@@ -3415,6 +3415,30 @@ def process_quote_boost(core_activity: dict, post_ap: str, their_post_ap: str):
             send_post_request(to.instance.inbox, accept_activity, post.author.private_key, post.author.public_url() + '#main-key')
 
 
+def announce_target_uri(activity: dict) -> Union[str, None]:
+    """Return the URI of the object an Announce (or Undo/Announce) refers to.
+
+    Mastodon sends the object as a bare URI string. Some platforms embed the
+    object, in which case its 'id' is the URI. Returns None if neither is usable.
+    """
+    if not isinstance(activity, dict):
+        return None
+    obj = activity.get('object')
+    if isinstance(obj, str):
+        return obj if obj else None
+    if isinstance(obj, dict):
+        obj_id = obj.get('id')
+        return obj_id if isinstance(obj_id, str) and obj_id else None
+    return None
+
+
+def is_top_level(post_data: dict) -> bool:
+    """True if a fetched object is a top-level post rather than a reply."""
+    if not isinstance(post_data, dict):
+        return False
+    return not post_data.get('inReplyTo')
+
+
 def process_microblog_announce(request_json, id, store_ap_json):
     """
     if post / comment already exists locally
