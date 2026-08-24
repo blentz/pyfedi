@@ -31,8 +31,8 @@ def is_disposable_database_url(url):
     """
     if not url:
         return False
-    segment = url.rsplit('/', 1)[-1]
-    segment = re.split(r'[?#]', segment, maxsplit=1)[0]
+    stripped_url = re.split(r'[?#]', url, maxsplit=1)[0]
+    segment = stripped_url.rsplit('/', 1)[-1]
     return segment.endswith('_test')
 
 
