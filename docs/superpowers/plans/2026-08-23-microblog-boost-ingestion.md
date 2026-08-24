@@ -29,6 +29,9 @@
 
 | File | Responsibility | Change |
 |---|---|---|
+| `compose.test.yaml` | Ephemeral Postgres and Redis for tests, via podman-compose | Create |
+| `.env.test` | Test environment: test database and Redis URLs | Create |
+| `run_tests.sh` | Bring up containers, migrate, run pytest | Create |
 | `tests/conftest.py` | App, database, and truncation fixtures | Create |
 | `tests/factories.py` | Builders for Instance, User, Community, Post, UserFollower | Create |
 | `tests/README.md` | How to set up and run the database-backed tests | Create |
@@ -51,6 +54,9 @@
 ## Task 0: Test fixtures
 
 **Files:**
+- Create: `compose.test.yaml`
+- Create: `.env.test`
+- Create: `run_tests.sh`
 - Create: `tests/conftest.py`
 - Create: `tests/factories.py`
 - Create: `tests/README.md`
@@ -58,11 +64,18 @@
 **Interfaces:**
 - Consumes: nothing.
 - Produces:
+  - `./run_tests.sh [pytest args]` — the entry point for the whole suite
   - pytest fixture `app` — session-scoped Flask app bound to the test database
   - pytest fixture `db_session` — function-scoped, truncates all tables after each test
   - `tests/factories.py`: `make_instance(domain, software='mastodon') -> Instance`, `make_user(instance, name, local=False) -> User`, `make_community(name='microblogs') -> Community`, `make_post(community, user, ap_id) -> Post`, `make_follow(local_user, remote_user) -> UserFollower`
 
-Schema comes from `flask db upgrade`, never `db.create_all()`. SQLAlchemy-Searchable triggers and several indexes are created by migrations and would be absent otherwise, so `create_all()` would silently test a different schema than production runs.
+Three constraints drive this design:
+
+1. Schema comes from `flask db upgrade`, never `db.create_all()`. SQLAlchemy-Searchable triggers and several indexes are created by migrations and would be absent otherwise, so `create_all()` would silently test a different schema than production runs.
+2. `app/__init__.py:61-62` builds `limiter` and `celery` from `Config` at **import time**. Redis URLs must therefore be in the environment before `app` is imported — a `TestConfig` attribute is too late. Hence `.env.test` plus a runner script rather than configuration in Python alone.
+3. `config.py:11` calls `load_dotenv('.env')`, which does **not** override already-exported variables. Exporting `.env.test` before pytest therefore coexists safely with the developer's dev `.env`.
+
+Containers use tmpfs and non-default ports (5433, 6380) so they cannot collide with, or outlive, the dev stack in `compose.dev.yaml`.
 
 - [ ] **Step 1: Write the smoke test that proves the fixtures work**
 
@@ -99,7 +112,119 @@ def test_truncation_between_tests(db_session):
 Run: `pytest tests/test_fixtures_smoke.py -v`
 Expected: FAIL — `fixture 'db_session' not found`
 
-- [ ] **Step 3: Write conftest.py**
+- [ ] **Step 3: Write the compose file**
+
+Create `compose.test.yaml`:
+
+```yaml
+# Ephemeral Postgres and Redis for the test suite.
+#
+# Data lives in tmpfs, so nothing survives `podman-compose down` and no state can
+# leak between runs. Ports differ from compose.dev.yaml (5432/6379) so this stack
+# can run alongside the dev stack without colliding.
+services:
+
+  test-db:
+    image: docker.io/library/postgres:17
+    environment:
+      POSTGRES_USER: pyfedi
+      POSTGRES_PASSWORD: pyfedi
+      POSTGRES_DB: pyfedi_test
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - full_page_writes=off
+      - -c
+      - synchronous_commit=off
+    tmpfs:
+      - /var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5433:5432"
+    networks:
+      - pf_test_network
+
+  test-redis:
+    image: docker.io/library/redis:6.2
+    ports:
+      - "127.0.0.1:6380:6379"
+    networks:
+      - pf_test_network
+
+networks:
+  pf_test_network:
+    name: pf_test_network
+    external: false
+```
+
+`fsync=off` and friends are safe here precisely because the data is disposable, and they make the truncation-per-test fixture noticeably cheaper.
+
+- [ ] **Step 4: Write the test environment file**
+
+Create `.env.test`:
+
+```bash
+# Environment for the test suite. Contains no secrets: everything here points at
+# the disposable containers in compose.test.yaml.
+#
+# These are exported before pytest starts, because app/__init__.py builds the rate
+# limiter and Celery app from Config at import time. config.py's load_dotenv() does
+# not override already-exported variables, so this coexists with a dev .env.
+SERVER_NAME=test.piefed.local
+SECRET_KEY=test-secret-not-used-outside-tests
+DATABASE_URL=postgresql+psycopg2://pyfedi:pyfedi@127.0.0.1:5433/pyfedi_test
+TEST_DATABASE_URL=postgresql+psycopg2://pyfedi:pyfedi@127.0.0.1:5433/pyfedi_test
+CACHE_TYPE=NullCache
+CACHE_REDIS_URL=redis://127.0.0.1:6380/1
+CELERY_BROKER_URL=redis://127.0.0.1:6380/0
+RESULT_BACKEND=redis://127.0.0.1:6380/0
+```
+
+- [ ] **Step 5: Write the runner**
+
+Create `run_tests.sh`, and `chmod +x` it:
+
+```bash
+#!/usr/bin/env bash
+# Run the test suite against disposable containers.
+#
+#   ./run_tests.sh                      # everything
+#   ./run_tests.sh tests/test_foo.py -v # passed straight through to pytest
+#   ./run_tests.sh --down               # stop and remove the containers
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+if [ "${1:-}" = "--down" ]; then
+    podman-compose -f compose.test.yaml down
+    exit 0
+fi
+
+set -a
+# shellcheck disable=SC1091
+. ./.env.test
+set +a
+
+podman-compose -f compose.test.yaml up -d
+
+echo "Waiting for Postgres..."
+for _ in $(seq 1 60); do
+    if podman-compose -f compose.test.yaml exec -T test-db pg_isready -U pyfedi -d pyfedi_test >/dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+done
+podman-compose -f compose.test.yaml exec -T test-db pg_isready -U pyfedi -d pyfedi_test >/dev/null
+
+flask db upgrade
+
+exec pytest "$@"
+```
+
+`flask db upgrade` is idempotent, so running the suite repeatedly is cheap after the first migrate. The containers are left running on purpose; `--down` disposes of them.
+
+- [ ] **Step 6: Write conftest.py**
 
 Create `tests/conftest.py`:
 
@@ -128,10 +253,15 @@ def app():
     """A Flask app bound to the test database.
 
     Skips rather than fails when TEST_DATABASE_URL is unset, so a bare checkout
-    can still run the pure-function tests. See tests/README.md for setup.
+    can still run the pure-function tests. Use ./run_tests.sh for the full suite.
     """
     if not TEST_DATABASE_URL:
-        pytest.skip('TEST_DATABASE_URL is not set; see tests/README.md')
+        pytest.skip('TEST_DATABASE_URL is not set; run ./run_tests.sh instead')
+
+    # The db_session fixture truncates every table. Refuse to point that at a
+    # database whose name does not mark it as disposable.
+    if 'test' not in TEST_DATABASE_URL.rsplit('/', 1)[-1]:
+        pytest.fail(f'TEST_DATABASE_URL must name a test database, got {TEST_DATABASE_URL!r}')
 
     from app import create_app
     application = create_app(TestConfig)
@@ -158,7 +288,7 @@ def db_session(app):
     db.session.commit()
 ```
 
-- [ ] **Step 4: Write factories.py**
+- [ ] **Step 7: Write factories.py**
 
 Create `tests/factories.py`:
 
@@ -249,62 +379,92 @@ def make_follow(local_user, remote_user) -> UserFollower:
     return follow
 ```
 
-- [ ] **Step 5: Write the setup documentation**
+- [ ] **Step 8: Write the setup documentation**
 
 Create `tests/README.md`:
 
 ```markdown
 # Tests
 
-Tests split into two groups.
+Run everything:
 
-**Pure function tests** need no setup and always run:
+    ./run_tests.sh
+
+Run a subset — arguments pass straight through to pytest:
+
+    ./run_tests.sh tests/test_boost_storage.py -v
+
+Dispose of the containers when you are done:
+
+    ./run_tests.sh --down
+
+## How it works
+
+`run_tests.sh` starts the Postgres and Redis in `compose.test.yaml` with
+podman-compose, waits for Postgres to accept connections, applies migrations, and
+runs pytest. Container data lives in tmpfs on ports 5433 and 6380, so the test
+stack neither collides with nor outlives the dev stack in `compose.dev.yaml`.
+
+Environment comes from `.env.test`, exported before pytest starts. That matters
+because `app/__init__.py` builds the rate limiter and Celery app from `Config` at
+import time, so a `TestConfig` attribute would be set too late. `config.py` calls
+`load_dotenv('.env')`, which does not override already-exported variables, so this
+coexists with your dev `.env`.
+
+The schema comes from `flask db upgrade`, not `db.create_all()`, because
+SQLAlchemy-Searchable triggers and several indexes are created by migrations and
+would otherwise be missing — tests would exercise a different schema than
+production.
+
+## Running pytest directly
+
+Pure-function tests need no database and run anywhere:
 
     pytest tests/test_microblog_announce.py tests/test_boost_cache_entries.py -v
 
-**Database-backed tests** need a throwaway PostgreSQL database. They skip, rather
-than fail, when `TEST_DATABASE_URL` is unset.
+Database-backed tests skip, rather than fail, when `TEST_DATABASE_URL` is unset.
 
-One-time setup:
-
-    createdb pyfedi_test
-    DATABASE_URL=postgresql+psycopg2://user:pass@localhost/pyfedi_test flask db upgrade
-
-Then run:
-
-    TEST_DATABASE_URL=postgresql+psycopg2://user:pass@localhost/pyfedi_test pytest tests/ -v
-
-The schema is created by `flask db upgrade`, not `db.create_all()`, because
-SQLAlchemy-Searchable triggers and several indexes are created by migrations and
-would otherwise be missing.
-
-**Warning:** the `db_session` fixture truncates every table after each test. Never
-point `TEST_DATABASE_URL` at a database whose contents you want to keep.
+**Warning:** the `db_session` fixture truncates every table after each test.
+`conftest.py` refuses to run if `TEST_DATABASE_URL` does not name a database with
+"test" in it, but do not defeat that guard.
 
 `tests/test_activitypub_util.py` predates this setup. It needs live network access
 and a hardcoded username, and is excluded from the standard run.
 ```
 
-- [ ] **Step 6: Create the test database and run the smoke test**
+- [ ] **Step 9: Bring up the stack and run the smoke test**
 
 ```bash
-createdb pyfedi_test
-DATABASE_URL=postgresql+psycopg2://user:pass@localhost/pyfedi_test flask db upgrade
-TEST_DATABASE_URL=postgresql+psycopg2://user:pass@localhost/pyfedi_test pytest tests/test_fixtures_smoke.py -v
+chmod +x run_tests.sh
+./run_tests.sh tests/test_fixtures_smoke.py -v
 ```
 
-Expected: PASS, 3 tests. If an insert fails on a missing NOT NULL column, add that column to the relevant factory and re-run.
+Expected: PASS, 3 tests.
 
-- [ ] **Step 7: Verify the skip path works**
+Two failure modes to expect and work through here, rather than treating them as plan defects:
 
-Run: `pytest tests/test_fixtures_smoke.py -v` with `TEST_DATABASE_URL` unset.
-Expected: 3 skipped, 0 failed.
+- An insert rejected for a missing NOT NULL column — add that column to the relevant factory in `tests/factories.py` and re-run.
+- `create_app()` failing on a service this plan did not anticipate. Read the traceback: if it needs another environment variable, add it to `.env.test`; if it needs another container, add it to `compose.test.yaml`. If it needs something that cannot be containerised, stop and report rather than stubbing out application startup.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 10: Verify the skip path works**
+
+Run: `pytest tests/test_fixtures_smoke.py -v` directly, with `TEST_DATABASE_URL` unset.
+Expected: 3 skipped, 0 failed. This is what keeps the pure-function tests runnable in a bare checkout.
+
+- [ ] **Step 11: Verify teardown leaves nothing behind**
 
 ```bash
-git add tests/conftest.py tests/factories.py tests/README.md tests/test_fixtures_smoke.py
-git commit -m "test: add database fixtures and factories"
+./run_tests.sh --down
+podman ps -a --filter name=test-db --filter name=test-redis
+```
+
+Expected: no containers listed. Because the data is on tmpfs, nothing persists.
+
+- [ ] **Step 12: Commit**
+
+```bash
+git add compose.test.yaml .env.test run_tests.sh tests/conftest.py tests/factories.py tests/README.md tests/test_fixtures_smoke.py
+git commit -m "test: add containerised database fixtures and factories"
 ```
 
 ---
@@ -649,7 +809,7 @@ def test_two_boosters_both_recorded(db_session, boosted):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `TEST_DATABASE_URL=... pytest tests/test_boost_storage.py -v`
+Run: `./run_tests.sh tests/test_boost_storage.py -v`
 Expected: FAIL at import — `ImportError: cannot import name 'record_boost'`
 
 - [ ] **Step 3: Add the cache method to Post**
@@ -706,7 +866,7 @@ def remove_boost(post: Post, user: User) -> None:
 
 - [ ] **Step 6: Run test to verify it passes**
 
-Run: `TEST_DATABASE_URL=... pytest tests/test_boost_storage.py -v`
+Run: `./run_tests.sh tests/test_boost_storage.py -v`
 Expected: PASS, 6 tests
 
 - [ ] **Step 7: Commit**
@@ -865,7 +1025,7 @@ def test_announce_without_object_is_rejected(db_session, fetch_spy, followed_boo
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `TEST_DATABASE_URL=... pytest tests/test_process_microblog_announce.py -v`
+Run: `./run_tests.sh tests/test_process_microblog_announce.py -v`
 Expected: FAIL — every test returns `None` from the stub, so the assertions about `PostBoost` rows and the local short circuit fail.
 
 - [ ] **Step 3: Add the trust gate helper**
@@ -946,12 +1106,12 @@ def process_microblog_announce(request_json, id, store_ap_json) -> Union[Post, N
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `TEST_DATABASE_URL=... pytest tests/test_process_microblog_announce.py -v`
+Run: `./run_tests.sh tests/test_process_microblog_announce.py -v`
 Expected: PASS, 6 tests
 
 - [ ] **Step 6: Run everything so far**
 
-Run: `TEST_DATABASE_URL=... pytest tests/ -v --ignore=tests/test_activitypub_util.py`
+Run: `./run_tests.sh tests/ -v --ignore=tests/test_activitypub_util.py`
 Expected: no failures
 
 - [ ] **Step 7: Document it**
@@ -1063,7 +1223,7 @@ def test_community_announce_of_remote_content_resolves(db_session, monkeypatch):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `TEST_DATABASE_URL=... pytest tests/test_announce_dispatch.py -v`
+Run: `./run_tests.sh tests/test_announce_dispatch.py -v`
 Expected: FAIL at import — `ImportError: cannot import name 'process_announce_of_uri'`
 
 - [ ] **Step 3: Add the dispatch function to util.py**
@@ -1117,7 +1277,7 @@ Then update the import at `app/activitypub/routes.py:22` to bring in `process_an
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `TEST_DATABASE_URL=... pytest tests/test_announce_dispatch.py -v`
+Run: `./run_tests.sh tests/test_announce_dispatch.py -v`
 Expected: PASS, 3 tests
 
 - [ ] **Step 6: Verify routes.py still imports**
@@ -1203,7 +1363,7 @@ def test_undo_boost_only_removes_the_undoing_users_boost(db_session, followed_bo
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `TEST_DATABASE_URL=... pytest tests/test_announce_dispatch.py -v`
+Run: `./run_tests.sh tests/test_announce_dispatch.py -v`
 Expected: FAIL at import — `ImportError: cannot import name 'undo_boost'`
 
 - [ ] **Step 3: Add undo_boost to util.py**
@@ -1251,7 +1411,7 @@ No trust gate applies. Removing a boost is always safe, and gating it could stra
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `TEST_DATABASE_URL=... pytest tests/test_announce_dispatch.py -v`
+Run: `./run_tests.sh tests/test_announce_dispatch.py -v`
 Expected: PASS, 7 tests
 
 - [ ] **Step 6: Verify routes.py still imports**
@@ -1368,7 +1528,7 @@ def test_clause_matches_the_one_in_utils():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `TEST_DATABASE_URL=... pytest tests/test_feed_boost_visibility.py -v`
+Run: `./run_tests.sh tests/test_feed_boost_visibility.py -v`
 Expected: the first three tests PASS (the clause is valid SQL on its own) and `test_clause_matches_the_one_in_utils` FAILS, because `app/utils.py` does not contain the clause yet.
 
 - [ ] **Step 3: Capture the baseline query plan**
@@ -1422,7 +1582,7 @@ Both `post_boost.post_id` and `post_boost.user_id` are already indexed by `migra
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `TEST_DATABASE_URL=... pytest tests/test_feed_boost_visibility.py -v`
+Run: `./run_tests.sh tests/test_feed_boost_visibility.py -v`
 Expected: PASS, 4 tests
 
 - [ ] **Step 6: Capture the new query plan**
@@ -1437,7 +1597,7 @@ Log in as a user who follows the boosting account, load the home feed with the "
 
 - [ ] **Step 8: Run the full suite**
 
-Run: `TEST_DATABASE_URL=... pytest tests/ -v --ignore=tests/test_activitypub_util.py`
+Run: `./run_tests.sh tests/ -v --ignore=tests/test_activitypub_util.py`
 Expected: no failures. `tests/test_activitypub_util.py` is excluded because it requires live network access and a hardcoded username.
 
 - [ ] **Step 9: Commit**
