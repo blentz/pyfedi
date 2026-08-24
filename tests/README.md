@@ -44,8 +44,26 @@ raises without it. `test-runner` gets that environment from `.env.test`.
 Database-backed tests skip, rather than fail, when `TEST_DATABASE_URL` is unset.
 
 **Warning:** the `db_session` fixture truncates every table after each test.
-`conftest.py` refuses to run if `TEST_DATABASE_URL` does not name a database with
-"test" in it, but do not defeat that guard.
+`conftest.py`'s `is_disposable_database_url()` refuses to run unless the database
+name (the last "/"-separated path segment, with any `?query`/`#fragment` stripped)
+ends with `_test` — a bare substring match on "test" is not enough, since that
+would also accept real database names like `attestation` or a URL whose query
+string merely mentions "test". Do not defeat that guard. `tests/test_conftest_guard.py`
+covers it.
 
 `tests/test_activitypub_util.py` predates this setup. It needs live network access
 and a hardcoded username, and is excluded from the standard run.
+
+## Known noise
+
+Two things show up in normal runs that are not bugs in this setup and do not
+need re-investigating:
+
+- Two `DeprecationWarning`s from `ldap3`/`pyasn1` (`tagMap`/`typeMap` are
+  deprecated) appear in every pytest run. They come from a transitive
+  dependency pulled in by LDAP support, unrelated to this test setup.
+- `./run_tests.sh --down` logs `StopSignal SIGTERM failed to stop container
+  ...test-runner... resorting to SIGKILL`. `test-runner` idles on
+  `sleep infinity`, which does not trap `SIGTERM`, so compose falls back to
+  `SIGKILL` after its timeout. Cosmetic — the container still stops and no
+  state persists (tmpfs).
