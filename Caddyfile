@@ -1,0 +1,30 @@
+# TLS termination for PieFed. Used by compose.prod.yaml on the VPS.
+# Caddy obtains and renews the Let's Encrypt certificate automatically; there is no
+# certbot and no renewal cron. Certificates and the ACME account key live in the
+# caddy_data volume -- losing that volume forces re-issuance and can trip Let's
+# Encrypt rate limits (5 certs per domain per week).
+{
+	# Let's Encrypt sends expiry and problem notices here. CHANGE THIS.
+	email admin@hell.cloud
+}
+
+hell.cloud {
+	encode zstd gzip
+
+	# The browser opens this as an EventSource, so it has to be same-origin over TLS.
+	# FastAPI already serves the route at /notifications/stream (fastapi_server.py:46),
+	# so no path rewriting is needed. flush_interval -1 disables response buffering,
+	# without which server-sent events arrive in chunks instead of live.
+	handle /notifications/* {
+		reverse_proxy piefednotifs:8000 {
+			flush_interval -1
+		}
+	}
+
+	reverse_proxy web:5000
+}
+
+# Uncomment to also answer on www and redirect to the apex.
+# www.hell.cloud {
+# 	redir https://hell.cloud{uri} permanent
+# }

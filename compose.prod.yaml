@@ -1,0 +1,49 @@
+# VPS deployment overlay -- rootful podman, TLS via Caddy + Let's Encrypt.
+#
+# Usage on the VPS (compose.override.yaml is local-only and must not exist there):
+#   podman-compose -f compose.yaml -f compose.prod.yaml up -d --build
+#
+# Prerequisites on the VPS:
+#   1. DNS: A (and AAAA if applicable) record for hell.cloud -> this VPS's public IP.
+#      Let's Encrypt validates over HTTP-01 on port 80, so the record must resolve
+#      and port 80 must be reachable from the internet before first start.
+#   2. .env.docker must contain:
+#        SERVER_NAME='hell.cloud'
+#        NOTIF_SERVER='https://hell.cloud'
+#      SERVER_NAME is baked into ActivityPub URLs by `flask init-db`, and changing it
+#      afterwards means re-running init-db, which drops every table. Set it first.
+#   3. ./pgdata must be owned by uid 1000 to match the db service's user: "1000:1000".
+#      Deploying as root, that is: chown -R 1000:1000 pgdata media logs tmp
+#   4. Set a real address in the Caddyfile's `email` field.
+services:
+
+  caddy:
+    image: docker.io/library/caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"          # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:z
+      - caddy_data:/data       # certificates + ACME account key -- MUST persist
+      - caddy_config:/config
+    depends_on:
+      - web
+      - piefednotifs
+    networks:
+      - pf_network
+
+  # Caddy reaches these over pf_network, so stop publishing them to the world.
+  # Kept bound to loopback for `curl` debugging on the VPS itself.
+  web:
+    ports: !override
+      - '127.0.0.1:8030:5000'
+
+  piefednotifs:
+    ports: !override
+      - '127.0.0.1:8040:8000'
+
+volumes:
+  caddy_data:
+  caddy_config:
