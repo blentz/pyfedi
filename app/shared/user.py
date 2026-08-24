@@ -120,16 +120,17 @@ def subscribe_user(person_id: int, subscribe, src, auth=None):
                     raise Exception(msg)
                 else:
                     flash(_(msg))
-            if person.has_blocked_user(user_id):
+            elif person.has_blocked_user(user_id):
                 msg = 'This user has blocked you.'
                 if src == SRC_API:
                     raise Exception(msg)
                 else:
                     flash(_(msg))
-            new_notification = NotificationSubscription(name=person.display_name(), user_id=user_id,
-                                                        entity_id=person_id, type=NOTIF_USER)
-            db.session.add(new_notification)
-            db.session.commit()
+            else:
+                new_notification = NotificationSubscription(name=person.display_name(), user_id=user_id,
+                                                            entity_id=person_id, type=NOTIF_USER)
+                db.session.add(new_notification)
+                db.session.commit()
 
     if src == SRC_API:
         return user_id
