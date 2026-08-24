@@ -2757,6 +2757,14 @@ class Post(db.Model):
             for emoji, url, count, authors in rows
         ]
 
+    def update_boost_cache(self):
+        from app.utils import boost_cache_entries
+        rows = db.session.query(PostBoost.user_id, User.ap_id, User.user_name, PostBoost.created_at). \
+            join(User, User.id == PostBoost.user_id). \
+            filter(PostBoost.post_id == self.id). \
+            order_by(PostBoost.created_at.desc()).all()
+        self.post_boosts = boost_cache_entries(rows)
+
 
 class PostReply(db.Model):
     query_class = FullTextSearchQuery

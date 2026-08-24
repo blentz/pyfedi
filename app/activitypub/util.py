@@ -27,7 +27,8 @@ from app.constants import *
 from app.models import User, Post, Community, File, PostReply, Instance, utcnow, \
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
     Language, Tag, Poll, PollChoice, CommunityBan, CommunityJoinRequest, NotificationSubscription, \
-    Licence, UserExtraField, Feed, FeedMember, FeedItem, CommunityFlair, UserFlair, Topic, Event, InstanceBan, Emoji
+    Licence, UserExtraField, Feed, FeedMember, FeedItem, CommunityFlair, UserFlair, Topic, Event, InstanceBan, Emoji, \
+    UserFollower, PostBoost
 from app.utils import get_request, allowlist_html, get_setting, ap_datetime, markdown_to_html, \
     is_image_url, domain_from_url, gibberish, ensure_directory_exists, shorten_string, fixup_url, \
     microblog_content_to_title, is_video_url, \
@@ -3413,6 +3414,35 @@ def process_quote_boost(core_activity: dict, post_ap: str, their_post_ap: str):
         to = find_actor_or_create_cached(core_activity['actor'])
         if to and to.instance.inbox:
             send_post_request(to.instance.inbox, accept_activity, post.author.private_key, post.author.public_url() + '#main-key')
+
+
+def record_boost(post: Post, user: User) -> None:
+    """Record that `user` boosted `post`, idempotently, and refresh the cache.
+
+    Idempotent by query-then-insert: the same Announce can be redelivered after
+    the 90 second Redis duplicate window in routes.py has expired.
+    """
+    existing = db.session.query(PostBoost).filter_by(user_id=user.id, post_id=post.id).first()
+    if existing:
+        return
+    db.session.add(PostBoost(user_id=user.id, post_id=post.id))
+    db.session.commit()
+    post.update_boost_cache()
+    db.session.commit()
+
+
+def remove_boost(post: Post, user: User) -> None:
+    """Remove `user`'s boost of `post` and refresh the cache.
+
+    A missing row is a successful no-op, not a failure — remote instances re-send.
+    """
+    existing = db.session.query(PostBoost).filter_by(user_id=user.id, post_id=post.id).first()
+    if existing is None:
+        return
+    db.session.delete(existing)
+    db.session.commit()
+    post.update_boost_cache()
+    db.session.commit()
 
 
 def announce_target_uri(activity: dict) -> Union[str, None]:
