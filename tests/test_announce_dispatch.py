@@ -1,5 +1,6 @@
 import pytest
 
+from app.constants import APLOG_ANNOUNCE, APLOG_DUPLICATE, APLOG_FAILURE, APLOG_IGNORED, APLOG_SUCCESS
 from tests.factories import make_community, make_follow, make_instance, make_post, make_user
 
 
@@ -38,6 +39,12 @@ def announce(actor_uri, object_uri):
     }
 
 
+def make_owned_community(name):
+    """make_community() hardcodes owner user_id=1 and instance_id=1; both rows must exist."""
+    make_user(make_instance('owner.example'), 'community_owner')
+    return make_community(name)
+
+
 def test_local_post_boost_is_recorded(db_session, followed_booster, monkeypatch):
     """A followed account boosting a locally authored post records the boost"""
     from app.activitypub.util import process_announce_of_uri
@@ -54,31 +61,35 @@ def test_local_post_boost_is_recorded(db_session, followed_booster, monkeypatch)
     assert PostBoost.query.filter_by(post_id=post.id, user_id=followed_booster.id).count() == 1
 
 
-def test_community_announce_of_local_content_is_ignored(db_session, monkeypatch):
-    """The community path still discards duplicates of local content"""
+def test_community_announce_of_local_content_is_ignored(db_session, monkeypatch, log_spy):
+    """The community path still discards duplicates of local content, logging
+    exactly the same type/result/message routes.py used to log at its old call
+    site, exactly once."""
     from app.activitypub.util import process_announce_of_uri
     monkeypatch.setattr('app.activitypub.util.resolve_remote_post',
                         lambda *args, **kwargs: pytest.fail('must not resolve local content'))
-    # make_community() hardcodes owner user_id=1 and instance_id=1; both rows must exist.
-    make_user(make_instance('owner.example'), 'community_owner')
-    community = make_community('news')
+    community = make_owned_community('news')
 
     result = process_announce_of_uri(
         announce('https://m.example/users/booster', 'https://test.piefed.local/c/news/p/1/hello'),
         community, 'd2', False)
 
     assert result is None
+    assert len(log_spy) == 1
+    aplog_type, aplog_result, message = log_spy[0]
+    assert (aplog_type, aplog_result) == (APLOG_DUPLICATE, APLOG_IGNORED)
+    assert message == 'Activity about local content which is already present'
 
 
-def test_community_announce_of_remote_content_resolves(db_session, monkeypatch):
-    """The community path still resolves remote content"""
+def test_community_announce_of_remote_content_resolves(db_session, monkeypatch, log_spy):
+    """The community path still resolves remote content, logging exactly the
+    same success type/result routes.py used to log at its old call site,
+    exactly once."""
     from app.activitypub.util import process_announce_of_uri
     seen = []
     monkeypatch.setattr('app.activitypub.util.resolve_remote_post',
                         lambda uri, community, announce_id, store: seen.append(uri) or 'resolved')
-    # make_community() hardcodes owner user_id=1 and instance_id=1; both rows must exist.
-    make_user(make_instance('owner.example'), 'community_owner')
-    community = make_community('news')
+    community = make_owned_community('news')
 
     result = process_announce_of_uri(
         announce('https://m.example/users/booster', 'https://other.example/notes/3'),
@@ -86,6 +97,49 @@ def test_community_announce_of_remote_content_resolves(db_session, monkeypatch):
 
     assert result == 'resolved'
     assert seen == ['https://other.example/notes/3']
+    assert len(log_spy) == 1
+    aplog_type, aplog_result, message = log_spy[0]
+    assert (aplog_type, aplog_result) == (APLOG_ANNOUNCE, APLOG_SUCCESS)
+    assert message is None
+
+
+def test_community_announce_resolution_failure_logs_once(db_session, monkeypatch, log_spy):
+    """The community path still logs a failure, with the same type/result/
+    message routes.py used to log at its old call site, exactly once -- not
+    twice, which was the regression this test guards against."""
+    from app.activitypub.util import process_announce_of_uri
+    monkeypatch.setattr('app.activitypub.util.resolve_remote_post',
+                        lambda *args, **kwargs: None)
+    community = make_owned_community('news')
+
+    result = process_announce_of_uri(
+        announce('https://m.example/users/booster', 'https://other.example/notes/9'),
+        community, 'd6', False)
+
+    assert result is None
+    assert len(log_spy) == 1
+    aplog_type, aplog_result, message = log_spy[0]
+    assert (aplog_type, aplog_result) == (APLOG_ANNOUNCE, APLOG_FAILURE)
+    assert message == 'Could not resolve post'
+
+
+def test_community_announce_without_object_uri_logs_once(db_session, monkeypatch, log_spy):
+    """A malformed Announce (empty object string) on the community path is
+    rejected with its own distinct reason, logged exactly once, instead of
+    falling through to resolve_remote_post(None, ...)."""
+    from app.activitypub.util import process_announce_of_uri
+    monkeypatch.setattr('app.activitypub.util.resolve_remote_post',
+                        lambda *args, **kwargs: pytest.fail('must not resolve a missing URI'))
+    community = make_owned_community('news')
+
+    result = process_announce_of_uri(
+        announce('https://m.example/users/booster', ''), community, 'd7', False)
+
+    assert result is None
+    assert len(log_spy) == 1
+    aplog_type, aplog_result, message = log_spy[0]
+    assert (aplog_type, aplog_result) == (APLOG_ANNOUNCE, APLOG_FAILURE)
+    assert message == 'Announce has no object URI'
 
 
 def test_microblog_path_does_not_double_log_on_rejection(db_session, followed_booster, log_spy):
