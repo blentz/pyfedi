@@ -3556,22 +3556,38 @@ def process_announce_of_uri(request_json, community, id, store_ap_json) -> Union
     With no community, this is a microblog boost. Its object may be local content,
     in which case process_microblog_announce records the boost without fetching or
     creating anything -- which is why the local-content short-circuit below applies
-    only to the community path. process_microblog_announce logs a distinct reason
-    on every exit path itself, so this function must not log anything on top of it;
-    the community path below has no such self-logging, so its call site (routes.py)
-    remains responsible for logging that outcome, same as before this function
-    existed.
+    only to the community path.
+
+    This function logs its own outcome on every path -- the caller must not log
+    anything of its own on top of it. On the microblog path that means deferring
+    entirely to process_microblog_announce, which already logs a distinct reason
+    on every exit path itself (except the deliberate, pre-existing silent
+    short-circuit for a boost of a post already held locally -- that one records
+    the boost and returns it without logging anything, and this function must not
+    add a log row there either). On the community path, this function logs
+    success/failure itself, using the same log type, result, and message strings
+    routes.py used to log at its call site before this function existed.
     """
     if community is None:
         return process_microblog_announce(request_json, id, store_ap_json)
 
     uri = announce_target_uri(request_json)
-    if uri and uri.startswith('https://' + current_app.config['SERVER_NAME']):
+    if not uri:
+        log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, request_json if store_ap_json else None,
+                        'Announce has no object URI')
+        return None
+
+    if uri.startswith('https://' + current_app.config['SERVER_NAME']):
         log_incoming_ap(id, APLOG_DUPLICATE, APLOG_IGNORED, request_json if store_ap_json else None,
                         'Activity about local content which is already present')
         return None
 
-    return resolve_remote_post(uri, community, id, store_ap_json)
+    post = resolve_remote_post(uri, community, id, store_ap_json)
+    if post:
+        log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_SUCCESS, request_json)
+    else:
+        log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, request_json, 'Could not resolve post')
+    return post
 
 
 def lemmy_site_data():

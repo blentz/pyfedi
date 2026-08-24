@@ -861,17 +861,9 @@ def process_inbox_request(request_json, store_ap_json):
                 # Announce: take care of inner objects that are just a URL (PeerTube, a.gup.pe), or find the user if the inner object is a dict
                 if request_json['type'] == 'Announce':
                     if isinstance(request_json['object'], str):
-                        post = process_announce_of_uri(request_json, community, id, store_ap_json)
-                        # The microblog path (community is None) has already logged a
-                        # distinct outcome inside process_announce_of_uri /
-                        # process_microblog_announce; logging here too would double-log
-                        # every rejected boost. The community path logs nothing of its
-                        # own (resolve_remote_post doesn't), so it still needs this.
-                        if community is not None:
-                            if post:
-                                log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_SUCCESS, request_json)
-                            else:
-                                log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, request_json, 'Could not resolve post')
+                        # process_announce_of_uri logs its own outcome on every path
+                        # (see its docstring), so there is nothing left to log here.
+                        process_announce_of_uri(request_json, community, id, store_ap_json)
                         return
                     elif isinstance(request_json['object'], list):  # PieFed can Announce an unlimited amount of objects at once, as long as they are all from the same community.
                         for obj in request_json['object']:
