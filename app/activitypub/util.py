@@ -3416,6 +3416,17 @@ def process_quote_boost(core_activity: dict, post_ap: str, their_post_ap: str):
             send_post_request(to.instance.inbox, accept_activity, post.author.private_key, post.author.public_url() + '#main-key')
 
 
+def announcer_is_followed(user_id: int) -> bool:
+    """True if at least one local user follows the remote user with this id.
+
+    Called before any outbound fetch, so that an unfollowed remote party cannot
+    make this instance request a URL of their choosing.
+    """
+    return db.session.query(UserFollower.id).filter(
+        UserFollower.remote_user_id == user_id,
+        UserFollower.is_inward == False).first() is not None
+
+
 def record_boost(post: Post, user: User) -> None:
     """Record that `user` boosted `post`, idempotently, and refresh the cache.
 
@@ -3469,26 +3480,57 @@ def is_top_level(post_data: dict) -> bool:
     return not post_data.get('inReplyTo')
 
 
-def process_microblog_announce(request_json, id, store_ap_json):
+def process_microblog_announce(request_json, id, store_ap_json) -> Union[Post, None]:
+    """Ingest a boost of a microblog post from an account a local user follows.
+
+    Top-level posts only. Boosted replies are ignored: backfilling absent
+    ancestors would mean unbounded recursion against untrusted hosts.
     """
-    if post / comment already exists locally
-	    update post announce data
-    else
-        retrieve post
-        if is top-level note
-            create post
-            update post announce data
-        else - it's a reply
-            retrieve context
-            make sure all notes and posts in context exist
-            find comment
-                update comment post announce data
-    """
-    post_data = remote_object_to_json(request_json['object'])
-    if not post_data:
+    saved_json = request_json if store_ap_json else None
+
+    uri = announce_target_uri(request_json)
+    if not uri:
+        log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, saved_json, 'Announce has no object URI')
         return None
 
+    # Trust gate. Must stay above every network call in this function.
+    announcer = find_actor_or_create_cached(request_json['actor'], create_if_not_found=False)
+    if not announcer or not isinstance(announcer, User):
+        log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json, 'Announce actor is not a known user')
+        return None
+    if announcer.banned:
+        log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json, f'{announcer.ap_id} is banned')
+        return None
+    if not announcer_is_followed(announcer.id):
+        log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json, 'Announce from unfollowed actor')
+        return None
 
+    # Local posts carry a full ap_id from Post.generate_ap_id(), so this resolves
+    # both already-ingested remote posts and posts authored on this instance.
+    post = Post.get_by_ap_id(uri)
+    if post:
+        record_boost(post, announcer)
+        return post
+
+    post_data = remote_object_to_json(uri)
+    if not post_data:
+        log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, saved_json, 'Could not fetch boosted object ' + uri)
+        return None
+
+    if not is_top_level(post_data):
+        log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json, 'Boosted object is a reply')
+        return None
+
+    # create_resolved_object performs the attributedTo / domain-match impersonation
+    # check. Do not duplicate it here.
+    resolved = create_resolved_object(uri, post_data, urlparse(uri).netloc,
+                                      find_microblogging_community(), id, store_ap_json)
+    if not isinstance(resolved, Post):
+        log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json, 'Boosted object did not resolve to a post')
+        return None
+
+    record_boost(resolved, announcer)
+    return resolved
 
 
 def lemmy_site_data():

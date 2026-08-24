@@ -35,6 +35,8 @@
   - [Link](https://www.w3.org/TR/activitystreams-vocabulary/#dfn-link)
   - [Note](https://www.w3.org/TR/activitystreams-vocabulary/#dfn-note)
   - [Question](https://www.w3.org/TR/activitystreams-vocabulary/#dfn-question)
+- Boosts (`Announce`) of top-level posts from microblogging platforms are ingested when
+  the boosting account is followed by a local user. Boosted replies are not ingested.
 
 ## Additional documentation
 
