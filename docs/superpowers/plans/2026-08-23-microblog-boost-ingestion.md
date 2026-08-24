@@ -17,7 +17,7 @@
 - Do not reimplement the `attributedTo` / domain-match impersonation check. `create_resolved_object()` already performs it at `app/activitypub/util.py:3680-3702`.
 - No database migration. `PostBoost` and `Post.post_boosts` already exist via `migrations/versions/c831b9c7eee9_post_boost.py`.
 - Every exit path calls `log_incoming_ap()` with a distinct reason string. A bare `return None` is a plan violation.
-- At most one outbound fetch per activity.
+- At most one fetch **of the boosted object** per activity, and never before the trust gate. This is not zero I/O after the gate: `create_resolved_object` calls `find_actor_or_create`, which may fetch the `attributedTo` actor's profile. That is bounded and acceptable — it happens behind the gate, and `util.py:3797` rejects any `attributedTo` on a different host than the object, so a sender cannot use it to reach a host of their choosing.
 - Boosts of replies are out of scope. A boosted object with a truthy `inReplyTo` is logged and ignored.
 - New logic goes in `app/activitypub/util.py`, not inline in `routes.py`. Branches in `routes.py` stay thin enough to read at a glance, mirroring how `undo_vote()` is called at `routes.py:1723`.
 - No new runtime dependencies. Remote fetches are stubbed by monkeypatching `remote_object_to_json`, not by adding an HTTP mocking library.
