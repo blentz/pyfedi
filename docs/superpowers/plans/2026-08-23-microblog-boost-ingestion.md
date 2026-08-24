@@ -152,6 +152,30 @@ services:
     networks:
       - pf_test_network
 
+  # Tests run in here, not on the host: this repo has no host Python environment
+  # (no venv, no .env, and system python3 has no Flask). The Dockerfile's `builder`
+  # target carries /venv with every requirement, including pytest. It is preferred
+  # over `runtime` because it runs as root — avoiding __pycache__ permission
+  # failures on the bind mount — and skips the tesseract layer tests do not need.
+  test-runner:
+    build:
+      context: .
+      target: builder
+    depends_on:
+      - test-db
+      - test-redis
+    env_file:
+      - ./.env.test
+    environment:
+      PATH: /venv/bin:/usr/local/bin:/usr/bin:/bin
+      PYTHONUNBUFFERED: "1"
+    working_dir: /app
+    volumes:
+      - ./:/app:z
+    command: ["sleep", "infinity"]
+    networks:
+      - pf_test_network
+
 networks:
   pf_test_network:
     name: pf_test_network
@@ -159,6 +183,10 @@ networks:
 ```
 
 `fsync=off` and friends are safe here precisely because the data is disposable, and they make the truncation-per-test fixture noticeably cheaper.
+
+`test-runner` idles on `sleep infinity` so `run_tests.sh` can `exec` into it repeatedly without paying container startup on every run.
+
+Because `test-runner` reaches the database over the compose network rather than the published port, `.env.test` must name the **service hostnames**, not `127.0.0.1`. That is why the URLs below use `test-db` and `test-redis`.
 
 - [ ] **Step 4: Write the test environment file**
 
@@ -173,13 +201,15 @@ Create `.env.test`:
 # not override already-exported variables, so this coexists with a dev .env.
 SERVER_NAME=test.piefed.local
 SECRET_KEY=test-secret-not-used-outside-tests
-DATABASE_URL=postgresql+psycopg2://pyfedi:pyfedi@127.0.0.1:5433/pyfedi_test
-TEST_DATABASE_URL=postgresql+psycopg2://pyfedi:pyfedi@127.0.0.1:5433/pyfedi_test
+DATABASE_URL=postgresql+psycopg2://pyfedi:pyfedi@test-db:5432/pyfedi_test
+TEST_DATABASE_URL=postgresql+psycopg2://pyfedi:pyfedi@test-db:5432/pyfedi_test
 CACHE_TYPE=NullCache
-CACHE_REDIS_URL=redis://127.0.0.1:6380/1
-CELERY_BROKER_URL=redis://127.0.0.1:6380/0
-RESULT_BACKEND=redis://127.0.0.1:6380/0
+CACHE_REDIS_URL=redis://test-redis:6379/1
+CELERY_BROKER_URL=redis://test-redis:6379/0
+RESULT_BACKEND=redis://test-redis:6379/0
 ```
+
+Hostnames are the compose service names because tests execute inside `test-runner`, on the compose network. The published ports 5433 and 6380 exist for inspecting the databases from the host (psql, redis-cli), not for the test run itself.
 
 - [ ] **Step 5: Write the runner**
 
@@ -196,33 +226,34 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+COMPOSE="podman-compose -f compose.test.yaml"
+
 if [ "${1:-}" = "--down" ]; then
-    podman-compose -f compose.test.yaml down
+    $COMPOSE down
     exit 0
 fi
 
-set -a
-# shellcheck disable=SC1091
-. ./.env.test
-set +a
-
-podman-compose -f compose.test.yaml up -d
+$COMPOSE up -d
 
 echo "Waiting for Postgres..."
 for _ in $(seq 1 60); do
-    if podman-compose -f compose.test.yaml exec -T test-db pg_isready -U pyfedi -d pyfedi_test >/dev/null 2>&1; then
+    if $COMPOSE exec -T test-db pg_isready -U pyfedi -d pyfedi_test >/dev/null 2>&1; then
         break
     fi
     sleep 1
 done
-podman-compose -f compose.test.yaml exec -T test-db pg_isready -U pyfedi -d pyfedi_test >/dev/null
+$COMPOSE exec -T test-db pg_isready -U pyfedi -d pyfedi_test >/dev/null
 
-flask db upgrade
-
-exec pytest "$@"
+# Tests run inside test-runner: there is no host Python environment.
+$COMPOSE exec -T test-runner flask db upgrade
+exec $COMPOSE exec -T test-runner pytest "$@"
 ```
 
 `flask db upgrade` is idempotent, so running the suite repeatedly is cheap after the first migrate. The containers are left running on purpose; `--down` disposes of them.
+
+The environment is not exported by this script — `test-runner` gets it from `env_file` in the compose file, which reaches the process before Python starts. That is what matters, because `app/__init__.py` builds the rate limiter and Celery app from `Config` at import time.
+
+The first run builds the `builder` image, which takes a few minutes. Subsequent runs reuse it.
 
 - [ ] **Step 6: Write conftest.py**
 
@@ -418,9 +449,14 @@ production.
 
 ## Running pytest directly
 
-Pure-function tests need no database and run anywhere:
+There is no host Python environment for this repo, so pytest always runs inside
+the `test-runner` container:
 
-    pytest tests/test_microblog_announce.py tests/test_boost_cache_entries.py -v
+    podman-compose -f compose.test.yaml exec -T test-runner pytest tests/test_microblog_announce.py -v
+
+Pure-function tests need no database, but they do need the environment — importing
+`app.utils` pulls in `config.py`, which reads `SERVER_NAME` at import time and
+raises without it. `test-runner` gets that environment from `.env.test`.
 
 Database-backed tests skip, rather than fail, when `TEST_DATABASE_URL` is unset.
 
@@ -448,8 +484,11 @@ Two failure modes to expect and work through here, rather than treating them as 
 
 - [ ] **Step 10: Verify the skip path works**
 
-Run: `pytest tests/test_fixtures_smoke.py -v` directly, with `TEST_DATABASE_URL` unset.
-Expected: 3 skipped, 0 failed. This is what keeps the pure-function tests runnable in a bare checkout.
+```bash
+podman-compose -f compose.test.yaml exec -T -e TEST_DATABASE_URL= test-runner pytest tests/test_fixtures_smoke.py -v
+```
+
+Expected: 3 skipped, 0 failed. This is what keeps the pure-function tests runnable without a database.
 
 - [ ] **Step 11: Verify teardown leaves nothing behind**
 
