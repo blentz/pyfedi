@@ -53,7 +53,10 @@ def make_community(name: str = 'microblogs') -> Community:
     return community
 
 
-def make_post(community, user, ap_id: str, title: str = 'a post') -> Post:
+def make_post(community, user, ap_id: str, title: str = 'a post', private: bool = False) -> Post:
+    """private=True marks a followers-only post (Post.private), i.e. not addressed to
+    as:Public. Defaults to False (a normal public post), matching the column default.
+    """
     post = Post(
         community_id=community.id,
         user_id=user.id,
@@ -65,6 +68,7 @@ def make_post(community, user, ap_id: str, title: str = 'a post') -> Post:
         from_bot=False,
         nsfw=False,
         deleted=False,
+        private=private,
     )
     db.session.add(post)
     db.session.commit()
@@ -83,16 +87,19 @@ def make_site() -> Site:
     return site
 
 
-def make_follow(local_user, remote_user, is_accepted=True) -> UserFollower:
+def make_follow(local_user, remote_user, is_accepted=True, is_inward=False) -> UserFollower:
     """local_user follows remote_user. is_inward False means outward: we follow them.
 
     is_accepted: None = request sent (pending), True = accepted, False = rejected.
+    is_inward: False (default) = local_user follows remote_user (outward -- opens feed
+    visibility). True = remote_user follows local_user (inward -- someone follows US;
+    this must NOT open feed visibility of what remote_user posts or boosts).
     """
     follow = UserFollower(
         local_user_id=local_user.id,
         remote_user_id=remote_user.id,
         is_accepted=is_accepted,
-        is_inward=False,
+        is_inward=is_inward,
     )
     db.session.add(follow)
     db.session.commit()

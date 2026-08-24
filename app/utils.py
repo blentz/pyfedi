@@ -3277,11 +3277,11 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
         sources.append("""EXISTS (SELECT 1 FROM user_follower uf
                                   WHERE uf.local_user_id = :local_user_id
                                   AND uf.remote_user_id = p.user_id AND is_inward is false)""")
-        sources.append("""EXISTS (SELECT 1 FROM post_boost pb
+        sources.append("""(p.private is false AND EXISTS (SELECT 1 FROM post_boost pb
                                   INNER JOIN user_follower uf2 ON uf2.remote_user_id = pb.user_id
                                   WHERE pb.post_id = p.id
                                   AND uf2.local_user_id = :local_user_id
-                                  AND uf2.is_inward is false)""")
+                                  AND uf2.is_inward is false))""")
         params['local_user_id'] = current_user.id
 
     post_id_where = ["(" + " OR ".join(sources) + ")", 'c.banned is false']
