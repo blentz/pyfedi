@@ -3249,6 +3249,10 @@ def undo_boost(target_ap_id: str, user: User) -> Union[Post, None]:
     Returns the post so the caller can log a result, mirroring undo_vote().
     A post with no boost from this user still returns the post: a repeated Undo
     is a successful no-op, not a failure.
+
+    This function does not log; the routes.py call site is the sole logger.
+    This mirrors undo_vote() and is intentionally opposite to
+    process_announce_of_uri(), which self-logs on all paths.
     """
     if not target_ap_id:
         return None
@@ -3583,6 +3587,8 @@ def process_announce_of_uri(request_json, community, id, store_ap_json) -> Union
     add a log row there either). On the community path, this function logs
     success/failure itself, using the same log type, result, and message strings
     routes.py used to log at its call site before this function existed.
+    (Note: Undo handlers like undo_boost() follow the opposite contract --
+    they do not log, delegating to the caller instead.)
     """
     if community is None:
         return process_microblog_announce(request_json, id, store_ap_json)
