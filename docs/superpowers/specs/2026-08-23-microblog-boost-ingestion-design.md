@@ -229,7 +229,15 @@ This sits in the hot feed path. The implementation plan gates the change on an
 
 - Every exit path calls `log_incoming_ap` with a distinct reason string. The current
   stub's bare `return None` is precisely what makes it undiagnosable in production.
-- At most one outbound fetch per activity, and only after the trust gate passes.
+- At most one fetch of the boosted object per activity, and only after the trust gate
+  passes. This is deliberately not a claim of zero I/O after the gate:
+  `create_resolved_object` calls `find_actor_or_create`, which may fetch the
+  `attributedTo` actor's profile. That fetch is bounded and acceptable — it happens
+  behind the gate, and the domain-match check rejects any `attributedTo` on a
+  different host than the object, so a sender cannot use it to reach a host of their
+  choosing. Enforcing a literal single fetch would mean resolving actors with
+  `create_if_not_found=False`, which would drop boosts of authors this instance has
+  never seen.
 - No retry loop is added. `process_inbox_request` already runs as a Celery task; a
   fetch failure logs and drops the activity.
 
