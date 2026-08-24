@@ -247,33 +247,62 @@ This sits in the hot feed path. The implementation plan gates the change on an
 ## Testing
 
 `tests/test_activitypub_util.py` requires a live database, live network access, and
-a hardcoded username, so it is not a suitable home for this coverage. New tests
-follow the style of `tests/test_microblog_content_to_title.py`: pure functions, no
-application context.
+a hardcoded username, so it is not a suitable home for this coverage. Rather than
+verify this work manually, the implementation builds the missing test
+infrastructure first.
 
-Extracted as module-level pure helpers, each with table-driven tests:
+**Test fixtures.** `tests/conftest.py` provides a session-scoped `app` bound to a
+throwaway database named by `TEST_DATABASE_URL`, and a function-scoped `db_session`
+that truncates every table after each test. Database-backed tests skip, rather than
+fail, when that variable is unset, so a bare checkout can still run the
+pure-function tests. Schema is created by `flask db upgrade`, never
+`db.create_all()`: SQLAlchemy-Searchable triggers and several indexes are created by
+migrations and would otherwise be absent, meaning tests would exercise a different
+schema than production. `tests/factories.py` provides row builders.
 
-- `announce_target_uri(activity) -> str | None` — handles a string object, a dict
-  object, and a missing or malformed object.
-- `is_top_level(post_data) -> bool` — handles `inReplyTo` absent, `None`, empty
-  string, and present.
+Remote fetches are stubbed by monkeypatching `remote_object_to_json`. No HTTP
+mocking dependency is added.
 
-Tested against fixtures:
+**Testability shapes the design.** Two pieces of inbox logic move out of
+`app/activitypub/routes.py` and into `app/activitypub/util.py` so they can be tested
+without Redis or signature plumbing, following the existing `undo_vote()` precedent
+at `app/activitypub/util.py:3209`:
 
-- `announcer_is_followed(user_id) -> bool` — one indexed query.
-- `record_boost` idempotency: calling it twice produces one row.
-- `update_boost_cache` output shape.
+- `process_announce_of_uri(request_json, community, id, store_ap_json)` — the
+  dispatch for an `Announce` whose object is a bare URI, including the local-content
+  ordering described above.
+- `undo_boost(target_ap_id, user)` — returns the post whose boost was removed.
 
-Verified manually, because this harness cannot exercise them:
+**Pure helpers**, table-driven tests, no application context:
 
-- Ingestion of a boost from a followed Mastodon account.
-- `Undo` removing the boost.
-- A boost of a local post recording without a fetch.
-- Regression: community-path `Announce` still discards duplicate local content.
+- `announce_target_uri(activity) -> str | None`
+- `is_top_level(post_data) -> bool`
+- `boost_cache_entries(rows) -> list` — split out of `update_boost_cache` so the
+  stored JSON shape is testable without a database.
 
-Gated on measurement:
+**Database-backed tests:**
 
-- `EXPLAIN ANALYZE` of the feed query before and after the `EXISTS` addition.
+- `record_boost` idempotency, `remove_boost` no-op on a missing row, per-user
+  isolation, and cache contents.
+- Trust gate: an unfollowed or banned announcer is rejected, asserted together with
+  a call counter proving **no fetch occurred**. This is how the security property is
+  enforced, rather than by reading the code.
+- A boosted reply is ignored, after exactly one fetch.
+- A boost of a post already held locally short-circuits without fetching.
+- Redelivery of the same `Announce` records one boost.
+- Dispatch: microblog boost of local content is recorded; community-path `Announce`
+  of local content is still discarded; community-path `Announce` of remote content
+  still resolves.
+- `Undo`: removes the row, returns the post, is a no-op when repeated, and leaves
+  other users' boosts intact.
+- Feed clause: executed as SQL against seeded data, plus a guard asserting the tested
+  SQL matches what `get_deduped_post_ids` actually builds.
+
+**Not automated:**
+
+- `EXPLAIN ANALYZE` of the feed query before and after the `EXISTS` addition, on a
+  populated database. This is a merge gate.
+- One end-to-end check that a boosted post appears in the running app's feed.
 
 ## Risks
 

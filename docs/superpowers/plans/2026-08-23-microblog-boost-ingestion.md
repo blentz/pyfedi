@@ -2,23 +2,25 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make PieFed ingest boosts (`Announce`) of microblog posts from Mastodon-style accounts that local users follow, record them, remove them on un-boost, and surface them in the feed.
+**Goal:** Make PieFed ingest boosts (`Announce`) of microblog posts from Mastodon-style accounts that local users follow, record them, remove them on un-boost, and surface them in the feed — with real automated tests, not manual verification.
 
-**Architecture:** `process_microblog_announce()` in `app/activitypub/util.py` is currently an empty stub that silently drops every such activity. It gains a trust gate that runs before any network I/O, a local-post short circuit, a top-level-only guard, and delegation to the existing `create_resolved_object()` for creation. Boosts are stored in the already-present but entirely unused `PostBoost` model and `Post.post_boosts` JSON cache. A new `Undo`/`Announce` branch removes them.
+**Architecture:** `process_microblog_announce()` in `app/activitypub/util.py` is currently an empty stub that silently drops every such activity. It gains a trust gate that runs before any network I/O, a local-post short circuit, a top-level-only guard, and delegation to the existing `create_resolved_object()` for creation. Boosts are stored in the already-present but entirely unused `PostBoost` model and `Post.post_boosts` JSON cache. Inbox logic that currently lives inline in `app/activitypub/routes.py` is extracted into `util.py` functions so it can be tested without Redis or signature plumbing, following the existing `undo_vote()` precedent.
 
-**Tech Stack:** Python 3, Flask, SQLAlchemy, Celery, PostgreSQL, pytest/unittest, httpx.
+**Tech Stack:** Python 3, Flask 3.1.3, Flask-SQLAlchemy 3.1.1, SQLAlchemy 2.0, Celery, PostgreSQL, pytest/unittest, httpx.
 
 **Spec:** `docs/superpowers/specs/2026-08-23-microblog-boost-ingestion-design.md`
 
 ## Global Constraints
 
-- The trust gate MUST run before any outbound HTTP request. An unauthenticated remote party must never be able to make PieFed fetch a URL of their choosing.
+- The trust gate MUST run before any outbound HTTP request. An unauthenticated remote party must never be able to make PieFed fetch a URL of their choosing. This is asserted by a test, not just by reading the code.
 - Never read the acting actor from an inner object. Only `request_json['actor']` is HTTP-signature-verified. See the comment at `app/activitypub/routes.py:819`.
 - Do not reimplement the `attributedTo` / domain-match impersonation check. `create_resolved_object()` already performs it at `app/activitypub/util.py:3680-3702`.
 - No database migration. `PostBoost` and `Post.post_boosts` already exist via `migrations/versions/c831b9c7eee9_post_boost.py`.
 - Every exit path calls `log_incoming_ap()` with a distinct reason string. A bare `return None` is a plan violation.
 - At most one outbound fetch per activity.
 - Boosts of replies are out of scope. A boosted object with a truthy `inReplyTo` is logged and ignored.
+- New logic goes in `app/activitypub/util.py`, not inline in `routes.py`. Branches in `routes.py` stay thin enough to read at a glance, mirroring how `undo_vote()` is called at `routes.py:1723`.
+- No new runtime dependencies. Remote fetches are stubbed by monkeypatching `remote_object_to_json`, not by adding an HTTP mocking library.
 - Rebase onto current `origin/main` before starting. The local branch is 111 commits ahead and 109 behind, and these functions have moved before.
 
 ---
@@ -27,16 +29,283 @@
 
 | File | Responsibility | Change |
 |---|---|---|
-| `app/utils.py` | `boost_cache_entries()` — pure row-to-JSON shaping for the boost cache | Modify |
-| `app/activitypub/util.py` | `announce_target_uri()`, `is_top_level()` pure helpers; `announcer_is_followed()`, `record_boost()`, `remove_boost()`; the real `process_microblog_announce()` | Modify |
+| `tests/conftest.py` | App, database, and truncation fixtures | Create |
+| `tests/factories.py` | Builders for Instance, User, Community, Post, UserFollower | Create |
+| `tests/README.md` | How to set up and run the database-backed tests | Create |
+| `app/utils.py` | `boost_cache_entries()` pure shaping; feed `EXISTS` clause | Modify |
+| `app/activitypub/util.py` | `announce_target_uri()`, `is_top_level()`, `announcer_is_followed()`, `record_boost()`, `remove_boost()`, `undo_boost()`, `process_announce_of_uri()`, real `process_microblog_announce()` | Modify |
 | `app/models.py` | `Post.update_boost_cache()` | Modify |
-| `app/activitypub/routes.py` | Announce dispatch reorder; new `Undo`/`Announce` branch | Modify |
-| `app/utils.py` | Feed query gains an `EXISTS` over `post_boost` | Modify |
-| `tests/test_microblog_announce.py` | Unit tests for the pure helpers | Create |
-| `tests/test_boost_cache_entries.py` | Unit tests for cache shaping | Create |
+| `app/activitypub/routes.py` | Delegate Announce dispatch and Undo/Announce to `util.py` | Modify |
+| `tests/test_microblog_announce.py` | Pure helper tests | Create |
+| `tests/test_boost_cache_entries.py` | Cache shaping tests | Create |
+| `tests/test_boost_storage.py` | Database-backed boost storage tests | Create |
+| `tests/test_process_microblog_announce.py` | Database-backed ingestion tests | Create |
+| `tests/test_announce_dispatch.py` | Dispatch routing and undo tests | Create |
+| `tests/test_feed_boost_visibility.py` | Feed SQL clause tests | Create |
 | `FEDERATION.md` | Document boost ingestion | Modify |
 
-Tests follow `tests/test_microblog_content_to_title.py`: `unittest.TestCase`, no Flask app context, no database. `tests/test_activitypub_util.py` is **not** a model to copy — it requires a live database, live network, and a hardcoded username.
+`tests/test_activitypub_util.py` is **not** a model to copy — it requires live network access and a hardcoded username. Task 0 exists so that nothing else in this plan has to follow it.
+
+---
+
+## Task 0: Test fixtures
+
+**Files:**
+- Create: `tests/conftest.py`
+- Create: `tests/factories.py`
+- Create: `tests/README.md`
+
+**Interfaces:**
+- Consumes: nothing.
+- Produces:
+  - pytest fixture `app` — session-scoped Flask app bound to the test database
+  - pytest fixture `db_session` — function-scoped, truncates all tables after each test
+  - `tests/factories.py`: `make_instance(domain, software='mastodon') -> Instance`, `make_user(instance, name, local=False) -> User`, `make_community(name='microblogs') -> Community`, `make_post(community, user, ap_id) -> Post`, `make_follow(local_user, remote_user) -> UserFollower`
+
+Schema comes from `flask db upgrade`, never `db.create_all()`. SQLAlchemy-Searchable triggers and several indexes are created by migrations and would be absent otherwise, so `create_all()` would silently test a different schema than production runs.
+
+- [ ] **Step 1: Write the smoke test that proves the fixtures work**
+
+Create `tests/test_fixtures_smoke.py`:
+
+```python
+def test_database_is_reachable_and_empty(db_session):
+    """The fixture gives each test a clean database"""
+    from app.models import User
+    assert User.query.count() == 0
+
+
+def test_factories_build_a_followed_remote_user(db_session):
+    """A remote user followed by a local user can be constructed"""
+    from tests.factories import make_instance, make_user, make_follow
+    from app.models import UserFollower
+
+    remote_instance = make_instance('m.example')
+    alice = make_user(remote_instance, 'alice')
+    local = make_user(None, 'localuser', local=True)
+    make_follow(local, alice)
+
+    assert UserFollower.query.filter_by(remote_user_id=alice.id, is_inward=False).count() == 1
+
+
+def test_truncation_between_tests(db_session):
+    """Rows created by the previous test are gone"""
+    from app.models import User
+    assert User.query.count() == 0
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `pytest tests/test_fixtures_smoke.py -v`
+Expected: FAIL — `fixture 'db_session' not found`
+
+- [ ] **Step 3: Write conftest.py**
+
+Create `tests/conftest.py`:
+
+```python
+import os
+
+import pytest
+
+from config import Config
+
+TEST_DATABASE_URL = os.environ.get('TEST_DATABASE_URL')
+
+
+class TestConfig(Config):
+    """Test configuration. Inherits the real Config so tests exercise real settings."""
+    TESTING = True
+    WTF_CSRF_ENABLED = False
+    MAIL_SUPPRESS_SEND = True
+    SQLALCHEMY_DATABASE_URI = TEST_DATABASE_URL
+    CACHE_TYPE = 'NullCache'
+    SERVER_NAME = 'test.piefed.local'
+
+
+@pytest.fixture(scope='session')
+def app():
+    """A Flask app bound to the test database.
+
+    Skips rather than fails when TEST_DATABASE_URL is unset, so a bare checkout
+    can still run the pure-function tests. See tests/README.md for setup.
+    """
+    if not TEST_DATABASE_URL:
+        pytest.skip('TEST_DATABASE_URL is not set; see tests/README.md')
+
+    from app import create_app
+    application = create_app(TestConfig)
+    with application.app_context():
+        yield application
+
+
+@pytest.fixture
+def db_session(app):
+    """Give each test a clean database.
+
+    Truncates rather than rolling back a nested transaction: the code under test
+    calls db.session.commit() in several places, which a rollback-based fixture
+    would have to fight.
+    """
+    from app import db
+    from sqlalchemy import text
+
+    yield db.session
+
+    db.session.rollback()
+    table_names = ', '.join(f'"{table.name}"' for table in reversed(db.metadata.sorted_tables))
+    db.session.execute(text(f'TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE'))
+    db.session.commit()
+```
+
+- [ ] **Step 4: Write factories.py**
+
+Create `tests/factories.py`:
+
+```python
+"""Builders for database rows used by the boost ingestion tests.
+
+Each builder sets the minimum needed for a valid row and commits, so the object
+has an id. If Postgres rejects an insert for a missing NOT NULL column, add that
+column here rather than in the test.
+"""
+
+from app import db
+from app.models import Community, Instance, Post, User, UserFollower, utcnow
+
+
+def make_instance(domain: str, software: str = 'mastodon') -> Instance:
+    instance = Instance(domain=domain, software=software, online=True)
+    db.session.add(instance)
+    db.session.commit()
+    return instance
+
+
+def make_user(instance, name: str, local: bool = False) -> User:
+    """A local user has ap_id None; a remote user has a full actor URI."""
+    user = User(
+        user_name=name,
+        email=f'{name}@example.com',
+        instance_id=instance.id if instance else 1,
+        verified=True,
+        banned=False,
+        ap_id=None if local else f'{name}@{instance.domain}',
+        ap_profile_id=None if local else f'https://{instance.domain}/users/{name}',
+        ap_public_url=None if local else f'https://{instance.domain}/users/{name}',
+        ap_inbox_url=None if local else f'https://{instance.domain}/users/{name}/inbox',
+    )
+    db.session.add(user)
+    db.session.commit()
+    return user
+
+
+def make_community(name: str = 'microblogs') -> Community:
+    community = Community(
+        name=name,
+        title=name,
+        instance_id=1,
+        user_id=1,
+        ap_profile_id=f'https://test.piefed.local/c/{name}',
+        ap_public_url=f'https://test.piefed.local/c/{name}',
+        ap_followers_url=f'https://test.piefed.local/c/{name}/followers',
+        ap_domain='test.piefed.local',
+        subscriptions_count=0,
+        local_only=False,
+        nsfw=False,
+    )
+    db.session.add(community)
+    db.session.commit()
+    return community
+
+
+def make_post(community, user, ap_id: str, title: str = 'a post') -> Post:
+    post = Post(
+        community_id=community.id,
+        user_id=user.id,
+        title=title,
+        ap_id=ap_id,
+        instance_id=user.instance_id,
+        posted_at=utcnow(),
+        last_active=utcnow(),
+        from_bot=False,
+        nsfw=False,
+        deleted=False,
+    )
+    db.session.add(post)
+    db.session.commit()
+    return post
+
+
+def make_follow(local_user, remote_user) -> UserFollower:
+    """local_user follows remote_user. is_inward False means outward: we follow them."""
+    follow = UserFollower(
+        local_user_id=local_user.id,
+        remote_user_id=remote_user.id,
+        is_accepted=True,
+        is_inward=False,
+    )
+    db.session.add(follow)
+    db.session.commit()
+    return follow
+```
+
+- [ ] **Step 5: Write the setup documentation**
+
+Create `tests/README.md`:
+
+```markdown
+# Tests
+
+Tests split into two groups.
+
+**Pure function tests** need no setup and always run:
+
+    pytest tests/test_microblog_announce.py tests/test_boost_cache_entries.py -v
+
+**Database-backed tests** need a throwaway PostgreSQL database. They skip, rather
+than fail, when `TEST_DATABASE_URL` is unset.
+
+One-time setup:
+
+    createdb pyfedi_test
+    DATABASE_URL=postgresql+psycopg2://user:pass@localhost/pyfedi_test flask db upgrade
+
+Then run:
+
+    TEST_DATABASE_URL=postgresql+psycopg2://user:pass@localhost/pyfedi_test pytest tests/ -v
+
+The schema is created by `flask db upgrade`, not `db.create_all()`, because
+SQLAlchemy-Searchable triggers and several indexes are created by migrations and
+would otherwise be missing.
+
+**Warning:** the `db_session` fixture truncates every table after each test. Never
+point `TEST_DATABASE_URL` at a database whose contents you want to keep.
+
+`tests/test_activitypub_util.py` predates this setup. It needs live network access
+and a hardcoded username, and is excluded from the standard run.
+```
+
+- [ ] **Step 6: Create the test database and run the smoke test**
+
+```bash
+createdb pyfedi_test
+DATABASE_URL=postgresql+psycopg2://user:pass@localhost/pyfedi_test flask db upgrade
+TEST_DATABASE_URL=postgresql+psycopg2://user:pass@localhost/pyfedi_test pytest tests/test_fixtures_smoke.py -v
+```
+
+Expected: PASS, 3 tests. If an insert fails on a missing NOT NULL column, add that column to the relevant factory and re-run.
+
+- [ ] **Step 7: Verify the skip path works**
+
+Run: `pytest tests/test_fixtures_smoke.py -v` with `TEST_DATABASE_URL` unset.
+Expected: 3 skipped, 0 failed.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add tests/conftest.py tests/factories.py tests/README.md tests/test_fixtures_smoke.py
+git commit -m "test: add database fixtures and factories"
+```
 
 ---
 
@@ -173,14 +442,14 @@ git commit -m "feat: add pure helpers for reading Announce activities"
 ## Task 2: Boost cache shaping
 
 **Files:**
-- Modify: `app/utils.py` (add a module-level function; place it near `microblog_content_to_title`, around line 990)
+- Modify: `app/utils.py` (add a module-level function near `microblog_content_to_title`, around line 990)
 - Test: `tests/test_boost_cache_entries.py`
 
 **Interfaces:**
 - Consumes: nothing.
 - Produces: `boost_cache_entries(rows) -> list` — takes an iterable of `(user_id, ap_id, display_name, created_at)` tuples and returns the list of dicts stored in `Post.post_boosts`.
 
-This is separated from the database query so the JSON shape, which is where format bugs live, is unit-testable without a database.
+Separated from the database query so the JSON shape, which is where format bugs live, is testable without a database.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -197,10 +466,10 @@ class TestBoostCacheEntries(unittest.TestCase):
 
     def test_single_remote_booster(self):
         """A remote user's ap_id and ISO timestamp are carried into the cache"""
-        rows = [(7, 'https://m.example/users/alice', 'alice', datetime(2026, 8, 23, 12, 30, 0))]
+        rows = [(7, 'alice@m.example', 'alice', datetime(2026, 8, 23, 12, 30, 0))]
         self.assertEqual(boost_cache_entries(rows), [{
             'user_id': 7,
-            'ap_id': 'https://m.example/users/alice',
+            'ap_id': 'alice@m.example',
             'display_name': 'alice',
             'created_at': '2026-08-23T12:30:00',
         }])
@@ -274,10 +543,11 @@ git commit -m "feat: add boost cache entry shaping"
 
 **Files:**
 - Modify: `app/models.py` — add `Post.update_boost_cache()` immediately after `Post.update_reaction_cache()`, which ends at line 2713
-- Modify: `app/activitypub/util.py` — add `record_boost()` and `remove_boost()` above `announce_target_uri` from Task 1; extend the model import at line 27-30
+- Modify: `app/activitypub/util.py` — add `record_boost()` and `remove_boost()` above `announce_target_uri`; extend the model import at lines 27-30
+- Test: `tests/test_boost_storage.py`
 
 **Interfaces:**
-- Consumes: `boost_cache_entries()` from Task 2.
+- Consumes: `boost_cache_entries()` (Task 2); fixtures and factories (Task 0).
 - Produces:
   - `Post.update_boost_cache() -> None`
   - `record_boost(post: Post, user: User) -> None`
@@ -285,7 +555,104 @@ git commit -m "feat: add boost cache entry shaping"
 
 Idempotency uses query-then-insert rather than a unique constraint. A constraint would need a migration, and the duplicate suppression at `app/activitypub/routes.py:647` is a Redis key with a 90-second expiry — replay protection, not durable dedup. Redelivery after that window must not double-count.
 
-- [ ] **Step 1: Add the cache method to Post**
+- [ ] **Step 1: Write the failing test**
+
+Create `tests/test_boost_storage.py`:
+
+```python
+import pytest
+
+from tests.factories import make_community, make_follow, make_instance, make_post, make_user
+
+
+@pytest.fixture
+def boosted(db_session):
+    """A post, and a remote user who can boost it."""
+    from app.models import User
+    instance = make_instance('m.example')
+    author = make_user(instance, 'author')
+    booster = make_user(instance, 'booster')
+    community = make_community()
+    post = make_post(community, author, 'https://m.example/notes/1')
+    return post, booster
+
+
+def test_record_boost_creates_one_row(db_session, boosted):
+    """Recording a boost writes a PostBoost row"""
+    from app.activitypub.util import record_boost
+    from app.models import PostBoost
+    post, booster = boosted
+
+    record_boost(post, booster)
+
+    assert PostBoost.query.filter_by(post_id=post.id, user_id=booster.id).count() == 1
+
+
+def test_record_boost_is_idempotent(db_session, boosted):
+    """Redelivery of the same Announce does not double-count"""
+    from app.activitypub.util import record_boost
+    from app.models import PostBoost
+    post, booster = boosted
+
+    record_boost(post, booster)
+    record_boost(post, booster)
+
+    assert PostBoost.query.filter_by(post_id=post.id).count() == 1
+
+
+def test_record_boost_populates_cache(db_session, boosted):
+    """The post_boosts cache is refreshed with the booster's details"""
+    from app.activitypub.util import record_boost
+    post, booster = boosted
+
+    record_boost(post, booster)
+
+    assert len(post.post_boosts) == 1
+    assert post.post_boosts[0]['user_id'] == booster.id
+    assert post.post_boosts[0]['display_name'] == 'booster'
+
+
+def test_remove_boost_deletes_the_row(db_session, boosted):
+    """Un-boosting removes the row and empties the cache"""
+    from app.activitypub.util import record_boost, remove_boost
+    from app.models import PostBoost
+    post, booster = boosted
+
+    record_boost(post, booster)
+    remove_boost(post, booster)
+
+    assert PostBoost.query.filter_by(post_id=post.id).count() == 0
+    assert post.post_boosts == []
+
+
+def test_remove_boost_when_absent_is_a_no_op(db_session, boosted):
+    """A repeated Undo does not raise; remote instances re-send"""
+    from app.activitypub.util import remove_boost
+    post, booster = boosted
+
+    remove_boost(post, booster)
+    remove_boost(post, booster)
+
+
+def test_two_boosters_both_recorded(db_session, boosted):
+    """Idempotency is per user, not per post"""
+    from app.activitypub.util import record_boost
+    from app.models import PostBoost
+    post, booster = boosted
+    other = make_user(make_instance('other.example'), 'other')
+
+    record_boost(post, booster)
+    record_boost(post, other)
+
+    assert PostBoost.query.filter_by(post_id=post.id).count() == 2
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `TEST_DATABASE_URL=... pytest tests/test_boost_storage.py -v`
+Expected: FAIL at import — `ImportError: cannot import name 'record_boost'`
+
+- [ ] **Step 3: Add the cache method to Post**
 
 In `app/models.py`, immediately after the end of `update_reaction_cache()` (line 2713):
 
@@ -301,11 +668,11 @@ In `app/models.py`, immediately after the end of `update_reaction_cache()` (line
 
 `PostBoost` is defined later in the same module (line 4255) but resolves at call time. `update_reaction_cache` uses the same local-import-from-`app.utils` idiom.
 
-- [ ] **Step 2: Add the import to util.py**
+- [ ] **Step 4: Add the import to util.py**
 
 In `app/activitypub/util.py`, extend the `from app.models import ...` block at lines 27-30 with `UserFollower` and `PostBoost`. Neither is currently imported there.
 
-- [ ] **Step 3: Add the write helpers to util.py**
+- [ ] **Step 5: Add the write helpers to util.py**
 
 ```python
 def record_boost(post: Post, user: User) -> None:
@@ -337,20 +704,15 @@ def remove_boost(post: Post, user: User) -> None:
     db.session.commit()
 ```
 
-- [ ] **Step 4: Verify the module still imports**
+- [ ] **Step 6: Run test to verify it passes**
 
-Run: `python -c "import app.activitypub.util, app.models"`
-Expected: no output, exit 0. A `NameError` here means the `PostBoost` import in Step 2 was missed.
+Run: `TEST_DATABASE_URL=... pytest tests/test_boost_storage.py -v`
+Expected: PASS, 6 tests
 
-- [ ] **Step 5: Run the existing test suite for regressions**
-
-Run: `pytest tests/test_microblog_announce.py tests/test_boost_cache_entries.py tests/test_microblog_content_to_title.py -v`
-Expected: PASS, 20 tests
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add app/models.py app/activitypub/util.py
+git add app/models.py app/activitypub/util.py tests/test_boost_storage.py
 git commit -m "feat: add boost recording and removal"
 ```
 
@@ -359,14 +721,154 @@ git commit -m "feat: add boost recording and removal"
 ## Task 4: Implement process_microblog_announce
 
 **Files:**
-- Modify: `app/activitypub/util.py:3418-3435` — replace the stub body
+- Modify: `app/activitypub/util.py:3418-3435` — replace the stub body; add `announcer_is_followed()`
 - Modify: `FEDERATION.md`
+- Test: `tests/test_process_microblog_announce.py`
 
 **Interfaces:**
 - Consumes: `announce_target_uri()`, `is_top_level()` (Task 1); `record_boost()` (Task 3); existing `find_actor_or_create_cached()` (line 322), `remote_object_to_json()` (line 3621), `create_resolved_object()` (line 3678), `find_microblogging_community()` (line 4030), `log_incoming_ap()` (line 3957).
-- Produces: `process_microblog_announce(request_json, id, store_ap_json) -> Union[Post, None]` — signature unchanged, so the call site at `app/activitypub/routes.py:868` is unaffected.
+- Produces:
+  - `announcer_is_followed(user_id: int) -> bool`
+  - `process_microblog_announce(request_json, id, store_ap_json) -> Union[Post, None]` — signature unchanged, so the call site is unaffected.
 
-- [ ] **Step 1: Add the trust gate helper**
+- [ ] **Step 1: Write the failing test**
+
+Create `tests/test_process_microblog_announce.py`:
+
+```python
+import pytest
+
+from tests.factories import make_community, make_follow, make_instance, make_post, make_user
+
+
+@pytest.fixture
+def followed_booster(db_session):
+    """A remote account that a local user follows."""
+    instance = make_instance('m.example')
+    booster = make_user(instance, 'booster')
+    local = make_user(None, 'localuser', local=True)
+    make_follow(local, booster)
+    return booster
+
+
+@pytest.fixture
+def fetch_spy(monkeypatch):
+    """Replace the remote fetch, and count how many times it is called."""
+    calls = []
+
+    def fake_fetch(uri):
+        calls.append(uri)
+        return fake_fetch.result
+
+    fake_fetch.result = None
+    monkeypatch.setattr('app.activitypub.util.remote_object_to_json', fake_fetch)
+    return fake_fetch, calls
+
+
+def announce(actor_uri, object_uri):
+    return {
+        'id': f'{actor_uri}/statuses/1/activity',
+        'type': 'Announce',
+        'actor': actor_uri,
+        'object': object_uri,
+    }
+
+
+def test_unfollowed_actor_is_rejected_without_fetching(db_session, fetch_spy):
+    """The trust gate runs before any network I/O"""
+    from app.activitypub.util import process_microblog_announce
+    _, calls = fetch_spy
+    instance = make_instance('m.example')
+    stranger = make_user(instance, 'stranger')
+
+    result = process_microblog_announce(
+        announce(stranger.ap_public_url, 'https://other.example/notes/9'), 'a1', False)
+
+    assert result is None
+    assert calls == [], 'no fetch may happen for an unfollowed actor'
+
+
+def test_banned_actor_is_rejected_without_fetching(db_session, fetch_spy, followed_booster):
+    """A banned actor is rejected even if followed"""
+    from app import db
+    from app.activitypub.util import process_microblog_announce
+    _, calls = fetch_spy
+    followed_booster.banned = True
+    db.session.commit()
+
+    result = process_microblog_announce(
+        announce(followed_booster.ap_public_url, 'https://other.example/notes/9'), 'a2', False)
+
+    assert result is None
+    assert calls == []
+
+
+def test_boosted_reply_is_ignored(db_session, fetch_spy, followed_booster):
+    """A boosted reply is dropped; ancestor backfill is out of scope"""
+    from app.activitypub.util import process_microblog_announce
+    fake_fetch, calls = fetch_spy
+    fake_fetch.result = {
+        'id': 'https://other.example/notes/9',
+        'type': 'Note',
+        'inReplyTo': 'https://other.example/notes/8',
+        'attributedTo': 'https://other.example/users/bob',
+    }
+
+    result = process_microblog_announce(
+        announce(followed_booster.ap_public_url, 'https://other.example/notes/9'), 'a3', False)
+
+    assert result is None
+    assert len(calls) == 1, 'exactly one fetch per activity'
+
+
+def test_existing_local_post_is_boosted_without_fetching(db_session, fetch_spy, followed_booster):
+    """A boost of a post we already have short-circuits before the fetch"""
+    from app.activitypub.util import process_microblog_announce
+    from app.models import PostBoost
+    _, calls = fetch_spy
+    author = make_user(make_instance('other.example'), 'bob')
+    post = make_post(make_community(), author, 'https://other.example/notes/7')
+
+    result = process_microblog_announce(
+        announce(followed_booster.ap_public_url, post.ap_id), 'a4', False)
+
+    assert result is not None and result.id == post.id
+    assert calls == [], 'a post we already have must not be fetched'
+    assert PostBoost.query.filter_by(post_id=post.id, user_id=followed_booster.id).count() == 1
+
+
+def test_redelivery_does_not_double_count(db_session, fetch_spy, followed_booster):
+    """The same Announce arriving twice records one boost"""
+    from app.activitypub.util import process_microblog_announce
+    from app.models import PostBoost
+    author = make_user(make_instance('other.example'), 'bob')
+    post = make_post(make_community(), author, 'https://other.example/notes/7')
+    activity = announce(followed_booster.ap_public_url, post.ap_id)
+
+    process_microblog_announce(activity, 'a5', False)
+    process_microblog_announce(activity, 'a5', False)
+
+    assert PostBoost.query.filter_by(post_id=post.id).count() == 1
+
+
+def test_announce_without_object_is_rejected(db_session, fetch_spy, followed_booster):
+    """A malformed Announce is rejected without fetching"""
+    from app.activitypub.util import process_microblog_announce
+    _, calls = fetch_spy
+
+    result = process_microblog_announce(
+        {'id': 'a6', 'type': 'Announce', 'actor': followed_booster.ap_public_url}, 'a6', False)
+
+    assert result is None
+    assert calls == []
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `TEST_DATABASE_URL=... pytest tests/test_process_microblog_announce.py -v`
+Expected: FAIL — every test returns `None` from the stub, so the assertions about `PostBoost` rows and the local short circuit fail.
+
+- [ ] **Step 3: Add the trust gate helper**
 
 In `app/activitypub/util.py`, above `record_boost`:
 
@@ -382,9 +884,9 @@ def announcer_is_followed(user_id: int) -> bool:
         UserFollower.is_inward == False).first() is not None
 ```
 
-- [ ] **Step 2: Replace the stub body**
+- [ ] **Step 4: Replace the stub body**
 
-Replace the whole of `process_microblog_announce` — the docstring and the two-line body at lines 3418-3435 — with:
+Replace the whole of `process_microblog_announce` — docstring and two-line body, lines 3418-3435 — with:
 
 ```python
 def process_microblog_announce(request_json, id, store_ap_json) -> Union[Post, None]:
@@ -442,43 +944,15 @@ def process_microblog_announce(request_json, id, store_ap_json) -> Union[Post, N
 
 `urlparse` is already imported at line 11. The `APLOG_*` constants arrive via `from app.constants import *` at line 26.
 
-- [ ] **Step 3: Verify the module imports and helpers still pass**
+- [ ] **Step 5: Run test to verify it passes**
 
-Run: `python -c "import app.activitypub.util" && pytest tests/test_microblog_announce.py tests/test_boost_cache_entries.py -v`
-Expected: PASS, 17 tests
+Run: `TEST_DATABASE_URL=... pytest tests/test_process_microblog_announce.py -v`
+Expected: PASS, 6 tests
 
-- [ ] **Step 4: Verify against a real instance**
+- [ ] **Step 6: Run everything so far**
 
-This path cannot be exercised by the test harness. From a shell with the project's usual environment:
-
-```bash
-flask shell <<'EOF'
-from app.activitypub.util import process_microblog_announce
-from app.models import Post, PostBoost
-# Replace with a real boost URI from an account a local user follows,
-# and that account's actor URI.
-activity = {
-    'id': 'https://m.example/users/alice/statuses/1/activity',
-    'type': 'Announce',
-    'actor': 'https://m.example/users/alice',
-    'object': 'https://other.example/users/bob/statuses/9',
-}
-post = process_microblog_announce(activity, activity['id'], False)
-print('post:', post)
-print('boosts:', PostBoost.query.filter_by(post_id=post.id).count() if post else None)
-print('cache:', post.post_boosts if post else None)
-EOF
-```
-
-Expected: a `Post` in the microblogs community, exactly one `PostBoost` row, and a populated `post_boosts` cache.
-
-- [ ] **Step 5: Verify idempotency**
-
-Re-run the same block. Expected: the same post, still exactly **one** `PostBoost` row.
-
-- [ ] **Step 6: Verify the trust gate**
-
-Re-run with `actor` set to an account **no** local user follows. Expected: `post: None`, no fetch attempted, and an `ActivityPubLog` row whose message is `Announce from unfollowed actor`.
+Run: `TEST_DATABASE_URL=... pytest tests/ -v --ignore=tests/test_activitypub_util.py`
+Expected: no failures
 
 - [ ] **Step 7: Document it**
 
@@ -492,24 +966,132 @@ In `FEDERATION.md`, under `## ActivityPub`, add:
 - [ ] **Step 8: Commit**
 
 ```bash
-git add app/activitypub/util.py FEDERATION.md
+git add app/activitypub/util.py FEDERATION.md tests/test_process_microblog_announce.py
 git commit -m "feat: ingest boosts of microblog posts from followed accounts"
 ```
 
 ---
 
-## Task 5: Record boosts of local posts
+## Task 5: Announce dispatch, including boosts of local posts
 
 **Files:**
-- Modify: `app/activitypub/routes.py:862-875`
+- Modify: `app/activitypub/util.py` — add `process_announce_of_uri()`
+- Modify: `app/activitypub/routes.py:862-875` — delegate to it
+- Test: `tests/test_announce_dispatch.py`
 
 **Interfaces:**
-- Consumes: `process_microblog_announce()` (Task 4).
-- Produces: no new symbols. Changes which activities reach `process_microblog_announce`.
+- Consumes: `process_microblog_announce()` (Task 4); existing `resolve_remote_post()` (line 3662).
+- Produces: `process_announce_of_uri(request_json, community, id, store_ap_json) -> Union[Post, None]`
 
-The early return at lines 864-866 fires for any Announce whose object URL starts with this server's name, **before** the `community is None` dispatch at line 868. A followed account boosting a post authored here therefore never reaches the function. That is likely the most common boost a PieFed instance receives.
+The early return at `routes.py:864-866` fires for any Announce whose object URL starts with this server's name, **before** the `community is None` dispatch at line 868. A followed account boosting a post authored here therefore never reaches `process_microblog_announce`. That is likely the most common boost a PieFed instance receives.
 
-- [ ] **Step 1: Reorder the dispatch**
+Extracting the dispatch into `util.py` fixes that and makes the ordering testable without Redis or the inbox plumbing.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `tests/test_announce_dispatch.py`:
+
+```python
+import pytest
+
+from tests.factories import make_community, make_follow, make_instance, make_post, make_user
+
+
+@pytest.fixture
+def followed_booster(db_session):
+    instance = make_instance('m.example')
+    booster = make_user(instance, 'booster')
+    local = make_user(None, 'localuser', local=True)
+    make_follow(local, booster)
+    return booster
+
+
+def announce(actor_uri, object_uri):
+    return {
+        'id': f'{actor_uri}/statuses/1/activity',
+        'type': 'Announce',
+        'actor': actor_uri,
+        'object': object_uri,
+    }
+
+
+def test_local_post_boost_is_recorded(db_session, followed_booster, monkeypatch):
+    """A followed account boosting a locally authored post records the boost"""
+    from app.activitypub.util import process_announce_of_uri
+    from app.models import PostBoost
+    monkeypatch.setattr('app.activitypub.util.remote_object_to_json',
+                        lambda uri: pytest.fail('must not fetch local content'))
+    author = make_user(None, 'localauthor', local=True)
+    post = make_post(make_community('news'), author, 'https://test.piefed.local/c/news/p/1/hello')
+
+    result = process_announce_of_uri(announce(followed_booster.ap_public_url, post.ap_id),
+                                     None, 'd1', False)
+
+    assert result is not None and result.id == post.id
+    assert PostBoost.query.filter_by(post_id=post.id, user_id=followed_booster.id).count() == 1
+
+
+def test_community_announce_of_local_content_is_ignored(db_session, monkeypatch):
+    """The community path still discards duplicates of local content"""
+    from app.activitypub.util import process_announce_of_uri
+    monkeypatch.setattr('app.activitypub.util.resolve_remote_post',
+                        lambda *args, **kwargs: pytest.fail('must not resolve local content'))
+    community = make_community('news')
+
+    result = process_announce_of_uri(
+        announce('https://m.example/users/booster', 'https://test.piefed.local/c/news/p/1/hello'),
+        community, 'd2', False)
+
+    assert result is None
+
+
+def test_community_announce_of_remote_content_resolves(db_session, monkeypatch):
+    """The community path still resolves remote content"""
+    from app.activitypub.util import process_announce_of_uri
+    seen = []
+    monkeypatch.setattr('app.activitypub.util.resolve_remote_post',
+                        lambda uri, community, announce_id, store: seen.append(uri) or 'resolved')
+    community = make_community('news')
+
+    result = process_announce_of_uri(
+        announce('https://m.example/users/booster', 'https://other.example/notes/3'),
+        community, 'd3', False)
+
+    assert result == 'resolved'
+    assert seen == ['https://other.example/notes/3']
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `TEST_DATABASE_URL=... pytest tests/test_announce_dispatch.py -v`
+Expected: FAIL at import — `ImportError: cannot import name 'process_announce_of_uri'`
+
+- [ ] **Step 3: Add the dispatch function to util.py**
+
+In `app/activitypub/util.py`, immediately after `process_microblog_announce`:
+
+```python
+def process_announce_of_uri(request_json, community, id, store_ap_json) -> Union[Post, None]:
+    """Route an Announce whose object is a bare URI.
+
+    With no community, this is a microblog boost. Its object may be local content,
+    in which case process_microblog_announce records the boost without fetching or
+    creating anything — which is why the local-content check below applies only to
+    the community path.
+    """
+    if community is None:
+        return process_microblog_announce(request_json, id, store_ap_json)
+
+    uri = announce_target_uri(request_json)
+    if uri and uri.startswith('https://' + current_app.config['SERVER_NAME']):
+        log_incoming_ap(id, APLOG_DUPLICATE, APLOG_IGNORED, request_json if store_ap_json else None,
+                        'Activity about local content which is already present')
+        return None
+
+    return resolve_remote_post(uri, community, id, store_ap_json)
+```
+
+- [ ] **Step 4: Delegate from routes.py**
 
 Replace lines 863-870 of `app/activitypub/routes.py`:
 
@@ -528,59 +1110,25 @@ with:
 
 ```python
                     if isinstance(request_json['object'], str):
-                        if community is None:
-                            # A microblog boost. Its object may be local content, in which
-                            # case process_microblog_announce records the boost without
-                            # fetching or creating anything.
-                            post = process_microblog_announce(request_json, id, store_ap_json)
-                        elif request_json['object'].startswith('https://' + current_app.config['SERVER_NAME']):
-                            log_incoming_ap(id, APLOG_DUPLICATE, APLOG_IGNORED, saved_json, 'Activity about local content which is already present')
-                            return
-                        else:
-                            post = resolve_remote_post(request_json['object'], community, id, store_ap_json)
+                        post = process_announce_of_uri(request_json, community, id, store_ap_json)
 ```
 
-The early return stays in place for the `community is not None` path, so community-path deduplication is unchanged.
+Then update the import at `app/activitypub/routes.py:22` to bring in `process_announce_of_uri`. `process_microblog_announce` and `resolve_remote_post` may no longer be referenced directly in `routes.py`; remove them from the import only if that is the case.
 
-- [ ] **Step 2: Verify a boost of a local post is recorded**
+- [ ] **Step 5: Run test to verify it passes**
 
-```bash
-flask shell <<'EOF'
-from app.activitypub.util import process_microblog_announce
-from app.models import Post, PostBoost
-local_post = Post.query.filter(Post.ap_id.like('https://%'), Post.instance_id == 1).first()
-activity = {
-    'id': 'https://m.example/users/alice/statuses/2/activity',
-    'type': 'Announce',
-    'actor': 'https://m.example/users/alice',   # must be followed by a local user
-    'object': local_post.ap_id,
-}
-post = process_microblog_announce(activity, activity['id'], False)
-print('same post:', post is not None and post.id == local_post.id)
-print('boosts:', PostBoost.query.filter_by(post_id=local_post.id).count())
-EOF
-```
+Run: `TEST_DATABASE_URL=... pytest tests/test_announce_dispatch.py -v`
+Expected: PASS, 3 tests
 
-Expected: `same post: True`, `boosts: 1`, and no outbound fetch.
+- [ ] **Step 6: Verify routes.py still imports**
 
-- [ ] **Step 3: Regression check — community-path dedup still works**
+Run: `python -c "import app.activitypub.routes"`
+Expected: no output, exit 0
 
-Send an `Announce` from a **Community** actor whose object is a local post URL, and confirm the log still records `Activity about local content which is already present` and that no post is created or modified. Query the most recent `ActivityPubLog` rows:
+- [ ] **Step 7: Commit**
 
 ```bash
-flask shell <<'EOF'
-from app.models import ActivityPubLog
-for row in ActivityPubLog.query.filter_by(direction='in').order_by(ActivityPubLog.id.desc()).limit(5):
-    print(row.activity_type, row.result, row.exception_message)
-EOF
-```
-
-Expected: the `Announce` from the Community actor appears with result `ignored` and message `Activity about local content which is already present`.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add app/activitypub/routes.py
+git add app/activitypub/util.py app/activitypub/routes.py tests/test_announce_dispatch.py
 git commit -m "fix: record boosts of posts authored on this instance"
 ```
 
@@ -589,30 +1137,107 @@ git commit -m "fix: record boosts of posts authored on this instance"
 ## Task 6: Handle Undo of a boost
 
 **Files:**
-- Modify: `app/activitypub/routes.py` — add a branch after the `Like`/`Dislike` branch, which ends at line 1731; extend the `app.activitypub.util` import at line 22
+- Modify: `app/activitypub/util.py` — add `undo_boost()` next to `undo_vote()` (line 3209)
+- Modify: `app/activitypub/routes.py` — add a branch after the `Like`/`Dislike` branch, which ends at line 1731; extend the import at line 22
+- Test: `tests/test_announce_dispatch.py` (append)
 
 **Interfaces:**
 - Consumes: `announce_target_uri()` (Task 1), `remove_boost()` (Task 3).
-- Produces: no new symbols.
+- Produces: `undo_boost(target_ap_id: str, user: User) -> Union[Post, None]` — returns the post whose boost was removed, or None. Mirrors `undo_vote()`'s shape so the routes branch stays thin.
 
 There is currently no `Undo`/`Announce` branch at all. The chain starting at line 1645 handles only `Follow`, `Delete`, `Like`/`Dislike`, `Lock`, `Block`, and `ChooseAnswer`, so boost counts can only ever increase.
 
-- [ ] **Step 1: Extend the import**
+- [ ] **Step 1: Write the failing test**
 
-In `app/activitypub/routes.py`, add `announce_target_uri` and `remove_boost` to the `from app.activitypub.util import ...` block that already brings in `process_microblog_announce` at line 22.
+Append to `tests/test_announce_dispatch.py`:
 
-- [ ] **Step 2: Add the branch**
+```python
+def test_undo_boost_removes_the_row(db_session, followed_booster):
+    """Un-boosting removes the PostBoost row and returns the post"""
+    from app.activitypub.util import record_boost, undo_boost
+    from app.models import PostBoost
+    author = make_user(make_instance('other.example'), 'bob')
+    post = make_post(make_community(), author, 'https://other.example/notes/7')
+    record_boost(post, followed_booster)
 
-Immediately after the `Like`/`Dislike` branch's `return` (line 1731):
+    result = undo_boost(post.ap_id, followed_booster)
+
+    assert result is not None and result.id == post.id
+    assert PostBoost.query.filter_by(post_id=post.id).count() == 0
+    assert post.post_boosts == []
+
+
+def test_undo_boost_for_unknown_post_returns_none(db_session, followed_booster):
+    """An Undo for a post we do not have is ignored, not an error"""
+    from app.activitypub.util import undo_boost
+
+    assert undo_boost('https://other.example/notes/404', followed_booster) is None
+
+
+def test_undo_boost_twice_is_a_no_op(db_session, followed_booster):
+    """Remote instances re-send; the second Undo must not raise"""
+    from app.activitypub.util import record_boost, undo_boost
+    author = make_user(make_instance('other.example'), 'bob')
+    post = make_post(make_community(), author, 'https://other.example/notes/7')
+    record_boost(post, followed_booster)
+
+    undo_boost(post.ap_id, followed_booster)
+    assert undo_boost(post.ap_id, followed_booster) is not None
+
+
+def test_undo_boost_only_removes_the_undoing_users_boost(db_session, followed_booster):
+    """One user's Undo leaves another user's boost intact"""
+    from app.activitypub.util import record_boost, undo_boost
+    from app.models import PostBoost
+    author = make_user(make_instance('other.example'), 'bob')
+    other = make_user(make_instance('third.example'), 'carol')
+    post = make_post(make_community(), author, 'https://other.example/notes/7')
+    record_boost(post, followed_booster)
+    record_boost(post, other)
+
+    undo_boost(post.ap_id, followed_booster)
+
+    assert PostBoost.query.filter_by(post_id=post.id).count() == 1
+    assert PostBoost.query.filter_by(post_id=post.id, user_id=other.id).count() == 1
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `TEST_DATABASE_URL=... pytest tests/test_announce_dispatch.py -v`
+Expected: FAIL at import — `ImportError: cannot import name 'undo_boost'`
+
+- [ ] **Step 3: Add undo_boost to util.py**
+
+In `app/activitypub/util.py`, immediately after `undo_vote()` (which begins at line 3209):
+
+```python
+def undo_boost(target_ap_id: str, user: User) -> Union[Post, None]:
+    """Remove `user`'s boost of the post at `target_ap_id`.
+
+    Returns the post so the caller can log a result, mirroring undo_vote().
+    A post with no boost from this user still returns the post: a repeated Undo
+    is a successful no-op, not a failure.
+    """
+    if not target_ap_id:
+        return None
+    post = Post.get_by_ap_id(target_ap_id)
+    if not post:
+        return None
+    remove_boost(post, user)
+    return post
+```
+
+- [ ] **Step 4: Add the routes branch**
+
+In `app/activitypub/routes.py`, immediately after the `Like`/`Dislike` branch's `return` (line 1731):
 
 ```python
                     if core_activity['object']['type'] == 'Announce':  # Undoing a boost from a microblogging platform
+                        # `user` comes from the signed outer actor, resolved at line 838.
+                        # Never read the actor from the inner object.
                         target_ap_id = announce_target_uri(core_activity['object'])
-                        post = Post.get_by_ap_id(target_ap_id) if target_ap_id else None
+                        post = undo_boost(target_ap_id, user)
                         if post:
-                            # `user` comes from the signed outer actor, resolved at line 838.
-                            # Never read the actor from the inner object.
-                            remove_boost(post, user)
                             log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_SUCCESS, saved_json)
                         else:
                             log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json,
@@ -620,50 +1245,24 @@ Immediately after the `Like`/`Dislike` branch's `return` (line 1731):
                         return
 ```
 
+Add `announce_target_uri` and `undo_boost` to the `from app.activitypub.util import ...` block at line 22.
+
 No trust gate applies. Removing a boost is always safe, and gating it could strand rows if the announcer is unfollowed between the boost and the un-boost. No fetch occurs, because there is nothing to create.
 
-- [ ] **Step 3: Verify the module imports**
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `TEST_DATABASE_URL=... pytest tests/test_announce_dispatch.py -v`
+Expected: PASS, 7 tests
+
+- [ ] **Step 6: Verify routes.py still imports**
 
 Run: `python -c "import app.activitypub.routes"`
 Expected: no output, exit 0
 
-- [ ] **Step 4: Verify un-boost removes the row**
-
-Using the post boosted in Task 4 Step 4:
+- [ ] **Step 7: Commit**
 
 ```bash
-flask shell <<'EOF'
-from app.activitypub.routes import process_inbox_request
-from app.models import Post, PostBoost
-post = Post.query.filter_by(ap_id='https://other.example/users/bob/statuses/9').first()
-print('before:', PostBoost.query.filter_by(post_id=post.id).count())
-undo = {
-    'id': 'https://m.example/users/alice/statuses/1/undo',
-    'type': 'Undo',
-    'actor': 'https://m.example/users/alice',
-    'object': {
-        'id': 'https://m.example/users/alice/statuses/1/activity',
-        'type': 'Announce',
-        'actor': 'https://m.example/users/alice',
-        'object': post.ap_id,
-    },
-}
-process_inbox_request(undo, False)
-print('after:', PostBoost.query.filter_by(post_id=post.id).count())
-print('cache:', Post.query.get(post.id).post_boosts)
-EOF
-```
-
-Expected: `before: 1`, `after: 0`, cache `[]`.
-
-- [ ] **Step 5: Verify a repeated Undo is a no-op**
-
-Re-run the same block. Expected: `after: 0`, no exception, and a log row with result `success`.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add app/activitypub/routes.py
+git add app/activitypub/util.py app/activitypub/routes.py tests/test_announce_dispatch.py
 git commit -m "feat: handle Undo of microblog boosts"
 ```
 
@@ -673,6 +1272,7 @@ git commit -m "feat: handle Undo of microblog boosts"
 
 **Files:**
 - Modify: `app/utils.py:3244-3248`
+- Test: `tests/test_feed_boost_visibility.py`
 
 **Interfaces:**
 - Consumes: the `post_boost` table populated by Task 3.
@@ -682,9 +1282,98 @@ Without this, ingestion is invisible bookkeeping — the existing clause matches
 
 This sits in the hot feed path, so the change is gated on measurement.
 
-- [ ] **Step 1: Capture the baseline query plan**
+- [ ] **Step 1: Write the failing test**
 
-Before changing anything, capture the plan for a logged-in feed query on a populated database:
+Create `tests/test_feed_boost_visibility.py`:
+
+```python
+"""The feed clause is a SQL string in app/utils.py, so it is tested as SQL.
+
+This keeps the test independent of Flask-Login and the rest of the feed query.
+"""
+
+import pytest
+from sqlalchemy import text
+
+from tests.factories import make_community, make_follow, make_instance, make_post, make_user
+
+BOOST_CLAUSE = """SELECT p.id FROM "post" as p WHERE
+EXISTS (SELECT 1 FROM post_boost pb
+        INNER JOIN user_follower uf2 ON uf2.remote_user_id = pb.user_id
+        WHERE pb.post_id = p.id
+        AND uf2.local_user_id = :local_user_id
+        AND uf2.is_inward is false)"""
+
+
+@pytest.fixture
+def scenario(db_session):
+    """A local user follows booster. Stranger authors a post. Booster boosts it."""
+    from app.activitypub.util import record_boost
+    instance = make_instance('m.example')
+    booster = make_user(instance, 'booster')
+    stranger = make_user(make_instance('other.example'), 'stranger')
+    local = make_user(None, 'localuser', local=True)
+    make_follow(local, booster)
+    post = make_post(make_community(), stranger, 'https://other.example/notes/1')
+    record_boost(post, booster)
+    return local, post, stranger
+
+
+def test_boosted_post_is_visible(db_session, scenario):
+    """A post boosted by a followed account matches the clause"""
+    from app import db
+    local, post, _ = scenario
+
+    ids = [row[0] for row in db.session.execute(text(BOOST_CLAUSE), {'local_user_id': local.id})]
+
+    assert post.id in ids
+
+
+def test_unboosted_post_is_not_visible(db_session, scenario):
+    """A post nobody followed has boosted does not match"""
+    from app import db
+    local, _, stranger = scenario
+    other_post = make_post(make_community('other'), stranger, 'https://other.example/notes/2')
+
+    ids = [row[0] for row in db.session.execute(text(BOOST_CLAUSE), {'local_user_id': local.id})]
+
+    assert other_post.id not in ids
+
+
+def test_not_visible_to_a_user_who_follows_nobody(db_session, scenario):
+    """The clause is scoped to the querying user's own follows"""
+    from app import db
+    _, post, _ = scenario
+    someone_else = make_user(None, 'someoneelse', local=True)
+
+    ids = [row[0] for row in db.session.execute(text(BOOST_CLAUSE),
+                                                {'local_user_id': someone_else.id})]
+
+    assert ids == []
+
+
+def test_clause_matches_the_one_in_utils():
+    """The tested SQL is the SQL the feed actually uses.
+
+    Guards against the test drifting from app/utils.py.
+    """
+    import inspect
+    from app import utils
+    source = inspect.getsource(utils.get_deduped_post_ids)
+    assert 'post_boost pb' in source
+    assert 'uf2.remote_user_id = pb.user_id' in source
+```
+
+`get_deduped_post_ids` (`app/utils.py:3226`) is the function that builds this SQL.
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `TEST_DATABASE_URL=... pytest tests/test_feed_boost_visibility.py -v`
+Expected: the first three tests PASS (the clause is valid SQL on its own) and `test_clause_matches_the_one_in_utils` FAILS, because `app/utils.py` does not contain the clause yet.
+
+- [ ] **Step 3: Capture the baseline query plan**
+
+Before changing `app/utils.py`, capture the plan for a logged-in feed query on a **populated** database — the development database, not the truncated test one:
 
 ```bash
 flask shell <<'EOF'
@@ -702,7 +1391,7 @@ EOF
 
 Record the total execution time. Substitute a `local_user_id` that actually follows people.
 
-- [ ] **Step 2: Add the EXISTS clause**
+- [ ] **Step 4: Add the EXISTS clause**
 
 In `app/utils.py`, replace lines 3244-3248:
 
@@ -731,25 +1420,30 @@ with:
 
 Both `post_boost.post_id` and `post_boost.user_id` are already indexed by `migrations/versions/c831b9c7eee9_post_boost.py`.
 
-- [ ] **Step 3: Capture the new query plan**
+- [ ] **Step 5: Run test to verify it passes**
 
-Re-run Step 1's block with the second `EXISTS` added to the `WHERE` clause. Compare execution time against the baseline.
+Run: `TEST_DATABASE_URL=... pytest tests/test_feed_boost_visibility.py -v`
+Expected: PASS, 4 tests
 
-**Gate:** if the added clause degrades the query beyond what the team accepts on this dataset, stop and report the numbers rather than merging. Do not silently accept a regression in the feed path.
+- [ ] **Step 6: Capture the new query plan**
 
-- [ ] **Step 4: Verify a boosted post appears in the feed**
+Re-run Step 3's block with the second `EXISTS` added to the `WHERE` clause. Compare execution time against the baseline.
 
-Log in as a user who follows the boosting account, load the home feed with the "subscribed" filter, and confirm the post boosted in Task 4 appears even though its author is not followed.
+**Gate:** if the added clause degrades the query beyond what the team accepts on this dataset, stop and report the numbers rather than merging. Do not silently accept a regression in the feed path. Tasks 0-6 remain useful on their own if this happens.
 
-- [ ] **Step 5: Run the full unit test suite**
+- [ ] **Step 7: Verify end to end in the running app**
 
-Run: `pytest tests/ -v --ignore=tests/test_activitypub_util.py`
-Expected: no new failures compared to the pre-change baseline. `tests/test_activitypub_util.py` is excluded because it requires live network access and a hardcoded username.
+Log in as a user who follows the boosting account, load the home feed with the "subscribed" filter, and confirm a boosted post appears even though its author is not followed.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Run the full suite**
+
+Run: `TEST_DATABASE_URL=... pytest tests/ -v --ignore=tests/test_activitypub_util.py`
+Expected: no failures. `tests/test_activitypub_util.py` is excluded because it requires live network access and a hardcoded username.
+
+- [ ] **Step 9: Commit**
 
 ```bash
-git add app/utils.py
+git add app/utils.py tests/test_feed_boost_visibility.py
 git commit -m "feat: surface posts boosted by followed accounts in the feed"
 ```
 
@@ -768,7 +1462,11 @@ Spec coverage, section by section:
 | Boosts of local posts | Task 5 |
 | Feed surfacing | Task 7 |
 | Error handling and logging | Task 4 (every branch logs) |
-| Security considerations | Task 4 Step 6, Task 6 Step 2 |
-| Testing | Tasks 1, 2; manual steps in Tasks 4-7 |
+| Security considerations | Task 4 Steps 1-4 (trust gate asserted by test), Task 6 Step 4 |
+| Testing | Task 0 provides fixtures; Tasks 1-7 each carry tests |
 
-Symbols are used consistently throughout: `announce_target_uri`, `is_top_level`, `boost_cache_entries`, `announcer_is_followed`, `record_boost`, `remove_boost`, `Post.update_boost_cache`.
+The spec's Testing section describes several behaviours as manually verified. Task 0 supersedes that: everything except the `EXPLAIN ANALYZE` gate and the final end-to-end feed check is now automated. The spec has been updated to match.
+
+Symbols used consistently throughout: `announce_target_uri`, `is_top_level`, `boost_cache_entries`, `announcer_is_followed`, `record_boost`, `remove_boost`, `undo_boost`, `process_announce_of_uri`, `Post.update_boost_cache`.
+
+Known risk carried into implementation: `tests/factories.py` sets the columns that are needed as far as the models show. If Postgres rejects an insert for a column this plan did not anticipate, add it to the factory — that is expected iteration, not a plan defect.
