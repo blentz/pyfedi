@@ -19,13 +19,21 @@ def test_api_user_subscriptions(app, api_baseline):
     existing_subs = db.session.execute(
         text('SELECT entity_id FROM "notification_subscription" WHERE user_id = :user_id AND type = 0'),
         {"user_id": user_id}).scalars()
+    # Users who have blocked user_id are excluded too: without it, an unordered
+    # `.first()` over a freshly seeded table could hand back someone who has
+    # blocked this user, which put_user_subscribe rejects with "This user has
+    # blocked you." -- breaking the "normal add/remove" flow below before it
+    # ever gets to the block case this test exercises explicitly further down.
+    existing_bans = db.session.execute(text('SELECT blocker_id FROM "user_block" WHERE blocked_id = :user_id'),
+                                       {"user_id": user_id}).scalars()
     # User.id != user_id: without it, an unordered `.first()` over a freshly seeded
     # table is liable to hand back user_id itself (the smallest id, physically first
     # in the table) as "a person to subscribe to" -- which put_user_subscribe rejects
     # as a self-subscription, breaking the "normal add/remove" flow below before it
     # ever gets to the self-subscribe case this test exercises explicitly further
     # down. Excluding self here makes the query say what it means: find someone else.
-    person = User.query.filter(User.id.not_in(existing_subs), User.id != user_id, User.banned == False).first()
+    person = User.query.filter(User.id.not_in(existing_subs), User.id.not_in(existing_bans),
+                               User.id != user_id, User.banned == False).first()
     assert person is not None and hasattr(person, 'id')
 
     data = {"person_id": person.id, "subscribe": True}
@@ -77,26 +85,15 @@ def test_api_user_subscriptions(app, api_baseline):
         result = put_user_subscribe(auth, data)
 
     # subscribe to a user who has blocked this user
-    #
-    # NOTE: this query is written as `WHERE blocker_id = :user_id`, which finds rows
-    # where *this* user is the blocker, then selects blocker_id -- i.e. it can only
-    # ever recover this user's own id, never the id of someone who blocked them (that
-    # would be `WHERE blocked_id = :user_id`, selecting blocker_id). No seeded
-    # UserBlock row can make this resolve to an actual "someone blocked me" case
-    # without also making `person` resolve to user1's own id, which would misfire the
-    # self-subscribe error instead of the block error below. Left as-is (matching the
-    # existing test's own query) with no UserBlock row seeded for user1 as blocker,
-    # so existing_bans is empty and this guarded block cleanly no-ops instead of
-    # tripping the wrong assertion.
-    existing_bans = db.session.execute(text('SELECT blocker_id FROM "user_block" WHERE blocker_id = :user_id'),
+    existing_bans = db.session.execute(text('SELECT blocker_id FROM "user_block" WHERE blocked_id = :user_id'),
                                        {"user_id": user_id}).scalars()
     existing_subs = db.session.execute(
         text('SELECT entity_id FROM "notification_subscription" WHERE user_id = :user_id AND type = 0'),
         {"user_id": user_id}).scalars()
     person = User.query.filter(User.id.in_(existing_bans), User.id.not_in(existing_subs),
                                User.banned == False).first()
-    if person:
-        data = {"person_id": person.id, "subscribe": True}
-        with pytest.raises(Exception) as ex:
-            result = put_user_subscribe(auth, data)
-        assert str(ex.value) == 'This user has blocked you.'
+    assert person is not None
+    data = {"person_id": person.id, "subscribe": True}
+    with pytest.raises(Exception) as ex:
+        result = put_user_subscribe(auth, data)
+    assert str(ex.value) == 'This user has blocked you.'
