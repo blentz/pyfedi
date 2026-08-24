@@ -2,7 +2,7 @@ services:
 
   db:
     shm_size: 2gb
-    image: postgres:17
+    image: docker.io/library/postgres:17
     restart: unless-stopped
     user: "1000:1000"
     env_file:
@@ -41,12 +41,13 @@ services:
       - -c
       - jit=off
     volumes:
-     - ./pgdata:/var/lib/postgresql/data
+     # ':z' relabels the bind mount for SELinux. No-op on non-SELinux hosts.
+     - ./pgdata:/var/lib/postgresql/data:z
     networks:
       - pf_network
 
   redis:
-    image: redis:6.2
+    image: docker.io/library/redis:6.2
     restart: unless-stopped
     env_file:
      - ./.env.docker
@@ -68,9 +69,9 @@ services:
      - ./.env.docker
     entrypoint: ./entrypoint_celery.sh
     volumes:
-     - ./media/:/app/app/static/media/
-     - ./logs/:/app/logs/
-     - ./tmp/:/app/app/static/tmp/
+     - ./media/:/app/app/static/media/:z
+     - ./logs/:/app/logs/:z
+     - ./tmp/:/app/app/static/tmp/:z
     networks:
       - pf_network
     healthcheck:
@@ -92,10 +93,10 @@ services:
     env_file:
      - ./.env.docker
     volumes:
-     - ./gunicorn.conf.py:/app/gunicorn.conf.py
-     - ./media/:/app/app/static/media/
-     - ./logs/:/app/logs/
-     - ./tmp/:/app/app/static/tmp/
+     - ./gunicorn.conf.py:/app/gunicorn.conf.py:z
+     - ./media/:/app/app/static/media/:z
+     - ./logs/:/app/logs/:z
+     - ./tmp/:/app/app/static/tmp/:z
     ports:
       - '8030:5000'
     networks:
@@ -131,7 +132,7 @@ services:
 
 
   adminer:
-    image: adminer
+    image: docker.io/library/adminer
     restart: unless-stopped
     ports:
       - 127.0.0.1:8888:8080

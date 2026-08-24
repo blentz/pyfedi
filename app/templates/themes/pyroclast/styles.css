@@ -1,0 +1,373 @@
+/*
+ * Pyroclast — a PieFed theme
+ *
+ * Palette (from the instance logo):
+ *   Void Black / Deep Slate  #0F0E17   background, outer cloud body
+ *   Molten Orange            #FF5722   mid-tone fire, inner glow
+ *   Sulfur Yellow            #FFD166   highlights, core heat
+ *   Crimson Core             #D62828   accent, shadow in flame
+ *
+ * Loaded after Bootstrap and after app/static/styles.css, so plain
+ * specificity usually wins; `!important` only where PieFed uses it too.
+ *
+ * ---------------------------------------------------------------------------
+ * THEME STATE — why this file has three mode selectors, not two
+ *
+ * app/templates/base.html:3 emits a bare <html lang="..."> with NO
+ * data-bs-theme attribute. app/static/js/set_theme.js (loaded at line 124)
+ * stamps it from localStorage, falling back to prefers-color-scheme. So the
+ * attribute is absent until JS runs, and absent forever if JS is off.
+ *
+ * That means a theme keyed only on [data-bs-theme="dark"] / ="light" has an
+ * unstyled third state. Pyroclast covers all three:
+ *
+ *   1. no attribute            -> :root, warm paper (safe against Bootstrap's
+ *                                 own light defaults, which is what paints)
+ *   2. no attribute + OS dark  -> prefers-color-scheme media query
+ *   3. explicit attribute      -> wins over both
+ *
+ * ---------------------------------------------------------------------------
+ * STRUCTURE — primitives vs. roles
+ *
+ * Custom properties resolve late: `--bs-body-bg: var(--pyro-bg)` declared once
+ * in :root picks up whatever --pyro-bg is on the matched element. So the
+ * ~40 Bootstrap mappings in section 2 are written ONCE, and each mode only
+ * redefines the ~17 primitives in section 3. That is what keeps the
+ * prefers-color-scheme duplicate down to one short block instead of forty
+ * lines copied verbatim.
+ *
+ * Repaint the theme = edit section 3. Nothing else.
+ */
+
+/* ==========================================================================
+   1. Raw brand colours
+   ========================================================================== */
+
+:root {
+    /* Never referenced below except by decorative fills that are the same in
+       both modes (the navbar ember). Everything else goes through a
+       primitive in section 3, then a role in section 2. */
+    --pyro-molten: #FF5722;
+    --pyro-sulfur: #FFD166;
+    --pyro-crimson: #D62828;
+
+    --pyro-molten-rgb: 255, 87, 34;
+}
+
+/* ==========================================================================
+   2. Role wiring — written once, resolves per mode
+   ========================================================================== */
+
+:root {
+    /* PieFed's own primary (app/static/scss/_colours.scss:52). Overriding
+       only the --bs-* vars leaves .btn-primary blue in _controls.scss:79. */
+    --primary-colour: var(--pyro-link);
+
+    --accent-color: var(--pyro-link);
+    --accent-color-hovered: var(--pyro-link-hover);
+    --accent-color-active: var(--pyro-link-active);
+    --accent-color-rgb: var(--pyro-link-rgb);
+    --accent-color-hovered-rgb: var(--pyro-link-hover-rgb);
+
+    /* Text sitting ON an accent-filled surface. Separate problem from text
+       sitting NEXT to one: molten orange is a light colour, so it takes dark
+       ink; crimson is dark, so it takes white. */
+    --accent-ink: var(--pyro-accent-ink);
+
+    --bs-link-color: var(--pyro-link);
+    --bs-link-hover-color: var(--pyro-link-hover);
+    --bs-link-color-rgb: var(--pyro-link-rgb);
+    --bs-link-hover-color-rgb: var(--pyro-link-hover-rgb);
+
+    --bs-body-bg: var(--pyro-bg);
+    --bs-body-bg-rgb: var(--pyro-bg-rgb);
+    --bs-body-color: var(--pyro-ink);
+    --bs-body-color-rgb: var(--pyro-ink-rgb);
+
+    --bs-secondary-bg: var(--pyro-bg);
+    --bs-secondary-bg-rgb: var(--pyro-bg-rgb);
+    --bs-secondary-bg-subtle: var(--pyro-inset);
+    --bs-secondary-border-subtle: var(--pyro-border-soft);
+    --bs-secondary-color: rgba(var(--pyro-ink-rgb), 0.75);
+    --bs-secondary-color-rgb: var(--pyro-ink-rgb);
+
+    --bs-tertiary-bg: var(--pyro-inset);
+    --bs-tertiary-color: rgba(var(--pyro-ink-rgb), 0.5);
+
+    --bs-border-color: var(--pyro-border);
+    --bs-border-color-translucent: rgba(var(--pyro-ink-rgb), 0.12);
+
+    --bs-heading-color: inherit;
+    --bs-code-color: var(--pyro-code);
+
+    --bs-primary-text-emphasis: var(--pyro-emphasis);
+    --bs-primary-bg-subtle: rgba(var(--pyro-molten-rgb), 0.11);
+    --bs-primary-border-subtle: rgba(var(--pyro-link-rgb), 0.42);
+
+    --bs-danger: var(--pyro-danger);
+    --bs-danger-text-emphasis: var(--pyro-link-active);
+    --bs-danger-bg-subtle: rgba(var(--pyro-link-rgb), 0.15);
+    --bs-danger-border-subtle: rgba(var(--pyro-link-rgb), 0.5);
+
+    /* Comment thread depth guides. PieFed cycles --depth-00..21 down a
+       nested thread; default is a rainbow. Pyroclast walks the fire gradient
+       so depth reads as heat rather than hue. 09-21 are aliases in
+       _colours.scss, but they alias PieFed's values, not ours — so all 22
+       are mapped here explicitly. */
+    --depth-00: rgba(var(--pyro-depth-a), 0.8);
+    --depth-01: rgba(var(--pyro-depth-b), 0.8);
+    --depth-02: rgba(var(--pyro-depth-c), 0.8);
+    --depth-03: rgba(var(--pyro-depth-b), 0.58);
+    --depth-04: rgba(var(--pyro-depth-a), 0.58);
+    --depth-05: rgba(var(--pyro-depth-c), 0.58);
+    --depth-06: rgba(var(--pyro-depth-b), 1);
+    --depth-07: rgba(var(--pyro-depth-a), 1);
+    --depth-08: rgba(var(--pyro-depth-c), 1);
+    --depth-09: var(--depth-00);
+    --depth-10: var(--depth-01);
+    --depth-11: var(--depth-02);
+    --depth-12: var(--depth-03);
+    --depth-13: var(--depth-04);
+    --depth-14: var(--depth-05);
+    --depth-15: var(--depth-06);
+    --depth-16: var(--depth-07);
+    --depth-17: var(--depth-08);
+    --depth-18: var(--depth-00);
+    --depth-19: var(--depth-01);
+    --depth-20: var(--depth-02);
+    --depth-21: var(--depth-03);
+}
+
+/* ==========================================================================
+   3. Mode primitives — the only block to edit when repainting
+   ========================================================================== */
+
+/* --- Light: "warm paper" -------------------------------------------------
+ *
+ * Surfaces tint toward the palette rather than staying neutral, so the theme
+ * is still recognisably itself in light mode. Two tones: ash for the page,
+ * paper for the content it carries.
+ *
+ * Fire colours carry different weight here. Molten orange on paper is 3.0:1
+ * — FAILS AA — so light mode demotes it to decorative fills and promotes
+ * crimson to the link role. Brand crimson #D62828 is itself only 4.2:1 on
+ * ash; #C82424 is the same hue two steps darker, indistinguishable by eye,
+ * and clears 4.7:1 on ash / 5.3:1 on paper.
+ *
+ * Applies to state 1 (no attribute) and state 3 (explicit light).
+ */
+:root,
+[data-bs-theme="light"] {
+    color-scheme: light;
+
+    --pyro-bg: #F2E9E0;              /* warm ash */
+    --pyro-bg-rgb: 242, 233, 224;
+    --pyro-pane: #FDF8F3;            /* warm paper */
+    --pyro-inset: #EADFD4;
+    --pyro-border: #E2D6CA;
+    --pyro-border-soft: #DDCFC2;
+
+    --pyro-ink: #2B2430;             /* warm dark slate — the void's hue */
+    --pyro-ink-rgb: 43, 36, 48;
+
+    --pyro-link: #C82424;
+    --pyro-link-rgb: 200, 36, 36;
+    --pyro-link-hover: #A81F1F;
+    --pyro-link-hover-rgb: 168, 31, 31;
+    --pyro-link-active: #8F1A1A;
+    --pyro-accent-ink: #FFFFFF;
+
+    --pyro-code: #9E3A12;            /* molten, darkened to pass on paper */
+    --pyro-emphasis: #C82424;
+    --pyro-danger: #C82424;
+
+    /* Sulfur and molten at guide alphas vanish against paper, so the depth
+       ladder runs in banked tones: the heat is damped, not extinguished. */
+    --pyro-depth-a: 200, 36, 36;
+    --pyro-depth-b: 184, 74, 22;
+    --pyro-depth-c: 138, 106, 18;
+}
+
+/* --- Dark: the void ------------------------------------------------------
+ *
+ * Molten orange on the void is 6.1:1, so dark mode gets the palette at full
+ * saturation — orange links, sulfur hover, crimson pressed.
+ *
+ * Declared twice on purpose. State 3 (explicit dark) and state 2 (no
+ * attribute + OS dark) cannot share a selector across a media-query
+ * boundary, so the primitives repeat. This is the ONLY duplicated block in
+ * the file, and it exists so JS-off visitors on a dark OS get dark mode.
+ * Edit both halves together.
+ */
+[data-bs-theme="dark"] {
+    color-scheme: dark;
+
+    --pyro-bg: #0F0E17;              /* void */
+    --pyro-bg-rgb: 15, 14, 23;
+    --pyro-pane: #171622;            /* the void, lifted once */
+    --pyro-inset: #201E2D;           /* lifted twice */
+    --pyro-border: #2E2B3F;
+    --pyro-border-soft: #2E2B3F;
+
+    --pyro-ink: #E8E4DC;             /* warm off-white */
+    --pyro-ink-rgb: 232, 228, 220;
+
+    --pyro-link: #FF5722;
+    --pyro-link-rgb: 255, 87, 34;
+    --pyro-link-hover: #FFD166;
+    --pyro-link-hover-rgb: 255, 209, 102;
+    --pyro-link-active: #D62828;
+    --pyro-accent-ink: #0F0E17;
+
+    --pyro-code: #FFD166;
+    --pyro-emphasis: #FFD166;
+    --pyro-danger: #D62828;
+
+    --pyro-depth-a: 214, 40, 40;
+    --pyro-depth-b: 255, 87, 34;
+    --pyro-depth-c: 255, 209, 102;
+}
+
+@media (prefers-color-scheme: dark) {
+    /* :not() guard so an explicit light choice still beats the OS. */
+    :root:not([data-bs-theme="light"]) {
+        color-scheme: dark;
+
+        --pyro-bg: #0F0E17;
+        --pyro-bg-rgb: 15, 14, 23;
+        --pyro-pane: #171622;
+        --pyro-inset: #201E2D;
+        --pyro-border: #2E2B3F;
+        --pyro-border-soft: #2E2B3F;
+
+        --pyro-ink: #E8E4DC;
+        --pyro-ink-rgb: 232, 228, 220;
+
+        --pyro-link: #FF5722;
+        --pyro-link-rgb: 255, 87, 34;
+        --pyro-link-hover: #FFD166;
+        --pyro-link-hover-rgb: 255, 209, 102;
+        --pyro-link-active: #D62828;
+        --pyro-accent-ink: #0F0E17;
+
+        --pyro-code: #FFD166;
+        --pyro-emphasis: #FFD166;
+        --pyro-danger: #D62828;
+
+        --pyro-depth-a: 214, 40, 40;
+        --pyro-depth-b: 255, 87, 34;
+        --pyro-depth-c: 255, 209, 102;
+    }
+}
+
+/* ==========================================================================
+   4. Structure
+   ========================================================================== */
+
+body {
+    background-color: var(--bs-secondary-bg) !important;
+}
+
+.main_pane,
+.card,
+.table {
+    background-color: var(--pyro-pane);
+    border: 1px solid var(--bs-border-color) !important;
+    border-radius: 7px !important;
+}
+
+div.navbar {
+    background-color: var(--bs-secondary-bg) !important;
+    border-bottom: 1px solid var(--bs-border-color) !important;
+}
+
+/* A thin ember line under the masthead — the logo's glow, flattened.
+   Full-saturation fire in both modes; it is a fill, never text. */
+div.navbar::after {
+    content: "";
+    display: block;
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -1px;
+    height: 2px;
+    background: linear-gradient(90deg,
+        var(--pyro-crimson) 0%,
+        var(--pyro-molten) 45%,
+        var(--pyro-sulfur) 100%);
+    opacity: 0.85;
+    pointer-events: none;
+}
+
+/* ==========================================================================
+   5. Controls
+   ========================================================================== */
+
+.btn-primary {
+    --bs-btn-bg: var(--accent-color);
+    --bs-btn-border-color: var(--accent-color);
+    --bs-btn-color: var(--accent-ink);
+
+    --bs-btn-hover-bg: var(--accent-color-hovered);
+    --bs-btn-hover-border-color: var(--accent-color-hovered);
+    --bs-btn-hover-color: var(--accent-ink);
+
+    --bs-btn-active-bg: var(--accent-color-active);
+    --bs-btn-active-border-color: var(--accent-color-active);
+    --bs-btn-active-color: var(--accent-ink);
+
+    --bs-btn-disabled-bg: var(--accent-color);
+    --bs-btn-disabled-border-color: var(--accent-color);
+}
+
+.btn-outline-primary {
+    --bs-btn-color: var(--accent-color);
+    --bs-btn-border-color: var(--accent-color);
+    --bs-btn-hover-bg: var(--accent-color);
+    --bs-btn-hover-color: var(--accent-ink);
+    --bs-btn-active-bg: var(--accent-color-active);
+    --bs-btn-active-border-color: var(--accent-color-active);
+    --bs-btn-active-color: var(--accent-ink);
+}
+
+.nav-pills {
+    --bs-nav-pills-link-active-bg: var(--accent-color);
+    --bs-nav-pills-link-active-color: var(--accent-ink);
+}
+
+.form-check-input:checked {
+    background-color: var(--accent-color);
+    border-color: var(--accent-color);
+}
+
+.form-control:focus,
+.dark-form-control:focus {
+    border-color: var(--accent-color);
+    box-shadow: 0 0 0 0.2rem rgba(var(--accent-color-rgb), 0.25);
+}
+
+.dropdown-item:active,
+.dropdown-menu .dropdown-item.active {
+    background-color: var(--accent-color);
+    color: var(--accent-ink);
+}
+
+/* ==========================================================================
+   6. Voting + flags
+   ========================================================================== */
+
+/* Upvote keeps a distinct hue — it must stay separable from the fire
+   palette, which downvote and warnings both draw from. */
+.voted_up .upvote_button {
+    color: var(--pyro-link-hover) !important;
+}
+
+.voted_down .downvote_button,
+.voted_down {
+    color: var(--pyro-link-active) !important;
+}
+
+.fe-warning,
+.orangered {
+    color: var(--pyro-code) !important;
+}
