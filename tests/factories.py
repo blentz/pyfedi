@@ -10,7 +10,7 @@ from app.models import Community, Instance, Post, User, UserFollower, utcnow
 
 
 def make_instance(domain: str, software: str = 'mastodon') -> Instance:
-    instance = Instance(domain=domain, software=software, online=True)
+    instance = Instance(domain=domain, software=software)
     db.session.add(instance)
     db.session.commit()
     return instance
