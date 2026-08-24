@@ -3421,10 +3421,18 @@ def announcer_is_followed(user_id: int) -> bool:
 
     Called before any outbound fetch, so that an unfollowed remote party cannot
     make this instance request a URL of their choosing.
+
+    A follow the remote side has explicitly rejected (is_accepted is False) does
+    not open the gate. A pending (is_accepted is None) or accepted (True) follow
+    does: Mastodon follows can sit pending indefinitely and those users still
+    expect their timeline to work. `isnot(False)` (rather than `!= False`) is
+    required so NULL (pending) rows are not excluded by SQL's NULL comparison
+    semantics.
     """
     return db.session.query(UserFollower.id).filter(
         UserFollower.remote_user_id == user_id,
-        UserFollower.is_inward == False).first() is not None
+        UserFollower.is_inward == False,
+        UserFollower.is_accepted.isnot(False)).first() is not None
 
 
 def record_boost(post: Post, user: User) -> None:
@@ -3494,10 +3502,19 @@ def process_microblog_announce(request_json, id, store_ap_json) -> Union[Post, N
         return None
 
     # Trust gate. Must stay above every network call in this function.
-    announcer = find_actor_or_create_cached(request_json['actor'], create_if_not_found=False)
+    actor = request_json.get('actor') if isinstance(request_json, dict) else None
+    if not actor or not isinstance(actor, (str, dict)):
+        log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, saved_json, 'Announce has no usable actor')
+        return None
+    announcer = find_actor_or_create_cached(actor, create_if_not_found=False)
     if not announcer or not isinstance(announcer, User):
         log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json, 'Announce actor is not a known user')
         return None
+    # Stale-cache backstop, not the primary defence: find_actor_or_create_cached()
+    # already rejects a banned actor upstream, via validate_remote_actor() inside
+    # find_actor_by_url(), for any actor already present in the database. This
+    # branch only fires for a _find_actor_id_cached() entry cached before the
+    # actor was banned, which bypasses that upstream check.
     if announcer.banned:
         log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json, f'{announcer.ap_id} is banned')
         return None

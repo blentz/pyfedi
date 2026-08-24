@@ -6,7 +6,7 @@ column here rather than in the test.
 """
 
 from app import db
-from app.models import Community, Instance, Post, User, UserFollower, utcnow
+from app.models import Community, Instance, Post, Site, User, UserFollower, utcnow
 
 
 def make_instance(domain: str, software: str = 'mastodon') -> Instance:
@@ -71,12 +71,27 @@ def make_post(community, user, ap_id: str, title: str = 'a post') -> Post:
     return post
 
 
-def make_follow(local_user, remote_user) -> UserFollower:
-    """local_user follows remote_user. is_inward False means outward: we follow them."""
+def make_site() -> Site:
+    """The Site row with id 1 that app.utils.blocked_phrases() (called from
+    Post.new()) unconditionally looks up. Not created automatically by
+    db_session, which only truncates tables -- callers that exercise the
+    post-creation path must call this first.
+    """
+    site = Site(name='Test Site', blocked_phrases='')
+    db.session.add(site)
+    db.session.commit()
+    return site
+
+
+def make_follow(local_user, remote_user, is_accepted=True) -> UserFollower:
+    """local_user follows remote_user. is_inward False means outward: we follow them.
+
+    is_accepted: None = request sent (pending), True = accepted, False = rejected.
+    """
     follow = UserFollower(
         local_user_id=local_user.id,
         remote_user_id=remote_user.id,
-        is_accepted=True,
+        is_accepted=is_accepted,
         is_inward=False,
     )
     db.session.add(follow)
