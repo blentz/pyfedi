@@ -141,6 +141,14 @@ def api_baseline(app, db_session):
     - User id 3 (``.user3``): local, unbanned, no relationship to user1 yet
       -- the target used by "subscribe to a new person" flows, so that flow
       never lands on user1 subscribing to themselves.
+    - User id 4 (``.user4``): local, unbanned, no NOTIF_USER subscription
+      from user1 -- and blocks user1 (UserBlock blocker_id=user4,
+      blocked_id=user1), the "someone has blocked me" case. Kept as a
+      separate user from user3 deliberately: user3 is the sole candidate an
+      unqualified "any unbanned, not-yet-subscribed, non-self user" query
+      resolves to, and that query is exactly what the "normal add/remove"
+      flow uses. Giving user4 the block relationship instead of user3 means
+      that flow's target is unaffected by this fixture's block seeding.
     - ``.banned_user``: banned=True, for negative-path assertions.
     - Three non-banned REMOTE communities (ap_id is not None, so
       ``community_view``'s ``name@ap_domain`` string lookup works):
@@ -177,21 +185,13 @@ def api_baseline(app, db_session):
       then fail with "DID NOT RAISE"). Leaving no deleted rows in the shared
       baseline makes every one of these guarded blocks no-op consistently,
       which is what an unconditional `if:` guard is for.
-    - Any UserBlock with blocker_id=1. One test's own query for "a user who
-      has blocked me" is written as `WHERE blocker_id = :user_id` (it should
-      read `blocked_id`), which -- given any row at all -- would resolve to
-      user1's own id and misfire a self-subscribe error instead of the "this
-      user has blocked you" error it is testing for. That guarded block is
-      designed to no-op when no such data exists; seeding it would make an
-      already-buggy query trip a wrong assertion instead of skipping cleanly.
-      See the test file for the corresponding note.
     """
     from types import SimpleNamespace
 
     from app import db
     from app.constants import NOTIF_COMMUNITY, NOTIF_POST, NOTIF_USER
     from app.models import (Community, CommunityBan, CommunityMember, NotificationSubscription, Post, PostReply,
-                            User, utcnow)
+                            User, UserBlock, utcnow)
     from datetime import datetime
 
     from tests.factories import make_community, make_instance, make_post, make_site, make_user
@@ -204,6 +204,7 @@ def api_baseline(app, db_session):
     user1.password_updated_at = datetime(2000, 1, 1)
     user2 = make_user(instance_local, 'user2', local=True)
     user3 = make_user(instance_local, 'user3', local=True)
+    user4 = make_user(instance_local, 'user4', local=True)
     banned_user = make_user(instance_local, 'banneduser', local=True)
     banned_user.banned = True
     db.session.commit()
@@ -244,9 +245,12 @@ def api_baseline(app, db_session):
     db.session.add(NotificationSubscription(name='user2', user_id=user1.id, entity_id=user2.id, type=NOTIF_USER))
     db.session.commit()
 
+    db.session.add(UserBlock(blocker_id=user4.id, blocked_id=user1.id))
+    db.session.commit()
+
     return SimpleNamespace(
         instance_local=instance_local, instance_remote=instance_remote, site=site,
-        user1=user1, user2=user2, user3=user3, banned_user=banned_user,
+        user1=user1, user2=user2, user3=user3, user4=user4, banned_user=banned_user,
         community1=community1, community2=community2, community3=community3, banned_community=banned_community,
         post1=post1, post2=post2,
         reply1=reply1,
