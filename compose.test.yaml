@@ -1,0 +1,63 @@
+# Ephemeral Postgres and Redis for the test suite.
+#
+# Data lives in tmpfs, so nothing survives `podman-compose down` and no state can
+# leak between runs. Ports differ from compose.dev.yaml (5432/6379) so this stack
+# can run alongside the dev stack without colliding.
+services:
+
+  test-db:
+    image: docker.io/library/postgres:17
+    environment:
+      POSTGRES_USER: pyfedi
+      POSTGRES_PASSWORD: pyfedi
+      POSTGRES_DB: pyfedi_test
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - full_page_writes=off
+      - -c
+      - synchronous_commit=off
+    tmpfs:
+      - /var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5433:5432"
+    networks:
+      - pf_test_network
+
+  test-redis:
+    image: docker.io/library/redis:6.2
+    ports:
+      - "127.0.0.1:6380:6379"
+    networks:
+      - pf_test_network
+
+  # Tests run in here, not on the host: this repo has no host Python environment
+  # (no venv, no .env, and system python3 has no Flask). The Dockerfile's `builder`
+  # target carries /venv with every requirement, including pytest. It is preferred
+  # over `runtime` because it runs as root — avoiding __pycache__ permission
+  # failures on the bind mount — and skips the tesseract layer tests do not need.
+  test-runner:
+    build:
+      context: .
+      target: builder
+    depends_on:
+      - test-db
+      - test-redis
+    env_file:
+      - ./.env.test
+    environment:
+      PATH: /venv/bin:/usr/local/bin:/usr/bin:/bin
+      PYTHONUNBUFFERED: "1"
+    working_dir: /app
+    volumes:
+      - ./:/app:z
+    command: ["sleep", "infinity"]
+    networks:
+      - pf_test_network
+
+networks:
+  pf_test_network:
+    name: pf_test_network
+    external: false
