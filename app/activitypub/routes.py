@@ -15,11 +15,11 @@ from app.activitypub.util import users_total, active_half_year, active_month, lo
     lemmy_site_data, is_activitypub_request, delete_post_or_comment, community_members, \
     create_post, create_post_reply, update_post_reply_from_activity, \
     update_post_from_activity, undo_vote, post_to_page, find_reported_object, \
-    process_report, ensure_domains_match, resolve_remote_post, refresh_community_profile, \
+    process_report, ensure_domains_match, refresh_community_profile, \
     comment_model_to_json, restore_post_or_comment, ban_user, unban_user, \
     log_incoming_ap, find_community, site_ban_remove_data, community_ban_remove_data, verify_object_from_source, \
     post_replies_for_ap, is_vote, find_instance_id, resolve_remote_post_from_search, proactively_delete_content, \
-    process_quote_boost, object_has_missing_fields, find_microblogging_community, process_microblog_announce
+    process_quote_boost, object_has_missing_fields, find_microblogging_community, process_announce_of_uri
 from app.community.routes import show_community
 from app.community.util import send_to_remote_instance, send_to_remote_instance_fast
 from app.constants import *
@@ -861,17 +861,17 @@ def process_inbox_request(request_json, store_ap_json):
                 # Announce: take care of inner objects that are just a URL (PeerTube, a.gup.pe), or find the user if the inner object is a dict
                 if request_json['type'] == 'Announce':
                     if isinstance(request_json['object'], str):
-                        if request_json['object'].startswith('https://' + current_app.config['SERVER_NAME']):
-                            log_incoming_ap(id, APLOG_DUPLICATE, APLOG_IGNORED, saved_json, 'Activity about local content which is already present')
-                            return
-                        if community is None:
-                            post = process_microblog_announce(request_json, id, store_ap_json)
-                        else:
-                            post = resolve_remote_post(request_json['object'], community, id, store_ap_json)
-                        if post:
-                            log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_SUCCESS, request_json)
-                        else:
-                            log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, request_json, 'Could not resolve post')
+                        post = process_announce_of_uri(request_json, community, id, store_ap_json)
+                        # The microblog path (community is None) has already logged a
+                        # distinct outcome inside process_announce_of_uri /
+                        # process_microblog_announce; logging here too would double-log
+                        # every rejected boost. The community path logs nothing of its
+                        # own (resolve_remote_post doesn't), so it still needs this.
+                        if community is not None:
+                            if post:
+                                log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_SUCCESS, request_json)
+                            else:
+                                log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_FAILURE, request_json, 'Could not resolve post')
                         return
                     elif isinstance(request_json['object'], list):  # PieFed can Announce an unlimited amount of objects at once, as long as they are all from the same community.
                         for obj in request_json['object']:

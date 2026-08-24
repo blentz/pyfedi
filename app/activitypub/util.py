@@ -3550,6 +3550,30 @@ def process_microblog_announce(request_json, id, store_ap_json) -> Union[Post, N
     return resolved
 
 
+def process_announce_of_uri(request_json, community, id, store_ap_json) -> Union[Post, None]:
+    """Route an Announce whose object is a bare URI.
+
+    With no community, this is a microblog boost. Its object may be local content,
+    in which case process_microblog_announce records the boost without fetching or
+    creating anything -- which is why the local-content short-circuit below applies
+    only to the community path. process_microblog_announce logs a distinct reason
+    on every exit path itself, so this function must not log anything on top of it;
+    the community path below has no such self-logging, so its call site (routes.py)
+    remains responsible for logging that outcome, same as before this function
+    existed.
+    """
+    if community is None:
+        return process_microblog_announce(request_json, id, store_ap_json)
+
+    uri = announce_target_uri(request_json)
+    if uri and uri.startswith('https://' + current_app.config['SERVER_NAME']):
+        log_incoming_ap(id, APLOG_DUPLICATE, APLOG_IGNORED, request_json if store_ap_json else None,
+                        'Activity about local content which is already present')
+        return None
+
+    return resolve_remote_post(uri, community, id, store_ap_json)
+
+
 def lemmy_site_data():
     site = g.site
     logo = site.logo if site.logo else '/static/images/piefed_logo_icon_t_75.png'
