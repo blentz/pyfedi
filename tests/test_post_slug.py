@@ -141,6 +141,7 @@ def test_generate_ap_id_basic(app):
         community = Mock()
         community.name = "testcommunity"
         community.post_url_type = None
+        community.ap_domain = app.config["SERVER_NAME"]
 
         # Create a mock post
         post = Post()
@@ -192,6 +193,7 @@ def test_generate_ap_id_with_empty_string(app):
         community = Mock()
         community.name = "testcommunity"
         community.post_url_type = None
+        community.ap_domain = app.config["SERVER_NAME"]
 
         post = Post()
         post.id = 222

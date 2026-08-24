@@ -1,81 +1,72 @@
 import pytest
+from flask import g
 from sqlalchemy import text
 
-from app import create_app, db
+from app import db
 from app.constants import POST_STATUS_REVIEWING
-from app.models import User, Post
-from config import Config
+from app.models import Post, User
 
 
-class TestConfig(Config):
-    """Test configuration that inherits from the main Config"""
-    TESTING = True
-    WTF_CSRF_ENABLED = False
-    # Disable real email sending during tests
-    MAIL_SUPPRESS_SEND = True
+def test_api_post_bookmarks(app, api_baseline):
+    from app.api.alpha.utils.post import put_post_save
 
+    # post_view (called by put_post_save) unconditionally reads g.admin_ids to
+    # decide whether the requester should see a deleted post's body. A real
+    # request gets this from a before_request hook; calling the util function
+    # directly skips that, so it must be set here. Empty: none of the seeded
+    # users are admins.
+    g.admin_ids = []
 
-@pytest.fixture
-def app():
-    """Create and configure a Flask app for testing using the app factory"""
-    app = create_app(TestConfig)
-    return app
+    user_id = api_baseline.user1.id
+    user = User.query.get(user_id)
+    assert user is not None and hasattr(user, 'id')
+    jwt = user.encode_jwt_token()
+    assert jwt is not None
+    auth = f'Bearer {jwt}'
 
+    # normal add / remove bookmark
+    existing_bookmarks = db.session.execute(text('SELECT post_id FROM "post_bookmark" WHERE user_id = :user_id'),
+                                            {"user_id": user_id}).scalars()
+    post = Post.query.filter(Post.id.not_in(existing_bookmarks), Post.deleted == False,
+                             Post.status > POST_STATUS_REVIEWING).first()
+    assert post is not None and hasattr(post, 'id')
 
-def test_api_post_bookmarks(app):
-    with app.app_context():
-        from app.api.alpha.utils.post import put_post_save
+    data = {"post_id": post.id, "save": True}
+    result = put_post_save(auth, data)
+    assert result is not None and result['post_view']['saved'] == True
+    data = {"post_id": post.id, "save": False}
+    result = put_post_save(auth, data)
+    assert result is not None and result['post_view']['saved'] == False
 
-        user_id = 1
-        user = User.query.get(user_id)
-        assert user is not None and hasattr(user, 'id')
-        jwt = user.encode_jwt_token()
-        assert jwt is not None
-        auth = f'Bearer {jwt}'
+    # remove from non-existing
+    data = {"post_id": post.id, "save": False}
+    with pytest.raises(Exception) as ex:
+        put_post_save(auth, data)
+    assert str(ex.value) == 'This post was not bookmarked.'
 
-        # normal add / remove bookmark
-        existing_bookmarks = db.session.execute(text('SELECT post_id FROM "post_bookmark" WHERE user_id = :user_id'),
-                                                {"user_id": user_id}).scalars()
-        post = Post.query.filter(Post.id.not_in(existing_bookmarks), Post.deleted == False,
-                                 Post.status > POST_STATUS_REVIEWING).first()
-        assert post is not None and hasattr(post, 'id')
-
+    # add to existing
+    existing_bookmarks = db.session.execute(text('SELECT post_id FROM "post_bookmark" WHERE user_id = :user_id'),
+                                            {"user_id": user_id}).scalars()
+    post = Post.query.filter(Post.id.in_(existing_bookmarks), Post.deleted == False,
+                             Post.status > POST_STATUS_REVIEWING).first()
+    if post:
         data = {"post_id": post.id, "save": True}
-        result = put_post_save(auth, data)
-        assert result is not None and result['post_view']['saved'] == True
-        data = {"post_id": post.id, "save": False}
-        result = put_post_save(auth, data)
-        assert result is not None and result['post_view']['saved'] == False
-
-        # remove from non-existing
-        data = {"post_id": post.id, "save": False}
         with pytest.raises(Exception) as ex:
             put_post_save(auth, data)
-        assert str(ex.value) == 'This post was not bookmarked.'
+        assert str(ex.value) == 'This post has already been bookmarked.'
 
-        # add to existing
-        existing_bookmarks = db.session.execute(text('SELECT post_id FROM "post_bookmark" WHERE user_id = :user_id'),
-                                                {"user_id": user_id}).scalars()
-        post = Post.query.filter(Post.id.in_(existing_bookmarks), Post.deleted == False,
-                                 Post.status > POST_STATUS_REVIEWING).first()
-        if post:
-            data = {"post_id": post.id, "save": True}
-            with pytest.raises(Exception) as ex:
-                put_post_save(auth, data)
-            assert str(ex.value) == 'This post has already been bookmarked.'
+    # add to deleted
+    post = Post.query.filter(Post.deleted == True).first()
+    if post:
+        data = {"post_id": post.id, "save": True}
+        with pytest.raises(Exception):
+            result = put_post_save(auth, data)
 
-        # add to deleted
-        post = Post.query.filter(Post.deleted == True).first()
-        if post:
-            data = {"post_id": post.id, "save": True}
-            with pytest.raises(Exception):
-                result = put_post_save(auth, data)
-
-        # remove from deleted
-        existing_bookmarks = db.session.execute(text('SELECT post_id FROM "post_bookmark" WHERE user_id = :user_id'),
-                                                {"user_id": user_id}).scalars()
-        post = Post.query.filter(Post.id.in_(existing_bookmarks), Post.deleted == True).first()
-        if post:
-            data = {"post_id": post.id, "save": False}
-            with pytest.raises(Exception):
-                result = put_post_save(auth, data)
+    # remove from deleted
+    existing_bookmarks = db.session.execute(text('SELECT post_id FROM "post_bookmark" WHERE user_id = :user_id'),
+                                            {"user_id": user_id}).scalars()
+    post = Post.query.filter(Post.id.in_(existing_bookmarks), Post.deleted == True).first()
+    if post:
+        data = {"post_id": post.id, "save": False}
+        with pytest.raises(Exception):
+            result = put_post_save(auth, data)
