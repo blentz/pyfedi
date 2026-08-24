@@ -1,4 +1,5 @@
 import os
+import re
 
 import pytest
 
@@ -13,6 +14,26 @@ import app  # noqa: F401
 from config import Config
 
 TEST_DATABASE_URL = os.environ.get('TEST_DATABASE_URL')
+
+
+def is_disposable_database_url(url):
+    """True if `url` names a database whose name marks it as disposable.
+
+    The db_session fixture truncates every table in this database after every
+    test, so this check must not be defeatable by a name that merely contains
+    "test" as a substring (e.g. "attestation", "contest_archive",
+    "latest_snapshot", "posttest_analytics") or by a query string/fragment
+    appended after the real name (e.g.
+    "...pyfedi_prod?application_name=pytest_test", whose real database name
+    is "pyfedi_prod"). The database name is the last "/"-separated path
+    segment, with any trailing "?query" or "#fragment" stripped, and it must
+    END WITH "_test" — a bare substring match is not enough.
+    """
+    if not url:
+        return False
+    segment = url.rsplit('/', 1)[-1]
+    segment = re.split(r'[?#]', segment, maxsplit=1)[0]
+    return segment.endswith('_test')
 
 
 class TestConfig(Config):
@@ -37,8 +58,9 @@ def app():
 
     # The db_session fixture truncates every table. Refuse to point that at a
     # database whose name does not mark it as disposable.
-    if 'test' not in TEST_DATABASE_URL.rsplit('/', 1)[-1]:
-        pytest.fail(f'TEST_DATABASE_URL must name a test database, got {TEST_DATABASE_URL!r}')
+    if not is_disposable_database_url(TEST_DATABASE_URL):
+        pytest.fail(f'TEST_DATABASE_URL must name a disposable test database '
+                    f'(name ending in "_test"), got {TEST_DATABASE_URL!r}')
 
     from app import create_app
     application = create_app(TestConfig)
