@@ -2,7 +2,8 @@ import pytest
 from sqlalchemy import text
 
 from app import db
-from app.models import User
+from app.constants import NOTIF_USER, SRC_WEB
+from app.models import NotificationSubscription, User
 
 
 def test_api_user_subscriptions(app, api_baseline):
@@ -97,3 +98,42 @@ def test_api_user_subscriptions(app, api_baseline):
     with pytest.raises(Exception) as ex:
         result = put_user_subscribe(auth, data)
     assert str(ex.value) == 'This user has blocked you.'
+
+
+def test_web_user_subscribe_self_does_not_create_subscription(app, api_baseline):
+    """The web path (SRC_WEB) flashes 'Target must be a another user.' instead of
+    raising -- subscribe_user() must not fall through and create the subscription
+    row anyway once it has told the user it can't be done."""
+    from flask_login import login_user
+
+    from app.shared.user import subscribe_user
+
+    user1 = api_baseline.user1
+
+    with app.test_request_context():
+        login_user(user1)
+        subscribe_user(user1.id, True, SRC_WEB)
+
+    created = NotificationSubscription.query.filter_by(entity_id=user1.id, user_id=user1.id,
+                                                        type=NOTIF_USER).first()
+    assert created is None
+
+
+def test_web_user_subscribe_blocked_does_not_create_subscription(app, api_baseline):
+    """Same bug, the case that actually matters: a user's block on someone must
+    not be silently ignored just because the request came from the web UI
+    instead of the API."""
+    from flask_login import login_user
+
+    from app.shared.user import subscribe_user
+
+    user1 = api_baseline.user1
+    user4 = api_baseline.user4  # blocks user1, per api_baseline fixture
+
+    with app.test_request_context():
+        login_user(user1)
+        subscribe_user(user4.id, True, SRC_WEB)
+
+    created = NotificationSubscription.query.filter_by(entity_id=user4.id, user_id=user1.id,
+                                                        type=NOTIF_USER).first()
+    assert created is None
