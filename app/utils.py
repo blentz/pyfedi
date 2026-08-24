@@ -1008,6 +1008,23 @@ def mastodon_extra_field_link(extra_field: str) -> str:
         return tag['href']
 
 
+def boost_cache_entries(rows) -> list:
+    """Shape (user_id, ap_id, display_name, created_at) rows into the post_boosts cache.
+
+    Kept separate from the query so the stored JSON shape can be tested without
+    a database. Input order is preserved; the caller chooses the ordering.
+    """
+    return [
+        {
+            'user_id': user_id,
+            'ap_id': ap_id if ap_id else '',
+            'display_name': display_name,
+            'created_at': created_at.isoformat() if created_at else '',
+        }
+        for user_id, ap_id, display_name, created_at in rows
+    ]
+
+
 def microblog_content_to_title(html: str) -> Tuple[str, str]:
     title = ''
     link = ''
