@@ -43,6 +43,35 @@ def test_rejects_query_string_containing_test():
     assert is_disposable_database_url(url) is False
 
 
+def test_rejects_query_value_containing_a_slash_before__test():
+    """A query value that itself contains a "/" (e.g. an sslrootcert path)
+    must not let rsplit('/', 1) pick a fake "_test"-suffixed segment out of
+    the query string. The real database name here is "pyfedi_prod"."""
+    url = 'postgresql+psycopg2://pyfedi:pyfedi@db:5432/pyfedi_prod?ssl=/x/y_test'
+    assert is_disposable_database_url(url) is False
+
+
+def test_rejects_sslrootcert_style_query_value():
+    """A realistic sslrootcert-style path in the query string, not just an
+    adversarial one. The real database name here is "pyfedi_prod"."""
+    url = 'postgresql+psycopg2://pyfedi:pyfedi@db:5432/pyfedi_prod?sslrootcert=/etc/ssl/certs/root_test'
+    assert is_disposable_database_url(url) is False
+
+
+def test_accepts_real_test_database_with_sslrootcert_query():
+    """A legitimate query string must not cause a false rejection of a real
+    "_test"-suffixed database name."""
+    url = 'postgresql+psycopg2://pyfedi:pyfedi@db:5432/pyfedi_test?sslrootcert=/etc/ssl/certs/root.crt'
+    assert is_disposable_database_url(url) is True
+
+
+def test_rejects_fragment_containing_a_slash_before__test():
+    """Same bypass shape via a "#fragment" instead of a "?query". The real
+    database name here is "pyfedi_prod"."""
+    url = 'postgresql+psycopg2://pyfedi:pyfedi@db:5432/pyfedi_prod#frag/x_test'
+    assert is_disposable_database_url(url) is False
+
+
 def test_rejects_name_with_no_test_marker():
     url = 'postgresql+psycopg2://pyfedi:pyfedi@db:5432/pyfedi'
     assert is_disposable_database_url(url) is False
