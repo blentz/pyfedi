@@ -171,3 +171,67 @@ def test_microblog_path_does_not_double_log_on_silent_success(db_session, follow
 
     assert result is not None
     assert log_spy == []
+
+
+def test_undo_boost_removes_the_row(db_session, followed_booster):
+    """Un-boosting removes the PostBoost row and returns the post"""
+    from app.activitypub.util import record_boost, undo_boost
+    from app.models import PostBoost
+    author = make_user(make_instance('other.example'), 'bob')
+    post = make_post(make_community(), author, 'https://other.example/notes/7')
+    record_boost(post, followed_booster)
+
+    result = undo_boost(post.ap_id, followed_booster)
+
+    assert result is not None and result.id == post.id
+    assert PostBoost.query.filter_by(post_id=post.id).count() == 0
+    assert post.post_boosts == []
+
+
+def test_undo_boost_for_unknown_post_returns_none(db_session, followed_booster):
+    """An Undo for a post we do not have is ignored, not an error"""
+    from app.activitypub.util import undo_boost
+
+    assert undo_boost('https://other.example/notes/404', followed_booster) is None
+
+
+def test_undo_boost_twice_is_a_no_op(db_session, followed_booster):
+    """Remote instances re-send; the second Undo must not raise"""
+    from app.activitypub.util import record_boost, undo_boost
+    author = make_user(make_instance('other.example'), 'bob')
+    post = make_post(make_community(), author, 'https://other.example/notes/7')
+    record_boost(post, followed_booster)
+
+    undo_boost(post.ap_id, followed_booster)
+    assert undo_boost(post.ap_id, followed_booster) is not None
+
+
+def test_undo_boost_only_removes_the_undoing_users_boost(db_session, followed_booster):
+    """One user's Undo leaves another user's boost intact"""
+    from app.activitypub.util import record_boost, undo_boost
+    from app.models import PostBoost
+    author = make_user(make_instance('other.example'), 'bob')
+    other = make_user(make_instance('third.example'), 'carol')
+    post = make_post(make_community(), author, 'https://other.example/notes/7')
+    record_boost(post, followed_booster)
+    record_boost(post, other)
+
+    undo_boost(post.ap_id, followed_booster)
+
+    assert PostBoost.query.filter_by(post_id=post.id).count() == 1
+    assert PostBoost.query.filter_by(post_id=post.id, user_id=other.id).count() == 1
+
+
+def test_undo_boost_does_not_log(db_session, followed_booster, log_spy):
+    """undo_boost() must never log; the routes.py Undo branch is the sole
+    logger for this activity, exactly as undo_vote()'s call site is today.
+    Covers both the found-and-removed path and the target-not-found path."""
+    from app.activitypub.util import record_boost, undo_boost
+    author = make_user(make_instance('other.example'), 'bob')
+    post = make_post(make_community(), author, 'https://other.example/notes/7')
+    record_boost(post, followed_booster)
+
+    undo_boost(post.ap_id, followed_booster)
+    undo_boost('https://other.example/notes/404', followed_booster)
+
+    assert log_spy == []

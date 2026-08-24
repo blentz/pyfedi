@@ -19,7 +19,8 @@ from app.activitypub.util import users_total, active_half_year, active_month, lo
     comment_model_to_json, restore_post_or_comment, ban_user, unban_user, \
     log_incoming_ap, find_community, site_ban_remove_data, community_ban_remove_data, verify_object_from_source, \
     post_replies_for_ap, is_vote, find_instance_id, resolve_remote_post_from_search, proactively_delete_content, \
-    process_quote_boost, object_has_missing_fields, find_microblogging_community, process_announce_of_uri
+    process_quote_boost, object_has_missing_fields, find_microblogging_community, process_announce_of_uri, \
+    announce_target_uri, undo_boost
 from app.community.routes import show_community
 from app.community.util import send_to_remote_instance, send_to_remote_instance_fast
 from app.constants import *
@@ -1720,6 +1721,18 @@ def process_inbox_request(request_json, store_ap_json):
                         else:
                             log_incoming_ap(id, APLOG_UNDO_VOTE, APLOG_FAILURE, saved_json,
                                             'Unfound object ' + target_ap_id)
+                        return
+
+                    if core_activity['object']['type'] == 'Announce':  # Undoing a boost from a microblogging platform
+                        # `user` comes from the signed outer actor, resolved by process_inbox_request.
+                        # Never read the actor from the inner object.
+                        target_ap_id = announce_target_uri(core_activity['object'])
+                        post = undo_boost(target_ap_id, user)
+                        if post:
+                            log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_SUCCESS, saved_json)
+                        else:
+                            log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json,
+                                            'Unfound object for Undo Announce ' + str(target_ap_id))
                         return
 
                     if core_activity['object']['type'] == 'Lock':  # Undo of post lock

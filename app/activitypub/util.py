@@ -3243,6 +3243,22 @@ def undo_vote(comment, post, target_ap_id, user):
     return None
 
 
+def undo_boost(target_ap_id: str, user: User) -> Union[Post, None]:
+    """Remove `user`'s boost of the post at `target_ap_id`.
+
+    Returns the post so the caller can log a result, mirroring undo_vote().
+    A post with no boost from this user still returns the post: a repeated Undo
+    is a successful no-op, not a failure.
+    """
+    if not target_ap_id:
+        return None
+    post = Post.get_by_ap_id(target_ap_id)
+    if not post:
+        return None
+    remove_boost(post, user)
+    return post
+
+
 def process_report(user, reported, request_json, session):
     if 'summary' not in request_json:  # reports from peertube have no summary
         reasons = ''
