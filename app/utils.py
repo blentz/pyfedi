@@ -53,7 +53,7 @@ from wtforms.widgets import ListWidget, CheckboxInput, TextInput
 from wtforms.validators import ValidationError
 from markupsafe import Markup
 import boto3
-from app import db, cache, httpx_client, celery, plugins
+from app import db, cache, httpx_client, celery, get_ip_address, plugins
 from app.constants import *
 import re
 from PIL import Image, ImageOps, ImageCms
@@ -1831,14 +1831,13 @@ class MultiCheckboxField(SelectMultipleField):
     option_widget = CheckboxInput()
 
 
-def ip_address() -> str:
-    try:
-        ip = request.headers.get('CF-Connecting-IP') or request.headers.get('X-Forwarded-For') or request.remote_addr
-    except:
-        ip = ''
-    if ',' in ip:  # Remove all but first ip addresses
-        ip = ip[:ip.index(',')].strip()
-    return ip
+# The client IP address. One implementation, shared with Flask-Limiter's key function:
+# this used to be a copy of app.get_ip_address and the two drifted apart, so rate
+# limiting and IP bans could bucket the same request differently. It lives in
+# app/__init__.py because that module builds the limiter at import time and cannot
+# import from app.utils (app.utils imports from app). See app.get_ip_address for what
+# is trusted and why.
+ip_address = get_ip_address
 
 
 def user_ip_banned() -> bool:

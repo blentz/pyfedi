@@ -51,6 +51,14 @@ class Config(object):
     WTF_CSRF_TIME_LIMIT = None  # a value of None ensures csrf token is valid for the lifetime of the session
     HTTP_PROTOCOL = os.environ.get('HTTP_PROTOCOL') or 'https'  # useful during development
 
+    # Where the client IP used for rate limiting, IP bans, geolocation and the audit
+    # trail comes from. Empty (the default) means request.remote_addr, which
+    # ProxyFix(x_for=1) resolves from the last entry of X-Forwarded-For: correct behind
+    # one trusted reverse proxy such as Caddy or nginx. Set it to a header name only
+    # when a CDN in front of PieFed publishes the real client there and the client
+    # cannot supply it themselves (Cloudflare: CF-Connecting-IP). See env.sample.
+    TRUSTED_CLIENT_IP_HEADER = os.environ.get('TRUSTED_CLIENT_IP_HEADER') or ''
+
     BOUNCE_ADDRESS = os.environ.get('BOUNCE_ADDRESS') or MAIL_FROM or ''    # Warning: all emails in this inbox will be deleted!
     BOUNCE_HOST = os.environ.get('BOUNCE_HOST') or ''
     BOUNCE_HOST_TYPE = os.environ.get('BOUNCE_HOST_TYPE') or ''     # imap or pop3

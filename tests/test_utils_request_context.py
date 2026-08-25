@@ -3,30 +3,16 @@ import json
 import pytest
 
 from app.utils import (block_bots, compaction_level, debug_mode_only,
-                       display_back_button, ip_address, referrer, requestor_domain,
+                       display_back_button, referrer, requestor_domain,
                        show_ban_message, user_cookie_banned)
 from tests.factories import make_instance, make_user
 
 
-class TestIpAddress:
-    def test_cloudflare_header_wins(self, app):
-        with app.test_request_context(headers={'CF-Connecting-IP': '1.2.3.4',
-                                               'X-Forwarded-For': '5.6.7.8'}):
-            assert ip_address() == '1.2.3.4'
-
-    def test_forwarded_for_is_used_when_cloudflare_is_absent(self, app):
-        with app.test_request_context(headers={'X-Forwarded-For': '5.6.7.8'}):
-            assert ip_address() == '5.6.7.8'
-
-    def test_remote_addr_is_the_last_resort(self, app):
-        with app.test_request_context(environ_base={'REMOTE_ADDR': '9.9.9.9'}):
-            assert ip_address() == '9.9.9.9'
-
-    def test_only_the_first_of_a_proxy_chain_is_kept(self, app):
-        """Fails if the comma-splitting is removed; the rest of the chain is
-        attacker-controlled and must not be trusted as the client IP."""
-        with app.test_request_context(headers={'X-Forwarded-For': '1.2.3.4, 5.6.7.8, 9.9.9.9'}):
-            assert ip_address() == '1.2.3.4'
+# NOTE: ip_address is covered in tests/test_client_ip.py, not here. The tests that
+# used to live in this file pinned the pre-fix behaviour -- CF-Connecting-IP, then
+# X-Forwarded-For, first entry of the chain -- which is exactly the spoofing defect
+# TRUSTED_CLIENT_IP_HEADER fixed. ip_address is now the same object as Flask-Limiter's
+# key function, so its tests cover both and belong in one place.
 
 
 class TestRequestorDomain:

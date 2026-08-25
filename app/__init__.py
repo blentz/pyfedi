@@ -41,9 +41,40 @@ def get_locale():
 
 
 def get_ip_address() -> str:
-    ip = request.headers.get('CF-Connecting-IP') or request.headers.get('X-Forwarded-For') or request.remote_addr
-    if ',' in ip:  # Remove all but first ip addresses
-        ip = ip[:ip.index(',')].strip()
+    """The client IP address, from the source this deployment is configured to trust.
+
+    This is Flask-Limiter's key function (see `limiter` below) and, re-exported as
+    `app.utils.ip_address`, the value IP bans, the honeypot ban, geolocation and the
+    `user.ip_address` audit column are derived from. Everything here therefore has to
+    come from a source the client cannot write: a client that can choose this value
+    chooses its own rate-limit bucket and steps around an IP ban.
+
+    By default it is `request.remote_addr`, which `ProxyFix(x_for=1)` (installed in
+    `create_app`) has already resolved from the last entry of `X-Forwarded-For` - the
+    entry appended by the one trusted reverse proxy PieFed sits behind. Caddy and
+    nginx operators need to configure nothing.
+
+    `TRUSTED_CLIENT_IP_HEADER` names a header to read instead. That is for the CDN
+    case, where a single-IP header is authoritative and `X-Forwarded-For`'s last hop
+    is the CDN rather than the client (Cloudflare: `CF-Connecting-IP`). Only set it
+    when the named header is written by infrastructure you control.
+
+    If the configured header holds a comma-separated list, the LAST entry is used.
+    That is counter-intuitive and deliberate: every hop APPENDS the address it saw,
+    so the last entry is the one written by the proxy nearest PieFed - the only entry
+    a client cannot forge. The first entry is simply whatever the client sent, which
+    is what this function used to return.
+    """
+    try:
+        header_name = current_app.config.get('TRUSTED_CLIENT_IP_HEADER')
+        ip = request.headers.get(header_name) if header_name else None
+        if ip and ',' in ip:
+            ip = ip[ip.rindex(',') + 1:]
+        ip = ip.strip() if ip else ''
+        if not ip:
+            ip = request.remote_addr or ''
+    except RuntimeError:  # no application or request context (e.g. a CLI command)
+        ip = ''
     return ip
 
 
