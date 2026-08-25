@@ -217,6 +217,40 @@ floors met." Exit codes: 0 met, 1 violated, 2 could not check.
 coverage.py's own `fail_under` is a single global number, which is why the
 per-module check is a script.
 
+### Sub-project 1a: app/utils.py
+
+Sub-project 1a (nine tasks, `tests/test_utils_*.py` plus
+`tests/test_utils_context_globals.py`) covered `app/utils.py`'s pure functions,
+its security-sensitive parsers (`allowlist_html`, `sanitize_svg_bytes`,
+`is_valid_xml_utf8`, URL/domain helpers), and the functions that only need an
+app or request context (`humanize_number`, `round_invisible_digits`,
+`debug_checkpoint`, `localize_datetime`, `get_timezones`, `theme_list`,
+`render_from_tpl`, `orjson_response`, `ensure_directory_exists`). It set
+`app/utils.py`'s first coverage floor at 46% — the measured blended
+statement-and-branch `percent_covered` from the full suite, rounded down —
+not 100%, because the module also holds many DB-backed and network-backed
+functions that sub-projects 1b and 1c are scoped to cover. Floors only rise:
+1b and 1c raise this one further as they close those gaps, they do not lower
+it.
+
+Seven functions were identified in Task 1 as out of reach for a pure/context-only
+sub-project and moved out of scope, to be picked up by 1b or 1c:
+
+| Function | Why it moved | Where |
+|---|---|---|
+| `jaccard_similarity` | calls `recently_upvoted_posts()` / `recently_upvoted_post_replies()`, both DB-backed; also memoises into a module-level `user2_cache` dict that persists across tests | 1b |
+| `actor_contains_blocked_words` | calls `get_setting()`, which queries the `Setting` table | 1b |
+| `user_ip_banned` | calls `banned_ip_addresses()`, DB-backed | 1b |
+| `first_paragraph` | calls `allowlist_html()` with no `test_env`, which reaches `get_emoji_replacements()` and `fediverse_domains()` — both DB-backed | 1b |
+| `is_image_url` | calls `mime_type_using_head()`, which performs a network HEAD request | 1c |
+| `is_local_image_url` | calls `is_image_url()` — same network dependency | 1c |
+| `download_defeds` | both arms call `download_defeds_worker`, which reaches the network through `retrieve_defederation_list` | 1c |
+
+The fuzz corpus this sub-project built lives at `tests/fuzz/corpus/<target>/`
+(committed, hand-curated) with working-set output in `tests/fuzz/.work/<target>/`
+(gitignored); see "Fuzzing" above for how the two differ and how to run a
+campaign.
+
 ## Fixtures for external services
 
 - `http_mock` — respx router over outbound httpx. `assert_all_called=True`, so a
