@@ -49,7 +49,7 @@ from app.utils import render_template, permission_required, set_setting, get_set
     download_defeds, instance_banned, login_required, referrer, \
     community_membership, retrieve_image_hash, posts_with_blocked_images, user_access, reported_posts, user_notes, \
     safe_order_by, get_task_session, patch_db_session, low_value_reposters, moderating_communities_ids, \
-    instance_allowed, trusted_instance_ids, get_emoji_replacements, get_site_as_dict, roles_with
+    instance_allowed, trusted_instance_ids, get_emoji_replacements, get_site_as_dict, roles_with, sanitize_svg
 from app.admin import bp
 
 
@@ -177,7 +177,22 @@ def admin_site():
             # Save logo file
             base_filename = f'logo_{gibberish(5)}'
             uploaded_icon.save(f'{directory}/{base_filename}{file_ext}')
-            
+
+            # An SVG that cannot be sanitized is rejected. The '.svg' branch
+            # below stores the file as uploaded -- no Pillow re-encode -- and
+            # serves it from this site's own origin as the site logo, on every
+            # page. sanitize_svg has already destroyed the file by the time it
+            # returns False, and abort(400) is what the extension check above
+            # does with an upload this route will not accept.
+            #
+            # The predicate here is .lower(), unlike the '.svg' branch below:
+            # '.SVG' passes the allowed_extensions check (which lowercases) but
+            # not that branch, so it used to be handed to Image.open, raise, and
+            # leave the uploaded bytes in the media root. Sanitizing on the
+            # case-insensitive form covers that too.
+            if file_ext.lower() == '.svg' and not sanitize_svg(f'{directory}/{base_filename}{file_ext}'):
+                abort(400)
+
             if file_ext == '.svg':
                 # For SVG uploads, clear all logo fields and settings
                 site.logo = f'/static/media/{base_filename}{file_ext}'

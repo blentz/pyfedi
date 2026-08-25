@@ -14,7 +14,7 @@ from app.community.routes import do_subscribe
 from app.community.util import search_for_community
 from app.constants import POST_TYPE_IMAGE
 from app.models import User, Community, Instance, CommunityMember, Post, Topic
-from app.utils import gibberish, topic_tree, get_request, store_files_in_s3, ensure_directory_exists, guess_mime_type, get_task_session, patch_db_session
+from app.utils import gibberish, topic_tree, get_request, store_files_in_s3, ensure_directory_exists, guess_mime_type, get_task_session, patch_db_session, sanitize_svg_bytes
 
 
 def unsubscribe_from_everything_then_delete(user_id):
@@ -221,13 +221,28 @@ def move_community_images_to_here(community_id):
                                                 if '?' in file_extension:
                                                     file_extension = file_extension.split('?')[0]
 
+                                            # A remote SVG must be sanitized before it is
+                                            # re-hosted under our own name. content_type is
+                                            # 'image/svg+xml' here, so file_extension is
+                                            # '.svg+xml' and guess_mime_type gives it back as
+                                            # 'image/svg+xml' when it is uploaded -- it really
+                                            # is served as an SVG from our bucket. An SVG we
+                                            # cannot sanitize is skipped: the ValueError is
+                                            # caught by the handler below, which logs and moves
+                                            # on to the next post, the same as a failed
+                                            # download. The post keeps pointing at the remote
+                                            # URL, which is where it pointed already.
+                                            image_bytes = response.content
+                                            if 'svg' in content_type:
+                                                image_bytes = sanitize_svg_bytes(image_bytes)
+
                                             # Save to a temporary file first
                                             new_filename = gibberish(15)
                                             tmp_directory = 'app/static/tmp'
                                             ensure_directory_exists(tmp_directory)
                                             tmp_file = os.path.join(tmp_directory, new_filename + file_extension)
                                             with open(tmp_file, 'wb') as f:
-                                                f.write(response.content)
+                                                f.write(image_bytes)
                                             response.close()
 
                                             # Upload to S3
@@ -283,13 +298,29 @@ def move_community_images_to_here(community_id):
                                                 if '?' in file_extension:
                                                     file_extension = file_extension.split('?')[0]
 
+                                            # As above: a remote SVG is sanitized before it is
+                                            # re-hosted, and one we cannot sanitize is skipped
+                                            # rather than stored. This branch's handler only
+                                            # catches httpx.HTTPError, so the ValueError is
+                                            # caught here instead -- letting it out would abort
+                                            # the whole task and roll back the posts already
+                                            # moved.
+                                            image_bytes = response.content
+                                            if 'svg' in content_type:
+                                                try:
+                                                    image_bytes = sanitize_svg_bytes(image_bytes)
+                                                except ValueError as e:
+                                                    current_app.logger.error(
+                                                        f"Could not sanitize SVG for post {post_id}: {e}")
+                                                    continue
+
                                             # Save to a temporary file first
                                             new_filename = gibberish(15)
                                             tmp_directory = 'app/static/tmp'
                                             ensure_directory_exists(tmp_directory)
                                             tmp_file = os.path.join(tmp_directory, new_filename + file_extension)
                                             with open(tmp_file, 'wb') as f:
-                                                f.write(response.content)
+                                                f.write(image_bytes)
                                             response.close()
 
                                             # Now move to the proper directory

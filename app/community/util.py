@@ -22,7 +22,8 @@ from app.constants import SRC_WEB, POST_TYPE_LINK
 from app.models import Community, File, PostReply, Post, utcnow, CommunityMember, Site, \
     Instance, User, Tag, CommunityFlair, CommunityThemeAllowed
 from app.utils import get_request, gibberish, ensure_directory_exists, ap_datetime, instance_banned, get_task_session, \
-    store_files_in_s3, guess_mime_type, patch_db_session, instance_allowed, get_setting, scale_gif, theme_list
+    store_files_in_s3, guess_mime_type, patch_db_session, instance_allowed, get_setting, scale_gif, theme_list, \
+    sanitize_svg
 from sqlalchemy import func, desc, text
 import os
 
@@ -547,6 +548,16 @@ def save_icon_file(icon_file, directory='communities') -> File:
     final_place_thumbnail = os.path.join(local_directory, new_filename + '_thumbnail.webp')
     icon_file.save(final_place)
 
+    # An SVG that cannot be sanitized is rejected. The '.svg' branch below skips
+    # the Pillow re-encode ("svgs don't need to be resized"), so nothing
+    # downstream would repair or re-check the file -- it would be served from
+    # this site's own origin exactly as uploaded. sanitize_svg has already
+    # destroyed the file by the time it returns False. abort(400) is this
+    # function's own convention for an upload it will not accept, the same as
+    # the extension check above and the trailing else below.
+    if file_ext.lower() == '.svg' and not sanitize_svg(final_place):
+        abort(400)
+
     if file_ext.lower() == '.heic':
         register_heif_opener()
     elif file_ext.lower() == '.avif':
@@ -701,6 +712,16 @@ def save_banner_file(banner_file, directory='communities') -> File:
     final_place = os.path.join(local_directory, new_filename + file_ext)
     final_place_thumbnail = os.path.join(local_directory, new_filename + '_thumbnail.webp')
     banner_file.save(final_place)
+
+    # An SVG that cannot be sanitized is rejected, before Image.open below gets
+    # it. '.svg' is in allowed_extensions but this function has no '.svg' branch,
+    # so Pillow raises UnidentifiedImageError on one and the request 500s --
+    # leaving the uploaded bytes sitting in the media root with nothing to clean
+    # them up. sanitize_svg has already destroyed the file by the time it
+    # returns False. (A CLEAN SVG banner still fails at Image.open; that is a
+    # separate, pre-existing bug in listing '.svg' as a banner extension.)
+    if file_ext.lower() == '.svg' and not sanitize_svg(final_place):
+        abort(400)
 
     if file_ext.lower() == '.heic':
         register_heif_opener()

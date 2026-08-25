@@ -2367,30 +2367,44 @@ def url_to_thumbnail_file(filename) -> File:
     if response.status_code == 200:
         content_type = response.headers.get('content-type')
         if content_type and content_type.startswith('image'):
-            # Sanitize SVG files to remove potentially dangerous elements
+            # Sanitize SVG files to remove potentially dangerous elements.
+            #
+            # sanitize_svg_bytes raises ValueError on input it will not sanitize
+            # -- an entity declaration, a UTF-16 encoding, or over MAX_SVG_SIZE.
+            # A remote thumbnail we cannot sanitize is DROPPED, exactly as a
+            # thumbnail we could not fetch is dropped a few lines above: this
+            # function reports failure by returning None, and letting the
+            # ValueError out instead would crash edit_post, which calls this and
+            # does not catch it. The two sanitize_svg_bytes calls are the only
+            # statements below that raise ValueError.
             response_content = response.content
-            if "svg" in content_type:
-                response_content = sanitize_svg_bytes(response_content)
-                file_extension = final_ext = ".svg"
-            else:
-                # Generate file extension from mime type
-                if ';' in content_type:
-                    content_type_parts = content_type.split(';')
-                    content_type = content_type_parts[0]
-                content_type_parts = content_type.split('/')
-                if content_type_parts:
-                    file_extension = '.' + content_type_parts[-1]
-                    if file_extension == '.jpeg':
-                        file_extension = '.jpg'
+            try:
+                if "svg" in content_type:
+                    response_content = sanitize_svg_bytes(response_content)
+                    file_extension = final_ext = ".svg"
                 else:
-                    file_extension = os.path.splitext(filename)[1]
-                    file_extension = file_extension.replace('%3f', '?')  # sometimes urls are not decoded properly
-                    if '?' in file_extension:
-                        file_extension = file_extension.split('?')[0]
+                    # Generate file extension from mime type
+                    if ';' in content_type:
+                        content_type_parts = content_type.split(';')
+                        content_type = content_type_parts[0]
+                    content_type_parts = content_type.split('/')
+                    if content_type_parts:
+                        file_extension = '.' + content_type_parts[-1]
+                        if file_extension == '.jpeg':
+                            file_extension = '.jpg'
+                    else:
+                        file_extension = os.path.splitext(filename)[1]
+                        file_extension = file_extension.replace('%3f', '?')  # sometimes urls are not decoded properly
+                        if '?' in file_extension:
+                            file_extension = file_extension.split('?')[0]
 
-            # Also sanitize if file extension is .svg (regardless of content-type)
-            if file_extension == '.svg' and "svg" not in content_type:
-                response_content = sanitize_svg_bytes(response_content)
+                # Also sanitize if file extension is .svg (regardless of content-type)
+                if file_extension == '.svg' and "svg" not in content_type:
+                    response_content = sanitize_svg_bytes(response_content)
+            except ValueError as e:
+                current_app.logger.info(f"Discarding unsanitizable remote SVG {filename}: {e}")
+                response.close()
+                return None
 
             new_filename = gibberish(15)
             if store_files_in_s3():
@@ -4652,11 +4666,35 @@ def refuse_svg_entity_declarations(svg_bytes: bytes) -> None:
     that declares none -- the `<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" ...>`
     that Illustrator and Inkscape emit -- is accepted, because refusing it buys
     nothing: filter_svg never fetches an external DTD, never dereferences a SYSTEM
-    or parameter entity, and refuses a nested entity reference outright, and an
-    ELEMENT/ATTLIST/NOTATION declaration is inert (attribute defaults declared in
-    an internal subset are not applied). All of that was established by execution
-    against the installed py-svg-hush and is pinned by
-    TestFilterSvgIsSafeWithoutPreStripping.
+    or parameter entity, and an ELEMENT/ATTLIST/NOTATION declaration is inert
+    (attribute defaults declared in an internal subset are not applied). All of
+    that was established by execution against the installed py-svg-hush and is
+    pinned by TestFilterSvgIsSafeWithoutPreStripping.
+
+    ENCODING ASSUMPTION, and why UTF-16 is refused outright. The scan below reads
+    ASCII bytes, so it is sound only over an ASCII-compatible encoding. Every
+    encoding XML permits is ASCII-compatible except UTF-16 and UTF-32 -- the
+    others have to be, because the XML declaration naming them must itself be
+    readable -- and py-svg-hush accepts UTF-16 but not UTF-32. A UTF-16 document
+    therefore carried `<!ENTITY` straight past this scan: the literal bytes
+    simply are not present, and filter_svg went on to transcode the document and
+    expand the entity. XML 1.0 section 4.3.3 requires a UTF-16 entity to begin
+    with a byte order mark, and py-svg-hush refuses UTF-16 without one, so
+    refusing FF FE / FE FF closes the whole of that surface.
+
+    Refusing rather than decoding first is deliberate. Nothing in PieFed produces
+    or expects a UTF-16 SVG; filter_svg's output is UTF-8 whatever it is given,
+    so a UTF-16 upload was never stored as UTF-16 even when it was accepted; and
+    decoding attacker-chosen bytes before scanning them would make this function
+    correct only as long as its decode agreed with py-svg-hush's on every input,
+    which is a much harder property to hold than "we do not accept UTF-16".
+
+    The refusal is on the encoding, not on the content, so a harmless UTF-16 SVG
+    is refused too. That is the cost, and it is why the guard is kept as narrow
+    as it can be: a UTF-8 BOM is not a UTF-16 BOM, and a legacy 8-bit encoding
+    such as ISO-8859-1 -- which filter_svg accepts and which spells `<!ENTITY`
+    with exactly those bytes -- is not affected. Refusing everything that fails a
+    UTF-8 decode would have caught ISO-8859-1 as well, for no gain.
 
     This refuses rather than strips. A regex hunting for a declaration's closing
     '>' is defeated by quoting -- XML 1.0 section 2.8 permits '>' inside a quoted
@@ -4687,6 +4725,9 @@ def refuse_svg_entity_declarations(svg_bytes: bytes) -> None:
     '<!ENTITY' inside a processing instruction or inside a DOCTYPE's system
     literal is refused rather than accepted, and no real SVG contains one.
     """
+    if svg_bytes[:2] in (b'\xff\xfe', b'\xfe\xff'):
+        raise ValueError('SVG must not be UTF-16: this scan reads ASCII bytes')
+
     i = 0
     while True:
         i = svg_bytes.find(b'<!', i)
@@ -4716,13 +4757,32 @@ def sanitize_svg_bytes(svg_bytes: bytes) -> bytes:
     rewrites the bytes before filter_svg sees them: byte-level pre-processing was
     what previously both corrupted valid documents and let hostile ones through.
 
-    filter_svg is safe on its own against the attacks the old pre-stripping was
-    there to prevent. Verified by execution against this exact version: a SYSTEM
-    entity naming file:/// or http:// is never dereferenced (it expands to
-    nothing), an external DTD is never fetched, and an entity whose value
-    references another entity is refused outright, so entity expansion cannot be
-    amplified. The entity refusal above is defence in depth, not a
-    dependency of filter_svg's safety.
+    filter_svg is safe on its own against XXE: verified by execution against this
+    exact version, a SYSTEM entity naming file:/// or http:// is never
+    dereferenced (it expands to nothing) and an external DTD is never fetched.
+
+    It is NOT safe on its own against entity expansion, and an earlier revision
+    of this docstring wrongly said it refused nested entity references outright.
+    It does not. What it has is an expansion BUDGET, measured against the
+    installed version:
+
+    * expanding one entity's value may trigger at most two further expansions,
+      counted transitively. `<!ENTITY b "&a;&a;">` expands and
+      `<!ENTITY b "&a;&a;&a;">` does not, which is what refuses classic billion
+      laughs -- a fanout of ten blows the budget on the first nested entity, at
+      depth 2 as much as at depth 9. Nesting itself is permitted.
+    * references in element content are not subject to that budget at all. A
+      single non-nested entity referenced many times amplifies freely until a
+      TOTAL expansion budget of 256 MiB is reached: 255.990 MiB of expansion
+      succeeds, 256.010 MiB is refused, and a 787 KB input is enough to get
+      there. MAX_SVG_SIZE bounds the input, not the output.
+
+    So refuse_svg_entity_declarations is NOT merely defence in depth against
+    expansion -- it is the only thing standing between a 10 MB upload and a
+    quarter-gigabyte allocation, which is why its encoding blind spot (UTF-16)
+    was worth closing. It remains defence in depth against XXE, where filter_svg
+    is safe by itself. All of the above is pinned by
+    TestFilterSvgIsSafeWithoutPreStripping.
     """
     if len(svg_bytes) > MAX_SVG_SIZE:
         raise ValueError(f"SVG file too large: {len(svg_bytes)} bytes (max {MAX_SVG_SIZE})")
