@@ -134,43 +134,26 @@ per-module check is a script.
 - `redis_double` — fakeredis patched over `app.utils.get_redis_connection`. Note
   the rate limiter and Celery app are built from `Config` at import time and are
   not affected by it.
-- Celery runs eagerly under test, with `eager_propagates` so a failing task raises
-  rather than being swallowed. Configured in the `app` fixture, on `celery.conf`
-  directly (**not** `TestConfig` attributes), setting BOTH the old- and
-  new-style key names together in one `celery.conf.update(...)` call:
-  `task_always_eager` / `CELERY_ALWAYS_EAGER` and `task_eager_propagates` /
-  `CELERY_EAGER_PROPAGATES_EXCEPTIONS`. Two independent Celery quirks make
-  anything simpler fragile:
-
-  1. `config.py`'s `CELERY_BROKER_URL` is itself an old-style name, so by the
-     time `app/__init__.py:175`'s `celery.conf.update(app.config)` has run,
-     `celery.conf` already holds old-format keys. Celery's `Settings` object
-     refuses to mix old- and new-format keys once a first real access
-     finalizes it with one format dominant
-     (`celery.exceptions.ImproperlyConfigured: "Cannot mix new setting names
-     with old setting names"`) — setting only the modern `task_always_eager`
-     name can raise exactly that.
-  2. Setting only the *old*-style names is not reliably enough either:
-     Celery's built-in defaults dict always carries a literal
-     `task_always_eager` (and `task_eager_propagates`) key of its own, with
-     value `False`. If anything else causes `celery.conf` to finalize before
-     this fixture runs — e.g. a module-level `@celery.task`-decorated
-     function, decorated at *import* time, and pytest imports every test
-     module during collection before any fixture executes — a lookup by the
-     new-style name finds Celery's own literal default first and never falls
-     back to checking the old-style alias. The old-style write then silently
-     has no effect, and whether the eager flag "works" ends up depending on
-     which test files pytest happened to collect first. Observed concretely
-     via `tests/test_instance_util.py`, whose `@celery.task def bulk_follow`
-     (`app/instance/util.py`) triggers exactly this if it is imported before
-     the `app` fixture has run.
-
-  Providing both spellings in the same `update()` call sidesteps both
-  problems: if this fixture is what finalizes `celery.conf`, Celery's own
-  mixing check explicitly allows a setting provided under both names at once;
-  if something else already finalized `celery.conf` first, the new-style
-  write here lands as a literal key that a `ChainMap` lookup always checks
-  before the defaults layer, so it wins regardless of collection order.
+- Celery runs eagerly under test, with `eager_propagates` so a failing task
+  raises rather than being swallowed. Configured in the `app` fixture, on
+  `celery.conf` directly (**not** `TestConfig` attributes), in the OLD key
+  format. `config.py`'s `CELERY_BROKER_URL` and friends are already old-format
+  names, so by the time `app/__init__.py:175`'s `celery.conf.update(app.config)`
+  has run, `celery.conf` is old-format dominant. Celery refuses to mix formats:
+  writing only the modern `task_always_eager` raises
+  `celery.exceptions.ImproperlyConfigured: "Cannot mix new setting names with
+  old setting names"` on the first *read* of the setting. The fixture supplies
+  both spellings, but only the old ones are load-bearing — `detect_settings`
+  explicitly tolerates a setting given under both names and converts the new one
+  to the old key before storing it.
+- `block_outbound_http` — session-scoped and autouse: an empty respx router, so
+  any request no `http_mock` matched raises instead of reaching the network.
+  Without it, eager Celery turns every federating test into real outbound
+  timeouts (`tests/test_announce_dispatch.py` measured 1.15s with it, 119s
+  without). respx consults routers in registration order, so this one is asked
+  *first* and `http_mock` second; that is safe only because it registers zero
+  routes and can never match. **Never add a route to it** — even a catch-all
+  that logs would silently override every `http_mock` route in the suite.
 
 ### Eager Celery makes outbound federation happen inline — and it fails silently
 
@@ -179,23 +162,34 @@ Read this before writing any test that federates.
 With `task_always_eager`, `.delay()` no longer enqueues; it runs the task in this
 process. `task_selector` calls `.delay()`, and `send_post_request` in turn calls
 `post_request.delay()`, so a test that triggers a follow, a vote or a post really
-does attempt the outbound HTTP POST during the test.
+does try to federate during the test — the actor lookups it performs are live
+outbound GETs, and the send is attempted right after them.
 
-That POST does **not** fail loudly when it goes nowhere.
-`app/activitypub/signature.py`'s `post_request` wraps the request in
+None of that fails loudly when it goes nowhere.
+`app/activitypub/signature.py`'s `post_request` wraps the send in
 `except Exception` and records the failure as an `ActivityPubLog` row instead of
 propagating it. respx's "unexpected request" error is therefore swallowed, and a
 test whose federation went nowhere still passes.
 
-So a green test proves nothing about delivery on its own. To assert an activity
-was actually sent, do one of:
-
-- pass `include_inbox=True` to `federation_peer`, so `assert_all_called=True`
-  fails the test if the POST never happened; or
-- assert on the `ActivityPubLog` row the send produced.
-
 `task_eager_propagates` does not help here: it re-raises what the *task* raises,
 and `post_request` raises nothing.
+
+So a green test proves nothing about delivery on its own. To assert an activity
+was actually sent:
+
+- pass `include_inbox=True` to `federation_peer`, **and** build the sending actor
+  with `make_user(..., with_keys=True)`. Both are required. Signing dereferences
+  the sender's private key, so a keyless sender raises `'NoneType' object has no
+  attribute 'encode'` before any HTTP request is attempted — the inbox route is
+  then never called and you get an opaque `RESPX: some routes were not called!`
+  at teardown, pointing nowhere near the cause. `make_user` leaves the keypair
+  empty by default because generating one costs about a second.
+- or assert on the `ActivityPubLog` row the send produced. This distinguishes a
+  failed send (`result == 'failure'`, with the reason in `exception_message`)
+  from no send at all (no row), which the route-count check cannot do.
+
+`tests/test_fixture_proofs.py::test_delivery_can_be_proved_when_the_sender_has_keys`
+is the worked example.
 
 Prove a fixture by driving real application code through it. A test asserting that
 fakeredis stores what you put in it tests fakeredis, not PieFed.

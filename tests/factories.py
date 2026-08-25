@@ -6,6 +6,7 @@ column here rather than in the test.
 """
 
 from app import db
+from app.activitypub.signature import RsaKeys
 from app.models import Community, Instance, Post, Site, User, UserFollower, utcnow
 
 
@@ -16,14 +17,25 @@ def make_instance(domain: str, software: str = 'mastodon') -> Instance:
     return instance
 
 
-def make_user(instance, name: str, local: bool = False) -> User:
-    """A local user has ap_id None; a remote user has a full actor URI."""
+def make_user(instance, name: str, local: bool = False, with_keys: bool = False) -> User:
+    """A local user has ap_id None; a remote user has a full actor URI.
+
+    with_keys generates a real RSA keypair. Off by default because generation
+    costs roughly a second and almost no test needs it -- but a user that SENDS
+    a signed activity does: HttpSignature.signed_request calls .encode() on the
+    private key, so a keyless sender dies at signing with "'NoneType' object has
+    no attribute 'encode'" before any HTTP request is attempted. A test
+    asserting on delivery must build its sending actor with with_keys=True.
+    """
+    private_key, public_key = RsaKeys.generate_keypair() if with_keys else (None, None)
     user = User(
         user_name=name,
         email=f'{name}@example.com',
         instance_id=instance.id if instance else 1,
         verified=True,
         banned=False,
+        private_key=private_key,
+        public_key=public_key,
         ap_id=None if local else f'{name}@{instance.domain}',
         ap_profile_id=None if local else f'https://{instance.domain}/users/{name}',
         ap_public_url=None if local else f'https://{instance.domain}/users/{name}',
