@@ -30,8 +30,6 @@ and tests/test_utils_security.py covers it directly.
 """
 
 import re
-import sys
-import traceback
 import xml.etree.ElementTree as ElementTree
 
 from bs4 import BeautifulSoup
@@ -52,17 +50,21 @@ _URL_REMOVED_ENTIRELY = str.maketrans('', '', '\t\n\r')
 _EVENT_HANDLER_ATTR = re.compile(r'^on.', re.IGNORECASE)
 
 
-def _resolves_to_javascript_url(value) -> bool:
-    """True if a browser would treat this attribute value as a javascript: URL.
+def _resolves_to_scheme(value, schemes) -> bool:
+    """True if a browser would read one of `schemes` off this attribute value.
 
     Applies the WHATWG stripping described above before looking at the scheme,
-    which is exactly what app.utils.allowlist_html's furl(...).scheme test does
-    not do.
+    which is exactly what app.utils.allowlist_html's furl(...).scheme test used
+    to fail to do. `schemes` is a tuple of names WITHOUT the colon.
+
+    Deliberately a separate reading of the rule from the production one in
+    app.utils.url_scheme: a property check that called the code under test would
+    assert nothing.
     """
     if isinstance(value, list):        # BeautifulSoup returns multi-valued attributes as lists
         value = ' '.join(value)
-    normalized = value.strip(_URL_LEADING_TRAILING_STRIP).translate(_URL_REMOVED_ENTIRELY)
-    return normalized.lower().startswith('javascript:')
+    normalized = value.strip(_URL_LEADING_TRAILING_STRIP).translate(_URL_REMOVED_ENTIRELY).lower()
+    return any(normalized.startswith(f'{scheme}:') for scheme in schemes)
 
 
 def _local_name(name: str) -> str:
@@ -161,12 +163,17 @@ def check_sanitize_svg_bytes(data: bytes) -> None:
             assert not _EVENT_HANDLER_ATTR.match(local), (
                 f'event handler attribute {local!r} survived sanitization')
             if local in ('href', 'src'):
-                assert not _resolves_to_javascript_url(value), (
+                # javascript: only. data: is NOT asserted against here:
+                # sanitize_svg_bytes legitimately keeps data: URLs for the image
+                # MIME types in its keep list, so asserting on it would report
+                # correct output as a break-in.
+                assert not _resolves_to_scheme(value, ('javascript',)), (
                     f'javascript: URL survived sanitization in {local!r}')
 
 
-def _allowlist_html_properties(data: bytes, *, check_javascript_urls: bool) -> None:
-    """The body of check_allowlist_html. See both wrappers below.
+def check_allowlist_html(data: bytes) -> None:
+    """The XSS boundary for all remote content: no script element, no event
+    handler attribute and no script-executing URL may survive, for any input.
 
     test_env is passed so the function does not reach get_emoji_replacements()
     or fediverse_domains(), both of which are DB-backed. Fuzzing must not need a
@@ -178,6 +185,30 @@ def _allowlist_html_properties(data: bytes, *, check_javascript_urls: bool) -> N
     character data. They are inert text; a substring check calls them XSS.
     BeautifulSoup('html.parser') is the same parser allowlist_html itself uses
     to decide what to keep, so the tree checked here is the tree it built.
+
+    This function used to have a second form, check_allowlist_html_past_known_defects,
+    which suppressed two reported-but-unfixed defects so a campaign could hunt
+    past them: the javascript:-URL bypass, and an IndexError out of
+    escape_non_html_brackets on "</>". Both are now fixed in app/utils.py, so
+    the suppression has been deleted rather than left to swallow a regression.
+    There is one target again, and it is the honest one.
+
+    javascript: and vbscript: are asserted against; data: is not. A data: href
+    is blanked by app.utils.allowlist_html as defence in depth, but that is a
+    policy choice rather than a property of the XSS boundary, and asserting it
+    here would make a campaign report a policy change as a break-in.
+
+    The href assertion applies to ANCHORS ONLY, for the same reason the module
+    docstring gives for asserting against a parsed tree. 'href' is on
+    allowlist_html's allowed_attrs for every element, so malformed input can
+    leave <img href="javascript:x"> standing -- and that is inert, because HTML
+    defines no href on img and no browser navigates it. Of the elements in
+    app.utils.allowed_tags, 'a' is the only one for which href is a defined,
+    navigable attribute: area, link and base are not allowed through at all, so
+    nothing is lost by scoping this to anchors. Measured, not assumed: the first
+    campaign this target could run flagged exactly that inert <img href> at seed
+    load, and tests/fuzz/corpus/allowlist_html/javascript_href_on_img_is_inert
+    is the minimised case pinning it.
     """
     text = data.decode('utf-8', errors='replace')
     result = allowlist_html(text, test_env={'fn_string': 'fn-test'})
@@ -189,57 +220,6 @@ def _allowlist_html_properties(data: bytes, *, check_javascript_urls: bool) -> N
         for name, value in tag.attrs.items():
             assert not _EVENT_HANDLER_ATTR.match(name), (
                 f'event handler attribute {name!r} survived the allowlist')
-            if check_javascript_urls and name == 'href':
-                assert not _resolves_to_javascript_url(value), (
-                    'javascript: URL survived the allowlist')
-
-
-def check_allowlist_html(data: bytes) -> None:
-    """The XSS boundary for all remote content: no script, no handlers, no
-    javascript: URLs may survive, for any input.
-
-    This is the check the corpus replay runs, and the one a campaign should use.
-    """
-    _allowlist_html_properties(data, check_javascript_urls=True)
-
-
-# The frames that raise app.utils's reported-but-unfixed IndexError. Both do
-# `tag_content[1:].split()[0]` (or [:-1]) on markup like "</>", where stripping
-# the slash leaves an empty string and split() therefore returns [].
-_KNOWN_INDEX_ERROR_FRAMES = ('escape_non_html_brackets', 'escape_non_html_angle_brackets')
-
-
-def check_allowlist_html_past_known_defects(data: bytes) -> None:
-    """check_allowlist_html with its two REPORTED, UNFIXED defects suppressed.
-    Campaigns only -- never the corpus replay.
-
-    A fuzz campaign stops at its first crash. allowlist_html has two known
-    defects that a campaign reaches immediately, so a run against
-    check_allowlist_html spends its whole budget rediscovering them and never
-    looks for a third:
-
-    1. the javascript:-URL bypass -- tests/fuzz/corpus/allowlist_html/
-       javascript_url_leading_space and its two siblings. Reached at execution 0,
-       because it is in the seed corpus.
-    2. IndexError out of escape_non_html_brackets on "</>" --
-       tests/fuzz/corpus/allowlist_html/empty_closing_tag. This campaign found
-       it at execution 236 of its first 60-second run.
-
-    Both are pinned by strict xfails in tests/test_utils_fuzz_corpus.py, which is
-    where they stay visible. Suppressing them HERE, and only here, is what lets a
-    campaign keep hunting past them; it is not a fix and it does not hide them.
-
-    Both suppressions are narrow. Dropping the javascript:-URL assertion costs
-    nothing production already handles -- an unpadded "javascript:" href is
-    emptied by allowlist_html itself, so that assertion can only ever fire on the
-    known bypass. The IndexError is swallowed only when it was raised by one of
-    the two frames named in _KNOWN_INDEX_ERROR_FRAMES; an IndexError from
-    anywhere else is a new finding and propagates.
-    """
-    try:
-        _allowlist_html_properties(data, check_javascript_urls=False)
-    except IndexError:
-        raising_frame = traceback.extract_tb(sys.exc_info()[2])[-1].name
-        if raising_frame in _KNOWN_INDEX_ERROR_FRAMES:
-            return
-        raise
+            if name == 'href' and tag.name == 'a':
+                assert not _resolves_to_scheme(value, ('javascript', 'vbscript')), (
+                    'script-executing URL survived the allowlist')

@@ -35,22 +35,19 @@ import atheris
 # mutator towards branches in third-party libraries that are not under test.
 with atheris.instrument_imports(include=['app', 'tests']):
     from tests.fuzz.harnesses import (check_allowlist_html,
-                                      check_allowlist_html_past_known_defects,
                                       check_is_valid_xml_utf8,
                                       check_sanitize_svg_bytes)
 
 # name -> (property check, corpus directory it seeds from and writes back to).
 #
-# allowlist_html_past_known_defects shares the allowlist_html corpus on purpose.
-# It is the same target with two reported-but-unfixed defects suppressed, so a
-# campaign can keep hunting instead of aborting on them; see the docstring on
-# check_allowlist_html_past_known_defects. Anything it finds is a finding about
-# allowlist_html and belongs in allowlist_html's corpus. Run the plain target
-# first -- it is the honest one -- and this one only to look past what that
-# found.
+# There used to be a fourth target, allowlist_html_past_known_defects: the same
+# target with two reported-but-unfixed defects suppressed, so a campaign could
+# keep hunting instead of aborting on them at execution 0. Both defects are now
+# fixed in app/utils.py -- the javascript:-URL bypass and the IndexError on
+# "</>" -- so the suppression has been deleted rather than left in place to
+# swallow a regression, and the honest allowlist_html target runs.
 TARGETS = {
     'allowlist_html': (check_allowlist_html, 'allowlist_html'),
-    'allowlist_html_past_known_defects': (check_allowlist_html_past_known_defects, 'allowlist_html'),
     'is_valid_xml_utf8': (check_is_valid_xml_utf8, 'is_valid_xml_utf8'),
     'sanitize_svg_bytes': (check_sanitize_svg_bytes, 'sanitize_svg_bytes'),
 }

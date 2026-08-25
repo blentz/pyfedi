@@ -43,31 +43,54 @@ class TestMastodonExtraFieldLink:
         html = '<a href="https://example.com/">example</a>'
         assert mastodon_extra_field_link(html) == 'https://example.com/'
 
-    def test_no_anchor_returns_none(self):
-        """BUG (see plan): falls off the end rather than returning a documented value.
+    def test_no_anchor_returns_the_input_unchanged(self):
+        """WAS A BUG, now fixed: this used to fall off the end and return None.
 
         Both live callers (app/activitypub/util.py:648, :1157) only invoke this
         function when '<a ' already appears in the raw string, so this exact path
-        is guarded in practice. But that guard is a naive substring check, not real
-        HTML validation, so malformed remote input (e.g. an unclosed '<a href...'
-        with no '>') can still reach here. When it does, the caller immediately
-        does `field_data['value'].strip()` on the result with no None-check, so a
-        None return here becomes an unhandled AttributeError while processing a
-        remote actor's profile fields.
+        looked guarded. But that guard is a naive substring check, not real HTML
+        validation, so malformed remote input (e.g. an unclosed '<a href...' with
+        no '>') reached here anyway. The caller then does
+        `field_data['value'].strip()` on the result with no None-check, so the
+        None return became an unhandled AttributeError while processing a remote
+        actor's profile fields -- and `activity_json['attachment']` is entirely
+        remote-instance-controlled, so that was a remote-triggerable crash in
+        deployed software.
 
-        This return value is UNGUARDED at both call sites, and it is not the only
-        unguarded failure mode: an anchor with no `href` attribute (e.g.
-        '<a class="x">link</a>' or '<a name="anchor">y</a>') raises KeyError('href')
-        on `tag['href']` above, for the same reason. Both `activity_json['attachment']`
-        entries are entirely remote-instance-controlled, making this a
-        remote-triggerable crash in deployed software. A controller ruling
-        confirmed this by execution and escalated it to the project owner directly
-        rather than fixing it here — the fix belongs in app/activitypub/util.py,
-        outside this sub-project's file scope. See task-3-report.md, "Finding 2",
-        for the full analysis. Do not add the KeyError case as a test in this
-        file; it belongs with the eventual fix.
+        The contract now: a str in every path, so both call sites' .strip() is
+        safe without either of them being touched. When there is no anchor
+        carrying an href, the extra field is returned unchanged -- the caller
+        stores the field's own text, which is the closest thing to what the
+        remote instance meant.
         """
-        assert mastodon_extra_field_link('<p>no link</p>') is None
+        assert mastodon_extra_field_link('<p>no link</p>') == '<p>no link</p>'
+
+    def test_unclosed_anchor_returns_the_input_unchanged(self):
+        """The exact input that used to become AttributeError at the call site."""
+        assert mastodon_extra_field_link('text <a ') == 'text <a '
+
+    def test_anchor_without_an_href_returns_the_input_unchanged(self):
+        """WAS A BUG, now fixed: `tag['href']` raised KeyError('href') here.
+
+        Same reachability as above -- '<a ' appears in the raw string, so the
+        call sites' substring guard lets it through.
+        """
+        assert mastodon_extra_field_link('<a class="x">link</a>') == '<a class="x">link</a>'
+        assert mastodon_extra_field_link('<a name="anchor">y</a>') == '<a name="anchor">y</a>'
+
+    def test_an_href_less_anchor_does_not_hide_a_later_link(self):
+        html = '<a class="x">label</a> <a href="https://example.com/">example</a>'
+        assert mastodon_extra_field_link(html) == 'https://example.com/'
+
+    def test_an_empty_href_is_returned_as_the_empty_string(self):
+        """Pre-existing behaviour, pinned: an href that is present but empty is
+        still an href, and returning '' keeps the return type a str."""
+        assert mastodon_extra_field_link('<a href="">e</a>') == ''
+
+    def test_the_return_is_always_a_str(self):
+        for value in ['<p>no link</p>', 'text <a ', '<a class="x">l</a>', '',
+                      '<a href="https://example.com/">e</a>', '<a href="">e</a>']:
+            assert isinstance(mastodon_extra_field_link(value), str), value
 
 
 class TestLinksWithParens:
