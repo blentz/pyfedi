@@ -190,6 +190,53 @@ def test_successful_boost_creates_post_and_records_boost(db_session, fetch_spy, 
     assert PostBoost.query.filter_by(post_id=result.id, user_id=followed_booster.id).count() == 1
 
 
+def test_boost_of_private_community_post_is_refused(db_session, fetch_spy, followed_booster, log_spy):
+    """FINDING 2: local post ap_ids are guessable (https://<server>/post/<id>), so
+    any remote actor a single local user follows could Announce an arbitrary
+    local post URI and get a PostBoost row created for a post in a private
+    (invite-only) community it was never a member of. The get_by_ap_id
+    short-circuit must refuse before record_boost, not after.
+    """
+    from app import db
+    from app.activitypub.util import process_microblog_announce
+    from app.models import PostBoost
+    _, calls = fetch_spy
+    author = make_user(make_instance('other.example'), 'bob')
+    community = make_community('secret-club')
+    community.private = True
+    db.session.commit()
+    post = make_post(community, author, 'https://other.example/notes/70')
+
+    result = process_microblog_announce(
+        announce(followed_booster.ap_public_url, post.ap_id), 'b1', False)
+
+    assert result is None
+    assert calls == [], 'the post is already held locally; no fetch should happen'
+    assert PostBoost.query.filter_by(post_id=post.id).count() == 0
+    assert log_spy[-1][2] == 'Boosted post belongs to a private or local_only community'
+
+
+def test_boost_of_local_only_community_post_is_refused(db_session, fetch_spy, followed_booster, log_spy):
+    """Same as above, for a local_only community (no federation intended at all)."""
+    from app import db
+    from app.activitypub.util import process_microblog_announce
+    from app.models import PostBoost
+    _, calls = fetch_spy
+    author = make_user(make_instance('other2.example'), 'carol')
+    community = make_community('local-only-comm')
+    community.local_only = True
+    db.session.commit()
+    post = make_post(community, author, 'https://other2.example/notes/71')
+
+    result = process_microblog_announce(
+        announce(followed_booster.ap_public_url, post.ap_id), 'b2', False)
+
+    assert result is None
+    assert calls == []
+    assert PostBoost.query.filter_by(post_id=post.id).count() == 0
+    assert log_spy[-1][2] == 'Boosted post belongs to a private or local_only community'
+
+
 def test_rejected_follow_does_not_open_gate(db_session, fetch_spy):
     """A follow the remote side explicitly rejected (is_accepted False) must not
     grant trust -- only pending or accepted follows should."""

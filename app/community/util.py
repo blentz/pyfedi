@@ -16,7 +16,7 @@ from flask_babel import _, lazy_gettext as _l
 from app import db, cache, celery
 from app.activitypub.signature import post_request, default_context, send_post_request
 from app.activitypub.util import find_actor_or_create, actor_json_to_model, \
-    find_hashtag_or_create, create_post, remote_object_to_json, find_flair
+    find_hashtag_or_create, create_post, remote_object_to_json, find_flair, activitypub_visibility
 from app.community.forms import CreateLinkForm
 from app.constants import SRC_WEB, POST_TYPE_LINK
 from app.models import Community, File, PostReply, Post, utcnow, CommunityMember, Site, \
@@ -214,7 +214,14 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                                                 # Skip if reply already exists
                                                 if session.query(PostReply).filter_by(ap_id=reply_data['id']).first():
                                                     continue
-                                                
+
+                                                # Refuse non-public replies, same policy as create_post_reply.
+                                                # reply_data IS the object here (see the synthesised
+                                                # reply_data['object'] below), so classify it directly rather
+                                                # than a nested 'object' key that does not exist yet.
+                                                if activitypub_visibility(reply_data) != 'public':
+                                                    continue
+
                                                 # Find the author of the reply
                                                 reply_author = find_actor_or_create(reply_data['attributedTo'])
                                                 if not reply_author:

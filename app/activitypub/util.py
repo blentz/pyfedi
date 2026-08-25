@@ -3523,6 +3523,14 @@ def activitypub_visibility(obj: dict) -> str:
     Note that Post.private does NOT mean "not public": Post.new() sets it for any
     titleless object, i.e. every microblog post, making it an unlisted marker.
     PostReply.private does mean followers-only. The two are not the same thing.
+
+    Also note Post.new() clears that private flag whenever the ACTIVITY-level
+    'to' or 'cc' contains Public (app/models.py ~1802-1807), including via 'cc' --
+    i.e. for a genuinely unlisted post. This classifier reads the OBJECT's own
+    'to'/'cc' instead. So a directly-delivered unlisted Mastodon post ends up
+    stored with private=False (Post.new's activity-level check) even though this
+    classifier would call it 'unlisted' (the object-level check): two sources of
+    truth for addressing, five hundred lines apart. Do not conflate them.
     """
     to = _addressing_list(obj, 'to')
     cc = _addressing_list(obj, 'cc')
@@ -3598,6 +3606,17 @@ def process_microblog_announce(request_json, id, store_ap_json) -> Union[Post, N
     # both already-ingested remote posts and posts authored on this instance.
     post = Post.get_by_ap_id(uri)
     if post:
+        # Local ap_ids are guessable (https://<server>/post/<id>), so any remote
+        # actor a single local user follows could otherwise Announce an arbitrary
+        # local post URI into a post_boost row -- including one in a private
+        # (invite-only) or local_only community the announcer was never a member
+        # of. Refuse before recording rather than trusting the community's own
+        # federation gate, which this path never goes through.
+        community = post.community
+        if community and (community.private or community.local_only):
+            log_incoming_ap(id, APLOG_ANNOUNCE, APLOG_IGNORED, saved_json,
+                            'Boosted post belongs to a private or local_only community')
+            return None
         record_boost(post, announcer)
         return post
 
