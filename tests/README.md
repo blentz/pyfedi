@@ -94,6 +94,20 @@ unexercised.
 Coverage is a floor, not a target. A test that executes a line without asserting
 anything raises the number and catches nothing.
 
+The gate measures coverage.py BRANCH coverage, not CONDITION coverage: a compound
+`if a and b` is "covered" once both the true and false outcome of the whole
+expression have been observed, even if one of `a`/`b` is never independently
+falsified. So 100% here does not mean every sub-condition has been shown to
+matter -- read `--cov-report=term-missing` output with that in mind, and do not
+over-read the number as-is. Two known cases in `app/request_hooks.py` where a
+sub-condition of a compound branch is never independently falsified by this
+suite: `request.path.startswith('/bootstrap/static/')` at lines 130 and 141, and
+`"api/alpha/swagger" in request.path` / `not in request.path` at lines 147 and
+166. (A third case, `response.status_code != 304` at line 150, is covered by
+test_no_csp_header_on_a_304_response in tests/test_request_hooks.py -- listed
+here as an example of the kind of gap this paragraph is warning about, and of
+what closing one looks like.)
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not

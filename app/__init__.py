@@ -169,7 +169,7 @@ def create_app(config_class=Config):
     bootstrap.init_app(app)
     babel.init_app(app, locale_selector=get_locale)
     cache.init_app(app)
-    compress.init_app(app)   # registered before the after_request in app/request_hooks.py, so it runs after it
+    compress.init_app(app)
     limiter.init_app(app)
     app_bcrypt.init_app(app)
     celery.conf.update(app.config)
@@ -325,6 +325,13 @@ def create_app(config_class=Config):
     load_plugins()
 
     from app.request_hooks import register_request_hooks
+    # Must be registered after compress.init_app(app) above. Flask runs after_request
+    # callbacks in reverse registration order, so registering here (last) makes our
+    # after_request in app/request_hooks.py run FIRST and Flask-Compress run after it,
+    # appending Accept-Encoding to the Vary header our hook just merged (see the comment
+    # on response.vary.update(...) in app/request_hooks.py). Moving this call earlier
+    # -- e.g. up next to the other init_app() calls -- would silently flip that order.
+    # test_request_hooks.py's test_after_request_runs_before_flask_compress pins it.
     register_request_hooks(app)
 
     return app

@@ -28,7 +28,7 @@ from sqlalchemy import text
 
 from app import db
 from app.constants import ROLE_ADMIN
-from app.models import Role, Settings
+from app.models import Role, Settings, Site
 from tests.factories import make_community, make_instance, make_post, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -327,6 +327,42 @@ def test_no_csp_header_for_htmx_request(app, db_session):
     assert 'Content-Security-Policy' not in response.headers
 
 
+def test_no_csp_header_on_a_304_response(app, db_session):
+    """Under branch coverage, `if not is_htmx and response.status_code != 304`
+    (app/request_hooks.py:150) is only ever falsified through is_htmx -- no other
+    test in this suite ever produces a 304, so `and response.status_code != 304`
+    could be deleted and the 100%-branch-coverage gate would stay green.
+
+    That would matter: app/main/routes.py's index_rss() -- unlike index(),
+    show_post() and show_community(), which all gate their 304 on
+    current_user.is_anonymous -- returns 304 for ANY request (authenticated or
+    not) whose If-None-Match matches. So an authenticated request can reach this
+    branch with response.status_code == 304. If the status_code check were gone,
+    this hook would attach a FRESH CSP nonce to that 304 while the browser
+    replays cached HTML carrying the OLD nonce, blocking every inline script on
+    the page.
+
+    The etag is computed here with index_rss()'s exact formula
+    (f"home_{hash(g.site.last_active)}") rather than read off a prior response,
+    because return_304() only echoes an ETag response header for anonymous
+    requests. hash() of a datetime is not salted by PYTHONHASHSEED (only str/
+    bytes hashing is -- see the Python docs on hash randomization), so computing
+    it here reproduces, in this same process, the exact value index_rss() will
+    compute for the same Site row.
+    """
+    instance = make_instance('test.piefed.local', software='piefed')
+    user = make_user(instance, 'etaguser', local=True)
+    site = Site.query.get(1)
+    current_etag = f"home_{hash(site.last_active)}"
+
+    with app.test_client() as client:
+        login(client, user)
+        response = client.get('/index/feed', headers={'If-None-Match': current_etag})
+
+    assert response.status_code == 304
+    assert 'Content-Security-Policy' not in response.headers
+
+
 def test_hsts_header_present_when_protocol_is_https(app, db_session, monkeypatch):
     monkeypatch.setitem(app.config, 'HTTP_PROTOCOL', 'https')
 
@@ -444,6 +480,38 @@ def test_html_response_vary_includes_accept_language_and_cookie(app, db_session)
     assert 'Cookie' in response.headers['Vary']
 
 
+def test_after_request_runs_before_flask_compress(app):
+    """Pins the registration-order guarantee the comment on
+    response.vary.update(...) (app/request_hooks.py:174-176) depends on.
+
+    Flask-Compress is registered in app/__init__.py's create_app() via
+    compress.init_app(app), before register_request_hooks(app) registers our
+    after_request. Flask calls after_request callbacks in REVERSE registration
+    order, so registering ours LAST makes it run FIRST -- Flask-Compress then
+    runs after it and appends Accept-Encoding to the Vary header our hook just
+    merged, rather than the two clobbering each other.
+
+    Previously this ordering was structurally guaranteed: Flask-Compress lived
+    in the factory and our hook in a different module that necessarily loaded
+    (and therefore registered) later. Now both registrations are calls inside
+    the same create_app() function, so nothing stops a future edit from moving
+    register_request_hooks(app) up next to the other init_app() calls -- exactly
+    the tidy-up that looks harmless and would silently flip this order. This
+    test is what would catch that.
+    """
+    funcs = app.after_request_funcs[None]
+
+    assert funcs[-1].__module__ == 'app.request_hooks', (
+        "app/request_hooks.py's after_request must be the LAST-registered "
+        "after_request callback so it runs FIRST (Flask runs these in reverse "
+        "registration order)."
+    )
+    assert any(f.__module__.startswith('flask_compress') for f in funcs[:-1]), (
+        'Flask-Compress must be registered before app/request_hooks.py, so its '
+        'after_request runs AFTER ours.'
+    )
+
+
 # ---------------------------------------------------------------------------
 # context processor
 # ---------------------------------------------------------------------------
@@ -483,10 +551,62 @@ def test_context_processor_supplies_site_from_g(app, db_session):
 
 
 # ---------------------------------------------------------------------------
+# jinja globals and filters
+# ---------------------------------------------------------------------------
+
+def test_jinja_globals_and_filters_are_registered(app):
+    """This is the branch's actual deliverable, and until now nothing asserted
+    it: register_request_hooks() sets ~24% of the module's significant lines
+    wiring up jinja globals/filters, but they were only "covered" by
+    create_app() running -- no test checked that any of them actually ended up
+    registered. A future edit that dropped e.g. human_filesize,
+    round_invisible_digits, favorite_communities or compaction_level would keep
+    the 100%-branch-coverage gate green and the suite passing, while recreating
+    exactly the class of breakage this branch exists to fix (a template calling
+    a global/filter that was never wired up, raising at render time).
+
+    This list is read directly from app/request_hooks.py, not from memory. Uses
+    >= rather than == so Flask's own builtin globals/filters, and any future
+    additions, do not break this test.
+    """
+    expected_globals = {
+        'len', 'digits', 'str', 'shorten_number', 'community_membership',
+        'feed_membership', 'json_loads', 'user_access', 'role_access',
+        'ap_datetime', 'can_upvote', 'can_downvote', 'can_upload_video',
+        'show_explore', 'in_sorted_list', 'theme', 'file_exists',
+        'first_paragraph', 'ngettext', 'html_to_text', 'csrf_token',
+        'debug_checkpoint', 'compaction_level', 'humanize_number',
+        'round_invisible_digits', 'localize_datetime', 'display_back_button',
+        'favorite_communities',
+    }
+    expected_filters = {
+        'community_links', 'feed_links', 'person_links', 'shorten',
+        'shorten_url', 'remove_images', 'human_filesize',
+    }
+
+    assert set(app.jinja_env.globals) >= expected_globals
+    assert set(app.jinja_env.filters) >= expected_filters
+
+
+# ---------------------------------------------------------------------------
 # teardown_appcontext
 # ---------------------------------------------------------------------------
 
 def test_teardown_removes_the_session_for_the_popped_context(app, db_session):
+    """This asserts the COMBINED effect of shutdown_session (app/request_hooks.py)
+    and Flask-SQLAlchemy's own teardown_appcontext (registered by db.init_app(),
+    which runs after ours -- teardown callbacks run in reverse registration order).
+    It does NOT isolate shutdown_session: deleting shutdown_session outright still
+    leaves this test passing, because Flask-SQLAlchemy's own teardown already
+    removes the session from the registry on its own. This is an effect-observation
+    test, not a regression guard for this hook.
+
+    test_teardown_rolls_back_then_removes_on_exception below, which monkeypatches
+    db.session.rollback/remove to record the call sequence, is the only test in
+    this suite that actually exercises shutdown_session's own behaviour -- it is
+    not a "companion" to this one; it is currently the sole thing protecting the
+    hook.
+    """
     from flask.globals import app_ctx as app_ctx_proxy
 
     with app.app_context():
