@@ -418,3 +418,112 @@ def process_topic_communities(topic_data, topic_id):
             raise
         finally:
             session.close()
+
+
+def directory_candidates(accounts, domain: str, minimum_statuses: int, minimum_followers: int,
+                         exclude_bots: bool, limit: int) -> Tuple[List[str], dict]:
+    """Filter Mastodon /api/v1/directory entries into handles worth following.
+
+    Returns (handles, stats). `handles` is capped at `limit`; `stats` counts
+    everything seen so a dry run can report why accounts were skipped.
+
+    Mastodon returns `acct` as a BARE username for accounts local to the queried
+    instance, so the domain has to be appended -- an unqualified handle is one
+    search_for_user cannot resolve, which fails silently as "nothing happened".
+    """
+    stats = {'seen': 0, 'below_minimum_statuses': 0, 'below_minimum_followers': 0,
+             'bots': 0, 'malformed': 0, 'candidates': 0}
+    handles = []
+
+    for entry in accounts:
+        stats['seen'] += 1
+
+        acct = entry.get('acct') if isinstance(entry, dict) else None
+        if not acct or not isinstance(acct, str):
+            stats['malformed'] += 1
+            continue
+        if exclude_bots and entry.get('bot'):
+            stats['bots'] += 1
+            continue
+        if (entry.get('statuses_count') or 0) < minimum_statuses:
+            stats['below_minimum_statuses'] += 1
+            continue
+        if (entry.get('followers_count') or 0) < minimum_followers:
+            stats['below_minimum_followers'] += 1
+            continue
+
+        stats['candidates'] += 1
+        handles.append(acct if '@' in acct else f'{acct}@{domain}')
+
+    return handles[:limit], stats
+
+
+DIRECTORY_PAGE_SIZE = 80
+
+
+def fetch_mastodon_directory(remote_url: str, max_pages: int = 20) -> List[dict]:
+    """Page Mastodon's public profile directory, returning the raw entries.
+
+    /api/v1/directory is opt-in twice over -- the instance enables it and each
+    account chooses to appear -- so it lists only accounts that consented to be
+    discoverable. `order=active` puts recently-active accounts first.
+
+    max_pages is a hard stop. A large instance, or one that keeps returning full
+    pages, must not be able to hold this loop open indefinitely.
+    """
+    accounts: List[dict] = []
+
+    for page in range(max_pages):
+        params = {'local': 'true', 'order': 'active',
+                  'limit': str(DIRECTORY_PAGE_SIZE), 'offset': str(page * DIRECTORY_PAGE_SIZE)}
+        response = get_request(f'{remote_url}/api/v1/directory', params=params)
+        try:
+            entries = response.json()
+        finally:
+            response.close()
+
+        if not isinstance(entries, list) or not entries:
+            break
+
+        accounts.extend(entries)
+
+        if len(entries) < DIRECTORY_PAGE_SIZE:
+            break
+
+    return accounts
+
+
+def remote_instance_software(remote_url: str) -> str:
+    """Return a remote instance's software name, lowercased, from its nodeinfo.
+
+    Raises if nodeinfo is missing, malformed, or advertises no schema 2.0/2.1
+    link, so the caller can report that rather than failing further downstream on
+    an endpoint the software does not have.
+    """
+    response = get_request(f'{remote_url}/.well-known/nodeinfo')
+    try:
+        nodeinfo = response.json()
+    finally:
+        response.close()
+
+    schemas = ('http://nodeinfo.diaspora.software/ns/schema/2.0',
+               'http://nodeinfo.diaspora.software/ns/schema/2.1')
+    instanceinfo_url = None
+    for link in (nodeinfo or {}).get('links', []):
+        if isinstance(link, dict) and link.get('rel') in schemas:
+            instanceinfo_url = link.get('href')
+
+    if not instanceinfo_url:
+        raise Exception(f'{remote_url} advertises no nodeinfo 2.0 or 2.1 endpoint')
+
+    response = get_request(instanceinfo_url)
+    try:
+        instanceinfo = response.json()
+    finally:
+        response.close()
+
+    name = ((instanceinfo or {}).get('software') or {}).get('name')
+    if not name:
+        raise Exception(f'{remote_url} nodeinfo does not name its software')
+
+    return name.lower()

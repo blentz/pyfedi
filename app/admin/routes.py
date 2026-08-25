@@ -24,13 +24,15 @@ from app.admin.constants import ReportTypes
 from app.admin.forms import FederationForm, SiteMiscForm, SiteProfileForm, EditCommunityForm, EditUserForm, \
     EditTopicForm, SendNewsletterForm, AddUserForm, PreLoadCommunitiesForm, ImportExportBannedListsForm, \
     EditInstanceForm, RemoteInstanceScanForm, MoveCommunityForm, EditBlockedImageForm, AddBlockedImageForm, \
-    CmsPageForm, CreateOfflineInstanceForm, InstanceChooserForm, CloseInstanceForm, EmojiForm, TopicImportForm
+    CmsPageForm, CreateOfflineInstanceForm, InstanceChooserForm, CloseInstanceForm, EmojiForm, TopicImportForm, \
+    MastodonDirectoryScanForm
 from flask_wtf import FlaskForm
 from app.admin.util import unsubscribe_from_everything_then_delete, unsubscribe_from_community, send_newsletter, \
     topics_for_form, move_community_images_to_here, switch_to_unsilenced, switch_to_silenced, serialize_topic_tree, \
-    create_topic_and_children
+    create_topic_and_children, fetch_mastodon_directory, directory_candidates, remote_instance_software
 from app.auth.util import send_email_verification, random_token
 from app.community.util import save_icon_file, save_banner_file, search_for_community, is_bad_name
+from app.instance.util import bulk_follow
 from app.community.routes import do_subscribe
 from app.constants import REPORT_STATE_NEW, REPORT_STATE_ESCALATED, POST_STATUS_REVIEWING, ROLE_ADMIN
 from app.email import send_registration_approved_email
@@ -891,6 +893,77 @@ def admin_federation_remote_scan():
     return render_template('admin/federation_remote_scan.html', title=_('Federation settings - remote scan'),
                            remote_scan_form=remote_scan_form, current_app_debug=current_app.debug,
                            roles_with=roles_with('change instance settings'))
+
+
+@bp.route('/federation/mastodon_scan', methods=['GET', 'POST'])
+@permission_required('change instance settings')
+@login_required
+def admin_federation_mastodon_scan():
+    """Bulk-follow accounts from a Mastodon instance's public profile directory.
+
+    The two community scans on this page call Lemmy-family community APIs, which
+    Mastodon does not have. This is the people-shaped equivalent: read the opt-in
+    directory, filter it, and hand the handles to the existing bulk_follow, which
+    resolves each one through search_for_user and follows it.
+    """
+    mastodon_scan_form = MastodonDirectoryScanForm()
+
+    if mastodon_scan_form.mastodon_scan_submit.data and mastodon_scan_form.validate():
+        remote_url = mastodon_scan_form.mastodon_url.data.strip().rstrip('/')
+
+        try:
+            software = remote_instance_software(remote_url)
+        except Exception:
+            flash(_('Could not read nodeinfo from %(url)s.', url=remote_url))
+            return redirect(url_for('admin.admin_federation_mastodon_scan'))
+
+        # Not gatekeeping: /api/v1/directory only exists on Mastodon and its close
+        # forks. Skipping the check would just move the failure to a 404 later.
+        if software != 'mastodon':
+            flash(_('%(url)s reports its software as "%(software)s". This scan reads '
+                    'Mastodon\'s /api/v1/directory, which other software does not provide.',
+                    url=remote_url, software=software))
+            return redirect(url_for('admin.admin_federation_mastodon_scan'))
+
+        domain = urlparse(remote_url).netloc
+        accounts = fetch_mastodon_directory(remote_url)
+        handles, stats = directory_candidates(
+            accounts, domain,
+            minimum_statuses=mastodon_scan_form.minimum_statuses.data,
+            minimum_followers=mastodon_scan_form.minimum_followers.data,
+            exclude_bots=mastodon_scan_form.exclude_bots.data,
+            limit=mastodon_scan_form.accounts_requested.data)
+
+        if mastodon_scan_form.mastodon_dry_run.data:
+            flash(_('Dry run for %(url)s: %(seen)d accounts in the directory, '
+                    '%(bots)d bots, %(low_statuses)d below the post minimum, '
+                    '%(low_followers)d below the follower minimum, '
+                    '%(candidates)d candidates, %(to_follow)d would be followed.',
+                    url=remote_url, seen=stats['seen'], bots=stats['bots'],
+                    low_statuses=stats['below_minimum_statuses'],
+                    low_followers=stats['below_minimum_followers'],
+                    candidates=stats['candidates'], to_follow=len(handles)))
+            return redirect(url_for('admin.admin_federation_mastodon_scan'))
+
+        if not handles:
+            flash(_('No accounts on %(url)s matched those filters.', url=remote_url))
+            return redirect(url_for('admin.admin_federation_mastodon_scan'))
+
+        # Follow as user 1, matching the two community scans on this page.
+        user = User.query.get(1)
+        if current_app.debug:
+            bulk_follow(user.id, handles)
+        else:
+            bulk_follow.delay(user.id, handles)
+
+        flash(_('Following %(num)d accounts from %(url)s in the background.',
+                num=len(handles), url=remote_url))
+        return redirect(url_for('admin.admin_federation_mastodon_scan'))
+
+    return render_template('admin/federation_mastodon_scan.html',
+                           title=_('Federation settings - Mastodon scan'),
+                           mastodon_scan_form=mastodon_scan_form,
+                           current_app_debug=current_app.debug)
 
 
 @bp.route('/federation/ban_lists', methods=['GET', 'POST'])

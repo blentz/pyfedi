@@ -39,6 +39,15 @@
             </div>
         </div>
 </fieldset>
+<fieldset class="coolfieldset border mt-4 p-2 pb-3 mb-4">
+    <legend class="tweak-top">{{ _('Bulk people import') }}</legend>
+        <div class="row">
+            <div class="column">
+                <p><a href="{{ url_for('admin.admin_federation_mastodon_scan') }}">{{ _('Mastodon directory scan') }}</a></p>
+                <p class="small">{{ _('Mastodon has no communities, so the community scans above cannot reach it. This follows people instead.') }}</p>
+            </div>
+        </div>
+</fieldset>
 <hr />
 <div class="row">
     <div class="col">

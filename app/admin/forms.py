@@ -129,6 +129,21 @@ class RemoteInstanceScanForm(FlaskForm):
     remote_scan_submit = SubmitField(_l('Scan'))
 
 
+class MastodonDirectoryScanForm(FlaskForm):
+    """Bulk-follow accounts from a Mastodon instance's public profile directory.
+
+    The user-shaped analogue of RemoteInstanceScanForm: Mastodon has no
+    communities, so the two community importers on this page cannot reach it.
+    """
+    mastodon_url = StringField(_l('Mastodon Server'), validators=[DataRequired()])
+    accounts_requested = IntegerField(_l('Number of accounts to follow'), default=25)
+    minimum_statuses = IntegerField(_l('Accounts must have posted at least this many times'), default=50)
+    minimum_followers = IntegerField(_l('Accounts must have at least this many followers'), default=10)
+    exclude_bots = BooleanField(_l('Skip accounts marked as bots'), default=True)
+    mastodon_dry_run = BooleanField(_l('Dry Run'))
+    mastodon_scan_submit = SubmitField(_l('Scan'))
+
+
 class ImportExportBannedListsForm(FlaskForm):
     import_file = FileField(_l('Import Bans List Json File'))
     import_submit = SubmitField(_l('Import'))
