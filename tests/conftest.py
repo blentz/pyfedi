@@ -333,9 +333,14 @@ def redis_double(monkeypatch):
     Still NOT covered, for the same binding reason:
 
     - `app.redis_client` -- a module-level global in app/__init__.py, assigned
-      by create_app() before this function-scoped fixture runs. `from app import
-      redis_client` in app/shared/post.py, app/cli.py and app/admin/routes.py
-      reads that real client. Patch `app.redis_client` yourself if you need it.
+      by create_app() before this function-scoped fixture runs. Around 14
+      modules do `from app import redis_client` and read that real client;
+      `grep -rn 'from app import.*redis_client' app/` is the current list, and
+      it is deliberately not enumerated here because such a list rots silently.
+      This is a much wider surface than get_redis_connection's four bindings,
+      so a sub-project needing Redis isolation across app/ should expect to
+      patch `app.redis_client` too -- and to widen this fixture rather than
+      hand-roll it.
     - The rate limiter and Celery app, built from Config at import time.
     """
     server = fakeredis.FakeRedis(decode_responses=True)
