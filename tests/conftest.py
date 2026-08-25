@@ -110,6 +110,23 @@ def db_session(app):
 
 
 @pytest.fixture
+def site(db_session):
+    """The Site row (id 1) that before_request (registered by the app factory)
+    requires to populate g.site for every request except /inbox and /static/ --
+    see make_site()'s docstring in tests/factories.py.
+
+    Not autouse across the whole suite: several other tests (test_backfill_
+    reply_visibility.py, test_process_microblog_announce.py, test_visibility_
+    ingest.py, and the api_baseline fixture below) create their own Site row via
+    make_site(), and a second row with id 1 would collide with theirs. Modules
+    whose tests all issue requests through the app opt in with
+    `pytestmark = pytest.mark.usefixtures('site')` instead.
+    """
+    from tests.factories import make_site
+    return make_site()
+
+
+@pytest.fixture
 def api_baseline(app, db_session):
     """The populated-dev-database baseline that app/api/alpha/utils/*.py tests assume.
 

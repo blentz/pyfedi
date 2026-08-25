@@ -169,7 +169,7 @@ def create_app(config_class=Config):
     bootstrap.init_app(app)
     babel.init_app(app, locale_selector=get_locale)
     cache.init_app(app)
-    compress.init_app(app)   # registered before the after_request in pyfedi.py, so it runs after it
+    compress.init_app(app)   # registered before the after_request in app/request_hooks.py, so it runs after it
     limiter.init_app(app)
     app_bcrypt.init_app(app)
     celery.conf.update(app.config)
