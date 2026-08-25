@@ -179,3 +179,9 @@ compose.override.yaml
 
 # Local git worktrees created for isolated feature work
 .worktrees/
+
+# libFuzzer working corpus. tests/fuzz/run_campaign.py writes every
+# coverage-increasing unit it finds here, so a later campaign resumes from it;
+# the reviewable corpus is tests/fuzz/corpus/, which only ever holds
+# hand-written seeds and reproducers for real findings.
+tests/fuzz/.work/
