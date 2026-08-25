@@ -85,43 +85,20 @@ def app():
     from app import create_app
     application = create_app(TestConfig)
 
-    # Set directly on celery.conf rather than as TestConfig attributes, and set
-    # BOTH the old- and new-style key names together in one update(). Two
-    # independent Celery quirks make anything simpler fragile here:
+    # Written in the OLD key format, because config.py already puts old-format
+    # keys (CELERY_BROKER_URL et al.) into celery.conf via
+    # app/__init__.py:175's celery.conf.update(app.config). Celery's Settings
+    # object picks its defaults layer from whichever format is dominant, then
+    # refuses to mix: writing only the modern `task_always_eager` raises
+    # celery.exceptions.ImproperlyConfigured("Cannot mix new setting names with
+    # old setting names") on the first READ of the setting, at finalization,
+    # not at the update() itself.
     #
-    # 1. app/__init__.py:175 does celery.conf.update(app.config) before this
-    #    fixture runs, and config.py's CELERY_BROKER_URL is itself an
-    #    old-style name, so celery.conf already holds old-format keys by the
-    #    time we get here. Celery's Settings object refuses to mix old- and
-    #    new-format keys once a first access finalizes it with one format
-    #    dominant (celery.exceptions.ImproperlyConfigured: "Cannot mix new
-    #    setting names with old setting names") -- setting only the modern
-    #    `task_always_eager` attribute can raise exactly that.
-    # 2. Conversely, setting only the OLD-style names is not reliably enough:
-    #    Celery's built-in defaults dict always carries a literal
-    #    `task_always_eager` (and `task_eager_propagates`) key of its own. If
-    #    ANYTHING else in the test run causes celery.conf to finalize before
-    #    this fixture runs -- e.g. `@celery.task` decorating a module-level
-    #    function, which happens at import time, and pytest imports every
-    #    test module during collection, before any fixture executes -- the
-    #    old-style value we set afterwards lands in the `changes` layer, but a
-    #    lookup by the new-style name finds Celery's own literal default in
-    #    the `defaults` layer FIRST and never falls back to checking the
-    #    old-style alias. That default is False, so the old-style-only write
-    #    silently has no effect, and whether it "works" ends up depending on
-    #    which test files pytest happened to import first -- observed
-    #    concretely via tests/test_instance_util.py, whose `@celery.task def
-    #    bulk_follow` (app/instance/util.py) triggers exactly this.
-    #
-    # Providing both spellings in the same update() sidesteps both problems:
-    # if this fixture is what finalizes celery.conf, Celery's own mixing
-    # check explicitly allows a setting provided under both names at once
-    # (see the "e.g. both result_expires and CELERY_TASK_RESULT_EXPIRES"
-    # comment in celery/app/utils.py's detect_settings); if something else
-    # already finalized celery.conf first, the new-style write here lands as
-    # a literal key in the `changes` layer, which a ChainMap lookup always
-    # checks before `defaults`, so it wins regardless of the built-in
-    # default. Either way, `celery.conf.task_always_eager` reads True.
+    # The new-style spellings are here for readability only. detect_settings
+    # explicitly tolerates a setting supplied under both names, and converts the
+    # new name to the old one before storing it, so they are redundant rather
+    # than load-bearing -- verified against Celery 5.3.6, where `changes` ends
+    # up holding only CELERY_ALWAYS_EAGER and CELERY_EAGER_PROPAGATES_EXCEPTIONS.
     celery.conf.update(
         task_always_eager=True,
         CELERY_ALWAYS_EAGER=True,
@@ -207,8 +184,17 @@ def block_outbound_http():
     real one -- same code path, no network. assert_all_called=False because
     this router deliberately registers nothing.
 
-    Tests that need outbound HTTP nest their own router via http_mock, which
-    is checked first; anything it does not match falls through to here.
+    Precedence runs the other way round from what you might expect: respx
+    consults routers in REGISTRATION order, so this session-scoped one is
+    routers[0] and is asked first, with http_mock second. The arrangement is
+    safe only because this router registers ZERO routes -- it can never match,
+    so every request falls through to http_mock. Do NOT add a route here, not
+    even a catch-all that logs: it would silently take precedence over every
+    http_mock route in the suite.
+
+    A test that wants to observe a transport error should register a route with
+    side_effect=httpx.ConnectError(...) rather than reach for a real failed
+    connection.
     """
     with respx.mock(assert_all_called=False):
         yield
@@ -249,14 +235,19 @@ def federation_peer(http_mock):
     IMPORTANT -- forgetting include_inbox does NOT fail loudly. Since eager
     Celery landed, delivery runs inline: task_selector calls .delay(), which
     executes in-process, and send_post_request in turn calls
-    post_request.delay(), which also executes in-process and really does
-    attempt the outbound POST. But app.activitypub.signature.post_request
-    wraps the request in `except Exception`, recording the failure as an
-    ActivityPubLog row rather than propagating it -- so respx's "unexpected
-    request" error is swallowed and the test still passes. A test that means
-    to prove delivery must therefore either pass include_inbox=True (letting
-    assert_all_called prove the POST happened) or assert on the ActivityPubLog
-    row. Asserting neither proves nothing about delivery.
+    post_request.delay(), which also executes in-process. But
+    app.activitypub.signature.post_request wraps the send in `except
+    Exception`, recording the failure as an ActivityPubLog row rather than
+    propagating it -- so whatever went wrong is swallowed and the test still
+    passes.
+
+    A test that means to prove delivery must therefore pass include_inbox=True
+    AND build its sending actor with make_user(..., with_keys=True). Signing
+    dereferences the sender's private key, so a keyless sender dies before any
+    HTTP request is attempted and the inbox route is never called; the symptom
+    is an opaque "RESPX: some routes were not called!" at teardown. Asserting
+    on the ActivityPubLog row works too, and distinguishes a failed send from
+    no send at all. See test_delivery_can_be_proved_when_the_sender_has_keys.
     """
     def register(handle, include_inbox=False):
         name, domain = handle.lstrip('@').split('@')

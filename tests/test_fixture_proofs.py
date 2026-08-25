@@ -8,7 +8,7 @@ import boto3
 import pytest
 
 from app.instance.util import bulk_follow
-from app.models import UserFollower
+from app.models import ActivityPubLog, UserFollower
 from app.utils import decode_captcha
 from tests.factories import make_instance, make_site, make_user
 
@@ -64,3 +64,22 @@ def test_delay_reraises_a_failing_task(app, db_session, federation_peer):
 
     with pytest.raises(Exception):
         bulk_follow.delay(999999, ['wakko@mastodon.cloud'])
+
+
+def test_delivery_can_be_proved_when_the_sender_has_keys(app, db_session, federation_peer):
+    """The recipe tests/README.md gives for asserting an activity was delivered.
+
+    Two things must both hold or the POST never happens: include_inbox=True, so
+    respx has a route to match and assert_all_called can prove it was hit; and a
+    sender with a real keypair, since signing dereferences the private key. With
+    either missing this fails -- keyless at signing, routeless at teardown.
+    """
+    make_instance('test.piefed.local', software='piefed')
+    make_site()
+    local = make_user(None, 'localuser', local=True, with_keys=True)
+    federation_peer('wakko@mastodon.cloud', include_inbox=True)
+
+    bulk_follow.delay(local.id, ['wakko@mastodon.cloud'])
+
+    log = ActivityPubLog.query.filter_by(activity_type='Follow').one()
+    assert log.result == 'success', log.exception_message
