@@ -2,6 +2,9 @@ pgdata/
 app/static/media/
 media/
 logs/
+tmp/
+.worktrees/
+.claude/worktrees/
 .git/
 .gitignore
 venv/
