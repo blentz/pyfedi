@@ -313,6 +313,61 @@ PERSON_PATTERN = re.compile(r"(?<![\/])@([a-zA-Z0-9_.-]*)@([a-zA-Z0-9_.-]*)\b")
 COMMUNITY_PATTERN = re.compile(r"(?<![\/])!([a-zA-Z0-9_.-]*)@([a-zA-Z0-9_.-]*)\b")
 FEED_PATTERN = re.compile(r"(?<![\/])~([a-zA-Z0-9_.-]*)@([a-zA-Z0-9_.-]*)\b")
 
+# The WHATWG URL Standard's basic URL parser normalises a URL BEFORE it reads
+# the scheme (https://url.spec.whatwg.org/#concept-basic-url-parser):
+#
+#   step 1 - "remove any leading and trailing C0 control or space from input";
+#            a C0 control or space is U+0000 to U+001F, or U+0020.
+#   step 2 - "remove all ASCII tab or newline from input", from anywhere in it;
+#            an ASCII tab or newline is U+0009, U+000A or U+000D.
+#
+# So a browser resolves href=" jav<TAB>ascript:alert(1)" to javascript:alert(1)
+# and runs it on click. Deciding the scheme from the raw attribute value - which
+# is what furl(href).scheme does, since furl performs none of this - misses every
+# padded spelling. These two constants are that normalisation, and nothing else
+# in this module may decide a scheme without applying them first.
+_URL_LEADING_TRAILING_STRIP = ''.join(chr(c) for c in range(0x21))
+_URL_TAB_OR_NEWLINE = str.maketrans('', '', '\t\n\r')
+
+# WHATWG URL Standard, scheme start state and scheme state: a scheme is an ASCII
+# alpha followed by any number of ASCII alphanumerics, '+', '-' and '.', ending
+# at the first ':'. It is ASCII-lowercased before it is compared to anything,
+# which is why the comparison below is case-insensitive.
+_URL_SCHEME_PATTERN = re.compile(r'\A([A-Za-z][A-Za-z0-9+.\-]*):')
+
+# Schemes an anchor's href may never carry out of sanitisation.
+#
+# 'javascript' and 'vbscript' execute script in the current document's origin.
+# 'data' lets an attacker supply the whole document (data:text/html,... or
+# data:image/svg+xml,...); current browsers block top-level navigation to a
+# data: URL, so blocking it here is defence in depth rather than a live hole,
+# but PieFed has no reason to carry a data: URL in a link.
+#
+# Scope: this set governs <a href> only. img/@src is not scheme-checked, here or
+# before this change - see the note in allowlist_html.
+UNSAFE_URL_SCHEMES = frozenset({'javascript', 'vbscript', 'data'})
+
+
+def url_scheme(url: str) -> str:
+    """The scheme a browser would read from `url`, lowercased, or '' if it has none.
+
+    Applies the WHATWG normalisation described above before looking, so
+    url_scheme(' jav\\tascript:alert(1)') is 'javascript'.
+    """
+    normalized = url.strip(_URL_LEADING_TRAILING_STRIP).translate(_URL_TAB_OR_NEWLINE)
+    match = _URL_SCHEME_PATTERN.match(normalized)
+    return match.group(1).lower() if match else ''
+
+
+def has_unsafe_url_scheme(url: str) -> bool:
+    """True if `url` names a scheme that must not survive sanitisation.
+
+    The comparison is against a whole scheme, never a prefix: 'javascriptic:'
+    and a path segment spelt 'javascript:' inside an https URL are both safe and
+    must keep working.
+    """
+    return url_scheme(url) in UNSAFE_URL_SCHEMES
+
 
 # sanitise HTML using an allow list
 def allowlist_html(html: str, a_target='_blank', test_env=False) -> str:
@@ -407,11 +462,18 @@ def allowlist_html(html: str, a_target='_blank', test_env=False) -> str:
             return f"&lt;{match.group(1)}&gt;"
         # Handle closing tags by removing the leading slash before extracting tag name
         if tag_content.startswith('/'):
-            tag_name = tag_content[1:].split()[0]
+            words = tag_content[1:].split()
         elif tag_content.endswith('/'):
-            tag_name = tag_content[:-1].split()[0]
+            words = tag_content[:-1].split()
         else:
-            tag_name = tag_content.split()[0]
+            words = tag_content.split()
+        # words is empty when the brackets name no tag at all: '</>' strips to
+        # '', and ''.split() is []. Taking words[0] there raised IndexError, so
+        # a three-character string in any federated post, comment or profile was
+        # an unhandled 500 on the ingest path. An empty tag name matches nothing
+        # in html_tags below, so the content is escaped as text - the same
+        # treatment the tag_content == '' guard above gives '<>'.
+        tag_name = words[0] if words else ''
 
         # Check if this looks like a valid HTML tag (allowed or not)
         # Valid HTML tags have specific patterns
@@ -474,11 +536,33 @@ def allowlist_html(html: str, a_target='_blank', test_env=False) -> str:
                 if not tag.attrs.get('href', "").startswith("#"):
                     tag.attrs['rel'] = 'nofollow ugc'
                     tag.attrs['target'] = a_target
-                    f = furl(tag['href'])
-                    if f.host in instance_domains:
-                        tag['href'] = rewrite_href(tag['href'])
-                    elif f.scheme == 'javascript':
+                    # The scheme test comes FIRST, and is has_unsafe_url_scheme
+                    # rather than furl(...).scheme: furl does not perform the
+                    # WHATWG normalisation a browser performs before reading a
+                    # scheme, so it saw no javascript scheme in
+                    # href=" javascript:alert(1)" or href="java<LF>script:..."
+                    # and left the attribute intact - stored XSS on every piece
+                    # of federated content. Testing the scheme before the host
+                    # also means a hostile href can never reach rewrite_href.
+                    #
+                    # A rejected href is blanked, which is what this function
+                    # already did for an unpadded javascript: URL. An ACCEPTED
+                    # href is kept exactly as it arrived: the normalisation
+                    # above decides, it does not rewrite. Every browser applies
+                    # the same normalisation itself when it follows the link, so
+                    # rewriting would change stored content for no gain.
+                    #
+                    # Only <a href> is checked. img/@src is on allowed_attrs and
+                    # is not scheme-checked, here or before this change; no
+                    # current browser executes a javascript: URL in img/@src, so
+                    # it is inert, and widening this to src would change how
+                    # img, video and source are treated. Left alone deliberately.
+                    if has_unsafe_url_scheme(tag['href']):
                         tag['href'] = ''
+                    else:
+                        f = furl(tag['href'])
+                        if f.host in instance_domains:
+                            tag['href'] = rewrite_href(tag['href'])
                 else:
                     # This is a same-page anchor - a footnote, give unique suffix for href
                     tag.attrs['href'] = tag.attrs.get('href', '') + '-' + fn_string
@@ -505,10 +589,13 @@ def escape_non_html_angle_brackets(text: str) -> str:
     def escape_tag(match):
         tag_content = match.group(1).strip().lower()
         # Handle closing tags by removing the leading slash before extracting tag name
-        if tag_content.startswith('/'):
-            tag_name = tag_content[1:].split()[0]
-        else:
-            tag_name = tag_content.split()[0]
+        words = tag_content[1:].split() if tag_content.startswith('/') else tag_content.split()
+        # Same defect as escape_non_html_brackets, plus one more case: this
+        # function has no empty-content guard, so '< >' raised IndexError here
+        # as well as '</>'. An empty tag name is in neither allowed_tags nor
+        # emoticons and matches no LINK_PATTERN, so the content is escaped as
+        # text, which is what it is.
+        tag_name = words[0] if words else ''
         emoticons = ['3', # heart
                      '\\3', # broken heart
                      '|:‑)', # santa claus *<|:‑)
@@ -1000,9 +1087,30 @@ def get_emoji_replacements():
 
 
 def mastodon_extra_field_link(extra_field: str) -> str:
+    """The href of the first anchor in a Mastodon PropertyValue field.
+
+    Returns `extra_field` unchanged when the value carries no anchor with an
+    href. A str in every path, so a caller may .strip() the result without
+    checking it -- which is what app/activitypub/util.py:648 and :1157 do.
+
+    Both of those call sites reach this function whenever the literal '<a '
+    appears in a remote actor's attachment value, which is a substring test and
+    not HTML validation. Two remote-controlled inputs used to get past it and
+    crash:
+
+      '<a class="x">link</a>'  -> KeyError('href') on tag['href'] here
+      'text <a '               -> None here, then AttributeError on the
+                                  caller's .strip()
+
+    An anchor without an href does not hide a later one that has it: the first
+    href found wins, which is what the callers want from a profile field.
+    """
     soup = BeautifulSoup(extra_field, 'html.parser')
     for tag in soup.find_all('a'):
-        return tag['href']
+        href = tag.get('href')
+        if href is not None:
+            return href
+    return extra_field
 
 
 def boost_cache_entries(rows) -> list:
@@ -4427,12 +4535,30 @@ def following_user_ids(user_id):
     return db.session.execute(stmt).scalars().all()
 
 
+SHORTHAND_HEX_COLOR_PATTERN = re.compile(r'#[0-9A-Fa-f]{3}')
+
+
 def expand_hex_color(text: str) -> str:
-    new_text = ("#" +
-                text[1] * 2 +
-                text[2] * 2 +
-                text[3] * 2)
-    return new_text
+    """Expand CSS three-digit shorthand: '#abc' -> '#aabbcc'. Case is preserved.
+
+    Total on str input: anything that is not '#' followed by exactly three hex
+    digits is returned UNCHANGED, and nothing is raised. The values reaching
+    this function are CSS colours supplied by API clients
+    (app/api/alpha/utils/community.py, lines 547, 553, 600 and 606), so raising
+    would turn bad input into a 500. Two things that guard motivates:
+
+    * it used to index text[1]..text[3] with no guard at all, so
+      expand_hex_color('#ab') raised IndexError. Every call site happens to
+      test `len(...) == 4` first, so that was unreachable -- but only by
+      accident of the caller.
+    * a length test is not a format test. 'abcd' is four characters, passed
+      every one of those guards, and was silently expanded to '#bbccdd'. It is
+      now stored as the client sent it rather than turned into a different
+      colour.
+    """
+    if not SHORTHAND_HEX_COLOR_PATTERN.fullmatch(text):
+        return text
+    return "#" + text[1] * 2 + text[2] * 2 + text[3] * 2
 
 
 def scale_gif(path, scale, new_path=None):

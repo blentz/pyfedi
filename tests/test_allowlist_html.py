@@ -1,4 +1,8 @@
+import html as html_module
 import unittest
+
+import pytest
+from bs4 import BeautifulSoup
 
 from app.utils import allowlist_html, community_link_to_href, feed_link_to_href, person_link_to_href, markdown_to_html
 
@@ -234,6 +238,226 @@ class TestAllowlistHtml(unittest.TestCase):
         result = allowlist_html(html, test_env={'fn_string': 'fn-test'})
         self.assertIn('loading="lazy"', result)
         self.assertIn('width="200px"', result)
+
+
+def href_of(result: str) -> str:
+    """The href BeautifulSoup reads back out of allowlist_html's own output.
+
+    Asserting on the parsed attribute rather than on a substring of the markup
+    matters here: the whole point of these tests is that a value can *look*
+    harmless in the raw string and still be a javascript: URL once a browser has
+    normalised it, so a substring assertion would be testing the wrong thing.
+    """
+    anchor = BeautifulSoup(result, 'html.parser').find('a')
+    assert anchor is not None, f'no anchor survived: {result!r}'
+    return anchor.get('href')
+
+
+class TestAnchorSchemeIsDecidedTheWayABrowserDecidesIt:
+    """Padded and case-varied script URLs must not survive the allowlist.
+
+    allowlist_html is the sanitisation boundary for every remote post, comment,
+    profile field and community description, so an href it leaves intact is an
+    href a browser will follow on click.
+
+    The expectations come from the WHATWG URL Standard's basic URL parser
+    (https://url.spec.whatwg.org/#concept-basic-url-parser), which normalises a
+    URL BEFORE reading its scheme:
+
+    * step 1 -- "remove any leading and trailing C0 control or space from
+      input"; a C0 control or space is U+0000 to U+001F, or U+0020.
+    * step 2 -- "remove all ASCII tab or newline from input", from anywhere in
+      it; an ASCII tab or newline is U+0009, U+000A or U+000D.
+    * scheme start state / scheme state -- a scheme is an ASCII alpha followed
+      by ASCII alphanumerics, '+', '-' and '.', terminated by ':', and it is
+      ASCII-lowercased before it is compared to anything.
+
+    Additional spellings are taken from the OWASP XSS Filter Evasion Cheat
+    Sheet's "Embedded tab", "Embedded newline", "Embedded carriage return" and
+    case-variation entries.
+
+    BUG (fixed here): the previous implementation asked
+    furl(tag['href']).scheme == 'javascript'. furl performs none of the
+    normalisation above, so every padded spelling below was returned intact,
+    with rel/target added as though it were an ordinary safe link -- stored XSS
+    reachable from any federating instance.
+    """
+
+    # (id, href as it appears in the source HTML). The entity spellings are
+    # written as entities on purpose: that is how they arrive over the wire, and
+    # the HTML parser is what turns them into the raw control character.
+    BLOCKED = [
+        ('plain', 'javascript:alert(1)'),
+        ('uppercase', 'JAVASCRIPT:alert(1)'),
+        ('mixed_case', 'JaVaScRiPt:alert(1)'),
+        ('leading_space', ' javascript:alert(1)'),
+        ('trailing_space', 'javascript:alert(1) '),
+        ('leading_tab_entity', '&#9;javascript:alert(1)'),
+        ('leading_lf_entity', '&#10;javascript:alert(1)'),
+        ('leading_cr_entity', '&#13;javascript:alert(1)'),
+        ('leading_nul', '\x00javascript:alert(1)'),
+        ('leading_c0_unit_separator', '\x1fjavascript:alert(1)'),
+        ('embedded_tab_in_scheme', 'jav\tascript:alert(1)'),
+        ('embedded_lf_in_scheme', 'java\nscript:alert(1)'),
+        ('embedded_cr_in_scheme', 'java\rscript:alert(1)'),
+        ('embedded_tab_entity_in_scheme', 'jav&#9;ascript:alert(1)'),
+        ('embedded_lf_entity_in_scheme', 'java&#10;script:alert(1)'),
+        ('every_trick_at_once', ' \t\n\rJaVa\tScRiPt&#10;:alert(1) '),
+        ('colon_entity', 'javascript&#58;alert(1)'),
+    ]
+
+    @pytest.mark.parametrize('href', [h for _, h in BLOCKED], ids=[i for i, _ in BLOCKED])
+    def test_a_javascript_url_is_blanked(self, href):
+        result = allowlist_html(f'<a href="{href}">x</a>', test_env={'fn_string': 'fn-test'})
+        assert href_of(result) == '', f'javascript: URL survived: {result!r}'
+
+    @pytest.mark.parametrize('href', [
+        'vbscript:msgbox(1)',
+        'VBScript:msgbox(1)',
+        ' vbscript:msgbox(1)',
+        'vb&#9;script:msgbox(1)',
+    ])
+    def test_a_vbscript_url_is_blanked(self, href):
+        """A deliberate widening beyond the reported javascript: defect.
+
+        vbscript: executes script in the same way javascript: does wherever it
+        is still supported, and there is no legitimate use of it in federated
+        content. It was NOT blocked before this change.
+        """
+        result = allowlist_html(f'<a href="{href}">x</a>', test_env={'fn_string': 'fn-test'})
+        assert href_of(result) == '', f'vbscript: URL survived: {result!r}'
+
+    @pytest.mark.parametrize('href', [
+        'data:text/html,&lt;script&gt;alert(1)&lt;/script&gt;',
+        'data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==',
+        'DATA:text/html,x',
+        ' data:text/html,x',
+        'da&#9;ta:text/html,x',
+        'data:image/svg+xml;base64,PHN2Zz48c2NyaXB0Lz48L3N2Zz4=',
+    ])
+    def test_a_data_url_is_blanked(self, href):
+        """A deliberate widening beyond the reported javascript: defect.
+
+        A data:text/html or data:image/svg+xml href navigated to from a link
+        executes script in a document the attacker wrote. Browsers now block
+        top-level navigation to data: URLs, so this is defence in depth rather
+        than a live hole -- but the anchor href is not a place PieFed has any
+        reason to carry a data: URL, so it is blanked. Note the scope: this
+        applies to <a href> only. img/@src is untouched by this change.
+        """
+        result = allowlist_html(f'<a href="{href}">x</a>', test_env={'fn_string': 'fn-test'})
+        assert href_of(result) == '', f'data: URL survived: {result!r}'
+
+    @pytest.mark.parametrize('href', [
+        'https://example.com/',
+        'http://example.com/path?a=b&amp;c=d#frag',
+        'https://example.com/javascript:alert(1)',
+        'https://example.com/?q=data:text/html',
+        'https://user:pw@example.com:8443/x',
+        '/relative/path',
+        '//example.com/protocol-relative',
+        'relative.html',
+        'mailto:someone@example.com',
+        'tel:+15550100',
+        'ftp://example.com/file.txt',
+        'magnet:?xt=urn:btih:abc',
+        'gemini://example.com/',
+        'data-sheet.html',
+        'javascriptic://example.com/',
+    ])
+    def test_an_ordinary_href_is_preserved_byte_for_byte(self, href):
+        """A fix that blanks legitimate hrefs is worse than the bug it fixes.
+
+        The value is kept as it arrived, not as the WHATWG parser normalises it:
+        normalisation is used to DECIDE, not to rewrite. Every browser applies
+        the same normalisation itself when it follows the link, so rewriting
+        would change stored content for no gain, and 'javascriptic' shows why
+        the decision has to be a scheme comparison rather than a prefix test.
+        """
+        result = allowlist_html(f'<a href="{href}">ok</a>', test_env={'fn_string': 'fn-test'})
+        assert href_of(result) == html_module.unescape(href)
+
+    @pytest.mark.parametrize('href', [
+        ' https://example.com/ ',
+        '\thttps://example.com/',
+        'https://example.com/a\tb',
+        '\x01https://example.com/',
+    ])
+    def test_an_accepted_href_is_not_rewritten_to_its_normalised_form(self, href):
+        """Normalisation DECIDES the scheme; it must not rewrite what is stored.
+
+        Added after a discrimination run: mutating the fix to store the
+        normalised value instead of the original left the whole suite green,
+        which meant the "decide, do not rewrite" decision was undocumented by
+        any test. It is documented by this one. A browser applies the same
+        normalisation itself when it follows the link, so rewriting would edit
+        stored federated content for no gain.
+        """
+        result = allowlist_html(f'<a href="{href}">ok</a>', test_env={'fn_string': 'fn-test'})
+        assert href_of(result) == href
+
+    def test_a_same_page_anchor_still_gets_its_footnote_suffix(self):
+        result = allowlist_html('<a href="#fn-1">1</a>', test_env={'fn_string': 'fn-test'})
+        assert href_of(result) == '#fn-1-fn-test'
+
+    def test_a_blanked_anchor_keeps_its_text_and_its_rel(self):
+        """Blanking the href is the pre-existing treatment for a rejected URL,
+        and it is kept: the link text stays visible and the anchor goes nowhere."""
+        result = allowlist_html('<a href=" javascript:alert(1)">click me</a>',
+                                test_env={'fn_string': 'fn-test'})
+        assert 'click me' in result
+        assert 'rel="nofollow ugc"' in result
+
+    def test_a_markdown_link_still_round_trips(self):
+        result = markdown_to_html('[a link](https://example.com/x)', test_env={'fn_string': 'fn-test'})
+        assert href_of(result) == 'https://example.com/x'
+
+    def test_a_markdown_javascript_link_is_blanked(self):
+        result = markdown_to_html('[click](javascript:alert%281%29)', test_env={'fn_string': 'fn-test'})
+        assert href_of(result) == ''
+
+
+class TestDegenerateAngleBrackets:
+    """Angle-bracket content that names no tag must be treated as text.
+
+    BUG (fixed here): app.utils.escape_non_html_brackets did
+    tag_content[1:].split()[0] once it saw a leading slash. For '</>' that is
+    ''.split(), which is [], so a three-character string raised IndexError --
+    an unhandled 500 on the ingest path for every federated post, comment and
+    profile, and for any local user who typed it into a comment box.
+    escape_non_html_angle_brackets had the same bug plus one more case: it had
+    no empty-content guard at all, so markdown_to_html('< >') raised too.
+
+    The IndexError was found by the fuzz campaign in tests/fuzz/ at execution
+    236; the minimised artifact is tests/fuzz/corpus/allowlist_html/empty_closing_tag.
+    """
+
+    DEGENERATE = ['</>', '<>', '< >', '</ >', '< / >', '<//>', '< />', '<\t>', '<  />', '</\t>',
+                  '</  >', '<\x0b>']
+
+    @pytest.mark.parametrize('text', DEGENERATE)
+    def test_allowlist_html_treats_it_as_text(self, text):
+        result = allowlist_html(text, test_env={'fn_string': 'fn-test'})
+        assert '&lt;' in result and '&gt;' in result, (
+            f'{text!r} was not escaped as text: {result!r}')
+
+    @pytest.mark.parametrize('text', DEGENERATE)
+    def test_markdown_to_html_treats_it_as_text(self, text):
+        result = markdown_to_html(text, test_env={'fn_string': 'fn-test'})
+        assert '&lt;' in result and '&gt;' in result, (
+            f'{text!r} was not escaped as text: {result!r}')
+
+    @pytest.mark.parametrize('text', ['<p>a</>b</p>', 'x </> y', '```\n</>\n```'])
+    def test_degenerate_brackets_do_not_destroy_their_surroundings(self, text):
+        assert allowlist_html(text, test_env={'fn_string': 'fn-test'})
+        assert markdown_to_html(text, test_env={'fn_string': 'fn-test'})
+
+    @pytest.mark.parametrize('text,tag', [('<p>ok</p>', 'p'), ('<strong>ok</strong>', 'strong'),
+                                          ('<br/>', 'br'), ('<em>ok</em>', 'em')])
+    def test_real_tags_are_still_recognised(self, text, tag):
+        """The guard must not turn well-formed markup into escaped text."""
+        result = allowlist_html(text, test_env={'fn_string': 'fn-test'})
+        assert BeautifulSoup(result, 'html.parser').find(tag) is not None, result
 
 
 if __name__ == '__main__':

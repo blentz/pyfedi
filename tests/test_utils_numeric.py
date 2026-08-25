@@ -119,7 +119,32 @@ class TestExpandHexColor:
     def test_three_digit_shorthand_expands(self):
         assert expand_hex_color('#abc') == '#aabbcc'
 
-    def test_short_input_raises_index_error(self):
-        """BUG (see plan): no length guard. Report before deciding the fix."""
-        with pytest.raises(IndexError):
-            expand_hex_color('#ab')
+    def test_case_is_preserved(self):
+        assert expand_hex_color('#ABC') == '#AABBCC'
+        assert expand_hex_color('#aB3') == '#aaBB33'
+
+    @pytest.mark.parametrize('text', ['#ab', '#', '', '#abcd', '#abcdef', 'abc', 'abcd',
+                                      '#ab!', '#a-c', '#ab ', ' #abc', '#абв', 'rebeccapurple',
+                                      'var(--x)', '#12', '#1234567'])
+    def test_anything_that_is_not_a_three_digit_hex_colour_is_returned_unchanged(self, text):
+        """WAS A BUG, now fixed: this used to index text[1]..text[3] unguarded.
+
+        '#ab' raised IndexError; the old test here asserted
+        `pytest.raises(IndexError)` because the defect was reported rather than
+        fixed at the time. Every call site is in
+        app/api/alpha/utils/community.py (lines 547, 553, 600, 606) and each one
+        guards with `len(...) == 4`, so the crash was not reachable -- but that
+        guard checks length, not format, and the value comes straight from API
+        input. 'abcd' has length 4, passed the guard, and was silently expanded
+        to '#bbccdd'. Returning the input unchanged is what makes that stop:
+        garbage in, the same garbage out, and no 500.
+
+        The function does NOT raise. These are API-supplied CSS colours, and
+        raising would turn bad input into an unhandled 500 at all four sites.
+        """
+        assert expand_hex_color(text) == text
+
+    def test_a_six_digit_colour_is_left_alone(self):
+        """The call sites only invoke this for len == 4, but the function has to
+        be total on its own: an already-expanded colour must not be mangled."""
+        assert expand_hex_color('#DEDDDA') == '#DEDDDA'

@@ -11,8 +11,9 @@ deterministic, and without the fuzzer's tracing fighting coverage.py's.
 The production change that would make these tests fail: any edit to
 app.utils.allowlist_html, app.utils.is_valid_xml_utf8 or
 app.utils.sanitize_svg_bytes that lets script markup, an event-handler
-attribute, a javascript: URL or an entity declaration through, or that makes
-is_valid_xml_utf8's character table disagree with XML 1.0.
+attribute, a javascript:/vbscript: URL in an anchor's href, or an entity
+declaration through, or that makes is_valid_xml_utf8's character table disagree
+with XML 1.0.
 """
 
 import pathlib
@@ -37,30 +38,23 @@ CHECKS = {
 # strict=True on purpose: when a defect is fixed its cases XPASS and fail the
 # run, which is the signal to delete the entry rather than let a stale xfail hide
 # a later regression.
-_JAVASCRIPT_URL_BYPASS = (
-    'reported, unfixed: allowlist_html decides whether an href is a javascript: URL with '
-    "furl(href).scheme == 'javascript'. The WHATWG URL parser strips leading and trailing C0 "
-    'controls and spaces and removes every ASCII tab, LF and CR BEFORE reading the scheme, so a '
-    'browser resolves href=" javascript:alert(1)" and href="java\\nscript:alert(1)" to '
-    'javascript:alert(1) and runs them, while furl sees no javascript scheme and the attribute '
-    'is left intact. allowlist_html is the XSS boundary for all remote content: stored XSS.')
-
-_EMPTY_CLOSING_TAG_INDEX_ERROR = (
-    'reported, unfixed: allowlist_html raises IndexError on "</>". '
-    'app/utils.py:410 escape_non_html_brackets does tag_content[1:].split()[0] after seeing a '
-    'leading slash; for "/" that is "".split(), which is []. The empty-string guard above it '
-    'only catches "<>". escape_non_html_angle_brackets has the same bug, so markdown_to_html("</>") '
-    'raises too. Every piece of remote content goes through here, so a three-character string in '
-    'any federated post, comment or profile is an unhandled 500.')
-
-KNOWN_UNFIXED = {
-    'allowlist_html/javascript_url_leading_space': _JAVASCRIPT_URL_BYPASS,
-    'allowlist_html/javascript_url_leading_tab_entity': _JAVASCRIPT_URL_BYPASS,
-    'allowlist_html/javascript_url_newline_in_scheme': _JAVASCRIPT_URL_BYPASS,
-    'allowlist_html/empty_closing_tag': _EMPTY_CLOSING_TAG_INDEX_ERROR,
-    'allowlist_html/empty_closing_tag_with_space': _EMPTY_CLOSING_TAG_INDEX_ERROR,
-    'allowlist_html/empty_closing_tag_indexerror_as_found': _EMPTY_CLOSING_TAG_INDEX_ERROR,
-}
+#
+# EMPTY, deliberately. It held six entries covering two defects, both of which
+# the project owner authorised and which are now fixed in app/utils.py:
+#
+#   * the javascript:-URL bypass (javascript_url_leading_space,
+#     javascript_url_leading_tab_entity, javascript_url_newline_in_scheme).
+#     allowlist_html decided the scheme with furl(href).scheme, and furl does not
+#     apply the WHATWG normalisation a browser applies before reading a scheme.
+#     It now calls app.utils.has_unsafe_url_scheme, which does.
+#   * IndexError out of escape_non_html_brackets on '</>' (empty_closing_tag,
+#     empty_closing_tag_with_space, empty_closing_tag_indexerror_as_found).
+#
+# Their corpus files are still here and still replayed on every run -- they are
+# now regression pins that PASS, which is exactly what a fixed finding should
+# become. The strict xfails XPASSed the moment the fix landed, which is what
+# prompted deleting these entries rather than relaxing them.
+KNOWN_UNFIXED = {}
 
 
 def corpus_cases():
@@ -98,7 +92,11 @@ def test_every_known_unfixed_case_is_present(case_id):
 
     Delete the corpus file and the parametrize id disappears with it, taking the
     xfail and its report of the defect along -- silently. This asserts the
-    pairing so the reminder cannot be removed by accident."""
+    pairing so the reminder cannot be removed by accident.
+
+    While KNOWN_UNFIXED is empty this collects as a single test skipped with
+    "got empty parameter set", which is the honest report: there is nothing
+    pinned as unfixed, and the guard is here for the next finding."""
     name, _, filename = case_id.partition('/')
     assert (CORPUS_ROOT / name / filename).is_file(), (
         f'{case_id} is named in KNOWN_UNFIXED but no longer exists')

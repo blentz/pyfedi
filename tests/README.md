@@ -123,9 +123,9 @@ runs in well under a second, and it is what makes a finding permanent.
     podman-compose -f compose.test.yaml exec -T -w /app test-runner \
         python -m tests.fuzz.run_campaign is_valid_xml_utf8 -max_total_time=60
 
-Targets: `is_valid_xml_utf8`, `sanitize_svg_bytes`, `allowlist_html`, and
-`allowlist_html_past_known_defects` (see below). `-max_total_time` is the budget
-in seconds; every other libFuzzer flag passes straight through.
+Targets: `is_valid_xml_utf8`, `sanitize_svg_bytes` and `allowlist_html`.
+`-max_total_time` is the budget in seconds; every other libFuzzer flag passes
+straight through.
 
 Use `python -m`, from the repository root. Running the file by path puts
 `tests/fuzz/` on `sys.path` instead of the root and the import of
@@ -158,14 +158,17 @@ project owner's decision. When a campaign finds something: rename the
 committed corpus, and add its id to `KNOWN_UNFIXED` in
 `tests/test_utils_fuzz_corpus.py` with a reason naming the defect. Those are
 `strict=True` xfails, so the day the defect is fixed they XPASS and fail the run
--- which is the signal to delete the entry, not to relax it.
+-- which is the signal to delete the entry, not to relax it. `KNOWN_UNFIXED` is
+currently empty: it held six entries covering two `allowlist_html` defects, the
+owner authorised fixing both, and the fix made all six XPASS. Their corpus files
+are still replayed on every run, now as regression pins that pass.
 
 A campaign stops at its first crash, so an unfixed defect blocks the search
-behind it. That is what `allowlist_html_past_known_defects` is for: the same
-target with the two currently-known defects suppressed, campaign use only, so the
-fuzzer can hunt for a third. Its suppressions are documented on
-`check_allowlist_html_past_known_defects`. Run the plain `allowlist_html` target
-first; it is the honest one.
+behind it. There used to be a fourth target, `allowlist_html_past_known_defects`
+-- the same target with those two defects suppressed, so the fuzzer could hunt
+for a third. With both fixed, the suppression would only serve to swallow a
+regression, so it and its target have been deleted. `allowlist_html` runs
+honestly: 90,984 executions in 60s, `cov: 90 ft: 513`, no finding.
 
 **Assert properties, not the absence of crashes.** "It did not crash" would pass
 a sanitiser that returned its input unchanged. Each check in `harnesses.py`
@@ -173,6 +176,14 @@ asserts a security property instead, against a PARSED tree rather than raw bytes
 -- every one of these functions may legally emit the text `javascript:` or
 ` onload=` as escaped character data, and a substring check reports that inert
 text as a break-in within seconds of fuzzing.
+
+Inertness cuts finer than "text vs markup". `allowlist_html`'s URL property is
+asserted on ANCHORS only: `href` is on its `allowed_attrs` for every element, so
+malformed input can leave `<img href="javascript:x">` standing, and that is
+inert because HTML defines no `href` on `img`. `a` is the only element in
+`allowed_tags` for which `href` is navigable. That distinction was found the
+hard way -- the first campaign the fixed target could run flagged exactly that
+`<img href>` at seed load.
 
 `app.utils.sanitize_svg` is deliberately not a target. It opens a path, calls
 `sanitize_svg_bytes` and writes the result back; all of its input handling is
