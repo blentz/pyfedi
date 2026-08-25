@@ -1,0 +1,34 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% from 'bootstrap5/form.html' import render_form, render_field %}
+{% set active_child = 'admin_federation' %}
+
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+
+<div class="row">
+    <div class="col">
+        <h1>{{ _('Federation - Mastodon directory scan') }}</h1>
+        <p>{{ _('Use this to follow accounts from a Mastodon server\'s public profile directory, ranked by recent activity. Their posts then arrive in the microblogs community, and boosts from them become visible to anyone following them.') }}</p>
+        <p>{{ _('The directory is opt-in twice over: the server enables it, and each account chooses to appear in it. Accounts that did not opt in are not listed and will not be followed.') }}</p>
+        <p>{{ _('The two community scans on this page cannot reach Mastodon, because Mastodon has no communities. This is the equivalent for people.') }}</p>
+        <p>{{ _('Input should be in the form of <strong>https://server-name.tld</strong>') }}</p>
+        <p>{{ _('Tick <strong>Dry Run</strong> first to see how many accounts match your filters without following anyone.') }}</p>
+        {% if current_app_debug %}
+        <p>*** {{ _('This instance is in development mode. This function could cause timeouts depending on how your networking is setup.') }} ***</p>
+        {% endif %}
+        {{ render_form(mastodon_scan_form) }}
+    </div>
+</div>
+<hr />
+<div class="row">
+    <div class="col">
+        {% include 'admin/_nav.html' %}
+    </div>
+</div>
+<hr />
+{% endblock %}
