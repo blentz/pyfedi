@@ -24,8 +24,19 @@ class TestCreateCaptcha:
 
         assert stored is not None
         assert decode_captcha(result['uuid'], stored) is True
+        assert redis_double.get('captcha_' + result['uuid']) is None, \
+            'a solved captcha must not be replayable'
 
     def test_the_requested_length_is_honoured(self, app, redis_double):
+        """Asserts on redis_double's stored state rather than round-tripping
+        through decode_captcha.
+
+        A considered choice, not laziness: create_captcha never exposes the
+        code anywhere else (it only returns image/audio/uuid), so the stored
+        Redis value is the only observable evidence of the code's length --
+        there is no round trip available that would prove the same thing
+        without re-deriving the code from the double.
+        """
         result = create_captcha(length=6)
         assert len(redis_double.get('captcha_' + result['uuid'])) == 6
 
@@ -34,9 +45,30 @@ class TestCreateCaptcha:
 
 
 class TestDecodeCaptcha:
+    """Also see tests/test_fixture_proofs.py for the case-insensitive /
+    consumed-on-use / malformed-uuid-guard proofs this class deliberately
+    does not repeat.
+
+    What this class does NOT attempt: proving decode_captcha's get-and-delete
+    is atomic under real concurrency. decode_captcha now uses a single
+    GETDEL command specifically so that no client-side test can observe two
+    separate round trips to race -- the atomicity guarantee comes from
+    Redis's (and fakeredis's) single-command execution model, not from
+    anything assertable here. A test that tried to demonstrate the race
+    empirically would need two real callers against a real, shared Redis
+    with a deliberately reintroduced delay between GET and DELETE to force
+    the window open, run over many trials for a statistical signal -- i.e.
+    it would be inherently non-deterministic, exactly the kind of flaky test
+    this suite avoids. What IS pinned below, deterministically: the key is
+    gone after exactly one call, on both the success and failure paths, so a
+    solved or failed captcha cannot be replayed or retried.
+    """
+
     def test_a_wrong_code_is_rejected(self, app, redis_double):
         redis_double.set('captcha_' + 'b' * 24, 'WXYZ')
         assert decode_captcha('b' * 24, 'nope') is False
+        assert redis_double.get('captcha_' + 'b' * 24) is None, \
+            'a failed attempt still consumes the key -- no retries'
 
     def test_an_unknown_uuid_is_rejected(self, app, redis_double):
         assert decode_captcha('c' * 24, 'wxyz') is False
@@ -56,6 +88,8 @@ class TestDecodeCaptcha:
         """
         redis_double.set('captcha_' + 'd' * 24, 'WXYZ')
         assert decode_captcha('d' * 24, None) is False
+        assert redis_double.get('captcha_' + 'd' * 24) is None, \
+            'a None code still consumes the key -- no retries'
 
 
 class TestGetRedisConnection:
