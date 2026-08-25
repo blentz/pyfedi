@@ -109,6 +109,76 @@ test_no_csp_header_on_a_304_response in tests/test_request_hooks.py -- listed
 here as an example of the kind of gap this paragraph is warning about, and of
 what closing one looks like.)
 
+## Fuzzing
+
+Two modes, and the split is the point.
+
+**The corpus replay** is an ordinary pytest file, `tests/test_utils_fuzz_corpus.py`.
+It reads every file under `tests/fuzz/corpus/<target>/` and pushes it through the
+matching property check in `tests/fuzz/harnesses.py`. Deterministic, no atheris,
+runs in well under a second, and it is what makes a finding permanent.
+
+**The campaign** is on demand and runs OUTSIDE the coverage run:
+
+    podman-compose -f compose.test.yaml exec -T -w /app test-runner \
+        python -m tests.fuzz.run_campaign is_valid_xml_utf8 -max_total_time=60
+
+Targets: `is_valid_xml_utf8`, `sanitize_svg_bytes`, `allowlist_html`, and
+`allowlist_html_past_known_defects` (see below). `-max_total_time` is the budget
+in seconds; every other libFuzzer flag passes straight through.
+
+Use `python -m`, from the repository root. Running the file by path puts
+`tests/fuzz/` on `sys.path` instead of the root and the import of
+`tests.fuzz.harnesses` fails.
+
+**Never run a campaign under `--cov`.** atheris installs its own bytecode
+instrumentation to guide mutation and coverage.py is already tracing; they must
+not fight. They never meet, because nothing pytest collects imports atheris:
+`harnesses.py` holds plain functions, and `run_campaign.py` is neither named
+`test_*.py` nor holds test functions.
+
+`run_campaign.py` instruments only `app` and `tests` (`atheris.instrument_imports(include=...)`).
+Without instrumentation libFuzzer gets no feedback and degenerates into blind
+random bytes -- it says so, with "no interesting inputs were found so far. Is the
+code instrumented for coverage?", and the corpus never grows.
+
+Two corpus directories, and which is which matters:
+
+- `tests/fuzz/corpus/<target>/` is committed and hand-curated: named hostile
+  seeds, plus a reproducer for every real finding. libFuzzer only READS it, and
+  writes crash artifacts into it via `-artifact_prefix`.
+- `tests/fuzz/.work/<target>/` is gitignored. libFuzzer writes every
+  coverage-increasing unit there, and a later campaign resumes from it. One 60s
+  run against `sanitize_svg_bytes` produces about a hundred of these; they do not
+  belong in review.
+
+**Findings are reported, not fixed.** A security fix in deployed software is the
+project owner's decision. When a campaign finds something: rename the
+`crash-<sha1>` artifact to something that says what it is, keep it in the
+committed corpus, and add its id to `KNOWN_UNFIXED` in
+`tests/test_utils_fuzz_corpus.py` with a reason naming the defect. Those are
+`strict=True` xfails, so the day the defect is fixed they XPASS and fail the run
+-- which is the signal to delete the entry, not to relax it.
+
+A campaign stops at its first crash, so an unfixed defect blocks the search
+behind it. That is what `allowlist_html_past_known_defects` is for: the same
+target with the two currently-known defects suppressed, campaign use only, so the
+fuzzer can hunt for a third. Its suppressions are documented on
+`check_allowlist_html_past_known_defects`. Run the plain `allowlist_html` target
+first; it is the honest one.
+
+**Assert properties, not the absence of crashes.** "It did not crash" would pass
+a sanitiser that returned its input unchanged. Each check in `harnesses.py`
+asserts a security property instead, against a PARSED tree rather than raw bytes
+-- every one of these functions may legally emit the text `javascript:` or
+` onload=` as escaped character data, and a substring check reports that inert
+text as a break-in within seconds of fuzzing.
+
+`app.utils.sanitize_svg` is deliberately not a target. It opens a path, calls
+`sanitize_svg_bytes` and writes the result back; all of its input handling is
+`sanitize_svg_bytes`, which is fuzzed. Fuzzing a filesystem path would exercise
+`open()`, not PieFed.
+
 ## The coverage ratchet
 
 Per-module floors live in `coverage_floors.ini`. Floors only ever RISE; raising

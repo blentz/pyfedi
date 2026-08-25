@@ -42,6 +42,7 @@ pytest-timeout
 respx
 moto
 fakeredis
+atheris
 stripe~=12.0.0
 Authlib~=1.7.0
 webauthn~=3.0.0
