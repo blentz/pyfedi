@@ -1,9 +1,12 @@
 import os
 import re
 
+import boto3
+import fakeredis
 import httpx
 import pytest
 import respx
+from moto import mock_aws
 
 # Import app before config. config.py does `import app.constants`, which starts
 # loading the app package; app/__init__.py in turn does `from config import
@@ -27,6 +30,7 @@ import app  # noqa: F401
 # because app.instance.routes reaches app.community before app.activitypub
 # does).
 import app.activitypub.signature  # noqa: F401
+from app import celery
 from config import Config
 
 TEST_DATABASE_URL = os.environ.get('TEST_DATABASE_URL')
@@ -80,6 +84,51 @@ def app():
 
     from app import create_app
     application = create_app(TestConfig)
+
+    # Set directly on celery.conf rather than as TestConfig attributes, and set
+    # BOTH the old- and new-style key names together in one update(). Two
+    # independent Celery quirks make anything simpler fragile here:
+    #
+    # 1. app/__init__.py:175 does celery.conf.update(app.config) before this
+    #    fixture runs, and config.py's CELERY_BROKER_URL is itself an
+    #    old-style name, so celery.conf already holds old-format keys by the
+    #    time we get here. Celery's Settings object refuses to mix old- and
+    #    new-format keys once a first access finalizes it with one format
+    #    dominant (celery.exceptions.ImproperlyConfigured: "Cannot mix new
+    #    setting names with old setting names") -- setting only the modern
+    #    `task_always_eager` attribute can raise exactly that.
+    # 2. Conversely, setting only the OLD-style names is not reliably enough:
+    #    Celery's built-in defaults dict always carries a literal
+    #    `task_always_eager` (and `task_eager_propagates`) key of its own. If
+    #    ANYTHING else in the test run causes celery.conf to finalize before
+    #    this fixture runs -- e.g. `@celery.task` decorating a module-level
+    #    function, which happens at import time, and pytest imports every
+    #    test module during collection, before any fixture executes -- the
+    #    old-style value we set afterwards lands in the `changes` layer, but a
+    #    lookup by the new-style name finds Celery's own literal default in
+    #    the `defaults` layer FIRST and never falls back to checking the
+    #    old-style alias. That default is False, so the old-style-only write
+    #    silently has no effect, and whether it "works" ends up depending on
+    #    which test files pytest happened to import first -- observed
+    #    concretely via tests/test_instance_util.py, whose `@celery.task def
+    #    bulk_follow` (app/instance/util.py) triggers exactly this.
+    #
+    # Providing both spellings in the same update() sidesteps both problems:
+    # if this fixture is what finalizes celery.conf, Celery's own mixing
+    # check explicitly allows a setting provided under both names at once
+    # (see the "e.g. both result_expires and CELERY_TASK_RESULT_EXPIRES"
+    # comment in celery/app/utils.py's detect_settings); if something else
+    # already finalized celery.conf first, the new-style write here lands as
+    # a literal key in the `changes` layer, which a ChainMap lookup always
+    # checks before `defaults`, so it wins regardless of the built-in
+    # default. Either way, `celery.conf.task_always_eager` reads True.
+    celery.conf.update(
+        task_always_eager=True,
+        CELERY_ALWAYS_EAGER=True,
+        task_eager_propagates=True,
+        CELERY_EAGER_PROPAGATES_EXCEPTIONS=True,
+    )
+
     with application.app_context():
         yield application
 
@@ -142,6 +191,29 @@ def site(db_session):
     return make_site()
 
 
+@pytest.fixture(scope='session', autouse=True)
+def block_outbound_http():
+    """No test may reach the real network.
+
+    This became load-bearing when Celery went eager. Before that, outbound
+    federation went through .delay() and sat in a broker with no worker, so it
+    never left the process. Now .delay() runs inline, so app/activitypub/
+    signature.py's post_request really does attempt the POST -- and against
+    non-resolving test domains that cost ~37s per federating test in real
+    timeouts, on top of making the suite depend on DNS and egress.
+
+    An empty respx router raises on any unmatched request instead, which
+    post_request records as an ActivityPubLog failure exactly as it would a
+    real one -- same code path, no network. assert_all_called=False because
+    this router deliberately registers nothing.
+
+    Tests that need outbound HTTP nest their own router via http_mock, which
+    is checked first; anything it does not match falls through to here.
+    """
+    with respx.mock(assert_all_called=False):
+        yield
+
+
 @pytest.fixture
 def http_mock():
     """A respx router intercepting all outbound httpx traffic.
@@ -166,21 +238,25 @@ def federation_peer(http_mock):
     invented, so a test passing here means the code handles what real servers send.
 
     By default this registers only webfinger and actor -- resolving an actor is
-    the common case, and most callers never deliver to it. Delivery normally
-    goes through app.shared.tasks.task_selector, which only runs a task inline
-    when current_app.debug is True; by default (matching production) it instead
-    calls Celery's .delay(), which enqueues to the real test broker with no
-    worker present to consume it, so nothing ever reaches the inbox
-    synchronously in-process. A route registered here but never called is a
-    hard failure under http_mock's assert_all_called=True, so leaving inbox out
-    by default avoids handing every future test a foot-gun for the common case.
+    the common case, and most callers never assert on delivery. A route
+    registered here but never called is a hard failure under http_mock's
+    assert_all_called=True, so leaving inbox out by default avoids handing
+    every future test a foot-gun for the common case.
 
     Pass include_inbox=True to also register a POST route for the actor's
-    inbox, for tests that exercise an actual delivery (e.g. app.activitypub.
-    signature.send_post_request called directly, or any path running with
-    current_app.debug True so task_selector executes inline). Forgetting to
-    pass it when delivery *does* happen surfaces as an "unexpected request"
-    error naming the exact URL -- a clear pointer to the fix.
+    inbox, for any test that asserts an activity was actually delivered.
+
+    IMPORTANT -- forgetting include_inbox does NOT fail loudly. Since eager
+    Celery landed, delivery runs inline: task_selector calls .delay(), which
+    executes in-process, and send_post_request in turn calls
+    post_request.delay(), which also executes in-process and really does
+    attempt the outbound POST. But app.activitypub.signature.post_request
+    wraps the request in `except Exception`, recording the failure as an
+    ActivityPubLog row rather than propagating it -- so respx's "unexpected
+    request" error is swallowed and the test still passes. A test that means
+    to prove delivery must therefore either pass include_inbox=True (letting
+    assert_all_called prove the POST happened) or assert on the ActivityPubLog
+    row. Asserting neither proves nothing about delivery.
     """
     def register(handle, include_inbox=False):
         name, domain = handle.lstrip('@').split('@')
@@ -215,6 +291,29 @@ def federation_peer(http_mock):
         return actor
 
     return register
+
+
+@pytest.fixture
+def redis_double(monkeypatch):
+    """Patch get_redis_connection so app code reaches a fakeredis instance.
+
+    Patched at app.utils.get_redis_connection because callers invoke it per use
+    (see decode_captcha) rather than holding a module-level client. The rate
+    limiter and Celery app are built from Config at import time and are NOT
+    covered by this fixture.
+    """
+    server = fakeredis.FakeRedis(decode_responses=True)
+    monkeypatch.setattr('app.utils.get_redis_connection', lambda *args, **kwargs: server)
+    return server
+
+
+@pytest.fixture
+def s3_bucket():
+    """A moto-backed S3 bucket, yielding its name."""
+    with mock_aws():
+        client = boto3.client('s3', region_name='us-east-1')
+        client.create_bucket(Bucket='pyfedi-test')
+        yield 'pyfedi-test'
 
 
 @pytest.fixture
