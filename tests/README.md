@@ -73,6 +73,20 @@ covers it.
 `tests/test_activitypub_util.py` predates this setup. It needs live network access
 and a hardcoded username, and is excluded from the standard run.
 
+## Coverage
+
+`app/request_hooks.py` is held at 100% branch coverage:
+
+    ./run_tests.sh tests/ -q --ignore=tests/test_activitypub_util.py \
+        --cov=app/request_hooks.py --cov-branch --cov-report=term-missing --cov-fail-under=100
+
+Branch coverage, not just line coverage: `after_request` is dense with
+conditionals, and line coverage alone reports 100% while leaving whole branches
+unexercised.
+
+Coverage is a floor, not a target. A test that executes a line without asserting
+anything raises the number and catches nothing.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
