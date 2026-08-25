@@ -130,10 +130,11 @@ def register_request_hooks(app):
         # Don't set cookies for static resources or ActivityPub responses to make them cachable
         if request.path.startswith('/static/') or request.path.startswith('/bootstrap/static/') or response.content_type == 'application/activity+json':
             # Remove session cookies that mess up caching
-            # pragma: no branch justification: flask.session always exists in every
-            # Flask version this project supports, so the false side of this
-            # condition is unreachable without deleting an attribute from the flask
-            # module itself -- there is no real code path that takes it.
+            # Why the pragma below: this module already does
+            # `from flask import session` at the top (module import time), so if
+            # flask did not expose `session`, that import would fail and this
+            # module -- and the app -- would never load. The false side of this
+            # condition is therefore provably unreachable, not merely unlikely.
             if 'session' in dir(flask):  # pragma: no branch
                 from flask import session
                 session.modified = False

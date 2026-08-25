@@ -27,7 +27,8 @@ from flask import g, render_template_string
 from sqlalchemy import text
 
 from app import db
-from app.models import Settings
+from app.constants import ROLE_ADMIN
+from app.models import Role, Settings
 from tests.factories import make_community, make_instance, make_post, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -59,13 +60,25 @@ def test_a_page_renders_under_test(app, db_session):
 # ---------------------------------------------------------------------------
 
 def test_options_request_short_circuits_before_the_route(app, db_session):
-    """OPTIONS gets the CORS preflight response, and never reaches index()."""
+    """OPTIONS gets the CORS preflight response, and never reaches index().
+
+    '/' is registered with methods=['HEAD', 'GET'] (app/main/routes.py), so if
+    before_request's own OPTIONS block were deleted, Flask would fall back to
+    its own automatic OPTIONS handling (make_default_options_response()) --
+    also a 200 with an empty body, and (via after_request, which runs
+    regardless of who produced the response) the same three CORS headers
+    below. What Flask's default OPTIONS response carries that
+    before_request's does not is an 'Allow' header listing the route's
+    methods; its absence is what actually discriminates this response as
+    before_request's, not Flask's fallback.
+    """
     with app.test_client() as client:
         response = client.options('/')
 
     assert response.status_code == 200
     assert response.headers['Access-Control-Allow-Origin'] == app.config.get('CORS_ALLOW_ORIGIN', '*')
     assert response.headers['Access-Control-Allow-Methods'] == 'GET, POST, PUT, DELETE, OPTIONS'
+    assert 'Allow' not in response.headers
     # An empty body proves before_request's own make_response('', 200) was returned
     # and index() -- which renders a full HTML page -- never ran.
     assert response.data == b''
@@ -114,13 +127,25 @@ def test_static_path_does_not_get_g_site(app, db_session):
 
 
 def test_admin_ids_computed_and_persisted_when_setting_absent(app, db_session):
-    make_instance('test.piefed.local', software='piefed')
+    """The admin_ids query is `WHERE u.id = 1 UNION SELECT ... JOIN user_role
+    ... WHERE role_id = ROLE_ADMIN`, so user id 1 is unconditionally included
+    regardless of role -- asserting an empty list would pass even against a
+    completely broken query (an empty table also has no id-1 user). Create a
+    non-admin user first, so it claims id 1, and a second, higher-id user with
+    the admin role: only if the role-driven half of the query actually runs
+    does that second user's id show up in g.admin_ids."""
+    instance = make_instance('test.piefed.local', software='piefed')
+    make_user(instance, 'notadmin', local=True)
+    admin = make_user(instance, 'realadmin', local=True)
+    admin.roles.append(Role(id=ROLE_ADMIN, name='admin'))
+    db.session.commit()
+    assert admin.id != 1
     assert Settings.query.filter_by(name='admin_ids').first() is None
 
     with app.test_client() as client:
         client.get('/auth/please_wait')
 
-    assert g.admin_ids == []
+    assert admin.id in g.admin_ids
     # get_setting() is cached in redis; before_request calls set_setting() to
     # persist what it computed, so a Settings row now exists.
     assert Settings.query.filter_by(name='admin_ids').first() is not None
@@ -381,15 +406,26 @@ def test_authenticated_html_response_gets_no_store_cache_control(app, db_session
     assert response.headers['Cache-Control'] == 'no-store, no-cache, must-revalidate, private'
 
 
-def test_anonymous_html_response_is_not_marked_no_store(app, db_session):
+def test_anonymous_html_response_does_not_set_a_session_cookie(app, db_session):
+    """The `else` arm for an anonymous, non-/auth/, non-swagger HTML response
+    (as opposed to the authenticated/no-store arm covered by
+    test_authenticated_html_response_gets_no_store_cache_control) is
+    `flask.session.modified = False` -- "don't let flask set a session cookie
+    for logged out users". An external Referer on an anonymous request would
+    otherwise write session['Referer'] (before_request) and mark the session
+    modified, which would normally produce a Set-Cookie; if this line were
+    deleted, that cookie would appear. Same technique as
+    test_activity_json_response_does_not_set_a_session_cookie, applied to the
+    plain-HTML branch instead of the activity+json one."""
     post, _instance = _make_embeddable_post()
 
     with app.test_client() as client:
-        response = client.get(f'/post/{post.id}/embed')
+        response = client.get(f'/post/{post.id}/embed',
+                              headers={'Referer': 'http://elsewhere.example/page'})
 
-    # render_template() sets its own 'no-cache, must-revalidate' for anonymous
-    # viewers; the point here is that after_request's no-store string is not it.
-    assert response.headers.get('Cache-Control') != 'no-store, no-cache, must-revalidate, private'
+    assert response.content_type.startswith('text/html')
+    set_cookie_headers = response.headers.getlist('Set-Cookie')
+    assert not any('session=' in h for h in set_cookie_headers)
 
 
 def test_html_response_vary_includes_accept_language_and_cookie(app, db_session):
