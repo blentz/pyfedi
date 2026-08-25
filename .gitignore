@@ -175,3 +175,6 @@ app/plugins/piefed_onboarding/
 app/static/styles.css.map
 # local-only podman overlay (see compose.override.yaml header)
 compose.override.yaml
+
+# Local git worktrees created for isolated feature work
+.worktrees/
