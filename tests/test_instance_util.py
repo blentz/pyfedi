@@ -18,20 +18,11 @@ class TestIsFediHandle:
 
 
 def test_bulk_follow_follows_a_resolved_remote_account(app, db_session, federation_peer):
-    """The end-to-end path this fixture exists to enable: a handle becomes a follow.
-
-    include_inbox=False: bulk_follow's follow_user call reaches app.shared.tasks.
-    task_selector, which (current_app.debug is False here, as in production)
-    dispatches the actual Follow delivery via Celery's .delay() -- a real enqueue
-    to the test-redis broker with no worker consuming it in-process. The inbox
-    route would sit unregistered-but-unused and trip http_mock's
-    assert_all_called=True, so it is left out here; other tests that exercise
-    delivery synchronously can ask federation_peer for it.
-    """
+    """The end-to-end path this fixture exists to enable: a handle becomes a follow."""
     make_instance('test.piefed.local', software='piefed')
     make_site()
     local = make_user(None, 'localuser', local=True)
-    federation_peer('wakko@mastodon.cloud', include_inbox=False)
+    federation_peer('wakko@mastodon.cloud')
 
     bulk_follow(local.id, ['wakko@mastodon.cloud'])
 
@@ -44,7 +35,7 @@ def test_bulk_follow_skips_an_account_already_followed(app, db_session, federati
     make_instance('test.piefed.local', software='piefed')
     make_site()
     local = make_user(None, 'localuser', local=True)
-    federation_peer('wakko@mastodon.cloud', include_inbox=False)
+    federation_peer('wakko@mastodon.cloud')
 
     bulk_follow(local.id, ['wakko@mastodon.cloud'])
     bulk_follow(local.id, ['wakko@mastodon.cloud'])

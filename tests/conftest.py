@@ -165,16 +165,24 @@ def federation_peer(http_mock):
     The payload shape follows docs/activitypub_examples/users.md rather than being
     invented, so a test passing here means the code handles what real servers send.
 
-    include_inbox=True (the default) also registers a POST route for the actor's
+    By default this registers only webfinger and actor -- resolving an actor is
+    the common case, and most callers never deliver to it. Delivery normally
+    goes through app.shared.tasks.task_selector, which only runs a task inline
+    when current_app.debug is True; by default (matching production) it instead
+    calls Celery's .delay(), which enqueues to the real test broker with no
+    worker present to consume it, so nothing ever reaches the inbox
+    synchronously in-process. A route registered here but never called is a
+    hard failure under http_mock's assert_all_called=True, so leaving inbox out
+    by default avoids handing every future test a foot-gun for the common case.
+
+    Pass include_inbox=True to also register a POST route for the actor's
     inbox, for tests that exercise an actual delivery (e.g. app.activitypub.
     signature.send_post_request called directly, or any path running with
-    current_app.debug True so app.shared.tasks.task_selector executes a task
-    inline rather than handing it to Celery's .delay()). A caller whose code path
-    only resolves the actor -- never delivers to it -- should pass
-    include_inbox=False, since http_mock's assert_all_called=True fails a test
-    that registers a route it never calls.
+    current_app.debug True so task_selector executes inline). Forgetting to
+    pass it when delivery *does* happen surfaces as an "unexpected request"
+    error naming the exact URL -- a clear pointer to the fix.
     """
-    def register(handle, include_inbox=True):
+    def register(handle, include_inbox=False):
         name, domain = handle.lstrip('@').split('@')
         actor_url = f'https://{domain}/users/{name}'
         actor = {
