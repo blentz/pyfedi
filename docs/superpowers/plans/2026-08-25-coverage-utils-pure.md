@@ -19,10 +19,56 @@
 - Every pragma carries a written justification. Unexplained pragmas are rejected.
 - Tests assert on observable behaviour, never on whether a mock was called.
 - **For every test, name the production change that would make it fail.** If you cannot name one, the test is decoration and must be rewritten. Put that name in the test's docstring where it is not obvious.
+- **Derive expected values from primary sources where one exists** — the XML, SVG, HTML, ActivityPub and URI specifications, and the OWASP cheat sheets. Cite the clause. Never read an expected value off the current implementation and call it a test. See the section below.
 - Floors in `coverage_floors.ini` only ever RISE.
 - No new runtime dependencies. `atheris` is a test dependency.
 - No host Python environment exists. Run tests with `./run_tests.sh [pytest args]`. Read `tests/README.md` first. **Never** run `./run_tests.sh --down` — it destroys the tmpfs database and forces a replay of ~269 migrations.
 - Run one suite at a time. Two concurrent runs against the same test database corrupt each other.
+
+## Derive expectations from primary sources, not from the code
+
+**This is the difference between a coverage test and a correctness test.** A
+test whose expected value was read off the current implementation can only ever
+prove the code still does what it does. A test whose expected value comes from
+the specification can prove the code is *wrong* — and finding that is an
+explicit goal of this sub-project, not an accident.
+
+Where a function implements something a standard defines, read the standard and
+derive the cases from it. Cite the clause in the test docstring.
+
+| Function | Primary source | What to check against it |
+|---|---|---|
+| `is_valid_xml_utf8` | [XML 1.0 §2.2, the `Char` production](https://www.w3.org/TR/xml/#charsets); [RFC 3629](https://www.rfc-editor.org/rfc/rfc3629) for UTF-8 | The `Char` production is `#x9 \| #xA \| #xD \| [#x20-#xD7FF] \| [#xE000-#xFFFD] \| [#x10000-#x10FFFF]`. Enumerate it and compare against what the function accepts. See the three suspected divergences below. |
+| `sanitize_svg_bytes`, `sanitize_svg` | [SVG 1.1 / SVG 2](https://www.w3.org/TR/SVG2/); [OWASP XML External Entity Prevention](https://cheatsheetseries.owasp.org/cheatsheets/XML_External_Entity_Prevention_Cheat_Sheet.html) | XXE vectors, `<foreignObject>`, `<use href>` external references, `<set attributeName="onload">`, entity expansion. Test the vectors the cheat sheet names, not only the ones the code visibly handles. |
+| `allowlist_html` | [HTML Standard](https://html.spec.whatwg.org/multipage/); [OWASP XSS Filter Evasion](https://cheatsheetseries.owasp.org/cheatsheets/XSS_Filter_Evasion_Cheat_Sheet.html) | Filter-evasion vectors: `<svg/onload=>`, malformed nesting, `javascript:` with entities or whitespace, `data:text/html`. |
+| `inbox_domain` | [ActivityPub §8](https://www.w3.org/TR/activitypub/); [ActivityStreams 2.0](https://www.w3.org/TR/activitystreams-core/) | An inbox is an absolute IRI. Check IDN hosts, ports, userinfo, uppercase scheme. |
+| `mimetype_from_url`, `domain_from_email` | [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986) (URI syntax); [RFC 5321 §4.1.2](https://www.rfc-editor.org/rfc/rfc5321) (address domain) | Fragment vs query handling; the code splits on `?` only — check what `#fragment.png` does. |
+| `is_valid_xml_utf8` callers | [ActivityPub](https://www.w3.org/TR/activitypub/) | Confirm what PieFed does with a `False` result, so the test asserts on something that matters. |
+
+### Three suspected spec divergences in `is_valid_xml_utf8`
+
+Found by reading it against XML 1.0 while writing this plan. **Verify each, then
+report — do not silently encode current behaviour as correct.**
+
+1. **`0x7F` (DEL) is rejected, but XML 1.0 permits it.** DEL falls inside
+   `[#x20-#xD7FF]`. Rejecting it is stricter than the spec. That may be
+   deliberate defensiveness — establish which, and say so.
+2. **Malformed UTF-8 is not detected at all.** The function scans for specific
+   byte patterns; it never validates the encoding. `b'\xc0\x80'` (an overlong
+   NUL, forbidden by RFC 3629 §3) is two bytes, so the `next3` check never runs
+   and the function returns `True` — while a real XML parser would reject it.
+   Lone continuation bytes and truncated sequences likewise pass.
+3. **The tail is checked less strictly than the body.** The first loop stops at
+   `c_end - 2` and checks both ASCII controls and the forbidden 3-byte
+   sequences; the second loop checks only ASCII controls. Establish whether a
+   forbidden sequence can be positioned so that neither loop rejects it. If one
+   can, that is a filter bypass and a security finding — report it under the
+   fuzzing rule (report, do not fix).
+
+Where a divergence is confirmed, write the test that asserts the SPEC's
+behaviour, mark it `xfail` with a docstring citing the clause, and report. An
+`xfail` naming a spec violation is worth more than a passing test that blesses
+it.
 
 ## Known bugs in scope — report before encoding
 
