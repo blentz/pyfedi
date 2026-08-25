@@ -170,7 +170,35 @@ def site(db_session):
 
 @pytest.fixture(scope='session', autouse=True)
 def block_outbound_http():
-    """No test may reach the real network.
+    """Block outbound HTTPX. Nothing else.
+
+    SCOPE, precisely: respx patches httpx's transports and nothing else, so this
+    fixture covers exactly the traffic that goes through httpx -- which is all of
+    app/activitypub/ and everything else built on app.utils.get_request /
+    post_request. A request no http_mock route matched raises instead of leaving
+    the process.
+
+    NOT YET BLOCKED -- three transports in app/ bypass httpx entirely and DO
+    reach the real internet under this harness. Verified by probe, not inferred:
+
+    - urllib (urllib.request.urlopen) -- app/nntp/server.py:767 fetches images
+      with it. A probe against https://example.com/ returned status 200 with
+      this fixture active.
+    - botocore/urllib3 (boto3) -- ten app modules use it (app/cli.py,
+      app/email.py, app/admin/util.py, app/community/util.py, app/utils.py,
+      app/activitypub/util.py, app/main/routes.py, app/shared/post.py,
+      app/shared/tasks/maintenance.py, app/shared/upload.py). A probe made a
+      real S3 call. The `s3_bucket` fixture covers this, but it is
+      function-scoped and opt-in: a test that drives S3 code WITHOUT requesting
+      `s3_bucket` calls real AWS.
+    - smtplib -- app/email.py:164-166 opens smtplib.SMTP/SMTP_SSL directly.
+      TestConfig's MAIL_SUPPRESS_SEND governs Flask-Mail, not this code path.
+
+    So if you are writing the harness for app/nntp/, for an S3-using module, or
+    for app/email.py, you must arrange your own isolation (monkeypatch the
+    urlopen/smtplib name in the module under test; request `s3_bucket` for boto3
+    code). Do not assume this fixture has you covered. Closing the gap properly
+    means a socket-level block, which is a design change nobody has ruled on.
 
     This became load-bearing when Celery went eager. Before that, outbound
     federation went through .delay() and sat in a broker with no worker, so it
@@ -288,13 +316,31 @@ def federation_peer(http_mock):
 def redis_double(monkeypatch):
     """Patch get_redis_connection so app code reaches a fakeredis instance.
 
-    Patched at app.utils.get_redis_connection because callers invoke it per use
-    (see decode_captcha) rather than holding a module-level client. The rate
-    limiter and Celery app are built from Config at import time and are NOT
-    covered by this fixture.
+    What matters is WHERE THE NAME IS BOUND, not when it is called. `from
+    app.utils import get_redis_connection` creates a NEW name in the importing
+    module, bound to the function object at import time; monkeypatching
+    `app.utils.get_redis_connection` rebinds only the attribute on app.utils and
+    leaves every such copy pointing at the original. So each binding site has to
+    be patched separately, and this fixture patches all four that exist today:
+    app.utils itself, plus app.main.routes (:42, used at :712), app.cli (:45,
+    used at :2092) and app.activitypub.routes (:38, used at :47).
+
+    Before this was fixed, a test covering app/main/routes.py:712 went green
+    while talking to the REAL, shared, never-truncated test Redis in the compose
+    stack. If you add a fifth `from app.utils import get_redis_connection`
+    anywhere in app/, add it to the list below or you will get that silently.
+
+    Still NOT covered, for the same binding reason:
+
+    - `app.redis_client` -- a module-level global in app/__init__.py, assigned
+      by create_app() before this function-scoped fixture runs. `from app import
+      redis_client` in app/shared/post.py, app/cli.py and app/admin/routes.py
+      reads that real client. Patch `app.redis_client` yourself if you need it.
+    - The rate limiter and Celery app, built from Config at import time.
     """
     server = fakeredis.FakeRedis(decode_responses=True)
-    monkeypatch.setattr('app.utils.get_redis_connection', lambda *args, **kwargs: server)
+    for module in ('app.utils', 'app.main.routes', 'app.cli', 'app.activitypub.routes'):
+        monkeypatch.setattr(f'{module}.get_redis_connection', lambda *args, **kwargs: server)
     return server
 
 
