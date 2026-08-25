@@ -152,6 +152,19 @@ def test_clause_matches_the_one_in_utils():
     loosely-matched substrings. A clause missing the viewer scoping or the is_inward
     filter would have passed the old two-substring version of this test; it cannot
     pass this one. Guards against the test drifting from app/utils.py.
+
+    Containment alone has a directional blind spot: the ungated BOOST_CLAUSE_BODY is
+    trivially a substring of a *gated* production clause too, since
+    "EXISTS (...)" is a substring of "(p.private is false AND EXISTS (...))". So the
+    assertion above would keep passing even if `p.private is false AND` were
+    re-added to the boost disjunct -- exactly the regression this task exists to
+    prevent. The second assertion below closes that hole: it isolates the boost
+    disjunct's own sources.append(...) block (identified by containing
+    "post_boost pb", which is unique to it) and asserts the gate text is absent from
+    THAT block specifically -- not a blanket absence check against the whole
+    function body, which would incorrectly fail on the untouched
+    `if not include_following: post_id_where.append('p.private is false')` line
+    elsewhere in get_deduped_post_ids.
     """
     import inspect
     from app import utils
@@ -161,3 +174,11 @@ def test_clause_matches_the_one_in_utils():
 
     source = inspect.getsource(utils.get_deduped_post_ids)
     assert normalize(BOOST_CLAUSE_BODY) in normalize(source)
+
+    append_blocks = re.findall(r'sources\.append\("""(.*?)"""\)', source, re.DOTALL)
+    boost_blocks = [b for b in append_blocks if 'post_boost pb' in b]
+    assert len(boost_blocks) == 1, \
+        f'expected exactly one boost sources.append(...) block, found {len(boost_blocks)}'
+    boost_block = normalize(boost_blocks[0])
+    assert 'p.private is false' not in boost_block, \
+        'the p.private gate has been re-added to the boost disjunct'
