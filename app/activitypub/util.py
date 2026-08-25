@@ -2315,6 +2315,11 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
     if community.local_only:
         log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, 'Community is local only, reply discarded')
         return None
+    visibility = activitypub_visibility(request_json.get('object'))
+    if visibility in ('followers', 'direct'):
+        log_incoming_ap(id, APLOG_CREATE, APLOG_IGNORED, saved_json,
+                        f'Non-public reply refused: {visibility}')
+        return None
     post_id, parent_comment_id, root_id = find_reply_parent(in_reply_to)
 
     if post_id or parent_comment_id or root_id:
@@ -2489,6 +2494,11 @@ def create_post(store_ap_json, community: Community, request_json: dict, user: U
     id = request_json['id']
     if community.local_only:
         log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, 'Community is local only, post discarded')
+        return None
+    visibility = activitypub_visibility(request_json.get('object'))
+    if visibility in ('followers', 'direct'):
+        log_incoming_ap(id, APLOG_CREATE, APLOG_IGNORED, saved_json,
+                        f'Non-public post refused: {visibility}')
         return None
     try:
         post = Post.new(user, community, request_json, announce_id)
