@@ -1,24 +1,14 @@
 #!flask/bin/python
 import os
-from datetime import datetime
-import cProfile
-import pstats
-import io
 
-import flask
-from flask import session, g, json, request, current_app
-from flask_babel import get_locale
-from flask_login import current_user
+from flask import json
 from flask_wtf.csrf import generate_csrf
-from sqlalchemy import text
 from werkzeug.middleware.profiler import ProfilerMiddleware
-from app import create_app, db, cli
-from app.models import Site
-from app.utils import gibberish, shorten_number, community_membership, digits, user_access, ap_datetime, \
+from app import create_app, cli
+from app.utils import shorten_number, community_membership, digits, user_access, ap_datetime, \
     can_create_post, can_upvote, can_downvote, current_theme, shorten_string, shorten_url, feed_membership, role_access, \
     in_sorted_list, first_paragraph, html_to_text, community_link_to_href, person_link_to_href, remove_images, \
-    feed_link_to_href, get_setting, set_setting, show_explore, human_filesize
-from app.constants import *
+    feed_link_to_href, show_explore, human_filesize
 
 app = create_app()
 
@@ -53,118 +43,3 @@ with app.app_context():
     app.config['PROFILE'] = True
     app.wsgi_app = ProfilerMiddleware(app.wsgi_app, restrictions=[500])
     app.run(debug = True, host='127.0.0.1')
-
-
-@app.before_request
-def before_request():
-    g.profiler = cProfile.Profile()
-    g.profiler.enable()
-
-    # Handle CORS preflight requests for all routes
-    if request.method == 'OPTIONS':
-        return '', 200
-
-    # Store nonce in g (g is per-request, unlike session)
-    g.nonce = gibberish()
-    g.locale = str(get_locale())
-    g.low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
-    if request.path != '/inbox' and not request.path.startswith(
-            '/static/'):  # do not load g.site on shared inbox, to increase chance of duplicate detection working properly
-        g.site = Site.query.get(1)
-        g.admin_ids = get_setting('admin_ids')  # get_setting is cached in redis
-        if g.admin_ids is None:
-            g.admin_ids = list(db.session.execute(
-                text("""SELECT u.id FROM "user" u WHERE u.id = 1
-                            UNION
-                            SELECT u.id
-                            FROM "user" u
-                            JOIN user_role ur ON u.id = ur.user_id AND ur.role_id = :role_admin AND u.deleted = false AND u.banned = false
-                            ORDER BY id"""),
-                {'role_admin': ROLE_ADMIN}).scalars())
-            set_setting('admin_ids', g.admin_ids)
-
-    if current_user.is_authenticated:
-        current_user.last_seen = datetime.utcnow()
-        current_user.email_unread_sent = False
-    else:
-        if 'Windows' in request.user_agent.string:
-            current_user.font = 'inter'
-        else:
-            current_user.font = ''
-        if session.get('Referer') is None and \
-                request.headers.get('Referer') is not None and \
-                current_app.config['SERVER_NAME'] not in request.headers.get('Referer'):
-            session['Referer'] = request.headers.get('Referer')
-
-
-@app.after_request
-def after_request(response):
-    # Add CORS headers to all responses
-    response.headers['Access-Control-Allow-Origin'] = current_app.config.get('CORS_ALLOW_ORIGIN', '*')
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, User-Agent'
-
-    # Don't set cookies for static resources or ActivityPub responses to make them cachable
-    if request.path.startswith('/static/') or request.path.startswith(
-            '/bootstrap/static/') or response.content_type == 'application/activity+json':
-        # Remove session cookies that mess up caching
-        if 'session' in dir(flask):
-            from flask import session
-            session.modified = False
-        # Cache headers for static resources
-        if request.path.startswith('/static/') or request.path.startswith('/bootstrap/static/'):
-            response.headers['Cache-Control'] = 'public, max-age=31536000'  # 1 year
-    else:
-        if not current_app.config['ALLOW_AI_CRAWLERS']:
-            response.headers.add('Link',
-                                 f'<https://{current_app.config["SERVER_NAME"]}/rsl.xml>; rel="license"; type="application/rsl+xml"')
-        if 'auth/register' not in request.path:
-            if hasattr(g, 'nonce') and "api/alpha/swagger" not in request.path:
-                # Don't set CSP header for htmx fragment requests - they use parent page's CSP
-                is_htmx = request.headers.get('HX-Request') == 'true'
-                if not is_htmx:
-                    # strict-dynamic allows scripts dynamically added by nonce-validated scripts (needed for htmx)
-                    if current_user.is_authenticated:
-                        response.headers[
-                            'Content-Security-Policy'] = f"script-src 'self' 'nonce-{g.nonce}' 'strict-dynamic'; object-src 'none'; base-uri 'none';"
-            if current_app.config['HTTP_PROTOCOL'] == 'https':
-                response.headers['Strict-Transport-Security'] = 'max-age=63072000; includeSubDomains; preload'
-            response.headers['X-Content-Type-Options'] = 'nosniff'
-            if '/embed' not in request.path:
-                response.headers['X-Frame-Options'] = 'DENY'
-
-    # Caching headers for html pages - pages are automatically translated and should not be cached while logged in.
-    if response.content_type.startswith('text/html'):
-        if current_user.is_authenticated or request.path.startswith('/auth/') or "api/alpha/swagger" in request.path:
-            response.headers.setdefault(
-                'Cache-Control',
-                'no-store, no-cache, must-revalidate, private'
-            )
-            response.headers.setdefault('Vary', 'Accept-Language, Cookie')
-        else:
-            response.headers.setdefault('Vary', 'Accept-Language, Cookie')
-            # Prevent Flask from setting session cookie for anonymous users
-            # This must be done by marking session as not modified, since Flask sets
-            # the cookie after after_request handlers run
-            if 'session' in dir(flask):
-                from flask import session
-                session.modified = False
-
-    profiler = getattr(g, 'profiler', None)
-    if profiler:
-        profiler.disable()
-        s = io.StringIO()
-        ps = pstats.Stats(profiler, stream=s).sort_stats('cumulative')
-        ps.print_stats(500)  # Top 50 lines by cumulative time
-
-        # Output to stderr, or save to file, or add to response
-        print(f"--- PROFILE ({request.path}) ---\n{s.getvalue()}")
-
-    return response
-
-
-@app.teardown_appcontext
-def shutdown_session(exception=None):
-    if exception:
-        db.session.rollback()
-    db.session.remove()
