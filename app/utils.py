@@ -4827,8 +4827,13 @@ def sanitize_svg(filepath: str) -> bool:
     written when sanitizing succeeded, so without this a failure would leave the
     attacker's original bytes on disk -- and a caller that ignored the False
     return would go on to publish them. Failing this way makes the function safe
-    regardless of what the caller does with the return value; callers must still
-    check it, and both do.
+    regardless of what the caller does with the return value.
+
+    The invariant, stated without a count so it cannot go stale: EVERY caller
+    checks the return and rejects the upload on False, and the file is destroyed
+    before False is returned, so a caller that forgets is still safe. Do not
+    weaken either half -- the destruction is what makes a forgetful caller safe,
+    and the check is what tells the user their upload was refused.
     """
     try:
 

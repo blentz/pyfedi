@@ -200,6 +200,7 @@ def move_community_images_to_here(community_id):
                                     db.session.commit()
                             else:
                                 # download the image to app/static/tmp
+                                response = None
                                 try:
                                     # Download the image
                                     response = get_request(post.image.source_url)
@@ -263,7 +264,16 @@ def move_community_images_to_here(community_id):
                                             post.image.source_url = f"https://{current_app.config['S3_PUBLIC_URL']}/{new_path}"
                                             db.session.commit()
                                 except Exception as e:
+                                    # Close the response before moving on. Every way out of
+                                    # the try above that is not the success path lands here --
+                                    # a failed download, a failed upload, and the SVG we
+                                    # refused to sanitize -- and none of them had reached the
+                                    # response.close() on the success path, so each one leaked
+                                    # a pooled connection. get_request may itself have raised,
+                                    # hence the None guard.
                                     current_app.logger.error(f"Error downloading image for post {post_id}: {str(e)}")
+                                    if response is not None:
+                                        response.close()
                                     continue
                 else:
                     for post_id in post_ids:
@@ -277,6 +287,7 @@ def move_community_images_to_here(community_id):
                                     db.session.commit()
                             else:
                                 # Download the image to app/static/tmp, then move to app/static/media
+                                response = None
                                 try:
                                     # Download the image
                                     response = get_request(post.image.source_url)
@@ -312,6 +323,7 @@ def move_community_images_to_here(community_id):
                                                 except ValueError as e:
                                                     current_app.logger.error(
                                                         f"Could not sanitize SVG for post {post_id}: {e}")
+                                                    response.close()
                                                     continue
 
                                             # Save to a temporary file first
@@ -336,7 +348,12 @@ def move_community_images_to_here(community_id):
                                             post.image.source_url = f"{current_app.config['SERVER_URL']}/{new_path}"
                                             db.session.commit()
                                 except httpx.HTTPError as e:
+                                    # As above: close before moving on. This handler is
+                                    # narrower than the S3 branch's, so it only sees a failed
+                                    # download, but it leaked the same way.
                                     current_app.logger.error(f"Error downloading image for post {post_id}: {str(e)}")
+                                    if response is not None:
+                                        response.close()
                                     continue
         except Exception:
             session.rollback()
