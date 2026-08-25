@@ -53,10 +53,23 @@ def make_community(name: str = 'microblogs') -> Community:
     return community
 
 
-def make_post(community, user, ap_id: str, title: str = 'a post', private: bool = False) -> Post:
-    """private=True marks a followers-only post (Post.private), i.e. not addressed to
-    as:Public. Defaults to False (a normal public post), matching the column default.
+def make_post(community, user, ap_id: str, title: str = 'a post', private: bool = False,
+              microblog: bool = False) -> Post:
+    """Build a Post.
+
+    microblog=True produces the shape ingestion actually creates for a Mastodon
+    Note: no title, and private=True. Post.new() sets private for ANY titleless
+    object (app/models.py:1796-1797), so Post.private is an unlisted marker, NOT a
+    followers-only flag -- it is the filter on the discovery surfaces (search, tags,
+    domains, community listings, profiles) while the subscribed feed skips it.
+    PostReply.private is the one that means followers-only.
+
+    Prefer microblog=True in any test about feed visibility of ingested content.
+    Passing private= directly sets the column without the rest of the shape.
     """
+    if microblog:
+        private = True
+        title = ''
     post = Post(
         community_id=community.id,
         user_id=user.id,
