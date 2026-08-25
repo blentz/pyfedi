@@ -57,12 +57,18 @@ def make_post(community, user, ap_id: str, title: str = 'a post', private: bool 
               microblog: bool = False) -> Post:
     """Build a Post.
 
-    microblog=True produces the shape ingestion actually creates for a Mastodon
-    Note: no title, and private=True. Post.new() sets private for ANY titleless
-    object (app/models.py:1796-1797), so Post.private is an unlisted marker, NOT a
-    followers-only flag -- it is the filter on the discovery surfaces (search, tags,
-    domains, community listings, profiles) while the subscribed feed skips it.
-    PostReply.private is the one that means followers-only.
+    microblog=True reproduces the columns Post.new() sets for a Mastodon Note with
+    no 'name': title='', private=True, and microblog=True. It does NOT reproduce
+    Post.new()'s activity-level Public check that can clear private back to False
+    for a genuinely unlisted post (app/models.py ~1796-1807) -- private here is
+    exactly the object-titleless default, nothing more. status is left at the
+    column default (POST_STATUS_PUBLISHED = 1), which already matches what
+    Post.new() implicitly leaves it at, since Post.new() never sets status itself.
+
+    Post.private is an unlisted marker, NOT a followers-only flag -- it is the
+    filter on the discovery surfaces (search, tags, domains, community listings,
+    profiles) while the subscribed feed skips it. PostReply.private is the one
+    that means followers-only.
 
     Prefer microblog=True in any test about feed visibility of ingested content.
     Passing private= directly sets the column without the rest of the shape.
@@ -82,6 +88,7 @@ def make_post(community, user, ap_id: str, title: str = 'a post', private: bool 
         nsfw=False,
         deleted=False,
         private=private,
+        microblog=microblog,
     )
     db.session.add(post)
     db.session.commit()
