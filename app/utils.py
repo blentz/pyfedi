@@ -4485,8 +4485,23 @@ def to_srgb(im: Image.Image, assume="sRGB"):
     except ImageCms.PyCMSError:
         # Fallback: just convert without ICC
         im = im.convert("RGB")
-    except AttributeError:
-        # Fallback, older versions of PIL have a different attribute name
+    except AttributeError:  # pragma: no cover -- unreachable on the pinned Pillow.
+        # Fallback, older versions of PIL have a different attribute name.
+        # This arm exists for Pillow releases whose ImageCms module exposed
+        # the BLACKPOINTCOMPENSATION flag as `ImageCms.FLAGS` rather than
+        # `ImageCms.Flags`. The pinned version (Pillow 12.3.0, confirmed via
+        # `hasattr`) has `Flags` and not `FLAGS`, so the `ImageCms.Flags[...]`
+        # lookup in the try block above always succeeds, and every failure
+        # profileToProfile can raise on this version surfaces as
+        # ImageCms.PyCMSError (proven interactively: mismatched mode/profile
+        # combinations, e.g. a LAB profile against an RGB image, raise
+        # PyCMSError -- "cannot build transform" -- never AttributeError).
+        # Reaching this branch would require downgrading Pillow, which is out
+        # of scope for a test-only change. Note also that if this arm were
+        # ever reached, its own fallback below still references the
+        # nonexistent `ImageCms.FLAGS` and would itself raise AttributeError,
+        # uncaught by the `except ImageCms.PyCMSError` two lines down -- a
+        # latent bug in this dead code, reported rather than fixed here.
         try:
             im = ImageCms.profileToProfile(
                 im, src, srgb_cms,
