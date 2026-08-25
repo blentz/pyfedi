@@ -1286,7 +1286,7 @@ def shorten_url(input: str, max_length=20):
     if input:
         return shorten_string(input.replace('https://', '').replace('http://', ''))
     else:
-        ''
+        return ''
 
 
 def remove_images(html) -> str:
