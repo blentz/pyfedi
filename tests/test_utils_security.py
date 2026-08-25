@@ -30,7 +30,7 @@ from py_svg_hush import filter_svg
 from werkzeug.datastructures import FileStorage
 
 from app.shared.upload import process_upload
-from app.utils import (MAX_SVG_SIZE, is_valid_xml_utf8, refuse_svg_markup_declarations,
+from app.utils import (MAX_SVG_SIZE, is_valid_xml_utf8, refuse_svg_entity_declarations,
                        sanitize_svg, sanitize_svg_bytes)
 
 KEEP_DATA_URL_MIME_TYPES = {"image": ["jpeg", "png", "gif", "webp", "avif"]}
@@ -250,112 +250,159 @@ class TestIsValidXmlUtf8EncodingValidity:
         assert is_valid_xml_utf8('before\ud800after') is False
 
 
-class TestRefuseSvgMarkupDeclarations:
-    """PieFed layer: uploaded SVGs carrying a markup declaration are refused.
+# The DOCTYPE Adobe Illustrator and older Inkscape put at the top of an SVG 1.1
+# export. It declares no entities, so it is accepted -- refusing it would break
+# uploads from the two most common SVG producers while buying nothing, since
+# filter_svg never fetches an external DTD (see
+# TestFilterSvgIsSafeWithoutPreStripping).
+ILLUSTRATOR_DOCTYPE = (
+    b'<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" '
+    b'"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">'
+)
+
+
+class TestRefuseSvgEntityDeclarations:
+    """PieFed layer: uploaded SVGs that declare an XML entity are refused.
 
     Refusal replaced a non-greedy ``rb'<\\!.*?>'`` substitution that tried to
     strip declarations out. That substitution was both bypassable (XML 1.0
     section 2.8 lets a quoted EntityValue contain '>', which ends the match
     early) and destructive to valid documents (a comment or CDATA section
     containing '>' was cut in half). Refusing can be neither.
+
+    The predicate is the entity declaration, not the DOCTYPE: entity declarations
+    are the actual threat, and a DTD that declares none is inert.
     """
 
     def test_a_plain_svg_is_accepted(self):
-        assert refuse_svg_markup_declarations(
+        assert refuse_svg_entity_declarations(
             b'<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>') is None
 
-    def test_a_doctype_is_refused(self):
-        with pytest.raises(ValueError, match='markup declarations'):
-            refuse_svg_markup_declarations(
-                b'<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" '
-                b'"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">'
-                b'<svg xmlns="http://www.w3.org/2000/svg"/>')
+    def test_a_doctype_that_declares_no_entities_is_accepted(self):
+        """REGRESSION GUARD. Refusing every DOCTYPE would reject SVG 1.1 exports
+        from Illustrator and Inkscape, which is a pure availability cost: it buys
+        no security, because filter_svg never fetches the DTD this names."""
+        assert refuse_svg_entity_declarations(
+            ILLUSTRATOR_DOCTYPE + b'<svg xmlns="http://www.w3.org/2000/svg"/>') is None
 
     def test_an_entity_declaration_is_refused(self):
-        with pytest.raises(ValueError, match='markup declarations'):
-            refuse_svg_markup_declarations(
+        with pytest.raises(ValueError, match='entity declarations'):
+            refuse_svg_entity_declarations(
                 b'<!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
+                b'<svg xmlns="http://www.w3.org/2000/svg"/>')
+
+    @pytest.mark.parametrize('spelling', [
+        pytest.param(b'<!ENTITY', id='canonical-uppercase'),
+        pytest.param(b'<!entity', id='lowercase'),
+        pytest.param(b'<!EnTiTy', id='mixed-case'),
+    ])
+    def test_the_entity_match_is_case_insensitive(self, spelling):
+        """Only uppercase `<!ENTITY` is a real XML declaration, so the other
+        spellings would be refused by the parser anyway. Matching them here is
+        deliberate slack in the refusing direction; the '-->' and ']]>'
+        terminators are matched exactly, because slack there would mean skipping
+        bytes unexamined."""
+        with pytest.raises(ValueError, match='entity declarations'):
+            refuse_svg_entity_declarations(
+                b'<!DOCTYPE svg [' + spelling + b' e "x">]>'
                 b'<svg xmlns="http://www.w3.org/2000/svg"/>')
 
     @pytest.mark.parametrize('declaration', [
         pytest.param(b'<!ELEMENT svg ANY>', id='ELEMENT'),
         pytest.param(b'<!ATTLIST svg x CDATA #IMPLIED>', id='ATTLIST'),
+        pytest.param(b'<!ATTLIST svg onload CDATA "alert(1)">', id='ATTLIST-with-default'),
         pytest.param(b'<!NOTATION gif SYSTEM "gif">', id='NOTATION'),
-        pytest.param(b'<![INCLUDE[<!ENTITY e "x">]]>', id='conditional-section'),
     ])
-    def test_the_other_markup_declarations_are_refused_too(self, declaration):
-        """Not just DOCTYPE and ENTITY: anything beginning '<!' that is not a
-        comment or a CDATA section is a declaration, and none of them belongs in
-        an uploaded image."""
-        with pytest.raises(ValueError, match='markup declarations'):
-            refuse_svg_markup_declarations(
-                declaration + b'<svg xmlns="http://www.w3.org/2000/svg"/>')
+    def test_a_non_entity_declaration_is_accepted(self, declaration):
+        """These declare no entity and are inert: filter_svg does not apply
+        attribute defaults declared in an internal subset, which the ATTLIST case
+        above is the interesting one for. Verified by execution; the
+        end-to-end consequence is pinned by
+        test_an_attlist_default_does_not_inject_an_attribute below."""
+        assert refuse_svg_entity_declarations(
+            b'<!DOCTYPE svg [' + declaration + b']>'
+            b'<svg xmlns="http://www.w3.org/2000/svg"/>') is None
 
-    def test_a_declaration_after_the_root_element_is_refused(self):
+    def test_an_entity_inside_a_conditional_section_is_still_refused(self):
+        """`<![INCLUDE[` is neither a comment nor a CDATA section, so the scan
+        advances two bytes and keeps looking rather than skipping its body."""
+        with pytest.raises(ValueError, match='entity declarations'):
+            refuse_svg_entity_declarations(
+                b'<![INCLUDE[<!ENTITY e "x">]]>'
+                b'<svg xmlns="http://www.w3.org/2000/svg"/>')
+
+    def test_an_entity_declared_alongside_other_declarations_is_still_found(self):
+        """A non-entity declaration must not consume the entity behind it."""
+        with pytest.raises(ValueError, match='entity declarations'):
+            refuse_svg_entity_declarations(
+                b'<!DOCTYPE svg [<!ELEMENT svg ANY><!ENTITY e "x">]>'
+                b'<svg xmlns="http://www.w3.org/2000/svg"/>')
+
+    def test_an_entity_declaration_after_the_root_element_is_refused(self):
         """The scan is not limited to the prolog, so a declaration cannot be
         hidden by putting it somewhere a prolog-only check would not look."""
-        with pytest.raises(ValueError, match='markup declarations'):
-            refuse_svg_markup_declarations(
+        with pytest.raises(ValueError, match='entity declarations'):
+            refuse_svg_entity_declarations(
                 b'<svg xmlns="http://www.w3.org/2000/svg">'
                 b'<!ENTITY e "x"></svg>')
 
     def test_a_comment_is_not_mistaken_for_a_declaration(self):
         """XML 1.0 section 2.5. Comments begin '<!' and must be skipped, not
         refused -- this is what makes the check exact rather than a grep."""
-        assert refuse_svg_markup_declarations(
+        assert refuse_svg_entity_declarations(
             b'<svg xmlns="http://www.w3.org/2000/svg"><!-- hello --><rect/></svg>') is None
 
-    def test_a_comment_containing_a_declaration_is_not_refused(self):
-        """A substring search for '<!DOCTYPE' would refuse this valid document.
+    def test_a_comment_containing_an_entity_declaration_is_not_refused(self):
+        """A substring search for '<!ENTITY' would refuse this valid document.
         Skipping the comment by its '-->' terminator does not."""
-        assert refuse_svg_markup_declarations(
+        assert refuse_svg_entity_declarations(
             b'<svg xmlns="http://www.w3.org/2000/svg">'
-            b'<!-- <!DOCTYPE svg> --><rect/></svg>') is None
+            b'<!-- <!ENTITY e "x"> --><rect/></svg>') is None
 
-    def test_a_cdata_section_containing_a_declaration_is_not_refused(self):
+    def test_a_cdata_section_containing_an_entity_declaration_is_not_refused(self):
         """XML 1.0 section 2.7: inside CDATA this is ordinary character data."""
-        assert refuse_svg_markup_declarations(
+        assert refuse_svg_entity_declarations(
             b'<svg xmlns="http://www.w3.org/2000/svg">'
             b'<text><![CDATA[<!ENTITY e "x">]]></text></svg>') is None
 
     def test_a_comment_containing_gt_is_not_refused(self):
         """The exact case the old stripper corrupted. '>' is legal in a comment
         and must not terminate anything."""
-        assert refuse_svg_markup_declarations(
+        assert refuse_svg_entity_declarations(
             b'<svg xmlns="http://www.w3.org/2000/svg"><!-- a > b --><rect/></svg>') is None
 
     def test_an_unterminated_comment_is_refused(self):
         """Not well-formed XML, so there is no valid document to preserve, and
         an unterminated comment could otherwise hide the rest of the file."""
         with pytest.raises(ValueError, match='unterminated comment'):
-            refuse_svg_markup_declarations(
+            refuse_svg_entity_declarations(
                 b'<svg xmlns="http://www.w3.org/2000/svg"><!-- <rect/></svg>')
 
     def test_an_unterminated_cdata_section_is_refused(self):
         with pytest.raises(ValueError, match='unterminated CDATA'):
-            refuse_svg_markup_declarations(
+            refuse_svg_entity_declarations(
                 b'<svg xmlns="http://www.w3.org/2000/svg"><text><![CDATA[x</text></svg>')
 
-    def test_a_declaration_after_a_comment_is_still_found(self):
+    def test_an_entity_declaration_after_a_comment_is_still_found(self):
         """Skipping a comment must resume scanning, not stop."""
-        with pytest.raises(ValueError, match='markup declarations'):
-            refuse_svg_markup_declarations(
+        with pytest.raises(ValueError, match='entity declarations'):
+            refuse_svg_entity_declarations(
                 b'<svg xmlns="http://www.w3.org/2000/svg"><!-- x -->'
                 b'<!ENTITY e "y"><rect/></svg>')
 
-    def test_a_declaration_after_a_cdata_section_is_still_found(self):
-        with pytest.raises(ValueError, match='markup declarations'):
-            refuse_svg_markup_declarations(
+    def test_an_entity_declaration_after_a_cdata_section_is_still_found(self):
+        with pytest.raises(ValueError, match='entity declarations'):
+            refuse_svg_entity_declarations(
                 b'<svg xmlns="http://www.w3.org/2000/svg"><text><![CDATA[x]]></text>'
                 b'<!ENTITY e "y"><rect/></svg>')
 
-    def test_a_declaration_quoting_a_gt_is_refused(self):
+    def test_an_entity_declaration_quoting_a_gt_is_refused(self):
         """XML 1.0 section 2.8 lets an EntityValue contain '>' when quoted, so
         `<!ENTITY greater "x>y">` is a legal declaration whose closing '>' is not
         the first one. That ambiguity is exactly why this refuses rather than
         strips: there is nothing to get wrong."""
-        with pytest.raises(ValueError, match='markup declarations'):
-            refuse_svg_markup_declarations(DOCTYPE_GT_IN_QUOTED_VALUE)
+        with pytest.raises(ValueError, match='entity declarations'):
+            refuse_svg_entity_declarations(DOCTYPE_GT_IN_QUOTED_VALUE)
 
 
 class TestFilterSvgIsSafeWithoutPreStripping:
@@ -418,6 +465,20 @@ class TestFilterSvgIsSafeWithoutPreStripping:
                b'<a xlink:href="&js;"><rect/></a></svg>')
         assert b'javascript' not in filter_svg(raw, KEEP_DATA_URL_MIME_TYPES).lower()
 
+    def test_an_attlist_default_does_not_inject_an_attribute(self):
+        """The reason a non-entity internal subset can be let through.
+
+        XML lets an ATTLIST declare a DEFAULT value for an attribute, which a
+        conforming parser applies to every matching element. If filter_svg's
+        parser did that, a DTD with no entity in it could still inject onload.
+        It does not: the attribute never appears.
+        """
+        raw = (b'<!DOCTYPE svg [<!ATTLIST svg onload CDATA "alert(1)">]>'
+               b'<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>')
+        result = filter_svg(raw, KEEP_DATA_URL_MIME_TYPES).lower()
+        assert b'onload' not in result
+        assert b'alert' not in result
+
     def test_a_doctype_alone_does_not_stop_filter_svg_sanitising(self):
         """The document PieFed used to mangle into unparseable garbage. Handed to
         filter_svg intact, the <script> is removed and the document survives."""
@@ -443,13 +504,13 @@ class TestSanitizeSvgBytes:
         no partly-processed document to get wrong."""
         svg = (b'<!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
                b'<svg xmlns="http://www.w3.org/2000/svg"/>')
-        with pytest.raises(ValueError, match='markup declarations'):
+        with pytest.raises(ValueError, match='entity declarations'):
             sanitize_svg_bytes(svg)
 
     def test_a_reference_to_a_declared_entity_is_refused(self):
         svg = (b'<!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
                b'<svg xmlns="http://www.w3.org/2000/svg"><text>&xxe;</text></svg>')
-        with pytest.raises(ValueError, match='markup declarations'):
+        with pytest.raises(ValueError, match='entity declarations'):
             sanitize_svg_bytes(svg)
 
     def test_billion_laughs_is_refused(self):
@@ -458,7 +519,7 @@ class TestSanitizeSvgBytes:
         filter_svg refuses it independently."""
         svg = (b'<!DOCTYPE lolz [<!ENTITY lol "lol"><!ENTITY lol2 "&lol;&lol;&lol;">]>'
                b'<svg xmlns="http://www.w3.org/2000/svg"><text>&lol2;</text></svg>')
-        with pytest.raises(ValueError, match='markup declarations'):
+        with pytest.raises(ValueError, match='entity declarations'):
             sanitize_svg_bytes(svg)
 
     def test_a_processing_instruction_does_not_survive(self):
@@ -466,6 +527,21 @@ class TestSanitizeSvgBytes:
         by regex -- filter_svg drops them, which this pins."""
         svg = b'<?xml-stylesheet href="evil.xsl"?><svg xmlns="http://www.w3.org/2000/svg"/>'
         assert b'<?xml-stylesheet' not in sanitize_svg_bytes(svg)
+
+    def test_an_illustrator_doctype_is_sanitized_rather_than_refused(self):
+        """REGRESSION GUARD for the DOCTYPE over-refusal we nearly shipped.
+
+        The document is accepted and sanitised: the script goes, the drawing
+        stays. Refusing every DOCTYPE would have turned every Illustrator and
+        Inkscape SVG 1.1 export into a failed upload.
+        """
+        svg = (ILLUSTRATOR_DOCTYPE +
+               b'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">'
+               b'<script>alert(1)</script><rect width="1" height="1"/></svg>')
+        result = sanitize_svg_bytes(svg)
+        assert b'script' not in result.lower()
+        assert b'<rect' in result
+        assert b'width="10"' in result
 
     def test_an_xml_declaration_is_accepted(self):
         """The other side of that: essentially every real SVG starts with one."""
@@ -562,7 +638,7 @@ class TestSanitizeSvgBytes:
         original bytes -- <script> included -- stayed on disk. The file is now
         refused for carrying a declaration at all, which no quoting can affect.
         """
-        with pytest.raises(ValueError, match='markup declarations'):
+        with pytest.raises(ValueError, match='entity declarations'):
             sanitize_svg_bytes(DOCTYPE_GT_IN_QUOTED_VALUE)
 
     def test_a_comment_containing_gt_does_not_corrupt_the_document(self):
@@ -736,6 +812,29 @@ class TestProcessUploadRejectsUnsanitizableSvg:
         finally:
             for path in new_files:
                 os.remove(path)
+
+    def test_an_illustrator_doctype_svg_uploads_and_is_sanitized(self, app):
+        """REGRESSION GUARD, end to end, for the DOCTYPE over-refusal.
+
+        An SVG 1.1 export carrying `<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG
+        1.1//EN" ...>` -- what Illustrator and Inkscape emit, and the single most
+        common shape of real-world SVG upload -- must reach the media root with
+        its drawing intact and its script gone. Refusing on the DOCTYPE rather
+        than on the entity declaration made this raise instead.
+        """
+        payload = (ILLUSTRATOR_DOCTYPE +
+                   b'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">'
+                   b'<script>alert(1)</script><rect width="1" height="1"/></svg>')
+        with app.app_context():
+            url = process_upload(self._upload(payload, filename='logo.svg'))
+            stored = self._stored_path(url)
+            try:
+                content = open(stored, 'rb').read()
+                assert b'script' not in content.lower()
+                assert b'<rect' in content
+                assert b'width="10"' in content
+            finally:
+                os.remove(stored)
 
     def test_a_clean_svg_still_uploads_and_is_sanitized(self, app):
         """The happy path is not collateral damage: a legitimate SVG carrying a

@@ -4644,31 +4644,48 @@ def is_invalid_get_request_uri(uri):
 MAX_SVG_SIZE = 10 * 1024 * 1024  # 10 MB
 
 
-def refuse_svg_markup_declarations(svg_bytes: bytes) -> None:
-    """Raise ValueError if an uploaded SVG carries any markup declaration.
+def refuse_svg_entity_declarations(svg_bytes: bytes) -> None:
+    """Raise ValueError if an uploaded SVG declares an XML entity.
 
-    An SVG offered for upload has no legitimate need for a DOCTYPE or an entity,
-    element, attlist or notation declaration, so their presence is grounds to
-    refuse the file. Refusing is strictly safer than the stripping this replaced:
-    it cannot corrupt valid content, and it cannot be defeated by quoting, which
-    a regex looking for a declaration's closing '>' can be -- XML 1.0 section 2.8
-    permits '>' inside a quoted EntityValue, so `<!ENTITY g "x>y">` ends a
-    non-greedy `<\\!.*?>` match early and hands the parser a broken document.
+    Entity declarations are the actual threat in an SVG's DTD, and they are what
+    the `<!DOCTYPE svg [<!ENTITY greater "x>y">]>` bypass exploited. A DOCTYPE
+    that declares none -- the `<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" ...>`
+    that Illustrator and Inkscape emit -- is accepted, because refusing it buys
+    nothing: filter_svg never fetches an external DTD, never dereferences a SYSTEM
+    or parameter entity, and refuses a nested entity reference outright, and an
+    ELEMENT/ATTLIST/NOTATION declaration is inert (attribute defaults declared in
+    an internal subset are not applied). All of that was established by execution
+    against the installed py-svg-hush and is pinned by
+    TestFilterSvgIsSafeWithoutPreStripping.
 
-    The scan is exact rather than heuristic. XML 1.0 section 2.4 forbids a literal
-    '<' in character data and in attribute values, so in a well-formed document a
-    raw '<!' can only begin a markup declaration, a comment or a CDATA section.
-    Comments and CDATA sections are skipped over by their terminators, '-->' and
-    ']]>', neither of which can be quoted away the way a declaration's '>' can.
-    Anything else beginning '<!' is a declaration and is refused.
+    This refuses rather than strips. A regex hunting for a declaration's closing
+    '>' is defeated by quoting -- XML 1.0 section 2.8 permits '>' inside a quoted
+    EntityValue, so `<!ENTITY g "x>y">` ends a non-greedy `<\\!.*?>` match early
+    and hands the parser a broken document -- and stripping also destroys valid
+    comments and CDATA sections that contain '>'. Refusal can do neither.
 
-    An unterminated comment or CDATA section is refused too: it is not well-formed
-    XML, so there is no valid document to preserve.
+    The scan is exact rather than a substring search. XML 1.0 section 2.4 forbids
+    a literal '<' in character data and in attribute values, so in a well-formed
+    document a raw '<!' can only begin a markup declaration, a comment or a CDATA
+    section. Comments and CDATA sections are skipped by their terminators, '-->'
+    and ']]>', neither of which can be quoted away the way a declaration's '>'
+    can, so `<!-- <!ENTITY x "y"> -->` is correctly accepted. Any other '<!'
+    advances by two rather than to its own '>', which is what lets a DOCTYPE's
+    internal subset be scanned for the entity declarations it may contain.
+
+    The ENTITY match is case-insensitive. XML is case-sensitive and only
+    `<!ENTITY` is a real declaration, so this is deliberate slack in the
+    refusing direction; the comment and CDATA terminators are matched exactly,
+    because being lenient about those would mean skipping over bytes unexamined.
+
+    An unterminated comment or CDATA section is refused: their contents cannot be
+    skipped safely if the terminator is missing, and the document is not
+    well-formed XML anyway.
 
     Nothing is modified -- this only inspects -- so no valid SVG can be damaged by
-    it. The one false positive it can produce is a declaration-lookalike inside a
-    processing instruction, which is refused rather than accepted; that is the
-    safe direction and no real SVG contains one.
+    it. Its false positives are all in the safe direction: the literal text
+    '<!ENTITY' inside a processing instruction or inside a DOCTYPE's system
+    literal is refused rather than accepted, and no real SVG contains one.
     """
     i = 0
     while True:
@@ -4685,15 +4702,16 @@ def refuse_svg_markup_declarations(svg_bytes: bytes) -> None:
             if end == -1:
                 raise ValueError('SVG contains an unterminated CDATA section')
             i = end + 3
+        elif svg_bytes[i:i + 8].upper() == b'<!ENTITY':
+            raise ValueError('SVG entity declarations are not allowed')
         else:
-            raise ValueError(
-                'SVG markup declarations (DOCTYPE, ENTITY) are not allowed')
+            i += 2
 
 
 def sanitize_svg_bytes(svg_bytes: bytes) -> bytes:
     """Sanitize an SVG, or raise ValueError if it cannot be sanitized.
 
-    Two refusals of our own -- oversize input and markup declarations -- and then
+    Two refusals of our own -- oversize input and entity declarations -- and then
     py-svg-hush's filter_svg, which does the actual sanitizing. Nothing here
     rewrites the bytes before filter_svg sees them: byte-level pre-processing was
     what previously both corrupted valid documents and let hostile ones through.
@@ -4703,13 +4721,13 @@ def sanitize_svg_bytes(svg_bytes: bytes) -> bytes:
     entity naming file:/// or http:// is never dereferenced (it expands to
     nothing), an external DTD is never fetched, and an entity whose value
     references another entity is refused outright, so entity expansion cannot be
-    amplified. The declaration refusal above is defence in depth, not a
+    amplified. The entity refusal above is defence in depth, not a
     dependency of filter_svg's safety.
     """
     if len(svg_bytes) > MAX_SVG_SIZE:
         raise ValueError(f"SVG file too large: {len(svg_bytes)} bytes (max {MAX_SVG_SIZE})")
 
-    refuse_svg_markup_declarations(svg_bytes)
+    refuse_svg_entity_declarations(svg_bytes)
 
     # Allow common image MIME types in data URLs
     keep_data_url_mime_types = {
