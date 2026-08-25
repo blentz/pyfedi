@@ -32,6 +32,7 @@ from app.models import User, Community, CommunityJoinRequest, CommunityMember, C
 from app.post.routes import continue_discussion, show_post
 from app.shared.tasks import task_selector
 from app.user.routes import show_profile
+from app.user.utils import search_for_user
 from app.utils import gibberish, get_setting, community_membership, ap_datetime, ip_address, can_downvote, \
     can_upvote, can_create_post, awaken_dormant_instance, shorten_string, can_create_post_reply, sha256_digest, \
     community_moderators, html_to_text, add_to_modlog, instance_banned, get_redis_connection, \
@@ -380,6 +381,9 @@ def user_profile(actor):
             if user is None:
                 user = User.query.filter_by(ap_profile_id=f'{current_app.config["SERVER_URL"]}/u/{actor.lower()}', ap_id=None).first()
 
+    if user is None:
+        user = resolve_remote_handle(actor)
+
     if user is not None:
         if request.method == 'HEAD':
             if is_activitypub_request():
@@ -458,6 +462,34 @@ def user_profile(actor):
             return show_profile(user)
     else:
         abort(404)
+
+
+def resolve_remote_handle(actor: str):
+    """Look up a remote handle this instance has not seen before, or return None.
+
+    Gated three ways, and each guard is load-bearing:
+
+    - Only handles (`name@server`) can be remote; a bare name is local or nothing.
+    - Authenticated callers only. search_for_user() fetches a host taken from the
+      URL, so without this an anonymous stranger could make this instance issue
+      outbound requests to any host they choose, at any rate.
+    - HTML requests only. A remote server sending an ActivityPub Accept header to
+      /u/foo@bar.example is asking whether WE host that user; resolving it would
+      answer the wrong question and let that server make us fetch a third host.
+
+    search_for_user() raises for a banned instance rather than returning None
+    (app/user/utils.py), so the caller falls through to its existing 404.
+    """
+    if '@' not in actor:
+        return None
+    if not current_user.is_authenticated:
+        return None
+    if is_activitypub_request():
+        return None
+    try:
+        return search_for_user(actor)
+    except Exception:
+        return None
 
 
 @bp.route('/u/<actor>/outbox', methods=['GET'])
