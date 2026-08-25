@@ -834,9 +834,6 @@ def links_with_parens(text: str) -> str:
 
     better_html = str(soup)
 
-    # This escapes <hr/> for some reason, so need to fix that
-    better_html.replace("<hr/>;", "<hr />")
-
     return better_html
 
 
