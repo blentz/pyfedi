@@ -14,6 +14,16 @@ import pytest
 from tests.factories import make_instance, make_site, make_user
 
 
+@pytest.fixture(autouse=True)
+def site(db_session):
+    """before_request (registered by the app factory as of the app-factory-request-wiring
+    change) populates g.site for every request except /inbox and /static/, which requires
+    a Site row with id 1 to exist -- see make_site()'s docstring. Not needed when this file
+    was written, since the app built by the conftest `app` fixture did not yet register
+    that hook and g.site was simply left unset."""
+    return make_site()
+
+
 @pytest.fixture
 def resolve_spy(monkeypatch):
     """Replace the webfinger lookup, recording every address it is asked for."""

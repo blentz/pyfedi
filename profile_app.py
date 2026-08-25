@@ -6,7 +6,6 @@ import pstats
 import io
 
 import flask
-import pendulum
 from flask import session, g, json, request, current_app
 from flask_babel import get_locale
 from flask_login import current_user
@@ -15,29 +14,13 @@ from sqlalchemy import text
 from werkzeug.middleware.profiler import ProfilerMiddleware
 from app import create_app, db, cli
 from app.models import Site
-from app.utils import gibberish, shorten_number, community_membership, getmtime, digits, user_access, ap_datetime, \
+from app.utils import gibberish, shorten_number, community_membership, digits, user_access, ap_datetime, \
     can_create_post, can_upvote, can_downvote, current_theme, shorten_string, shorten_url, feed_membership, role_access, \
     in_sorted_list, first_paragraph, html_to_text, community_link_to_href, person_link_to_href, remove_images, \
-    notif_id_to_string, feed_link_to_href, get_setting, set_setting, show_explore, human_filesize
+    feed_link_to_href, get_setting, set_setting, show_explore, human_filesize
 from app.constants import *
 
 app = create_app()
-
-
-@app.context_processor
-def app_context_processor():
-    return dict(getmtime=getmtime, instance_domain=current_app.config['SERVER_NAME'], debug_mode=current_app.debug,
-                pendulum=pendulum, locale=g.locale if hasattr(g, 'locale') else None,
-                notif_server=current_app.config['NOTIF_SERVER'],
-                site=g.site if hasattr(g, 'site') else None, nonce=g.nonce if hasattr(g, 'nonce') else None,
-                admin_ids=g.admin_ids if hasattr(g, 'admin_ids') else [],
-                low_bandwidth=g.low_bandwidth if hasattr(g, 'low_bandwidth') else None,
-                can_translate=current_app.config['TRANSLATE_ENDPOINT'] != '',
-                POST_TYPE_LINK=POST_TYPE_LINK, POST_TYPE_IMAGE=POST_TYPE_IMAGE, notif_id_to_string=notif_id_to_string,
-                POST_TYPE_ARTICLE=POST_TYPE_ARTICLE, POST_TYPE_VIDEO=POST_TYPE_VIDEO, POST_TYPE_POLL=POST_TYPE_POLL,
-                POST_TYPE_EVENT=POST_TYPE_EVENT,
-                SUBSCRIPTION_MODERATOR=SUBSCRIPTION_MODERATOR, SUBSCRIPTION_MEMBER=SUBSCRIPTION_MEMBER,
-                SUBSCRIPTION_OWNER=SUBSCRIPTION_OWNER, SUBSCRIPTION_PENDING=SUBSCRIPTION_PENDING, VERSION=VERSION)
 
 
 with app.app_context():
