@@ -4,7 +4,8 @@ import unittest
 import pytest
 from bs4 import BeautifulSoup
 
-from app.utils import allowlist_html, community_link_to_href, feed_link_to_href, person_link_to_href, markdown_to_html
+from app.utils import (allowlist_html, community_link_to_href, feed_link_to_href, markdown_to_html,
+                       person_link_to_href, url_host)
 
 
 class TestAllowlistHtml(unittest.TestCase):
@@ -458,6 +459,158 @@ class TestDegenerateAngleBrackets:
         """The guard must not turn well-formed markup into escaped text."""
         result = allowlist_html(text, test_env={'fn_string': 'fn-test'})
         assert BeautifulSoup(result, 'html.parser').find(tag) is not None, result
+
+
+class TestAMalformedHrefDoesNotDestroyTheDocument:
+    """furl refuses to parse some URLs, and it refuses by raising ValueError.
+
+    BUG (fixed here): allowlist_html called furl(tag['href']) unguarded, purely
+    to read .host for the instance_domains comparison. A remote instance
+    controls the content, so a single anchor with an unparseable authority made
+    the WHOLE document raise out of the sanitisation boundary -- an unhandled
+    500 on the federated ingest path, and on any local user who typed such a
+    link into a comment box.
+
+    A URL whose host furl cannot parse simply has no host, so it cannot be one
+    of our instances. It is treated as remote and left alone, which is what this
+    function already does with every other href it has no reason to rewrite.
+    Blanking it would be wrong: an unparseable authority is not a script URL,
+    and the scheme test has already run and passed by this point.
+
+    Found by probing rather than by the fuzz campaign: reaching it needs the
+    literal '<a href=' structure wrapped around a specific malformed authority.
+    The two reported vectors were 'http://[' and 'http://[::1'; probing furl
+    directly turned up four distinct refusal classes, all ValueError, listed in
+    MALFORMED below.
+    """
+
+    # Every one of these raised ValueError out of allowlist_html before the fix.
+    # Grouped by the refusal furl reports, because they are four different code
+    # paths inside furl and only the first is about IPv6 at all.
+    MALFORMED = [
+        # "Invalid IPv6 URL" -- an unterminated or misplaced bracket
+        'http://[',
+        'http://[::1',
+        'http://[:80',
+        'https://[',
+        '//[',
+        'http://user@[/',
+        'http://[::1]x/',
+        'http://a[b]c/',
+        'http://[[]]/',
+        'ftp://[',
+        # "... does not appear to be an IPv4 or IPv6 address" -- bracketed, but
+        # not an address
+        'http://[]',
+        'http://[]:80',
+        'http://[zzz]',
+        'http://[1:2:3:4:5:6:7:8:9]',
+        # "Invalid port ..." -- nothing to do with the host
+        'http://example.com:notaport/',
+        'http://example.com:99999999999/',
+        # "Invalid host ..." -- characters furl will not accept in a host
+        'http://%zz/',
+        # UnicodeEncodeError out of the idna codec -- a lone surrogate in the
+        # host. Found by probing furl with 200,000 random short strings and then
+        # targeted ones; it is the only non-"ValueError" spelling that turned up,
+        # and it is caught anyway because UnicodeEncodeError IS a ValueError.
+        # Reachable: json.loads turns a "\\ud800" escape in remote actor or
+        # object JSON into exactly this string.
+        'http://\ud800/',
+        'http://\udfff.example.com/',
+    ]
+
+    @pytest.mark.parametrize('href', MALFORMED)
+    def test_it_does_not_raise(self, href):
+        allowlist_html(f'<a href="{href}">x</a>', test_env={'fn_string': 'fn-test'})
+
+    @pytest.mark.parametrize('href', MALFORMED)
+    def test_the_href_is_left_alone(self, href):
+        """Left alone, not blanked. An unparseable authority is not a script
+        URL, and the scheme test has already passed by the time furl is asked."""
+        result = allowlist_html(f'<a href="{href}">x</a>', test_env={'fn_string': 'fn-test'})
+        assert href_of(result) == href
+
+    @pytest.mark.parametrize('href', MALFORMED)
+    def test_the_rest_of_the_document_still_renders(self, href):
+        """The point of the defect: one bad anchor took the whole post with it."""
+        html = f'<p>before</p><a href="{href}">x</a><p>after</p>'
+        result = allowlist_html(html, test_env={'fn_string': 'fn-test'})
+        assert 'before' in result and 'after' in result
+
+    @pytest.mark.parametrize('href', MALFORMED)
+    def test_markdown_survives_it_too(self, href):
+        result = markdown_to_html(f'text <a href="{href}">x</a> more',
+                                  test_env={'fn_string': 'fn-test'})
+        assert 'text' in result and 'more' in result
+
+    @pytest.mark.parametrize('href', [
+        'javascript://[',
+        ' javascript://[::1',
+        'vbscript://[',
+        'data://[',
+        'jav\tascript://[',
+    ])
+    def test_an_unsafe_scheme_is_still_blanked_when_the_host_is_unparseable(self, href):
+        """A hostile scheme wins over an unparseable host: these are blanked,
+        not left alone.
+
+        The scheme test also runs BEFORE furl is asked for a host, so a hostile
+        href never reaches furl or rewrite_href. That ORDERING is defence in
+        depth and this suite cannot observe it: allowlist_html sets
+        instance_domains to [] under test_env, so the host comparison is always
+        False and swapping the two tests changes no outcome here. Confirmed by
+        mutation, not assumed -- see the f5_scheme_test_after_host row in the
+        task report. What this test does pin is the outcome: unsafe scheme plus
+        unparseable host is blanked."""
+        result = allowlist_html(f'<a href="{href}">x</a>', test_env={'fn_string': 'fn-test'})
+        assert href_of(result) == ''
+
+    @pytest.mark.parametrize('href', [
+        'http://[::1]:80/',
+        'http://[::1]/',
+        'http://[fe80::1%25eth0]/',
+        'http://[::ffff:1.2.3.4]/',
+        'https://example.com:8443/',
+    ])
+    def test_a_well_formed_authority_is_still_parsed_and_kept(self, href):
+        """The guard must swallow furl's refusal, not furl's answer: a URL furl
+        parses fine must still reach the instance_domains comparison."""
+        result = allowlist_html(f'<a href="{href}">ok</a>', test_env={'fn_string': 'fn-test'})
+        assert href_of(result) == href
+
+
+class TestUrlHost:
+    """url_host must swallow furl's REFUSAL without swallowing its ANSWER.
+
+    Tested directly because allowlist_html cannot reach the difference: it sets
+    instance_domains to [] under test_env, so `host in instance_domains` is
+    False whatever the host is, and a url_host that always returned None would
+    leave the whole suite green. That is not hypothetical -- mutating url_host
+    to `return None` unconditionally passed 829 tests before this class existed.
+    """
+
+    @pytest.mark.parametrize('url,host', [
+        ('https://example.com/path', 'example.com'),
+        ('http://sub.example.com:8443/x', 'sub.example.com'),
+        ('https://user:pw@example.com/', 'example.com'),
+        ('http://[::1]:80/', '[::1]'),
+        ('http://[::ffff:1.2.3.4]/', '[::ffff:1.2.3.4]'),
+    ])
+    def test_a_parseable_host_is_returned(self, url, host):
+        assert url_host(url) == host
+
+    @pytest.mark.parametrize('url', TestAMalformedHrefDoesNotDestroyTheDocument.MALFORMED)
+    def test_a_host_furl_refuses_becomes_none(self, url):
+        assert url_host(url) is None
+
+    @pytest.mark.parametrize('url', ['mailto:someone@example.com', '/relative/path',
+                                     'relative.html', '#fragment', ''])
+    def test_a_url_with_no_authority_has_no_host(self, url):
+        """None here is furl's own answer, not the guard's -- the caller has
+        always handled it, which is why None is the right thing to return for a
+        refusal too."""
+        assert url_host(url) is None
 
 
 if __name__ == '__main__':
