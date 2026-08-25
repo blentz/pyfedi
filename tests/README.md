@@ -108,6 +108,98 @@ test_no_csp_header_on_a_304_response in tests/test_request_hooks.py -- listed
 here as an example of the kind of gap this paragraph is warning about, and of
 what closing one looks like.)
 
+## The coverage ratchet
+
+Per-module floors live in `coverage_floors.ini`. Floors only ever RISE; raising
+one is a sub-project's deliverable, and lowering one to make a run pass defeats
+the ratchet. A module with no entry is ignored, so unfinished modules block
+nobody.
+
+    ./run_tests.sh tests/ -q --ignore=tests/test_activitypub_util.py --cov=app --cov-report=json
+    podman-compose -f compose.test.yaml exec -T test-runner \
+        python tests/check_coverage_floors.py coverage.json coverage_floors.ini
+
+coverage.py's own `fail_under` is a single global number, which is why the
+per-module check is a script.
+
+## Fixtures for external services
+
+- `http_mock` — respx router over outbound httpx. `assert_all_called=True`, so a
+  registered-but-unused route fails the test.
+- `federation_peer(handle)` — webfinger + actor responses for a remote handle.
+  The domain must NOT end in `.local`: `get_request()` rejects those via
+  `is_invalid_get_request_uri()` before respx sees them. Pass
+  `include_inbox=True` to also register the actor's inbox for a POST.
+- `s3_bucket` — a moto-backed bucket, yields the bucket name.
+- `redis_double` — fakeredis patched over `app.utils.get_redis_connection`. Note
+  the rate limiter and Celery app are built from `Config` at import time and are
+  not affected by it.
+- Celery runs eagerly under test, with `eager_propagates` so a failing task raises
+  rather than being swallowed. Configured in the `app` fixture, on `celery.conf`
+  directly (**not** `TestConfig` attributes), setting BOTH the old- and
+  new-style key names together in one `celery.conf.update(...)` call:
+  `task_always_eager` / `CELERY_ALWAYS_EAGER` and `task_eager_propagates` /
+  `CELERY_EAGER_PROPAGATES_EXCEPTIONS`. Two independent Celery quirks make
+  anything simpler fragile:
+
+  1. `config.py`'s `CELERY_BROKER_URL` is itself an old-style name, so by the
+     time `app/__init__.py:175`'s `celery.conf.update(app.config)` has run,
+     `celery.conf` already holds old-format keys. Celery's `Settings` object
+     refuses to mix old- and new-format keys once a first real access
+     finalizes it with one format dominant
+     (`celery.exceptions.ImproperlyConfigured: "Cannot mix new setting names
+     with old setting names"`) — setting only the modern `task_always_eager`
+     name can raise exactly that.
+  2. Setting only the *old*-style names is not reliably enough either:
+     Celery's built-in defaults dict always carries a literal
+     `task_always_eager` (and `task_eager_propagates`) key of its own, with
+     value `False`. If anything else causes `celery.conf` to finalize before
+     this fixture runs — e.g. a module-level `@celery.task`-decorated
+     function, decorated at *import* time, and pytest imports every test
+     module during collection before any fixture executes — a lookup by the
+     new-style name finds Celery's own literal default first and never falls
+     back to checking the old-style alias. The old-style write then silently
+     has no effect, and whether the eager flag "works" ends up depending on
+     which test files pytest happened to collect first. Observed concretely
+     via `tests/test_instance_util.py`, whose `@celery.task def bulk_follow`
+     (`app/instance/util.py`) triggers exactly this if it is imported before
+     the `app` fixture has run.
+
+  Providing both spellings in the same `update()` call sidesteps both
+  problems: if this fixture is what finalizes `celery.conf`, Celery's own
+  mixing check explicitly allows a setting provided under both names at once;
+  if something else already finalized `celery.conf` first, the new-style
+  write here lands as a literal key that a `ChainMap` lookup always checks
+  before the defaults layer, so it wins regardless of collection order.
+
+### Eager Celery makes outbound federation happen inline — and it fails silently
+
+Read this before writing any test that federates.
+
+With `task_always_eager`, `.delay()` no longer enqueues; it runs the task in this
+process. `task_selector` calls `.delay()`, and `send_post_request` in turn calls
+`post_request.delay()`, so a test that triggers a follow, a vote or a post really
+does attempt the outbound HTTP POST during the test.
+
+That POST does **not** fail loudly when it goes nowhere.
+`app/activitypub/signature.py`'s `post_request` wraps the request in
+`except Exception` and records the failure as an `ActivityPubLog` row instead of
+propagating it. respx's "unexpected request" error is therefore swallowed, and a
+test whose federation went nowhere still passes.
+
+So a green test proves nothing about delivery on its own. To assert an activity
+was actually sent, do one of:
+
+- pass `include_inbox=True` to `federation_peer`, so `assert_all_called=True`
+  fails the test if the POST never happened; or
+- assert on the `ActivityPubLog` row the send produced.
+
+`task_eager_propagates` does not help here: it re-raises what the *task* raises,
+and `post_request` raises nothing.
+
+Prove a fixture by driving real application code through it. A test asserting that
+fakeredis stores what you put in it tests fakeredis, not PieFed.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
