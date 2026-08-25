@@ -11,17 +11,9 @@ rather than propagate the exception search_for_user raises.
 
 import pytest
 
-from tests.factories import make_instance, make_site, make_user
+from tests.factories import make_instance, make_user
 
-
-@pytest.fixture(autouse=True)
-def site(db_session):
-    """before_request (registered by the app factory as of the app-factory-request-wiring
-    change) populates g.site for every request except /inbox and /static/, which requires
-    a Site row with id 1 to exist -- see make_site()'s docstring. Not needed when this file
-    was written, since the app built by the conftest `app` fixture did not yet register
-    that hook and g.site was simply left unset."""
-    return make_site()
+pytestmark = pytest.mark.usefixtures('site')
 
 
 @pytest.fixture
@@ -112,16 +104,10 @@ def test_banned_instance_returns_404_not_500(app, db_session, resolve_spy):
     assert response.status_code == 404
 
 
-# NOT TESTED HERE: that a successfully resolved handle renders its profile page.
-#
-# @app.before_request lives in pyfedi.py, outside create_app(), so an app built by
-# the conftest fixture never registers it and `g.site` is unset. Rendering any full
-# page therefore raises AttributeError under test, for every route in this codebase,
-# not just this one. Covering it means either registering that handler in the app
-# factory or replicating it in the fixture — a change with a blast radius well
-# beyond this feature.
+# NOT TESTED HERE: that a successfully resolved handle renders its profile page --
+# Flask handing the resolved User to the pre-existing show_profile() is outside
+# what this feature touched.
 #
 # What the tests above do cover is every branch this feature added: the two guards
 # that must not resolve, the lookup being attempted when they pass, and the banned
-# instance exception becoming a 404. The only uncovered step is Flask handing the
-# resolved User to the pre-existing show_profile(), which this change did not touch.
+# instance exception becoming a 404.
