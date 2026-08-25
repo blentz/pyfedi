@@ -25,15 +25,32 @@ unchanged and now pass. No test in this file is expected to fail.
 import os
 from io import BytesIO
 
+import httpx
 import pytest
 from py_svg_hush import filter_svg
 from werkzeug.datastructures import FileStorage
+from werkzeug.exceptions import BadRequest
 
+from app.community.util import save_banner_file, save_icon_file
 from app.shared.upload import process_upload
 from app.utils import (MAX_SVG_SIZE, is_valid_xml_utf8, refuse_svg_entity_declarations,
-                       sanitize_svg, sanitize_svg_bytes)
+                       sanitize_svg, sanitize_svg_bytes, url_to_thumbnail_file)
 
 KEEP_DATA_URL_MIME_TYPES = {"image": ["jpeg", "png", "gif", "webp", "avif"]}
+
+# Every SVG-to-disk path in app/ writes below this, relative to the repo root,
+# which is the working directory the app runs from. It is gitignored; the tests
+# that write here clean up after themselves.
+MEDIA_ROOT = 'app/static'
+
+
+def files_under(root: str) -> list:
+    """Every regular file below `root`, for before/after comparison."""
+    found = []
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for name in filenames:
+            found.append(os.path.join(dirpath, name))
+    return found
 
 # A well-formed SVG whose <!DOCTYPE> internal subset contains a '>' inside a
 # quoted entity value. XML 1.0 section 2.8 permits that, and lxml parses this
@@ -260,6 +277,18 @@ ILLUSTRATOR_DOCTYPE = (
     b'"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">'
 )
 
+# The same amplifying document in both UTF-16 byte orders. XML 1.0 section 4.3.3
+# requires a UTF-16 entity to begin with a byte order mark, and py-svg-hush
+# refuses UTF-16 without one, so these two are the whole of the reachable
+# UTF-16 surface. Neither contains the ASCII bytes b'<!ENTITY', which is what
+# made them invisible to the refusal scan; 1000 references to a 1 KB entity
+# amplify a ~6 KB input into ~1 MB of output.
+_UTF16_ENTITY_SOURCE = ('<!DOCTYPE svg [<!ENTITY a "' + 'A' * 1000 + '">]>'
+                        '<svg xmlns="http://www.w3.org/2000/svg"><text>' +
+                        '&a;' * 1000 + '</text></svg>')
+UTF16_ENTITY_SVG_LE = b'\xff\xfe' + _UTF16_ENTITY_SOURCE.encode('utf-16-le')
+UTF16_ENTITY_SVG_BE = b'\xfe\xff' + _UTF16_ENTITY_SOURCE.encode('utf-16-be')
+
 
 class TestRefuseSvgEntityDeclarations:
     """PieFed layer: uploaded SVGs that declare an XML entity are refused.
@@ -404,6 +433,66 @@ class TestRefuseSvgEntityDeclarations:
         with pytest.raises(ValueError, match='entity declarations'):
             refuse_svg_entity_declarations(DOCTYPE_GT_IN_QUOTED_VALUE)
 
+    @pytest.mark.parametrize('encoded', [
+        pytest.param(UTF16_ENTITY_SVG_LE, id='utf-16-le-bom'),
+        pytest.param(UTF16_ENTITY_SVG_BE, id='utf-16-be-bom'),
+    ])
+    def test_a_utf16_svg_is_refused(self, encoded):
+        """SECURITY. The scan reads ASCII bytes, so `<!ENTITY` encoded as UTF-16
+        is invisible to it -- the literal byte string is simply not present:
+
+            b'<!ENTITY' in svg.encode('utf-16')  ->  False
+
+        and the declaration sailed through untouched. filter_svg DOES accept
+        UTF-16 (it transcodes to UTF-8 on output), so this was a real bypass of
+        the entity refusal, and combined with the flat-expansion amplification
+        pinned in TestFilterSvgIsSafeWithoutPreStripping it is reachable
+        amplification, not a theoretical gap.
+
+        The fix refuses UTF-16 outright rather than decoding it first. Nothing
+        in PieFed produces or expects a UTF-16 SVG, and filter_svg's output is
+        UTF-8 regardless, so a UTF-16 upload was never stored as UTF-16 anyway.
+        """
+        assert b'<!ENTITY' not in encoded, 'the ASCII scan cannot see this declaration'
+        with pytest.raises(ValueError, match='UTF-16'):
+            refuse_svg_entity_declarations(encoded)
+
+    def test_a_clean_utf16_svg_is_refused_too(self):
+        """The refusal is on the encoding, not on what the document contains --
+        that is what makes it sound. A UTF-16 document with nothing hostile in
+        it is refused as well, and that availability cost is the price of not
+        having to decode attacker-chosen bytes before scanning them."""
+        clean = ('<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>').encode('utf-16')
+        with pytest.raises(ValueError, match='UTF-16'):
+            refuse_svg_entity_declarations(clean)
+
+    def test_a_utf8_bom_is_not_mistaken_for_a_utf16_one(self):
+        """A UTF-8 BOM (EF BB BF) is ASCII-compatible from byte three onwards,
+        so the scan works on it and it must not be caught by the UTF-16 guard.
+        filter_svg accepts such a document."""
+        assert refuse_svg_entity_declarations(
+            b'\xef\xbb\xbf<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>') is None
+
+    def test_a_legacy_eight_bit_encoding_is_still_accepted(self):
+        """REGRESSION GUARD for the narrowness of the UTF-16 refusal.
+
+        Refusing everything that does not decode as UTF-8 would also refuse a
+        declared ISO-8859-1 document, which filter_svg accepts today. It needs
+        no special handling: every ASCII-compatible encoding spells `<!ENTITY`
+        with exactly those bytes, so the scan is already sound over it.
+        """
+        latin1 = ('<?xml version="1.0" encoding="ISO-8859-1"?>'
+                  '<svg xmlns="http://www.w3.org/2000/svg"><text>caf\xe9</text></svg>'
+                  ).encode('latin-1')
+        assert refuse_svg_entity_declarations(latin1) is None
+
+    def test_an_entity_in_a_legacy_eight_bit_encoding_is_still_refused(self):
+        latin1 = ('<!DOCTYPE svg [<!ENTITY e "caf\xe9">]>'
+                  '<svg xmlns="http://www.w3.org/2000/svg"><text>&e;</text></svg>'
+                  ).encode('latin-1')
+        with pytest.raises(ValueError, match='entity declarations'):
+            refuse_svg_entity_declarations(latin1)
+
 
 class TestFilterSvgIsSafeWithoutPreStripping:
     """py-svg-hush's own behaviour, pinned because sanitize_svg_bytes relies on it.
@@ -438,15 +527,85 @@ class TestFilterSvgIsSafeWithoutPreStripping:
         result = filter_svg(raw, KEEP_DATA_URL_MIME_TYPES)
         assert b'root:' not in result
 
-    def test_a_nested_entity_reference_is_refused_outright(self):
-        """The billion-laughs primitive. An entity whose value references another
-        entity is refused at depth 2, so expansion cannot be amplified at all --
-        there is no expansion budget to exhaust."""
-        raw = (b'<!DOCTYPE lolz [<!ENTITY lol "lol">'
-               b'<!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">]>'
-               b'<svg xmlns="http://www.w3.org/2000/svg"><text>&lol2;</text></svg>')
+    def test_a_nested_entity_reference_expands_within_a_budget(self):
+        """Nesting is NOT refused outright. An expansion budget is what stops
+        billion laughs, and this test names the budget rather than a property
+        py-svg-hush does not have.
+
+        Measured against the installed py-svg-hush: expanding ONE entity's value
+        may itself trigger at most TWO further expansions, counted
+        transitively. So an entity value holding two references expands, and one
+        holding three does not; a chain of three entities expands and a chain of
+        four does not. The budget is per top-level expansion, not global -- ten
+        independent depth-2 entities all expand in the same document.
+
+        An earlier revision of this test asserted that a nested reference was
+        "refused outright". It passed, but for the wrong reason: the fanout-ten
+        payload it used blows the budget on its first entity, so the test would
+        have kept passing even if nesting had been permitted to arbitrary depth.
+        """
+        expands = (b'<!DOCTYPE svg [<!ENTITY a "AAAA"><!ENTITY b "&a;&a;">]>'
+                   b'<svg xmlns="http://www.w3.org/2000/svg"><text>&b;</text></svg>')
+        assert b'AAAAAAAA' in filter_svg(expands, KEEP_DATA_URL_MIME_TYPES)
+
+        chain_of_three = (b'<!DOCTYPE svg [<!ENTITY a "AAAA"><!ENTITY b "&a;">'
+                          b'<!ENTITY c "&b;">]>'
+                          b'<svg xmlns="http://www.w3.org/2000/svg"><text>&c;</text></svg>')
+        assert b'AAAA' in filter_svg(chain_of_three, KEEP_DATA_URL_MIME_TYPES)
+
+        over_budget = (b'<!DOCTYPE svg [<!ENTITY a "AAAA"><!ENTITY b "&a;&a;&a;">]>'
+                       b'<svg xmlns="http://www.w3.org/2000/svg"><text>&b;</text></svg>')
         with pytest.raises(ValueError, match='XML parsing error'):
-            filter_svg(raw, KEEP_DATA_URL_MIME_TYPES)
+            filter_svg(over_budget, KEEP_DATA_URL_MIME_TYPES)
+
+        chain_of_four = (b'<!DOCTYPE svg [<!ENTITY a "AAAA"><!ENTITY b "&a;">'
+                         b'<!ENTITY c "&b;"><!ENTITY d "&c;">]>'
+                         b'<svg xmlns="http://www.w3.org/2000/svg"><text>&d;</text></svg>')
+        with pytest.raises(ValueError, match='XML parsing error'):
+            filter_svg(chain_of_four, KEEP_DATA_URL_MIME_TYPES)
+
+    def test_billion_laughs_exceeds_the_budget_rather_than_being_banned(self):
+        """Why the classic payload never gets off the ground: a fanout of ten
+        exceeds the two-expansion budget on the very first nested entity, so it
+        is refused at depth 2 just as at depth 9. That is the budget doing the
+        work, not a ban on nesting."""
+        depth2 = (b'<!DOCTYPE lolz [<!ENTITY lol "lol">'
+                  b'<!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">]>'
+                  b'<svg xmlns="http://www.w3.org/2000/svg"><text>&lol2;</text></svg>')
+        with pytest.raises(ValueError, match='XML parsing error'):
+            filter_svg(depth2, KEEP_DATA_URL_MIME_TYPES)
+
+    def test_a_flat_expansion_amplifies_and_is_bounded_only_by_a_total_budget(self):
+        """The amplification that IS real, recorded honestly.
+
+        The per-entity-value budget above does not apply to references in
+        ELEMENT CONTENT: each one is expanded independently, so a single
+        non-nested entity referenced many times amplifies without limit until a
+        TOTAL expansion budget of 256 MiB is hit. That budget was measured
+        exactly against the installed py-svg-hush -- 255.990 MiB of expansion
+        succeeds and 256.010 MiB is refused -- and a 787 KB input reaches it, so
+        PieFed's 10 MB MAX_SVG_SIZE input cap does not bound the output.
+
+        This test proves the amplification exists using a SMALL document: about
+        4 KB in, about 1 MB out, a factor of roughly 250. The 256 MiB figure
+        itself is exercised only by
+        TestFilterSvgExpansionBudgetIsExpensive::test_the_total_expansion_budget_is_256_mib,
+        which is skipped unless PIEFED_EXPENSIVE_SVG_TESTS is set, because
+        reaching it costs about half a gigabyte of RSS.
+
+        None of this is reachable through PieFed's own SVG entry points --
+        refuse_svg_entity_declarations rejects the declaration before filter_svg
+        sees it -- which is exactly why that refusal must not have an encoding
+        blind spot. See TestRefuseSvgEntityDeclarations' UTF-16 cases.
+        """
+        raw = (b'<!DOCTYPE svg [<!ENTITY a "' + b'A' * 1000 + b'">]>'
+               b'<svg xmlns="http://www.w3.org/2000/svg"><text>' +
+               b'&a;' * 1000 + b'</text></svg>')
+        result = filter_svg(raw, KEEP_DATA_URL_MIME_TYPES)
+
+        assert len(raw) < 5 * 1024, 'the input for this test must stay small'
+        assert len(result) > 1000 * 1000
+        assert len(result) > 200 * len(raw)
 
     def test_an_entity_cannot_smuggle_a_script_element(self):
         """Entity expansion happens before filtering, so an expanded <script>
@@ -485,6 +644,43 @@ class TestFilterSvgIsSafeWithoutPreStripping:
         result = filter_svg(DOCTYPE_GT_IN_QUOTED_VALUE, KEEP_DATA_URL_MIME_TYPES)
         assert b'script' not in result.lower()
         assert b'<svg' in result
+
+
+@pytest.mark.skipif(
+    not os.environ.get('PIEFED_EXPENSIVE_SVG_TESTS'),
+    reason='allocates ~500 MB of RSS; set PIEFED_EXPENSIVE_SVG_TESTS=1 to run',
+)
+class TestFilterSvgExpansionBudgetIsExpensive:
+    """The exact 256 MiB total expansion budget, measured rather than asserted.
+
+    Deliberately NOT part of the normal suite: proving this figure means
+    actually materialising a quarter of a gigabyte of expanded text, which
+    peaked at 505 MB RSS when measured. The cheap consequence of the same
+    budget -- that a small document amplifies by a factor of hundreds -- is
+    covered unconditionally by
+    TestFilterSvgIsSafeWithoutPreStripping::test_a_flat_expansion_amplifies_and_is_bounded_only_by_a_total_budget.
+
+    Run with:
+
+        PIEFED_EXPENSIVE_SVG_TESTS=1 ./run_tests.sh tests/test_utils_security.py -q
+    """
+
+    EXPANSION_BUDGET = 256 * 1024 * 1024
+
+    @staticmethod
+    def _document(expanded_bytes: int, unit: int = 1024) -> bytes:
+        return (b'<!DOCTYPE svg [<!ENTITY a "' + b'A' * unit + b'">]>'
+                b'<svg xmlns="http://www.w3.org/2000/svg"><text>' +
+                b'&a;' * (expanded_bytes // unit) + b'</text></svg>')
+
+    def test_the_total_expansion_budget_is_256_mib(self):
+        under = self._document(self.EXPANSION_BUDGET - 10 * 1024)
+        assert len(under) < 1024 * 1024, 'the INPUT is under 1 MB; only the output is huge'
+        assert len(filter_svg(under, KEEP_DATA_URL_MIME_TYPES)) > 255 * 1024 * 1024
+
+        over = self._document(self.EXPANSION_BUDGET + 10 * 1024)
+        with pytest.raises(ValueError, match='XML parsing error'):
+            filter_svg(over, KEEP_DATA_URL_MIME_TYPES)
 
 
 class TestSanitizeSvgBytes:
@@ -548,6 +744,20 @@ class TestSanitizeSvgBytes:
         svg = (b'<?xml version="1.0" encoding="UTF-8"?>'
                b'<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>')
         assert b'<rect/>' in sanitize_svg_bytes(svg)
+
+    @pytest.mark.parametrize('encoded', [
+        pytest.param(UTF16_ENTITY_SVG_LE, id='utf-16-le-bom'),
+        pytest.param(UTF16_ENTITY_SVG_BE, id='utf-16-be-bom'),
+    ])
+    def test_a_utf16_entity_svg_is_refused_rather_than_expanded(self, encoded):
+        """SECURITY, at the layer PieFed's callers actually use.
+
+        Without the UTF-16 guard this reached filter_svg with its declaration
+        intact and came back roughly 1 MB of expanded text -- a ~166x
+        amplification of a 6 KB input, and the entity refusal never saw a thing.
+        """
+        with pytest.raises(ValueError, match='UTF-16'):
+            sanitize_svg_bytes(encoded)
 
     def test_script_element_does_not_survive(self):
         svg = (b'<svg xmlns="http://www.w3.org/2000/svg">'
@@ -768,6 +978,16 @@ class TestSanitizeSvgFile:
         assert sanitize_svg(str(path)) is False
         assert not path.exists()
 
+    def test_a_utf16_file_does_not_survive_on_disk(self, app, tmp_path):
+        """SECURITY. The UTF-16 refusal has to reach the file layer too: this
+        used to be sanitised "successfully" -- filter_svg transcoded it and
+        expanded its entity -- with the declaration never examined."""
+        path = tmp_path / 'utf16.svg'
+        path.write_bytes(UTF16_ENTITY_SVG_LE)
+
+        assert sanitize_svg(str(path)) is False
+        assert not path.exists()
+
 
 class TestProcessUploadRejectsUnsanitizableSvg:
     """app/shared/upload.py's call site, driven for real.
@@ -853,8 +1073,187 @@ class TestProcessUploadRejectsUnsanitizableSvg:
 
     @staticmethod
     def _snapshot(root: str) -> list:
-        found = []
-        for dirpath, _dirnames, filenames in os.walk(root):
-            for name in filenames:
-                found.append(os.path.join(dirpath, name))
-        return found
+        return files_under(root)
+
+
+class TestSaveIconFileRejectsUnsanitizableSvg:
+    """app/community/util.py's save_icon_file, driven for real.
+
+    SECURITY. This is the avatar upload: app/user/routes.py:267 reaches it for
+    any logged-in user, and '.svg' is in its allowed_extensions. It saved the
+    uploaded bytes straight to the media root and then took the '.svg' branch
+    commented "svgs don't need to be resized", which skips the Pillow re-encode
+    -- so a hostile SVG was stored verbatim and served from this site's own
+    origin. Stored XSS, reachable by any account.
+
+    The rejection is abort(400), which is this function's own convention for an
+    upload it will not accept: it is what the disallowed-extension check at the
+    top and the trailing else both do, and it is the only way out of the
+    function that is not a File, since save_icon_file never returns None. A
+    caller's `if file:` cannot swallow it.
+    """
+
+    @staticmethod
+    def _upload(payload: bytes, filename: str = 'avatar.svg') -> FileStorage:
+        return FileStorage(stream=BytesIO(payload), filename=filename)
+
+    def test_a_hostile_svg_avatar_is_rejected(self, app):
+        with app.app_context():
+            with pytest.raises(BadRequest):
+                save_icon_file(self._upload(DOCTYPE_GT_IN_QUOTED_VALUE), 'users')
+
+    def test_a_utf16_svg_avatar_is_rejected(self, app):
+        with app.app_context():
+            with pytest.raises(BadRequest):
+                save_icon_file(self._upload(UTF16_ENTITY_SVG_LE), 'users')
+
+    def test_the_rejected_avatar_is_not_left_anywhere_under_the_media_root(self, app):
+        """The property that matters. Before the fix these bytes -- well-formed
+        XML with a live <script>, which a browser renders and runs -- were still
+        sitting under app/static/media/users/ when the request finished."""
+        before = files_under(MEDIA_ROOT)
+        with app.app_context():
+            with pytest.raises(BadRequest):
+                save_icon_file(self._upload(DOCTYPE_GT_IN_QUOTED_VALUE), 'users')
+        new_files = sorted(set(files_under(MEDIA_ROOT)) - set(before))
+
+        try:
+            for path in new_files:
+                with open(path, 'rb') as f:
+                    assert b'<script' not in f.read().lower(), \
+                        f'hostile payload survived at {path}'
+            assert new_files == [], f'rejected upload left files behind: {new_files}'
+        finally:
+            for path in new_files:
+                os.remove(path)
+
+    def test_a_clean_svg_avatar_is_stored_and_sanitized(self, app, db_session):
+        """The happy path is not collateral damage. db_session is required
+        because save_icon_file adds the File row to the session on success."""
+        payload = (b'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">'
+                   b'<script>alert(1)</script><rect width="1" height="1"/></svg>')
+        with app.app_context():
+            file = save_icon_file(self._upload(payload), 'users')
+            try:
+                with open(file.file_path, 'rb') as f:
+                    content = f.read()
+                assert b'script' not in content.lower()
+                assert b'<rect' in content
+            finally:
+                os.remove(file.file_path)
+
+
+class TestSaveBannerFileRejectsUnsanitizableSvg:
+    """app/community/util.py's save_banner_file, driven for real.
+
+    Same shape as save_icon_file and reachable the same way
+    (app/user/routes.py:283 is the profile cover image), but the pre-existing
+    behaviour was worse rather than better: save_banner_file has no '.svg'
+    branch at all, so after writing the upload to the media root it called
+    Image.open on it, Pillow raised UnidentifiedImageError, and the request
+    500ed -- leaving the hostile bytes on disk with nothing to clean them up.
+
+    Sanitising before that point means the payload is destroyed and the upload
+    refused with a 400. A CLEAN SVG banner still fails, because Image.open still
+    cannot read it; that is a pre-existing bug in listing '.svg' as an allowed
+    banner extension and is deliberately not changed here. Only the security
+    property is fixed.
+    """
+
+    @staticmethod
+    def _upload(payload: bytes, filename: str = 'cover.svg') -> FileStorage:
+        return FileStorage(stream=BytesIO(payload), filename=filename)
+
+    def test_a_hostile_svg_banner_is_rejected(self, app):
+        with app.app_context():
+            with pytest.raises(BadRequest):
+                save_banner_file(self._upload(DOCTYPE_GT_IN_QUOTED_VALUE), 'users')
+
+    def test_the_rejected_banner_is_not_left_anywhere_under_the_media_root(self, app):
+        before = files_under(MEDIA_ROOT)
+        with app.app_context():
+            with pytest.raises(BadRequest):
+                save_banner_file(self._upload(DOCTYPE_GT_IN_QUOTED_VALUE), 'users')
+        new_files = sorted(set(files_under(MEDIA_ROOT)) - set(before))
+
+        try:
+            for path in new_files:
+                with open(path, 'rb') as f:
+                    assert b'<script' not in f.read().lower(), \
+                        f'hostile payload survived at {path}'
+            assert new_files == [], f'rejected upload left files behind: {new_files}'
+        finally:
+            for path in new_files:
+                os.remove(path)
+
+
+class TestUrlToThumbnailFileDropsUnsanitizableSvg:
+    """app/utils.py's remote-thumbnail fetch.
+
+    REGRESSION GUARD for a crash path the entity refusal introduced.
+    url_to_thumbnail_file calls sanitize_svg_bytes directly, and that function
+    now raises ValueError on entity-bearing input where the old pre-strip
+    silently mangled the bytes instead. The exception propagated out of
+    url_to_thumbnail_file into edit_post uncaught, so a remote SVG carrying an
+    entity declaration crashed post editing.
+
+    A remote thumbnail that cannot be sanitised is dropped, which is what this
+    function already does with a thumbnail it cannot fetch and with a URL it
+    will not fetch: return None.
+    """
+
+    URL = 'https://thumbnails.example/hostile.svg'
+
+    @staticmethod
+    def _svg_response(payload: bytes) -> httpx.Response:
+        return httpx.Response(200, content=payload,
+                              headers={'content-type': 'image/svg+xml'})
+
+    def test_an_entity_bearing_remote_svg_is_dropped_rather_than_raising(self, app, http_mock):
+        http_mock.get(self.URL).mock(return_value=self._svg_response(DOCTYPE_GT_IN_QUOTED_VALUE))
+        with app.app_context():
+            assert url_to_thumbnail_file(self.URL) is None
+
+    def test_a_utf16_remote_svg_is_dropped_rather_than_raising(self, app, http_mock):
+        http_mock.get(self.URL).mock(return_value=self._svg_response(UTF16_ENTITY_SVG_LE))
+        with app.app_context():
+            assert url_to_thumbnail_file(self.URL) is None
+
+    def test_an_oversize_remote_svg_is_dropped_rather_than_raising(self, app, http_mock):
+        """The other ValueError sanitize_svg_bytes raises. Padding is a comment,
+        so the document stays well-formed."""
+        payload = (b'<svg xmlns="http://www.w3.org/2000/svg">'
+                   b'<!--' + b'A' * MAX_SVG_SIZE + b'--></svg>')
+        http_mock.get(self.URL).mock(return_value=self._svg_response(payload))
+        with app.app_context():
+            assert url_to_thumbnail_file(self.URL) is None
+
+    def test_the_dropped_svg_is_not_left_anywhere_under_the_media_root(self, app, http_mock):
+        http_mock.get(self.URL).mock(return_value=self._svg_response(DOCTYPE_GT_IN_QUOTED_VALUE))
+        before = files_under(MEDIA_ROOT)
+        with app.app_context():
+            assert url_to_thumbnail_file(self.URL) is None
+        new_files = sorted(set(files_under(MEDIA_ROOT)) - set(before))
+
+        try:
+            assert new_files == [], f'dropped thumbnail left files behind: {new_files}'
+        finally:
+            for path in new_files:
+                os.remove(path)
+
+    def test_a_clean_remote_svg_still_becomes_a_thumbnail(self, app, http_mock):
+        """The happy path is not collateral damage: a fetchable SVG is still
+        stored, with its script removed."""
+        payload = (b'<svg xmlns="http://www.w3.org/2000/svg">'
+                   b'<script>alert(1)</script><rect width="1" height="1"/></svg>')
+        http_mock.get(self.URL).mock(return_value=self._svg_response(payload))
+        with app.app_context():
+            file = url_to_thumbnail_file(self.URL)
+            assert file is not None
+            try:
+                with open(file.thumbnail_path, 'rb') as f:
+                    content = f.read()
+                assert b'script' not in content.lower()
+                assert b'<rect' in content
+            finally:
+                os.remove(file.thumbnail_path)
