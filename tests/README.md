@@ -16,8 +16,27 @@ Dispose of the containers when you are done:
 
 `run_tests.sh` starts the Postgres and Redis in `compose.test.yaml` with
 podman-compose, waits for Postgres to accept connections, applies migrations, and
-runs pytest. Container data lives in tmpfs on ports 5433 and 6380, so the test
-stack neither collides with nor outlives the dev stack in `compose.dev.yaml`.
+runs pytest. Container data lives in tmpfs, so nothing survives `--down` and no
+state leaks between runs.
+
+Neither service publishes a host port. `test-runner` reaches them over the compose
+network by name, so none is needed — and publishing one would stop two checkouts of
+this repo (a git worktree, for instance) from running tests at the same time, since
+the second stack could not bind the port. To inspect a running test database:
+
+    podman-compose -f compose.test.yaml exec test-db psql -U pyfedi pyfedi_test
+    podman-compose -f compose.test.yaml exec test-redis redis-cli
+
+## Two things that will otherwise waste your time
+
+**`--down` makes the next run slow.** It destroys the tmpfs volume, so the next
+run replays all ~269 migrations against an empty database instead of the usual
+no-op. Use it when you are finished, not between runs.
+
+**podman-compose names the project after the directory.** A second checkout gets a
+separate stack, and `./run_tests.sh --down` only stops the stack belonging to the
+directory you run it from. If a run stalls waiting for Postgres, check `podman ps`
+for another checkout's containers and stop that stack from its own directory.
 
 Environment comes from `.env.test`, exported before pytest starts. That matters
 because `app/__init__.py` builds the rate limiter and Celery app from `Config` at

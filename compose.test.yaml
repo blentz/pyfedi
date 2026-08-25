@@ -21,15 +21,20 @@ services:
       - synchronous_commit=off
     tmpfs:
       - /var/lib/postgresql/data
-    ports:
-      - "127.0.0.1:5433:5432"
+    # No published host ports on purpose. test-runner reaches these services over
+    # the compose network by name, so nothing needs a host port -- and publishing
+    # one would mean two checkouts of this repo (a git worktree, say) could never
+    # run tests at the same time, because the second stack cannot bind the port.
+    # That failure looks like Postgres hanging rather than a port clash.
+    #
+    # To inspect a running test database from the host:
+    #   podman-compose -f compose.test.yaml exec test-db psql -U pyfedi pyfedi_test
+    #   podman-compose -f compose.test.yaml exec test-redis redis-cli
     networks:
       - pf_test_network
 
   test-redis:
     image: docker.io/library/redis:6.2
-    ports:
-      - "127.0.0.1:6380:6379"
     networks:
       - pf_test_network
 
