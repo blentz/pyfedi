@@ -1,7 +1,9 @@
 import os
 import re
 
+import httpx
 import pytest
+import respx
 
 # Import app before config. config.py does `import app.constants`, which starts
 # loading the app package; app/__init__.py in turn does `from config import
@@ -11,6 +13,20 @@ import pytest
 # the same here so `from config import Config` below sees a fully-initialised
 # config module.
 import app  # noqa: F401
+
+# app.community.routes and app.activitypub.routes import from each other
+# (community.routes needs RsaKeys/send_post_request from activitypub.signature;
+# activitypub.routes needs show_community from community.routes). Whichever
+# package's __init__.py starts running first finishes cleanly; if
+# app.community starts first, it is still mid-import (show_community not yet
+# defined) when app.activitypub.routes asks for it, raising a circular
+# ImportError. Priming app.activitypub here, before pytest collects any test
+# module, fixes the winning order once for the whole session -- otherwise it
+# depends on which test file pytest happens to alphabetically collect first
+# (e.g. a bare `from app.instance.util import ...` at module level hits this,
+# because app.instance.routes reaches app.community before app.activitypub
+# does).
+import app.activitypub.signature  # noqa: F401
 from config import Config
 
 TEST_DATABASE_URL = os.environ.get('TEST_DATABASE_URL')
@@ -124,6 +140,73 @@ def site(db_session):
     """
     from tests.factories import make_site
     return make_site()
+
+
+@pytest.fixture
+def http_mock():
+    """A respx router intercepting all outbound httpx traffic.
+
+    assert_all_called=True means a test that registers a route it never exercises
+    fails, rather than passing while silently testing less than it claims.
+    """
+    with respx.mock(assert_all_called=True) as router:
+        yield router
+
+
+@pytest.fixture
+def federation_peer(http_mock):
+    """Serve webfinger and actor responses for a remote handle.
+
+    Returns a callable: federation_peer('wakko@mastodon.cloud') -> actor dict.
+
+    The domain must not end in '.local' -- get_request() rejects those via
+    is_invalid_get_request_uri() before respx ever sees the request.
+
+    The payload shape follows docs/activitypub_examples/users.md rather than being
+    invented, so a test passing here means the code handles what real servers send.
+
+    include_inbox=True (the default) also registers a POST route for the actor's
+    inbox, for tests that exercise an actual delivery (e.g. app.activitypub.
+    signature.send_post_request called directly, or any path running with
+    current_app.debug True so app.shared.tasks.task_selector executes a task
+    inline rather than handing it to Celery's .delay()). A caller whose code path
+    only resolves the actor -- never delivers to it -- should pass
+    include_inbox=False, since http_mock's assert_all_called=True fails a test
+    that registers a route it never calls.
+    """
+    def register(handle, include_inbox=True):
+        name, domain = handle.lstrip('@').split('@')
+        actor_url = f'https://{domain}/users/{name}'
+        actor = {
+            '@context': 'https://www.w3.org/ns/activitystreams',
+            'type': 'Person',
+            'id': actor_url,
+            'preferredUsername': name,
+            'name': name,
+            'inbox': f'{actor_url}/inbox',
+            'outbox': f'{actor_url}/outbox',
+            'followers': f'{actor_url}/followers',
+            'publicKey': {
+                'id': f'{actor_url}#main-key',
+                'owner': actor_url,
+                'publicKeyPem': '-----BEGIN PUBLIC KEY-----\nnot-a-real-key\n-----END PUBLIC KEY-----\n',
+            },
+        }
+
+        http_mock.get(f'https://{domain}/.well-known/webfinger').mock(
+            return_value=httpx.Response(200, json={
+                'subject': f'acct:{name}@{domain}',
+                'links': [{'rel': 'self',
+                           'type': 'application/activity+json',
+                           'href': actor_url}],
+            }))
+        http_mock.get(actor_url).mock(return_value=httpx.Response(200, json=actor))
+        if include_inbox:
+            http_mock.post(f'{actor_url}/inbox').mock(return_value=httpx.Response(202))
+
+        return actor
+
+    return register
 
 
 @pytest.fixture
