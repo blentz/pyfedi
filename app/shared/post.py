@@ -493,7 +493,12 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         if final_ext == '.avif':
             import pillow_avif  # NOQA  # do not remove
         if final_ext == '.svg':
-            sanitize_svg(final_place)
+            # An SVG that cannot be sanitized is rejected: the '.svg' branch
+            # below skips the Pillow re-encode, so nothing downstream would
+            # repair or re-check the file. sanitize_svg has already destroyed it
+            # by the time it returns False.
+            if not sanitize_svg(final_place):
+                raise Exception('SVG file could not be sanitized')
 
         Image.MAX_IMAGE_PIXELS = 89478485
 

@@ -4070,6 +4070,49 @@ def orjson_response(obj, status=200, headers=None):
     )
 
 
+# The complement of the XML 1.0 (Fifth Edition) section 2.2 Char production:
+#
+#   Char ::= #x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]
+#
+# A single search therefore finds any character XML cannot represent. Matching on
+# code points rather than on byte patterns is what makes the check unbypassable:
+# a forbidden code point has exactly one code point value however it was spelled.
+# Lone surrogates are included because a Python str can hold them and XML cannot.
+_XML_CHAR_RANGES = (
+    (0x9, 0x9), (0xA, 0xA), (0xD, 0xD),
+    (0x20, 0xD7FF), (0xE000, 0xFFFD), (0x10000, 0x10FFFF),
+)
+_XML_FORBIDDEN_CHAR_RE = re.compile(
+    '[^' + ''.join(f'{chr(lo)}-{chr(hi)}' for lo, hi in _XML_CHAR_RANGES) + ']'
+)
+
+
+def is_valid_xml_utf8(pystring):
+    """Check if a string is valid UTF-8 XML character data.
+
+    Accepts str or bytes.
+
+    bytes must decode as *strict* UTF-8. RFC 3629 section 3 forbids overlong
+    forms, stray continuation bytes, truncated sequences, surrogate encodings and
+    anything above U+10FFFF; none of them denotes a code point, so a decode
+    failure is an outright rejection. Decoding strictly is also what closes the
+    respelling bypass RFC 3629 section 10 describes: a forbidden code point
+    re-encoded as a longer sequence decodes to the same code point and is caught
+    by the same test as its shortest form.
+
+    Every resulting code point must then satisfy the XML 1.0 5e section 2.2 Char
+    production. A str is checked directly, without an encode/decode round trip,
+    so a lone surrogate is reported invalid instead of being silently discarded.
+    """
+    if isinstance(pystring, bytes):
+        try:
+            pystring = pystring.decode('utf-8')
+        except UnicodeDecodeError:
+            return False
+
+    return _XML_FORBIDDEN_CHAR_RE.search(pystring) is None
+
+
 def archive_post(post_id: int, s3_connection):
     session = get_task_session()  # noqa: F811
     try:
@@ -4598,22 +4641,75 @@ def is_invalid_get_request_uri(uri):
         return True
 
 
+MAX_SVG_SIZE = 10 * 1024 * 1024  # 10 MB
+
+
+def refuse_svg_markup_declarations(svg_bytes: bytes) -> None:
+    """Raise ValueError if an uploaded SVG carries any markup declaration.
+
+    An SVG offered for upload has no legitimate need for a DOCTYPE or an entity,
+    element, attlist or notation declaration, so their presence is grounds to
+    refuse the file. Refusing is strictly safer than the stripping this replaced:
+    it cannot corrupt valid content, and it cannot be defeated by quoting, which
+    a regex looking for a declaration's closing '>' can be -- XML 1.0 section 2.8
+    permits '>' inside a quoted EntityValue, so `<!ENTITY g "x>y">` ends a
+    non-greedy `<\\!.*?>` match early and hands the parser a broken document.
+
+    The scan is exact rather than heuristic. XML 1.0 section 2.4 forbids a literal
+    '<' in character data and in attribute values, so in a well-formed document a
+    raw '<!' can only begin a markup declaration, a comment or a CDATA section.
+    Comments and CDATA sections are skipped over by their terminators, '-->' and
+    ']]>', neither of which can be quoted away the way a declaration's '>' can.
+    Anything else beginning '<!' is a declaration and is refused.
+
+    An unterminated comment or CDATA section is refused too: it is not well-formed
+    XML, so there is no valid document to preserve.
+
+    Nothing is modified -- this only inspects -- so no valid SVG can be damaged by
+    it. The one false positive it can produce is a declaration-lookalike inside a
+    processing instruction, which is refused rather than accepted; that is the
+    safe direction and no real SVG contains one.
+    """
+    i = 0
+    while True:
+        i = svg_bytes.find(b'<!', i)
+        if i == -1:
+            return
+        if svg_bytes.startswith(b'<!--', i):
+            end = svg_bytes.find(b'-->', i + 4)
+            if end == -1:
+                raise ValueError('SVG contains an unterminated comment')
+            i = end + 3
+        elif svg_bytes.startswith(b'<![CDATA[', i):
+            end = svg_bytes.find(b']]>', i + 9)
+            if end == -1:
+                raise ValueError('SVG contains an unterminated CDATA section')
+            i = end + 3
+        else:
+            raise ValueError(
+                'SVG markup declarations (DOCTYPE, ENTITY) are not allowed')
+
+
 def sanitize_svg_bytes(svg_bytes: bytes) -> bytes:
-    # Sanitize SVGs to remove potentially dangerous elements.
+    """Sanitize an SVG, or raise ValueError if it cannot be sanitized.
 
-    max_svg_size = 10 * 1024 * 1024  # 10 MB
-    if len(svg_bytes) > max_svg_size:
-        raise ValueError(f"SVG file too large: {len(svg_bytes)} bytes (max {max_svg_size})")
+    Two refusals of our own -- oversize input and markup declarations -- and then
+    py-svg-hush's filter_svg, which does the actual sanitizing. Nothing here
+    rewrites the bytes before filter_svg sees them: byte-level pre-processing was
+    what previously both corrupted valid documents and let hostile ones through.
 
-    # Strip all XML declarations (<!...) to prevent XXE/billion laughs attacks
-    svg_bytes = re.sub(rb'<\!.*?>', rb'', svg_bytes, flags=re.DOTALL)
+    filter_svg is safe on its own against the attacks the old pre-stripping was
+    there to prevent. Verified by execution against this exact version: a SYSTEM
+    entity naming file:/// or http:// is never dereferenced (it expands to
+    nothing), an external DTD is never fetched, and an entity whose value
+    references another entity is refused outright, so entity expansion cannot be
+    amplified. The declaration refusal above is defence in depth, not a
+    dependency of filter_svg's safety.
+    """
+    if len(svg_bytes) > MAX_SVG_SIZE:
+        raise ValueError(f"SVG file too large: {len(svg_bytes)} bytes (max {MAX_SVG_SIZE})")
 
-    # Strip all XML processing instructions (<?...?>) as they can also be attack vectors
-    svg_bytes = re.sub(rb'<\?.*?\?>', rb'', svg_bytes, flags=re.DOTALL)
-
-    # Additional cleanup
-    svg_bytes = re.sub(rb'\[>', rb'', svg_bytes)
-    svg_bytes = re.sub(rb'\]>', rb'', svg_bytes)
+    refuse_svg_markup_declarations(svg_bytes)
 
     # Allow common image MIME types in data URLs
     keep_data_url_mime_types = {
@@ -4623,10 +4719,38 @@ def sanitize_svg_bytes(svg_bytes: bytes) -> bytes:
     return filter_svg(svg_bytes, keep_data_url_mime_types)
 
 
+def discard_unsanitized_svg(filepath: str) -> None:
+    """Destroy an SVG that could not be sanitized.
+
+    Truncate first, then unlink: truncation is what actually destroys the
+    payload, and it has already happened if the unlink then fails for a reason
+    of its own (a read-only directory, say).
+
+    Only a regular file is touched. A missing path or a directory is left alone
+    rather than being created or removed, so sanitize_svg's failure cases stay
+    side-effect-free apart from the one file it was asked to clean.
+    """
+    if not os.path.isfile(filepath):
+        return
+    try:
+        with open(filepath, 'wb'):
+            pass
+        os.remove(filepath)
+    except OSError as e:
+        current_app.logger.error(f"Could not discard unsanitized SVG {filepath}: {e}")
+
+
 def sanitize_svg(filepath: str) -> bool:
     """
     Sanitize an SVG file using py-svg-hush to remove potentially dangerous elements.
     Returns True if sanitization was successful, False otherwise.
+
+    On failure the file is destroyed before returning. Sanitized bytes are only
+    written when sanitizing succeeded, so without this a failure would leave the
+    attacker's original bytes on disk -- and a caller that ignored the False
+    return would go on to publish them. Failing this way makes the function safe
+    regardless of what the caller does with the return value; callers must still
+    check it, and both do.
     """
     try:
 
@@ -4641,6 +4765,7 @@ def sanitize_svg(filepath: str) -> bool:
         return True
     except Exception as e:
         current_app.logger.error(f"Error sanitizing SVG: {e}")
+        discard_unsanitized_svg(filepath)
         return False
 
 

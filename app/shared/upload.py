@@ -41,9 +41,13 @@ def process_upload(image_file, destination='posts', user: User | None = None):
 
     final_ext = file_ext.lower()  # track file extension for conversion
 
-    # Sanitize SVG files to remove potentially dangerous elements
+    # Sanitize SVG files to remove potentially dangerous elements. An SVG that
+    # cannot be sanitized is rejected: the '.svg' branch below skips the Pillow
+    # re-encode, so nothing downstream would repair or re-check the file.
+    # sanitize_svg has already destroyed it by the time it returns False.
     if final_ext == '.svg':
-        sanitize_svg(final_place)
+        if not sanitize_svg(final_place):
+            raise Exception('SVG file could not be sanitized')
 
     if file_ext.lower() == '.heic':
         register_heif_opener()

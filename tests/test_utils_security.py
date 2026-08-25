@@ -1,37 +1,45 @@
 """Rejection paths for the XML and SVG input filters in app/utils.py.
 
-These three functions exist to reject hostile input, so the expectations here are
+These functions exist to reject hostile input, so the expectations here are
 derived from the primary sources rather than from the implementation:
 
 * XML 1.0 (Fifth Edition) section 2.2, the ``Char`` production --
   ``#x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]``
   (https://www.w3.org/TR/xml/#charsets)
+* XML 1.0 section 2.4 (a literal '<' may not appear in character data or in an
+  attribute value), section 2.5 (comments), section 2.7 (CDATA), section 2.8
+  (EntityValue may contain a quoted '>')
 * RFC 3629 section 3, which forbids overlong forms, surrogate encodings,
-  sequences above U+10FFFF, and the bytes C0/C1/F5-FF
+  sequences above U+10FFFF, and the bytes C0/C1/F5-FF; and section 10, on
+  respelling a code point to defeat a filter
 * OWASP XML External Entity Prevention Cheat Sheet
 * OWASP XSS Filter Evasion Cheat Sheet
 * SVG 1.1 / SVG 2 for element and attribute semantics
 
-Where the implementation and the standard disagree, the test asserts what the
-standard says and is marked ``xfail(strict=True)`` with the clause cited. A
-strict xfail turns into a failure the moment the divergence is fixed, so none of
-them can rot into a silent pass.
+An earlier revision of this file carried sixteen ``xfail(strict=True)`` marks
+recording places where the implementation contradicted those sources. All of
+them have been fixed and the marks are gone; the assertions they guarded are
+unchanged and now pass. No test in this file is expected to fail.
 """
 
 import os
+from io import BytesIO
 
 import pytest
+from py_svg_hush import filter_svg
+from werkzeug.datastructures import FileStorage
 
-from app.utils import is_valid_xml_utf8, sanitize_svg, sanitize_svg_bytes
+from app.shared.upload import process_upload
+from app.utils import (MAX_SVG_SIZE, is_valid_xml_utf8, refuse_svg_markup_declarations,
+                       sanitize_svg, sanitize_svg_bytes)
 
-MAX_SVG_SIZE = 10 * 1024 * 1024
+KEEP_DATA_URL_MIME_TYPES = {"image": ["jpeg", "png", "gif", "webp", "avif"]}
 
 # A well-formed SVG whose <!DOCTYPE> internal subset contains a '>' inside a
-# quoted entity value. app/utils.py strips declarations with the non-greedy
-# rb'<\!.*?>', which stops at that inner '>' and leaves the tail of the
-# declaration behind, so the document handed to filter_svg is no longer
-# well-formed. Used by several tests below; see
-# test_a_doctype_quoting_a_gt_defeats_the_pre_strip_regex.
+# quoted entity value. XML 1.0 section 2.8 permits that, and lxml parses this
+# document happily -- it is only a non-DTD-aware stripper that breaks on it,
+# because a non-greedy rb'<\!.*?>' stops at the inner '>'. That is what used to
+# make sanitize_svg fail and leave these bytes, <script> and all, on disk.
 DOCTYPE_GT_IN_QUOTED_VALUE = (
     b'<!DOCTYPE svg [<!ENTITY greater "x>y">]>'
     b'<svg xmlns="http://www.w3.org/2000/svg">'
@@ -40,12 +48,13 @@ DOCTYPE_GT_IN_QUOTED_VALUE = (
 
 
 class TestIsValidXmlUtf8:
-    """A hand-rolled UTF-8 byte scanner. Each test names the check it exercises."""
+    """Strict UTF-8 decode, then the XML 1.0 Char production, per code point."""
 
     def test_plain_ascii_is_valid(self):
         assert is_valid_xml_utf8(b'hello world') is True
 
-    def test_a_str_is_encoded_before_scanning(self):
+    def test_a_str_is_accepted_as_well_as_bytes(self):
+        """Both production callers (the RSS builders) pass str."""
         assert is_valid_xml_utf8('hello world') is True
 
     def test_permitted_whitespace_is_valid(self):
@@ -66,34 +75,29 @@ class TestIsValidXmlUtf8:
         assert is_valid_xml_utf8(b'\x0e') is False
         assert is_valid_xml_utf8(b'\x1f') is False
 
-    def test_delete_is_rejected(self):
-        """Current behaviour. This CONTRADICTS XML 1.0 -- see the xfail below.
-
-        Kept so the divergence is visible from both sides: this test records what
-        the code does today, and
-        test_delete_is_permitted_by_the_char_production records what the standard
-        requires. Fixing the divergence must flip both.
-        """
-        assert is_valid_xml_utf8(b'\x7f') is False
-
-    @pytest.mark.xfail(strict=True, reason='SPEC DIVERGENCE: XML 1.0 permits #x7F')
     def test_delete_is_permitted_by_the_char_production(self):
         """XML 1.0 5e section 2.2: Char includes ``[#x20-#xD7FF]``, and #x7F is in it.
 
         DEL is listed only under the *discouraged* compatibility characters note
         ("[#x7F-#x84] and [#x86-#x9F]"), which is advisory prose, not part of the
         grammar. A conforming parser accepts it: ElementTree parses
-        b'<r>\\x7f</r>' without error. Rejecting it here silently drops legitimate
-        posts from the RSS feeds built in app/user/routes.py.
+        b'<r>\\x7f</r>' without error.
+
+        This is a deliberate behaviour change. The old byte scanner rejected
+        #x7F, which silently dropped any post containing a DEL character from the
+        RSS feeds built in app/user/routes.py:2234 and :2238. Such posts now
+        appear, which is what XML 1.0 requires.
         """
         assert is_valid_xml_utf8(b'\x7f') is True
 
-    def test_control_char_in_a_long_string_is_rejected_by_the_first_loop(self):
-        """Long enough that the control byte is found before the tail loop."""
+    def test_a_control_char_early_in_a_long_string_is_rejected(self):
         assert is_valid_xml_utf8(b'aaaaaaaaaa\x00aaaaaaaaaa') is False
 
-    def test_control_char_in_the_last_two_bytes_is_rejected_by_the_tail_loop(self):
-        """The first loop stops at c_end - 2, so the tail loop must catch this."""
+    def test_a_control_char_at_the_very_end_of_a_string_is_rejected(self):
+        """The predecessor scanned in two loops split at c_end - 2, and a control
+        character in the final two bytes was reachable only by the second. The
+        position dependence is gone, but the case is kept as a regression guard.
+        """
         assert is_valid_xml_utf8(b'aaaaaaaaaa\x00') is False
 
     def test_forbidden_fffe_is_rejected(self):
@@ -104,10 +108,31 @@ class TestIsValidXmlUtf8:
         """U+FFFF is likewise outside every Char alternative."""
         assert is_valid_xml_utf8(b'\xef\xbf\xbf') is False
 
+    def test_fffd_the_replacement_character_is_valid(self):
+        """Boundary on the other side: Char's [#xE000-#xFFFD] ends at U+FFFD.
+
+        Narrowing that range to #xFFFC makes this fail.
+        """
+        assert is_valid_xml_utf8(b'\xef\xbf\xbd') is True
+
     def test_surrogate_range_is_rejected(self):
-        """Char stops at #xD7FF and resumes at #xE000, excluding D800-DFFF."""
-        assert is_valid_xml_utf8(b'\xed\xa0\x80') is False   # \ud800, low end
-        assert is_valid_xml_utf8(b'\xed\xbf\xbf') is False   # \udfff, high end
+        """Char stops at #xD7FF and resumes at #xE000, excluding D800-DFFF.
+
+        As bytes these are also invalid UTF-8 (RFC 3629 forbids encoding a
+        surrogate), so they are refused at the decode step.
+        """
+        assert is_valid_xml_utf8(b'\xed\xa0\x80') is False   # U+D800, low end
+        assert is_valid_xml_utf8(b'\xed\xbf\xbf') is False   # U+DFFF, high end
+
+    def test_the_code_points_around_the_surrogate_block_are_valid(self):
+        """Boundaries of Char's [#x20-#xD7FF] and [#xE000-#xFFFD] alternatives."""
+        assert is_valid_xml_utf8('퟿') is True
+        assert is_valid_xml_utf8('') is True
+
+    def test_astral_plane_text_is_valid(self):
+        """Char's [#x10000-#x10FFFF] alternative, at both ends."""
+        assert is_valid_xml_utf8('\U00010000') is True
+        assert is_valid_xml_utf8('\U0010ffff') is True
 
     def test_legitimate_multibyte_text_is_valid(self):
         assert is_valid_xml_utf8('日本語のテキスト'.encode('utf-8')) is True
@@ -116,7 +141,7 @@ class TestIsValidXmlUtf8:
         assert is_valid_xml_utf8(b'') is True
 
     def test_short_inputs_do_not_raise(self):
-        """The loop bounds are hand-written; 1- and 2-byte inputs are the edge."""
+        """1- and 2-byte inputs used to be the edge case for the loop bounds."""
         for raw in [b'', b'a', b'ab', b'\xef', b'\xef\xbf']:
             assert isinstance(is_valid_xml_utf8(raw), bool)
 
@@ -128,17 +153,13 @@ class TestIsValidXmlUtf8:
     ])
     @pytest.mark.parametrize('total_length', range(3, 13))
     def test_a_forbidden_sequence_is_caught_at_every_position(self, forbidden, total_length):
-        """No position lets a forbidden 3-byte sequence slip between the two loops.
+        """No offset in the buffer lets a forbidden sequence through.
 
-        The first loop runs ``while i < c_end - 2`` and the tail loop checks only
-        ASCII controls, which looks like a gap. It is not one: a complete 3-byte
-        window can only start at index <= c_end - 3, and c_end - 3 < c_end - 2, so
-        every window the buffer actually contains is examined by the first loop.
-        This sweeps every start offset for every buffer length 3..12 to prove it.
-
-        Widening the first loop's bound to ``while i < c_end`` would make this
-        raise IndexError; narrowing it to ``while i < c_end - 3`` would make the
-        last-position cases return True.
+        The predecessor scanned bytes in two loops with hand-written bounds, and
+        whether a forbidden 3-byte window was examined depended on where it sat.
+        Checking decoded code points makes position irrelevant, but the sweep is
+        kept: it is cheap, and it would catch any future reintroduction of a
+        position-sensitive scan.
         """
         for pos in range(total_length - 2):
             raw = b'a' * pos + forbidden + b'a' * (total_length - pos - 3)
@@ -147,21 +168,14 @@ class TestIsValidXmlUtf8:
 
 
 class TestIsValidXmlUtf8EncodingValidity:
-    """RFC 3629 section 3 sequences the scanner never looks at.
+    """RFC 3629 section 3: byte sequences that denote no code point at all.
 
-    ``is_valid_xml_utf8`` searches for specific byte *patterns*; it never checks
-    that the input decodes as UTF-8 at all. Every input below raises
-    UnicodeDecodeError in Python and is rejected by ElementTree when wrapped in
-    an element, yet the function reports it as valid XML content.
-
-    Reachability: the two production callers (app/user/routes.py, RSS feed
-    generation) pass ``str``, and ``str.encode('utf-8', errors='ignore')`` can
-    only produce well-formed UTF-8 -- so these are latent today rather than
-    remotely triggerable. The signature accepts bytes and the docstring promises
-    a UTF-8 check, so any future bytes caller inherits the hole.
+    Every input below raises UnicodeDecodeError in Python and is rejected by
+    ElementTree when wrapped in an element. The predecessor searched for specific
+    byte *patterns* and never checked that its input decoded as UTF-8, so it
+    reported all of them as valid XML content.
     """
 
-    @pytest.mark.xfail(strict=True, reason='SPEC DIVERGENCE: RFC 3629 s3 forbids overlong forms')
     @pytest.mark.parametrize('raw', [
         pytest.param(b'\xc0\x80', id='overlong-2-byte-NUL'),
         pytest.param(b'\xe0\x80\x80', id='overlong-3-byte-NUL'),
@@ -172,12 +186,11 @@ class TestIsValidXmlUtf8EncodingValidity:
         """RFC 3629 section 3: "implementations MUST reject" non-shortest forms.
 
         These matter beyond pedantry: b'\\xc0\\x80' and b'\\xe0\\x80\\x80' both
-        denote U+0000, which test_nul_is_rejected shows the function does reject
-        when spelled b'\\x00'. The overlong spelling walks straight past it.
+        denote U+0000, which test_nul_is_rejected shows is rejected when spelled
+        b'\\x00'. The overlong spelling used to walk straight past it.
         """
         assert is_valid_xml_utf8(raw) is False
 
-    @pytest.mark.xfail(strict=True, reason='SPEC DIVERGENCE: RFC 3629 s3 forbids stray continuation bytes')
     @pytest.mark.parametrize('raw', [
         pytest.param(b'\x80', id='lone-continuation'),
         pytest.param(b'ab\x80cd', id='continuation-mid-string'),
@@ -186,7 +199,6 @@ class TestIsValidXmlUtf8EncodingValidity:
         """RFC 3629 section 3: 80-BF may appear only after a valid lead byte."""
         assert is_valid_xml_utf8(raw) is False
 
-    @pytest.mark.xfail(strict=True, reason='SPEC DIVERGENCE: RFC 3629 s3 forbids truncated sequences')
     @pytest.mark.parametrize('raw', [
         pytest.param(b'\xe2\x82', id='truncated-3-byte'),
         pytest.param(b'\xf0\x9f\x98', id='truncated-4-byte'),
@@ -195,7 +207,6 @@ class TestIsValidXmlUtf8EncodingValidity:
         """RFC 3629 section 3: a lead byte must be followed by its full complement."""
         assert is_valid_xml_utf8(raw) is False
 
-    @pytest.mark.xfail(strict=True, reason='SPEC DIVERGENCE: RFC 3629 s3 restricts UTF-8 to U+10FFFF')
     @pytest.mark.parametrize('raw', [
         pytest.param(b'\xf5\x80\x80\x80', id='above-U+10FFFF'),
         pytest.param(b'\xfe', id='byte-FE'),
@@ -205,89 +216,262 @@ class TestIsValidXmlUtf8EncodingValidity:
         """RFC 3629 section 3: F5-FF never occur in a valid UTF-8 sequence."""
         assert is_valid_xml_utf8(raw) is False
 
-    @pytest.mark.xfail(strict=True, reason='SECURITY: the U+FFFE/U+FFFF/surrogate filter is bypassable by overlong encoding')
     @pytest.mark.parametrize('raw', [
         pytest.param(b'\xf0\x8f\xbf\xbe', id='overlong-U+FFFE'),
         pytest.param(b'\xf0\x8f\xbf\xbf', id='overlong-U+FFFF'),
         pytest.param(b'\xf0\x8d\xa0\x80', id='overlong-U+D800'),
     ])
     def test_forbidden_code_points_are_rejected_in_their_overlong_spelling(self, raw):
-        """The same code points test_forbidden_fffe_is_rejected et al. reject.
+        """SECURITY: the same code points test_forbidden_fffe_is_rejected covers.
 
-        The scanner only recognises the *shortest* 3-byte spellings (EF BF BE,
-        EF BF BF, ED A0 80..ED BF BF). Re-spelling the identical code point as a
-        4-byte overlong sequence -- exactly the technique in RFC 3629 section 10's
-        security considerations, "a different way to represent the same
-        character" -- walks past the filter. This is a positional-independent
-        bypass of the very check the function exists to perform, and is the real
-        answer to "can a forbidden sequence get through": not by moving it, by
-        respelling it.
+        A byte-pattern scanner recognises only the *shortest* spelling of each
+        forbidden code point. Re-spelling one as a longer sequence -- exactly the
+        technique RFC 3629 section 10 warns about, "a different way to represent
+        the same character" -- used to defeat the filter outright. Decoding
+        before checking closes it: the overlong form no longer decodes at all,
+        and if it did it would decode to the same code point its shortest form
+        does, and be caught by the same test.
         """
         assert is_valid_xml_utf8(raw) is False
 
-    @pytest.mark.xfail(strict=True, reason='SPEC DIVERGENCE: errors=ignore hides a lone surrogate in the str path')
     def test_a_lone_surrogate_str_is_rejected(self):
         """XML 1.0 section 2.2: D800-DFFF is not a Char.
 
-        ``pystring.encode('utf-8', errors='ignore')`` silently deletes a lone
-        surrogate, so the scanner sees b'' and reports valid. The caller then
-        hands the original str to feedgen, which cannot serialise it. Discarding
-        the encoding error is what loses the information; encoding with
-        ``errors='strict'`` and treating the exception as invalid would fix it.
+        Deliberate behaviour change. This used to return True: the function's
+        first act was ``pystring.encode('utf-8', errors='ignore')``, which
+        silently deletes a lone surrogate, so the scanner saw b'' and reported
+        valid -- while the caller went on to hand the original str to feedgen,
+        which cannot serialise it. A str is now checked directly, with no
+        encode/decode round trip to lose the information.
         """
         assert is_valid_xml_utf8('\ud800') is False
+
+    def test_a_lone_surrogate_is_rejected_inside_otherwise_valid_text(self):
+        assert is_valid_xml_utf8('before\ud800after') is False
+
+
+class TestRefuseSvgMarkupDeclarations:
+    """PieFed layer: uploaded SVGs carrying a markup declaration are refused.
+
+    Refusal replaced a non-greedy ``rb'<\\!.*?>'`` substitution that tried to
+    strip declarations out. That substitution was both bypassable (XML 1.0
+    section 2.8 lets a quoted EntityValue contain '>', which ends the match
+    early) and destructive to valid documents (a comment or CDATA section
+    containing '>' was cut in half). Refusing can be neither.
+    """
+
+    def test_a_plain_svg_is_accepted(self):
+        assert refuse_svg_markup_declarations(
+            b'<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>') is None
+
+    def test_a_doctype_is_refused(self):
+        with pytest.raises(ValueError, match='markup declarations'):
+            refuse_svg_markup_declarations(
+                b'<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" '
+                b'"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">'
+                b'<svg xmlns="http://www.w3.org/2000/svg"/>')
+
+    def test_an_entity_declaration_is_refused(self):
+        with pytest.raises(ValueError, match='markup declarations'):
+            refuse_svg_markup_declarations(
+                b'<!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
+                b'<svg xmlns="http://www.w3.org/2000/svg"/>')
+
+    @pytest.mark.parametrize('declaration', [
+        pytest.param(b'<!ELEMENT svg ANY>', id='ELEMENT'),
+        pytest.param(b'<!ATTLIST svg x CDATA #IMPLIED>', id='ATTLIST'),
+        pytest.param(b'<!NOTATION gif SYSTEM "gif">', id='NOTATION'),
+        pytest.param(b'<![INCLUDE[<!ENTITY e "x">]]>', id='conditional-section'),
+    ])
+    def test_the_other_markup_declarations_are_refused_too(self, declaration):
+        """Not just DOCTYPE and ENTITY: anything beginning '<!' that is not a
+        comment or a CDATA section is a declaration, and none of them belongs in
+        an uploaded image."""
+        with pytest.raises(ValueError, match='markup declarations'):
+            refuse_svg_markup_declarations(
+                declaration + b'<svg xmlns="http://www.w3.org/2000/svg"/>')
+
+    def test_a_declaration_after_the_root_element_is_refused(self):
+        """The scan is not limited to the prolog, so a declaration cannot be
+        hidden by putting it somewhere a prolog-only check would not look."""
+        with pytest.raises(ValueError, match='markup declarations'):
+            refuse_svg_markup_declarations(
+                b'<svg xmlns="http://www.w3.org/2000/svg">'
+                b'<!ENTITY e "x"></svg>')
+
+    def test_a_comment_is_not_mistaken_for_a_declaration(self):
+        """XML 1.0 section 2.5. Comments begin '<!' and must be skipped, not
+        refused -- this is what makes the check exact rather than a grep."""
+        assert refuse_svg_markup_declarations(
+            b'<svg xmlns="http://www.w3.org/2000/svg"><!-- hello --><rect/></svg>') is None
+
+    def test_a_comment_containing_a_declaration_is_not_refused(self):
+        """A substring search for '<!DOCTYPE' would refuse this valid document.
+        Skipping the comment by its '-->' terminator does not."""
+        assert refuse_svg_markup_declarations(
+            b'<svg xmlns="http://www.w3.org/2000/svg">'
+            b'<!-- <!DOCTYPE svg> --><rect/></svg>') is None
+
+    def test_a_cdata_section_containing_a_declaration_is_not_refused(self):
+        """XML 1.0 section 2.7: inside CDATA this is ordinary character data."""
+        assert refuse_svg_markup_declarations(
+            b'<svg xmlns="http://www.w3.org/2000/svg">'
+            b'<text><![CDATA[<!ENTITY e "x">]]></text></svg>') is None
+
+    def test_a_comment_containing_gt_is_not_refused(self):
+        """The exact case the old stripper corrupted. '>' is legal in a comment
+        and must not terminate anything."""
+        assert refuse_svg_markup_declarations(
+            b'<svg xmlns="http://www.w3.org/2000/svg"><!-- a > b --><rect/></svg>') is None
+
+    def test_an_unterminated_comment_is_refused(self):
+        """Not well-formed XML, so there is no valid document to preserve, and
+        an unterminated comment could otherwise hide the rest of the file."""
+        with pytest.raises(ValueError, match='unterminated comment'):
+            refuse_svg_markup_declarations(
+                b'<svg xmlns="http://www.w3.org/2000/svg"><!-- <rect/></svg>')
+
+    def test_an_unterminated_cdata_section_is_refused(self):
+        with pytest.raises(ValueError, match='unterminated CDATA'):
+            refuse_svg_markup_declarations(
+                b'<svg xmlns="http://www.w3.org/2000/svg"><text><![CDATA[x</text></svg>')
+
+    def test_a_declaration_after_a_comment_is_still_found(self):
+        """Skipping a comment must resume scanning, not stop."""
+        with pytest.raises(ValueError, match='markup declarations'):
+            refuse_svg_markup_declarations(
+                b'<svg xmlns="http://www.w3.org/2000/svg"><!-- x -->'
+                b'<!ENTITY e "y"><rect/></svg>')
+
+    def test_a_declaration_after_a_cdata_section_is_still_found(self):
+        with pytest.raises(ValueError, match='markup declarations'):
+            refuse_svg_markup_declarations(
+                b'<svg xmlns="http://www.w3.org/2000/svg"><text><![CDATA[x]]></text>'
+                b'<!ENTITY e "y"><rect/></svg>')
+
+    def test_a_declaration_quoting_a_gt_is_refused(self):
+        """XML 1.0 section 2.8 lets an EntityValue contain '>' when quoted, so
+        `<!ENTITY greater "x>y">` is a legal declaration whose closing '>' is not
+        the first one. That ambiguity is exactly why this refuses rather than
+        strips: there is nothing to get wrong."""
+        with pytest.raises(ValueError, match='markup declarations'):
+            refuse_svg_markup_declarations(DOCTYPE_GT_IN_QUOTED_VALUE)
+
+
+class TestFilterSvgIsSafeWithoutPreStripping:
+    """py-svg-hush's own behaviour, pinned because sanitize_svg_bytes relies on it.
+
+    Removing PieFed's byte-level pre-stripping is only sound if filter_svg is
+    itself safe against XXE and entity expansion. These call filter_svg directly,
+    bypassing PieFed's declaration refusal entirely, so they measure the library
+    and nothing else. If a future py-svg-hush starts resolving external entities
+    or amplifying internal ones, these fail and the refusal above stops being
+    defence in depth and becomes load-bearing.
+    """
+
+    def test_an_external_entity_naming_a_local_file_is_never_dereferenced(self):
+        """OWASP XXE Prevention. The entity expands to nothing; the file is not read."""
+        raw = (b'<!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
+               b'<svg xmlns="http://www.w3.org/2000/svg"><text>&xxe;</text></svg>')
+        result = filter_svg(raw, KEEP_DATA_URL_MIME_TYPES)
+        assert b'root:' not in result
+        assert b'/bin/' not in result
+        assert b'<text/>' in result
+
+    def test_an_external_dtd_is_never_fetched(self):
+        """A SYSTEM identifier on the DOCTYPE itself. Port 9 (discard) would hang
+        or refuse if it were dereferenced; the document sanitises instead."""
+        raw = (b'<!DOCTYPE svg SYSTEM "http://127.0.0.1:9/evil.dtd">'
+               b'<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>')
+        assert b'<rect/>' in filter_svg(raw, KEEP_DATA_URL_MIME_TYPES)
+
+    def test_a_parameter_entity_naming_a_local_file_is_never_dereferenced(self):
+        raw = (b'<!DOCTYPE svg [<!ENTITY % pe SYSTEM "file:///etc/passwd">%pe;]>'
+               b'<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>')
+        result = filter_svg(raw, KEEP_DATA_URL_MIME_TYPES)
+        assert b'root:' not in result
+
+    def test_a_nested_entity_reference_is_refused_outright(self):
+        """The billion-laughs primitive. An entity whose value references another
+        entity is refused at depth 2, so expansion cannot be amplified at all --
+        there is no expansion budget to exhaust."""
+        raw = (b'<!DOCTYPE lolz [<!ENTITY lol "lol">'
+               b'<!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">]>'
+               b'<svg xmlns="http://www.w3.org/2000/svg"><text>&lol2;</text></svg>')
+        with pytest.raises(ValueError, match='XML parsing error'):
+            filter_svg(raw, KEEP_DATA_URL_MIME_TYPES)
+
+    def test_an_entity_cannot_smuggle_a_script_element(self):
+        """Entity expansion happens before filtering, so an expanded <script>
+        would still be seen as a script element and removed. It is not smuggled
+        past the filter as text either."""
+        raw = (b'<!DOCTYPE svg [<!ENTITY e "<script>alert(1)</script>">]>'
+               b'<svg xmlns="http://www.w3.org/2000/svg">&e;</svg>')
+        result = filter_svg(raw, KEEP_DATA_URL_MIME_TYPES).lower()
+        assert b'script' not in result
+        assert b'alert' not in result
+
+    def test_an_entity_cannot_smuggle_a_javascript_url(self):
+        raw = (b'<!DOCTYPE svg [<!ENTITY js "javascript:alert(1)">]>'
+               b'<svg xmlns="http://www.w3.org/2000/svg" '
+               b'xmlns:xlink="http://www.w3.org/1999/xlink">'
+               b'<a xlink:href="&js;"><rect/></a></svg>')
+        assert b'javascript' not in filter_svg(raw, KEEP_DATA_URL_MIME_TYPES).lower()
+
+    def test_a_doctype_alone_does_not_stop_filter_svg_sanitising(self):
+        """The document PieFed used to mangle into unparseable garbage. Handed to
+        filter_svg intact, the <script> is removed and the document survives."""
+        result = filter_svg(DOCTYPE_GT_IN_QUOTED_VALUE, KEEP_DATA_URL_MIME_TYPES)
+        assert b'script' not in result.lower()
+        assert b'<svg' in result
 
 
 class TestSanitizeSvgBytes:
     """The XXE and script-injection boundary for uploaded SVGs.
 
-    ``sanitize_svg_bytes`` is two layers: PieFed's own size guard and regex
-    pre-stripping, then ``filter_svg`` from py-svg-hush. Tests below say which
-    layer they pin.
+    ``sanitize_svg_bytes`` is a size guard and a markup-declaration refusal of
+    PieFed's own, then ``filter_svg`` from py-svg-hush. Nothing rewrites the
+    bytes before filter_svg sees them. Tests below say which layer they pin.
     """
 
     def test_a_plain_svg_survives(self):
         svg = b'<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>'
         assert b'<rect' in sanitize_svg_bytes(svg)
 
-    def test_doctype_entity_declaration_is_stripped(self):
-        """OWASP XXE Prevention: the entity must not survive to be resolved.
-
-        PieFed layer. The declaration is removed by the rb'<\\!.*?>' substitution
-        and the orphaned ']>' by the rb'\\]>' substitution, leaving a document
-        with no DTD at all. Nothing in the output can reference file:///etc/passwd.
-        """
+    def test_a_doctype_entity_declaration_is_refused(self):
+        """OWASP XXE Prevention. PieFed layer: refused, not stripped, so there is
+        no partly-processed document to get wrong."""
         svg = (b'<!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
                b'<svg xmlns="http://www.w3.org/2000/svg"/>')
-        result = sanitize_svg_bytes(svg)
-        assert b'<!ENTITY' not in result
-        assert b'DOCTYPE' not in result
-        assert b'passwd' not in result
+        with pytest.raises(ValueError, match='markup declarations'):
+            sanitize_svg_bytes(svg)
 
-    def test_a_reference_to_a_stripped_entity_fails_closed(self):
-        """OWASP XXE Prevention: fail closed rather than emit a partly-resolved doc.
-
-        Once the DTD is stripped, '&xxe;' is an undefined entity reference and
-        filter_svg refuses the document. Raising is the safe outcome *for this
-        function*; see TestSanitizeSvgFile for what the file-level wrapper then
-        does with the failure.
-        """
+    def test_a_reference_to_a_declared_entity_is_refused(self):
         svg = (b'<!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
                b'<svg xmlns="http://www.w3.org/2000/svg"><text>&xxe;</text></svg>')
-        with pytest.raises(ValueError, match='XML parsing error'):
+        with pytest.raises(ValueError, match='markup declarations'):
             sanitize_svg_bytes(svg)
 
-    def test_billion_laughs_fails_closed(self):
-        """OWASP XXE Prevention, entity expansion. Same mechanism, DoS payload."""
+    def test_billion_laughs_is_refused(self):
+        """OWASP XXE Prevention, entity expansion. Refused at PieFed's layer for
+        carrying a declaration; TestFilterSvgIsSafeWithoutPreStripping shows
+        filter_svg refuses it independently."""
         svg = (b'<!DOCTYPE lolz [<!ENTITY lol "lol"><!ENTITY lol2 "&lol;&lol;&lol;">]>'
                b'<svg xmlns="http://www.w3.org/2000/svg"><text>&lol2;</text></svg>')
-        with pytest.raises(ValueError, match='XML parsing error'):
+        with pytest.raises(ValueError, match='markup declarations'):
             sanitize_svg_bytes(svg)
 
-    def test_processing_instruction_is_stripped(self):
-        """PieFed layer: rb'<\\?.*?\\?>'. An xml-stylesheet PI can load remote XSLT."""
+    def test_a_processing_instruction_does_not_survive(self):
+        """An xml-stylesheet PI can load remote XSLT. PieFed no longer strips PIs
+        by regex -- filter_svg drops them, which this pins."""
         svg = b'<?xml-stylesheet href="evil.xsl"?><svg xmlns="http://www.w3.org/2000/svg"/>'
         assert b'<?xml-stylesheet' not in sanitize_svg_bytes(svg)
+
+    def test_an_xml_declaration_is_accepted(self):
+        """The other side of that: essentially every real SVG starts with one."""
+        svg = (b'<?xml version="1.0" encoding="UTF-8"?>'
+               b'<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>')
+        assert b'<rect/>' in sanitize_svg_bytes(svg)
 
     def test_script_element_does_not_survive(self):
         svg = (b'<svg xmlns="http://www.w3.org/2000/svg">'
@@ -370,58 +554,47 @@ class TestSanitizeSvgBytes:
         assert len(payload) == MAX_SVG_SIZE
         assert b'<svg' in sanitize_svg_bytes(payload)
 
-    def test_a_doctype_quoting_a_gt_defeats_the_pre_strip_regex(self):
-        """PieFed layer defect: rb'<\\!.*?>' is not DTD-aware.
-
-        XML 1.0 section 2.8 lets an EntityValue contain '>' when quoted, so
-        `<!ENTITY greater "x>y">` is a legal declaration. The non-greedy regex
-        stops at that inner '>' and leaves `y">]>` in front of the root element,
-        so a document that WAS well-formed (lxml parses it and sees the <script>
-        child) is handed to filter_svg as garbage and rejected outright.
-
-        Sanitisation therefore never runs on an attacker-chosen input, purely
-        because of PieFed's own pre-processing. That is safe here -- the raise is
-        fail-closed -- but see
-        test_a_file_the_sanitizer_rejects_is_left_hostile_on_disk for what the
-        wrapper does with it.
-
-        The production change that makes this test fail is making the stripping
-        DTD-aware -- i.e. fixing the defect -- at which point filter_svg receives
-        a well-formed document and sanitises it instead of raising. (Deleting the
-        rb'<\\!.*?>' substitution alone does NOT flip it: the later rb'\\]>'
-        substitution then removes the internal subset's terminator and the
-        document is still unparseable. Verified by executing both edits.)
+    def test_a_doctype_quoting_a_gt_is_refused(self):
+        """REGRESSION GUARD. XML 1.0 section 2.8 lets an EntityValue contain '>'
+        when quoted, and a non-greedy `rb'<\\!.*?>'` strip stopped at that inner
+        '>', leaving `y">]>` in front of the root element. filter_svg then
+        refused the mangled document, sanitize_svg returned False, and the
+        original bytes -- <script> included -- stayed on disk. The file is now
+        refused for carrying a declaration at all, which no quoting can affect.
         """
-        with pytest.raises(ValueError, match='XML parsing error'):
+        with pytest.raises(ValueError, match='markup declarations'):
             sanitize_svg_bytes(DOCTYPE_GT_IN_QUOTED_VALUE)
 
-    def test_a_comment_containing_gt_leaks_its_tail_as_rendered_text(self):
-        """PieFed layer defect: the same non-DTD-aware regex corrupts comments.
-
-        XML 1.0 section 2.5 allows '>' inside a comment. rb'<\\!.*?>' stops at it
-        and leaves the rest of the comment as character data, which filter_svg
-        then escapes and emits as *visible text* in the sanitised SVG. Not an
-        injection -- the serialiser escapes it -- but silent content corruption
-        of any legitimate SVG whose comments contain '>'.
-
-        This asserts the divergence from XML 1.0's comment rule directly: a
-        DTD-aware stripper would leave no comment residue at all.
+    def test_a_comment_containing_gt_does_not_corrupt_the_document(self):
+        """REGRESSION GUARD. XML 1.0 section 2.5 allows '>' inside a comment.
+        The old `rb'<\\!.*?>'` strip stopped at it and left ` b -->` behind as
+        character data, which filter_svg escaped and emitted as *visible text* in
+        the sanitised image. Nothing rewrites the bytes now, so the comment is
+        simply dropped by filter_svg and the drawing is unchanged.
         """
         svg = b'<svg xmlns="http://www.w3.org/2000/svg"><!-- a > b --><rect/></svg>'
         result = sanitize_svg_bytes(svg)
-        assert b'b --&gt;' in result, 'comment tail leaks into the document as text'
+        assert b'b --&gt;' not in result, 'comment tail leaked into the document as text'
+        assert b'&gt;' not in result
+        assert b'<rect/>' in result
 
-    def test_a_cdata_section_containing_gt_is_truncated(self):
-        """PieFed layer defect: rb'<\\!.*?>' also eats into `<![CDATA[ ... ]]>`.
-
-        XML 1.0 section 2.7: '>' is ordinary data inside CDATA. The regex removes
-        `<![CDATA[a >` and the rb'\\]>' cleanup removes the section terminator, so
-        the text content silently changes from 'a > b' to ' b]'.
+    def test_a_cdata_section_containing_gt_survives_intact(self):
+        """REGRESSION GUARD. XML 1.0 section 2.7: '>' is ordinary data inside
+        CDATA. The old strip removed `<![CDATA[a >` and the `rb'\\]>'` cleanup ate
+        the section terminator, silently changing the text from 'a > b' to ' b]'.
         """
         svg = b'<svg xmlns="http://www.w3.org/2000/svg"><text><![CDATA[a > b]]></text></svg>'
         result = sanitize_svg_bytes(svg)
-        assert b'a &gt; b' not in result
-        assert b'<text> b]</text>' in result
+        assert b'<text>a &gt; b</text>' in result
+        assert b'<text> b]</text>' not in result
+
+    def test_a_close_bracket_gt_in_text_is_not_eaten(self):
+        """REGRESSION GUARD for the `rb'\\]>'` cleanup that existed only to tidy
+        up after DOCTYPE stripping. It matched anywhere, including in ordinary
+        character data.
+        """
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg"><text>a]&gt;b</text></svg>'
+        assert b'<text>a]&gt;b</text>' in sanitize_svg_bytes(svg)
 
 
 class TestSanitizeSvgFile:
@@ -433,21 +606,23 @@ class TestSanitizeSvgFile:
         assert sanitize_svg(str(path)) is True
         assert b'<rect' in path.read_bytes()
 
-    def test_a_hostile_file_is_rewritten_in_place(self, app, tmp_path):
+    def test_a_hostile_file_that_can_be_sanitized_is_rewritten_in_place(self, app, tmp_path):
         path = tmp_path / 'hostile.svg'
-        path.write_bytes(b'<!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
-                         b'<svg xmlns="http://www.w3.org/2000/svg"/>')
+        path.write_bytes(b'<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)">'
+                         b'<script>alert(2)</script><rect/></svg>')
 
         assert sanitize_svg(str(path)) is True
-        assert b'<!ENTITY' not in path.read_bytes()
+        result = path.read_bytes()
+        assert b'script' not in result.lower()
+        assert b'onload' not in result.lower()
+        assert b'<rect/>' in result
 
     def test_an_already_sanitized_file_is_not_rewritten(self, app, tmp_path):
         """The `if sanitized_svg != svg_bytes` false arm: no write when nothing changed.
 
-        `sanitize_svg_bytes` is idempotent -- the rb'<\\?.*?\\?>' strip removes the
-        XML declaration and filter_svg puts an identical one back -- so feeding it
-        its own output is a fixed point. mtime is the observable: it is pinned to
-        the epoch first, and an unnecessary rewrite would move it.
+        `sanitize_svg_bytes` is idempotent -- feeding it its own output is a fixed
+        point -- so mtime is the observable: it is pinned to the epoch first, and
+        an unnecessary rewrite would move it.
 
         Removing the `if` and writing unconditionally makes this fail.
         """
@@ -462,43 +637,43 @@ class TestSanitizeSvgFile:
         assert os.stat(path).st_mtime == 0, 'file was rewritten despite being unchanged'
 
     def test_a_missing_file_reports_failure_rather_than_raising(self, app, tmp_path):
-        """The except arm: callers rely on False, not on an exception."""
-        assert sanitize_svg(str(tmp_path / 'does-not-exist.svg')) is False
+        """The except arm: callers rely on False, not on an exception.
 
-    def test_an_oversize_file_reports_failure(self, app, tmp_path):
-        path = tmp_path / 'huge.svg'
-        path.write_bytes(b'a' * (MAX_SVG_SIZE + 1))
-        assert sanitize_svg(str(path)) is False
+        The failure path must also not create the file it was asked to clean.
+        """
+        missing = tmp_path / 'does-not-exist.svg'
+        assert sanitize_svg(str(missing)) is False
+        assert not missing.exists()
 
-    def test_a_file_the_sanitizer_rejects_is_left_hostile_on_disk(self, app, tmp_path):
-        """SECURITY: False means "not sanitised", and the file keeps its payload.
+    def test_a_directory_path_reports_failure_without_removing_it(self, app, tmp_path):
+        """IsADirectoryError has to come back as False, not propagate -- and the
+        directory must survive: only a regular file is ever destroyed."""
+        assert sanitize_svg(str(tmp_path)) is False
+        assert tmp_path.is_dir()
 
-        `sanitize_svg` writes only when sanitisation succeeded, so when it returns
-        False the original bytes are still on disk -- including the <script>. The
-        input used here is well-formed XML that lxml parses happily (it is only
-        PieFed's own pre-strip regex that breaks it), so a browser served this
-        file renders it and runs the script.
+    def test_a_file_the_sanitizer_rejects_does_not_survive_on_disk(self, app, tmp_path):
+        """SECURITY, and the property the whole fix turns on.
 
-        This asserts `sanitize_svg`'s observable contract, which is all this
-        module can see. Whether that is exploitable depends on the callers:
-        app/shared/upload.py:46 and app/shared/post.py:496 both discard the
-        return value, and app/shared/upload.py:63 skips Pillow re-encoding for
-        '.svg', so nothing downstream re-checks the file. Reported, not fixed.
+        sanitize_svg writes only when sanitising succeeded, so a failure used to
+        leave the attacker's original bytes untouched on disk -- <script> and
+        all -- for any caller that ignored the False return. Both callers did.
+        The file is now destroyed before False is returned, so the failure is
+        safe whatever the caller does with it.
+
+        The input is well-formed XML that lxml parses happily, so a browser
+        served these bytes would render them and run the script.
         """
         path = tmp_path / 'quoted-gt.svg'
         path.write_bytes(DOCTYPE_GT_IN_QUOTED_VALUE)
 
         assert sanitize_svg(str(path)) is False
-        assert path.read_bytes() == DOCTYPE_GT_IN_QUOTED_VALUE
-        assert b'<script>alert(1)</script>' in path.read_bytes()
+        assert not path.exists()
 
-    def test_an_oversize_file_also_keeps_its_payload(self, app, tmp_path):
-        """SECURITY, same shape: the size guard skips sanitisation entirely.
-
-        An SVG over 10 MB is never sanitised -- the ValueError is raised before
-        filter_svg is reached -- yet the file is left on disk unchanged with its
-        script intact. Padding here is a comment, so the document stays
-        well-formed and renderable.
+    def test_an_oversize_file_does_not_survive_on_disk(self, app, tmp_path):
+        """SECURITY, same shape. An SVG over 10 MB is never sanitised -- the
+        ValueError is raised before filter_svg is reached -- and used to be left
+        on disk with its script intact. Padding here is a comment, so the
+        document stays well-formed and renderable.
         """
         path = tmp_path / 'huge-hostile.svg'
         payload = (b'<svg xmlns="http://www.w3.org/2000/svg">'
@@ -507,9 +682,80 @@ class TestSanitizeSvgFile:
         path.write_bytes(payload)
 
         assert sanitize_svg(str(path)) is False
-        assert path.read_bytes() == payload
-        assert b'<script>alert(1)</script>' in path.read_bytes()
+        assert not path.exists()
 
-    def test_a_directory_path_reports_failure(self, app, tmp_path):
-        """IsADirectoryError also has to come back as False, not propagate."""
-        assert sanitize_svg(str(tmp_path)) is False
+    def test_a_file_that_is_not_xml_at_all_does_not_survive(self, app, tmp_path):
+        """An HTML file renamed to .svg: filter_svg refuses it, so it must go."""
+        path = tmp_path / 'not-really.svg'
+        path.write_bytes(b'<html><body><script>alert(1)</script></body></html>')
+
+        assert sanitize_svg(str(path)) is False
+        assert not path.exists()
+
+
+class TestProcessUploadRejectsUnsanitizableSvg:
+    """app/shared/upload.py's call site, driven for real.
+
+    process_upload used to call sanitize_svg and discard the result, then carry
+    on to register the file and serve it from its URL. The '.svg' branch skips
+    the Pillow re-encode, so nothing downstream re-checked it.
+
+    user=None keeps this out of the database: the File/user_file rows are only
+    written when a user is passed. Uploads land under app/static/media/, which
+    is gitignored; each test cleans up after itself.
+    """
+
+    @staticmethod
+    def _upload(payload: bytes, filename: str = 'x.svg') -> FileStorage:
+        return FileStorage(stream=BytesIO(payload), filename=filename)
+
+    @staticmethod
+    def _stored_path(url: str) -> str:
+        """process_upload returns SERVER_URL + '/' + final_place minus 'app/'."""
+        return 'app/static/' + url.split('/static/', 1)[1]
+
+    def test_an_svg_that_cannot_be_sanitized_is_rejected(self, app):
+        with app.app_context():
+            with pytest.raises(Exception, match='could not be sanitized'):
+                process_upload(self._upload(DOCTYPE_GT_IN_QUOTED_VALUE))
+
+    def test_the_rejected_svg_is_not_left_anywhere_under_the_media_root(self, app):
+        media_root = 'app/static'
+        before = self._snapshot(media_root)
+        with app.app_context():
+            with pytest.raises(Exception, match='could not be sanitized'):
+                process_upload(self._upload(DOCTYPE_GT_IN_QUOTED_VALUE))
+        after = self._snapshot(media_root)
+
+        new_files = sorted(set(after) - set(before))
+        try:
+            for path in new_files:
+                assert b'<script' not in open(path, 'rb').read().lower(), \
+                    f'hostile payload survived at {path}'
+            assert new_files == [], f'rejected upload left files behind: {new_files}'
+        finally:
+            for path in new_files:
+                os.remove(path)
+
+    def test_a_clean_svg_still_uploads_and_is_sanitized(self, app):
+        """The happy path is not collateral damage: a legitimate SVG carrying a
+        script is accepted, with the script removed."""
+        payload = (b'<svg xmlns="http://www.w3.org/2000/svg">'
+                   b'<script>alert(1)</script><rect width="1" height="1"/></svg>')
+        with app.app_context():
+            url = process_upload(self._upload(payload))
+            stored = self._stored_path(url)
+            try:
+                content = open(stored, 'rb').read()
+                assert b'script' not in content.lower()
+                assert b'<rect' in content
+            finally:
+                os.remove(stored)
+
+    @staticmethod
+    def _snapshot(root: str) -> list:
+        found = []
+        for dirpath, _dirnames, filenames in os.walk(root):
+            for name in filenames:
+                found.append(os.path.join(dirpath, name))
+        return found
