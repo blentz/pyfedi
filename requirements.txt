@@ -39,6 +39,9 @@ ua-parser[regex]
 captcha
 pytest
 pytest-cov
+respx
+moto
+fakeredis
 stripe~=12.0.0
 Authlib~=1.7.0
 webauthn~=2.5.0
