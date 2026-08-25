@@ -369,6 +369,38 @@ def has_unsafe_url_scheme(url: str) -> bool:
     return url_scheme(url) in UNSAFE_URL_SCHEMES
 
 
+def url_host(url: str) -> Optional[str]:
+    """The host furl reads from `url`, or None when furl refuses to parse it.
+
+    furl reports every parse refusal by raising ValueError, and it refuses more
+    than IPv6 literals: an unterminated bracket ('http://['), a bracketed value
+    that is not an address ('http://[zzz]'), a port that is not a number
+    ('http://example.com:notaport/') and a host holding characters it will not
+    accept ('http://%zz/') are four separate refusals, all ValueError.
+
+    allowlist_html called furl unguarded, purely to read .host for the
+    instance_domains comparison, so a single anchor with an unparseable
+    authority raised out of the sanitisation boundary and took the whole
+    federated document with it. A URL whose host cannot be parsed has no host,
+    so it cannot be one of our instances: None is the honest answer and it is
+    the same answer furl already gives for a URL with no authority at all
+    (mailto:, a bare path), which the caller already handles.
+
+    Only ValueError is caught, deliberately narrowly: anything else furl raises
+    is a new defect and should surface with its own traceback rather than be
+    swallowed here. That covers every refusal found by probing furl with 200,000
+    random short strings plus targeted malformed URLs. The one exotic spelling
+    that turned up, UnicodeEncodeError from the idna codec on a lone surrogate
+    in the host: a lone-surrogate escape in remote JSON decodes to exactly
+    such a string. It is caught too, because UnicodeEncodeError is itself a
+    subclass of ValueError.
+    """
+    try:
+        return furl(url).host
+    except ValueError:
+        return None
+
+
 # sanitise HTML using an allow list
 def allowlist_html(html: str, a_target='_blank', test_env=False) -> str:
     # RUN THE TESTS in tests/test_allowlist_html.py whenever you alter this function, it's fragile and bugs are hard to spot.
@@ -559,10 +591,11 @@ def allowlist_html(html: str, a_target='_blank', test_env=False) -> str:
                     # img, video and source are treated. Left alone deliberately.
                     if has_unsafe_url_scheme(tag['href']):
                         tag['href'] = ''
-                    else:
-                        f = furl(tag['href'])
-                        if f.host in instance_domains:
-                            tag['href'] = rewrite_href(tag['href'])
+                    elif url_host(tag['href']) in instance_domains:
+                        # url_host, not furl(...).host: furl raises ValueError on
+                        # a host it cannot parse, and an unguarded call here made
+                        # one malformed anchor fail the whole document to render.
+                        tag['href'] = rewrite_href(tag['href'])
                 else:
                     # This is a same-page anchor - a footnote, give unique suffix for href
                     tag.attrs['href'] = tag.attrs.get('href', '') + '-' + fn_string
