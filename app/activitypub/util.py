@@ -3484,6 +3484,48 @@ def remove_boost(post: Post, user: User) -> None:
     db.session.commit()
 
 
+AS_PUBLIC = ('https://www.w3.org/ns/activitystreams#Public', 'as:Public', 'Public')
+
+
+def _addressing_list(obj: dict, field: str) -> list:
+    """Normalise one ActivityPub addressing field to a list of strings.
+
+    `to` and `cc` are each independently a string, a list, or absent.
+    """
+    if not isinstance(obj, dict):
+        return []
+    value = obj.get(field)
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [entry for entry in value if isinstance(entry, str)]
+    return []
+
+
+def activitypub_visibility(obj: dict) -> str:
+    """Classify an object's audience as 'public', 'unlisted', 'followers' or 'direct'.
+
+    Pass the OBJECT, never the wrapping activity. In the boost path
+    create_resolved_object() synthesises {'id': ..., 'object': post_data} with no
+    addressing at the activity level, so reading the activity would see nothing and
+    classify everything as public.
+
+    Note that Post.private does NOT mean "not public": Post.new() sets it for any
+    titleless object, i.e. every microblog post, making it an unlisted marker.
+    PostReply.private does mean followers-only. The two are not the same thing.
+    """
+    to = _addressing_list(obj, 'to')
+    cc = _addressing_list(obj, 'cc')
+
+    if any(addr in AS_PUBLIC for addr in to):
+        return 'public'
+    if any(addr in AS_PUBLIC for addr in cc):
+        return 'unlisted'
+    if any(addr.endswith('/followers') for addr in to + cc):
+        return 'followers'
+    return 'direct'
+
+
 def announce_target_uri(activity: dict) -> Union[str, None]:
     """Return the URI of the object an Announce (or Undo/Announce) refers to.
 
