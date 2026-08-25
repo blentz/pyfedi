@@ -324,6 +324,9 @@ def create_app(config_class=Config):
     from app.plugins import load_plugins
     load_plugins()
 
+    from app.request_hooks import register_request_hooks
+    register_request_hooks(app)
+
     return app
 
 
