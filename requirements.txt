@@ -39,6 +39,7 @@ ua-parser[regex]
 captcha
 pytest
 pytest-cov
+pytest-timeout
 respx
 moto
 fakeredis
