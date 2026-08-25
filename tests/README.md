@@ -78,7 +78,14 @@ and a hardcoded username, and is excluded from the standard run.
 `app/request_hooks.py` is held at 100% branch coverage:
 
     ./run_tests.sh tests/ -q --ignore=tests/test_activitypub_util.py \
-        --cov=app/request_hooks.py --cov-branch --cov-report=term-missing --cov-fail-under=100
+        --cov=app.request_hooks --cov-branch --cov-report=term-missing --cov-fail-under=100
+
+Use the dotted module form (`--cov=app.request_hooks`), not a file path
+(`--cov=app/request_hooks.py`). The file-path form reports `Module
+app/request_hooks.py was never imported` and measures 0% in this environment
+(pytest-cov against pytest 9.1.1 / coverage.py 7.15.4, no pyproject.toml /
+pytest.ini / .coveragerc in this repo) even though the module is plainly
+imported and exercised -- silently failing the gate for the wrong reason.
 
 Branch coverage, not just line coverage: `after_request` is dense with
 conditionals, and line coverage alone reports 100% while leaving whole branches

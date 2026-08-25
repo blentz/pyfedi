@@ -130,7 +130,11 @@ def register_request_hooks(app):
         # Don't set cookies for static resources or ActivityPub responses to make them cachable
         if request.path.startswith('/static/') or request.path.startswith('/bootstrap/static/') or response.content_type == 'application/activity+json':
             # Remove session cookies that mess up caching
-            if 'session' in dir(flask):
+            # pragma: no branch justification: flask.session always exists in every
+            # Flask version this project supports, so the false side of this
+            # condition is unreachable without deleting an attribute from the flask
+            # module itself -- there is no real code path that takes it.
+            if 'session' in dir(flask):  # pragma: no branch
                 from flask import session
                 session.modified = False
             # Cache headers for static resources
