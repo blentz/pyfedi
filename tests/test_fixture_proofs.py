@@ -23,8 +23,24 @@ def test_redis_double_backs_a_real_captcha_round_trip(app, redis_double):
 
 
 def test_redis_double_rejects_a_malformed_uuid(app, redis_double):
-    """The regex guard rejects before any Redis call."""
-    assert decode_captcha('not-a-uuid', 'wxyz') is False
+    """The regex guard rejects a malformed uuid BEFORE any Redis call.
+
+    Seeded with the exact key a guardless decode_captcha would look up, and with
+    a code that would match. So False here can only come from the guard: delete
+    the guard from app/utils.py and this returns True, because the lookup then
+    succeeds. (Asserting False against an *unseeded* double proves nothing --
+    the lookup would simply miss and return False either way.)
+
+    The surviving key is the second half of the proof: decode_captcha deletes
+    the key as soon as it reads it, so a key still present means Redis was never
+    reached.
+    """
+    redis_double.set('captcha_not-a-uuid', 'WXYZ', ex=1800)
+
+    assert decode_captcha('not-a-uuid', 'wxyz') is False, \
+        'the guard must reject before the seeded code can match'
+    assert redis_double.get('captcha_not-a-uuid') == 'WXYZ', \
+        'the key survives, so no Redis lookup happened'
 
 
 def test_s3_bucket_fixture_provides_a_usable_bucket(app, s3_bucket):

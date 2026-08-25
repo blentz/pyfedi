@@ -83,9 +83,10 @@ and a hardcoded username, and is excluded from the standard run.
 Use the dotted module form (`--cov=app.request_hooks`), not a file path
 (`--cov=app/request_hooks.py`). The file-path form reports `Module
 app/request_hooks.py was never imported` and measures 0% in this environment
-(pytest-cov against pytest 9.1.1 / coverage.py 7.15.4, no pyproject.toml /
-pytest.ini / .coveragerc in this repo) even though the module is plainly
-imported and exercised -- silently failing the gate for the wrong reason.
+(pytest-cov against pytest 9.1.1 / coverage.py 7.15.4) even though the module is
+plainly imported and exercised -- silently failing the gate for the wrong
+reason. This was re-checked with the `.coveragerc` this branch adds in place:
+the warning still occurs, so the advice does not depend on config being absent.
 
 Branch coverage, not just line coverage: `after_request` is dense with
 conditionals, and line coverage alone reports 100% while leaving whole branches
@@ -115,9 +116,22 @@ one is a sub-project's deliverable, and lowering one to make a run pass defeats
 the ratchet. A module with no entry is ignored, so unfinished modules block
 nobody.
 
-    ./run_tests.sh tests/ -q --ignore=tests/test_activitypub_util.py --cov=app --cov-report=json
+    ./run_tests.sh tests/ -q --ignore=tests/test_activitypub_util.py --cov=app --cov-report=json && \
     podman-compose -f compose.test.yaml exec -T test-runner \
         python tests/check_coverage_floors.py coverage.json coverage_floors.ini
+
+**Run it as one `&&` chain, exactly as written.** `coverage.json` is gitignored,
+so it is not cleaned up and it persists in the working tree between runs. A
+pytest invocation that fails — or that never starts, e.g. a typo in a test path
+— writes no new report, and the ratchet run afterwards will happily pass against
+the *previous* run's file. A red suite followed by a green ratchet. Nothing
+detects that automatically; the `&&` is what protects you. The checker prints
+the report's absolute path and modification time on every run so you can see for
+yourself which report was measured.
+
+The checker fails closed. A missing, unreadable, section-less or empty
+`coverage_floors.ini` exits 2 with an error rather than reporting "All 0 module
+floors met." Exit codes: 0 met, 1 violated, 2 could not check.
 
 coverage.py's own `fail_under` is a single global number, which is why the
 per-module check is a script.
@@ -131,9 +145,16 @@ per-module check is a script.
   `is_invalid_get_request_uri()` before respx sees them. Pass
   `include_inbox=True` to also register the actor's inbox for a POST.
 - `s3_bucket` — a moto-backed bucket, yields the bucket name.
-- `redis_double` — fakeredis patched over `app.utils.get_redis_connection`. Note
-  the rate limiter and Celery app are built from `Config` at import time and are
-  not affected by it.
+- `redis_double` — fakeredis patched over `get_redis_connection`. Patched at
+  **four** binding sites, not one: `app.utils`, `app.main.routes`, `app.cli` and
+  `app.activitypub.routes`. `from app.utils import get_redis_connection` binds a
+  new name in the importing module at import time, so patching `app.utils` alone
+  leaves those three pointing at the original and talking to the real, shared
+  test Redis. Add any fifth such import to the fixture's list. Still not covered:
+  `app.redis_client` (a module-level global assigned by `create_app()`, read via
+  `from app import redis_client` in `app/shared/post.py`, `app/cli.py` and
+  `app/admin/routes.py`), and the rate limiter and Celery app, which are built
+  from `Config` at import time.
 - Celery runs eagerly under test, with `eager_propagates` so a failing task
   raises rather than being swallowed. Configured in the `app` fixture, on
   `celery.conf` directly (**not** `TestConfig` attributes), in the OLD key
@@ -147,7 +168,27 @@ per-module check is a script.
   explicitly tolerates a setting given under both names and converts the new one
   to the old key before storing it.
 - `block_outbound_http` — session-scoped and autouse: an empty respx router, so
-  any request no `http_mock` matched raises instead of reaching the network.
+  any outbound **httpx** request no `http_mock` matched raises instead of
+  reaching the network. **It blocks httpx and nothing else** — respx patches
+  httpx's transports only. Three transports in `app/` are **not yet blocked**
+  and do reach the real internet under this harness (all three verified by
+  probe, not inferred):
+  - `urllib` — `app/nntp/server.py:767` (`urllib.request.urlopen`). A probe
+    against `https://example.com/` returned 200 with the fixture active.
+  - `botocore`/`urllib3` (boto3) — ten modules: `app/cli.py`, `app/email.py`,
+    `app/admin/util.py`, `app/community/util.py`, `app/utils.py`,
+    `app/activitypub/util.py`, `app/main/routes.py`, `app/shared/post.py`,
+    `app/shared/tasks/maintenance.py`, `app/shared/upload.py`. The `s3_bucket`
+    fixture covers this, but it is function-scoped and opt-in: a test that
+    drives S3 code without requesting it calls real AWS.
+  - `smtplib` — `app/email.py:164-166`. `TestConfig`'s `MAIL_SUPPRESS_SEND`
+    governs Flask-Mail, not this code path.
+
+  If you are writing the harness for `app/nntp/`, an S3-using module or
+  `app/email.py`, arrange your own isolation; do not assume this fixture covers
+  you. Closing the gap properly means a socket-level block, which is a design
+  change nobody has ruled on yet.
+
   Without it, eager Celery turns every federating test into real outbound
   timeouts (`tests/test_announce_dispatch.py` measured 1.15s with it, 119s
   without). respx consults routers in registration order, so this one is asked
