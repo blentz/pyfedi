@@ -151,10 +151,14 @@ per-module check is a script.
   new name in the importing module at import time, so patching `app.utils` alone
   leaves those three pointing at the original and talking to the real, shared
   test Redis. Add any fifth such import to the fixture's list. Still not covered:
-  `app.redis_client` (a module-level global assigned by `create_app()`, read via
-  `from app import redis_client` in `app/shared/post.py`, `app/cli.py` and
-  `app/admin/routes.py`), and the rate limiter and Celery app, which are built
-  from `Config` at import time.
+  `app.redis_client` — a module-level global assigned by `create_app()` and read
+  via `from app import redis_client` in roughly 14 modules
+  (`grep -rn 'from app import.*redis_client' app/` for the current set; not
+  listed here because such a list rots). That is a far wider surface than
+  `get_redis_connection`'s four bindings, so a sub-project needing Redis
+  isolation across `app/` should plan to patch `app.redis_client` as well, and
+  to widen this fixture rather than hand-roll its own. Also not covered: the
+  rate limiter and Celery app, built from `Config` at import time.
 - Celery runs eagerly under test, with `eager_propagates` so a failing task
   raises rather than being swallowed. Configured in the `app` fixture, on
   `celery.conf` directly (**not** `TestConfig` attributes), in the OLD key
