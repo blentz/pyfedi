@@ -1,13 +1,20 @@
-"""`app.utils.back` and the routes that had its body copied into them.
+"""`app.utils.back` and the ten routes that had its body copied into them.
 
 `back(default)` sends a user to the page they came from, falling back to
-`default` when there is no Referer or when the Referer is the URL being
-requested (which would be a redirect loop). Two feed routes carried a verbatim
-copy of that logic -- comments included -- instead of calling it.
+`default` when there is no Referer, when the Referer is the URL being requested
+(which would be a redirect loop), or when the Referer does not point at this
+site (`is_safe_redirect_target` -- see tests/test_safe_redirect_target.py).
 
-The route tests here are pins: they assert the redirect each route produced
-BEFORE the copies were replaced, so they hold the refactor to "no behaviour
-change" rather than merely exercising the new call.
+Two feed routes carried a verbatim copy of that logic -- comments included. The
+TestFeedDeleteRedirect / TestFeedAddCommunityRedirect tests are the pins from
+that refactor: they assert the redirect those routes produced BEFORE the copies
+were replaced.
+
+The eight BackSiteContract subclasses at the bottom are the remaining sites,
+unified afterwards. Those are NOT no-behaviour-change pins: every one of them
+gained the self-URL guard and the empty-Referer fallback, six of them gained an
+origin check they never had, and two had a bypassable substring check replaced
+with a real one. The per-class docstrings say which.
 """
 
 import pytest
@@ -15,7 +22,7 @@ from flask import request, session
 from flask_wtf.csrf import generate_csrf
 
 from app import db
-from app.models import Feed
+from app.models import Feed, Site
 from app.utils import back
 from tests.factories import make_community, make_instance, make_user
 
@@ -82,6 +89,30 @@ class TestBack:
         with app.test_request_context('/here', headers={'Referer': ''}):
             response = back('/fallback')
         assert response.headers['Location'] == '/fallback'
+
+    def test_an_off_site_referrer_falls_back(self, app):
+        """back() used to follow any Referer at all, which made every caller an
+        open redirect. It now runs the same origin check referrer() does."""
+        with app.test_request_context('/here', headers={'Referer': 'https://evil.example/x'}):
+            response = back('/fallback')
+        assert response.headers['Location'] == '/fallback'
+
+    def test_a_substring_lookalike_referrer_falls_back(self, app):
+        with app.test_request_context(
+                '/here', headers={'Referer': 'https://evil.example/?x=test.piefed.local'}):
+            response = back('/fallback')
+        assert response.headers['Location'] == '/fallback'
+
+    def test_a_protocol_relative_referrer_falls_back(self, app):
+        with app.test_request_context('/here', headers={'Referer': '//evil.example/x'}):
+            response = back('/fallback')
+        assert response.headers['Location'] == '/fallback'
+
+    def test_an_on_site_absolute_referrer_is_followed(self, app):
+        with app.test_request_context(
+                '/here', headers={'Referer': 'https://test.piefed.local/there'}):
+            response = back('/fallback')
+        assert response.headers['Location'] == 'https://test.piefed.local/there'
 
 
 class TestFeedDeleteRedirect:
@@ -169,3 +200,214 @@ class TestFeedAddCommunityRedirect:
             login(client, user)
             response = self._add(client, user, feed, community, headers={'Referer': same})
         assert response.headers['Location'] == '/home'
+
+
+# ---------------------------------------------------------------------------
+# The eight sites that had `Referer`-handling copied into them and are now
+# routed through back(). Each subclass supplies the request; the contract below
+# is the same for all of them, because that is the point of unifying them.
+#
+# Two of these sites (community subscribe/unsubscribe) previously carried
+# `current_app.config['SERVER_NAME'] in referrer` -- a substring test. The other
+# six carried NO origin check at all and would follow any Referer anywhere, so
+# for those the "off-site referrer" and "lookalike" cases below are the tests of
+# a closed open-redirect, not of preserved behaviour. All eight previously
+# lacked the self-URL guard and accepted an empty `Referer:` header.
+# ---------------------------------------------------------------------------
+
+SELF = object()
+
+
+class BackSiteContract:
+    """The behaviour every route routed through back() now has."""
+
+    #: set by prepare()
+    expected_default = None
+
+    def prepare(self):
+        """Create the DB rows. Return (path, user_or_None) and set
+        self.expected_default."""
+        raise NotImplementedError
+
+    def _run(self, app, referer):
+        path, user = self.prepare()
+        headers = {}
+        if referer is SELF:
+            headers['Referer'] = url_of(app, path)
+        elif referer is not None:
+            headers['Referer'] = referer
+        with app.test_client() as client:
+            if user is not None:
+                login(client, user)
+            return client.get(path, headers=headers)
+
+    def test_a_same_site_referrer_is_followed(self, app, db_session, site):
+        response = self._run(app, 'https://test.piefed.local/came-from')
+        assert response.status_code == 302
+        assert response.headers['Location'] == 'https://test.piefed.local/came-from'
+
+    def test_a_relative_referrer_is_followed(self, app, db_session, site):
+        response = self._run(app, '/came-from')
+        assert response.headers['Location'] == '/came-from'
+
+    def test_an_off_site_referrer_goes_to_the_default(self, app, db_session, site):
+        response = self._run(app, 'https://evil.example/x')
+        assert response.headers['Location'] == self.expected_default
+
+    def test_a_substring_lookalike_referrer_goes_to_the_default(self, app, db_session, site):
+        response = self._run(app, 'https://evil.example/?x=test.piefed.local')
+        assert response.headers['Location'] == self.expected_default
+
+    def test_a_protocol_relative_referrer_goes_to_the_default(self, app, db_session, site):
+        response = self._run(app, '//evil.example/x')
+        assert response.headers['Location'] == self.expected_default
+
+    def test_no_referrer_goes_to_the_default(self, app, db_session, site):
+        response = self._run(app, None)
+        assert response.headers['Location'] == self.expected_default
+
+    def test_an_empty_referer_header_goes_to_the_default(self, app, db_session, site):
+        """Previously `referrer is not None` was true for '', so these routes
+        emitted `redirect('')`."""
+        response = self._run(app, '')
+        assert response.headers['Location'] == self.expected_default
+
+    def test_a_referrer_equal_to_the_request_url_goes_to_the_default(self, app, db_session, site):
+        """Previously these routes redirected to the page being requested."""
+        response = self._run(app, SELF)
+        assert response.headers['Location'] == self.expected_default
+
+
+def open_registration():
+    """approval_required redirects a key-less local user while the site is
+    'Closed' (the Site default), which would short-circuit the routes below."""
+    db.session.get(Site, 1).registration_mode = 'Open'
+    db.session.commit()
+
+
+class TestCommunitySubscribe(BackSiteContract):
+    """app/community/routes.py subscribe -- had the SERVER_NAME substring guard."""
+
+    def prepare(self):
+        instance = make_instance('test.piefed.local', software='piefed')
+        user = make_user(instance, 'joiner', local=True)
+        open_registration()
+        community = make_community('joinable')
+        self.expected_default = '/c/joinable'
+        return f'/community/{community.name}/subscribe', user
+
+
+class TestCommunityUnsubscribe(BackSiteContract):
+    """app/community/routes.py unsubscribe -- had the SERVER_NAME substring guard."""
+
+    def prepare(self):
+        instance = make_instance('test.piefed.local', software='piefed')
+        user = make_user(instance, 'leaver', local=True)
+        community = make_community('leavable')
+        self.expected_default = '/c/leavable'
+        return f'/community/{community.name}/unsubscribe', user
+
+
+class TestCommunityLookupRemote(BackSiteContract):
+    """app/community/routes.py lookup, the anonymous branch -- no origin check
+    at all before this change."""
+
+    def prepare(self):
+        self.expected_default = '/'
+        return '/community/lookup/somewhere/remote.example', None
+
+
+class TestFeedSubscribe(BackSiteContract):
+    """app/feed/routes.py subscribe -- no origin check at all before this change."""
+
+    def prepare(self):
+        instance = make_instance('test.piefed.local', software='piefed')
+        user = make_user(instance, 'feed-joiner', local=True)
+        user.feed_auto_follow = False
+        db.session.commit()
+        open_registration()
+        feed = make_feed(user, 'joinable-feed')
+        self.expected_default = '/f/joinable-feed'
+        return f'/feed/{feed.name}/subscribe', user
+
+
+class TestFeedUnsubscribe(BackSiteContract):
+    """app/feed/routes.py feed_unsubscribe -- no origin check at all before."""
+
+    def prepare(self):
+        instance = make_instance('test.piefed.local', software='piefed')
+        user = make_user(instance, 'feed-leaver', local=True)
+        feed = make_feed(user, 'leavable-feed')
+        self.expected_default = '/f/leavable-feed'
+        return f'/feed/{feed.name}/unsubscribe', user
+
+
+class TestFeedLookupRemote(BackSiteContract):
+    """app/feed/routes.py lookup, the anonymous branch -- no origin check before."""
+
+    def prepare(self):
+        self.expected_default = '/'
+        return '/feed/lookup/somewhere/remote.example', None
+
+
+class TestUserLookupNotRetrieved(BackSiteContract):
+    """app/user/routes.py lookup, the authenticated "could not be retrieved"
+    branch -- no origin check before. search_for_user fails because outbound
+    HTTP is blocked in the harness, which is exactly the branch under test."""
+
+    def prepare(self):
+        instance = make_instance('test.piefed.local', software='piefed')
+        user = make_user(instance, 'searcher', local=True)
+        self.expected_default = '/'
+        return '/user/lookup/nobody/remote.example', user
+
+
+class TestUserLookupAnonymous(BackSiteContract):
+    """app/user/routes.py lookup, the anonymous branch -- no origin check before."""
+
+    def prepare(self):
+        self.expected_default = '/'
+        return '/user/lookup/nobody/remote.example', None
+
+
+class TestReferrerDefaultIsNotAnEscapeHatch:
+    """Two routes passed the POSTed `referrer` field to referrer() as its
+    DEFAULT as well: `redirect(referrer(form.referrer.data))`.
+
+    The field is a HiddenField named `referrer`, so it is already referrer()'s
+    source #2 and is now checked. Passing it a second time as the default
+    re-injected the same user-controlled string on the unchecked path, undoing
+    the guard. The sibling route two functions above (post_reminder) already
+    called `referrer()` with no argument, so dropping it is the consistent form
+    as well as the safe one.
+
+    Sites: app/instance/routes.py instance_add_people,
+           app/post/routes.py post_reply_reminder.
+    """
+
+    def _post(self, app, client, referrer_field):
+        token = csrf(app, client)
+        return client.post('/instance/add_people',
+                           data={'csrf_token': token, 'people': '',
+                                 'referrer': referrer_field, 'submit': 'Add people'})
+
+    def _user(self):
+        instance = make_instance('test.piefed.local', software='piefed')
+        user = make_user(instance, 'adder', local=True)
+        open_registration()
+        return user
+
+    def test_a_cross_origin_referrer_field_does_not_come_back_as_the_default(self, app, db_session, site):
+        user = self._user()
+        with app.test_client() as client:
+            login(client, user)
+            response = self._post(app, client, 'https://evil.example/phish')
+        assert response.status_code == 302
+        assert response.headers['Location'] == '/home'
+
+    def test_a_same_origin_referrer_field_is_still_honoured(self, app, db_session, site):
+        user = self._user()
+        with app.test_client() as client:
+            login(client, user)
+            response = self._post(app, client, 'https://test.piefed.local/instance/x')
+        assert response.headers['Location'] == 'https://test.piefed.local/instance/x'

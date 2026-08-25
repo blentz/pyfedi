@@ -33,7 +33,7 @@ from app.user.forms import ProfileForm, SettingsForm, DeleteAccountForm, ReportU
 from app.user.utils import unsubscribe_from_community, search_for_user, _get_user_moderates, \
     _get_user_upvoted_posts, _get_user_subscribed_communities, _get_user_posts, _get_user_post_replies, \
     _get_user_archived_replies, _get_user_posts_and_replies, _get_user_same_ip, insert_or_update_user_note
-from app.utils import render_template, markdown_to_html, user_access, markdown_to_text, shorten_string, \
+from app.utils import back, render_template, markdown_to_html, user_access, markdown_to_text, shorten_string, \
     gibberish, community_membership, user_filters_home, \
     user_filters_posts, user_filters_replies, theme_list, \
     blocked_users, add_to_modlog, \
@@ -2115,21 +2115,14 @@ def lookup(person, domain):
                     flash(_('Sorry, that instance is blocked, check https://gui.fediseer.com/ for reasons.'), 'warning')
             if not new_person or new_person.banned:
                 flash(_('That person could not be retrieved or is banned from %(site)s.', site=g.site.name), 'warning')
-                referrer = request.headers.get('Referer', None)
-                if referrer is not None:
-                    return redirect(referrer)
-                else:
-                    return redirect('/')
+                # send them back where they came from
+                return back('/')
 
             return redirect('/u/' + new_person.ap_id)
         else:
             # send them back where they came from
             flash(_('Searching for remote people requires login'), 'error')
-            referrer = request.headers.get('Referer', None)
-            if referrer is not None:
-                return redirect(referrer)
-            else:
-                return redirect('/')
+            return back('/')
 
 
 # ----- user feed related routes

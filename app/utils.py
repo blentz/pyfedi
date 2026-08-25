@@ -1808,16 +1808,110 @@ def is_bot(user_agent) -> bool:
     return False
 
 
+# Characters a browser strips from a URL before parsing it (tab, LF, CR). We strip
+# them too, so this function and the browser cannot disagree about the host.
+_URL_STRIPPED_BY_BROWSERS = str.maketrans('', '', '\t\n\r')
+
+
+def is_safe_redirect_target(url) -> bool:
+    """True when `url` can be handed to `redirect()` without leaving this site.
+
+    This is THE origin check. Every place a user-influenced URL becomes a
+    redirect target -- `back()`, and all three of `referrer()`'s sources -- goes
+    through it, so there is one implementation and one behaviour.
+
+    Accepted:
+      - relative URLs (`/foo`, `foo`, `?x=1`, `#frag`): same-origin by definition.
+      - absolute `http://` or `https://` URLs whose HOST equals `SERVER_NAME`.
+
+    Rejected: any other host, protocol-relative `//host/x`, a backslash standing
+    in for the authority slashes, any non-http(s) scheme (`javascript:`, `data:`,
+    ...), control characters, and anything `urlparse` will not parse.
+
+    Two decisions worth stating, because they are the ones that make this
+    different from what it replaces:
+
+    * It compares the parsed HOST, not `SERVER_NAME in url`. The substring form
+      that used to guard `referrer()` and two community routes accepts
+      `https://evil.example/?x=<SERVER_NAME>` -- the server name is in the query
+      string -- and also `https://<SERVER_NAME>@evil.example/`, where everything
+      before the `@` is userinfo the browser ignores.
+
+    * `SERVER_NAME` may carry a port (`env.sample` ships `127.0.0.1:5000`), so the
+      port is stripped from it before comparing, and the URL's port is IGNORED.
+      Ports are a deployment detail -- a dev server on :5000, a public origin on
+      :443 behind a proxy -- and a same-host different-port URL requires an
+      attacker to already control a service on this very host, at which point a
+      redirect is not the weak link. Host identity is the control that matters.
+      Requiring an exact port match would instead break "go back" on real
+      deployments whose `SERVER_NAME` and public port disagree.
+
+    Scheme mismatch (`http://` to an https site, or the reverse) is ACCEPTED.
+    Rejecting it buys nothing: an attacker cannot make `http://<our host>` serve
+    their content, so both schemes land on this site either way. PieFed also
+    supports `HTTP_PROTOCOL = 'mixed'`, and a Referer legitimately arrives with
+    either scheme from behind a TLS-terminating proxy. Every scheme that is
+    actually dangerous is not http(s) at all, and those are rejected outright.
+    """
+    if not isinstance(url, str):
+        return False
+    candidate = url.strip().translate(_URL_STRIPPED_BY_BROWSERS)
+    if not candidate:
+        return False
+    if any(ord(char) < 0x20 or ord(char) == 0x7f for char in candidate):
+        return False
+    # WHATWG URL treats a backslash in the authority position as a forward slash,
+    # so `/\evil.example` navigates to another origin even though urlparse reports
+    # it as an ordinary relative path. Normalise before deciding.
+    candidate = candidate.replace('\\', '/')
+    try:
+        parsed = urlparse(candidate)
+        host = parsed.hostname
+        parsed.port  # raises ValueError on a port that is not a number in range
+    except ValueError:
+        # Malformed IPv6 literals ('http://[::1') and out-of-range ports land
+        # here. Unparseable is not same-origin.
+        return False
+
+    if not parsed.scheme and not parsed.netloc:
+        # Relative -- unless it opens with the authority marker. urlparse reports
+        # '///evil.example' as the relative path '/evil.example' with no netloc,
+        # but a browser reads three-or-more leading slashes as an authority and
+        # navigates off-site. Anything starting '//' is not relative here.
+        return not candidate.startswith('//')
+
+    if parsed.scheme.lower() not in ('http', 'https'):
+        return False
+
+    if not host:
+        return False
+
+    server_name = (current_app.config.get('SERVER_NAME') or '').strip().lower()
+    if not server_name:
+        return False
+    expected_host = urlparse(f'//{server_name}').hostname
+    if not expected_host:
+        return False
+
+    # Both sides are already lower-case -- urlparse's .hostname normalises the case
+    # of an ASCII host, and config.py lower-cases SERVER_NAME at import. Neither
+    # .lower() below is therefore discriminated by a test; they are here so the
+    # comparison stays correct if either of those normalisations goes away.
+    return host.lower() == expected_host.lower()
+
+
 # sends the user back to where they came from
 def back(default_url):
     # Get the referrer from the request headers
     referrer = request.referrer
 
-    # If the referrer exists and is not the same as the current request URL, redirect to the referrer
-    if referrer and referrer != request.url:
+    # Redirect to the referrer when there is one, it is not the URL being requested
+    # (which would be a loop), and it points at this site (an unchecked Referer is an
+    # open redirect -- see is_safe_redirect_target).
+    if referrer and referrer != request.url and is_safe_redirect_target(referrer):
         return redirect(referrer)
 
-    # If referrer is not available or is the same as the current request URL, redirect to the default URL
+    # Otherwise the default URL.
     return redirect(default_url)
 
 
@@ -3234,12 +3328,20 @@ def instance_software(domain: str):
 # ----------------------------------------------------------------------
 # Return contents of referrer with a fallback
 def referrer(default: str = None) -> str:
-    if request.args.get('next'):
-        return request.args.get('next')
-    if request.form.get('referrer'):
-        return request.form.get('referrer')
-    if request.referrer and current_app.config['SERVER_NAME'] in request.referrer:
-        return request.referrer
+    """Where to send the user next, from the first source that is safe to use.
+
+    All three sources are user-controlled and ~29 call sites hand the result
+    straight to `redirect()`, so each one is checked with is_safe_redirect_target
+    -- the same function `back()` uses. `?next=` and the posted `referrer` field
+    used to be returned verbatim (`?next=https://evil.example` was an open
+    redirect) and the header was guarded only by a bypassable substring test.
+
+    A source that fails the check is skipped, not raised on: the next source is
+    tried, and finally the default.
+    """
+    for candidate in (request.args.get('next'), request.form.get('referrer'), request.referrer):
+        if candidate and is_safe_redirect_target(candidate):
+            return candidate
     if default:
         return default
     return url_for('main.index')

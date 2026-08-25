@@ -581,11 +581,8 @@ def feed_create_post(feed_name):
 @approval_required
 def subscribe(actor):
     join_feed(actor, current_user.id)
-    referrer = request.headers.get('Referer', None)
-    if referrer is not None:
-        return redirect(referrer)
-    else:
-        return redirect('/f/' + actor)
+    # send them back where they came from
+    return back('/f/' + actor)
 
 
 @bp.route('/feed/<actor>/unsubscribe', methods=['GET'])
@@ -654,11 +651,7 @@ def feed_unsubscribe(actor):
                 flash(_('You need to make someone else the owner before unsubscribing.'), 'warning')
 
         # send them back where they came from
-        referrer = request.headers.get('Referer', None)
-        if referrer is not None:
-            return redirect(referrer)
-        else:
-            return redirect('/f/' + actor)
+        return back('/f/' + actor)
     else:
         abort(404)
 
@@ -700,11 +693,7 @@ def lookup(feedname, domain):
         else:
             # send them back where they came from
             flash(_('Searching for remote feeds requires login'), 'error')
-            referrer = request.headers.get('Referer', None)
-            if referrer is not None:
-                return redirect(referrer)
-            else:
-                return redirect('/')
+            return back('/')
 
 
 @bp.route('/f/<path:feed_path>.rss', methods=['GET'])

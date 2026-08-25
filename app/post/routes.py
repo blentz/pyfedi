@@ -1308,7 +1308,9 @@ def post_reply_reminder(post_reply_id: int):
         db.session.add(reminder)
         db.session.commit()
         flash(_('Reminder added for %(when)s', when=str(remind_at)))
-        return redirect(referrer(form.referrer.data))
+        # form.referrer.data is already referrer()'s second source (the field is named
+        # `referrer`), and passing it as the default too would re-inject it unchecked.
+        return redirect(referrer())
     else:
         form.referrer.data = request.referrer
         return render_template('generic_form.html',
