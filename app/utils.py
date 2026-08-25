@@ -3270,8 +3270,12 @@ def decode_captcha(uuid: str, code: str):
         return False
 
     redis_client = get_redis_connection()
-    saved_code = redis_client.get("captcha_" + uuid)
-    redis_client.delete("captcha_" + uuid)
+    # GETDEL reads and deletes in a single atomic command (requires Redis >= 6.2,
+    # already the version pinned by compose.yaml/compose.dev.yaml/compose.test.yaml).
+    # A separate get() then delete() left a TOCTOU window: two concurrent callers
+    # could both read the code before either deleted it, so one solved captcha
+    # could validate more than once.
+    saved_code = redis_client.getdel("captcha_" + uuid)
     if saved_code is not None and code is not None:
         if code.lower() == saved_code.lower():
             return True
