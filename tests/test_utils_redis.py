@@ -45,6 +45,18 @@ class TestDecodeCaptcha:
         """The except TypeError arm: re.fullmatch(None) raises."""
         assert decode_captcha(None, 'wxyz') is False
 
+    def test_a_none_code_against_a_live_captcha_is_rejected_without_raising(self, app, redis_double):
+        """Regression guard: CaptchaField.post_validate passes self.data as
+        code, which WTForms leaves as None when the captcha field is omitted
+        from the submitted form. Without the `code is not None` guard,
+        `code.lower()` raises AttributeError instead of failing validation
+        cleanly -- distinct from the None-uuid case above, which is caught by
+        the regex guard before any Redis lookup happens; this one requires a
+        live, stored code so the code.lower() call is actually reached.
+        """
+        redis_double.set('captcha_' + 'd' * 24, 'WXYZ')
+        assert decode_captcha('d' * 24, None) is False
+
 
 class TestGetRedisConnection:
     def test_a_tcp_connection_string_is_parsed(self, app):

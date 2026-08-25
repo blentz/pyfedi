@@ -3272,7 +3272,7 @@ def decode_captcha(uuid: str, code: str):
     redis_client = get_redis_connection()
     saved_code = redis_client.get("captcha_" + uuid)
     redis_client.delete("captcha_" + uuid)
-    if saved_code is not None:
+    if saved_code is not None and code is not None:
         if code.lower() == saved_code.lower():
             return True
     return False
