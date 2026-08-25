@@ -228,7 +228,9 @@ def instance_add_people():
             bulk_follow.delay(current_user.id, to_follow)
         flash(_('%(num)d people will be followed. Please wait a few minutes while this happens in the background.',
                 num=len(to_follow)))
-        return redirect(referrer(form.referrer.data))
+        # form.referrer.data is already referrer()'s second source (the field is named
+        # `referrer`), and passing it as the default too would re-inject it unchecked.
+        return redirect(referrer())
 
     form.referrer.data = request.referrer
     return render_template('instance/add_people.html', title=_('Add people'), form=form)

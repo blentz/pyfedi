@@ -48,7 +48,7 @@ from app.community import bp
 from app.post.util import tags_to_string
 from app.shared.community import invite_with_chat, invite_with_email, subscribe_community, add_mod_to_community, \
     remove_mod_from_community, get_comm_flair_list, favorite_community
-from app.utils import get_setting, render_template, markdown_to_html, validation_required, \
+from app.utils import back, get_setting, render_template, markdown_to_html, validation_required, \
     shorten_string, gibberish, community_membership, \
     request_etag_matches, return_304, can_upvote, can_downvote, user_filters_posts, \
     joined_communities, moderating_communities, moderating_communities_ids, blocked_domains, \
@@ -828,11 +828,8 @@ def subscribe(actor):
         else:
             return render_template('community/_leave_button.html', community=community)
     else:
-        referrer = request.headers.get('Referer', None)
-        if referrer is not None and current_app.config['SERVER_NAME'] in referrer:
-            return redirect(referrer)
-        else:
-            return redirect('/c/' + actor)
+        # send them back where they came from
+        return back('/c/' + actor)
 
 
 # this is separated out from the subscribe route so it can be used by the
@@ -988,11 +985,7 @@ def unsubscribe(actor):
             return render_template('community/_join_button.html', community=community)
         else:
             # send them back where they came from
-            referrer = request.headers.get('Referer', None)
-            if referrer is not None and current_app.config['SERVER_NAME'] in referrer:
-                return redirect(referrer)
-            else:
-                return redirect('/c/' + actor)
+            return back('/c/' + actor)
     else:
         abort(404)
 
@@ -2761,11 +2754,7 @@ def lookup(community, domain):
         else:
             # send them back where they came from
             flash(_('Searching for remote communities requires login'), 'error')
-            referrer = request.headers.get('Referer', None)
-            if referrer is not None:
-                return redirect(referrer)
-            else:
-                return redirect('/')
+            return back('/')
 
 
 @bp.route('/check_url_already_posted')

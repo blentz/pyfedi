@@ -31,6 +31,12 @@ class TestRequestorDomain:
 
 
 class TestReferrer:
+    """referrer() reads three user-controlled sources -- ?next=, a posted
+    `referrer` form field, and the Referer header -- and ~29 call sites hand the
+    result straight to redirect(). Every source goes through
+    is_safe_redirect_target; a source that fails falls through to the next one
+    and ultimately to the default."""
+
     def test_the_next_query_parameter_wins(self, app):
         with app.test_request_context('/?next=/somewhere'):
             assert referrer() == '/somewhere'
@@ -44,18 +50,71 @@ class TestReferrer:
             assert referrer() == 'https://test.piefed.local/x'
 
     def test_an_off_site_referer_header_is_ignored(self, app):
-        """Fails if the SERVER_NAME check is dropped -- an open-redirect guard."""
+        """Fails if the origin check is dropped -- an open-redirect guard."""
         with app.test_request_context('/', headers={'Referer': 'https://evil.example/x'}):
             assert referrer(default='/fallback') == '/fallback'
 
-    def test_a_referer_that_merely_mentions_the_server_name_is_still_accepted(self, app):
-        """Documents a real weakness: `SERVER_NAME in referrer` is a substring
-        check, not an origin check. https://evil.example/?x=test.piefed.local
-        contains the SERVER_NAME as a query-string value and is accepted here,
-        even though it is not this site. Reported, not fixed here."""
+    # ---- the open-redirect / phishing vector -------------------------------
+    # ?next= and the posted `referrer` field used to be returned VERBATIM, with
+    # no check at all, and the Referer header was guarded only by the substring
+    # test `SERVER_NAME in referrer`. These four are the regression guards.
+
+    def test_a_cross_origin_next_parameter_is_rejected(self, app):
+        """THE phishing vector. `/?next=https://evil.example` used to be returned
+        unchecked and redirected to."""
+        with app.test_request_context('/?next=https://evil.example'):
+            assert referrer(default='/fallback') == '/fallback'
+
+    def test_a_same_origin_next_parameter_is_honoured(self, app):
+        with app.test_request_context('/?next=https://test.piefed.local/x'):
+            assert referrer(default='/fallback') == 'https://test.piefed.local/x'
+
+    def test_a_cross_origin_posted_referrer_field_is_rejected(self, app):
+        with app.test_request_context('/', method='POST',
+                                      data={'referrer': 'https://evil.example/x'}):
+            assert referrer(default='/fallback') == '/fallback'
+
+    def test_a_same_origin_posted_referrer_field_is_honoured(self, app):
+        with app.test_request_context('/', method='POST',
+                                      data={'referrer': 'https://test.piefed.local/x'}):
+            assert referrer(default='/fallback') == 'https://test.piefed.local/x'
+
+    def test_a_referer_that_merely_mentions_the_server_name_is_rejected(self, app):
+        """`SERVER_NAME in referrer` was a substring check, not an origin check:
+        https://evil.example/?x=test.piefed.local contains the SERVER_NAME as a
+        query-string value and used to be accepted. It is not this site."""
         with app.test_request_context(
                 '/', headers={'Referer': 'https://evil.example/?x=test.piefed.local'}):
-            assert referrer(default='/fallback') == 'https://evil.example/?x=test.piefed.local'
+            assert referrer(default='/fallback') == '/fallback'
+
+    def test_a_protocol_relative_next_parameter_is_rejected(self, app):
+        with app.test_request_context('/?next=//evil.example/x'):
+            assert referrer(default='/fallback') == '/fallback'
+
+    # ---- fall-through ------------------------------------------------------
+
+    def test_a_rejected_next_falls_through_to_the_form_field(self, app):
+        with app.test_request_context('/?next=https://evil.example',
+                                      method='POST', data={'referrer': '/from-form'}):
+            assert referrer(default='/fallback') == '/from-form'
+
+    def test_a_rejected_next_and_form_field_fall_through_to_the_header(self, app):
+        with app.test_request_context('/?next=https://evil.example',
+                                      method='POST',
+                                      data={'referrer': 'https://also-evil.example/x'},
+                                      headers={'Referer': 'https://test.piefed.local/x'}):
+            assert referrer(default='/fallback') == 'https://test.piefed.local/x'
+
+    def test_all_three_rejected_falls_through_to_the_default(self, app):
+        with app.test_request_context('/?next=https://evil.example',
+                                      method='POST',
+                                      data={'referrer': '//evil.example/x'},
+                                      headers={'Referer': 'https://evil.example/?x=test.piefed.local'}):
+            assert referrer(default='/fallback') == '/fallback'
+
+    def test_all_three_rejected_and_no_default_falls_through_to_the_index(self, app):
+        with app.test_request_context('/?next=javascript:alert(1)'):
+            assert referrer() == '/home'
 
     def test_the_default_is_used_when_nothing_else_matches(self, app):
         with app.test_request_context('/'):
