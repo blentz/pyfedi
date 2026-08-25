@@ -15,8 +15,7 @@ Registered in `pyfedi.py`, outside the factory:
 |---|---|
 | `pyfedi.py:30` | `@app.context_processor` — 20+ template globals |
 | `pyfedi.py:44` | `@app.shell_context_processor` |
-| `pyfedi.py:50` | `app.jinja_env.globals['len']` |
-| `pyfedi.py:79-84` | six `jinja_env.filters` |
+| `pyfedi.py:47-85` | one `with app.app_context():` block holding 35 `jinja_env` globals and filters |
 | `pyfedi.py:86` | `@app.before_request` |
 | `pyfedi.py:130` | `@app.after_request` |
 | `pyfedi.py:183` | `@app.teardown_appcontext` |
