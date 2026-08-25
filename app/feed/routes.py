@@ -26,7 +26,7 @@ from app.models import Feed, FeedMember, FeedItem, Community, NotificationSubscr
     CommunityMember, User, FeedJoinRequest, Instance, Topic, CommunityJoinRequest
 from app.shared.feed import join_feed, _feed_add_community, announce_feed_delete_to_subscribers, edit_feed, \
     form_communities_to_ids, make_feed, delete_feed
-from app.utils import show_ban_message, piefed_markdown_to_lemmy_markdown, markdown_to_html, render_template, \
+from app.utils import back, show_ban_message, piefed_markdown_to_lemmy_markdown, markdown_to_html, render_template, \
     user_filters_posts, joined_communities, menu_instance_feeds, validation_required, feed_membership, \
     gibberish, get_task_session, instance_banned, menu_subscribed_feeds, referrer, community_membership, \
     paginate_post_ids, get_deduped_post_ids, get_request, post_ids_to_models, recently_upvoted_posts, \
@@ -200,15 +200,7 @@ def feed_delete(feed_id: int):
         cache.delete_memoized(menu_instance_feeds)
 
     # send the user back to the page they came from or main
-    # Get the referrer from the request headers
-    referrer = request.referrer
-
-    # If the referrer exists and is not the same as the current request URL, redirect to the referrer
-    if referrer and referrer != request.url:
-        return redirect(referrer)
-
-    # If referrer is not available or is the same as the current request URL, redirect to the default URL
-    return redirect(url_for('main.index'))
+    return back(url_for('main.index'))
 
 
 @bp.route('/feed/<int:feed_id>/copy', methods=['GET', 'POST'])
@@ -358,15 +350,7 @@ def feed_add_community():
     _feed_add_community(community_id, current_feed_id, feed_id, user_id)
 
     # send the user back to the page they came from or main
-    # Get the referrer from the request headers
-    referrer = request.referrer
-
-    # If the referrer exists and is not the same as the current request URL, redirect to the referrer
-    if referrer and referrer != request.url:
-        return redirect(referrer)
-
-    # If referrer is not available or is the same as the current request URL, redirect to the default URL
-    return redirect(url_for('main.index'))
+    return back(url_for('main.index'))
 
 
 @bp.route('/feed/list', methods=['GET'])

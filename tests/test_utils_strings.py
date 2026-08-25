@@ -2,11 +2,10 @@ from app.utils import (domain_from_email, is_bot, is_video_hosting_site,
                        mimetype_from_url, reply_is_just_link_to_gif_reaction,
                        reply_is_low_effort, shorten_string, shorten_url)
 
-# NOTE: inbox_domain is intentionally NOT tested here. A caller check found no
-# reference to it anywhere in the codebase: not in any .py file (besides its own
-# definition), not registered as a Jinja global/filter in app/request_hooks.py or
-# profile_app.py, and not used in templates/. It is dead code. See
-# task-2-report.md for the finding.
+# NOTE: inbox_domain is covered in tests/test_instance_domain_lookup.py, together
+# with the four instance_* lookups that used to carry a copy of its body inline.
+# It had no callers when task-2-report.md was written; the duplication was the
+# defect, not the unused function.
 
 
 class TestIsVideoHostingSite:

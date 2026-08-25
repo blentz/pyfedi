@@ -231,7 +231,9 @@ statement-and-branch `percent_covered` from the full suite, rounded down —
 not 100%, because the module also holds many DB-backed and network-backed
 functions that sub-projects 1b and 1c are scoped to cover. Floors only rise:
 1b and 1c raise this one further as they close those gaps, they do not lower
-it.
+it. It is currently 48%: the client-IP fix (`tests/test_client_ip.py`) and the
+`back()` / `inbox_domain()` de-duplication (`tests/test_redirect_back.py`,
+`tests/test_instance_domain_lookup.py`) raised it from 46.
 
 Seven functions were identified in Task 1 as out of reach for a pure/context-only
 sub-project and moved out of scope, to be picked up by 1b or 1c:

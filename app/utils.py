@@ -1850,9 +1850,7 @@ def user_ip_banned() -> bool:
 def instance_allowed(host: str) -> bool:
     if host is None or host == '':
         return True
-    host = host.lower()
-    if 'https://' in host or 'http://' in host:
-        host = urlparse(host).hostname
+    host = inbox_domain(host)
     instance = db.session.query(AllowedInstances).filter_by(domain=host.strip()).first()
     return instance is not None
 
@@ -1863,9 +1861,7 @@ def instance_banned(domain: str) -> bool:
     try:
         if domain is None or domain == '':
             return False
-        domain = domain.lower().strip()
-        if 'https://' in domain or 'http://' in domain:
-            domain = urlparse(domain).hostname
+        domain = inbox_domain(domain.strip())
         banned = session.query(BannedInstances).filter_by(domain=domain).first()
         if banned is not None:
             return True
@@ -1885,9 +1881,7 @@ def instance_banned(domain: str) -> bool:
 def instance_online(domain: str) -> bool:
     if domain is None or domain == '':
         return False
-    domain = domain.lower().strip()
-    if 'https://' in domain or 'http://' in domain:
-        domain = urlparse(domain).hostname
+    domain = inbox_domain(domain.strip())
     session = get_task_session()  # noqa: F811
     try:
         instance = session.query(Instance).filter_by(domain=domain).first()
@@ -1906,9 +1900,7 @@ def instance_online(domain: str) -> bool:
 def instance_gone_forever(domain: str) -> bool:
     if domain is None or domain == '':
         return False
-    domain = domain.lower().strip()
-    if 'https://' in domain or 'http://' in domain:
-        domain = urlparse(domain).hostname
+    domain = inbox_domain(domain.strip())
     session = get_task_session()  # noqa: F811
     try:
         instance = session.query(Instance).filter_by(domain=domain).first()
@@ -2153,6 +2145,18 @@ def trusted_instance_ids() -> List[int]:
 
 
 def inbox_domain(inbox: str) -> str:
+    """Reduce an ActivityPub URL, or a bare domain, to a lower-case hostname.
+
+    Accepts both forms because callers hold values from either source: an inbox
+    or actor URL from a remote payload, or a domain already stored on a row. A
+    value with no scheme is only lower-cased. `.hostname` rather than `.netloc`,
+    so any port is dropped.
+
+    This is the single implementation of a normalisation that used to be copied
+    inline into instance_allowed, instance_banned, instance_online and
+    instance_gone_forever. It does not strip surrounding whitespace: those
+    callers strip before or after to preserve their own long-standing behaviour.
+    """
     inbox = inbox.lower()
     if 'https://' in inbox or 'http://' in inbox:
         inbox = urlparse(inbox).hostname
