@@ -6,7 +6,7 @@ rather than a copy of its SQL, so a restructure of the WHERE clause cannot pass 
 by. The observable behaviour is the list of post ids the function returns.
 
 Background: `Post.private` is the microblog marker, set by `Post.new()`
-(app/models.py ~1796) for any object with no `name`. It is NOT a followers-only
+(app/models.py:1834-1835) for any object with no `name`. It is NOT a followers-only
 flag; `create_post()` (app/activitypub/util.py ~2498) refuses `followers` and
 `direct` visibility before `Post.new()` is ever reached, so no non-public object
 becomes a Post at all. `tests/test_post_private_is_only_the_microblog_marker.py`

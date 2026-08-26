@@ -75,7 +75,7 @@ def make_post(community, user, ap_id: str, title: str = 'a post', private: bool 
     microblog=True reproduces the columns Post.new() sets for a Mastodon Note with
     no 'name': title='', private=True, microblog=True, and a non-empty body_html.
     It does NOT reproduce Post.new()'s activity-level Public check that can clear
-    private back to False for a genuinely unlisted post (app/models.py ~1796-1807)
+    private back to False for a genuinely unlisted post (app/models.py:1834-1846)
     -- private here is exactly the object-titleless default, nothing more. status is
     left at the column default (POST_STATUS_PUBLISHED = 1), which already matches
     what Post.new() implicitly leaves it at, since Post.new() never sets status
@@ -286,7 +286,7 @@ def make_follow(local_user, remote_user, is_accepted=True, is_inward=False) -> U
     app/activitypub/routes.py:1144 when a remote target's Accept arrives. It is a
     denormalised counter, not a view over user_follower, and
     `get_deduped_post_ids` reads THAT counter -- not the rows -- to decide whether
-    to add the follow and boost disjuncts at all (app/utils.py:3756). A follow row
+    to add the follow and boost disjuncts at all (app/utils.py:3815). A follow row
     without the counter is a shape production never produces, and it would make a
     feed test silently exercise the no-follows branch.
     """
