@@ -305,6 +305,18 @@ class TestReadLanguageIds:
     the appended fragment with `1=0 ` inside the same `if` -- every post
     would be excluded once read_language_ids is non-empty, including one
     whose language IS in the list.
+
+    `test_a_posts_null_language_is_present` below covers the `OR
+    p.language_id is null` escape hatch specifically. That term is a SQL-level
+    alternative living inside a query STRING, not a Python branch --
+    coverage.py's statement/branch measurement cannot see it, and the other
+    two tests in this class never exercise it (their posts always carry a
+    language_id). Without it, deleting `OR p.language_id is null` from
+    app/utils.py:3870 would go completely unnoticed by this file despite its
+    100% statement-and-branch reading. Real production impact
+    if it silently broke: any post with no language set would vanish from
+    the feed of every user who has chosen specific languages, even though
+    "no language" is not "a language I didn't choose".
     """
 
     def test_a_posts_unselected_language_is_absent(self, app, db_session, redis_double):
@@ -328,10 +340,12 @@ class TestReadLanguageIds:
         assert post.id not in ids
 
     def test_a_posts_selected_language_is_present(self, app, db_session, redis_double):
-        """Same viewer, same community, same Language rows; only
-        post.language_id flips from the unselected language to the selected
-        one. Proves the filter admits the language the viewer opted into
-        rather than excluding everything once read_language_ids is set.
+        """Same viewer, same community, same shape; only post.language_id
+        flips from the unselected language to the selected one. Proves the
+        filter admits the language the viewer opted into rather than
+        excluding everything once read_language_ids is set. No unselected
+        `other` Language is needed here -- unlike the absence test, this one
+        never has to demonstrate exclusion.
         """
         make_instance('langokhome.example')
         viewer = make_user(None, 'langokviewer', local=True)
@@ -339,11 +353,43 @@ class TestReadLanguageIds:
         community = make_community('langokcomm')
         post = make_post(community, author, 'https://langokhome.example/posts/1')
         wanted = Language(code='en', name='English')
-        other = Language(code='de', name='German')
-        db.session.add_all([wanted, other])
+        db.session.add(wanted)
         db.session.commit()
         post.language_id = wanted.id
         viewer.read_language_ids = [wanted.id]
+        viewer.hide_nsfw = 0
+        viewer.hide_nsfl = 0
+        db.session.commit()
+
+        ids = feed_ids(app, viewer, [community.id])
+
+        assert post.id in ids
+
+    def test_a_posts_null_language_is_present(self, app, db_session, redis_double):
+        """A post with NO language set (post.language_id left at make_post's
+        default, NULL) is present even though the viewer's read_language_ids
+        does not contain (and cannot contain -- it's None) anything matching
+        it. This is the `OR p.language_id is null` half of the clause, not
+        the `IN :read_language_ids` half the other two tests in this class
+        exercise -- the post's language is neither selected nor unselected,
+        it's simply unknown, and the filter's job is to let unknowns through
+        rather than hide them by default.
+
+        Mutation that fails only this test: deleting `OR p.language_id is
+        null` from app/utils.py:3870, leaving `p.language_id IN
+        :read_language_ids` as the sole predicate -- a NULL language_id can
+        never satisfy an IN list, so the post would vanish.
+        """
+        make_instance('langnullhome.example')
+        viewer = make_user(None, 'langnullviewer', local=True)
+        author = make_user(None, 'langnullauthor', local=True)
+        community = make_community('langnullcomm')
+        post = make_post(community, author, 'https://langnullhome.example/posts/1')
+        unrelated = Language(code='fr', name='French')
+        db.session.add(unrelated)
+        db.session.commit()
+        # post.language_id stays unset (NULL) -- never assigned
+        viewer.read_language_ids = [unrelated.id]
         viewer.hide_nsfw = 0
         viewer.hide_nsfl = 0
         db.session.commit()
