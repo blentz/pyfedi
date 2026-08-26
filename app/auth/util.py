@@ -6,7 +6,6 @@ import secrets
 from datetime import datetime, timedelta
 from typing import Any
 from unicodedata import normalize
-from urllib.parse import urlsplit
 
 from flask import current_app, flash, g, make_response, redirect, request, session, url_for
 from flask_babel import _
@@ -23,7 +22,8 @@ from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap, login_with_ldap
 from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role
 from app.utils import banned_ip_addresses, blocked_referrers, finalize_user_setup, get_request, get_setting, gibberish, \
-    ip_address, markdown_to_html, render_template, user_cookie_banned, user_ip_banned, role_access, actor_contains_blocked_words
+    ip_address, is_safe_redirect_target, markdown_to_html, render_template, safe_redirect_target, user_cookie_banned, \
+    user_ip_banned, role_access, actor_contains_blocked_words
 
 
 ALPHABET = string.ascii_letters + string.digits
@@ -366,10 +366,12 @@ def render_registration_form(form):
 
 
 def redirect_next_page():
-    next_page = request.args.get("next")
-    if not next_page or urlsplit(next_page).netloc != "":
-        next_page = url_for("main.index")
-    return redirect(next_page)
+    # `?next=` is attacker-supplied and this is the login flow, so it gets the
+    # same origin check as every other user-influenced redirect target. The
+    # urlsplit-netloc emptiness test this replaces rejected `//evil.example` but
+    # ACCEPTED `///evil.example`, `/\evil.example` and `\\evil.example`, all of
+    # which a browser reads as an authority and navigates off-origin.
+    return redirect(safe_redirect_target(request.args.get("next"), url_for("main.index")))
 
 
 def process_login(form: LoginForm):
@@ -498,8 +500,9 @@ def sync_user_with_ldap(user, password):
 
 
 def determine_next_page():
+    # See redirect_next_page for what the old netloc test let through.
     next_page = request.args.get("next")
-    if not next_page or urlsplit(next_page).netloc != "":
+    if not is_safe_redirect_target(next_page):
         next_page = url_for(
             "auth.filter_selection" if not current_user.finished_onboarding else "main.index"
         )

@@ -110,6 +110,48 @@ class TestLinksWithParens:
         html = '<a href="https://example.com/(x)">(x)</a>'
         assert links_with_parens(html) == html
 
+    def test_a_pushed_out_paren_joins_the_text_that_follows(self):
+        """Reaches the second arm of the push-out branch.
+
+        When the link is the last node (the test above) there is nothing to
+        prepend to, so the `)` is inserted as a new sibling. When a text node
+        FOLLOWS the link, the `)` is prepended to that node instead. This is the
+        case that reaches app/utils.py line 953 and branch [950, 953], which the
+        final whole-branch review found uncovered with no recorded reason. It is
+        reachable, so it is covered rather than pragma'd.
+        """
+        html = '<a href="https://example.com/x)">x)</a> and more'
+        result = links_with_parens(html)
+        assert result == '<a href="https://example.com/x">x</a>) and more'
+
+    def test_a_pushed_out_paren_absorbs_a_following_comment_into_text(self):
+        """PINS A PRE-EXISTING QUIRK, reported rather than fixed.
+
+        For ORDINARY text the two arms of the push-out branch are
+        indistinguishable in the output: prepending `)` to the following text
+        node and inserting `)` as a new sibling render identically, so the test
+        above raises coverage without discriminating between them. This case is
+        the difference.
+
+        bs4's Comment subclasses NavigableString, so an HTML comment following
+        the link takes the prepend arm. `")" + comment` is a plain str, and
+        replace_with then swaps the Comment node for a NavigableString -- the
+        comment's TEXT becomes visible content. The insert_after arm would have
+        left the comment intact.
+
+        Consequences checked before deciding not to fix: this is markdown output
+        heading for allowlist_html, the absorbed text is escaped as character
+        data like any other text, and it needs an author to write both an
+        unbalanced trailing `)` in a link and an adjacent HTML comment. Cosmetic,
+        not a security property. Fixing it means choosing what a comment beside a
+        link should do, which is a behaviour decision and its own change; this
+        test says what happens today so that change is visible when someone makes
+        it.
+        """
+        html = '<a href="https://example.com/x)">x)</a><!-- note -->'
+        result = links_with_parens(html)
+        assert result == '<a href="https://example.com/x">x</a>) note '
+
 
 class TestActorLinkHelpers:
     """The uncovered line in each is the `current_app.config` fallback branch,

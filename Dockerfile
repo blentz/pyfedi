@@ -17,6 +17,23 @@ RUN --mount=type=cache,target=/root/.cache/pip,id=pip-py313-slim \
 RUN --mount=type=cache,target=/root/.cache/pip,id=pip-py313-slim \
     pip install gunicorn
 
+# Test dependencies go here and NOWHERE ELSE. This stage is what
+# compose.test.yaml builds; `runtime` below copies /venv from `builder`, which
+# never sees requirements-test.txt, so nothing here reaches a production image.
+#
+# That separation is the point: atheris (the fuzzing engine) publishes no
+# aarch64 wheel, so an entry for it in requirements.txt makes
+# `pip install -r requirements.txt` build it from source -- needing clang with
+# libFuzzer -- and fail outright on any ARM64 host.
+#
+# This stage must stay ABOVE `runtime`: a Dockerfile with no --target builds the
+# LAST stage, and that has to remain the production image.
+FROM builder AS test
+
+RUN --mount=type=cache,target=/root/.cache/pip,id=pip-py313-slim \
+    --mount=source=requirements-test.txt,target=/tmp/requirements-test.txt \
+    pip install -r /tmp/requirements-test.txt
+
 FROM python:3.13-slim AS runtime
 
 ARG TARGETARCH

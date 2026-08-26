@@ -18,7 +18,8 @@ from app.shared.site import block_remote_instance, unblock_remote_instance
 from app.utils import render_template, blocked_domains, \
     blocked_or_banned_instances, blocked_communities, blocked_users, user_filters_home, recently_upvoted_posts, \
     recently_downvoted_posts, reported_posts, login_required, moderating_communities_ids, following_user_ids, \
-    validation_required, approval_required, user_ip_banned, show_ban_message, referrer, silenced_instances
+    validation_required, approval_required, user_ip_banned, show_ban_message, referrer, safe_redirect_target, \
+    silenced_instances
 
 
 @bp.route('/instances', methods=['GET'])
@@ -336,7 +337,7 @@ def instance_block(instance_id):
 
         return resp
 
-    goto = request.args.get('redirect') if 'redirect' in request.args else url_for('user.user_settings_filters')
+    goto = safe_redirect_target(request.args.get('redirect'), url_for('user.user_settings_filters'))
     return redirect(goto)
 
 
@@ -353,5 +354,5 @@ def instance_unblock(instance_id):
 
         return resp
 
-    goto = request.args.get('redirect') if 'redirect' in request.args else url_for('user.user_settings_filters')
+    goto = safe_redirect_target(request.args.get('redirect'), url_for('user.user_settings_filters'))
     return redirect(goto)

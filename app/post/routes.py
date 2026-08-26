@@ -64,7 +64,7 @@ from app.utils import render_template, markdown_to_html, validation_required, \
     total_comments_on_post_and_cross_posts, approval_required, libretranslate_string, user_in_restricted_country, \
     site_language_code, block_honey_pot, joined_communities, moderating_communities, user_pronouns, \
     instance_sticky_posts, instance_sticky_post_ids, user_access, show_reason_why_no_federation, \
-    community_membership_private, user_ip_banned, check_anoobis, roles_with
+    community_membership_private, user_ip_banned, check_anoobis, safe_redirect_target, roles_with
 
 
 @login_required_if_private_instance
@@ -1171,8 +1171,12 @@ def post_delete(post_id: int):
             else:
                 delete_post(post.id, True, SRC_WEB, None)
             flash(_('Post deleted.'))
-            ref = request.form.get('referrer')
-            if '/post/' not in ref:
+            # The posted `referrer` field is user-supplied, so it gets the
+            # same origin check as every other redirect target. The `if ref`
+            # also fixes a TypeError when the field is absent entirely --
+            # `'/post/' not in None` raises.
+            ref = safe_redirect_target(request.form.get('referrer'), '')
+            if ref and '/post/' not in ref:
                 return redirect(ref)
             else:
                 return redirect(url_for('activitypub.community_profile',
@@ -2152,8 +2156,10 @@ def post_block_image_purge_posts(post_id: int):
 
         flash(_('%(count)s posts deleted.', count=len(post_ids)))
 
-        ref = request.args.get('referrer')
-        if '/post/' not in ref:
+        # `?referrer=` arrives from the hidden field the block-image form
+        # forwards; user-supplied either way. See the sibling site above.
+        ref = safe_redirect_target(request.args.get('referrer'), '')
+        if ref and '/post/' not in ref:
             return redirect(ref)
         else:
             return redirect(url_for('activitypub.community_profile',

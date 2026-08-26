@@ -2025,6 +2025,34 @@ def is_safe_redirect_target(url) -> bool:
     return False
 
 
+def safe_redirect_target(candidate, default: str) -> str:
+    """`candidate` if it is safe to redirect to, otherwise `default`.
+
+    The single-source form of the origin check, for the ~25 route sites that
+    take ONE user-supplied redirect target out of the request -- `?next=`,
+    `?redirect=`, `?return_to=`, a posted `referrer` field -- and have their own
+    per-site fallback. `referrer()` is the multi-source form of the same
+    decision; both defer to `is_safe_redirect_target`, so there is still exactly
+    one implementation of the control.
+
+    A rejected candidate is REPLACED, not raised on: these are ordinary
+    navigations, and a user who arrives with a mangled `?redirect=` should land
+    on the page the route would have chosen anyway.
+
+    `candidate` is deliberately untyped. `request.args.get` returns None when the
+    parameter is absent, and a form field can hand back a list; both are handled
+    here rather than at 25 call sites, because `is_safe_redirect_target` returns
+    False for any non-`str`.
+
+    Callers whose default is expensive or has a side effect (the login flow's
+    `determine_next_page` commits `finished_onboarding`) call
+    `is_safe_redirect_target` directly instead, so the default stays lazy.
+    """
+    if candidate and is_safe_redirect_target(candidate):
+        return candidate
+    return default
+
+
 # sends the user back to where they came from
 def back(default_url):
     # Get the referrer from the request headers

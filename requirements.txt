@@ -37,13 +37,10 @@ python-slugify==8.0.4
 furl==2.1.3
 ua-parser[regex]
 captcha
-pytest
-pytest-cov
-pytest-timeout
-respx
-moto
-fakeredis
-atheris
+# Test-only dependencies live in requirements-test.txt: this file IS the
+# production install (Dockerfile, deploy.sh, INSTALL.md) and atheris has no
+# aarch64 wheel, so having it here broke `pip install -r requirements.txt` on
+# every ARM64 host.
 stripe~=12.0.0
 Authlib~=1.7.0
 webauthn~=2.5.0
