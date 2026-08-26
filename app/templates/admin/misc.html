@@ -34,6 +34,8 @@
             {{ render_field(form.meme_comms_low_quality) }}
             {{ render_field(form.allow_local_image_posts) }}
             {{ render_field(form.allow_video_file_uploads) }}
+            {{ render_field(form.redirect_policy) }}
+            <p class="small field_hint">{{ _('Controls which servers a "go back" link, a Referer header or a ?next= parameter may send someone to. "Any server at all" is DANGEROUS: it lets anyone craft a link that starts on this site and silently lands the visitor on a phishing page, which is exactly what the safe options prevent. Leave it on "This server only" unless you have a specific reason not to.') }}</p>
             {{ render_field(form.enable_nsfw) }}
             {{ render_field(form.enable_nsfl) }}
             {{ render_field(form.nsfw_country_restriction) }}
