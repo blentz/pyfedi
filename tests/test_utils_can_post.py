@@ -30,7 +30,7 @@ from flask import g
 from app import db
 from app.constants import ALLOWLIST_INTENSE
 from app.models import AllowedInstances, BannedInstances, Role, user_role, utcnow
-from app.utils import can_create_post, get_setting, set_setting
+from app.utils import can_create_post, can_create_post_reply, get_setting, set_setting
 from tests.factories import (ban_user_from_community, make_community, make_community_member,
                              make_instance, make_instance_ban, make_user)
 
@@ -431,3 +431,386 @@ class TestCanCreatePostBans:
         db.session.commit()
         make_instance_ban(user, remote)
         assert can_create_post(user, community) is False
+
+
+# ---------------------------------------------------------------------------
+# Task 6: can_create_post_reply
+#
+# Nearly parallel to can_create_post above, but NOT a mirror. Read directly
+# from app/utils.py, can_create_post_reply's guard order is:
+#
+#     user is None or content is None or user.banned            -> False
+#     user.ban_comments                                          -> False
+#     local:  verified is False or private_key is None          -> False
+#     remote: allowlist-or-instance-ban (NO new-account rate limit here)
+#     content.banned                                             -> False
+#     content.is_moderator(user) or user.is_admin()              -> True  (early return)
+#     content.local_only and not user.is_local()                 -> False
+#     content.id in communities_banned_from(user.id)              -> False
+#     otherwise                                                  -> True
+#
+# Three things can_create_post has that this function does NOT:
+#   - no `content.restricted_to_mods` check at all
+#   - no new-account rate limit (`created_very_recently() and post_count > 3`)
+#   - no tail `content.instance_id in banned_instances(user.id)` check
+# (can_create_post's own tail check is dead code anyway, per
+# TestCanCreatePostBans.test_an_instance_ban_is_refused above -- but this
+# function does not even have the dead line.)
+#
+# Also unlike can_create_post, there is no leading standalone `if content is
+# None: return False` before the compound guard -- here `content is None` is
+# ONLY checked inside the compound, so that sub-condition is live, not dead.
+# ---------------------------------------------------------------------------
+
+
+class TestCanCreatePostReplyUserAndContentGuards:
+    """`if user is None or content is None or user.banned: return False` --
+    three sub-conditions, each its own case. Unlike can_create_post, there is
+    no earlier standalone `content is None` check shadowing this one, so the
+    `content is None` sub-condition here is exercised for real."""
+
+    def test_user_is_none_is_refused(self, app, db_session):
+        make_instance('test.piefed.local', software='piefed')  # user.instance_id FK target
+        make_user(None, 'owner', local=True)  # occupies id 1, make_community()'s owner FK
+        community = make_community('replyland1')
+        assert can_create_post_reply(None, community) is False
+
+    def test_content_is_none_is_refused(self, app, db_session):
+        make_instance('test.piefed.local', software='piefed')  # user.instance_id FK target
+        user = make_user(None, 'noreplycontent', local=True, with_keys=True)
+        assert can_create_post_reply(user, None) is False
+
+    def test_a_banned_user_is_refused(self, app, db_session):
+        """Fails if `or user.banned` is deleted from the compound guard."""
+        make_instance('test.piefed.local', software='piefed')  # user.instance_id FK target
+        user = make_user(None, 'bannedreplyuser', local=True, with_keys=True)
+        user.banned = True
+        community = make_community('replyland2')
+        assert can_create_post_reply(user, community) is False
+
+
+class TestCanCreatePostReplyBanComments:
+    """`if user.ban_comments: return False` -- the analogue of
+    can_create_post's `user.ban_posts`, and the guard this task's
+    discrimination proof targets (see task-6-report.md)."""
+
+    def test_ban_comments_is_refused(self, app, db_session):
+        """Fails if `if user.ban_comments: return False` is deleted."""
+        make_instance('test.piefed.local', software='piefed')  # user.instance_id FK target
+        user = make_user(None, 'banreplier', local=True, with_keys=True)
+        user.ban_comments = True
+        community = make_community('replyland3')
+        assert can_create_post_reply(user, community) is False
+
+
+class TestCanCreatePostReplyLocalBranch:
+    """`if user.is_local(): if user.verified is False or user.private_key is
+    None: return False` -- two sub-conditions, each needing its own case."""
+
+    def test_an_ordinary_verified_local_user_may_reply(self, app, db_session):
+        make_instance('test.piefed.local', software='piefed')  # user.instance_id FK target
+        user = make_user(None, 'localreplier', local=True, with_keys=True)
+        community = make_community('replyland4')
+        assert can_create_post_reply(user, community) is True
+
+    def test_an_unverified_local_user_is_refused(self, app, db_session):
+        make_instance('test.piefed.local', software='piefed')  # user.instance_id FK target
+        user = make_user(None, 'unverifiedreplier', local=True, with_keys=True)
+        user.verified = False
+        community = make_community('replyland5')
+        assert can_create_post_reply(user, community) is False
+
+    def test_a_local_user_with_no_private_key_is_refused(self, app, db_session):
+        """with_keys=False (the default) leaves private_key None."""
+        make_instance('test.piefed.local', software='piefed')  # user.instance_id FK target
+        user = make_user(None, 'nokeyreplier', local=True, with_keys=False)
+        community = make_community('replyland6')
+        assert can_create_post_reply(user, community) is False
+
+
+class TestCanCreatePostReplyRemoteBranch:
+    """The remote half of the local/remote split: allowlist-or-instance-ban.
+
+    Unlike can_create_post, there is no new-account rate limit following this
+    block -- see TestCanCreatePostReplyNewAccountRateLimitAsymmetry below,
+    which pins that absence as a test rather than leaving it as prose.
+    """
+
+    def test_a_remote_user_from_a_banned_instance_is_refused(self, app, db_session):
+        make_instance('test.piefed.local', software='piefed')  # id 1: local instance
+        remote = make_instance('replybanned.example')  # id 2
+        user = make_user(remote, 'fromreplybanned')
+        user.ap_domain = remote.domain
+        db.session.add(BannedInstances(domain=remote.domain))
+        db.session.commit()
+        community = make_community('replyland7')
+        assert can_create_post_reply(user, community) is False
+
+    def test_a_remote_user_from_a_permitted_instance_is_allowed(self, app, db_session):
+        make_instance('test.piefed.local', software='piefed')  # id 1: local instance
+        remote = make_instance('replypermitted.example')  # id 2
+        user = make_user(remote, 'fromreplypermitted')
+        user.ap_domain = remote.domain
+        community = make_community('replyland8')
+        assert can_create_post_reply(user, community) is True
+
+
+class TestCanCreatePostReplyGSiteMutation:
+    """`if not hasattr(g, 'site'): g.site = db.session.query(Site).get(1)` --
+    reached on the remote branch, same as can_create_post's copy of this same
+    two-line pattern. REPORTED, not changed, per this task's brief: a
+    permission check (can_create_post_reply, not just its sibling) silently
+    populates a request-global as a side effect of deciding whether someone
+    may reply.
+    """
+
+    def test_g_site_already_set_is_left_alone(self, app, db_session, site):
+        make_instance('test.piefed.local', software='piefed')  # id 1
+        remote = make_instance('replygsitealready.example')  # id 2
+        user = make_user(remote, 'replygsiteuser')
+        user.ap_domain = remote.domain
+        community = make_community('replyland_gsite1')
+        with app.test_request_context('/'):
+            sentinel = object()
+            g.site = sentinel
+            assert can_create_post_reply(user, community) is True
+            assert g.site is sentinel
+
+    def test_g_site_is_populated_as_a_side_effect_when_absent(self, app, db_session, site):
+        """The `not hasattr` arm: proves can_create_post_reply really does
+        mutate flask.g, not merely read a local variable named the same."""
+        make_instance('test.piefed.local', software='piefed')  # id 1
+        remote = make_instance('replygsiteabsent.example')  # id 2
+        user = make_user(remote, 'replygsiteuser2')
+        user.ap_domain = remote.domain
+        community = make_community('replyland_gsite2')
+        with app.test_request_context('/'):
+            assert not hasattr(g, 'site')
+            assert can_create_post_reply(user, community) is True
+            assert hasattr(g, 'site')
+            assert g.site.id == 1
+
+
+class TestCanCreatePostReplyAllowlistMode:
+    """`if get_setting('use_allowlist') and g.site.allowlist_mode ==
+    ALLOWLIST_INTENSE:` -- both sub-conditions must be True to switch from
+    instance_banned() to instance_allowed(); each needs its own case, plus the
+    True/False outcome of instance_allowed() itself once inside that arm.
+    """
+
+    def test_intense_allowlist_refuses_an_unlisted_instance(self, app, db_session, site):
+        original_setting = get_setting('use_allowlist')
+        original_mode = site.allowlist_mode
+        try:
+            set_setting('use_allowlist', True)
+            site.allowlist_mode = ALLOWLIST_INTENSE
+            db.session.commit()
+            make_instance('test.piefed.local', software='piefed')  # id 1
+            remote = make_instance('replyunlisted.example')  # id 2
+            user = make_user(remote, 'replyunlisted')
+            user.ap_domain = remote.domain
+            community = make_community('replyland9')
+            assert can_create_post_reply(user, community) is False
+        finally:
+            set_setting('use_allowlist', original_setting)
+            site.allowlist_mode = original_mode
+            db.session.commit()
+
+    def test_intense_allowlist_permits_an_allowed_instance(self, app, db_session, site):
+        original_setting = get_setting('use_allowlist')
+        original_mode = site.allowlist_mode
+        try:
+            set_setting('use_allowlist', True)
+            site.allowlist_mode = ALLOWLIST_INTENSE
+            make_instance('test.piefed.local', software='piefed')  # id 1
+            remote = make_instance('replyallowed.example')  # id 2
+            db.session.add(AllowedInstances(domain=remote.domain))
+            db.session.commit()
+            user = make_user(remote, 'replyallowedone')
+            user.ap_domain = remote.domain
+            community = make_community('replyland10')
+            assert can_create_post_reply(user, community) is True
+        finally:
+            set_setting('use_allowlist', original_setting)
+            site.allowlist_mode = original_mode
+            db.session.commit()
+
+    def test_use_allowlist_off_ignores_intense_mode(self, app, db_session, site):
+        """The `get_setting('use_allowlist')` sub-condition's False outcome
+        while allowlist_mode is ALREADY intense -- proves both halves of the
+        `and` are independently required, not just the mode half."""
+        original_setting = get_setting('use_allowlist')
+        original_mode = site.allowlist_mode
+        try:
+            set_setting('use_allowlist', False)
+            site.allowlist_mode = ALLOWLIST_INTENSE
+            db.session.commit()
+            make_instance('test.piefed.local', software='piefed')  # id 1
+            remote = make_instance('replyunlisted2.example')  # id 2, not on any allowlist
+            user = make_user(remote, 'replystillallowed')
+            user.ap_domain = remote.domain
+            community = make_community('replyland11')
+            assert can_create_post_reply(user, community) is True
+        finally:
+            set_setting('use_allowlist', original_setting)
+            site.allowlist_mode = original_mode
+            db.session.commit()
+
+
+class TestCanCreatePostReplyNewAccountRateLimitAsymmetry:
+    """can_create_post limits new accounts to 3 posts in their first 24h
+    (`user.created_very_recently() and user.post_count > 3`). This function
+    has NO equivalent limit for replies -- confirmed by reading
+    app/utils.py:2366-2398, where the remote branch goes straight from the
+    allowlist/ban check to `if content.banned` with nothing in between.
+
+    Pinned deliberately. If a limit is later added here, this test fails and
+    forces the change to be explicit rather than silent. Whether the
+    asymmetry is correct policy (new accounts capped on posts but not on
+    replies) is the project owner's call, not this test suite's.
+    """
+
+    def test_a_very_new_user_may_reply_more_than_three_times(self, app, db_session):
+        make_instance('test.piefed.local', software='piefed')  # id 1
+        remote = make_instance('replyveryneww.example')  # id 2
+        user = make_user(remote, 'veryneweplier')
+        user.ap_domain = remote.domain
+        # created defaults to utcnow() at insert time in make_user, so this
+        # user IS created_very_recently() -- no override needed. A post_count
+        # far past can_create_post's threshold of 3 would refuse a POST.
+        user.post_count = 400
+        community = make_community('replyland12')
+        assert can_create_post_reply(user, community) is True
+
+
+class TestCanCreatePostReplyContentBanned:
+    def test_a_banned_community_is_refused(self, app, db_session):
+        """Fails if `if content.banned: return False` is deleted."""
+        make_instance('test.piefed.local', software='piefed')  # user.instance_id FK target
+        user = make_user(None, 'replycontentbanned', local=True, with_keys=True)
+        community = make_community('replyland13')
+        community.banned = True
+        assert can_create_post_reply(user, community) is False
+
+
+class TestCanCreatePostReplyModeratorAndAdminOrdering:
+    """`content.is_moderator(user) or user.is_admin()` returns True BEFORE
+    `content.local_only` is checked -- this function has no
+    `restricted_to_mods` guard to order against (it does not exist here), so
+    the ordering proof for this function is against `local_only` instead: a
+    remote moderator of a `local_only` community is permitted by the early
+    return, and would be refused if that return moved below the `local_only`
+    check (local_only refuses non-local users). That is exactly what the
+    discrimination proof in this task's report demonstrates by moving the
+    early return below `local_only` and re-running the suite.
+
+    An outcome test alone cannot show the order is right -- a moderator being
+    permitted in a local_only community is also what you'd see if the early
+    return were simply missing and the subject happened to be local. The
+    moderator here is deliberately REMOTE to rule that out: only the early
+    return, not local_only's own permissive branch, can explain a pass.
+    """
+
+    def test_a_remote_moderator_of_a_local_only_community_is_permitted(self, app, db_session):
+        """The subject is a remote moderator, not local -- so local_only's own
+        `not user.is_local()` branch would refuse them if the early return
+        did not exist or sat below local_only. A pass here can only be
+        explained by the early return actually sitting above local_only."""
+        make_instance('test.piefed.local', software='piefed')  # id 1: community's instance
+        remote = make_instance('replymodinstance.example')  # id 2: moderator's instance
+        make_user(None, 'owner', local=True)  # occupies id 1, off is_admin()'s id==1 path
+        mod = make_user(remote, 'remotereplymod')
+        mod.ap_domain = remote.domain
+        community = make_community('replyland14')
+        community.local_only = True
+        make_community_member(mod, community, is_moderator=True)
+        assert can_create_post_reply(mod, community) is True
+
+    def test_an_admin_of_a_local_only_community_is_permitted(self, app, db_session):
+        make_instance('test.piefed.local', software='piefed')  # id 1
+        remote = make_instance('replyadmininstance.example')  # id 2
+        make_user(None, 'owner2', local=True)  # occupies id 1, keeps the admin below
+        # off the id==1 special case -- proved by a real Admin role instead.
+        admin = make_user(remote, 'remotereplyadmin')
+        admin.ap_domain = remote.domain
+        _make_admin(admin)
+        community = make_community('replyland15')
+        community.local_only = True
+        assert can_create_post_reply(admin, community) is True
+
+    def test_a_non_moderator_is_refused_by_local_only(self, app, db_session):
+        """Baseline: without moderator/admin status, a remote user in a
+        local_only community IS refused -- confirms the early-return cases
+        above pass because of the early return, not because local_only
+        somehow does not apply to this community."""
+        make_instance('test.piefed.local', software='piefed')  # id 1
+        remote = make_instance('replyordinaryinstance.example')  # id 2
+        make_user(None, 'owner3', local=True)  # occupies id 1
+        user = make_user(remote, 'ordinaryreplier')
+        user.ap_domain = remote.domain
+        community = make_community('replyland16')
+        community.local_only = True
+        assert can_create_post_reply(user, community) is False
+
+
+class TestCanCreatePostReplyRestrictedToModsAsymmetry:
+    """can_create_post refuses a non-moderator in a `restricted_to_mods`
+    community. can_create_post_reply has NO such check at all -- reading
+    app/utils.py:2366-2398 top to bottom, `content.restricted_to_mods` is
+    never referenced.
+
+    Pinned deliberately, same rationale as the rate-limit asymmetry above: if
+    a restricted_to_mods guard is later added to this function, this test
+    fails and forces that policy change to be explicit. Whether replies
+    genuinely should be unrestricted in a mods-only community is the project
+    owner's call.
+    """
+
+    def test_an_ordinary_user_may_reply_in_a_restricted_to_mods_community(self, app, db_session):
+        make_instance('test.piefed.local', software='piefed')  # id 1
+        make_user(None, 'owner4', local=True)  # occupies id 1, off is_admin()'s path
+        user = make_user(None, 'ordinaryreplierrtm', local=True, with_keys=True)
+        community = make_community('replyland17')
+        community.restricted_to_mods = True
+        assert can_create_post_reply(user, community) is True
+
+
+class TestCanCreatePostReplyLocalOnly:
+    """`if content.local_only and not user.is_local(): return False` -- two
+    sub-conditions, each needing its own case with the other held eligible.
+    Non-moderator subjects here, off id 1, so the moderator/admin early
+    return cannot mask this guard (see the Ordering class above for the
+    moderator-specific case)."""
+
+    def test_local_only_refuses_a_remote_user(self, app, db_session):
+        make_instance('test.piefed.local', software='piefed')  # id 1
+        make_user(None, 'filler', local=True)  # occupies id 1, off is_admin()'s path
+        remote = make_instance('replyremoteposter.example')  # id 2
+        user = make_user(remote, 'remotereplylocalonly')
+        user.ap_domain = remote.domain
+        community = make_community('replyland18')
+        community.local_only = True
+        assert can_create_post_reply(user, community) is False
+
+    def test_local_only_permits_a_local_user(self, app, db_session):
+        make_instance('test.piefed.local', software='piefed')  # id 1
+        make_user(None, 'filler2', local=True)  # occupies id 1
+        user = make_user(None, 'localreplylocalonly', local=True, with_keys=True)
+        community = make_community('replyland19')
+        community.local_only = True
+        assert can_create_post_reply(user, community) is True
+
+
+class TestCanCreatePostReplyCommunityBan:
+    """`if content.id in communities_banned_from(user.id): return False` --
+    this function has no tail `banned_instances()` check to duplicate it, so
+    (unlike can_create_post's dead tail line) there is nothing further to
+    report here."""
+
+    def test_a_community_ban_is_refused(self, app, db_session):
+        make_instance('test.piefed.local', software='piefed')  # user.instance_id FK target
+        make_user(None, 'filler', local=True)  # occupies id 1, off is_admin()'s path
+        user = make_user(None, 'replycommbanned', local=True, with_keys=True)
+        community = make_community('replyland20')
+        ban_user_from_community(user, community)
+        assert can_create_post_reply(user, community) is False
