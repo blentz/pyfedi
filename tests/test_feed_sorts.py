@@ -262,3 +262,121 @@ class TestTopOrderingDivergesBetweenImplementations:
 
         assert [p.id for p in by_score] == [post_x.id, post_y.id]
         assert [p.id for p in by_votes] == [post_y.id, post_x.id]
+
+
+# The eight top_* cutoff windows get_deduped_post_ids applies (app/utils.py:3908-3927).
+# Each recognised value sets params['top_cutoff'] to utcnow() minus its own window and
+# appends 'p.posted_at > :top_cutoff ' to the WHERE clause (:3909-3910); top_all is the
+# exception and appends no cutoff clause at all. TOP_WINDOWS pairs each recognised,
+# time-bounded value with its production window so a single parametrized test proves
+# every boundary rather than one broad test that would pass whether or not any
+# individual window's number were wrong.
+TOP_WINDOWS = [
+    ('top_1h', timedelta(hours=1)),
+    ('top_6h', timedelta(hours=6)),
+    ('top_12h', timedelta(hours=12)),
+    ('top', timedelta(hours=24)),
+    ('top_1w', timedelta(days=7)),
+    ('top_1m', timedelta(days=28)),
+    ('top_1y', timedelta(days=365)),
+]
+
+# utcnow() is evaluated a second time inside get_deduped_post_ids, after this module's
+# utcnow() call below has already fixed each post's posted_at -- so the production
+# cutoff is never exactly "window ago" from the moment a test computed it, only close
+# to it. A post seeded exactly at the cutoff is therefore not reproducible: whether it
+# lands a hair inside or outside the strict '>' depends on scheduler timing between the
+# two calls. BOUNDARY_MARGIN seeds a few seconds either side instead, which is what the
+# task brief asks for -- close enough to the boundary that an off-by-one in any window's
+# timedelta (hours vs days, or the wrong number of either) would flip the result, while
+# leaving a margin no test process is slow enough to consume between seeding a post and
+# the query that reads it back.
+BOUNDARY_MARGIN = timedelta(seconds=30)
+
+
+class TestGetDedupedPostIdsTopWindows:
+    """Boundary coverage for get_deduped_post_ids' seven time-bounded top_* cutoffs.
+    For each window, one post is seeded a few seconds inside it (posted_at more recent
+    than the cutoff) and one a few seconds outside (posted_at older than the cutoff).
+    Only the inside post should come back -- the filter is strictly '>', so a post
+    exactly at the cutoff would be excluded, but that exact boundary is not
+    reproducible (see BOUNDARY_MARGIN above) and is not what these tests probe.
+
+    Each of these tests fails if app/utils.py's timedelta for its own `sort` value
+    changes to any other duration -- shorter OR longer -- since that would move the
+    cutoff away from where the two seeded posts straddle it. Step 3 below (run as part
+    of this task, not committed as a test) confirmed this directly for top_1w: swapping
+    its timedelta(days=7) for timedelta(days=1) failed only this window's two tests.
+    """
+
+    @pytest.mark.parametrize('sort,window', TOP_WINDOWS)
+    def test_post_just_inside_the_window_is_returned(self, app, db_session, redis_double, sort, window):
+        author, viewer, community = _setup(f'topin{sort.replace("_", "")}', with_viewer=True)
+        inside = _seed_post(community, author, f'https://topin{sort}.example/inside',
+                            posted_at=utcnow() - window + BOUNDARY_MARGIN)
+
+        ids = feed_ids(app, viewer, sort, community)
+
+        assert inside.id in ids
+
+    @pytest.mark.parametrize('sort,window', TOP_WINDOWS)
+    def test_post_just_outside_the_window_is_absent(self, app, db_session, redis_double, sort, window):
+        author, viewer, community = _setup(f'topout{sort.replace("_", "")}', with_viewer=True)
+        outside = _seed_post(community, author, f'https://topout{sort}.example/outside',
+                             posted_at=utcnow() - window - BOUNDARY_MARGIN)
+
+        ids = feed_ids(app, viewer, sort, community)
+
+        assert outside.id not in ids
+
+
+class TestGetDedupedPostIdsTopAll:
+    """top_all appends no cutoff clause at all (app/utils.py:3909), rather than a very
+    large one -- a single window value could never tell those two apart, since any
+    window long enough to be indistinguishable from "no cutoff" in a fast-running test
+    would itself be suspicious. The only test that actually discriminates "no cutoff"
+    from "a large cutoff" is a post old enough to fall outside every real window,
+    checked against both top_all (must be present) and top_1y (must be absent) in the
+    same test. This fails if top_all is ever changed to append its own top_cutoff
+    clause, however large.
+    """
+
+    def test_a_very_old_post_is_returned_by_top_all_but_not_top_1y(self, app, db_session, redis_double):
+        author, viewer, community = _setup('topallold', with_viewer=True)
+        very_old = _seed_post(community, author, 'https://topall.example/ancient',
+                              posted_at=utcnow() - timedelta(days=1000))
+
+        all_ids = feed_ids(app, viewer, 'top_all', community)
+        year_ids = feed_ids(app, viewer, 'top_1y', community)
+
+        assert very_old.id in all_ids
+        assert very_old.id not in year_ids
+
+
+class TestGetDedupedPostIdsTopFallthrough:
+    """Any sort value that starts with 'top' but matches none of the seven named
+    branches nor 'top_all' falls through to `elif sort != 'top_all':` (app/utils.py:
+    3926-3927), which silently applies the same 24-hour cutoff as 'top' -- it neither
+    raises nor falls back to top_all's "no cutoff" behaviour. A caller that mistypes a
+    sort value (e.g. 'top_1d' instead of 'top' or 'top_1w' instead of the real name)
+    gets a day's worth of posts with no error and no indication anything is wrong.
+
+    REPORTED, NOT FIXED, per this task's brief. This test pins the current fallthrough
+    behaviour (24-hour cutoff) rather than the presumably-intended behaviour, so it
+    would need to be rewritten -- not just left failing -- if that fallthrough is ever
+    changed. It fails if the fallthrough's timedelta stops being 24 hours, or if
+    'top_nonsense' starts being rejected or treated as top_all's unbounded case.
+    """
+
+    def test_an_unrecognised_top_value_gets_the_24_hour_fallback_cutoff(self, app, db_session, redis_double):
+        author, viewer, community = _setup('topfall', with_viewer=True)
+        now = utcnow()
+        inside = _seed_post(community, author, 'https://topfall.example/inside',
+                            posted_at=now - timedelta(hours=24) + BOUNDARY_MARGIN)
+        outside = _seed_post(community, author, 'https://topfall.example/outside',
+                             posted_at=now - timedelta(hours=24) - BOUNDARY_MARGIN)
+
+        ids = feed_ids(app, viewer, 'top_nonsense', community)
+
+        assert inside.id in ids
+        assert outside.id not in ids
