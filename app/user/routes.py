@@ -44,7 +44,7 @@ from app.utils import render_template, markdown_to_html, user_access, markdown_t
     recently_downvoted_post_replies, reported_posts, user_notes, login_required, get_setting, filtered_out_communities, \
     moderating_communities_ids, blocked_or_banned_instances, blocked_domains, get_task_session, \
     patch_db_session, user_in_restricted_country, referrer, user_pronouns, \
-    permission_required, check_anoobis, sql_file, calculate_rss_cache_timeout
+    permission_required, check_anoobis, sql_file, calculate_rss_cache_timeout, safe_redirect_target
 from app.rss_extras import RSSFeed
 
 @bp.route('/people', methods=['GET', 'POST'])
@@ -862,13 +862,13 @@ def ban_profile(actor):
 
         if user.id == current_user.id:
             flash(_('You cannot ban yourself.'), 'error')
-            goto = request.args.get('redirect') if 'redirect' in request.args else f'/u/{actor}'
+            goto = safe_redirect_target(request.args.get('redirect'), f'/u/{actor}')
             return redirect(goto)
         else:
             if form.validate_on_submit():
                 form.person_id = user.id
                 ban_user(form, SRC_WEB, None)
-                goto = request.args.get('redirect') if 'redirect' in request.args else f'/u/{actor}'
+                goto = safe_redirect_target(request.args.get('redirect'), f'/u/{actor}')
                 return redirect(goto)
 
             form.ip_address.data = True
@@ -906,7 +906,7 @@ def unban_profile(actor):
     else:
         abort(401)
 
-    goto = request.args.get('redirect') if 'redirect' in request.args else f'/u/{actor}'
+    goto = safe_redirect_target(request.args.get('redirect'), f'/u/{actor}')
     return redirect(goto)
 
 
@@ -951,7 +951,7 @@ def block_profile(actor):
 
         return resp
 
-    goto = request.args.get('redirect') if 'redirect' in request.args else f'/u/{actor}'
+    goto = safe_redirect_target(request.args.get('redirect'), f'/u/{actor}')
     return redirect(goto)
 
 
@@ -981,7 +981,7 @@ def user_block_instance(actor):
 
         return resp
 
-    goto = request.args.get('redirect') if 'redirect' in request.args else f'/u/{actor}'
+    goto = safe_redirect_target(request.args.get('redirect'), f'/u/{actor}')
     return redirect(goto)
 
 
@@ -1018,7 +1018,7 @@ def unblock_profile(actor):
 
         return resp
 
-    goto = request.args.get('redirect') if 'redirect' in request.args else f'/u/{actor}'
+    goto = safe_redirect_target(request.args.get('redirect'), f'/u/{actor}')
     return redirect(goto)
 
 
@@ -1042,7 +1042,7 @@ def report_profile(actor):
 
             if user.reports == -1:
                 flash(_('%(user_name)s has already been reported, thank you!', user_name=actor))
-                goto = request.args.get('redirect') if 'redirect' in request.args else f'/u/{actor}'
+                goto = safe_redirect_target(request.args.get('redirect'), f'/u/{actor}')
                 return redirect(goto)
 
             source_instance = Instance.query.get(user.instance_id)
@@ -1086,7 +1086,7 @@ def report_profile(actor):
                 ...
 
             flash(_('%(user_name)s has been reported, thank you!', user_name=actor))
-            goto = request.args.get('redirect') if 'redirect' in request.args else f'/u/{actor}'
+            goto = safe_redirect_target(request.args.get('redirect'), f'/u/{actor}')
             return redirect(goto)
         elif request.method == 'GET':
             form.report_remote.data = True
@@ -1111,7 +1111,7 @@ def delete_profile(actor):
         else:
             if user.id == 1:
                 flash('This user cannot be deleted.')
-                return redirect(request.args.get('redirect') if 'redirect' in request.args else f'/u/{actor}')
+                return redirect(safe_redirect_target(request.args.get('redirect'), f'/u/{actor}'))
             user.banned = True
             user.deleted = True
             user.deleted_by = current_user.id
@@ -1128,7 +1128,7 @@ def delete_profile(actor):
     else:
         abort(401)
 
-    goto = request.args.get('redirect') if 'redirect' in request.args else f'/u/{actor}'
+    goto = safe_redirect_target(request.args.get('redirect'), f'/u/{actor}')
     return redirect(goto)
 
 
@@ -1154,7 +1154,7 @@ def user_community_unblock(community_id):
 
         return resp
 
-    goto = request.args.get('redirect') if 'redirect' in request.args else url_for('user.user_settings_filters')
+    goto = safe_redirect_target(request.args.get('redirect'), url_for('user.user_settings_filters'))
     return redirect(goto)
 
 
@@ -1179,7 +1179,7 @@ def user_flair_unblock(flair_id):
 
         return resp
 
-    goto = request.args.get('redirect') if 'redirect' in request.args else url_for('user.user_settings_filters')
+    goto = safe_redirect_target(request.args.get('redirect'), url_for('user.user_settings_filters'))
     return redirect(goto)
 
 
@@ -2086,7 +2086,7 @@ def user_read_posts_delete():
 @login_required
 def edit_user_note(actor):
     actor = actor.strip()
-    return_to = request.args.get('return_to', '').strip()
+    return_to = safe_redirect_target(request.args.get('return_to', '').strip(), '')
     if return_to.startswith('http'):
         abort(401)
     if '@' in actor:
@@ -2134,7 +2134,7 @@ def user_preview(user_id):
 @login_required
 def user_follow(actor):
     actor = actor.strip()
-    return_to = request.args.get('return_to', f'/u/{actor}').strip()
+    return_to = safe_redirect_target(request.args.get('return_to', f'/u/{actor}').strip(), f'/u/{actor}')
     if return_to.startswith('http'):
         abort(401)
     if '@' in actor:
@@ -2160,7 +2160,7 @@ def user_follow(actor):
 @login_required
 def user_unfollow(actor):
     actor = actor.strip()
-    return_to = request.args.get('return_to', f'/u/{actor}').strip()
+    return_to = safe_redirect_target(request.args.get('return_to', f'/u/{actor}').strip(), f'/u/{actor}')
     if return_to.startswith('http'):
         abort(401)
     if '@' in actor:
@@ -2183,7 +2183,7 @@ def user_unfollow(actor):
 @permission_required('change instance settings')
 def user_bot_challenge(actor):
     actor = actor.strip()
-    return_to = request.args.get('return_to', f'/u/{actor}').strip()
+    return_to = safe_redirect_target(request.args.get('return_to', f'/u/{actor}').strip(), f'/u/{actor}')
     if return_to.startswith('http'):
         abort(401)
     if '@' in actor:
@@ -2356,7 +2356,7 @@ def user_file_delete(file_id):
     form = DeleteFileForm()
     if form.validate_on_submit():
         process_file_delete(file.source_url, current_user.id)
-        return redirect(form.referrer.data)
+        return redirect(safe_redirect_target(form.referrer.data, url_for('user.user_files')))
 
     form.referrer.data = referrer(url_for('user.user_files'))
 
@@ -2401,7 +2401,7 @@ def user_file_upload():
         if form.file10.data:
             process_upload(form.file10.data, user=current_user)
 
-        return redirect(form.referrer.data)
+        return redirect(safe_redirect_target(form.referrer.data, url_for('user.user_files')))
 
     total_size = 0
     file_sizes = db.session.execute(text('SELECT file_id, size FROM "user_file" WHERE user_id = :user_id'),

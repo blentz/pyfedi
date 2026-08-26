@@ -1,5 +1,4 @@
 from datetime import datetime
-from urllib.parse import urlsplit
 
 from flask import redirect, url_for, flash, request, make_response, session
 from markupsafe import Markup
@@ -12,7 +11,7 @@ from app.auth.util import get_country
 from app.constants import *
 from app.ldap_utils import sync_user_to_ldap
 from app.models import IpBan, User, utcnow
-from app.utils import ip_address, user_ip_banned, user_cookie_banned, banned_ip_addresses
+from app.utils import ip_address, is_safe_redirect_target, user_ip_banned, user_cookie_banned, banned_ip_addresses
 
 
 # function can be shared between WEB and API (only API calls it for now)
@@ -92,8 +91,13 @@ def log_user_in(input, src):
         ...
 
     if src == SRC_WEB:
+        # is_safe_redirect_target rather than safe_redirect_target: the
+        # fallback runs a DB query (user.communities()), so it must stay lazy.
+        # The urlsplit-netloc emptiness test this replaces accepted
+        # `///evil.example`, `/\evil.example` and `\\evil.example` -- all
+        # off-origin to a browser, on the login flow. See app.utils.
         next_page = request.args.get('next')
-        if not next_page or urlsplit(next_page).netloc != '':
+        if not is_safe_redirect_target(next_page):
             if len(user.communities()) == 0:
                 next_page = url_for('auth.filter_selection')
             else:

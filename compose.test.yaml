@@ -39,14 +39,21 @@ services:
       - pf_test_network
 
   # Tests run in here, not on the host: this repo has no host Python environment
-  # (no venv, no .env, and system python3 has no Flask). The Dockerfile's `builder`
-  # target carries /venv with every requirement, including pytest. It is preferred
-  # over `runtime` because it runs as root — avoiding __pycache__ permission
-  # failures on the bind mount — and skips the tesseract layer tests do not need.
+  # (no venv, no .env, and system python3 has no Flask). The Dockerfile's `test`
+  # target is `builder` plus requirements-test.txt, so /venv carries pytest,
+  # pytest-cov, pytest-timeout, respx, moto, fakeredis and atheris on top of
+  # every production requirement. It is preferred over `runtime` because it runs
+  # as root — avoiding __pycache__ permission failures on the bind mount — and
+  # skips the tesseract layer tests do not need.
+  #
+  # `test`, NOT `builder`: the test dependencies deliberately do not live in
+  # requirements.txt, because that file is the production install and atheris has
+  # no aarch64 wheel. Pointing this at `builder` gives a container that cannot
+  # collect the suite.
   test-runner:
     build:
       context: .
-      target: builder
+      target: test
     depends_on:
       - test-db
       - test-redis

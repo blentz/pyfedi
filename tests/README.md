@@ -113,6 +113,23 @@ what closing one looks like.)
 
 Two modes, and the split is the point.
 
+`atheris` is a TEST dependency and lives in `requirements-test.txt`, not
+`requirements.txt`. `requirements.txt` is the production install path
+(`Dockerfile`'s `builder` stage, `deploy.sh`, INSTALL.md) and atheris publishes
+no aarch64 wheel, so an entry there makes `pip install -r requirements.txt` try
+to build it from source -- needing clang with libFuzzer -- and fail outright on
+any ARM64 host. The Dockerfile's `test` stage is `builder` plus
+`requirements-test.txt`, and that is what `compose.test.yaml` builds, so the test
+container still gets atheris while `runtime` (which copies `/venv` from
+`builder`) does not. `tests/test_requirements_split.py` fails if that ever
+inverts. `pytest`, `pytest-cov`, `pytest-timeout`, `respx`, `moto` and
+`fakeredis` moved with it -- they install everywhere and were harmless, but a
+rule with exceptions is not a rule.
+
+Note that `compose.dev.yaml` still builds `builder`, so the DEV app stack no
+longer carries pytest. Tests run through `./run_tests.sh` / `compose.test.yaml`,
+which is where they always ran.
+
 **The corpus replay** is an ordinary pytest file, `tests/test_utils_fuzz_corpus.py`.
 It reads every file under `tests/fuzz/corpus/<target>/` and pushes it through the
 matching property check in `tests/fuzz/harnesses.py`. Deterministic, no atheris,
@@ -239,13 +256,56 @@ the ten `Referer`-handling routes onto `back()` behind one origin check
 raised it to 49, and making that origin check's host rule admin-configurable
 (`tests/test_redirect_policy.py`) raised it to 50.
 
-`is_safe_redirect_target` MOVED CATEGORY with that last change. It used to be
-pure -- app config and string parsing, no database. It now reads the
+`is_safe_redirect_target` MOVED CATEGORY with that last change (Ruling 17). It
+used to be pure -- app config and string parsing, no database. It now reads the
 `redirect_policy` setting through `get_setting`, and under the two
 instance-matching policies queries the `Instance` table, so it is DB-backed and
 belongs to 1b's category rather than 1a's. Its existing tests did not have to
 move: they already ran under the `site` fixture. Anything that later partitions
 `app/utils.py` by purity should count it on the DB side.
+
+A consequence of that move, worth knowing before it is discovered: `back()`,
+`referrer()` and `safe_redirect_target()` now touch the database on the redirect
+path, so a request served while the session is in a failed state can raise out of
+a helper that previously could not. The same-origin fast path returns before the
+setting is read, so the exposure is limited to off-origin candidates.
+
+## Every user-influenced redirect target
+
+`is_safe_redirect_target` is the origin check. Three things reach it, and between
+them they cover every place a user-supplied value becomes a redirect target:
+
+- `back(default)` -- the `Referer` header. Ten routes. `tests/test_redirect_back.py`.
+- `referrer(default)` -- the first usable of `?next=`, the posted `referrer`
+  field, and `Referer`. ~29 call sites.
+- `safe_redirect_target(candidate, default)` -- ONE candidate with a per-site
+  fallback: `?next=` on the auth path, `?redirect=`, `?return_to=`, and the two
+  places a posted `referrer` field is redirected to directly. 25 sites.
+  `tests/test_redirect_targets.py`.
+
+Sites whose fallback is expensive or has a side effect call
+`is_safe_redirect_target` directly instead, so the default stays lazy --
+`determine_next_page` commits `finished_onboarding` before choosing, and
+`app/shared/auth.py`'s equivalent runs a query.
+
+`tests/test_redirect_targets.py` also carries a SOURCE SCAN that fails if a new
+site reads `?next=` / `?redirect=` / `?return_to=` / a posted `referrer` without
+the check. It exists because the claim "one origin check for every
+user-influenced redirect target" was made once and was false -- three `?next=`
+sites and fourteen `?redirect=` sites were still unchecked when it was written.
+The scan's `DOCUMENTED_EXEMPTIONS` lists every read that legitimately is not a
+redirect target, with the reason, and a second test fails if an exemption names a
+line that no longer exists. Read that dict rather than trusting this paragraph.
+
+Deliberately NOT routed through the check, and why:
+
+- `app/main/routes.py` `/anoobis` reads `?next=` but does not call `redirect()`;
+  it renders a template whose script sets `location.href`, behind its own
+  `furl`-based host test. Its separate defect -- `furl('http://[')` raises, so
+  `?next=http://[` is a 500 -- is reported and left for its own change.
+- `app/request_hooks.py` stores `Referer` in the session for the registration
+  blocklist, and `app/auth/util.py:is_restricted_by_referrer` reads it back. That
+  is an inverted substring test, not a redirect, and both were left alone.
 
 Seven functions were identified in Task 1 as out of reach for a pure/context-only
 sub-project and moved out of scope, to be picked up by 1b or 1c:

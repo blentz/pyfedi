@@ -1,0 +1,28 @@
+# Test-only dependencies. NOT installed in production.
+#
+# requirements.txt is the production install path -- Dockerfile's `builder`
+# stage (whose /venv is copied into `runtime`), deploy.sh, and INSTALL.md all
+# run `pip install -r requirements.txt`. Nothing here belongs in a running
+# PieFed, and one entry actively breaks the install:
+#
+#   atheris publishes NO aarch64 wheel. On an ARM64 host -- Oracle Ampere,
+#   Hetzner ARM, an ARM Docker build, an Apple Silicon dev machine -- pip falls
+#   back to building atheris 3.0.0 from source, which needs clang with
+#   libFuzzer. On a stock Debian/Ubuntu VPS that build fails, and it takes the
+#   whole `pip install -r requirements.txt` down with it. On x86_64 it "works",
+#   at the cost of a 36.8 MB wheel in every production image.
+#
+# The rest are pure Python and install everywhere, so they were harmless where
+# they were -- they moved for consistency, not necessity. Splitting some
+# test dependencies out and leaving others behind would leave the next person
+# with no rule about where a new one goes.
+#
+# Installed only by the Dockerfile's `test` stage, which compose.test.yaml
+# builds. See tests/README.md.
+pytest
+pytest-cov
+pytest-timeout
+respx
+moto
+fakeredis
+atheris
