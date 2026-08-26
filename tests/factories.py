@@ -7,8 +7,10 @@ column here rather than in the test.
 
 from app import db
 from app.activitypub.signature import RsaKeys
-from app.models import (Community, CommunityBan, CommunityMember, Instance, InstanceBan, Post,
-                        Role, RolePermission, Site, User, UserFollower, user_role, utcnow)
+from app.models import (Community, CommunityBan, CommunityMember, Instance, InstanceBan,
+                        NotificationSubscription, Post, PostReply, PostReplyBookmark,
+                        PostReplyVote, Role, RolePermission, Site, User, UserBlock, UserFollower,
+                        user_role, utcnow)
 
 
 def make_instance(domain: str, software: str = 'mastodon') -> Instance:
@@ -182,6 +184,76 @@ def make_instance_ban(user: User, instance: Instance) -> InstanceBan:
     db.session.add(ban)
     db.session.commit()
     return ban
+
+
+def make_post_reply(post: Post, user: User, body: str = 'a reply') -> PostReply:
+    """A PostReply under `post`, authored by `user`. Mirrors the columns
+    tests/conftest.py's own inline PostReply construction sets (user_id,
+    post_id, community_id, instance_id, body, posted_at, deleted) -- there is
+    no NOT NULL constraint beyond the primary key in the model, but these are
+    the columns downstream queries (bookmarks, votes, subscriptions) actually
+    join against.
+    """
+    reply = PostReply(
+        user_id=user.id,
+        post_id=post.id,
+        community_id=post.community_id,
+        instance_id=user.instance_id,
+        body=body,
+        posted_at=utcnow(),
+        deleted=False,
+    )
+    db.session.add(reply)
+    db.session.commit()
+    return reply
+
+
+def make_post_reply_bookmark(user: User, reply: PostReply) -> PostReplyBookmark:
+    """The row app/utils.py's authorise_api_user reads via raw SQL:
+    `SELECT post_reply_id FROM "post_reply_bookmark" WHERE user_id = :user_id`
+    -- matches this factory's (user_id, post_reply_id) columns exactly.
+    """
+    bookmark = PostReplyBookmark(user_id=user.id, post_reply_id=reply.id)
+    db.session.add(bookmark)
+    db.session.commit()
+    return bookmark
+
+
+def make_post_reply_vote(user: User, reply: PostReply, effect: float) -> PostReplyVote:
+    """A vote by `user` on `reply`. app/utils.py's recently_upvoted_post_replies /
+    recently_downvoted_post_replies select post_reply_id from post_reply_vote
+    filtered on user_id and effect > 0 / < 0 -- pass effect=1.0 for an upvote,
+    effect=-1.0 for a downvote.
+    """
+    vote = PostReplyVote(user_id=user.id, author_id=reply.user_id, post_reply_id=reply.id,
+                         effect=effect)
+    db.session.add(vote)
+    db.session.commit()
+    return vote
+
+
+def make_notification_subscription(user: User, entity_id: int, type_: int,
+                                   name: str = 'sub') -> NotificationSubscription:
+    """A NotificationSubscription row. app/utils.py's authorise_api_user reads
+    `SELECT entity_id FROM "notification_subscription" WHERE type = :type and
+    user_id = :user_id` for the reply-subscription case (type=NOTIF_REPLY) --
+    matches this factory's (type, entity_id, user_id) columns exactly.
+    """
+    subscription = NotificationSubscription(name=name, type=type_, entity_id=entity_id,
+                                            user_id=user.id)
+    db.session.add(subscription)
+    db.session.commit()
+    return subscription
+
+
+def make_user_block(blocker: User, blocked: User) -> UserBlock:
+    """app/utils.py's blocked_users(user_id) reads UserBlock rows filtered on
+    blocker_id and returns blocked_id -- matches this factory's columns.
+    """
+    block = UserBlock(blocker_id=blocker.id, blocked_id=blocked.id)
+    db.session.add(block)
+    db.session.commit()
+    return block
 
 
 def make_follow(local_user, remote_user, is_accepted=True, is_inward=False) -> UserFollower:
