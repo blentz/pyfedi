@@ -316,10 +316,19 @@ class TestCommunitiesBannedFrom:
 
 class TestBlockedFlair:
     """The direct CommunityFlairBlock / post_flair query (app/utils.py:3893-
-    3899), reached only when `community_ids[0] != -1` -- both tests below
-    pass a specific community id, never [-1], to stay on this branch.
+    3899), reached only when `community_ids[0] != -1` -- the first two tests
+    below pass a specific community id, never [-1], to stay on this branch.
     Mutation that fails the absent test: deleting the `if blocked_flair:`
     block at 3896-3899 (or the query at 3894-3895 that feeds it).
+
+    A third test below takes the guard's OTHER arm: `community_ids[0] == -1`
+    short-circuits the whole flair-filter block (app/utils.py:3893's `if
+    community_ids[0] != -1:` going False), so a flair the viewer HAS blocked
+    still lets its post through when the request is for -- as the show_all
+    query builds -- every community. Mutation that fails it: deleting the
+    `if community_ids[0] != -1:` guard itself (collapsing the two arms into
+    one, so the -1 request pays the query cost and the filter suddenly does
+    apply there too).
     """
 
     def test_a_blocked_flairs_post_is_absent(self, app, db_session, redis_double):
@@ -345,5 +354,29 @@ class TestBlockedFlair:
         # no flair block
 
         ids = feed_ids(app, viewer, [community.id])
+
+        assert post.id in ids
+
+    def test_a_blocked_flairs_post_is_present_when_querying_all_communities(
+            self, app, db_session, redis_double):
+        """community_ids=[-1] ('all communities', c.show_all is true) takes
+        the `if community_ids[0] != -1:` guard's False arm at app/utils.py:3893,
+        so the flair-block filter never runs -- a post whose flair the viewer
+        blocked is still returned. This is real, by-design behaviour (flair
+        blocks are inherently community-scoped) rather than an oversight, and
+        it is worth pinning on its own terms: someone tightening the guard to
+        also cover -1 would silently change what "every community" means.
+        """
+        make_instance('flairallhome.example')
+        viewer = make_user(None, 'flairallviewer', local=True)
+        author = make_user(None, 'flairallauthor', local=True)
+        community = make_community('flairallcomm')
+        community.show_all = True
+        db.session.commit()
+        post = make_post(community, author, 'https://flairallhome.example/posts/1')
+        flair = make_post_flair(post, name='spoiler')
+        make_flair_block(viewer, flair)
+
+        ids = feed_ids(app, viewer, [-1])
 
         assert post.id in ids
