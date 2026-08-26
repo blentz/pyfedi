@@ -164,6 +164,29 @@ Two things there matter beyond the deferred set:
   and `edit_post` call it with no user at all. Neither half is complete alone —
   the audit cross-references both.
 
+Two more things surfaced during this branch's final review, after the ruling
+above, and are recorded in the audit doc rather than here so they stay next to
+the evidence:
+
+- **One of the fourteen now has a tracked follow-up, not just a table row.**
+  Of the deferred set, `GET /api/alpha/resolve_object` (item 1 / F3) is the
+  only one reachable with no credential at all — auth is optional, and
+  `enable_api()` is the sole gate. The ruling above (document and defer) is
+  unchanged; what changed is that this one item is now called out on its own
+  so it does not wait for the whole batch. See "Tracked follow-up: item 1" in
+  the audit doc.
+- **A second, unrelated finding in the same `lemmy-import` command.**
+  `app/cli.py:360` changes an existing user's password hash directly, bypassing
+  `User.set_password()`, so `password_updated_at` is not stamped and that
+  user's existing API tokens are not revoked by the import — even though eight
+  other password-changing sites now do revoke them (see commit `27403474`).
+  It was correctly excluded from that eight-site count, since it was never a
+  `set_password()` call to begin with; it is still worth evaluating on its own
+  list. `app/cli.py:377`, a second bypass in the same command flagged by the
+  re-reviewer, turns out not to share the problem — a brand-new user has no
+  prior credential or tokens to fail to revoke. See the note after F8 in the
+  audit doc for both halves.
+
 ## Ratchet gotchas
 
 - `percent_covered` is a **blended statement+branch figure**. This matters for

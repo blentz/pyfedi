@@ -126,6 +126,33 @@ the fourteen carry a literal **NONE** in the tables; the two poll-voting rows at
 item 2 carry a partial guard (`authorise_api_user` only, `instance_banned` only)
 that is not a permission check for voting.
 
+### Tracked follow-up: item 1 (`GET /api/alpha/resolve_object`)
+
+This section does not change item 1's status above — it is still **deferred,
+not fixed**, on the same "defer" ruling as the other thirteen. What changes is
+visibility: this branch's final reviewer went through all fourteen and singled
+out item 1 as the one severe enough to need a tracked action item of its own,
+rather than living only as a row in the table above, because it is the only
+member of the set reachable with **no credential of any kind** — `if auth:` at
+`app/api/alpha/utils/misc.py:50` makes authentication optional, so the sole
+gate between an anonymous caller and `create_resolved_object` persisting
+arbitrary remote posts and replies is `enable_api()`, a site-wide on/off
+switch with no `before_request` auth hook behind it. In the reviewer's words:
+"F3 (`GET /api/alpha/resolve_object`, anonymous write path) deserves a tracked
+follow-up now, not just a paragraph in an audit document."
+
+This document does not prescribe a fix. The point of tracking it is that it
+stays findable and gets evaluated on its own timeline — which the reviewer
+put at "weeks, not quarters" rather than waiting for the whole deferred batch
+— not that a remediation approach is pre-decided here.
+
+This needed its own section rather than a note added to item 1's bullet above:
+the "Deferred for evaluation" list is presented, and should stay presented, as
+one accepted batch of fourteen with one shared ruling. Marking one member as
+individually tracked inline would either read as a change to that shared
+ruling (it is not) or get lost the next time someone skims the batch assuming
+every item in it reads the same as its neighbours.
+
 ### Recorded with verdicts, but NOT part of the deferred 14
 
 These four are kept separate so the counts above stay honest. They are findings
@@ -523,6 +550,73 @@ post. Reported, not fixed; recorded with a verdict, NOT part of the deferred 14 
 **Verdict: upstream-gated by the trust boundary.** A Flask CLI command runs as
 the operator on the server, with no HTTP request and no user session. There is
 no permission function to apply. Recorded for completeness, not a defect.
+
+#### Note — the same command also bypasses password-rotation revocation, and it is a different concern from F8
+
+Found during this branch's final review, after commit `27403474` ("security: a
+password reset now revokes API tokens; expiry stops being an error") — not one
+of the fourteen deferred rows and not part of the F1-F14 set or its row
+counts, since it is not a permission-guard gap. Recorded here because it lives
+in the same `lemmy-import` command F8 already covers.
+
+`authorise_api_user` (`app/utils.py`) refuses a bearer token whose `iat` predates
+`password_updated_at` — the only mechanism by which changing a password
+revokes that user's existing API tokens. Every genuine password change is
+supposed to stamp it, via `User.set_password()`:
+
+    def set_password(self, password, revoke_sessions=True):
+        ...
+        self.password_hash = generate_password_hash(password)
+        if revoke_sessions:
+            self.password_updated_at = utcnow()
+
+(`app/models.py:1095, 1112-1114`.) There are nine `set_password()` call sites
+in `app/`: `app/cli.py:252`, `app/cli.py:271`, `app/cli.py:1206`,
+`app/admin/routes.py:1898`, `app/auth/util.py:271`, `app/auth/util.py:297`,
+`app/auth/routes.py:160`, `app/user/routes.py:240`, and `app/models.py:1149`.
+The last is `check_password`'s legacy-bcrypt rehash, the one caller that
+deliberately opts out with `revoke_sessions=False` — it re-saves the hash of a
+password the user just proved they know, not a password change, so it should
+not sign that user's API clients out. The other eight take the default and
+stamp. Commit `27403474` summarised this as "all EIGHT password-changing sites
+now stamp."
+
+`app/cli.py:360`, inside `lemmy-import`, changes an **existing** user's
+credential without going through any of the nine:
+
+    existing_user.password_hash = row.password_encrypted
+
+This is a direct assignment, not a `set_password()` call, so it was never one
+of the nine to begin with — it was correctly excluded from the "eight sites
+now stamp" count, not overlooked by it. The exclusion is right: this line
+copies an already-hashed credential (`row.password_encrypted`, from the Lemmy
+export being imported) during an operator-run bulk migration, not a
+user-initiated password change, and `lemmy-import` runs offline with no HTTP
+request or session — the same trust boundary F8 already applies to this
+command's other two direct-write bypasses. **That exclusion stands.**
+
+It is nonetheless still a path where an existing user's stored credential
+changes and `password_updated_at` is not stamped — so any API tokens that user
+already holds survive the import, unlike every other credential change in the
+app. A reader who sees only the exclusion (line above) would conclude there is
+nothing here; a reader who sees only the non-stamping (this line) would
+conclude it is the same kind of gap `27403474` just closed elsewhere. Both are
+true at once, which is why it belongs on a list rather than nowhere. Not fixed
+here — worth evaluating alongside the rest of `lemmy-import`'s trust-boundary
+exceptions (F8), whenever that command's design is next revisited.
+
+`app/cli.py:377`, the sibling assignment inside the same command's **new-user**
+constructor branch (`password_hash=row.password_encrypted or ""`, a few lines
+into the `User(...)` call), does **not** share this problem. `password_updated_at`
+is declared
+`db.Column(db.DateTime, default=utcnow)` (`app/models.py:1042`), the
+constructor at `app/cli.py:372-390` never passes that column explicitly, and
+SQLAlchemy applies the column default on insert — so the new row is stamped
+automatically. A brand-new user also has no prior credential and no API tokens
+issued yet, so there is nothing for a missing stamp to fail to revoke even in
+principle. Checked because the same re-reviewer that found `:360` flagged
+`:377` as a second bypass in the same path; it turns out to be a different
+shape, not a second instance of the same defect.
 
 ### F9 — Author self-upvotes bypass `can_upvote`
 
