@@ -275,6 +275,27 @@ some places and 60.18 in others depending on the rounding, and two documents
 disagreeing by a hundredth reads as a measurement error rather than a rounding
 one.
 
+Sub-project 1b-i's last task (the permission call-site audit,
+`docs/superpowers/specs/2026-08-25-permission-callsite-audit.md`) re-measured it
+at 60.2356. Rounded down that is still 60, so the floor did NOT rise there and
+`coverage_floors.ini` was left alone -- the honest outcome of "set it to the
+measured figure rounded DOWN" when the previous raise already banked the gain.
+The floor was still exercised: set to 61 the ratchet exits 1 with
+`app/utils.py: 60.24% is below its floor of 61.00%`, and back at 60 it exits 0
+with `All 3 module floors met.` A floor nobody has seen fail is not a floor,
+even on a task that does not raise it.
+
+`app/models.py` measured 42.6908 in the same run and still has NO floor entry,
+deliberately. Nothing has been scoped to cover it: 1a and 1b are `app/utils.py`
+sub-projects, and the coverage `app/models.py` has today is incidental --
+whatever the `app/utils.py` tests happened to drag in through fixtures. A floor
+pinned to an incidental figure would break on an unrelated refactor that stopped
+exercising a model path, which is the failure mode floors exist to avoid. It
+should get its first floor from the sub-project that first targets it, measured
+the same way. (An earlier note put this figure near 56.43; that number is
+`app/utils.py`'s own reading immediately before the microblog-feed raise, not
+`app/models.py`'s.)
+
 `is_safe_redirect_target` MOVED CATEGORY with that last change (Ruling 17). It
 used to be pure -- app config and string parsing, no database. It now reads the
 `redirect_policy` setting through `get_setting`, and under the two
