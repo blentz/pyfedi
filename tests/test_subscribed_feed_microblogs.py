@@ -20,6 +20,7 @@ import pytest
 from flask_login import login_user
 
 import app as app_package
+from app import db
 from app.activitypub.util import record_boost
 from app.utils import get_deduped_post_ids
 from tests.factories import (make_community, make_community_member, make_follow, make_instance,
@@ -158,3 +159,101 @@ def test_subscribed_feed_runs_for_a_viewer_with_no_follows_at_all(app, subscribe
     assert viewer.num_following == 0
 
     assert subscribed_feed_ids(app, viewer, community) == [ordinary.id]
+
+
+class TestTheMicroblogGateBindsToTheWholeCommunityDisjunct:
+    """The parentheses in `((community_disjunct) AND p.private is false)`.
+
+    `community_sql` is a raw SQL string built by the caller, and
+    `app/main/routes.py:124-132` builds four of them. Three contain a top-level
+    `OR`. They all happen to parenthesise it themselves today, so the inner parens
+    in `get_deduped_post_ids` are currently belt-and-braces -- which is exactly why
+    they need a test: correct, unexercised, and nothing would notice if they went.
+
+    SQL binds `AND` tighter than `OR`, so dropping them turns
+
+        ((c.private is false OR c.id IN (B)) AND p.private is false)
+
+    into
+
+        (c.private is false  OR  (c.id IN (B) AND p.private is false))
+
+    and the first branch admits rows with no microblog gate at all. The assertion
+    below is on a microblog in a community that matches ONLY that first branch, so
+    it is the leak itself that is observed, not a proxy for it.
+
+    Shape taken from app/main/routes.py:126, whose first factor is literally
+    `c.private is false OR c.id IN <private communities>` -- here without the
+    caller's own parentheses, since an unparenthesised OR is what these defend
+    against.
+    """
+
+    @pytest.fixture
+    def two_communities(self, db_session, isolated_result_cache):
+        """One public community and one private community, each with both kinds of post.
+
+        The viewer is a member of neither: `community_membership_private` must come
+        back empty, or `get_deduped_post_ids` appends its own
+        `(c.private is false OR c.id IN :private_community_ids)` filter and that,
+        not the parens, would decide the outcome.
+        """
+        author = make_user(make_instance('m.example'), 'precedenceauthor')
+        viewer = make_user(None, 'precedenceviewer', local=True)
+
+        public_community = make_community('public-side')
+        private_community = make_community('private-side')
+        private_community.private = True
+        db.session.commit()
+
+        posts = {
+            'public_microblog': make_post(public_community, author,
+                                          'https://m.example/notes/10', microblog=True),
+            'public_ordinary': make_post(public_community, author,
+                                         'https://m.example/notes/11', title='public ordinary'),
+            'private_microblog': make_post(private_community, author,
+                                           'https://m.example/notes/12', microblog=True),
+            'private_ordinary': make_post(private_community, author,
+                                          'https://m.example/notes/13', title='private ordinary'),
+        }
+        community_sql = f'c.private is false OR c.id IN ({private_community.id})'
+        return viewer, community_sql, posts
+
+    def feed_ids(self, app, viewer, community_sql):
+        """Mirrors app/main/routes.py:141 for the `local` and `popular` views:
+        community_ids is the placeholder [0] and community_sql carries the real
+        predicate. include_following is False, as it is for every caller that
+        supplies community_sql.
+        """
+        with app.test_request_context('/'):
+            login_user(viewer)
+            return get_deduped_post_ids(uuid.uuid4().hex, [0], 'new',
+                                        community_sql=community_sql)
+
+    def test_the_gate_applies_to_the_or_s_first_branch(self, app, two_communities):
+        """The leak. Collapsing the parens puts this post back in the feed."""
+        viewer, community_sql, posts = two_communities
+
+        ids = self.feed_ids(app, viewer, community_sql)
+
+        assert posts['public_microblog'].id not in ids
+
+    def test_the_gate_applies_to_the_or_s_second_branch(self, app, two_communities):
+        """The branch that keeps its gate either way, asserted so the pair is symmetric."""
+        viewer, community_sql, posts = two_communities
+
+        ids = self.feed_ids(app, viewer, community_sql)
+
+        assert posts['private_microblog'].id not in ids
+
+    def test_both_branches_still_return_their_ordinary_posts(self, app, two_communities):
+        """The control. Without it, "not in ids" could mean the OR matched nothing.
+
+        It also pins that the gate is an AND on the community source rather than a
+        replacement for it: both arms of the OR must still contribute rows.
+        """
+        viewer, community_sql, posts = two_communities
+
+        ids = self.feed_ids(app, viewer, community_sql)
+
+        assert posts['public_ordinary'].id in ids
+        assert posts['private_ordinary'].id in ids

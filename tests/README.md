@@ -267,9 +267,13 @@ the ten `Referer`-handling routes onto `back()` behind one origin check
 raised it to 49, and making that origin check's host rule admin-configurable
 (`tests/test_redirect_policy.py`) raised it to 50. The microblog feed fix
 (`tests/test_subscribed_feed_microblogs.py`, which drives `get_deduped_post_ids`
-end to end rather than a copy of its SQL) took the measured figure to 60.18 and
-the floor to 60 -- that raise banks unrecorded gains from the tasks between as
-well as its own; the module measured 56.43 immediately before it.
+end to end rather than a copy of its SQL) took the measured figure to 60.1865
+and the floor to 60 -- that raise banks unrecorded gains from the tasks between
+as well as its own; the module measured 56.4300 immediately before it. Figures
+here are quoted to four decimal places on purpose: 60.1865 rounds to 60.19 in
+some places and 60.18 in others depending on the rounding, and two documents
+disagreeing by a hundredth reads as a measurement error rather than a rounding
+one.
 
 `is_safe_redirect_target` MOVED CATEGORY with that last change (Ruling 17). It
 used to be pure -- app config and string parsing, no database. It now reads the

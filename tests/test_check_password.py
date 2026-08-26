@@ -18,11 +18,14 @@ ValueError and the bcrypt fallback then raised as well, the exception left
 check_password entirely and the login route answered 500 instead of "wrong
 password".
 
-The three hashes below are the reachable shapes of that: each one makes
+The hashes below are the reachable shapes of that: each one makes
 werkzeug raise ValueError (routing into the fallback) and then makes bcrypt
-raise too. They are not hypothetical rows -- a partial migration from another
-system, a truncated `password_hash` column or a hand-edited row all produce
-one.
+raise too, and they cover both ways werkzeug can raise: three where it cannot
+resolve the method at all, and one where it resolves a real method and that
+method rejects its parameters. They are not hypothetical rows -- a partial
+migration from another system, a truncated `password_hash` column, a
+hand-edited row or a config that once set impossible scrypt parameters all
+produce one.
 
 The rest of the file pins the behaviour that must NOT change while the
 fallback is made total, in particular the legacy-bcrypt migration: a correct
@@ -60,6 +63,15 @@ ESCAPING_HASHES = {
     'truncated_bcrypt': '$2b$12$short',
     # Neither werkzeug's nor bcrypt's: an algorithm from some other system.
     'unknown_method_prefix': '$argon9$x$y',
+    # The other fallback family, and the only one here that werkzeug recognises:
+    # a REAL werkzeug method with impossible parameters. werkzeug parses
+    # 'scrypt:0:0:0' as scrypt with n=0, r=0, p=0 and hashlib raises
+    # ValueError('n must be a power of 2') from inside the method it selected --
+    # not from failing to find one. The three shapes above all fail at method
+    # lookup instead, so without this the set covered only one of the two ways
+    # werkzeug can raise. bcrypt then rejects it as an invalid salt, same as the
+    # rest, and check_password returns False.
+    'valid_werkzeug_method_bad_parameters': 'scrypt:0:0:0$s$' + ('a' * 64),
 }
 
 
