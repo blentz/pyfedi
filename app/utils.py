@@ -337,15 +337,57 @@ _URL_SCHEME_PATTERN = re.compile(r'\A([A-Za-z][A-Za-z0-9+.\-]*):')
 
 # Schemes an anchor's href may never carry out of sanitisation.
 #
+# THIS IS A BLOCKLIST, AND A BLOCKLIST IS THE WEAKER DESIGN. Its whole failure
+# mode is the entry nobody thought of: 'livescript' and 'mocha' were missing
+# until they were noticed in review, and there is no argument that the set is
+# now complete - only that nothing else is currently known to be missing. An
+# ALLOWLIST of known-safe schemes (http, https, mailto, and whatever else is
+# genuinely needed) would be strictly stronger, because an unknown scheme would
+# then be refused rather than admitted.
+#
+# It was not changed to an allowlist here, and the reason is scope rather than
+# preference: allowlisting means auditing every scheme that legitimately appears
+# in federated content across the fediverse - matrix:, xmpp:, gemini:, magnet:,
+# ipfs:, tel:, ftp:, and the long tail of app-specific schemes remote software
+# emits - and getting that audit wrong silently destroys legitimate links in
+# every remote post, comment and profile that carries one. That audit is a
+# separate piece of work with its own evidence and its own review. Until it
+# happens this stays a blocklist, documented as one.
+#
+# What is in it and why:
+#
 # 'javascript' and 'vbscript' execute script in the current document's origin.
+# 'livescript' (Netscape 4) and 'mocha' (Netscape 2/3) are the two legacy
+# spellings of the same thing; no current browser executes either, so they are
+# not a live hole - they are here because the set is a blocklist and they belong
+# in it.
 # 'data' lets an attacker supply the whole document (data:text/html,... or
 # data:image/svg+xml,...); current browsers block top-level navigation to a
 # data: URL, so blocking it here is defence in depth rather than a live hole,
 # but PieFed has no reason to carry a data: URL in a link.
+UNSAFE_URL_SCHEMES = frozenset({'javascript', 'vbscript', 'livescript', 'mocha', 'data'})
+
+# Schemes a `src` may never carry out of sanitisation.
 #
-# Scope: this set governs <a href> only. img/@src is not scheme-checked, here or
-# before this change - see the note in allowlist_html.
-UNSAFE_URL_SCHEMES = frozenset({'javascript', 'vbscript', 'data'})
+# The same set MINUS 'data', because href and src are not the same control:
+#
+# * A data: href is a whole document the attacker wrote, reached by top-level
+#   navigation. Blocked.
+# * A data: src is decoded as an image, or as media for video/source. Browsers
+#   render an <img> in a NON-SCRIPTED context, so even data:image/svg+xml cannot
+#   run script through it, and data:text/html in an <img> is not a document at
+#   all - it is a decode failure. Against that inertness stands a real cost:
+#   inline data: images are an ordinary way to embed a small image, and
+#   allowlist_html is the sanitisation boundary for every federated post,
+#   comment, profile field and community description, so blanking them would
+#   silently destroy legitimate remote content. PieFed already takes this
+#   position in sanitize_svg_bytes, which passes keep_data_url_mime_types for
+#   image/jpeg|png|gif|webp|avif. So: permitted.
+#
+# Derived from UNSAFE_URL_SCHEMES rather than written out again, so a scheme
+# added above is blocked in both places by default and only the deliberate
+# exception needs stating.
+UNSAFE_SRC_SCHEMES = UNSAFE_URL_SCHEMES - {'data'}
 
 
 def url_scheme(url: str) -> str:
@@ -359,14 +401,21 @@ def url_scheme(url: str) -> str:
     return match.group(1).lower() if match else ''
 
 
-def has_unsafe_url_scheme(url: str) -> bool:
+def has_unsafe_url_scheme(url: str, unsafe_schemes: frozenset = UNSAFE_URL_SCHEMES) -> bool:
     """True if `url` names a scheme that must not survive sanitisation.
 
     The comparison is against a whole scheme, never a prefix: 'javascriptic:'
     and a path segment spelt 'javascript:' inside an https URL are both safe and
     must keep working.
+
+    `unsafe_schemes` selects WHICH set to compare against; it does not change
+    how the URL is read. There is deliberately one implementation of the
+    normalisation and one implementation of the comparison, with href and src
+    differing only in the set they pass (see UNSAFE_SRC_SCHEMES). Two
+    implementations of one control is exactly what produced the back()/referrer()
+    divergence this branch had to unpick.
     """
-    return url_scheme(url) in UNSAFE_URL_SCHEMES
+    return url_scheme(url) in unsafe_schemes
 
 
 def url_host(url: str) -> Optional[str]:
@@ -560,6 +609,30 @@ def allowlist_html(html: str, a_target='_blank', test_env=False) -> str:
             for attr in list(tag.attrs):
                 if attr not in allowed_attrs:
                     del tag[attr]
+            # Scheme-check `src`, the same way `href` is checked below.
+            #
+            # `src` is on allowed_attrs for EVERY element and used to be
+            # scheme-checked nowhere, so <img src="javascript:alert(1)">
+            # survived sanitisation verbatim - safe only because no current
+            # browser executes it, which is an argument about browsers rather
+            # than about filtering. allowed_tags carries no iframe/object/embed/
+            # svg, so src is loadable on img, video and source and nowhere else,
+            # but the check is applied wherever the attribute survives rather
+            # than to a hardcoded list of three: the attribute filter above is
+            # what decides where src can appear, and this should not have to be
+            # kept in step with it by hand.
+            #
+            # Same helper and same normalisation as the href path, differing
+            # only in the scheme set: UNSAFE_SRC_SCHEMES permits `data:`, which
+            # href blocks. The reasoning for that difference is at
+            # UNSAFE_SRC_SCHEMES.
+            #
+            # A rejected src is blanked, matching what the href path does with a
+            # rejected href: the element stays, its URL goes nowhere. An
+            # accepted src is kept exactly as it arrived - the normalisation
+            # decides, it does not rewrite.
+            if tag.attrs.get('src') is not None and has_unsafe_url_scheme(tag['src'], UNSAFE_SRC_SCHEMES):
+                tag['src'] = ''
             # Remove some mastodon guff - spans with class "invisible"
             if tag.name == 'span' and 'class' in tag.attrs and 'invisible' in tag.attrs['class']:
                 tag.extract()
@@ -584,11 +657,9 @@ def allowlist_html(html: str, a_target='_blank', test_env=False) -> str:
                     # the same normalisation itself when it follows the link, so
                     # rewriting would change stored content for no gain.
                     #
-                    # Only <a href> is checked. img/@src is on allowed_attrs and
-                    # is not scheme-checked, here or before this change; no
-                    # current browser executes a javascript: URL in img/@src, so
-                    # it is inert, and widening this to src would change how
-                    # img, video and source are treated. Left alone deliberately.
+                    # `src` is checked too, a few lines above, against
+                    # UNSAFE_SRC_SCHEMES rather than this set - same helper,
+                    # same normalisation, one scheme's difference.
                     if has_unsafe_url_scheme(tag['href']):
                         tag['href'] = ''
                     elif url_host(tag['href']) in instance_domains:
@@ -1632,14 +1703,24 @@ def retrieve_peertube_block_list():
 
 
 def ensure_directory_exists(directory):
-    """Ensure a directory exists and is writable, creating it if necessary."""
-    parts = directory.split('/')
-    rebuild_directory = ''
-    for part in parts:
-        rebuild_directory += part
-        if not os.path.isdir(rebuild_directory):
-            os.mkdir(rebuild_directory)
-        rebuild_directory += '/'
+    """Ensure a directory exists and is writable, creating it if necessary.
+
+    Handles absolute and relative paths alike. It previously handled only
+    relative ones: it split the argument on '/' and rebuilt the path one
+    component at a time starting from '', and an absolute path's split always
+    begins with an empty component, so the very first os.mkdir('') raised
+    FileNotFoundError before any real directory was created or touched. That
+    was unconditional for every absolute path, not an edge case. It stayed
+    latent because every caller in app/ happens to pass a relative path
+    ('app/static/...'), but this function is used for upload directories and a
+    future absolute path would have failed confusingly.
+
+    os.makedirs does the component-at-a-time creation the loop was hand-rolling,
+    and exist_ok=True gives the same tolerance of an already-existing directory
+    the `if not os.path.isdir(...)` test gave. Relative paths still resolve
+    against the working directory - nothing is absolutised here.
+    """
+    os.makedirs(directory, exist_ok=True)
 
     # Check if the final directory is writable
     if not os.access(directory, os.W_OK):
@@ -4725,10 +4806,34 @@ def to_srgb(im: Image.Image, assume="sRGB"):
     srgb_wrap = ImageCms.ImageCmsProfile(srgb_cms)
 
     # 1) source profile
+    #
+    # The ICC bytes come out of an uploaded or federated image, so they are
+    # attacker-controlled and may be corrupt. littlecms refuses bytes it cannot
+    # parse by raising OSError("cannot open profile from string") -- NOT
+    # PyCMSError, and not AttributeError. This construction used to sit outside
+    # the try below, so neither `except` arm could see that OSError and it
+    # escaped to_srgb entirely, defeating the graceful fallback this function
+    # exists to provide. Both routes into app/shared/post.py's upload path turn
+    # an escaped exception into a RAW MESSAGE SHOWN TO THE USER: the web routes
+    # flash `_('Your post was not accepted because %(reason)s', reason=str(ex))`
+    # (app/community/routes.py:1083, app/post/routes.py:155/840/1077), and the
+    # API's shared_error_handler falls through to
+    # `{"code": 400, "message": str(e), "status": "Bad Request"}`
+    # (app/api/alpha/__init__.py:113).
+    #
+    # A profile we cannot parse is treated exactly as no profile at all: the
+    # `assume` profile is substituted and the conversion below proceeds
+    # normally. PyCMSError is caught alongside OSError because ImageCms wraps
+    # some failures in its own exception type, which is not an OSError
+    # subclass; between them they cover every refusal this constructor makes.
     icc_bytes = im.info.get("icc_profile")
+    src = None
     if icc_bytes:
-        src = ImageCms.ImageCmsProfile(io.BytesIO(icc_bytes))
-    else:
+        try:
+            src = ImageCms.ImageCmsProfile(io.BytesIO(icc_bytes))
+        except (OSError, ImageCms.PyCMSError):
+            src = None
+    if src is None:
         src = ImageCms.createProfile(assume)
 
     # 2) CMYK → RGB first

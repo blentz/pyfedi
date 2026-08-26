@@ -9,24 +9,23 @@ probing the real container before writing assertions:
 - humanize_number(1215) is '1K', not '1.2K'. Babel's format_compact_decimal
   defaults to fraction_digits=0, so the short compact form for 1215 rounds to
   the nearest thousand with no decimal at all. Confirmed against Babel 2.18.0.
-- ensure_directory_exists does not handle absolute paths. It splits the
-  argument on '/' and rebuilds the path one component at a time starting from
-  the empty string, so for any absolute path (which starts with '/', so
-  str.split('/') begins with '') the very first os.mkdir('') raises
-  FileNotFoundError before any real directory is created or touched -- this is
-  unconditional, not an edge case. pytest's tmp_path fixture always hands out
-  an absolute path, so the brief's original tmp_path-based tests cannot pass
-  as written; TestEnsureDirectoryExists below documents the crash directly
-  (test_an_absolute_path_raises_instead_of_creating_anything) instead of
-  disguising it, and uses monkeypatch.chdir to reach the loop/warning logic
-  with a relative path -- not to hide the defect, but because a relative path
-  is the only input the function actually handles, and that logic still needs
-  coverage. Reported, not fixed, per instructions.
+- ensure_directory_exists did not handle absolute paths. It split the argument
+  on '/' and rebuilt the path one component at a time starting from the empty
+  string, so for any absolute path (which starts with '/', so str.split('/')
+  begins with '') the very first os.mkdir('') raised FileNotFoundError before
+  any real directory was created or touched -- unconditional, not an edge case.
+  pytest's tmp_path fixture always hands out an absolute path, so the brief's
+  original tmp_path-based tests could not pass as written. That defect has
+  since been FIXED (os.makedirs(..., exist_ok=True)) and
+  TestEnsureDirectoryExists below now pins both absolute and relative inputs.
+  The relative tests still use monkeypatch.chdir, because relative is what
+  every caller in app/ actually passes and that behaviour must not drift.
 """
 
 import json
 import os
 from datetime import datetime, timedelta
+from uuid import uuid4
 
 import pytest
 from flask import g
@@ -193,34 +192,66 @@ class TestOrjsonResponse:
 
 
 class TestEnsureDirectoryExists:
-    def test_an_absolute_path_raises_instead_of_creating_anything(self, app, tmp_path):
-        """DEFECT, reported not fixed: ensure_directory_exists splits its argument
-        on '/' and rebuilds from ''. An absolute path's split always starts with
-        an empty component, so the first os.mkdir('') raises FileNotFoundError
-        before any directory is created. tmp_path is always absolute, so this is
-        the actual, current behaviour for the exact kind of input pytest's own
-        fixture supplies -- not a contrived corner case. Every real caller in
-        app/ happens to pass a relative path ('app/static/...'), so the defect
-        is latent in production today, but the function is used for upload
-        directories and does not handle the paths it claims to ensure.
-        Production change that would make this test fail: rebuilding the path
-        so a leading '/' is preserved instead of collapsed to ''."""
+    def test_an_absolute_nested_path_is_created(self, app, tmp_path):
+        """FIXED defect. This used to raise FileNotFoundError unconditionally.
+
+        The function split its argument on '/' and rebuilt the path from '', so
+        an absolute path -- whose split always begins with an empty component --
+        made the very first os.mkdir('') raise before any real directory was
+        created or touched. tmp_path is always absolute, so that was the actual
+        behaviour for the exact kind of input pytest's own fixture supplies.
+        Every caller in app/ passes a relative path, which is why it was latent
+        rather than a live outage, but the function is used for upload
+        directories and did not handle the paths it claims to ensure.
+        """
         target = tmp_path / 'a' / 'b' / 'c'
 
-        with pytest.raises(FileNotFoundError):
-            ensure_directory_exists(str(target))
+        ensure_directory_exists(str(target))
 
-        assert not target.exists()
+        assert target.is_dir()
 
-    def test_a_nested_directory_is_created(self, app, tmp_path, monkeypatch):
-        """Relative path, reached via chdir into tmp_path: this is the only kind
-        of input the function actually handles (see the defect test above), and
-        the nested-mkdir loop still needs coverage."""
+    def test_an_absolute_path_with_a_trailing_slash_is_created(self, app, tmp_path):
+        """A trailing '/' used to add an empty final component to the split.
+        os.makedirs tolerates it; asserted so the tolerance is pinned rather
+        than assumed."""
+        target = tmp_path / 'trailing'
+
+        ensure_directory_exists(str(target) + '/')
+
+        assert target.is_dir()
+
+    def test_a_nested_relative_directory_is_created(self, app, tmp_path, monkeypatch):
+        """Relative-path behaviour is unchanged by the absolute-path fix: this
+        is what every caller in app/ actually passes."""
         monkeypatch.chdir(tmp_path)
 
         ensure_directory_exists('a/b/c')
 
         assert (tmp_path / 'a' / 'b' / 'c').is_dir()
+
+    def test_a_relative_path_is_created_relative_to_the_cwd_not_the_root(self, app, tmp_path, monkeypatch):
+        """Discriminates the fix from one that quietly absolutised its argument.
+
+        A 'fix' that prefixed '/' to reach os.makedirs would still create a
+        directory and still satisfy the test above by name, while writing to the
+        filesystem root instead of the working directory. This fails on that.
+
+        The relative path carries a fresh random component on every run, and the
+        root-side assertion is made against that same name. That is not
+        decoration: the first version of this test used the fixed name
+        'rel/target', and when the absolutising mutation was actually applied
+        during the discrimination run it created a real /rel/target inside the
+        test container -- which the container keeps. The next honest run then
+        failed on the leftover. A test that asserts about the filesystem root
+        must not name a path any other run could have created.
+        """
+        monkeypatch.chdir(tmp_path)
+        unique = f'rel-{uuid4().hex}/target'
+
+        ensure_directory_exists(unique)
+
+        assert (tmp_path / unique).is_dir()
+        assert not os.path.isdir('/' + unique)
 
     def test_an_existing_directory_is_left_alone(self, app, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -232,6 +263,16 @@ class TestEnsureDirectoryExists:
 
         with open(os.path.join('exists', 'keep.txt')) as f:
             assert f.read() == 'kept'
+
+    def test_an_existing_absolute_directory_is_left_alone(self, app, tmp_path):
+        """The exist_ok path, on the absolute input that used to raise."""
+        target = tmp_path / 'exists_abs'
+        target.mkdir()
+        (target / 'keep.txt').write_text('kept')
+
+        ensure_directory_exists(str(target))
+
+        assert (target / 'keep.txt').read_text() == 'kept'
 
     def test_an_unwritable_directory_warns_rather_than_raising(self, app, tmp_path, monkeypatch, caplog):
         """The os.access arm, forced via monkeypatch rather than file mode bits.

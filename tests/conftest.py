@@ -169,6 +169,46 @@ def site(db_session):
 
 
 @pytest.fixture(scope='session', autouse=True)
+def disable_rate_limiter():
+    """Turn Flask-Limiter off for the suite. It counts across RUNS, not tests.
+
+    `limiter`'s storage is the test Redis (`CACHE_REDIS_URL`, db 1), and the
+    test Redis is only destroyed by `./run_tests.sh --down`. Its counters carry
+    a one-day TTL. So a route with a real limit -- /auth/login is "30 per day;
+    10 per 5 minutes" -- accumulates hits from every run of the suite on the
+    same day, and once a bucket passes 30 the route starts returning
+    "429 - Too Many Requests" to every subsequent run until the TTL expires.
+
+    That is not hypothetical and it is not a flake in the ordinary sense: at
+    commit a144f5ed, with no change to app/ or tests/, the eight
+    TestLoginRouteEndToEnd tests in tests/test_redirect_targets.py failed
+    exactly this way -- the bucket for 198.51.100.201 held 37 with 82,896
+    seconds still to run, and the response body was the 25 bytes of
+    "\\n429 - Too Many Requests\\n". A green suite in the morning and a red one
+    in the afternoon, from developing on it.
+
+    tests/test_redirect_targets.py already knew about this and tried to dodge it
+    by giving each request its own REMOTE_ADDR (`from_a_fresh_ip`). That only
+    spreads the accumulation over a handful of fixed addresses; it delays the
+    problem by a few dozen runs rather than removing it, which is what happened
+    here. The counter, not the address, is the shared state.
+
+    `limiter.enabled` is Flask-Limiter's own switch, so this suppresses the
+    limit the way the library intends rather than by patching anything. Nothing
+    in the suite asserts rate-limiting behaviour (no test expects a 429), so
+    nothing loses coverage; tests/test_client_ip.py exercises the limiter's KEY
+    FUNCTION directly, which is unaffected by `enabled`.
+
+    Restored afterwards so the flag does not leak out of the session.
+    """
+    from app import limiter
+    previous = limiter.enabled
+    limiter.enabled = False
+    yield
+    limiter.enabled = previous
+
+
+@pytest.fixture(scope='session', autouse=True)
 def block_outbound_http():
     """Block outbound HTTPX. Nothing else.
 
