@@ -110,28 +110,21 @@ class TestLinksWithParens:
         html = '<a href="https://example.com/(x)">(x)</a>'
         assert links_with_parens(html) == html
 
-    def test_a_pushed_out_paren_joins_the_text_that_follows(self):
-        """Reaches the second arm of the push-out branch.
-
-        When the link is the last node (the test above) there is nothing to
-        prepend to, so the `)` is inserted as a new sibling. When a text node
-        FOLLOWS the link, the `)` is prepended to that node instead. This is the
-        case that reaches app/utils.py line 953 and branch [950, 953], which the
-        final whole-branch review found uncovered with no recorded reason. It is
-        reachable, so it is covered rather than pragma'd.
-        """
-        html = '<a href="https://example.com/x)">x)</a> and more'
-        result = links_with_parens(html)
-        assert result == '<a href="https://example.com/x">x</a>) and more'
-
     def test_a_pushed_out_paren_absorbs_a_following_comment_into_text(self):
-        """PINS A PRE-EXISTING QUIRK, reported rather than fixed.
+        """Covers app/utils.py line 953 / branch [950, 953], AND discriminates.
 
-        For ORDINARY text the two arms of the push-out branch are
-        indistinguishable in the output: prepending `)` to the following text
-        node and inserting `)` as a new sibling render identically, so the test
-        above raises coverage without discriminating between them. This case is
-        the difference.
+        The final whole-branch review found that line uncovered with no recorded
+        reason. It is the second arm of the push-out branch -- reached when a
+        node FOLLOWS the link, so the `)` is prepended to that node instead of
+        inserted as a new sibling.
+
+        A test using ordinary following text covers the line and catches
+        NOTHING: prepending `)` to a text node and inserting `)` as a sibling
+        render identically, so collapsing both arms onto insert_after passes it.
+        That test was written, measured against exactly that break, found to be
+        worthless, and deleted. This one is its replacement.
+
+        PINS A PRE-EXISTING QUIRK, reported rather than fixed.
 
         bs4's Comment subclasses NavigableString, so an HTML comment following
         the link takes the prepend arm. `")" + comment` is a plain str, and

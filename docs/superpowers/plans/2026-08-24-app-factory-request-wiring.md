@@ -44,6 +44,18 @@ Consequence to accept: this is not a small refactor. Task 3 is the first real te
 
 ---
 
+> **CORRECTION (2026-08-25, final-fix wave).** Where this plan says to append a
+> test dependency to `requirements.txt`, that instruction is WRONG and was
+> followed. `requirements.txt` is the production install -- the Dockerfile's
+> `builder` stage, `deploy.sh` and INSTALL.md all run
+> `pip install -r requirements.txt` -- and `atheris`, added by the fuzzing task,
+> publishes no aarch64 wheel, so it broke `pip install -r requirements.txt` on
+> every ARM64 host. Test dependencies now live in `requirements-test.txt`,
+> installed by the Dockerfile's `test` stage, which is what `compose.test.yaml`
+> builds. The plan text below is left as written because it is the record of
+> what was planned; do not follow this part of it.
+
+
 ## File Structure
 
 | File | Responsibility | Change |

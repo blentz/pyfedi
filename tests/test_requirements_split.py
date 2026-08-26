@@ -18,6 +18,16 @@ it. The final whole-branch review measured this directly:
 These tests fail if a test dependency is put back into the production file, or
 if the Dockerfile's `test` stage stops being what compose.test.yaml builds --
 which would leave the test container unable to collect the suite.
+
+SCOPE, stated because the obvious paraphrase of these tests would be false:
+they assert what `requirements.txt` DECLARES, not what the production image
+CONTAINS. `pytest` is in the production venv regardless, because `c2pa-python`
+declares it as a runtime dependency (`pip show pytest` in the builder image:
+`Required-by: c2pa-python`). That is pre-existing, upstream, pure Python and no
+ARM64 risk, so it is left alone -- but "no test packages in production" is not
+a claim this file makes or that anyone should make. The claim is narrower and
+true: nothing PieFed lists for production is test-only, and nothing the
+Dockerfile's `test` stage installs reaches `runtime`.
 """
 
 from pathlib import Path
@@ -95,3 +105,26 @@ def test_the_test_container_builds_the_test_stage():
     assert 'target: test' in compose, (
         'compose.test.yaml builds a stage without the test dependencies, so '
         'test-runner cannot collect the suite.')
+
+
+def test_install_md_does_not_tell_anyone_to_freeze_over_the_production_file():
+    """`pip freeze > requirements.txt` regenerates the exact defect.
+
+    A freeze of a development venv writes every installed distribution into the
+    file, which puts atheris and the rest of the test dependencies straight back
+    into the production install -- and re-breaks ARM64. INSTALL.md documented
+    that command as the way to record dependencies, which would have quietly
+    undone this fix the next time someone followed it.
+    """
+    install_md = (REPO_ROOT / 'INSTALL.md').read_text()
+    # A stripped line that IS the command -- i.e. one inside a ```bash block.
+    # The prose warning mentions the command in backticks to say "do not run
+    # this", which is the opposite of documenting it, so an unanchored
+    # substring test would fail on its own fix.
+    commands = [line.strip() for line in install_md.splitlines()]
+    assert 'pip freeze > requirements.txt' not in commands, (
+        'INSTALL.md documents `pip freeze > requirements.txt` as a command to '
+        'run. That writes the test dependencies into the production install and '
+        're-breaks `pip install -r requirements.txt` on ARM64.')
+    assert 'requirements-test.txt' in install_md, (
+        'INSTALL.md should say where a test dependency goes instead.')
