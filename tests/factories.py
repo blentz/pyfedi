@@ -7,8 +7,8 @@ column here rather than in the test.
 
 from app import db
 from app.activitypub.signature import RsaKeys
-from app.models import (Community, CommunityBan, CommunityMember, Instance, Post, Role,
-                        RolePermission, Site, User, UserFollower, user_role, utcnow)
+from app.models import (Community, CommunityBan, CommunityMember, Instance, InstanceBan, Post,
+                        Role, RolePermission, Site, User, UserFollower, user_role, utcnow)
 
 
 def make_instance(domain: str, software: str = 'mastodon') -> Instance:
@@ -166,6 +166,19 @@ def ban_user_from_community(user: User, community: Community) -> CommunityBan:
         banned_by=None,
         reason='test ban',
     )
+    db.session.add(ban)
+    db.session.commit()
+    return ban
+
+
+def make_instance_ban(user: User, instance: Instance) -> InstanceBan:
+    """The InstanceBan half of banned_instances() -- ban_user_from_community's
+    docstring ruled this out of scope for the earlier community-ban task on the
+    basis that can_create_post's instance check goes through banned_instances()
+    instead, covered here. InstanceBan has no surrogate id column: (user_id,
+    instance_id) is the composite primary key.
+    """
+    ban = InstanceBan(user_id=user.id, instance_id=instance.id)
     db.session.add(ban)
     db.session.commit()
     return ban
