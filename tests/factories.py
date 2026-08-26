@@ -73,28 +73,45 @@ def make_post(community, user, ap_id: str, title: str = 'a post', private: bool 
     """Build a Post.
 
     microblog=True reproduces the columns Post.new() sets for a Mastodon Note with
-    no 'name': title='', private=True, and microblog=True. It does NOT reproduce
-    Post.new()'s activity-level Public check that can clear private back to False
-    for a genuinely unlisted post (app/models.py ~1796-1807) -- private here is
-    exactly the object-titleless default, nothing more. status is left at the
-    column default (POST_STATUS_PUBLISHED = 1), which already matches what
-    Post.new() implicitly leaves it at, since Post.new() never sets status itself.
+    no 'name': title='', private=True, microblog=True, and a non-empty body_html.
+    It does NOT reproduce Post.new()'s activity-level Public check that can clear
+    private back to False for a genuinely unlisted post (app/models.py ~1796-1807)
+    -- private here is exactly the object-titleless default, nothing more. status is
+    left at the column default (POST_STATUS_PUBLISHED = 1), which already matches
+    what Post.new() implicitly leaves it at, since Post.new() never sets status
+    itself.
 
-    Post.private is an unlisted marker, NOT a followers-only flag -- it is the
-    filter on the discovery surfaces (search, tags, domains, community listings,
-    profiles) while the subscribed feed skips it. PostReply.private is the one
-    that means followers-only.
+    title='' is the WORST case Post.new() can leave, not the usual one: it derives a
+    title from the body via microblog_content_to_title(), which returns '' for a
+    body with no paragraph of five characters or more (an image-only toot, say).
+    body_html is what makes that case survivable -- app/community/routes.py's RSS
+    route calls feedgen's fe.title() and fe.description(), and feedgen raises
+    "Required fields not set" only when BOTH are empty. A factory that left
+    body_html unset would manufacture a crash production cannot reach.
+
+    Post.private is the microblog marker, NOT a followers-only flag: no non-public
+    object ever becomes a Post, because create_post() refuses `followers` and
+    `direct` visibility before Post.new() is reached
+    (tests/test_post_private_is_only_the_microblog_marker.py). It filters the
+    discovery surfaces -- search, tags, domains, user profiles -- and, in the
+    aggregate feeds, the community source only, so a microblog arrives there via a
+    follow rather than a subscription. It does NOT filter the community's own
+    listing or RSS feed: a post in a community is visible when you browse that
+    community. PostReply.private is the one that means followers-only.
 
     Prefer microblog=True in any test about feed visibility of ingested content.
     Passing private= directly sets the column without the rest of the shape.
     """
+    body_html = None
     if microblog:
         private = True
         title = ''
+        body_html = '<p>a short toot</p>'
     post = Post(
         community_id=community.id,
         user_id=user.id,
         title=title,
+        body_html=body_html,
         ap_id=ap_id,
         instance_id=user.instance_id,
         posted_at=utcnow(),
@@ -263,6 +280,15 @@ def make_follow(local_user, remote_user, is_accepted=True, is_inward=False) -> U
     is_inward: False (default) = local_user follows remote_user (outward -- opens feed
     visibility). True = remote_user follows local_user (inward -- someone follows US;
     this must NOT open feed visibility of what remote_user posts or boosts).
+
+    An accepted outward follow also bumps `local_user.num_following`, because
+    production does: app/shared/user.py:245 for a local target, and
+    app/activitypub/routes.py:1144 when a remote target's Accept arrives. It is a
+    denormalised counter, not a view over user_follower, and
+    `get_deduped_post_ids` reads THAT counter -- not the rows -- to decide whether
+    to add the follow and boost disjuncts at all (app/utils.py:3756). A follow row
+    without the counter is a shape production never produces, and it would make a
+    feed test silently exercise the no-follows branch.
     """
     follow = UserFollower(
         local_user_id=local_user.id,
@@ -271,5 +297,7 @@ def make_follow(local_user, remote_user, is_accepted=True, is_inward=False) -> U
         is_inward=is_inward,
     )
     db.session.add(follow)
+    if is_accepted is True and not is_inward:
+        local_user.num_following = (local_user.num_following or 0) + 1
     db.session.commit()
     return follow

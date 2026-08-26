@@ -3750,6 +3750,35 @@ def paginate_post_ids(post_ids, page: int, page_length: int):
     return post_ids[start:end]
 
 
+# The two follow-based sources a post can reach an aggregate feed through, as SQL
+# fragments OR'd into get_deduped_post_ids' WHERE clause. Module level rather than
+# inline so tests exercise the production string itself: they used to hold a
+# hand-copied duplicate, which cannot notice a restructure and had already drifted
+# from the code it claimed to mirror. Both bind :local_user_id, so
+# get_deduped_post_ids must add that parameter whenever it appends either of them.
+#
+# NEITHER carries a `p.private is false` gate, deliberately. p.private is the
+# microblog marker (Post.new(), app/models.py ~1796), and gating these excluded
+# every ingested Mastodon post from the feed -- a boosted microblog SHOULD appear
+# when you follow the booster. The gate belongs on the community source instead;
+# see MICROBLOG_GATE below.
+FOLLOWED_AUTHOR_SQL = """EXISTS (SELECT 1 FROM user_follower uf
+                                  WHERE uf.local_user_id = :local_user_id
+                                  AND uf.remote_user_id = p.user_id AND is_inward is false)"""
+
+FOLLOWED_BOOSTER_SQL = """EXISTS (SELECT 1 FROM post_boost pb
+                                  INNER JOIN user_follower uf2 ON uf2.remote_user_id = pb.user_id
+                                  WHERE pb.post_id = p.id
+                                  AND uf2.local_user_id = :local_user_id
+                                  AND uf2.is_inward is false)"""
+
+# Applied to the COMMUNITY source only, never to the whole query and never to the
+# two disjuncts above. A microblog reaches an aggregate feed because you follow its
+# author or its booster, never merely because you subscribed to a community that
+# carries it.
+MICROBLOG_GATE = 'p.private is false'
+
+
 def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, hashtag: str = '', include_following=False, community_sql: str = None) -> List[int]:
     from app import redis_client
     if not community_sql and (community_ids is None or len(community_ids) == 0):
@@ -3759,31 +3788,30 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
             return json.loads(redis_client.get(result_id))
 
     params = {}                 # parameters provided to the SQL query
-    sources = []                # communities and possibly followers as well
     post_id_sql = 'SELECT p.id, p.cross_posts, p.user_id, p.reply_count FROM "post" as p\nINNER JOIN "community" as c on p.community_id = c.id\n'
     if community_sql:
-        sources.append(community_sql)
+        community_disjunct = community_sql
     elif community_ids[0] == -1:  # A special value meaning to get posts from all communities
-        sources.append('c.show_all is true')
+        community_disjunct = 'c.show_all is true'
     else:
-        sources.append('c.id IN :community_ids')
+        community_disjunct = 'c.id IN :community_ids'
         params['community_ids'] = tuple(community_ids)
+
+    # The microblog gate rides with the community source, not with the whole query.
+    # Gating the whole query instead meant the gate had to be dropped wholesale for
+    # the subscribed feed (include_following=True), which put every ingested Mastodon
+    # post in front of users who follow nobody. The extra parentheses are
+    # load-bearing: community_sql is caller-supplied (app/main/routes.py) and must
+    # not be able to bind looser than the AND.
+    sources = [f'(({community_disjunct}) AND {MICROBLOG_GATE})']
     if current_user.is_authenticated and current_user.num_following and include_following:
-        sources.append("""EXISTS (SELECT 1 FROM user_follower uf
-                                  WHERE uf.local_user_id = :local_user_id
-                                  AND uf.remote_user_id = p.user_id AND is_inward is false)""")
-        sources.append("""EXISTS (SELECT 1 FROM post_boost pb
-                                  INNER JOIN user_follower uf2 ON uf2.remote_user_id = pb.user_id
-                                  WHERE pb.post_id = p.id
-                                  AND uf2.local_user_id = :local_user_id
-                                  AND uf2.is_inward is false)""")
+        sources.append(FOLLOWED_AUTHOR_SQL)
+        sources.append(FOLLOWED_BOOSTER_SQL)
         params['local_user_id'] = current_user.id
 
     post_id_where = ["(" + " OR ".join(sources) + ")", 'c.banned is false']
     if current_user.is_authenticated and current_user.hide_low_quality and community_ids[0] == -1:
         post_id_where.append('c.low_quality is false')
-    if not include_following:
-        post_id_where.append('p.private is false')
 
     # Filter by post tag
     if hashtag:

@@ -367,7 +367,11 @@ def show_community(community: Community):
     posts = None
     comments = None
     if content_type == 'posts' or content_type == 'events':
-        posts = Post.query.filter(Post.community_id == community.id, Post.private == False)
+        # No Post.private filter: private is the microblog marker (Post.new() sets it
+        # for any titleless object), not a privacy flag -- non-public objects are
+        # refused at ingest by create_post(). Filtering it here hid every microblog
+        # from the community that carries them, e.g. /c/microblogs@piefed.social.
+        posts = Post.query.filter(Post.community_id == community.id)
 
         if content_type == 'events':
             posts = posts.filter(Post.type == POST_TYPE_EVENT)
@@ -716,8 +720,9 @@ def show_community_rss(actor):
         tag = Tag.query.filter(Tag.display_as == tag.strip()).first() if tag else None
         flair_id = find_flair_id(flair.strip(), community.id)
 
+        # No Post.private filter, for the same reason as show_community above.
         posts = Post.query.filter(Post.community_id == community.id).filter(Post.from_bot == False, Post.deleted == False,
-                                  Post.status > POST_STATUS_REVIEWING, Post.private == False)
+                                  Post.status > POST_STATUS_REVIEWING)
         if score:
             posts = posts.filter(Post.score >= score)
         if tag:
