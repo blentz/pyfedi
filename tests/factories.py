@@ -7,7 +7,8 @@ column here rather than in the test.
 
 from app import db
 from app.activitypub.signature import RsaKeys
-from app.models import Community, Instance, Post, Site, User, UserFollower, utcnow
+from app.models import (Community, CommunityBan, CommunityMember, Instance, Post, Role,
+                        RolePermission, Site, User, UserFollower, user_role, utcnow)
 
 
 def make_instance(domain: str, software: str = 'mastodon') -> Instance:
@@ -117,6 +118,57 @@ def make_site() -> Site:
     db.session.add(site)
     db.session.commit()
     return site
+
+
+def grant_permission(user: User, permission: str) -> Role:
+    """Create a Role carrying `permission`, and assign it to `user`.
+
+    `user_access(permission, user.id)` reads role_permission joined to the
+    `user_role` association table (app/utils.py) -- there is no UserRole model,
+    `user_role` is a plain db.Table (app/models.py:918), so the assignment row
+    is inserted directly through it rather than via a relationship object.
+    """
+    role = Role(name=f'role-{permission}', weight=0)
+    db.session.add(role)
+    db.session.commit()
+
+    role_permission = RolePermission(role_id=role.id, permission=permission)
+    db.session.add(role_permission)
+    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.commit()
+    return role
+
+
+def make_community_member(user: User, community: Community, is_moderator: bool = False) -> CommunityMember:
+    member = CommunityMember(
+        user_id=user.id,
+        community_id=community.id,
+        is_moderator=is_moderator,
+        is_owner=False,
+        is_banned=False,
+    )
+    db.session.add(member)
+    db.session.commit()
+    return member
+
+
+def ban_user_from_community(user: User, community: Community) -> CommunityBan:
+    """Only the CommunityBan half of communities_banned_from's UNION.
+
+    communities_banned_from (app/utils.py) also unions in Community rows joined
+    through InstanceBan, but no InstanceBan factory exists here -- that path is
+    out of scope for this task; can_create_post's instance check goes through
+    banned_instances() instead, which a later task covers.
+    """
+    ban = CommunityBan(
+        user_id=user.id,
+        community_id=community.id,
+        banned_by=None,
+        reason='test ban',
+    )
+    db.session.add(ban)
+    db.session.commit()
+    return ban
 
 
 def make_follow(local_user, remote_user, is_accepted=True, is_inward=False) -> UserFollower:
