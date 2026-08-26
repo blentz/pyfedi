@@ -1812,9 +1812,83 @@ def is_bot(user_agent) -> bool:
 # them too, so this function and the browser cannot disagree about the host.
 _URL_STRIPPED_BY_BROWSERS = str.maketrans('', '', '\t\n\r')
 
+# The admin-configurable redirect policy: which HOSTS is_safe_redirect_target will
+# accept, over and above this server itself. Stored in the Setting table (no
+# migration), read through the memoized get_setting.
+#
+# The default is SAME_ORIGIN, and is the value get_setting is asked for whenever
+# no row exists -- so an install that upgrades into this feature keeps exactly the
+# behaviour it had before, without an admin touching anything. Any value that is
+# not one of the four below is also treated as SAME_ORIGIN: this fails closed, so
+# a typo, a hand-edited row or a value written by a future version can only ever
+# narrow the check, never widen it.
+REDIRECT_POLICY_SETTING = 'redirect_policy'
+REDIRECT_POLICY_SAME_ORIGIN = 'same_origin'
+REDIRECT_POLICY_TRUSTED_SERVERS = 'trusted_servers'
+REDIRECT_POLICY_FEDERATED_SERVERS = 'federated_servers'
+REDIRECT_POLICY_ALL_REFERRERS = 'all_referrers'
+
+
+@cache.memoize(timeout=150)
+def instance_redirect_allowed(host: str, trusted_only: bool) -> bool:
+    """True when `host` is a federated instance a redirect may point at.
+
+    `trusted_only` narrows the answer to instances an admin has marked
+    `trusted`; otherwise any instance we know about qualifies.
+
+    Memoized like its siblings instance_banned / instance_online /
+    instance_gone_forever, because is_safe_redirect_target runs on every "go
+    back" and every `?next=`. None of those siblings answers this question:
+    instance_allowed reads the AllowedInstances federation allowlist rather than
+    Instance; instance_online adds `dormant` to the test, which is not wanted
+    here (see below); and instance_gone_forever would answer it only by relying
+    on its "unknown domain -> True" convention, which is a fragile thing for a
+    security decision to lean on -- flipping that default, a defensible change
+    on its own terms, would silently turn this mode into "any host".
+    trusted_instance_ids() returns ids, not domains, so it cannot match a host.
+
+    BANNED and GONE_FOREVER instances are excluded, in both modes:
+
+    * Banned: an admin has declared the instance unwanted and we send it no
+      activities. Sending it a *person* -- which is what a redirect does -- is
+      strictly worse than sending it an activity, and a redirect to a hostile
+      host is exactly the phishing shape this whole check exists to prevent. A
+      ban is also a later and more deliberate act than the `trusted` flag, so
+      where a row is both banned and trusted, the ban wins.
+    * Gone forever: set after ~12 days of unreachability. The row then records
+      that nobody has answered on that domain for nearly a fortnight, so it is no
+      longer evidence about who *does* answer -- a lapsed domain can be
+      re-registered by anyone, and the stale row would hand them our users.
+
+    `dormant` is NOT excluded. It is a transient five-day send-failure state
+    that clears itself once the instance responds again; it says nothing about
+    who owns the domain, so it is not a reason to refuse a person's own "go
+    back".
+
+    Host matching is case-insensitive, done the way every other instance lookup
+    in this module does it: the input is lower-cased with inbox_domain() and
+    compared to the stored `Instance.domain`, which is written lower-case by the
+    same function. That keeps the unique index on `domain` in play on a hot
+    path. A row somehow stored with upper-case would not match and the redirect
+    would be refused -- failing closed, which is the right direction here.
+    """
+    if not host:
+        return False
+    domain = inbox_domain(host.strip())
+    if not domain:
+        return False
+    instance = db.session.query(Instance).filter_by(domain=domain).first()
+    if instance is None:
+        return False
+    if instance.gone_forever:
+        return False
+    if trusted_only and not instance.trusted:
+        return False
+    return not instance_banned(domain)
+
 
 def is_safe_redirect_target(url) -> bool:
-    """True when `url` can be handed to `redirect()` without leaving this site.
+    """True when `url` can be handed to `redirect()` under the site's policy.
 
     This is THE origin check. Every place a user-influenced URL becomes a
     redirect target -- `back()`, and all three of `referrer()`'s sources -- goes
@@ -1823,10 +1897,44 @@ def is_safe_redirect_target(url) -> bool:
     Accepted:
       - relative URLs (`/foo`, `foo`, `?x=1`, `#frag`): same-origin by definition.
       - absolute `http://` or `https://` URLs whose HOST equals `SERVER_NAME`.
+      - absolute `http://` or `https://` URLs whose HOST the admin's
+        `redirect_policy` setting additionally allows (see below).
 
-    Rejected: any other host, protocol-relative `//host/x`, a backslash standing
-    in for the authority slashes, any non-http(s) scheme (`javascript:`, `data:`,
-    ...), control characters, and anything `urlparse` will not parse.
+    Rejected: any host the policy does not allow, protocol-relative `//host/x`, a
+    backslash standing in for the authority slashes, any non-http(s) scheme
+    (`javascript:`, `data:`, ...), control characters, and anything `urlparse`
+    will not parse.
+
+    THE POLICY WIDENS WHICH HOSTS ARE ACCEPTABLE. IT NEVER CHANGES HOW A URL IS
+    PARSED, NOR HOW ITS HOST IS DETERMINED.
+
+    Everything above the `POLICY` marker in the body below is parsing, and runs
+    identically in all four modes. Only the host decision underneath it branches.
+    That split is what keeps `javascript:`, a control character, an unparseable
+    URL and a bare authority rejected even under `all_referrers`, and it is what
+    makes userinfo smuggling impossible to use as a disguise: the host every mode
+    matches on is `urlparse(...).hostname`, the part after any `@`, which is the
+    host the browser will actually navigate to. Under `all_referrers`,
+    `https://our.host@evil.example/` IS accepted -- because its real host is
+    `evil.example` and that mode accepts every host, not because the userinfo
+    fooled anything. Under `trusted_servers` the identical URL is rejected unless
+    `evil.example` itself is a trusted instance.
+
+    The four modes, from `redirect_policy` (default `same_origin`):
+
+      same_origin        this server only. What every install had before this
+                         setting existed, and what one that has never been
+                         configured still gets.
+      trusted_servers    plus instances marked `trusted`.
+      federated_servers  plus every instance we federate with.
+      all_referrers      any host. DANGEROUS -- this is an open redirect by
+                         choice, and the admin form says so.
+
+    Consequence worth knowing: this function is no longer pure. Under the default
+    it touches the database only for an off-origin absolute URL -- a relative URL
+    and this server's own host are both decided before the setting is read -- but
+    it can query, so it needs an app context with a working database, not just a
+    request context.
 
     Two decisions worth stating, because they are the ones that make this
     different from what it replaces:
@@ -1886,18 +1994,35 @@ def is_safe_redirect_target(url) -> bool:
     if not host:
         return False
 
-    server_name = (current_app.config.get('SERVER_NAME') or '').strip().lower()
-    if not server_name:
-        return False
-    expected_host = urlparse(f'//{server_name}').hostname
-    if not expected_host:
-        return False
+    # ---- POLICY ------------------------------------------------------------
+    # Everything above this line is parsing, and is identical in all four modes.
+    # Below it, only WHICH HOSTS are acceptable changes. `host` is
+    # urlparse's .hostname -- the authority with any userinfo already discarded,
+    # which is the host the browser will navigate to -- and it is the only value
+    # any mode below is allowed to match on.
 
-    # Both sides are already lower-case -- urlparse's .hostname normalises the case
-    # of an ASCII host, and config.py lower-cases SERVER_NAME at import. Neither
-    # .lower() below is therefore discriminated by a test; they are here so the
-    # comparison stays correct if either of those normalisations goes away.
-    return host.lower() == expected_host.lower()
+    # `.lower()` is belt-and-braces: urlparse's .hostname normalises the case of
+    # an ASCII host, and config.py lower-cases SERVER_NAME at import, so neither
+    # call is discriminated by a test. They are here so the comparison stays
+    # correct if either of those normalisations goes away.
+    host = host.lower()
+
+    server_name = (current_app.config.get('SERVER_NAME') or '').strip().lower()
+    expected_host = urlparse(f'//{server_name}').hostname if server_name else None
+    if expected_host and host == expected_host.lower():
+        # Our own host is acceptable under every policy, and deciding it here
+        # means the common case never reads the setting or touches the database.
+        return True
+
+    policy = get_setting(REDIRECT_POLICY_SETTING, REDIRECT_POLICY_SAME_ORIGIN)
+    if policy == REDIRECT_POLICY_ALL_REFERRERS:
+        return True
+    if policy == REDIRECT_POLICY_TRUSTED_SERVERS:
+        return instance_redirect_allowed(host, True)
+    if policy == REDIRECT_POLICY_FEDERATED_SERVERS:
+        return instance_redirect_allowed(host, False)
+    # REDIRECT_POLICY_SAME_ORIGIN, and anything unrecognised: fail closed.
+    return False
 
 
 # sends the user back to where they came from

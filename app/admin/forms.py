@@ -10,6 +10,8 @@ from flask_babel import _, lazy_gettext as _l
 from app.constants import DOWNVOTE_ACCEPT_ALL, DOWNVOTE_ACCEPT_MEMBERS, DOWNVOTE_ACCEPT_INSTANCE, \
     DOWNVOTE_ACCEPT_TRUSTED, DOWNVOTE_ACCEPT_NONE
 from app.models import Community, User, CmsPage
+from app.utils import REDIRECT_POLICY_ALL_REFERRERS, REDIRECT_POLICY_FEDERATED_SERVERS, \
+    REDIRECT_POLICY_SAME_ORIGIN, REDIRECT_POLICY_TRUSTED_SERVERS
 
 
 class SiteProfileForm(FlaskForm):
@@ -40,6 +42,14 @@ class SiteMiscForm(FlaskForm):
                ]
     allow_video_file_uploads = SelectField(_l('Allow video file uploads'), choices=video_upload_options,
                                            validators=[DataRequired()], render_kw={'class': 'form-select'})
+    redirect_policy_options = [
+        (REDIRECT_POLICY_SAME_ORIGIN, _l('This server only (recommended)')),
+        (REDIRECT_POLICY_TRUSTED_SERVERS, _l('This server and trusted servers')),
+        (REDIRECT_POLICY_FEDERATED_SERVERS, _l('This server and every server we federate with')),
+        (REDIRECT_POLICY_ALL_REFERRERS, _l('Any server at all - DANGEROUS, turns this site into an open redirect that phishing links can hide behind')),
+    ]
+    redirect_policy = SelectField(_l('Send people back to'), choices=redirect_policy_options,
+                                  validators=[DataRequired()], render_kw={'class': 'form-select'})
     enable_nsfw = BooleanField(_l('Allow NSFW communities'))
     enable_nsfl = BooleanField(_l('Allow NSFL communities and posts'))
     nsfw_country_restriction = TextAreaField(_l('Bar people from these countries from accessing NSFW and NSFL content'))

@@ -6,6 +6,18 @@ implementations of the control (`back()` had none, `referrer()` and two communit
 routes had `SERVER_NAME in url`), and the one that existed was a SUBSTRING test:
 `https://evil.example/?x=test.piefed.local` contains the server name and passed
 it. These tests pin the real check.
+
+Everything here runs under the DEFAULT redirect policy -- same origin only, the
+behaviour an install that has never touched the admin setting gets. The other
+three policies, and the guarantee that none of them relaxes any of the parsing
+pinned below, are in the sibling file tests/test_redirect_policy.py.
+
+RECLASSIFICATION: `is_safe_redirect_target` is no longer a pure function. Now
+that the policy is admin-configurable it reads `get_setting`, and under the two
+instance-matching policies it queries the Instance table -- so it needs a working
+database, not merely an app context. These tests already ran with `site` (and so
+with `db_session`), so none of them had to move; but the function itself now
+belongs in the DB-backed category rather than the pure one.
 """
 
 import pytest

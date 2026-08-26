@@ -49,7 +49,8 @@ from app.utils import render_template, permission_required, set_setting, get_set
     download_defeds, instance_banned, login_required, referrer, \
     community_membership, retrieve_image_hash, posts_with_blocked_images, user_access, reported_posts, user_notes, \
     safe_order_by, get_task_session, patch_db_session, low_value_reposters, moderating_communities_ids, \
-    instance_allowed, trusted_instance_ids, get_emoji_replacements, get_site_as_dict, roles_with, sanitize_svg
+    instance_allowed, trusted_instance_ids, get_emoji_replacements, get_site_as_dict, sanitize_svg, \
+    REDIRECT_POLICY_SETTING, REDIRECT_POLICY_SAME_ORIGIN, roles_with
 from app.admin import bp
 
 
@@ -330,6 +331,7 @@ def admin_misc():
         set_setting('auto_decline_countries', form.auto_decline_countries.data.strip())
         set_setting('cache_remote_images_locally', form.cache_remote_images_locally.data)
         set_setting('allow_video_file_uploads', form.allow_video_file_uploads.data)
+        set_setting(REDIRECT_POLICY_SETTING, form.redirect_policy.data)
         set_setting('enable_report_em_dash_replies', form.enable_report_em_dash_replies.data)
         set_setting('limit_one_em_report_per_user', form.limit_one_em_report_per_user.data)
         set_setting('read_posts_cutoff', int(form.read_posts_cutoff.data))
@@ -369,6 +371,7 @@ def admin_misc():
         form.honeypot.data = site.honeypot
         form.cache_remote_images_locally.data = get_setting('cache_remote_images_locally', True)
         form.allow_video_file_uploads.data = get_setting('allow_video_file_uploads', 'no')
+        form.redirect_policy.data = get_setting(REDIRECT_POLICY_SETTING, REDIRECT_POLICY_SAME_ORIGIN)
         form.enable_report_em_dash_replies.data = get_setting('enable_report_em_dash_replies', True)
         form.limit_one_em_report_per_user.data = get_setting('limit_one_em_report_per_user', False)
         form.read_posts_cutoff.data = get_setting('read_posts_cutoff', 180)
