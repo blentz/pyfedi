@@ -24,6 +24,19 @@ post seeded here, and a post's absence from a result is therefore always
 attributable to a WHERE clause, never to deduping. Distinct `ap_id`/`url`
 values per post (via distinct per-test hostnames) rule out the one other way
 two rows could look like cross-posts to begin with.
+
+Every viewer below also sets `hide_nsfw = 0` and `hide_nsfl = 0` right after
+creation. Both column-default to 1 ("on", app/models.py:984-985) for a fresh
+user, and this file never sets `nsfw`/`nsfl` on any post, so the coupling is
+inert for every assertion here today -- but task 5
+(tests/test_feed_display_preferences.py) found that an over-broadened
+hide_nsfw/hide_nsfl clause (`app/utils.py:3857-3860` rewritten to exclude
+everything once the preference is on) fails presence tests here as
+collateral, not because of anything this file is testing: 9 of these 17
+tests failed before this fix (all presence halves; the 8 absence halves are
+unaffected since they already expect the post to be absent), 0 after. Left
+unfixed, the next test added here that DOES carry an nsfw/nsfl post would be
+silently filtered by this coupling with no obvious cause.
 """
 import uuid
 
@@ -65,6 +78,8 @@ class TestFilteredOutCommunities:
     def test_a_filtered_communitys_post_is_absent(self, app, db_session, redis_double):
         make_instance('fltout.example')
         viewer = make_user(None, 'fltoutviewer', local=True)
+        viewer.hide_nsfw = 0  # default 1 -- keep the nsfw filter off for filters that don't test it
+        viewer.hide_nsfl = 0
         author = make_user(None, 'fltoutauthor', local=True)
         community = make_community('fltoutmatch')
         post = make_post(community, author, 'https://fltout.example/posts/1')
@@ -78,6 +93,8 @@ class TestFilteredOutCommunities:
     def test_an_unfiltered_communitys_post_is_present(self, app, db_session, redis_double):
         make_instance('fltoutpresent.example')
         viewer = make_user(None, 'fltoutpviewer', local=True)
+        viewer.hide_nsfw = 0  # default 1 -- keep the nsfw filter off for filters that don't test it
+        viewer.hide_nsfl = 0
         author = make_user(None, 'fltoutpauthor', local=True)
         community = make_community('fltoutpresent')
         post = make_post(community, author, 'https://fltoutpresent.example/posts/1')
@@ -106,6 +123,8 @@ class TestBlockedOrBannedInstancesCommunitySide:
         make_instance('csblkhome.example')  # id 1: viewer's and author's instance
         remote = make_instance('csblkremote.example')  # id 2: community's instance
         viewer = make_user(None, 'csblkviewer', local=True)
+        viewer.hide_nsfw = 0  # default 1 -- keep the nsfw filter off for filters that don't test it
+        viewer.hide_nsfl = 0
         author = make_user(None, 'csblkauthor', local=True)
         community = make_community('csblkcomm')
         community.instance_id = remote.id
@@ -121,6 +140,8 @@ class TestBlockedOrBannedInstancesCommunitySide:
         make_instance('csokhome.example')
         remote = make_instance('csokremote.example')
         viewer = make_user(None, 'csokviewer', local=True)
+        viewer.hide_nsfw = 0  # default 1 -- keep the nsfw filter off for filters that don't test it
+        viewer.hide_nsfl = 0
         author = make_user(None, 'csokauthor', local=True)
         community = make_community('csokcomm')
         community.instance_id = remote.id
@@ -149,6 +170,8 @@ class TestBlockedOrBannedInstancesPostSide:
         make_instance('psblkhome.example')  # id 1: viewer's and community's instance
         remote = make_instance('psblkremote.example')  # id 2: author's instance
         viewer = make_user(None, 'psblkviewer', local=True)
+        viewer.hide_nsfw = 0  # default 1 -- keep the nsfw filter off for filters that don't test it
+        viewer.hide_nsfl = 0
         author = make_user(remote, 'psblkauthor', local=False)
         community = make_community('psblkcomm')  # stays on instance 1
         post = make_post(community, author, 'https://psblkremote.example/posts/1')
@@ -162,6 +185,8 @@ class TestBlockedOrBannedInstancesPostSide:
         make_instance('psokhome.example')
         remote = make_instance('psokremote.example')
         viewer = make_user(None, 'psokviewer', local=True)
+        viewer.hide_nsfw = 0  # default 1 -- keep the nsfw filter off for filters that don't test it
+        viewer.hide_nsfl = 0
         author = make_user(remote, 'psokauthor', local=False)
         community = make_community('psokcomm')
         post = make_post(community, author, 'https://psokremote.example/posts/1')
@@ -182,6 +207,8 @@ class TestBlockedDomains:
     def test_a_blocked_domains_post_is_absent(self, app, db_session, redis_double):
         make_instance('domblk.example')
         viewer = make_user(None, 'domblkviewer', local=True)
+        viewer.hide_nsfw = 0  # default 1 -- keep the nsfw filter off for filters that don't test it
+        viewer.hide_nsfl = 0
         author = make_user(None, 'domblkauthor', local=True)
         community = make_community('domblkcomm')
         domain = make_domain('blocked-domain.example')
@@ -197,6 +224,8 @@ class TestBlockedDomains:
     def test_an_unblocked_domains_post_is_present(self, app, db_session, redis_double):
         make_instance('domokhome.example')
         viewer = make_user(None, 'domokviewer', local=True)
+        viewer.hide_nsfw = 0  # default 1 -- keep the nsfw filter off for filters that don't test it
+        viewer.hide_nsfl = 0
         author = make_user(None, 'domokauthor', local=True)
         community = make_community('domokcomm')
         domain = make_domain('unblocked-domain.example')
@@ -220,6 +249,8 @@ class TestBlockedCommunities:
     def test_a_blocked_communitys_post_is_absent(self, app, db_session, redis_double):
         make_instance('commblk.example')
         viewer = make_user(None, 'commblkviewer', local=True)
+        viewer.hide_nsfw = 0  # default 1 -- keep the nsfw filter off for filters that don't test it
+        viewer.hide_nsfl = 0
         author = make_user(None, 'commblkauthor', local=True)
         community = make_community('commblkcomm')
         post = make_post(community, author, 'https://commblk.example/posts/1')
@@ -232,6 +263,8 @@ class TestBlockedCommunities:
     def test_an_unblocked_communitys_post_is_present(self, app, db_session, redis_double):
         make_instance('commokhome.example')
         viewer = make_user(None, 'commokviewer', local=True)
+        viewer.hide_nsfw = 0  # default 1 -- keep the nsfw filter off for filters that don't test it
+        viewer.hide_nsfl = 0
         author = make_user(None, 'commokauthor', local=True)
         community = make_community('commokcomm')
         post = make_post(community, author, 'https://commokhome.example/posts/1')
@@ -256,6 +289,8 @@ class TestBlockedUsers:
         """Fails if the blocked_accounts clause is removed."""
         make_instance('userblk.example')
         viewer = make_user(None, 'userblkviewer', local=True)
+        viewer.hide_nsfw = 0  # default 1 -- keep the nsfw filter off for filters that don't test it
+        viewer.hide_nsfl = 0
         author = make_user(None, 'userblkauthor', local=True)
         community = make_community('userblkcomm')
         post = make_post(community, author, 'https://userblk.example/posts/1')
@@ -270,6 +305,8 @@ class TestBlockedUsers:
         would also pass -- the absence test alone cannot tell those apart."""
         make_instance('userokhome.example')
         viewer = make_user(None, 'userokviewer', local=True)
+        viewer.hide_nsfw = 0  # default 1 -- keep the nsfw filter off for filters that don't test it
+        viewer.hide_nsfl = 0
         author = make_user(None, 'userokauthor', local=True)
         community = make_community('userokcomm')
         post = make_post(community, author, 'https://userokhome.example/posts/1')
@@ -292,6 +329,8 @@ class TestCommunitiesBannedFrom:
     def test_a_banned_from_communitys_post_is_absent(self, app, db_session, redis_double):
         make_instance('banblk.example')
         viewer = make_user(None, 'banblkviewer', local=True)
+        viewer.hide_nsfw = 0  # default 1 -- keep the nsfw filter off for filters that don't test it
+        viewer.hide_nsfl = 0
         author = make_user(None, 'banblkauthor', local=True)
         community = make_community('banblkcomm')
         post = make_post(community, author, 'https://banblk.example/posts/1')
@@ -304,6 +343,8 @@ class TestCommunitiesBannedFrom:
     def test_an_unbanned_communitys_post_is_present(self, app, db_session, redis_double):
         make_instance('banokhome.example')
         viewer = make_user(None, 'banokviewer', local=True)
+        viewer.hide_nsfw = 0  # default 1 -- keep the nsfw filter off for filters that don't test it
+        viewer.hide_nsfl = 0
         author = make_user(None, 'banokauthor', local=True)
         community = make_community('banokcomm')
         post = make_post(community, author, 'https://banokhome.example/posts/1')
@@ -334,6 +375,8 @@ class TestBlockedFlair:
     def test_a_blocked_flairs_post_is_absent(self, app, db_session, redis_double):
         make_instance('flairblk.example')
         viewer = make_user(None, 'flairblkviewer', local=True)
+        viewer.hide_nsfw = 0  # default 1 -- keep the nsfw filter off for filters that don't test it
+        viewer.hide_nsfl = 0
         author = make_user(None, 'flairblkauthor', local=True)
         community = make_community('flairblkcomm')
         post = make_post(community, author, 'https://flairblk.example/posts/1')
@@ -347,6 +390,8 @@ class TestBlockedFlair:
     def test_an_unblocked_flairs_post_is_present(self, app, db_session, redis_double):
         make_instance('flairokhome.example')
         viewer = make_user(None, 'flairokviewer', local=True)
+        viewer.hide_nsfw = 0  # default 1 -- keep the nsfw filter off for filters that don't test it
+        viewer.hide_nsfl = 0
         author = make_user(None, 'flairokauthor', local=True)
         community = make_community('flairokcomm')
         post = make_post(community, author, 'https://flairokhome.example/posts/1')
@@ -369,6 +414,8 @@ class TestBlockedFlair:
         """
         make_instance('flairallhome.example')
         viewer = make_user(None, 'flairallviewer', local=True)
+        viewer.hide_nsfw = 0  # default 1 -- keep the nsfw filter off for filters that don't test it
+        viewer.hide_nsfl = 0
         author = make_user(None, 'flairallauthor', local=True)
         community = make_community('flairallcomm')
         community.show_all = True
