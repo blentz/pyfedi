@@ -7,10 +7,11 @@ column here rather than in the test.
 
 from app import db
 from app.activitypub.signature import RsaKeys
-from app.models import (Community, CommunityBan, CommunityMember, Instance, InstanceBan,
+from app.models import (Community, CommunityBan, CommunityBlock, CommunityFlair, CommunityFlairBlock,
+                        CommunityMember, Domain, DomainBlock, Instance, InstanceBan, InstanceBlock,
                         NotificationSubscription, Post, PostReply, PostReplyBookmark,
-                        PostReplyVote, Role, RolePermission, Site, User, UserBlock, UserFollower,
-                        user_role, utcnow)
+                        PostReplyVote, PostVote, Role, RolePermission, Site, User, UserBlock, UserFollower,
+                        hidden_posts, read_posts, user_role, utcnow)
 
 
 def make_instance(domain: str, software: str = 'mastodon') -> Instance:
@@ -301,3 +302,127 @@ def make_follow(local_user, remote_user, is_accepted=True, is_inward=False) -> U
         local_user.num_following = (local_user.num_following or 0) + 1
     db.session.commit()
     return follow
+
+
+def make_domain(name: str) -> Domain:
+    """A Domain row -- the FK target for DomainBlock and for Post.domain_id.
+
+    app/utils.py's blocked_domains(user_id) returns DomainBlock.domain_id values,
+    which get_deduped_post_ids compares against p.domain_id; both sides need a
+    real Domain row to point at.
+    """
+    domain = Domain(name=name)
+    db.session.add(domain)
+    db.session.commit()
+    return domain
+
+
+def make_domain_block(user: User, domain: Domain) -> DomainBlock:
+    """app/utils.py's blocked_domains(user_id) reads DomainBlock rows filtered on
+    user_id and returns domain_id -- matches this factory's columns.
+    """
+    block = DomainBlock(user_id=user.id, domain_id=domain.id)
+    db.session.add(block)
+    db.session.commit()
+    return block
+
+
+def make_instance_block(user: User, instance: Instance) -> InstanceBlock:
+    """app/utils.py's blocked_or_banned_instances(user_id) reads InstanceBlock rows
+    filtered on user_id and returns instance_id, unioned with banned_instances()
+    (the InstanceBan-backed function covered by make_instance_ban above) -- matches
+    this factory's columns.
+    """
+    block = InstanceBlock(user_id=user.id, instance_id=instance.id)
+    db.session.add(block)
+    db.session.commit()
+    return block
+
+
+def make_community_block(user: User, community: Community) -> CommunityBlock:
+    """app/utils.py's blocked_communities(user_id) reads CommunityBlock rows
+    filtered on user_id and returns community_id -- matches this factory's
+    columns.
+    """
+    block = CommunityBlock(user_id=user.id, community_id=community.id)
+    db.session.add(block)
+    db.session.commit()
+    return block
+
+
+def mark_post_read(user: User, post: Post) -> None:
+    """Insert into the `read_posts` association table.
+
+    `read_posts` has no ORM model -- it is a plain db.Table (app/models.py:933) --
+    so the row is inserted directly through it, mirroring grant_permission's use of
+    user_role.insert(). get_deduped_post_ids reads
+    `SELECT read_post_id FROM "read_posts" WHERE user_id = :user_id` when the
+    viewer's hide_read_posts is set (app/utils.py:3862), and get_instance_stickies
+    reads the identical query under the same condition (app/utils.py:4016).
+    """
+    db.session.execute(read_posts.insert().values(user_id=user.id, read_post_id=post.id))
+    db.session.commit()
+
+
+def hide_post(user: User, post: Post) -> None:
+    """Insert into the `hidden_posts` association table.
+
+    `hidden_posts` has no ORM model either (app/models.py:942). get_deduped_post_ids
+    reads `SELECT hidden_post_id FROM "hidden_posts" WHERE user_id = :user_id`
+    unconditionally for every authenticated viewer (app/utils.py:3865), and
+    get_instance_stickies reads the identical query unconditionally too
+    (app/utils.py:4012).
+    """
+    db.session.execute(hidden_posts.insert().values(user_id=user.id, hidden_post_id=post.id))
+    db.session.commit()
+
+
+def make_post_flair(post: Post, name: str = 'flair') -> CommunityFlair:
+    """A CommunityFlair scoped to `post`'s community, attached to `post`.
+
+    There is no PostFlair model: flair is a community-level CommunityFlair
+    (app/models.py:4151) attached to posts through the `post_flair` many-to-many
+    table (app/models.py:345), exposed as the `Post.flair` relationship. This
+    factory follows that shape rather than a per-post model. get_deduped_post_ids's
+    blocked-flair filter reads `post_flair` directly (`SELECT post_id FROM
+    "post_flair" WHERE flair_id IN :blocked_flair_ids`, app/utils.py:3898).
+    """
+    flair = CommunityFlair(community_id=post.community_id, flair=name)
+    db.session.add(flair)
+    db.session.commit()
+    post.flair.append(flair)
+    db.session.commit()
+    return flair
+
+
+def make_flair_block(user: User, flair: CommunityFlair) -> CommunityFlairBlock:
+    """app/utils.py's get_deduped_post_ids reads CommunityFlairBlock rows filtered
+    on user_id and community_id, then excludes posts carrying any blocked
+    community_flair_id (app/utils.py:3894-3899) -- matches this factory's columns.
+    community_id is taken from `flair` so the block always targets the community
+    the flair belongs to, matching how the query filters
+    CommunityFlairBlock.community_id.in_(community_ids).
+    """
+    block = CommunityFlairBlock(user_id=user.id, community_id=flair.community_id,
+                                community_flair_id=flair.id)
+    db.session.add(block)
+    db.session.commit()
+    return block
+
+
+def make_post_vote(user: User, post: Post, effect: float) -> PostVote:
+    """A vote by `user` on `post`, mirroring make_post_reply_vote.
+
+    post_ids_to_models's sort keys (ranking, ranking_scaled, score) are columns on
+    Post itself, not derived from post_vote at query time -- production
+    recalculates them when a vote is cast (app/shared/post.py:211-214), so a bare
+    PostVote row does not change sort order by itself. This factory exists for
+    parity with make_post_reply_vote and for tests that assert on the PostVote row
+    directly (e.g. a blocked user's vote still exists in the table but should not
+    count); a test about post_ids_to_models's sort order should set
+    post.score / post.ranking / post.ranking_scaled directly instead.
+    """
+    vote = PostVote(user_id=user.id, author_id=post.user_id, post_id=post.id, effect=effect)
+    db.session.add(vote)
+    db.session.commit()
+    return vote
