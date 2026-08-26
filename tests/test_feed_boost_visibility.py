@@ -1,37 +1,35 @@
-"""The feed clause is a SQL string in app/utils.py, so it is tested as SQL.
+"""The boost clause is a SQL fragment in app/utils.py, so it is tested as SQL.
 
-This keeps the test independent of Flask-Login and the rest of the feed query.
+This keeps the test independent of Flask-Login and the rest of the feed query;
+tests/test_subscribed_feed_microblogs.py drives the whole of get_deduped_post_ids
+end to end.
+
+The fragment is IMPORTED, not copied. It used to be a hand-transcribed duplicate
+with a separate test asserting the copy still appeared in
+inspect.getsource(get_deduped_post_ids) -- which could pin the fragment's own text
+but not the structure around it, and by the time the microblog gate moved onto the
+community disjunct that test's docstring was describing a line the function no
+longer contained while still passing. app/utils.py now exposes FOLLOWED_BOOSTER_SQL
+(and FOLLOWED_AUTHOR_SQL, and MICROBLOG_GATE) at module level, so there is nothing
+left to diverge: these tests run the production string.
 """
-
-import re
 
 import pytest
 from sqlalchemy import text
 
+from app import db
+from app.activitypub.util import record_boost
+from app.utils import FOLLOWED_AUTHOR_SQL, FOLLOWED_BOOSTER_SQL, MICROBLOG_GATE
 from tests.factories import make_community, make_follow, make_instance, make_post, make_user
 
-# The boost disjunct exactly as it appears in get_deduped_post_ids (app/utils.py),
-# wrapped so it can run standalone against "post" as p.
-#
-# There is no `p.private is false` gate here: Post.private is an unlisted marker, not
-# a followers-only flag (Post.new() sets it for ANY titleless object, which is every
-# ingested Mastodon Note), so gating on it excluded every boosted post from the feed.
-# Non-public content (followers-only, direct) is kept out by refusal at ingest
-# (create_post / create_post_reply), not by this clause.
-BOOST_CLAUSE_BODY = """EXISTS (SELECT 1 FROM post_boost pb
-                                  INNER JOIN user_follower uf2 ON uf2.remote_user_id = pb.user_id
-                                  WHERE pb.post_id = p.id
-                                  AND uf2.local_user_id = :local_user_id
-                                  AND uf2.is_inward is false)"""
-
-BOOST_CLAUSE = f"""SELECT p.id FROM "post" as p WHERE
-{BOOST_CLAUSE_BODY}"""
+# Wrapped so the production fragment can run standalone against "post" as p.
+BOOST_CLAUSE = f'''SELECT p.id FROM "post" as p WHERE
+{FOLLOWED_BOOSTER_SQL}'''
 
 
 @pytest.fixture
 def scenario(db_session):
     """A local user follows booster. Stranger authors a post. Booster boosts it."""
-    from app.activitypub.util import record_boost
     instance = make_instance('m.example')
     booster = make_user(instance, 'booster')
     stranger = make_user(make_instance('other.example'), 'stranger')
@@ -44,7 +42,6 @@ def scenario(db_session):
 
 def test_boosted_post_is_visible(db_session, scenario):
     """A post boosted by a followed account matches the clause"""
-    from app import db
     local, post, _ = scenario
 
     ids = [row[0] for row in db.session.execute(text(BOOST_CLAUSE), {'local_user_id': local.id})]
@@ -54,7 +51,6 @@ def test_boosted_post_is_visible(db_session, scenario):
 
 def test_unboosted_post_is_not_visible(db_session, scenario):
     """A post nobody followed has boosted does not match"""
-    from app import db
     local, _, stranger = scenario
     other_post = make_post(make_community('other'), stranger, 'https://other.example/notes/2')
 
@@ -71,8 +67,6 @@ def test_boost_by_unfollowed_account_is_not_visible(db_session, scenario):
     booster-identity predicate itself. This test does: there IS a boost, by a real
     account, just not one the viewer follows.
     """
-    from app import db
-    from app.activitypub.util import record_boost
     local, _, stranger = scenario
     unfollowed_booster = make_user(make_instance('unfollowed.example'), 'unfollowedbooster')
     other_post = make_post(make_community('unfollowed-booster-community'), stranger,
@@ -86,7 +80,6 @@ def test_boost_by_unfollowed_account_is_not_visible(db_session, scenario):
 
 def test_not_visible_to_a_user_who_follows_nobody(db_session, scenario):
     """The clause is scoped to the querying user's own follows"""
-    from app import db
     _, post, _ = scenario
     someone_else = make_user(None, 'someoneelse', local=True)
 
@@ -105,8 +98,6 @@ def test_inward_follow_does_not_open_visibility(db_session):
     clause would leave every other test in this file green. This test makes that
     predicate load-bearing.
     """
-    from app import db
-    from app.activitypub.util import record_boost
     instance = make_instance('inward.example')
     booster = make_user(instance, 'inwardbooster')
     stranger = make_user(make_instance('inward-stranger.example'), 'inwardstranger')
@@ -127,8 +118,6 @@ def test_boosted_microblog_post_is_visible(db_session):
     private for every titleless object, so every ingested Mastodon post was excluded
     and boosted posts never appeared.
     """
-    from app import db
-    from app.activitypub.util import record_boost
 
     instance = make_instance('m.example')
     booster = make_user(instance, 'booster')
@@ -143,42 +132,16 @@ def test_boosted_microblog_post_is_visible(db_session):
     assert post.id in ids
 
 
-def test_clause_matches_the_one_in_utils():
-    """The tested SQL is the SQL the feed actually uses.
+def test_the_boost_disjunct_carries_no_microblog_gate():
+    """The boost source must stay ungated on p.private.
 
-    Normalises whitespace on both sides and asserts the FULL boost-disjunct body --
-    the join, the post_id correlation, the viewer scoping, and the is_inward filter --
-    appears verbatim in get_deduped_post_ids' source, not just a couple of
-    loosely-matched substrings. A clause missing the viewer scoping or the is_inward
-    filter would have passed the old two-substring version of this test; it cannot
-    pass this one. Guards against the test drifting from app/utils.py.
-
-    Containment alone has a directional blind spot: the ungated BOOST_CLAUSE_BODY is
-    trivially a substring of a *gated* production clause too, since
-    "EXISTS (...)" is a substring of "(p.private is false AND EXISTS (...))". So the
-    assertion above would keep passing even if `p.private is false AND` were
-    re-added to the boost disjunct -- exactly the regression this task exists to
-    prevent. The second assertion below closes that hole: it isolates the boost
-    disjunct's own sources.append(...) block (identified by containing
-    "post_boost pb", which is unique to it) and asserts the gate text is absent from
-    THAT block specifically -- not a blanket absence check against the whole
-    function body, which would incorrectly fail on the untouched
-    `if not include_following: post_id_where.append('p.private is false')` line
-    elsewhere in get_deduped_post_ids.
+    Adding the gate here excluded every ingested Mastodon post from the feed --
+    Post.new() sets private for any titleless object -- which is the regression
+    test_boosted_microblog_post_is_visible above exists to catch. This asserts the
+    same thing structurally, so it fails on the edit rather than on the data, and it
+    names the one place the gate does belong.
     """
-    import inspect
-    from app import utils
-
-    def normalize(sql: str) -> str:
-        return re.sub(r'\s+', ' ', sql).strip()
-
-    source = inspect.getsource(utils.get_deduped_post_ids)
-    assert normalize(BOOST_CLAUSE_BODY) in normalize(source)
-
-    append_blocks = re.findall(r'sources\.append\("""(.*?)"""\)', source, re.DOTALL)
-    boost_blocks = [b for b in append_blocks if 'post_boost pb' in b]
-    assert len(boost_blocks) == 1, \
-        f'expected exactly one boost sources.append(...) block, found {len(boost_blocks)}'
-    boost_block = normalize(boost_blocks[0])
-    assert 'p.private is false' not in boost_block, \
-        'the p.private gate has been re-added to the boost disjunct'
+    assert MICROBLOG_GATE not in FOLLOWED_BOOSTER_SQL
+    assert MICROBLOG_GATE not in FOLLOWED_AUTHOR_SQL
+    assert 'private' not in FOLLOWED_BOOSTER_SQL
+    assert 'private' not in FOLLOWED_AUTHOR_SQL

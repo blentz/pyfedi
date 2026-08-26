@@ -265,7 +265,11 @@ it. It is currently 50%: the client-IP fix (`tests/test_client_ip.py`) and the
 the ten `Referer`-handling routes onto `back()` behind one origin check
 (`app.utils.is_safe_redirect_target`, `tests/test_safe_redirect_target.py`)
 raised it to 49, and making that origin check's host rule admin-configurable
-(`tests/test_redirect_policy.py`) raised it to 50.
+(`tests/test_redirect_policy.py`) raised it to 50. The microblog feed fix
+(`tests/test_subscribed_feed_microblogs.py`, which drives `get_deduped_post_ids`
+end to end rather than a copy of its SQL) took the measured figure to 60.18 and
+the floor to 60 -- that raise banks unrecorded gains from the tasks between as
+well as its own; the module measured 56.43 immediately before it.
 
 `is_safe_redirect_target` MOVED CATEGORY with that last change (Ruling 17). It
 used to be pure -- app config and string parsing, no database. It now reads the
@@ -335,6 +339,70 @@ The fuzz corpus this sub-project built lives at `tests/fuzz/corpus/<target>/`
 (committed, hand-curated) with working-set output in `tests/fuzz/.work/<target>/`
 (gitignored); see "Fuzzing" above for how the two differ and how to run a
 campaign.
+
+## `Post.private` is the microblog marker, not a privacy flag
+
+Three different tables have a `private` column and they mean three different
+things. Do not reason from one to another.
+
+- `Community.private` -- invite-only. Real access control.
+- `PostReply.private` -- followers-only. Real audience restriction
+  (`app/models.py` ~2827, set from the reply's `to`).
+- `Post.private` -- **set by `Post.new()` for any object with no `name`**, i.e.
+  every ingested microblog (`app/models.py` ~1796, under the comment
+  `# Microblog posts`). It is not access control.
+
+`Post.new()` is the ONLY writer of `Post.private`, and `create_post()`
+(`app/activitypub/util.py` ~2496) is the only caller of `Post.new()`.
+`create_post()` refuses `followers` and `direct` object visibility before calling
+it, so **no non-public object is ever stored as a Post at all** -- which is what
+makes `Post.private` unusable as a privacy filter: there is nothing for it to
+protect. Within microblogs it tracks ACTIVITY-level addressing, a second and less
+reliable source of truth than the object-level check: a genuinely unlisted post
+comes out `private=False`, while a public post arriving through
+`create_resolved_object()`'s synthesised wrapper (no activity-level addressing at
+all) comes out `private=True`.
+
+`tests/test_post_private_is_only_the_microblog_marker.py` pins all of that,
+including a `Post.new()` call-site scan (parsed with `ast`, because the name also
+appears in three docstrings) that fails if a second caller appears without the
+visibility refusal.
+
+Where the marker is and is not applied:
+
+- **The community's own listing and RSS feed do NOT filter it.** They used to, and
+  the result was that `/c/microblogs@piefed.social` showed nothing while those
+  same posts turned up in the subscribed feed. If a post is in a community and you
+  are looking at that community, you see it.
+  `tests/test_community_shows_microblogs.py`.
+- **The aggregate feeds gate the COMMUNITY source only**, never the whole query
+  and never the follow/boost disjuncts:
+
+      ((community_disjunct) AND p.private is false) OR followed_author OR followed_booster
+
+  So a microblog reaches an aggregate feed because you follow its author or its
+  booster -- never merely because you subscribed to a community that carries it.
+  `get_deduped_post_ids` previously dropped the gate for the whole query whenever
+  `include_following` was true, which is how Mastodon posts reached the subscribed
+  feed of a user following nobody. `tests/test_subscribed_feed_microblogs.py`
+  asserts both directions.
+- Discovery surfaces (search, tags, domains, user profiles) still filter it, and
+  were not touched.
+
+The three SQL fragments are module-level constants in `app/utils.py` --
+`FOLLOWED_AUTHOR_SQL`, `FOLLOWED_BOOSTER_SQL`, `MICROBLOG_GATE` -- specifically so
+tests import them instead of copying them.
+`tests/test_feed_boost_visibility.py` used to hold a hand-transcribed copy of the
+boost clause plus a test asserting the copy still appeared in
+`inspect.getsource(get_deduped_post_ids)`. That guarded the fragment's own text
+but not the structure around it: when the gate moved onto the community disjunct,
+that test kept passing while its docstring described a line the function no longer
+contained. Import the string; do not transcribe it.
+
+Note also that `find_microblogging_community()` filters `instance_id == 1`, so it
+only ever returns the LOCAL `microblogs` community. A remote aggregator community
+such as `microblogs@piefed.social` is invisible to it, and to the `local` view's
+exclusion built on it.
 
 ## Fixtures for external services
 
