@@ -202,6 +202,17 @@ inert because HTML defines no `href` on `img`. `a` is the only element in
 hard way -- the first campaign the fixed target could run flagged exactly that
 `<img href>` at seed load.
 
+`src` is now scheme-checked too, and it is a SEPARATE decision from `href`, not
+the same one widened. `app.utils.UNSAFE_SRC_SCHEMES` is `UNSAFE_URL_SCHEMES`
+minus `data`: a `data:` href is a document the attacker wrote and navigates to,
+while a `data:` src is decoded as an image in a non-scripted context and inline
+`data:` images are ordinary federated content -- `sanitize_svg_bytes` already
+keeps them for `image/jpeg|png|gif|webp|avif`. Both halves are pinned by
+`TestSrcSchemeIsFilteredTheSameWayHrefIs` in `tests/test_allowlist_html.py`;
+change one and that class must be changed with a reason. `UNSAFE_URL_SCHEMES`
+is a blocklist and says so in its own comment, including why it is not an
+allowlist yet.
+
 `app.utils.sanitize_svg` is deliberately not a target. It opens a path, calls
 `sanitize_svg_bytes` and writes the result back; all of its input handling is
 `sanitize_svg_bytes`, which is fuzzed. Fuzzing a filesystem path would exercise
@@ -388,6 +399,22 @@ campaign.
   *first* and `http_mock` second; that is safe only because it registers zero
   routes and can never match. **Never add a route to it** — even a catch-all
   that logs would silently override every `http_mock` route in the suite.
+
+- `disable_rate_limiter` — session-scoped and autouse: sets `limiter.enabled =
+  False` for the run, restoring it afterwards. Flask-Limiter's storage is the
+  test Redis (`CACHE_REDIS_URL`, db 1) with a one-day TTL on each counter, and
+  that Redis survives everything except `--down`. So a limited route accumulates
+  hits ACROSS RUNS: `/auth/login` is "30 per day", and after enough runs on the
+  same day every further run gets `429 - Too Many Requests` from it. This was
+  not hypothetical — the eight `TestLoginRouteEndToEnd` tests in
+  `tests/test_redirect_targets.py` failed exactly that way at commit `a144f5ed`
+  with no change to `app/` or `tests/`, the bucket for `198.51.100.201` holding
+  37 with 82,896 seconds still to run. Per-request unique IPs
+  (`from_a_fresh_ip`) only spread the accumulation over a few fixed addresses
+  and delay it. Nothing in the suite asserts a 429, so nothing loses coverage;
+  `tests/test_client_ip.py` exercises the limiter's key function directly, which
+  `enabled` does not affect. If you ever DO want to test a limit, re-enable it
+  inside that test rather than removing this fixture.
 
 ### Eager Celery makes outbound federation happen inline — and it fails silently
 

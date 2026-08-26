@@ -198,7 +198,19 @@ class TestAuthNextPageIsChecked:
 
 
 class TestLoginRouteEndToEnd:
-    """The same guard where a browser meets it, not only at the function."""
+    """The same guard where a browser meets it, not only at the function.
+
+    These are the only tests in this file that issue a real request through the
+    app. They failed for eight straight runs at commit a144f5ed with no change
+    to app/ or tests/, and the cause was NOT this file: /auth/login carries a
+    real "30 per day" Flask-Limiter limit whose counter lives in the test Redis
+    with a 24-hour TTL, and that Redis outlives every run. `from_a_fresh_ip`
+    below spreads the hits over a handful of fixed addresses, which delays the
+    exhaustion rather than preventing it; the 198.51.100.201 bucket had reached
+    37. The limiter is now disabled for the suite by conftest's
+    `disable_rate_limiter`, and `from_a_fresh_ip` is kept because the addresses
+    still document that each request is its own client.
+    """
 
     @pytest.mark.parametrize('n,candidate', list(enumerate(OFF_ORIGIN)))
     def test_an_authenticated_user_is_not_sent_off_site(self, app, db_session, n, candidate):

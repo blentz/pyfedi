@@ -1,3 +1,4 @@
+import pytest
 from PIL import Image, ImageCms
 
 from app.utils import get_new_frames, save_new_gif, scale_gif, to_srgb
@@ -63,6 +64,72 @@ class TestToSrgb:
         # original (incompatible) profile bytes survive untouched -- proof
         # the except arm ran rather than the success path.
         assert result.info.get('icc_profile') == lab_bytes
+
+    CORRUPT_PROFILES = [
+        # b'' is deliberately NOT here: it is falsy, so it never reaches the
+        # profile construction at all -- `if icc_bytes:` already routes it to
+        # the `assume` branch, and it passed before this fix.
+        ('not_a_profile', b'this is not an ICC profile at all'),
+        ('truncated_header', b'\x00\x00\x02\x0c' + b'A' * 100),
+        ('valid_prefix_then_garbage',
+         ImageCms.ImageCmsProfile(ImageCms.createProfile('sRGB')).tobytes()[:64] + b'\xff' * 64),
+    ]
+
+    @pytest.mark.parametrize('icc_bytes', [b for _, b in CORRUPT_PROFILES],
+                             ids=[i for i, _ in CORRUPT_PROFILES])
+    def test_a_corrupt_embedded_profile_falls_back_instead_of_escaping(self, icc_bytes):
+        """A corrupt ICC profile must reach the `assume` fallback, not the caller.
+
+        The ICC bytes come out of an uploaded or federated image, so they are
+        attacker-controlled. littlecms refuses bytes it cannot parse by raising
+        OSError('cannot open profile from string') -- NOT PyCMSError, and not
+        AttributeError -- so while the profile was built outside the guarded
+        region, neither `except` arm of to_srgb could see it and the OSError
+        escaped the function entirely. Both callers of to_srgb turn that into a
+        raw error message shown to the user: the web upload path flashes
+        `reason=str(ex)` and the API returns `{"message": str(e)}` at 400.
+
+        The function already has the fallback this needs -- `assume` -- so the
+        fix is only that the construction now sits inside the guard.
+        """
+        image = Image.new('RGB', (8, 8), (10, 20, 30))
+        image.info['icc_profile'] = icc_bytes
+
+        result = to_srgb(image)
+
+        assert result.mode == 'RGB'
+
+    def test_a_corrupt_profile_on_a_cmyk_image_still_converts(self):
+        """The conversion still happens; the fallback is not a bail-out.
+
+        CMYK is the mode to_srgb exists for, and the one whose pixels visibly
+        change: a mode of 'RGB' here means the image was really converted rather
+        than handed back as it arrived.
+        """
+        image = Image.new('CMYK', (8, 8), (10, 20, 30, 40))
+        image.info['icc_profile'] = b'this is not an ICC profile at all'
+
+        result = to_srgb(image)
+
+        assert result.mode == 'RGB'
+        assert result.size == (8, 8)
+
+    def test_a_corrupt_profile_falls_back_to_the_assume_profile_not_a_plain_convert(self):
+        """Discriminates the `assume` fallback from a bare `im.convert("RGB")`.
+
+        Both leave mode 'RGB', so mode alone cannot tell them apart. The
+        profileToProfile success path re-tags the result with sRGB; a plain
+        convert leaves whatever `info` held. Asserting the emitted profile is
+        the sRGB tag proves the transform ran against the substituted `assume`
+        profile rather than the corrupt bytes being routed to a bail-out.
+        """
+        srgb_tag = ImageCms.ImageCmsProfile(ImageCms.createProfile('sRGB')).tobytes()
+        image = Image.new('RGB', (8, 8), (10, 20, 30))
+        image.info['icc_profile'] = b'this is not an ICC profile at all'
+
+        result = to_srgb(image)
+
+        assert result.info.get('icc_profile') == srgb_tag
 
 
 class TestGetNewFrames:

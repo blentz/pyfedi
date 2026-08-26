@@ -349,6 +349,40 @@ class TestAnchorSchemeIsDecidedTheWayABrowserDecidesIt:
         result = allowlist_html(f'<a href="{href}">x</a>', test_env={'fn_string': 'fn-test'})
         assert href_of(result) == '', f'data: URL survived: {result!r}'
 
+    LEGACY_SCRIPT_SCHEMES = [
+        ('livescript_plain', 'livescript:alert(1)'),
+        ('livescript_uppercase', 'LIVESCRIPT:alert(1)'),
+        ('livescript_mixed_case', 'LiVeScRiPt:alert(1)'),
+        ('livescript_leading_space', ' livescript:alert(1)'),
+        ('livescript_embedded_tab', 'live\tscript:alert(1)'),
+        ('livescript_embedded_lf_entity', 'live&#10;script:alert(1)'),
+        ('livescript_every_trick', ' \t\n\rLiVe\tScRiPt&#10;:alert(1) '),
+        ('mocha_plain', 'mocha:alert(1)'),
+        ('mocha_uppercase', 'MOCHA:alert(1)'),
+        ('mocha_mixed_case', 'MoChA:alert(1)'),
+        ('mocha_leading_space', ' mocha:alert(1)'),
+        ('mocha_embedded_tab', 'mo\tcha:alert(1)'),
+        ('mocha_embedded_lf_entity', 'mo&#10;cha:alert(1)'),
+        ('mocha_every_trick', ' \t\n\rMo\tChA&#10;:alert(1) '),
+    ]
+
+    @pytest.mark.parametrize('href', [h for _, h in LEGACY_SCRIPT_SCHEMES],
+                             ids=[i for i, _ in LEGACY_SCRIPT_SCHEMES])
+    def test_a_legacy_script_url_is_blanked(self, href):
+        """livescript: (Netscape 4) and mocha: (Netscape 2/3) were the other two
+        spellings of "execute this as script in the current origin".
+
+        Neither is executed by any current browser, so this is not a live hole.
+        It is here because UNSAFE_URL_SCHEMES is a BLOCKLIST, and the whole
+        weakness of a blocklist is the entry nobody thought of -- which these
+        two were. The same WHATWG normalisation tricks that defeated the
+        original javascript: check are exercised against them, so the entries
+        are covered by the same decision procedure rather than by a bare
+        equality test.
+        """
+        result = allowlist_html(f'<a href="{href}">x</a>', test_env={'fn_string': 'fn-test'})
+        assert href_of(result) == '', f'legacy script URL survived: {result!r}'
+
     @pytest.mark.parametrize('href', [
         'https://example.com/',
         'http://example.com/path?a=b&amp;c=d#frag',
@@ -365,6 +399,9 @@ class TestAnchorSchemeIsDecidedTheWayABrowserDecidesIt:
         'gemini://example.com/',
         'data-sheet.html',
         'javascriptic://example.com/',
+        'livescriptic://example.com/',
+        'mochaccino://example.com/',
+        'mocha-latte.html',
     ])
     def test_an_ordinary_href_is_preserved_byte_for_byte(self, href):
         """A fix that blanks legitimate hrefs is worse than the bug it fixes.
@@ -416,6 +453,183 @@ class TestAnchorSchemeIsDecidedTheWayABrowserDecidesIt:
     def test_a_markdown_javascript_link_is_blanked(self):
         result = markdown_to_html('[click](javascript:alert%281%29)', test_env={'fn_string': 'fn-test'})
         assert href_of(result) == ''
+
+
+def src_of(result: str, tag_name: str = 'img') -> str:
+    """The src BeautifulSoup reads back out of allowlist_html's own output.
+
+    Parsed attribute, not a substring, for the same reason href_of is: the
+    point of these tests is that a value can look harmless in the raw markup
+    and still name a script scheme once a browser has normalised it.
+    """
+    tag = BeautifulSoup(result, 'html.parser').find(tag_name)
+    assert tag is not None, f'no <{tag_name}> survived: {result!r}'
+    return tag.get('src')
+
+
+class TestSrcSchemeIsFilteredTheSameWayHrefIs:
+    """`src` was on allowed_attrs for every element and scheme-checked nowhere.
+
+    UNSAFE_URL_SCHEMES was read from exactly one place, the `tag.name == 'a'`
+    branch, so `<img src="javascript:alert(1)">` survived allowlist_html
+    verbatim. That was safe only because no current browser executes a
+    javascript: URL in img/@src -- an argument about browser behaviour, not
+    about filtering. allowed_tags has no iframe/object/embed/svg, so src is
+    loadable on img, video and source and nowhere else; all three are checked.
+
+    The check is the same has_unsafe_url_scheme used for href, with the same
+    WHATWG normalisation. Deliberately one implementation, not two: two
+    implementations of one control is what produced the back()/referrer()
+    divergence earlier on this branch.
+    """
+
+    SCRIPT_SCHEMES = [
+        ('javascript_plain', 'javascript:alert(1)'),
+        ('javascript_uppercase', 'JAVASCRIPT:alert(1)'),
+        ('javascript_leading_space', ' javascript:alert(1)'),
+        ('javascript_embedded_tab', 'jav\tascript:alert(1)'),
+        ('javascript_embedded_lf_entity', 'java&#10;script:alert(1)'),
+        ('javascript_every_trick', ' \t\n\rJaVa\tScRiPt&#10;:alert(1) '),
+        ('vbscript', 'vbscript:msgbox(1)'),
+        ('livescript', 'livescript:alert(1)'),
+        ('mocha', 'mocha:alert(1)'),
+    ]
+
+    @pytest.mark.parametrize('tag_name', ['img', 'video', 'source'])
+    @pytest.mark.parametrize('src', [s for _, s in SCRIPT_SCHEMES],
+                             ids=[i for i, _ in SCRIPT_SCHEMES])
+    def test_a_script_scheme_in_src_is_blanked(self, tag_name, src):
+        result = allowlist_html(f'<{tag_name} src="{src}">', test_env={'fn_string': 'fn-test'})
+        assert src_of(result, tag_name) == '', f'script scheme survived in src: {result!r}'
+
+    LEGITIMATE = [
+        'https://example.com/cat.png',
+        'http://example.com/cat.png?a=b#frag',
+        '//example.com/protocol-relative.png',
+        '/relative/path/cat.png',
+        'cat.png',
+        'https://example.com/javascript:alert(1)/cat.png',
+        'https://example.com/?q=javascript:alert(1)',
+        'javascriptic://example.com/cat.png',
+    ]
+
+    @pytest.mark.parametrize('src', LEGITIMATE)
+    def test_a_legitimate_src_is_preserved_byte_for_byte(self, src):
+        """A fix that blanks legitimate images is worse than the bug it fixes.
+
+        As with href, the value is kept exactly as it arrived: normalisation
+        DECIDES, it does not rewrite. The last three entries are the near
+        misses -- a path segment or query value spelt 'javascript:' inside an
+        https URL, and a scheme that merely starts with 'javascript' -- which
+        are why the decision has to be a whole-scheme comparison.
+        """
+        result = allowlist_html(f'<img src="{src}">', test_env={'fn_string': 'fn-test'})
+        assert src_of(result) == src
+
+    @pytest.mark.parametrize('src', [
+        ' https://example.com/cat.png ',
+        '\thttps://example.com/cat.png',
+        'https://example.com/a\tb.png',
+        '\x01https://example.com/cat.png',
+    ])
+    def test_an_accepted_src_is_not_rewritten_to_its_normalised_form(self, src):
+        """Normalisation DECIDES the scheme; it must not rewrite what is stored.
+
+        The href path has the same pin, added there after a discrimination run
+        showed the "decide, do not rewrite" decision was documented by nothing.
+        This class needed its own: a break that stored the normalised src
+        instead of the original was caught by only ONE incidental case (the
+        leading-space data: URL below) before this test existed, which is a
+        vacuous proof by any other name. A browser applies the same
+        normalisation itself when it loads the image, so rewriting would edit
+        stored federated content for no gain.
+        """
+        result = allowlist_html(f'<img src="{src}">', test_env={'fn_string': 'fn-test'})
+        assert src_of(result) == src
+
+    DATA_IMAGES = [
+        'data:image/png;base64,iVBORw0KGgo=',
+        'data:image/jpeg;base64,/9j/4AAQ',
+        'data:image/gif;base64,R0lGODlh',
+        'data:image/webp;base64,UklGRg==',
+        'data:image/avif;base64,AAAAIGZ0',
+        'DATA:image/png;base64,iVBORw0KGgo=',
+        ' data:image/png;base64,iVBORw0KGgo=',
+    ]
+
+    @pytest.mark.parametrize('src', DATA_IMAGES)
+    def test_a_data_url_in_src_is_PERMITTED(self, src):
+        """DECISION, pinned here so it cannot be changed silently: `data:` is
+        blocked in href and PERMITTED in src.
+
+        The two are not the same control. A data: href is a document the
+        attacker wrote, navigated to as a top-level page -- that is why it is
+        blanked. A data: src is decoded as an image (or as media, for
+        video/source): browsers render an <img> from a data: URL in a
+        non-scripted context, so even data:image/svg+xml cannot run script
+        there, and data:text/html in an <img> is not a document at all, it is
+        simply a decode failure.
+
+        Against that inertness stands a real cost: inline data: images are an
+        ordinary, widely-used way to embed a small image in Markdown or HTML,
+        and this function is the sanitisation boundary for every federated
+        post, comment, profile field and community description. Blanking them
+        would silently destroy legitimate remote content. PieFed already takes
+        that position elsewhere in this same module -- sanitize_svg_bytes
+        passes keep_data_url_mime_types for image/jpeg|png|gif|webp|avif, so a
+        data: image URL is content the project deliberately preserves.
+
+        If a future change wants data: gone from src as well, it must delete
+        this test and say why, rather than discover the breakage in production.
+        """
+        result = allowlist_html(f'<img src="{src}">', test_env={'fn_string': 'fn-test'})
+        assert src_of(result) == src
+
+    def test_a_data_url_is_still_blanked_in_href(self):
+        """The href and src decisions really are different, and both are live.
+
+        Without this, a mutation that dropped 'data' from UNSAFE_URL_SCHEMES
+        entirely would satisfy every src test above.
+        """
+        result = allowlist_html('<a href="data:text/html,x">x</a>', test_env={'fn_string': 'fn-test'})
+        assert href_of(result) == ''
+
+    def test_an_img_keeps_its_other_attributes_when_src_is_blanked(self):
+        """Blanking mirrors the anchor treatment: the element stays, its URL
+        goes nowhere. Nothing else about the element changes."""
+        result = allowlist_html('<img src="javascript:alert(1)" alt="a cat" class="x">',
+                                test_env={'fn_string': 'fn-test'})
+        img = BeautifulSoup(result, 'html.parser').find('img')
+        assert img.get('src') == ''
+        assert img.get('alt') == 'a cat'
+        assert img.get('loading') == 'lazy'
+
+    def test_a_markdown_image_still_round_trips(self):
+        result = markdown_to_html('![a cat](https://example.com/cat.png)',
+                                  test_env={'fn_string': 'fn-test'})
+        assert src_of(result) == 'https://example.com/cat.png'
+
+    def test_a_markdown_javascript_image_is_blanked(self):
+        result = markdown_to_html('![x](javascript:alert%281%29)',
+                                  test_env={'fn_string': 'fn-test'})
+        assert src_of(result) == ''
+
+    def test_an_mp4_img_still_becomes_a_video_with_a_working_source(self):
+        """The <img src="...mp4"> -> <video><source> rewrite runs before the
+        attribute filter, so the src the check sees is the one the rewrite
+        produced. It must survive."""
+        result = allowlist_html('<img src="https://example.com/clip.mp4" />',
+                                test_env={'fn_string': 'fn-test'})
+        assert src_of(result, 'source') == 'https://example.com/clip.mp4'
+
+    def test_a_src_on_a_non_media_element_is_also_checked(self):
+        """src is on allowed_attrs for EVERY element, not only the three where
+        it is loadable, so the check is applied wherever the attribute survives.
+        Inert on a <p> today, but the inertness is the browser's doing and this
+        function should not depend on it."""
+        result = allowlist_html('<p src="javascript:alert(1)">x</p>',
+                                test_env={'fn_string': 'fn-test'})
+        assert src_of(result, 'p') == ''
 
 
 class TestDegenerateAngleBrackets:
