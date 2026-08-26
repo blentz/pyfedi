@@ -11,8 +11,190 @@ document is the **inverse** audit: it enumerates entry points by **what the
 action does**, not by what it calls, so that a path which never consults the
 guard still appears. Every row names the guard, or **NONE**.
 
-**Nothing in `app/` was changed by this audit.** Unguarded paths are recorded as
-findings for the project owner to rule on; they are not fixed here.
+**Nothing in `app/` was changed by this audit.**
+
+---
+
+## Status: found deliberately, deferred deliberately
+
+The project owner has ruled on the unguarded paths below. The ruling is
+**defer**: they are to be evaluated after the coverage campaign's testing work
+lands, not fixed now.
+
+- The 14 unguarded rows are **known, accepted, and deferred pending completion
+  of the testing improvements.**
+- They are **not latent oversights.** Each was found by deliberate inverse
+  audit — searching by what an action does, not by what it calls — and each
+  carries a verdict in the tables below.
+- **Re-evaluation is expected once the testing improvements are in place**,
+  because better coverage of the surrounding code changes what a safe fix looks
+  like. Several of these paths share sinks (`create_resolved_object`,
+  `resolve_remote_post_from_search`) whose behaviour is not yet covered; a fix
+  designed against the current level of coverage would be a guess.
+
+If you are reading this in six months and wondering whether anyone noticed:
+someone did. The list below is what they noticed, and this section is the
+record that leaving it was a decision rather than an omission.
+
+Nothing here pre-judges the fix. The purpose is that a future reader can pick
+these up and evaluate them, with the evidence already gathered.
+
+### Deferred for evaluation
+
+Ordered by exposure — how easily an outside party can reach the path — not by
+file. "Upstream provides" is the part that matters most: several of these have
+real partial protection, and a reader who misses that will either over-react to
+a signature-checked path or under-react to an anonymous one.
+
+**1. `GET /api/alpha/resolve_object` — anonymous callers can persist remote
+content.** `app/api/alpha/routes.py:145-150` → `app/api/alpha/utils/misc.py:47`,
+reaching `create_resolved_object` at `:417` and `:422` (2 rows: post branch and
+reply branch).
+*Unguarded:* no `can_create_post` / `can_create_post_reply`, and auth is
+optional — `if auth: user_id = authorise_api_user(auth)`, so with no
+`Authorization` header the endpoint proceeds with `user_id=None`.
+*Upstream provides:* `enable_api()` only, a site-wide on/off switch. There is no
+`before_request` auth hook on the API blueprint. This is the only path in the
+deferred set reachable with no credential of any kind, which is why it is first.
+
+**2. Poll voting — no permission check on any of its three entry points.**
+Web `app/post/routes.py:635-639`, API `app/api/alpha/utils/post.py:1790`, AP
+inbox `app/activitypub/routes.py:2434` (3 rows).
+*Unguarded:* no `can_upvote`, no `can_downvote`, no `communities_banned_from`,
+no `community.local_only` on the AP path, and no `VOTE_QUOTA` on any of the
+three — post and reply voting have one.
+*Upstream provides:* `vote_for_poll` (`app/shared/post.py:1148`) checks
+`user.banned` and `user_ip_banned()`; the API route additionally calls
+`authorise_api_user`; `process_poll_vote` checks
+`instance_banned(user.instance.domain)`. So the actor is identified and
+site-level bans apply — but nothing asks whether that actor may vote *here*.
+Poll voting has no permission function of its own, so this is a design gap
+rather than a skipped call.
+
+**3. `create_resolved_object` — signature-checked, but no ban or allowlist
+enforcement.** `app/activitypub/util.py:3924`, calling `create_post` at `:3979`
+and `create_post_reply` at `:3962`. Reached from `process_announce_of_uri` →
+`resolve_remote_post`, from `process_microblog_announce`, and from the Celery
+task `get_nodebb_replies_in_background` (4 rows).
+*Unguarded:* no `can_create_post` / `can_create_post_reply`, so none of
+`user.banned`, `user.ban_posts`, `community.banned`,
+`community.restricted_to_mods`, `communities_banned_from`, `banned_instances`,
+`instance_banned`, or ALLOWLIST_INTENSE is enforced. The shared inbox has no
+general `instance_banned` gate either — only `allowlist_mode >=
+ALLOWLIST_STRONG` at `app/activitypub/routes.py:673` — so defederation is
+enforced per-action, and this action does not enforce it.
+*Upstream provides:* real protection, and it should not be discounted — HTTP
+signature verification at the inbox; `announcer_is_followed` on the microblog
+path; an attributedTo/URI domain-match check that blocks impersonation;
+`community.local_only` and non-public-visibility refusal inside `create_post`;
+and, for replies, `post.comments_enabled`, `user.ban_comments`,
+`blocked_phrases` and `has_blocked_user` inside `PostReply.new`. What is missing
+is specifically the *ban and federation-policy* layer.
+Note `Post.new` does read `communities_banned_from(user.id)` at
+`app/models.py:2202` — but only to suppress the notification. The post is
+created either way.
+
+**4. `resolve_remote_post_from_search` — the AP `Move` path has no requester at
+all.** `app/activitypub/util.py:4035`, calling `create_post_reply` at `:4109`
+and `create_post` at `:4112`. Two entry points: AP inbox `Move`
+(`app/activitypub/routes.py:1575`) and web `search.retrieve_remote_post`
+(`app/search/routes.py:228`) (3 rows: two post rows, one shared reply row).
+*Unguarded:* no `can_create_post` / `can_create_post_reply` — same missing
+checks as item 3.
+*Upstream provides:* the `uri_domain == actor_domain` impersonation check, and
+on the web entry point `@login_required` plus a `current_user.banned` refusal.
+That gates the *requester*; it does not gate the *author* of the content
+fetched. The `Move` entry point has no requester to gate — it is inbox-driven.
+
+**5. `retrieve_mods_and_backfill` — no attributedTo domain-match, so any
+instance can be attributed.** Celery task, `app/community/util.py:93`, calling
+`create_post` at `:198` and `PostReply.new` at `:272` (2 rows).
+*Unguarded:* no `can_create_post` / `can_create_post_reply`; and, unlike item 3,
+**no check that the post's author domain matches the community's server** — the
+backfill takes `activity['attributedTo']` straight to `find_actor_or_create` at
+`app/community/util.py:184`. A remote community's outbox can therefore attribute
+posts to accounts on any instance, defederated ones included.
+*Upstream provides:* `search_for_community` (`app/community/util.py:38-41`)
+refuses a server that fails `instance_allowed` or passes `instance_banned`, so
+the *community's* instance is checked. Nothing checks the *author's*.
+Triggerable by any user who causes a new remote community to be fetched (search
+UI, feed subscription at `app/feed/util.py:115`, profile import at
+`app/user/routes.py:1314`) — and, via item 1, by an unauthenticated caller.
+
+**Count:** 14 rows across 10 distinct entry points, reaching 5 sinks. Twelve of
+the fourteen carry a literal **NONE** in the tables; the two poll-voting rows at
+item 2 carry a partial guard (`authorise_api_user` only, `instance_banned` only)
+that is not a permission check for voting.
+
+### Recorded with verdicts, but NOT part of the deferred 14
+
+These four are kept separate so the counts above stay honest. They are findings
+with verdicts, not members of the deferred set: three are asymmetries or
+wrong-subject calls rather than absent guards, and one is a read rather than a
+write.
+
+- **F5 — AP `Update` re-checks replies but not posts** (2 rows).
+  `app/activitypub/routes.py:2298-2299` checks authorship/mod only; the reply
+  branch twelve lines below at `:2341` does the same check *and*
+  `can_create_post_reply`. The PeerTube `Video` update at `:1240-1241` checks
+  only `user.id == post.user_id`. A guard is present on this path — the two
+  branches simply disagree about which one.
+- **F10 — `emoji_set` routes skip `@validation_required` / `@approval_required`**
+  (2 rows). `app/post/routes.py:606-608` and `:620-622` carry no decorators and
+  check `current_user.is_authenticated` in-body. The vote still reaches
+  `can_upvote`, so the permission function *is* consulted; what is missing is
+  the verified/approved check the four sibling vote routes get from decorators,
+  which `can_upvote` does not perform.
+- **F13 — `/admin/` has no `@permission_required`** (1 row).
+  `app/admin/routes.py:55`, the one route of 53 in that file without one. It
+  renders host load, CPU count, disk usage, loaded plugins and their hooks,
+  translation languages, and overdue cron jobs to any authenticated user. `POST`
+  is declared but the body handles no form: this is an unguarded **read**, not a
+  write, which is why it is not in the deferred set.
+- **F12 — `can_upload_video()` called with no user** (2 rows).
+  `app/shared/post.py:200` and `:464`. The guard is called; it is called with
+  the wrong subject. It fails closed, so it is a correctness and consistency
+  defect rather than a bypass. **See the cross-reference below.**
+
+The remaining verdicts — F6, F7, F8, F9, F14 — are in the findings section and
+are upstream-gated or deliberate; they are not in the deferred set either. One
+of them is worth knowing about anyway: **F7**, where a repeating scheduled post
+is re-published without re-checking `can_create_post`, so the guard ran once at
+schedule time and never again. That is a timing gap rather than an absent
+guard, which is why it sits here and not in the deferred list, but it is the
+only one of the five that is not simply "working as intended".
+
+### F12 and Task 7 are the same defect from two directions
+
+Task 7 audited `can_upload_video` forward and found that its `'users'` branch
+**ignores its own injected user**: the condition is
+`not current_user.is_authenticated and user is None`, so the moment `user` is
+anything other than `None` the compound is `False` regardless of what was
+passed, and the function falls through to `return True` — for a banned user, a
+deleted user, an unverified user, even a bare `AnonymousUserMixin()`. Recorded
+in `.superpowers/sdd/2026-08-25-coverage-utils-permissions/task-7-report.md`
+and in the docstring of `tests/test_utils_upload_video.py`.
+
+This audit approached the same function backwards and found F12: `make_post`
+(`app/shared/post.py:200`) and `edit_post` (`:464`) call it as
+`can_upload_video()` with **no** user at all, on a path also used by `SRC_API`
+where `current_user` is anonymous and the real caller is a token owner.
+
+Put together, the `'users'` branch never consults the actual API caller in
+either direction:
+
+- pass a user (`process_upload`, `app/shared/upload.py:22`) → `user is None` is
+  `False`, the branch is inert, everyone gets `True`;
+- pass no user (`make_post` / `edit_post`) → `current_user` is anonymous, the
+  branch matches, and the legitimate API caller gets `False`.
+
+The `user 1` and `admins` branches have the second half of this problem too:
+called with no user, they evaluate `current_user.get_id()` and
+`current_user.is_admin_or_staff()` against the anonymous web user rather than
+against the token's owner.
+
+A reader who finds either half should be led to the other; neither is complete
+on its own.
 
 ---
 
@@ -218,7 +400,7 @@ only to suppress the notification; the post is created regardless.
 
 **Verdict: unguarded, remote-triggerable.** A user banned from the community, a
 user banned site-wide, or a user on a defederated instance can have content
-persisted through this path. Reported, not fixed.
+persisted through this path. Reported, not fixed; deferred for evaluation after the testing work (see Status).
 
 ### F2 — `resolve_remote_post_from_search` creates posts and replies with no permission check
 
@@ -236,7 +418,8 @@ It does not apply `can_create_post`.
 
 **Verdict: unguarded.** Same missing checks as F1. The web entry point requires
 a logged-in, unbanned local user, which caps the abuse; the `Move` entry point
-does not.
+does not. Reported, not fixed; deferred for evaluation after the testing work
+(see Status).
 
 ### F3 — `GET /api/alpha/resolve_object` creates posts and replies, and does not require authentication
 
@@ -262,7 +445,7 @@ chain, and via `search_for_community` can cause a whole remote community to be
 created and backfilled (F4).
 
 **Verdict: unguarded, and unauthenticated.** The most reachable of the F1/F2/F3
-group. Reported, not fixed.
+group. Reported, not fixed; deferred for evaluation after the testing work (see Status).
 
 ### F4 — Celery `retrieve_mods_and_backfill` creates posts and replies with no permission check
 
@@ -286,7 +469,7 @@ Triggerable by any user who causes a new remote community to be fetched
 `app/feed/util.py:115`, profile import at `app/user/routes.py:1314`) — and,
 because of F3, by an unauthenticated API caller.
 
-**Verdict: unguarded.** Reported, not fixed.
+**Verdict: unguarded.** Reported, not fixed; deferred for evaluation after the testing work (see Status).
 
 ### F5 — AP `Update` of an existing post is not re-checked; `Update` of an existing reply is
 
@@ -305,7 +488,7 @@ been banned from the community, banned site-wide, or whose instance has since
 been defederated can still rewrite the title, body and URL of their existing
 post; the same actor cannot rewrite their existing reply. Whether editing should
 be gated by a *creation* permission is a policy call, but the two branches
-should not disagree. Reported, not fixed.
+should not disagree. Reported, not fixed; recorded with a verdict, NOT part of the deferred 14 (see Status).
 
 ### F6 — Editing your own post/reply on the web is gated by ownership, not by `can_create_post`
 
@@ -331,7 +514,7 @@ again.
 **Verdict: gated at schedule time only.** A user banned from the community — or
 banned site-wide, or whose community was banned — between scheduling and
 publication continues to publish on the schedule, indefinitely for a repeating
-post. Reported, not fixed.
+post. Reported, not fixed; recorded with a verdict, NOT part of the deferred 14 (see Status).
 
 ### F8 — CLI `lemmy-import` writes `Post` and `PostReply` rows directly
 
@@ -367,7 +550,7 @@ supply (`app/utils.py`, `validation_required` / `approval_required`).
 **Verdict: partially gated.** An unverified account, or one awaiting approval on
 a `RequireApplication` / `Closed` instance, can cast an emoji upvote through
 these two routes while being blocked from the four ordinary vote routes.
-Reported, not fixed.
+Reported, not fixed; recorded with a verdict, NOT part of the deferred 14 (see Status).
 
 ### F11 — Poll voting consults no permission function on any of its three entry points
 
@@ -388,7 +571,7 @@ three, unlike post and reply voting.
 **Verdict: unguarded.** Poll voting has no permission function of its own, so
 this is a design gap rather than a skipped call, but it is the same shape: an
 action that records a vote without asking whether the actor may vote here.
-Reported, not fixed.
+Reported, not fixed; deferred for evaluation after the testing work (see Status).
 
 ### F12 — `make_post` and `edit_post` call `can_upload_video()` without a user
 
@@ -422,7 +605,12 @@ scope at both sites and is not passed. Consequences on the API path:
 API path, so this is a correctness/consistency defect rather than a bypass —
 but it means the API path's video permission is decided by whoever
 `current_user` happens to be rather than by the token's owner. Reported, not
-fixed.
+fixed; not part of the deferred 14, since the guard is present.
+
+**This is one half of a defect Task 7 found from the other side.** See
+"F12 and Task 7 are the same defect from two directions" above: Task 7 found the
+`'users'` branch inert whenever a user *is* passed; this found the two callers
+that pass none. Do not act on either half without reading the other.
 
 ### F13 — `/admin/` has no `@permission_required`
 
@@ -437,7 +625,7 @@ names/frequencies/last-run times of overdue cron jobs.
 
 **Verdict: unguarded read.** No state is mutated (the `POST` method is declared
 but the body handles no form), so this is information disclosure to any
-authenticated user, not a privilege escalation. Reported, not fixed.
+authenticated user, not a privilege escalation. Reported, not fixed; recorded with a verdict, NOT part of the deferred 14 (see Status).
 
 ### F14 — `@permission_required` is applied outside `@login_required` on 50 admin routes
 
@@ -474,13 +662,56 @@ request-amplification. Not a permission-function gap; noted in passing.
 
 ## Summary
 
+Counted from the tables above, not from memory. The command that regenerates
+these numbers is at the end of this section; if you change a table, re-run it
+rather than editing the counts by hand.
+
 | | count |
 |---|---|
-| entry points enumerated | 63 |
-| rows whose guard is **NONE** | 24 |
-| genuinely unguarded (F1, F2, F3, F4, F11) | 13 rows |
+| rows in the four content tables (post, reply, vote, upload) | 62 |
+| of those, entry points that actually write | 61 |
+| of those, not a write (`app/post/util.py:55`, transient) | 1 |
+| rows in the two permission-sweep tables (`user_access`, `authorise_api_user`) | 6 |
+| **rows in all six tables** | **68** |
+| rows whose guard is a literal **NONE** | 23 |
+| **deferred for evaluation** (F1, F2, F3, F4, F11) | **14 rows / 10 entry points / 5 sinks** |
+| — of those, literal **NONE** | 12 |
+| — of those, partial guard that is not a voting permission check | 2 |
 | gated upstream or by design (F6, F8, F9, F14) | 8 rows |
-| asymmetries / wrong-subject (F5, F7, F10, F12, F13) | 6 rows |
+| asymmetry / wrong subject / unguarded read (F5, F7, F10, F12, F13) | 8 rows |
+
+The `user_access` and `authorise_api_user` tables hold 6 rows because those two
+sweeps are summarised by category, not one row per call site: 53 admin routes
+collapse to 3 rows, and the `authorise_api_user` scan lists only its 3
+exceptions out of the whole `app/api/alpha/utils/` mutating surface.
+
+**A correction, made while writing the deferred list.** Earlier drafts of this
+summary said "63 entry points, 24 NONE, 13 genuinely unguarded". All three were
+estimates written before the tables were finished, and all three were wrong.
+The figures above are extracted from the tables. The deferred set is **14 rows**,
+not 13: the miscount came from counting only rows with a literal **NONE** and so
+dropping two of poll voting's three entry points, whose guard cells name a
+partial check (`authorise_api_user` only, `instance_banned` only) rather than
+NONE. Recorded rather than silently corrected, because a count that changed
+without explanation is exactly the kind of thing that stops a reader trusting
+the rest.
+
+To regenerate:
+
+    python3 - <<'PY'
+    import re
+    p='docs/superpowers/specs/2026-08-25-permission-callsite-audit.md'
+    sec=None; counts={}
+    for l in open(p).read().splitlines():
+        if l.startswith('## ') or l.startswith('### '):
+            sec=l.strip('# ').strip()
+        if l.startswith('|') and not re.match(r'^\|[\s:|-]+\|$', l):
+            c=[x.strip() for x in l.strip('|').split('|')]
+            if c[0] in ('action','entry point','#','','what'): continue
+            counts[sec]=counts.get(sec,0)+1
+    for k,v in counts.items():
+        if k.startswith('Table:'): print(f'{v:3}  {k}')
+    PY
 
 The concentration is exactly where the brief predicted: the paths that ingest
 remote content **without** going through `process_new_content` — the

@@ -123,6 +123,47 @@ out of scope for a coverage campaign but should not be lost.
   architectural work. A coverage campaign must not quietly become an import
   refactor.
 
+### Permission call-site audit — 14 unguarded paths, deferred by ruling
+
+`docs/superpowers/specs/2026-08-25-permission-callsite-audit.md`
+
+Sub-project 1b-i's last task audited the eight permission functions
+**backwards**: instead of checking the call sites, it enumerated every entry
+point that creates a post, creates a reply, records a vote, or accepts an upload
+— by searching for what the action *does* (`Post(`, `PostReply(`, `PostVote(`,
+`PostReplyVote(`, the upload entry points) rather than for the guard's name,
+because a path that never calls the guard cannot be found by grepping for it.
+
+68 rows across web routes, the API, the ActivityPub inbox, the NNTP gateway,
+CLI commands and Celery tasks. **14 rows / 10 entry points / 5 sinks are
+unguarded.** The project owner has ruled: **document and defer**, to be
+evaluated once the campaign's testing work lands, because better coverage of the
+surrounding code changes what a safe fix looks like. They are accepted, not
+overlooked.
+
+Ordered by exposure: `GET /api/alpha/resolve_object` (auth is optional, so an
+anonymous caller can persist remote content); poll voting on all three of its
+entry points (no permission check at all); `create_resolved_object`
+(signature-checked and impersonation-checked, but no ban or allowlist
+enforcement); `resolve_remote_post_from_search` (the AP `Move` path has no
+requester); and `retrieve_mods_and_backfill` (no attributedTo domain-match, so
+any instance can be attributed).
+
+Read the audit's **Status** section before acting on any of them — several have
+real partial protection, and it records what upstream *does* provide as
+carefully as what it does not.
+
+Two things there matter beyond the deferred set:
+
+- **The method generalises.** Any sub-project that covers a guard should also
+  ask which entry points skip it. This campaign's largest find, `sanitize_svg`,
+  was that shape: the function was correct and five of seven upload paths never
+  called it. A forward audit cannot see that; searching by effect can.
+- **`can_upload_video` is one defect seen from two directions.** Task 7 found
+  its `'users'` branch ignores its injected user; this audit found `make_post`
+  and `edit_post` call it with no user at all. Neither half is complete alone —
+  the audit cross-references both.
+
 ## Ratchet gotchas
 
 - `percent_covered` is a **blended statement+branch figure**. This matters for
