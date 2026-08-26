@@ -622,12 +622,22 @@ def test_a_new_unguarded_read_appended_to_an_exempt_file_is_caught():
     clean = (APP_ROOT.parent / rel).read_text()
     assert unguarded_reads(clean, rel) == []
 
+    # NOTE the exact shape. This line CONTAINS the exempt line as a substring
+    # and is not equal to it, which is what makes it the discriminating case:
+    # the substring form of the match exempts it, the exact-line form does not.
+    # (A line IDENTICAL to an exempt line is the other half of the hole, and is
+    # caught by the occurrence count -- see the next test.)
     hostile = (
         "\n\n@bp.route('/u/<actor>/brand_new', methods=['POST'])\n"
         "def brand_new(actor):\n"
-        "    return_to = request.args.get('return_to', f'/u/{actor}').strip()\n"
+        "    return_to = request.args.get('return_to') or f'/u/{actor}'\n"
         "    return redirect(return_to)\n"
     )
+    exempt = DOCUMENTED_EXEMPTIONS[rel][0].line
+    assert exempt in hostile and f'    {exempt}\n' not in hostile, (
+        'this test only discriminates if the hostile line strictly contains the '
+        'exempt line')
+
     found = unguarded_reads(clean + hostile, rel)
     assert len(found) == 1, found
     assert "request.args.get('return_to'" in found[0]
