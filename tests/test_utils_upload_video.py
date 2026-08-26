@@ -54,7 +54,7 @@ endorsement of it as correct. If this is ever fixed to consult `upload_user`
 updated as part of the fix, not treated as a regression to chase.
 """
 
-from flask_login import login_user
+from flask_login import current_user, login_user
 
 from app.models import Role, user_role
 from app import db
@@ -290,7 +290,5 @@ class TestCanUploadVideoUsersPolicy:
 def current_user_is_authenticated_via_login(user):
     """Small readability helper: confirms login_user actually put `user`
     behind Flask-Login's current_user proxy, rather than trusting login_user
-    silently. Imported lazily to avoid a module-level flask_login.current_user
-    import outside a request context."""
-    from flask_login import current_user
+    silently."""
     return current_user.is_authenticated and current_user.get_id() == user.get_id()
