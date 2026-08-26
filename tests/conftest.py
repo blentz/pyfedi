@@ -370,22 +370,28 @@ def redis_double(monkeypatch):
     stack. If you add a fifth `from app.utils import get_redis_connection`
     anywhere in app/, add it to the list below or you will get that silently.
 
-    Still NOT covered, for the same binding reason:
+    Also covered, as of the coverage-utils-feed sub-project: `app.redis_client`,
+    the module-level global in app/__init__.py assigned by create_app(). Every
+    one of the ~14 `from app import redis_client` sites (`grep -rn 'from app
+    import.*redis_client' app/`) does that import INSIDE a function body, not at
+    module level -- unlike get_redis_connection's four bindings above, which are
+    bound once at import time. Because the import is re-executed on every call,
+    monkeypatching the single attribute `app.redis_client` is enough to redirect
+    all ~14 call sites to this fixture's fakeredis instance; there is no second
+    binding problem to solve here. Verified for get_deduped_post_ids
+    (app/utils.py:3790-3943), which both checks a cached result and, for an
+    authenticated caller, writes one back with a 24-hour TTL -- see
+    tests/test_factories_feed.py's Redis-policy tests, which show the real test
+    Redis (CACHE_REDIS_URL db 1, the one thing `--down` would otherwise be needed
+    to clear) does not grow across repeated runs while this fixture is active.
 
-    - `app.redis_client` -- a module-level global in app/__init__.py, assigned
-      by create_app() before this function-scoped fixture runs. Around 14
-      modules do `from app import redis_client` and read that real client;
-      `grep -rn 'from app import.*redis_client' app/` is the current list, and
-      it is deliberately not enumerated here because such a list rots silently.
-      This is a much wider surface than get_redis_connection's four bindings,
-      so a sub-project needing Redis isolation across app/ should expect to
-      patch `app.redis_client` too -- and to widen this fixture rather than
-      hand-roll it.
-    - The rate limiter and Celery app, built from Config at import time.
+    Still NOT covered: the rate limiter and Celery app, built from Config at
+    import time.
     """
     server = fakeredis.FakeRedis(decode_responses=True)
     for module in ('app.utils', 'app.main.routes', 'app.cli', 'app.activitypub.routes'):
         monkeypatch.setattr(f'{module}.get_redis_connection', lambda *args, **kwargs: server)
+    monkeypatch.setattr('app.redis_client', server)
     return server
 
 
