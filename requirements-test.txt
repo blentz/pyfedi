@@ -2,7 +2,7 @@
 #
 # requirements.txt is the production install path -- Dockerfile's `builder`
 # stage (whose /venv is copied into `runtime`), deploy.sh, and INSTALL.md all
-# run `pip install -r requirements.txt`. Nothing here belongs in a running
+# run `pip install -r requirements.txt`. Nothing here is needed by a running
 # PieFed, and one entry actively breaks the install:
 #
 #   atheris publishes NO aarch64 wheel. On an ARM64 host -- Oracle Ampere,
@@ -19,6 +19,13 @@
 #
 # Installed only by the Dockerfile's `test` stage, which compose.test.yaml
 # builds. See tests/README.md.
+#
+# Note, so nobody paraphrases this file into something false: pytest is present
+# in the PRODUCTION venv anyway, because c2pa-python declares it as a runtime
+# dependency. Pre-existing, pure Python, installs on every architecture, and
+# outside the scope of a packaging fix -- but the accurate claim is "PieFed
+# declares no test-only package for production", not "production has no test
+# packages".
 pytest
 pytest-cov
 pytest-timeout

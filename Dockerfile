@@ -19,7 +19,10 @@ RUN --mount=type=cache,target=/root/.cache/pip,id=pip-py313-slim \
 
 # Test dependencies go here and NOWHERE ELSE. This stage is what
 # compose.test.yaml builds; `runtime` below copies /venv from `builder`, which
-# never sees requirements-test.txt, so nothing here reaches a production image.
+# never sees requirements-test.txt, so nothing INSTALLED BY THIS STAGE reaches a
+# production image. (That is narrower than "no test package in production":
+# c2pa-python declares pytest as a runtime dependency, so pytest is in the
+# production venv either way. Pre-existing, pure Python, no ARM64 risk.)
 #
 # That separation is the point: atheris (the fuzzing engine) publishes no
 # aarch64 wheel, so an entry for it in requirements.txt makes

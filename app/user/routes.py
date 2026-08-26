@@ -2023,13 +2023,41 @@ def user_preview(user_id):
     return render_template('user/user_preview.html', user=user, return_to=return_to)
 
 
+def return_to_or_401(actor: str) -> str:
+    """`?return_to=` for the follow / unfollow / bot-challenge routes.
+
+    Two rules, in THIS ORDER, and the order is the whole point.
+
+    1. An ABSOLUTE url -- anything starting `http` -- is REFUSED with 401 rather
+       than redirected to. Pre-existing rule, and it must see the RAW value.
+       Running the origin check first replaces an off-origin absolute with the
+       fallback, so the 401 never fires for the case it was written for, and
+       fires only for legitimate same-origin absolutes -- the guard inverted.
+       This branch did exactly that and no test noticed, because they all
+       asserted "does not go off-site", which a silent fallback satisfies.
+       tests/test_redirect_targets.py::TestReturnToAbsoluteUrlsAre401 asserts
+       the status code now.
+    2. Everything else goes through the origin check, because
+       `startswith('http')` says nothing about `///evil.example`,
+       `/\evil.example` or `\\evil.example` -- all of which a browser reads as
+       an authority and navigates off-origin.
+
+    Note the asymmetry that rule 1 creates and rule 2 does not: an absolute url
+    is refused EVEN WHEN IT IS OUR OWN HOST. That is the pre-existing behaviour
+    and it is preserved deliberately rather than tidied into an origin test,
+    which would be a behaviour change wearing a cleanup's clothes.
+    """
+    candidate = request.args.get('return_to', f'/u/{actor}').strip()
+    if candidate.startswith('http'):
+        abort(401)
+    return safe_redirect_target(candidate, f'/u/{actor}')
+
+
 @bp.route('/u/<actor>/follow', methods=['POST'])
 @login_required
 def user_follow(actor):
     actor = actor.strip()
-    return_to = safe_redirect_target(request.args.get('return_to', f'/u/{actor}').strip(), f'/u/{actor}')
-    if return_to.startswith('http'):
-        abort(401)
+    return_to = return_to_or_401(actor)
     if '@' in actor:
         user: User = User.query.filter_by(ap_id=actor, deleted=False).first()
     else:
@@ -2053,9 +2081,7 @@ def user_follow(actor):
 @login_required
 def user_unfollow(actor):
     actor = actor.strip()
-    return_to = safe_redirect_target(request.args.get('return_to', f'/u/{actor}').strip(), f'/u/{actor}')
-    if return_to.startswith('http'):
-        abort(401)
+    return_to = return_to_or_401(actor)
     if '@' in actor:
         user: User = User.query.filter_by(ap_id=actor, deleted=False).first()
     else:
@@ -2076,9 +2102,7 @@ def user_unfollow(actor):
 @permission_required('change instance settings')
 def user_bot_challenge(actor):
     actor = actor.strip()
-    return_to = safe_redirect_target(request.args.get('return_to', f'/u/{actor}').strip(), f'/u/{actor}')
-    if return_to.startswith('http'):
-        abort(401)
+    return_to = return_to_or_401(actor)
     if '@' in actor:
         user: User = User.query.filter_by(ap_id=actor, deleted=False).first()
     else:

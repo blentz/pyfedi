@@ -33,6 +33,7 @@ than an end-to-end test per site and it is stated here rather than implied.
 
 import re
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 from flask import session
@@ -315,10 +316,11 @@ class TestRedirectParameterRoutes:
 
     @pytest.mark.parametrize('candidate', OFF_ORIGIN)
     def test_user_follow_refuses_an_off_origin_return_to(self, app, db_session, candidate):
-        """This route already had `if return_to.startswith('http'): abort(401)`,
-        which is why the absolute spellings 401 rather than redirect. It did
-        NOT stop `///evil.example` or `/\\evil.example`; those reached
-        redirect() intact."""
+        """The absolute spellings 401 here rather than redirecting -- see
+        TestReturnToAbsoluteUrlsAre401 below for why, and for why the ORDER of
+        the two guards matters. The three relative-looking off-origin spellings
+        (`///evil.example`, `/\\evil.example`, `\\\\evil.example`) sail past
+        `startswith('http')` and are stopped by the origin check instead."""
         user = local_user('me')
         local_user('them')
         client = app.test_client()
@@ -350,13 +352,71 @@ class TestRedirectParameterRoutes:
         assert_not_off_site(response)
 
 
+
+class TestReturnToAbsoluteUrlsAre401:
+    """`?return_to=` on follow / unfollow / bot_challenge: ORDER OF GUARDS.
+
+    These routes carry a pre-existing rule -- an ABSOLUTE url in `?return_to=`
+    is refused with 401, not redirected to. The origin check this branch added
+    has to run AFTER it, and the first version of that change ran it BEFORE.
+    That inverted the guard, silently:
+
+      - an off-origin absolute (`https://evil.example/x`) was replaced by the
+        fallback and quietly redirected, so the 401 never fired for the case it
+        was written for;
+      - a legitimate same-origin absolute (`https://test.piefed.local/x`) passed
+        the origin check, still started with `http`, and got the 401 instead.
+
+    Nothing noticed, because every test asserted only "does not go off-site" --
+    which a silent fallback satisfies. These assert the STATUS CODE, so the
+    ordering cannot invert again without failing.
+    """
+
+    ROUTES = ['/u/them/follow', '/u/them/unfollow']
+
+    def _post(self, app, route, return_to):
+        user = local_user('me')
+        local_user('them')
+        client = app.test_client()
+        login(client, user)
+        token = csrf(app, client)
+        return client.post(route, query_string={'return_to': return_to},
+                           data={'csrf_token': token})
+
+    @pytest.mark.parametrize('route', ROUTES)
+    def test_an_off_origin_absolute_is_401_not_a_silent_fallback(self, app, db_session, route):
+        response = self._post(app, route, 'https://evil.example/x')
+        assert response.status_code == 401, (
+            f'{route} answered {response.status_code} -> '
+            f'{response.headers.get("Location")!r}. An absolute ?return_to= must be '
+            f'refused outright; a 302 here means the origin check ran BEFORE the '
+            f'startswith("http") guard and swallowed it.')
+
+    @pytest.mark.parametrize('route', ROUTES)
+    def test_a_same_origin_absolute_is_also_401(self, app, db_session, route):
+        """The pre-existing rule is about ABSOLUTE urls, not about origin: it
+        refuses our own host too, and always did. Pinned so the fix cannot
+        quietly turn it into an origin test."""
+        response = self._post(app, route, 'https://test.piefed.local/x')
+        assert response.status_code == 401
+
+    @pytest.mark.parametrize('route', ROUTES)
+    def test_a_relative_off_origin_spelling_falls_back_rather_than_401(self, app, db_session, route):
+        """`///evil.example` does not start with `http`, so the 401 guard never
+        sees it. The origin check is what stops it, and a fallback is the right
+        answer for it."""
+        response = self._post(app, route, '///evil.example/x')
+        assert response.status_code == 302
+        assert response.headers['Location'] == '/u/them'
+
+
 # --------------------------------------------------------------------------
 # The completeness pin.
 #
 # Important 2 of the final review was not only a bug. It was a CLAIM -- "one
 # origin check for every user-influenced redirect target" -- that nothing
-# established, and a grep disproved it. This test is that grep, run on every
-# suite run, with the exemptions written down and reasoned rather than assumed.
+# established, and a grep disproved it. This is that grep, run on every suite
+# run, with the exemptions written down and reasoned rather than assumed.
 #
 # It reads source text, which is unusual for a test. It is here because the
 # property being asserted IS a property of the source: that no site reads one of
@@ -378,55 +438,118 @@ USER_SUPPLIED_TARGET = re.compile(
     r"""|redirect\([^)]*form\.referrer\.data"""
 )
 
-# A read is fine when the check is applied to it on the same line, or on the
-# line immediately after (`x = request.args.get('next')` /
-# `if not is_safe_redirect_target(x):`). Matches is_safe_redirect_target too.
+# Matches is_safe_redirect_target too, which is the deliberate form at the sites
+# whose fallback must stay lazy.
 GUARDED = re.compile(r'safe_redirect_target\(')
 
-# Every read that is NOT guarded, with the reason it does not need to be.
-# `relative path: {distinctive substring of the line: reason}`. A new unguarded
-# read anywhere under app/ fails the test until it is either routed through
-# safe_redirect_target or added here with a reason.
+# How far below the read the guard may sit. Three lines covers both shapes in
+# the tree -- the guard on the read's own line, and
+#
+#     candidate = request.args.get('return_to', ...)      <- the read
+#     if candidate.startswith('http'):
+#         abort(401)
+#     return safe_redirect_target(candidate, ...)         <- the guard, +3
+#
+# and is deliberately tight. A guard further from its read is harder to see is
+# missing, which is this test's entire job.
+GUARD_WINDOW = 3
+
+
+class Exempt(NamedTuple):
+    """One documented read that is not a redirect target.
+
+    `line` is the EXACT stripped source line, NOT a substring. A substring match
+    exempts any future line that happens to contain it, which is how an earlier
+    version of this list let a brand-new unguarded
+    `return_to = request.args.get('return_to')` into app/user/routes.py without
+    complaint. `occurrences` is how many times that exact line appears in the
+    file, so a SECOND copy of an exempt line is drift rather than a free pass.
+    """
+    line: str
+    occurrences: int
+    reason: str
+
+
+# WHAT THIS LIST AND THE SCAN AROUND IT DO AND DO NOT CATCH. Read this before
+# trusting either.
+#
+# CAUGHT:
+#   - a new read of `?next=` / `?redirect=` / `?return_to=` / a posted or query
+#     `referrer` anywhere under app/, with no guard within GUARD_WINDOW lines --
+#     INCLUDING in a file that already has exemptions, because an exemption
+#     matches a whole stripped line, not a substring
+#     (test_a_new_unguarded_read_appended_to_an_exempt_file_is_caught);
+#   - a second copy of an already-exempt line
+#     (test_a_second_copy_of_an_exempt_line_is_caught);
+#   - an exemption whose line no longer exists, or whose count has drifted;
+#   - a guard placed further than GUARD_WINDOW from its read;
+#   - reintroducing the bypassable `urlsplit(x).netloc` guard.
+#
+# NOT CAUGHT. These are real holes, not hypotheticals:
+#   - SEMANTIC ROT. If /anoobis started calling `redirect(next)` while its
+#     exempt line stayed exactly as written, this scan would still pass. An
+#     exemption records a claim about what the code AROUND the read does, and
+#     nothing here re-checks that claim. The reasons below are for a human to
+#     re-read when touching those functions -- that is what they are for.
+#   - a redirect target arriving under a fifth parameter name, or read
+#     dynamically (`request.args.get(name)`).
+#   - a value that IS guarded and then ignored, or guarded and then mutated.
+#   - anything outside `app/**/*.py`: templates, plugins, static JS.
+#
+# A safety net whose limits are written down is worth having. One that overstates
+# itself is the defect this whole finding was about, so the limits live here,
+# next to the thing they qualify, and not only in a report.
 DOCUMENTED_EXEMPTIONS = {
-    'app/utils.py': {
-        "for candidate in (request.args.get('next'), request.form.get('referrer')":
-            "referrer()'s own body. It calls is_safe_redirect_target on each "
-            "candidate on the very next line -- this IS the check, not a way "
-            "round it. tests/test_safe_redirect_target.py covers it.",
-    },
-    'app/main/routes.py': {
-        "next = request.args.get('next')":
-            "/anoobis does not call redirect(). It renders anoobis.html, whose "
-            "script sets location.href once the proof-of-work finishes, and it "
-            "applies its own furl-based host check first. Left alone "
-            "deliberately: routing it through safe_redirect_target would turn a "
-            "raise-on-hostile-host into a silent fallback, which is a behaviour "
-            "change on an unauthenticated anti-bot route rather than a security "
-            "fix. Its separate defect -- furl('http://[') raises ValueError, so "
-            "?next=http://[ is a 500 -- is reported in the final review and left "
-            "for its own change.",
-    },
-    'app/post/routes.py': {
-        "referrer=request.form.get('referrer')))":
-            "not a redirect target here: the value is passed as a query "
-            "parameter to url_for('post.post_block_image_purge_posts'), and the "
-            "route that receives it checks it before redirecting.",
-        "referrer=request.args.get('referrer'))":
-            "render_template keyword. It becomes a hidden field in "
-            "post_block_image_purge_posts.html, Jinja-escaped; it is checked "
-            "when it comes back and reaches redirect().",
-    },
-    'app/admin/routes.py': {
-        "form=form, referrer=request.args.get('referrer'))":
-            "render_template keyword, same template and same reasoning as the "
-            "app/post/routes.py entry above.",
-    },
-    'app/user/routes.py': {
-        "return_to = request.args.get('return_to')":
-            "user_preview: this value is only passed to render_template. The "
-            "follow/unfollow links it builds land on routes that check it "
-            "before redirecting.",
-    },
+    'app/main/routes.py': [
+        Exempt(
+            line="next = request.args.get('next')",
+            occurrences=1,
+            reason=("/anoobis does not call redirect(). It renders anoobis.html, "
+                    "whose script sets location.href once the proof-of-work "
+                    "finishes, and it applies its own furl-based host check "
+                    "first. Left alone deliberately: routing it through "
+                    "safe_redirect_target would turn a raise-on-hostile-host "
+                    "into a silent fallback, which is a behaviour change on an "
+                    "unauthenticated anti-bot route rather than a security fix. "
+                    "Its separate defect -- furl('http://[') raises ValueError, "
+                    "so ?next=http://[ is a 500 -- is reported in the final "
+                    "review and left for its own change. RE-CHECK THIS REASON "
+                    "if anoobis() ever gains a redirect(): the scan cannot."),
+        ),
+    ],
+    'app/post/routes.py': [
+        Exempt(
+            line="referrer=request.form.get('referrer')))",
+            occurrences=1,
+            reason=("not a redirect target here: the value is handed to "
+                    "url_for('post.post_block_image_purge_posts') as a query "
+                    "parameter, and that route checks it before redirecting."),
+        ),
+        Exempt(
+            line="referrer=request.args.get('referrer'))",
+            occurrences=1,
+            reason=("render_template keyword. It becomes a hidden field in "
+                    "post_block_image_purge_posts.html, Jinja-escaped, and is "
+                    "checked when it comes back and reaches redirect()."),
+        ),
+    ],
+    'app/admin/routes.py': [
+        Exempt(
+            line="form=form, referrer=request.args.get('referrer'))",
+            occurrences=1,
+            reason=("render_template keyword, same template and same reasoning "
+                    "as the app/post/routes.py entry above."),
+        ),
+    ],
+    'app/user/routes.py': [
+        Exempt(
+            line="return_to = request.args.get('return_to')",
+            occurrences=1,
+            reason=("user_preview: passed only to render_template. The "
+                    "follow/unfollow links it builds land on routes that run "
+                    "the value through return_to_or_401 before redirecting."),
+        ),
+    ],
 }
 
 
@@ -434,26 +557,129 @@ def _relative(path):
     return str(path.relative_to(APP_ROOT.parent))
 
 
+def unguarded_reads(source, rel_path):
+    """Every user-supplied redirect-target read in `source` with no guard.
+
+    Takes TEXT rather than a path so the tests below can prove what the scan
+    catches by feeding it a modified copy of a real file, without writing to the
+    working tree.
+    """
+    exempt_lines = {entry.line for entry in DOCUMENTED_EXEMPTIONS.get(rel_path, [])}
+    found = []
+    lines = source.splitlines()
+    for index, line in enumerate(lines):
+        if not USER_SUPPLIED_TARGET.search(line):
+            continue
+        window = '\n'.join(lines[index:index + GUARD_WINDOW + 1])
+        if GUARDED.search(window):
+            continue
+        if line.strip() in exempt_lines:
+            continue
+        found.append(f'{rel_path}:{index + 1}: {line.strip()}')
+    return found
+
+
+def exemption_drift(sources=None):
+    """Exemptions whose line is missing, or no longer appears exactly N times.
+
+    `sources` maps a relative path to text, for the tests that check a
+    hypothetical file. It defaults to what is on disk.
+    """
+    drift = []
+    for rel, entries in DOCUMENTED_EXEMPTIONS.items():
+        if sources is not None and rel not in sources:
+            continue
+        text = sources[rel] if sources is not None else (APP_ROOT.parent / rel).read_text()
+        stripped = [line.strip() for line in text.splitlines()]
+        for entry in entries:
+            actual = stripped.count(entry.line)
+            if actual != entry.occurrences:
+                drift.append(
+                    f'{rel}: {entry.line!r} appears {actual}x, declared {entry.occurrences}x')
+    return drift
+
+
 def test_every_user_supplied_redirect_target_is_checked_or_documented():
     unguarded = []
     for path in sorted(APP_ROOT.rglob('*.py')):
-        rel = _relative(path)
-        exemptions = DOCUMENTED_EXEMPTIONS.get(rel, {})
-        lines = path.read_text().splitlines()
-        for index, line in enumerate(lines):
-            if not USER_SUPPLIED_TARGET.search(line):
-                continue
-            window = line + '\n' + (lines[index + 1] if index + 1 < len(lines) else '')
-            if GUARDED.search(window):
-                continue
-            if any(fragment in line for fragment in exemptions):
-                continue
-            unguarded.append(f'{rel}:{index + 1}: {line.strip()}')
+        unguarded.extend(unguarded_reads(path.read_text(), _relative(path)))
     assert not unguarded, (
         'These read a user-supplied redirect target without '
-        'safe_redirect_target(). Route each through it, or add the line to '
+        'safe_redirect_target(). Route each through it, or add it to '
         'DOCUMENTED_EXEMPTIONS in this file with the reason:\n  '
         + '\n  '.join(unguarded))
+
+
+def test_a_new_unguarded_read_appended_to_an_exempt_file_is_caught():
+    """The hole the re-review found, closed and pinned.
+
+    app/user/routes.py carries an exemption. While exemptions were SUBSTRINGS,
+    this appended route matched the exempt fragment
+    `return_to = request.args.get('return_to')` and sailed through -- a brand
+    new open redirect, in an already-exempt file, reported as clean.
+    """
+    rel = 'app/user/routes.py'
+    clean = (APP_ROOT.parent / rel).read_text()
+    assert unguarded_reads(clean, rel) == []
+
+    hostile = (
+        "\n\n@bp.route('/u/<actor>/brand_new', methods=['POST'])\n"
+        "def brand_new(actor):\n"
+        "    return_to = request.args.get('return_to', f'/u/{actor}').strip()\n"
+        "    return redirect(return_to)\n"
+    )
+    found = unguarded_reads(clean + hostile, rel)
+    assert len(found) == 1, found
+    assert "request.args.get('return_to'" in found[0]
+
+
+def test_a_second_copy_of_an_exempt_line_is_caught():
+    """An exemption covers ONE occurrence. A second copy of that exact line is a
+    second site, and the declared count is what notices -- the line-text match
+    alone would wave it through, which is why the count exists."""
+    rel = 'app/user/routes.py'
+    clean = (APP_ROOT.parent / rel).read_text()
+    duplicated = (clean + "\n\ndef another(actor):\n"
+                          "    return_to = request.args.get('return_to')\n"
+                          "    return redirect(return_to)\n")
+
+    # The scan exempts by line text, so it does NOT catch this one...
+    assert unguarded_reads(duplicated, rel) == []
+    # ...the occurrence count does.
+    drift = exemption_drift({rel: duplicated})
+    assert len(drift) == 1, drift
+    assert 'appears 2x, declared 1x' in drift[0]
+
+
+def test_a_guard_further_than_the_window_is_caught():
+    """GUARD_WINDOW is a real limit, asserted rather than assumed."""
+    source = ("def f(actor):\n"
+              "    candidate = request.args.get('return_to')\n"
+              "    a = 1\n"
+              "    b = 2\n"
+              "    c = 3\n"
+              "    d = 4\n"
+              "    return safe_redirect_target(candidate, '/')\n")
+    assert len(unguarded_reads(source, 'app/nowhere.py')) == 1
+
+    within = ("def f(actor):\n"
+              "    candidate = request.args.get('return_to')\n"
+              "    if candidate.startswith('http'):\n"
+              "        abort(401)\n"
+              "    return safe_redirect_target(candidate, '/')\n")
+    assert unguarded_reads(within, 'app/nowhere.py') == []
+
+
+def test_the_exemption_list_does_not_rot():
+    """An exemption naming a line that no longer exists -- or that now names two
+    sites instead of one -- is a stale claim. Fail on it."""
+    for rel, entries in DOCUMENTED_EXEMPTIONS.items():
+        for entry in entries:
+            assert entry.reason.strip(), f'{rel}: {entry.line!r} has an empty reason'
+            assert entry.occurrences >= 1
+    drift = exemption_drift()
+    assert not drift, ('DOCUMENTED_EXEMPTIONS has drifted from the code:\n  '
+                       + '\n  '.join(drift))
 
 
 def test_the_bypassable_netloc_guard_is_gone():
@@ -468,17 +694,3 @@ def test_the_bypassable_netloc_guard_is_gone():
         'urlsplit(...).netloc as a redirect guard accepts ///evil.example, '
         '/\\evil.example and \\\\evil.example. Use safe_redirect_target:\n  '
         + '\n  '.join(offenders))
-
-
-def test_the_exemption_list_does_not_rot():
-    """An exemption naming a line that no longer exists is a stale claim. Fail
-    on it rather than let the list drift out of step with the code."""
-    stale = []
-    for rel, exemptions in DOCUMENTED_EXEMPTIONS.items():
-        text = (APP_ROOT.parent / rel).read_text()
-        for fragment, reason in exemptions.items():
-            if fragment not in text:
-                stale.append(f'{rel}: {fragment!r}')
-            assert reason.strip(), f'{rel}: {fragment!r} has an empty reason'
-    assert not stale, ('DOCUMENTED_EXEMPTIONS names lines that no longer exist:\n  '
-                       + '\n  '.join(stale))

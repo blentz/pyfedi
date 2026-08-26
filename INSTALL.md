@@ -955,8 +955,22 @@ pip install -r requirements.txt
 
 dump currently installed packages to file:
 ```bash
-pip freeze > requirements.txt
+pip freeze > /tmp/installed.txt   # then hand-merge; see the warning below
 ```
+
+> **Do not run `pip freeze > requirements.txt`.** `requirements.txt` is the
+> production install -- the Dockerfile's `builder` stage, `deploy.sh` and the
+> instructions above all use it -- and a freeze of a development venv writes
+> the TEST dependencies into it as well. Those live in `requirements-test.txt`
+> and must stay there: `atheris` publishes no aarch64 wheel, so an entry for it
+> in `requirements.txt` makes `pip install -r requirements.txt` try to build it
+> from source and fail outright on any ARM64 host. A freeze also pins every
+> transitive dependency, which is not how either file is written.
+>
+> To add a production dependency, add the one line to `requirements.txt`. To add
+> a test dependency, add it to `requirements-test.txt`.
+> `tests/test_requirements_split.py` fails if a test dependency ends up in the
+> production file.
 
 upgrade a package:
 ```bash
