@@ -29,7 +29,7 @@ import pendulum
 import flask
 import httpx
 import jwt
-from jwt.exceptions import DecodeError
+from jwt.exceptions import InvalidTokenError
 import markdown2
 import redis
 from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning, NavigableString
@@ -3367,8 +3367,31 @@ def authorise_api_user(auth, return_type=None, id_match=None) -> User | dict | i
 
     try:
         decoded = jwt.decode(token, current_app.config['SECRET_KEY'], algorithms=["HS256"])
-    except DecodeError:
-        raise Exception('incorrect_login - problem decoding bearer token')
+    except InvalidTokenError as e:
+        # InvalidTokenError, not DecodeError: PyJWT raises ExpiredSignatureError
+        # for an expired token and ImmatureSignatureError for one dated in the
+        # future, and both are SIBLINGS of DecodeError under InvalidTokenError
+        # rather than subclasses of it. Catching only DecodeError let them
+        # escape as themselves, and app/api/alpha/__init__.py's error handler
+        # treats any exception whose message is not exactly 'incorrect_login' as
+        # an application error -- logging it and capturing it to Sentry, and
+        # echoing its text back to the caller. Expiry is the commonest
+        # legitimate rejection there is; it is not an application error.
+        #
+        # InvalidTokenError covers every way a token itself can be bad
+        # (DecodeError, InvalidSignatureError, ExpiredSignatureError,
+        # ImmatureSignatureError, InvalidAlgorithmError, MissingRequiredClaimError,
+        # and any future sibling) without swallowing InvalidKeyError, which sits
+        # outside it and means this server's SECRET_KEY is unusable -- that one
+        # IS an application error and must keep escaping.
+        #
+        # The reason goes to the log, where it is useful; the caller gets the
+        # same bare 'incorrect_login' as every other rejection, because the
+        # handler compares on that exact string and because telling a caller
+        # WHICH check its token failed narrows an attacker's search.
+        current_app.logger.info('authorise_api_user: bearer token rejected by jwt.decode: %s: %s',
+                                type(e).__name__, e)
+        raise Exception('incorrect_login')
 
     if decoded:
         if RevokedToken.query.filter_by(jti=decoded.get('jti')).first():

@@ -234,8 +234,9 @@ def edit_profile(actor):
         current_user.email = form.email.data.strip()
         password_updated = False
         if form.password.data.strip() != '':
+            # set_password() stamps password_updated_at itself, so that every
+            # password change revokes API tokens and not just this one.
             current_user.set_password(form.password.data)
-            current_user.password_updated_at = utcnow()
             password_updated = True
         current_user.about = piefed_markdown_to_lemmy_markdown(form.about.data)
         current_user.about_html = markdown_to_html(form.about.data)

@@ -6,8 +6,7 @@ Guard order, as read from app/utils.py (~3345-3406):
 
     not auth                                                   -> raise
     not auth.startswith('Bearer ')                              -> raise
-    jwt.decode(...) raises DecodeError                          -> raise (with
-                                                                    a more specific message)
+    jwt.decode(...) raises InvalidTokenError                     -> raise
     RevokedToken.query.filter_by(jti=decoded['jti']).first()    -> raise
     User.query.get(decoded['sub']) is None                      -> raise
     user.ap_id is not None or user.verified is False or          -> raise
@@ -18,10 +17,21 @@ Guard order, as read from app/utils.py (~3345-3406):
                return_type == 'dict'   -> a dict built from six queries
                otherwise               -> user.id
 
-Every rejection raises a bare `Exception('incorrect_login')` (the decode
-failure carries a longer message with the same prefix) -- `pytest.raises`
+Every rejection raises a bare `Exception('incorrect_login')` -- `pytest.raises`
 alone would match almost anything, so every test here also asserts on the
-message via `match=`.
+message, via `match=` where any 'incorrect_login' will do and via
+`str(exc_info.value) == 'incorrect_login'` where the message must be that
+string EXACTLY. The exact form matters for the jwt.decode failures:
+app/api/alpha/__init__.py's error handler logs, Sentry-captures and echoes
+back anything whose message differs, so a more descriptive message there
+turns a routine rejection into a reported incident. `type(...) is Exception`
+accompanies those, because `pytest.raises(Exception)` would happily catch a
+PyJWT error that escaped uncaught.
+
+`password_updated_at` is stamped by `User.set_password()` itself (see
+TestAPasswordResetRevokesExistingApiTokens), so every password change revokes
+existing tokens; the one deliberate exception is `check_password()`'s
+legacy-bcrypt rehash, which passes `revoke_sessions=False`.
 
 Tokens are minted through `User.encode_jwt_token()` (app/models.py:1537)
 wherever the payload's `iat` doesn't need to be pinned to a specific instant.
@@ -39,9 +49,9 @@ import jwt
 import pytest
 from flask import current_app
 
-from app import db
+from app import app_bcrypt, db
 from app.constants import NOTIF_REPLY
-from app.models import RevokedToken, User
+from app.models import RevokedToken, User, utcnow
 from app.utils import authorise_api_user
 from tests.factories import (ban_user_from_community, make_community, make_community_member,
                              make_instance, make_notification_subscription, make_post,
@@ -114,13 +124,23 @@ class TestAuthoriseApiUserBearerPrefix:
 
 
 class TestAuthoriseApiUserDecodeFailure:
-    """`except DecodeError: raise Exception('incorrect_login - problem
-    decoding bearer token')` -- a distinct message from every other
-    rejection, asserted on exactly."""
+    """`except InvalidTokenError: raise Exception('incorrect_login')`.
+
+    This used to raise 'incorrect_login - problem decoding bearer token'. That
+    message is now logged instead of raised: app/api/alpha/__init__.py's error
+    handler puts `str(e)` straight into the response body and treats anything
+    other than the exact string 'incorrect_login' as an application error, so
+    the longer message both leaked which check failed and turned a garbled
+    token into a logged, Sentry-captured incident. See
+    TestAuthoriseApiUserJwtValidationFailures below for the siblings that used
+    to escape entirely.
+    """
 
     def test_an_undecodable_token_is_refused(self, app, db_session):
-        with pytest.raises(Exception, match='incorrect_login - problem decoding bearer token'):
+        with pytest.raises(Exception) as exc_info:
             authorise_api_user('Bearer not-a-real-jwt-token')
+        assert type(exc_info.value) is Exception
+        assert str(exc_info.value) == 'incorrect_login'
 
 
 class TestAuthoriseApiUserRevokedToken:
@@ -423,3 +443,194 @@ class TestAuthoriseApiUserDictReturn:
         assert result['downvoted_reply_ids'] == [downvoted_reply.id]
         assert result['subscribed_reply_ids'] == [subscribed_reply.id]
         assert result['moderated_community_ids'] == [moderated_community.id]
+
+
+class TestAPasswordResetRevokesExistingApiTokens:
+    """The password-rotation check above is only as good as its wiring.
+
+    `password_updated_at` used to be written in exactly ONE place --
+    app/user/routes.py's settings form -- so every other way a password
+    changes left it untouched and the rotation check inert. The
+    forgot-password reset is the worst of those: it is the path a user takes
+    AFTER a compromise, and it left the attacker's bearer token working.
+
+    These tests drive the real route rather than assigning the column, because
+    the column being honoured is already covered by
+    TestAuthoriseApiUserPasswordRotation. What was broken is the wiring, and
+    only the wiring proves the fix.
+    """
+
+    def _user_with_a_token_minted_an_hour_ago(self, name):
+        """A local, eligible user whose password_updated_at is pinned far in
+        the past, plus a bearer token whose iat is an hour old.
+
+        The hour matters: `password_updated_at` is written with second-or-finer
+        precision at reset time while `iat` is whole seconds, so a token minted
+        in the same wall-clock second as the reset would compare equal, not
+        less-than, and the test would pass or fail on timing rather than on the
+        fix.
+        """
+        make_instance('test.piefed.local', software='piefed')
+        user = make_user(None, name, local=True)
+        user.password_updated_at = SAFE_PASSWORD_UPDATED_AT
+        db.session.commit()
+        token = _encode_token_with_iat(user, iat=int(time()) - 3600, exp=int(time()) + 90000)
+        # Precondition: the token works right now. Without this the test could
+        # pass because the token was never valid in the first place.
+        assert authorise_api_user(f'Bearer {token}') == user.id
+        return user, token
+
+    def test_the_forgot_password_route_revokes_a_token_minted_before_it(self, app, site):
+        """app/auth/routes.py reset_password(): the recovery path a compromised
+        user actually takes. It calls set_password() and commits, and nothing
+        else -- so the revocation has to come from set_password itself.
+
+        The reset token is produced by User.get_reset_password_token(), which is
+        the same value send_password_reset_email() puts in the email; the route
+        consumes it through the real verify_reset_password_token().
+        """
+        user, token = self._user_with_a_token_minted_an_hour_ago('resetviaemail')
+        reset_token = user.get_reset_password_token()
+
+        client = app.test_client()
+        response = client.post(f'/auth/reset_password/{reset_token}',
+                               data={'password': 'a-brand-new-password',
+                                     'password2': 'a-brand-new-password',
+                                     'submit': 'Set password'})
+        assert response.status_code == 302
+
+        # The request ran in its own app context, hence its own session.
+        db.session.expire_all()
+        reloaded = User.query.get(user.id)
+        # Proof the route really changed the password, not just redirected.
+        assert reloaded.check_password('a-brand-new-password')
+
+        with pytest.raises(Exception) as exc_info:
+            authorise_api_user(f'Bearer {token}')
+        assert str(exc_info.value) == 'incorrect_login'
+
+    def test_set_password_stamps_password_updated_at(self, app, db_session):
+        """The seam itself. Every other caller listed in the finding
+        (app/admin/routes.py's admin reset, app/auth/util.py's two
+        user-creation paths, app/cli.py's three) goes through this one method,
+        so stamping here is what makes them all revoke.
+        """
+        make_instance('test.piefed.local', software='piefed')
+        user = make_user(None, 'stamped', local=True)
+        user.password_updated_at = SAFE_PASSWORD_UPDATED_AT
+        db.session.commit()
+
+        before = utcnow()
+        user.set_password('something-else')
+        after = utcnow()
+
+        assert before <= user.password_updated_at <= after
+
+    def test_the_bcrypt_rehash_on_login_does_not_revoke_anything(self, app, db_session):
+        """The one caller that must NOT revoke: User.check_password()'s
+        fallback re-saves the hash with a stronger algorithm when the stored
+        one is a legacy bcrypt hash. The PASSWORD did not change -- only its
+        encoding -- and a successful login is not a reason to sign every one of
+        that user's API clients out.
+
+        This is a live path, not a hypothetical: werkzeug's check_password_hash
+        raises ValueError("Invalid hash method ''") on a `$2b$` bcrypt hash,
+        which is exactly what routes the login into the fallback.
+        """
+        make_instance('test.piefed.local', software='piefed')
+        user = make_user(None, 'legacyhash', local=True)
+        user.password_hash = app_bcrypt.generate_password_hash('the-old-password').decode()
+        user.password_updated_at = SAFE_PASSWORD_UPDATED_AT
+        db.session.commit()
+        token = _encode_token_with_iat(user, iat=int(time()) - 3600, exp=int(time()) + 90000)
+        assert authorise_api_user(f'Bearer {token}') == user.id
+
+        assert user.check_password('the-old-password') is True
+        # The fallback ran: the stored hash is no longer bcrypt's.
+        assert not user.password_hash.startswith('$2b$')
+        # ...and the stamp was left alone, so the token still works.
+        assert user.password_updated_at == SAFE_PASSWORD_UPDATED_AT
+        assert authorise_api_user(f'Bearer {token}') == user.id
+
+
+class TestAuthoriseApiUserJwtValidationFailures:
+    """`except InvalidTokenError:` -- every way PyJWT can reject a token.
+
+    Only DecodeError used to be caught. ExpiredSignatureError and
+    ImmatureSignatureError are siblings of it under InvalidTokenError, not
+    subclasses, so both escaped `authorise_api_user` as themselves. That
+    matters because app/api/alpha/__init__.py's error handler compares
+    `str(e)` against the exact string 'incorrect_login' and logs plus
+    Sentry-captures anything else -- so the single commonest legitimate
+    rejection there is, an expired token, was reported as an application
+    error.
+
+    `type(...) is Exception` is the load-bearing assertion in each test:
+    `pytest.raises(Exception)` catches every PyJWT error too, since they all
+    descend from Exception.
+    """
+
+    def test_an_expired_token_is_refused_as_a_plain_incorrect_login(self, app, db_session):
+        make_instance('test.piefed.local', software='piefed')
+        user = _eligible_user('expiredtoken', None)
+        now = int(time())
+        token = _encode_token_with_iat(user, iat=now - 7200, exp=now - 60)
+        with pytest.raises(Exception) as exc_info:
+            authorise_api_user(f'Bearer {token}')
+        assert type(exc_info.value) is Exception
+        assert str(exc_info.value) == 'incorrect_login'
+
+    def test_a_token_dated_in_the_future_is_refused_as_a_plain_incorrect_login(self, app, db_session):
+        """PyJWT raises ImmatureSignatureError("The token is not yet valid
+        (iat)") for an iat ahead of now -- a different sibling of DecodeError,
+        and it escaped the same way."""
+        make_instance('test.piefed.local', software='piefed')
+        user = _eligible_user('futuretoken', None)
+        now = int(time())
+        token = _encode_token_with_iat(user, iat=now + 3600, exp=now + 90000)
+        with pytest.raises(Exception) as exc_info:
+            authorise_api_user(f'Bearer {token}')
+        assert type(exc_info.value) is Exception
+        assert str(exc_info.value) == 'incorrect_login'
+
+    def test_a_token_signed_with_the_wrong_secret_is_refused(self, app, db_session):
+        """InvalidSignatureError is a DecodeError subclass, so this one was
+        already caught -- kept as the "still works" side of widening the
+        except clause."""
+        make_instance('test.piefed.local', software='piefed')
+        user = _eligible_user('wrongsecret', None)
+        now = int(time())
+        payload = {'sub': str(user.id), 'iss': current_app.config['SERVER_NAME'],
+                   'iat': now, 'exp': now + 90000, 'jti': str(uuid.uuid4())}
+        token = jwt.encode(payload, 'not-the-servers-secret', algorithm='HS256')
+        with pytest.raises(Exception) as exc_info:
+            authorise_api_user(f'Bearer {token}')
+        assert type(exc_info.value) is Exception
+        assert str(exc_info.value) == 'incorrect_login'
+
+
+class TestAnExpiredTokenIsNotLoggedAsAnApplicationError:
+    """The consequence Finding 2 is actually about, asserted where it happens:
+    app/api/alpha/__init__.py's error handler.
+
+    It logs `current_app.logger.exception("API exception")` (and captures to
+    Sentry when configured) for every exception whose message is not exactly
+    'incorrect_login'. An expired bearer token is a routine client condition;
+    it should produce a 400 and nothing in the error log.
+    """
+
+    def test_an_expired_bearer_token_yields_a_clean_400(self, app, site, caplog, monkeypatch):
+        monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
+        make_instance('test.piefed.local', software='piefed')
+        user = _eligible_user('apiexpired', None)
+        now = int(time())
+        token = _encode_token_with_iat(user, iat=now - 7200, exp=now - 60)
+
+        client = app.test_client()
+        with caplog.at_level('ERROR'):
+            response = client.get('/api/alpha/user/unread_count',
+                                  headers={'Authorization': f'Bearer {token}'})
+
+        assert response.status_code == 400
+        assert response.json['message'] == 'incorrect_login'
+        assert 'API exception' not in caplog.text

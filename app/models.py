@@ -1101,8 +1101,26 @@ class User(UserMixin, db.Model):
     def __repr__(self):
         return '<User {}_{}>'.format(self.user_name, self.id)
 
-    def set_password(self, password):
+    def set_password(self, password, revoke_sessions=True):
+        """Change the password, and by default stamp password_updated_at.
+
+        `password_updated_at` is what authorise_api_user() compares a bearer
+        token's `iat` against: a token issued before the stamp is refused. That
+        is the ONLY mechanism by which changing a password invalidates existing
+        API sessions, so the stamp belongs here rather than at each call site --
+        it used to be written only by the settings form, which left the
+        forgot-password reset (the path a compromised user actually takes), the
+        admin reset and the CLI resets unable to sign an attacker out.
+
+        revoke_sessions=False is for one caller only: check_password()'s
+        legacy-bcrypt fallback just below, which re-saves the hash of a password
+        the user has *just proved they know*. Nothing about the password changed
+        there, only its encoding, so it is not a reason to sign that user's API
+        clients out. Any genuine password change must leave the default alone.
+        """
         self.password_hash = generate_password_hash(password)
+        if revoke_sessions:
+            self.password_updated_at = utcnow()
 
     def check_password(self, password):
         try:
@@ -1112,9 +1130,11 @@ class User(UserMixin, db.Model):
             # Caused when invalid hash method used, check bcrypt as a fallback
             result = app_bcrypt.check_password_hash(self.password_hash, password)
 
-            # If pw validates, resave the hash using a more secure hashing algorithm
+            # If pw validates, resave the hash using a more secure hashing algorithm.
+            # revoke_sessions=False: this is a hash migration on a successful
+            # login, not a password change -- see set_password's docstring.
             if result:
-                self.set_password(password)
+                self.set_password(password, revoke_sessions=False)
                 db.session.commit()
 
             return result
