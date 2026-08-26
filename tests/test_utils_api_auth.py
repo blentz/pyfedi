@@ -17,6 +17,19 @@ Guard order, as read from app/utils.py (~3345-3406):
                return_type == 'dict'   -> a dict built from six queries
                otherwise               -> user.id
 
+Coverage: every branch above is exercised except one -- the `if decoded:` false
+side (app/utils.py:3381). It is not pragma'd, and it is left undocumented
+nowhere else: `jwt.decode` *raises* rather than returning something falsy for
+every malformed, expired, or tampered token, so in practice `decoded` is always
+truthy whenever `jwt.decode` returns at all, and no test here can drive the
+false side through a hostile token. It is not, however, strictly impossible --
+`jwt.decode` of a token whose payload is the empty object returns `{}`, which
+IS falsy, and the function would then fall through to `return None` implicitly
+rather than raising. Minting such a token requires this server's own
+`SECRET_KEY`, which is not attacker-reachable, so the branch is untested by
+design rather than by oversight. A caller that received `None` back from
+`authorise_api_user` instead of an exception would fail far from this cause.
+
 Every rejection raises a bare `Exception('incorrect_login')` -- `pytest.raises`
 alone would match almost anything, so every test here also asserts on the
 message, via `match=` where any 'incorrect_login' will do and via
@@ -33,7 +46,25 @@ TestAPasswordResetRevokesExistingApiTokens), so every password change revokes
 existing tokens; the one deliberate exception is `check_password()`'s
 legacy-bcrypt rehash, which passes `revoke_sessions=False`.
 
-Tokens are minted through `User.encode_jwt_token()` (app/models.py:1537)
+That covers every genuine password change EXCEPT the offline `lemmy-import`
+CLI command, which writes `password_hash` directly rather than through
+`set_password()`: `app/cli.py:377` (new-user construction) is harmless
+because the column's `default=utcnow` covers a fresh row, but
+`app/cli.py:360` (overwriting an existing row's hash during a re-import)
+is not stamped at all. An earlier count of "eight password-changing sites"
+included this line among the stampers; it does not belong there. Re-derived
+mechanically rather than by hand: `grep -rn '\\.set_password(' app/` finds
+nine callers, of which eight pass the default `revoke_sessions=True` (and so
+stamp) -- `app/cli.py:252`, `app/cli.py:271`, `app/cli.py:1206`,
+`app/admin/routes.py:1898`, `app/auth/util.py:271`, `app/auth/util.py:297`,
+`app/auth/routes.py:160`, `app/user/routes.py:240` -- and one,
+`app/models.py:1149`, deliberately does not. Separately,
+`grep -rn 'password_hash\\s*=' app/` (filtered to direct assignments outside
+`set_password`'s own definition) finds exactly the two `app/cli.py` lines
+above, neither of which is a `set_password()` call and only one of which
+stamps by accident of the column default.
+
+Tokens are minted through `User.encode_jwt_token()` (app/models.py:1576)
 wherever the payload's `iat` doesn't need to be pinned to a specific instant.
 The two password-rotation tests below need an `iat` other than "now", so they
 build the JWT with `jwt.encode` directly -- `_encode_token_with_iat` mirrors
@@ -264,6 +295,17 @@ class TestAuthoriseApiUserPasswordRotation:
     ones, and either test alone would still pass against that bug. The
     discrimination check in this task's report reverses the comparison and
     confirms both tests below fail.
+
+    DRIFT, marked rather than silently corrected: reversing `<` to `>` was
+    originally measured (module-scoped, this file only) at 10 failures.
+    Suite-wide it is now 22 -- `set_password()` began stamping
+    `password_updated_at` on every password change once the auth fix
+    landed, so far more fixtures across the suite now mint tokens against a
+    live stamp instead of a null one, and each becomes collateral under the
+    reversed comparison. The property the count was evidence for still
+    holds either way: both halves of the rotation pair above fail. Verified
+    with `./run_tests.sh tests/ -q --ignore=tests/test_activitypub_util.py`
+    against the reversed comparison: `22 failed, 1636 passed`.
     """
 
     def test_a_token_issued_before_the_password_change_is_refused(self, app, db_session):

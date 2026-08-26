@@ -14,6 +14,16 @@ class TestUserAccess:
 
         Fails if the bypass is removed. Documented rather than endorsed --
         see the spec's suspected-defects list.
+
+        Deleting the `if user_id == 1: return True` guard fails this test
+        plus one other, suite-wide: `tests/test_redirect_policy.py::
+        TestAdminFormRoundTrip::test_saving_the_policy_persists_it_and_it_loads_back`,
+        which drives an admin form that relies on user 1 being an
+        unconditional superadmin. (An earlier measurement against
+        `tests/test_utils_roles.py` alone reported "exactly one" -- that was
+        the module-scoped count, not the suite-wide one; verified here with
+        `./run_tests.sh tests/ -q --ignore=tests/test_activitypub_util.py`
+        against the mutated guard: `2 failed, 1656 passed`.)
         """
         assert user_access('change instance settings', 1) is True
 

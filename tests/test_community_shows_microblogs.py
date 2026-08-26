@@ -19,7 +19,7 @@ def community_with_a_microblog(db_session):
     """A community holding one microblog post and one ordinary post.
 
     The viewer is a logged-in local user because Site.private_instance defaults to
-    True (app/models.py ~3816), so an anonymous GET of either route is bounced to
+    True (app/models.py:3855), so an anonymous GET of either route is bounced to
     /auth/login before the post query runs.
     """
     make_instance('test.piefed.local', software='piefed')

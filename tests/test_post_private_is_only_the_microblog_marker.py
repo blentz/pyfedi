@@ -5,7 +5,7 @@ filtering `Post.private == False`, and the aggregate-feed gate moved onto the
 community disjunct. Both are safe only if `Post.private` marks microblogs rather
 than non-public content. That claim has three parts, and each has a test here:
 
-1. `Post.new()` (app/models.py ~1795) is the ONLY writer of the column, and it
+1. `Post.new()` (app/models.py:1834) is the ONLY writer of the column, and it
    sets it inside `if 'name' not in request_json['object']:` -- so a titled post is
    never private.
 2. `Post.new()` is reachable only through `create_post()`
@@ -19,7 +19,7 @@ than non-public content. That claim has three parts, and each has a test here:
    a synthesised activity with no addressing comes out private=True. It is
    therefore not usable as a privacy signal in either direction.
 
-`PostReply.private` (app/models.py ~2827) is a different column with a different
+`PostReply.private` (app/models.py:2866) is a different column with a different
 meaning -- it really does mean followers-only. Nothing here applies to it.
 """
 

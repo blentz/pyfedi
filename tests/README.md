@@ -372,9 +372,9 @@ things. Do not reason from one to another.
 
 - `Community.private` -- invite-only. Real access control.
 - `PostReply.private` -- followers-only. Real audience restriction
-  (`app/models.py` ~2827, set from the reply's `to`).
+  (`app/models.py:2866`, set from the reply's `to`).
 - `Post.private` -- **set by `Post.new()` for any object with no `name`**, i.e.
-  every ingested microblog (`app/models.py` ~1796, under the comment
+  every ingested microblog (`app/models.py:1834-1835`, under the comment
   `# Microblog posts`). It is not access control.
 
 `Post.new()` is the ONLY writer of `Post.private`, and `create_post()`
