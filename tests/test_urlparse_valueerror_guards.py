@@ -45,13 +45,18 @@ cannot take.
 import httpx
 import pytest
 
+from app import db
 from app.activitypub.util import extract_domain_and_actor
-from app.models import Domain
+from app.constants import POST_TYPE_VIDEO
+from app.models import Domain, Post
 from app.post.util import url_needs_archive
 from app.utils import (domain_from_url, fixup_url, get_request, inbox_domain,
                        instance_allowed, is_image_url,
-                       is_video_url, mime_type_using_head, mimetype_from_url,
+                       is_video_hosting_site, is_video_url,
+                       mime_type_using_head, mimetype_from_url,
                        remove_tracking_from_link)
+from tests.factories import (make_community, make_instance, make_post,
+                            make_user)
 
 # Every input that makes urlparse itself raise. Each guarded function is run
 # over the whole list so no shape is guarded by accident in one place and
@@ -419,14 +424,21 @@ class TestMimeTypeUsingHeadSurvivesAnInvalidUrl:
     """
 
     @pytest.mark.parametrize('url', [
-        'https://[::1/x',            # httpx: Invalid port: ':1'
-        'http://[1::2::3]',          # httpx: Invalid IPv6 address
-        'http://exa℀mple.com/',  # httpx: Invalid IDNA hostname
-        'http://[v1.x]/y',           # httpx refuses this one though urlparse accepts it
+        'https://[::1/mime-probe',            # httpx: Invalid port: ':1'
+        'http://[1::2::3]/mime-probe',        # httpx: Invalid IPv6 address
+        'http://exa℀mple.com/mime-probe',  # httpx: Invalid IDNA hostname
+        'http://[v1.x]/mime-probe',           # httpx refuses this though urlparse accepts it
     ])
     def test_a_url_httpx_refuses_yields_no_content_type(self, url, app):
         """No `http_mock`: these never reach a transport, so registering a
-        route would leave it uncalled and fail the fixture's own assertion."""
+        route would leave it uncalled and fail the fixture's own assertion.
+
+        The '/mime-probe' path keeps these keys distinct from the bare
+        MALFORMED urls the `is_image_url` user-path test drives through this
+        same function. `mime_type_using_head` is `@cache.memoize(timeout=10)`
+        against a FileSystemCache, so a shared key could serve a cached '' on a
+        re-run within 10 seconds and mask a reverted guard -- the ordinary-URL
+        tests below already use distinct hosts for exactly this reason."""
         assert mime_type_using_head(url) == ''
 
 
@@ -583,3 +595,211 @@ class TestInboxDomainAnEmptyHost:
         a stale answer on a re-run and could not be trusted as a revert check.
         """
         assert isinstance(inbox_domain(value), str)
+
+
+# The attack url. It has to clear THREE gates at once, and finding one that
+# does is what makes the listing crash reachable rather than theoretical:
+#
+#   1. `youtube_can_embed`'s gate is `"youtube.com" not in self.url` -- a
+#      substring test over the whole string, which says nothing about the
+#      netloc.
+#   2. `urlparse` must still refuse it. 'https://youtube.com[abc' has netloc
+#      'youtube.com[abc' -- an unbalanced bracket -> ValueError: Invalid IPv6
+#      URL. The netloc runs to the first '/', '?' or '#', so appending '[abc'
+#      straight after the host corrupts the AUTHORITY while leaving the prefix
+#      intact.
+#   3. It must be typed POST_TYPE_VIDEO, because the listing teaser only calls
+#      youtube_can_embed inside `render_video`. `is_video_hosting_site` matches
+#      on `url.startswith('https://youtube.com')`, which this satisfies -- so
+#      app/models.py:1982 (federation) and app/shared/post.py:654 (local
+#      submission) both type it VIDEO of their own accord.
+#
+# A url that satisfies only 1 and 2 -- 'http://[abc/youtube.com', with the
+# literal in the path -- is typed POST_TYPE_LINK and never reaches the listing
+# macro at all. The first draft of this test used exactly that and passed
+# against the unfixed code: green, and proving nothing.
+YOUTUBE_GATE_PASSING_MALFORMED_URL = 'https://youtube.com[abc'
+
+
+class TestAMalformedUrlIsStorable:
+    """The precondition for the stored-DoS below, asserted rather than assumed.
+
+    The guards from the earlier commits are what make this url PERSIST: every
+    function `create_post` runs over a submitted link now returns a safe value
+    instead of raising, so nothing rejects it and it reaches the column. That is
+    correct -- refusing to store it is a policy decision nobody made -- but it
+    means the display path has to survive it.
+    """
+
+    def test_every_creation_time_helper_accepts_it(self, app, db_session):
+        url = YOUTUBE_GATE_PASSING_MALFORMED_URL
+        assert domain_from_url(url, create=True) is None    # ban branch skipped
+        assert is_video_url(url) is False
+        assert mimetype_from_url(url) is None
+        with app.test_request_context('/'):
+            assert fixup_url(url) == (url, url)
+
+    def test_it_passes_youtube_can_embeds_substring_gate(self):
+        """Which is the whole reason the gate is not a guard."""
+        assert 'youtube.com' in YOUTUBE_GATE_PASSING_MALFORMED_URL
+
+    def test_production_types_it_as_a_video_of_its_own_accord(self):
+        """So the POST_TYPE_VIDEO the fixture sets is not the test arranging
+        its own crash: app/models.py:1982 and app/shared/post.py:654 both type
+        a post VIDEO when is_video_hosting_site(url) is True, and this url
+        satisfies that on `startswith('https://youtube.com')` alone."""
+        assert is_video_hosting_site(YOUTUBE_GATE_PASSING_MALFORMED_URL) is True
+
+
+@pytest.fixture
+def community_with_a_malformed_link_post(db_session):
+    """A community holding one video post whose url makes urlparse raise.
+
+    The viewer is a logged-in local user because Site.private_instance defaults
+    to True, so an anonymous GET is bounced to /auth/login before the listing
+    renders -- and a redirect would make this test pass without ever reaching
+    the template. Copied from tests/test_community_shows_microblogs.py, which
+    documents the same trap.
+    """
+    make_instance('test.piefed.local', software='piefed')
+    author = make_user(make_instance('m.example'), 'linkauthor')
+    viewer = make_user(None, 'listingviewer', local=True)
+    community = make_community('links')
+
+    victim = make_post(community, author, 'https://m.example/p/1', title='a crafted link')
+    victim.url = YOUTUBE_GATE_PASSING_MALFORMED_URL
+    victim.type = POST_TYPE_VIDEO
+
+    bystander = make_post(community, author, 'https://m.example/p/2', title='an innocent post')
+    bystander.url = 'https://www.youtube.com/watch?v=abc123'
+    bystander.type = POST_TYPE_VIDEO
+
+    db.session.commit()
+    return viewer, community, victim, bystander
+
+
+def logged_in_client(app, user):
+    client = app.test_client()
+    with client.session_transaction() as sess:
+        sess['_user_id'] = str(user.id)
+        sess['_fresh'] = True
+    return client
+
+
+class TestAMalformedLinkDoesNotBreakTheListing:
+    """THE TEST THAT MATTERS -- the stored denial of service, end to end.
+
+    `Post.youtube_can_embed` is called from four templates, one of them the
+    post-teaser macro used by every listing (app/templates/post/post_teaser/
+    _macros.html, and the dillo theme's copy). So one crafted post url 500s
+    every listing page containing it, for EVERY user -- not just its own page.
+    That is strictly worse than the creation-path crash: the victim is the
+    reader, and the attacker only has to post once.
+
+    A function-level test cannot establish this. Rounds 1 and 2 of this fix
+    both passed their function-level tests while the user-visible crash stayed
+    live, twice, because each round guarded the layer it was looking at rather
+    than the path a user walks. This renders the real template through the real
+    route and asserts on the response.
+    """
+
+    def test_the_listing_still_renders(self, app, site, community_with_a_malformed_link_post):
+        viewer, community, victim, bystander = community_with_a_malformed_link_post
+
+        response = logged_in_client(app, viewer).get(f'/c/{community.name}')
+
+        assert response.status_code == 200, (
+            f'a single crafted post url 500s the whole listing '
+            f'(got {response.status_code})')
+
+    def test_the_bystanders_post_is_still_listed(self, app, site,
+                                                 community_with_a_malformed_link_post):
+        """The denial-of-service half stated directly: the OTHER post in the
+        community must still reach the reader."""
+        viewer, community, victim, bystander = community_with_a_malformed_link_post
+
+        body = logged_in_client(app, viewer).get(
+            f'/c/{community.name}').get_data(as_text=True)
+
+        assert f'/post/{bystander.id}' in body
+
+    def test_the_bystanders_youtube_embed_still_renders(self, app, site,
+                                                        community_with_a_malformed_link_post):
+        """The over-correction guard, at the level that matters. A guard that
+        made youtube_can_embed always False would pass both tests above and
+        silently remove every YouTube embed from every listing on the site."""
+        viewer, community, victim, bystander = community_with_a_malformed_link_post
+
+        body = logged_in_client(app, viewer).get(
+            f'/c/{community.name}').get_data(as_text=True)
+
+        assert 'youtube.com/embed/abc123' in body
+
+    # NO route-level test for the post's OWN page (_post_full.html:142,190),
+    # deliberately: /post/<id> cannot be rendered in this harness at ALL, for
+    # any post. base.html:320 reads `form.csrf_token` and TestConfig disables
+    # WTF-CSRF, so NewReplyForm has no such attribute and every render of that
+    # route dies with jinja2.UndefinedError before reaching any post content.
+    # Verified by probe against an ORDINARY youtube post, which fails
+    # identically. A test that can never be green proves nothing, so the
+    # coverage for those two call sites is the unit-level
+    # TestYoutubeHelpersSurviveAMalformedUrl below -- they call exactly the same
+    # method as the listing macro. The harness gap is reported as a finding.
+
+
+class TestYoutubeHelpersSurviveAMalformedUrl:
+    """The three `Post` methods behind that page, unit level.
+
+    Safe values chosen by reading the templates, not by pattern:
+
+    * `youtube_can_embed` -> False. Every template calls it as `{% if %}`, and
+      False means "render no embed", which is the correct degradation for a url
+      whose authority cannot be parsed.
+    * `youtube_embed` and `youtube_video_id` -> ''. Both already return '' when
+      `self.url` is falsy, and both are interpolated straight into a url
+      attribute in all four templates. They are only ever reached INSIDE
+      `{% if post.youtube_can_embed() %}`, so with can_embed False these are
+      unreachable on the malformed path -- guarded anyway because they are
+      public methods that a future caller could reach directly, and '' is the
+      value that keeps them consistent with their own existing fallback.
+    """
+
+    @pytest.mark.parametrize('url', MALFORMED + [YOUTUBE_GATE_PASSING_MALFORMED_URL])
+    def test_can_embed_is_false(self, url, app, db_session):
+        post = Post(url=url)
+        assert post.youtube_can_embed() is False
+
+    @pytest.mark.parametrize('url', MALFORMED + [YOUTUBE_GATE_PASSING_MALFORMED_URL])
+    def test_embed_is_empty(self, url, app, db_session):
+        post = Post(url=url)
+        assert post.youtube_embed() == ''
+
+    @pytest.mark.parametrize('url', MALFORMED + [YOUTUBE_GATE_PASSING_MALFORMED_URL])
+    def test_video_id_is_empty(self, url, app, db_session):
+        post = Post(url=url)
+        assert post.youtube_video_id() == ''
+
+
+class TestYoutubeHelpersStillEmbedOrdinaryVideos:
+    """The over-correction guard at unit level. False/''/'' are also the answers
+    for any non-YouTube url, so only these distinguish a working guard."""
+
+    def test_a_watch_url_still_embeds(self, app, db_session):
+        post = Post(url='https://www.youtube.com/watch?v=abc123')
+        assert post.youtube_can_embed() is True
+        assert post.youtube_embed() == 'abc123?rel=0'
+        assert post.youtube_video_id() == 'abc123'
+
+    def test_a_shorts_url_still_embeds(self, app, db_session):
+        post = Post(url='https://www.youtube.com/shorts/abc123')
+        assert post.youtube_can_embed() is True
+        assert post.youtube_embed() == 'abc123?rel=0'
+        assert post.youtube_video_id() == 'abc123'
+
+    def test_a_playlist_url_still_embeds(self, app, db_session):
+        post = Post(url='https://www.youtube.com/playlist?list=PL1')
+        assert post.youtube_can_embed() is True
+        assert post.youtube_embed() == 'videoseries?list=PL1'
+
+    def test_a_non_youtube_url_is_still_not_embeddable(self, app, db_session):
+        assert Post(url='https://example.com/article').youtube_can_embed() is False

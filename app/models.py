@@ -2417,7 +2417,21 @@ class Post(db.Model):
         if "youtube.com" not in self.url:
             return False
 
-        parsed_url = urlparse(self.url)
+        try:
+            parsed_url = urlparse(self.url)
+        except ValueError:
+            # The gate above is a substring test over the whole url, so it says
+            # nothing about the authority: 'https://youtube.com[abc' passes it
+            # and then makes urlparse raise. Reachable from a stored post.url,
+            # and this method is called from four templates -- including the
+            # post-teaser macro every listing renders -- so an unguarded raise
+            # here 500s every listing page containing that post, for every
+            # reader, not just the post's own page.
+            #
+            # False is the correct degradation: all four call sites are
+            # `{% if post.youtube_can_embed() %}`, and False means "render no
+            # embed".
+            return False
         query_params = parse_qs(parsed_url.query)
 
         # Only create embed for videos, playlists and shorts (not e.g. posts)
@@ -2429,7 +2443,18 @@ class Post(db.Model):
 
     def youtube_embed(self, rel=True) -> str:
         if self.url:
-            parsed_url = urlparse(self.url)
+            try:
+                parsed_url = urlparse(self.url)
+            except ValueError:
+                # '' is this method's own existing fallback for a url it cannot
+                # build an embed from (the bare `return ''` below). Every
+                # template interpolates the result straight into a url
+                # attribute, so a str is required. Unreachable in practice --
+                # all four call sites sit inside
+                # `{% if post.youtube_can_embed() %}`, which now returns False
+                # first -- but guarded because this is a public method and the
+                # two gates are independent.
+                return ''
             query_params = parse_qs(parsed_url.query)
 
             # Handle playlists
@@ -2457,7 +2482,13 @@ class Post(db.Model):
 
     def youtube_video_id(self) -> str:
         if self.url:
-            parsed_url = urlparse(self.url)
+            try:
+                parsed_url = urlparse(self.url)
+            except ValueError:
+                # Same as youtube_embed above: '' is this method's own existing
+                # fallback, and the templates interpolate it into an
+                # img.youtube.com thumbnail url.
+                return ''
             query_params = parse_qs(parsed_url.query)
 
             if 'v' in query_params:
