@@ -191,7 +191,17 @@ class TestFallthroughElseRule:
         -- `if post is None:` is then False, so the reply lookup is skipped
         entirely and the url returns unchanged. Branch-covers the False arm of
         `if post is None:` at line 4986, distinct from the miss case above
-        where that arm is True."""
+        where that arm is True.
+
+        This pins a REPORTED DEFECT, not intended behaviour: `post =
+        Post.get_by_ap_id(url)` here is used only as a null check to decide
+        whether to fall through to the reply lookup -- the matched Post itself
+        is never used to rewrite anything, so a Post match in this branch is
+        silently inert. This test asserts CURRENT behaviour deliberately, so a
+        future fix that makes the fallthrough also rewrite a matched Post's
+        href (e.g. to post.slug / f'/post/{post.id}', mirroring the post rule)
+        should change this test's expected value along with it, not be read as
+        breaking a settled contract."""
         instance, owner, community = _base('k')
         make_post(community, owner, ap_id=self.FALLTHROUGH_URL)
 
