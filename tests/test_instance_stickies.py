@@ -1,5 +1,5 @@
-"""One-case-per-rule coverage for get_instance_stickies (app/utils.py:3990-4043)
-and its query helper instance_sticky_posts (app/utils.py:3972-3987).
+"""One-case-per-rule coverage for get_instance_stickies (app/utils.py:3997-4050)
+and its query helper instance_sticky_posts (app/utils.py:3979-3994).
 
 get_instance_stickies is a Python filter CHAIN, not a SQL WHERE clause like
 tasks 4/5's get_deduped_post_ids: a sequence of `continue` statements over
@@ -13,7 +13,7 @@ this file gives each rule its own post, tripping ONLY that rule, with every
 other rule held out of the way.
 
 Rule count, derived with the following command against this checkout
-(reproduce with `sed -n '3990,4043p' app/utils.py | grep -n continue`, or
+(reproduce with `sed -n '3997,4043p' app/utils.py | grep -n continue`, or
 the AST walk below -- both give the same seven line numbers):
 
     python3 -c "
@@ -26,21 +26,21 @@ the AST walk below -- both give the same seven line numbers):
                     print(c.lineno)
     "
 
-Output: 4004, 4007, 4026, 4029, 4032, 4035, 4038 -- seven `continue`
+Output: 4011, 4014, 4033, 4036, 4039, 4042, 4045 -- seven `continue`
 statements, split 2/5 across the two current_user.is_anonymous arms:
 
 Anonymous (current_user.is_anonymous is True), in order:
-  1. :4002-4004 -- CONTENT_WARNING disabled AND (nsfw OR nsfl)
-  2. :4006-4007 -- community not in community_ids AND NOT all_communities
+  1. :4009-4011 -- CONTENT_WARNING disabled AND (nsfw OR nsfl)
+  2. :4013-4014 -- community not in community_ids AND NOT all_communities
 
 Authenticated (the else arm), in order:
-  3. :4025-4026 -- community not in community_ids AND NOT all_communities
-  4. :4028-4029 -- hide_nsfl == 1 AND post.nsfl
-  5. :4031-4032 -- hide_nsfw == 1 AND post.nsfw
-  6. :4034-4035 -- post.id in read_post_ids (populated only when hide_read_posts)
-  7. :4037-4038 -- post.id in hidden_post_ids
+  3. :4032-4033 -- community not in community_ids AND NOT all_communities
+  4. :4035-4036 -- hide_nsfl == 1 AND post.nsfl
+  5. :4038-4039 -- hide_nsfw == 1 AND post.nsfw
+  6. :4041-4042 -- post.id in read_post_ids (populated only when hide_read_posts)
+  7. :4044-4045 -- post.id in hidden_post_ids
 
-Plus the `all_communities` flag itself (:3993-3996): `len(community_ids) ==
+Plus the `all_communities` flag itself (:4000-4003): `len(community_ids) ==
 1 and community_ids[0] < 0`, which gates rules 2 and 3's community check on
 both paths.
 
@@ -84,7 +84,7 @@ def make_sticky(community, user, ap_id, **kwargs):
     """A Post that instance_sticky_posts() will fetch: instance_sticky=True,
     deleted=False (factory default), status=1 (factory default, > 0). Those
     three are exactly instance_sticky_posts()'s WHERE clause
-    (app/utils.py:3966-3967, 3974), so every fixture below passes it
+    (app/utils.py:3973-3974, 3981), so every fixture below passes it
     uncontested -- what get_instance_stickies then does with the post is
     the thing under test.
     """
@@ -113,9 +113,9 @@ def ids_of(posts):
 
 
 class TestAllCommunitiesFlag:
-    """all_communities (app/utils.py:3993-3996): True iff community_ids is
+    """all_communities (app/utils.py:4000-4003): True iff community_ids is
     exactly [-1]. It short-circuits BOTH community-membership rules (anon
-    rule 2 at :4006-4007, authenticated rule 3 at :4025-4026) via `not
+    rule 2 at :4013-4014, authenticated rule 3 at :4032-4033) via `not
     all_communities`. Mutation that fails only these two presence tests:
     hardcoding `all_communities = False` (or deleting the `community_ids[0]
     < 0` half of the condition). The FALSE side of this flag is already
@@ -155,7 +155,7 @@ class TestAllCommunitiesFlag:
 
 
 class TestAnonymousNsfwFilter:
-    """app/utils.py:4002-4004: `if not CONTENT_WARNING: if post.nsfw or
+    """app/utils.py:4009-4011: `if not CONTENT_WARNING: if post.nsfw or
     post.nsfl: continue`. This class trips the nsfw half; TestAnonymousNsfl
     Filter below trips the nsfl half of the same `or`, and
     TestAnonymousContentWarningConfigured proves the outer `not
@@ -193,7 +193,7 @@ class TestAnonymousNsfwFilter:
 
 
 class TestAnonymousNsflFilter:
-    """The nsfl half of app/utils.py:4002-4004's `post.nsfw or post.nsfl`.
+    """The nsfl half of app/utils.py:4009-4011's `post.nsfw or post.nsfl`.
     Mutation that fails only the absent test: narrowing the condition to
     `post.nsfw` alone (dropping `or post.nsfl`) -- an nsfl-only post would
     then sail through unblocked while TestAnonymousNsfwFilter's tests stay
@@ -225,7 +225,7 @@ class TestAnonymousNsflFilter:
 
 
 class TestAnonymousContentWarningConfigured:
-    """The outer guard at app/utils.py:4002, isolated from the inner nsfw/
+    """The outer guard at app/utils.py:4009, isolated from the inner nsfw/
     nsfl check the two classes above cover. Both tests restore
     app.config['CONTENT_WARNING'] in a `finally`, since it is process-global
     config, not a per-request value -- the same pattern
@@ -256,7 +256,7 @@ class TestAnonymousContentWarningConfigured:
 
 
 class TestAnonymousCommunityNotInView:
-    """app/utils.py:4006-4007: `if post.community_id not in community_ids
+    """app/utils.py:4013-4014: `if post.community_id not in community_ids
     and not all_communities: continue`. all_communities is False throughout
     (community_ids is a real id, not [-1]), so this isolates the membership
     check from the flag TestAllCommunitiesFlag covers. Mutation that fails
@@ -291,7 +291,7 @@ class TestAnonymousCommunityNotInView:
 
 
 class TestAuthenticatedCommunityNotInView:
-    """The authenticated twin of app/utils.py:4025-4026 -- same predicate
+    """The authenticated twin of app/utils.py:4032-4033 -- same predicate
     shape as the anonymous rule above, but a SEPARATE `continue` statement
     on a separate code path, so it needs its own pair rather than inheriting
     coverage from the anonymous class. Mutation directions mirror
@@ -331,7 +331,7 @@ class TestAuthenticatedCommunityNotInView:
 
 
 class TestAuthenticatedHideNsfl:
-    """app/utils.py:4028-4029: `if current_user.hide_nsfl == 1 and
+    """app/utils.py:4035-4036: `if current_user.hide_nsfl == 1 and
     post.nsfl: continue`. Mutation that fails only the absent test: deleting
     this `continue`. Mutation that fails only the present test: dropping
     the `and post.nsfl` half so the continue fires for every post once
@@ -369,7 +369,7 @@ class TestAuthenticatedHideNsfl:
 
 
 class TestAuthenticatedHideNsfw:
-    """app/utils.py:4031-4032: `if current_user.hide_nsfw == 1 and
+    """app/utils.py:4038-4039: `if current_user.hide_nsfw == 1 and
     post.nsfw: continue`. Mutation directions mirror
     TestAuthenticatedHideNsfl's.
     """
@@ -405,10 +405,10 @@ class TestAuthenticatedHideNsfw:
 
 
 class TestAuthenticatedHideReadPosts:
-    """app/utils.py:4034-4035: `if post.id in read_post_ids: continue`,
-    where read_post_ids is populated (:4015-4018) only when
+    """app/utils.py:4041-4042: `if post.id in read_post_ids: continue`,
+    where read_post_ids is populated (:4022-4025) only when
     current_user.hide_read_posts is truthy -- otherwise it stays `[]`
-    (:4019-4020) and this `continue` can never fire. Both tests set
+    (:4026-4027) and this `continue` can never fire. Both tests set
     hide_read_posts=True so the query that fills read_post_ids actually
     runs; they differ only in whether the post is marked read via the
     mark_post_read factory (which inserts into the same `read_posts` table
@@ -452,8 +452,8 @@ class TestAuthenticatedHideReadPosts:
 
 
 class TestAuthenticatedHiddenPost:
-    """app/utils.py:4037-4038: `if post.id in hidden_post_ids: continue`.
-    hidden_post_ids (:4012-4014) is queried unconditionally for every
+    """app/utils.py:4044-4045: `if post.id in hidden_post_ids: continue`.
+    hidden_post_ids (:4019-4021) is queried unconditionally for every
     authenticated viewer, unlike read_post_ids, so no extra flag is needed
     to reach this rule -- only whether hide_post was called for this post.
     This is the rule the task-6 brief names explicitly for the Step-3
@@ -495,16 +495,16 @@ class TestAuthenticatedHiddenPost:
 
 
 class TestInstanceStickyPostsSortBranches:
-    """instance_sticky_posts's elif chain (app/utils.py:3975-3986), which
+    """instance_sticky_posts's elif chain (app/utils.py:3982-3993), which
     picks the ORDER BY. This is query assembly, not a visibility rule, so
     it does not get a rule-by-rule presence/absence pair like the classes
     above -- but every branch this suite's other classes leave unexercised
     (they all pass sort='new') is covered here, with an assertion on the
     actual resulting order rather than just executing the line. 'new'
-    itself (:3981-3982) is exercised by every other class in this file and
+    itself (:3988-3989) is exercised by every other class in this file and
     is not repeated here.
 
-    :3975's condition is `sort == '' or sort == 'hot'` -- a compound `or`
+    :3982's condition is `sort == '' or sort == 'hot'` -- a compound `or`
     where branch coverage of the whole `if` is satisfied by 'hot' alone,
     exactly the trap this file's TestAnonymousNsfwFilter/
     TestAnonymousNsflFilter split rule 1's `post.nsfw or post.nsfl` to
@@ -621,9 +621,9 @@ class TestInstanceStickyPostsSortBranches:
         assert ids_of(posts) == [fresh.id, stale.id]
 
     def test_an_unrecognized_sort_still_returns_every_matching_sticky(self, app, db_session):
-        """None of the six `if`/`elif` conditions at :3975-3986 match, so
+        """None of the six `if`/`elif` conditions at :3982-3993 match, so
         the query falls through with no ORDER BY applied at all (the
-        3985->3987 branch coverage.py reports as otherwise unexercised).
+        3992->3994 branch coverage.py reports as otherwise unexercised).
         This does not raise and does not drop posts -- it just leaves their
         order unspecified, which is why this test asserts membership rather
         than a sequence, unlike the five branch tests above it.

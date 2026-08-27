@@ -3806,9 +3806,16 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
     from app import redis_client
     if not community_sql and (community_ids is None or len(community_ids) == 0):
         return []
-    if result_id:
-        if redis_client.exists(result_id):
-            return json.loads(redis_client.get(result_id))
+    # result_id is client-controlled (every web caller reads it from ?result_id= and
+    # echoes it back into its pagination links), while the cached value is a list of
+    # post ids filtered for ONE viewer's authorisation that nothing downstream
+    # re-checks. So the key is namespaced per user, and the SAME key governs both the
+    # read below and the write at the end of this function -- two separate conditions
+    # could disagree, and did: the read used to require a non-empty result_id while
+    # the write required only an authenticated user.
+    cache_key = f'feed:{current_user.id}:{result_id}' if result_id and current_user.is_authenticated else None
+    if cache_key and redis_client.exists(cache_key):
+        return json.loads(redis_client.get(cache_key))
 
     params = {}                 # parameters provided to the SQL query
     post_id_sql = 'SELECT p.id, p.cross_posts, p.user_id, p.reply_count FROM "post" as p\nINNER JOIN "community" as c on p.community_id = c.id\n'
@@ -3953,8 +3960,8 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
     post_ids = db.session.execute(text(final_post_id_sql), params).all()
     post_ids = dedupe_post_ids(post_ids, limit_to_visible=(community_ids[0] != -1))
 
-    if current_user.is_authenticated:
-        redis_client.set(result_id, json.dumps(post_ids), ex=86400)  # 86400 is 1 day
+    if cache_key:  # same key the read above used; see where it is derived
+        redis_client.set(cache_key, json.dumps(post_ids), ex=86400)  # 86400 is 1 day
     return post_ids
 
 

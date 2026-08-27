@@ -330,7 +330,7 @@ every viewer not testing one of those two preferences.
 Carried forward as follow-up candidates, not acted on here per this
 campaign's report-don't-fix rule:
 
-- **`app/utils.py:4337` and `:4344`** (verified current against the file at
+- **`app/utils.py:4344` and `:4351`** (verified current against the file at
   commit time) are dead as within-loop duplicate filters inside
   `possible_communities` -- their `if c.id not in already_added:` guards can
   never take their False arm, because `CommunityMember`'s primary key is the

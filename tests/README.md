@@ -350,33 +350,88 @@ The two real gaps, now closed:
   very next branch index `community_ids[0]` on an empty list and raise
   `IndexError`, which is what makes the mutation observable rather than merely
   changing a return value.
-- **The Redis cache-HIT read path** (`app/utils.py:3794-3798`). Task 1 proved
+- **The Redis cache-HIT read path** (`app/utils.py:3801-3803`). Task 1 proved
   only the cache-WRITE side. `test_a_cached_result_id_is_served_without_reaching_the_database`
   primes a result_id's cached value through `redis_double` to something a live
   query could never produce, then asserts the STALE cached value comes back --
   discriminating a real cache hit from a test that would pass either way.
-  `test_an_authenticated_call_with_an_empty_result_id_still_writes_a_wasted_cache_entry`
-  closes the one remaining branch in this area (the outer `if result_id:`'s
-  False arm) and, in the same test, proves the sub-project's suspected defect
-  #1 is LIVE rather than theoretical: an authenticated call with an empty
-  `result_id` still writes a key literally named `''`. `grep -rn
-  'get_deduped_post_ids(' app/` shows two real call sites passing a literal
-  `''`: `app/feed/routes.py:719` (`show_feed_rss`) and `app/topic/routes.py:230`
-  (`show_topic_rss`). Neither route carries `@login_required`, so most
-  requests are anonymous, but neither excludes an authenticated session
-  either -- a logged-in browser opening either RSS URL reaches this exact
-  path. Reported, not fixed.
+  `test_an_authenticated_call_with_an_empty_result_id_writes_no_cache_entry`
+  closes the one remaining branch in this area (the False arm of the cache-key
+  condition). It used to be named
+  `..._still_writes_a_wasted_cache_entry` and asserted the OPPOSITE, proving the
+  sub-project's suspected defect #1 was live: an authenticated call with an empty
+  `result_id` wrote a key literally named `''` that the read path could never
+  return. That defect is now FIXED -- see "The feed cache key" below -- so the
+  test was replaced in place with the assertion that now holds, same call, same
+  fixtures, same branch covered.
 
 `get_deduped_post_ids` now carries exactly three documented-uncovered regions,
-all legitimately out of this sub-project's scope and unchanged by the fix round:
-the `hashtag` filter (`3826-3830`), the anonymous-viewer private-community
-branch (`3853-3854`), and the unrecognized-`sort` fallthrough (`3932->3936`,
-mirrored in `post_ids_to_models` at `3959->3961`). `instance_sticky_posts` and
+all legitimately out of this sub-project's scope and unchanged by the fix round
+or by the cache-key fix below: the `hashtag` filter (`3833-3837`), the
+anonymous-viewer private-community branch (`3860-3861`), and the
+unrecognized-`sort` fallthrough (`3939->3943`, mirrored in `post_ids_to_models`
+at `3966->3968`). Those line numbers moved by seven when the cache-key fix landed
+and are re-derived from `coverage.json`, not carried forward.
+`instance_sticky_posts` and
 `get_instance_stickies` are 100% statement and branch. `possible_communities`
-carries its two documented-dead branches (`4337->4336`, `4344->4343`), unchanged.
+carries its two documented-dead branches (`4344->4343`, `4351->4350`), unchanged.
+
+### The feed cache key
+
+`get_deduped_post_ids`'s Redis key is `feed:<user id>:<result_id>`, derived ONCE
+into a local `cache_key` that governs both the read near the top of the function
+and the write at the end, and set to `None` unless `result_id` is non-empty AND
+the caller is authenticated. Read `tests/test_feed_cache.py` before changing any
+of it; that file is the regression suite and carries the reasoning.
+
+It was `result_id` alone, which is three defects in one line:
+
+- **A cross-user leak.** `result_id` is CLIENT-CONTROLLED -- all three web callers
+  read it from `?result_id=` and echo it back into the pagination links they
+  render (`app/main/routes.py:83,161,163`; `app/feed/routes.py:419,484,487`;
+  `app/topic/routes.py:38,107,109`), so a shared page-2 link is enough for two
+  sessions to present the same one. The cached value is a list of post ids
+  filtered for ONE viewer's authorisation, and `post_ids_to_models` re-filters
+  nothing -- it renders whatever ids it is handed. So the key was, in effect, the
+  access-control boundary for the whole feed, with no user component and a 24h
+  TTL. It leaked in both directions: the second reader got the first reader's
+  feed, and a chosen `result_id` seeded what a victim's next page would render.
+- **Anonymous readers read it too.** The read guard was `if result_id:`, which
+  does not exclude an anonymous session, so a logged-out request could be served
+  an authenticated user's filtered ids.
+- **A wasted write.** The read guard (`if result_id:`) and the write guard (`if
+  current_user.is_authenticated:`) were different conditions, so the two RSS
+  callers that pass a literal `''` still wrote a 24h key named `''`.
+
+One derived key closes all three, because the read and the write can no longer
+disagree. `feed:` collides with no existing namespace: the other
+`redis_client` keys in `app/` are `pause_federation`, `cowbell`, raw activity ids
+(`app/activitypub/routes.py:677-680`), `ban:<ip>`, `captcha_<uuid>`,
+`votes_cast_<date>_<user id>` and `import:<user id>:<gibberish>`. `make_cache_key`
+(`app/utils.py:224`) is a Flask-Caching key function over `request.url`, a
+different store entirely.
+
+No backward compatibility with pre-fix entries was attempted, deliberately: they
+carry a 24h TTL and expire on their own.
+
+**Still open, found while fixing the above and NOT fixed here.** The
+private-community filter is inside a walrus guard:
+
+    if private_community_ids := community_membership_private(current_user.id):
+        post_id_where.append('(c.private is false OR c.id IN :private_community_ids) ')
+
+A viewer who belongs to no private community at all makes that guard falsy, so
+the clause is never appended and posts from EVERY private community appear in
+their feed. Verified by probe against this suite: a private community, one member
+(Alice) and one non-member (Bob) with no private memberships -- Bob's
+`get_deduped_post_ids` returns Alice's private-community post. This is why
+`tests/test_feed_cache.py`'s leak test discriminates on `hidden_posts` (appended
+unconditionally for every authenticated viewer) rather than on private-community
+membership, which would not have discriminated at all.
 
 **The Redis-write decision (Task 1).** `get_deduped_post_ids` ends with
-`redis_client.set(result_id, ..., ex=86400)` for every authenticated call --
+`redis_client.set(cache_key, ..., ex=86400)` for every authenticated call with a
+non-empty `result_id` --
 unbounded growth in the test Redis, which nothing but `--down` clears, and this
 campaign forbids `--down` because it forces a replay of ~269 migrations. The
 decision was to widen `redis_double` (`tests/conftest.py`) to also patch
