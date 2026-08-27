@@ -365,11 +365,12 @@ campaign's report-don't-fix rule:
 `docs/superpowers/specs/2026-08-27-coverage-utils-links-design.md`. Six tasks
 covered `domain_from_url`, `remove_tracking_from_link`, `fixup_url`,
 `rewrite_href` and `apply_feed_url_rules`, then fuzzed the first three and
-ratcheted the floor. Re-measured (never carried forward -- this campaign has
-now been wrong on a hand-carried figure seven times, once inside this very
-sub-project, when a previous implementer's stale-line-number brief was
-mistakenly told its numbers were stale when they had already been corrected)
-at **71.4776%** blended `percent_covered`, up from 1b-ii's 67.6478%. Rounded
+ratcheted the floor. Re-measured (never carried forward) at **71.4776%**
+blended `percent_covered`, up from 1b-ii's 67.6478%. This campaign has now had
+seven hand-carried counts turn out wrong on re-derivation -- one of them
+inside this very sub-project, when a reviewer told a previous implementer
+that its brief's line numbers were stale after they had, in fact, already
+been corrected. Rounded
 down, the floor moved from 67 to 71, proved to bite in both directions: set to
 72 the ratchet exits 1 naming `app/utils.py`; restored to 71 it exits 0 with
 `All 3 module floors met.` Full detail, including the per-function coverage
@@ -599,7 +600,7 @@ with the report-don't-fix rule:
 ### YouTube's URL formats are observed behaviour, not a specification
 
 `fixup_url`'s YouTube matrix (`/shorts/<id>`, `/watch?v=<id>`, `/playlist`
-with `list` in the query, `/post/<id>`, and the four recognised hostnames
+with `list` in the query, `/post/<id>`, and the five recognised hostnames
 `www.youtube.com` / `m.youtube.com` / `music.youtube.com` / `youtube.com` /
 `youtu.be`) is pinned in `tests/test_fixup_url.py` as OBSERVED behaviour --
 derived from the shapes the production code already handles -- not as an

@@ -49,24 +49,59 @@ NUL character parses without error but is then rejected by the Postgres
 driver when used as a query parameter ("A string literal cannot contain NUL
 (0x00) characters"), which is a DB round trip and so cannot occur in the
 other two, DB-free functions. This finding is deliberately NOT fixed here --
-see the "known, reported crash class" comment below for how it is kept from
-turning this file red -- and is written up in
+see `_is_known_urlparse_defect` below for how it is kept from turning this
+file red -- and is written up in
 docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md.
+
+`_is_known_urlparse_defect` matches by MESSAGE, not by catching `ValueError`
+broadly, and that is deliberate: a blanket `except ValueError` would also
+absorb any OTHER, unrelated `ValueError`-shaped defect these functions might
+have -- silently counting a genuinely new finding as more of this one. Only
+the message shapes named above are treated as this known, already-reported
+refusal; anything else propagates and fails the test, which is what makes it
+a real, new finding rather than noise from this harness.
+
+None of the three tests below asserts on how MANY inputs hit that known
+defect. Doing so (`assert skipped > 0`) would mean fixing the urlparse
+`ValueError` -- the exact "report it, do not fix it" finding above -- turns
+this fuzz suite red the day someone acts on the report. Instead, each test
+asserts `checked + skipped [+ excluded] == ITERATIONS`: every generated input
+was accounted for by exactly one path, which proves the loop ran and the
+property was evaluated on every non-excluded input, without depending on the
+defect still existing. If the urlparse defect is ever fixed, `skipped` drops
+to 0, `checked` rises to take its place, and the invariant still holds
+unchanged -- nothing here needs editing. `skipped` is still recorded and
+printed per test, so it stays visible as data even though nothing asserts on
+its value.
 """
 import random
+from urllib.parse import urlparse
 
 import atheris
-from urllib.parse import urlparse
 
 from app.utils import domain_from_url, fixup_url, remove_tracking_from_link
 
 ITERATIONS = 500
 
-# The known, reported crash class described in the module docstring above.
-# Caught here, not fixed in app/utils.py, so this harness pins the SEARCH
-# (it keeps running against fresh random input on every suite run) without
-# the suite going red on a defect this task is scoped to report, not resolve.
-_KNOWN_UNCAUGHT_URLPARSE_ERRORS = (ValueError,)
+# Message fragments from the ValueError shapes this task's fuzzing found and
+# reported (see "A crash this fuzzing found" above) -- urlparse's own
+# malformed-netloc refusals, plus (domain_from_url only) a NUL byte reaching
+# the Postgres driver as a query parameter. Not fixed in app/utils.py.
+_KNOWN_URLPARSE_DEFECT_MESSAGE_FRAGMENTS = (
+    'Invalid IPv6 URL',
+    'does not appear to be an IPv4 or IPv6 address',
+    'contains invalid characters under NFKC normalization',
+    'cannot contain NUL',
+)
+
+
+def _is_known_urlparse_defect(exc: Exception) -> bool:
+    """True only for the exact reported-not-fixed ValueError shapes above.
+    A DIFFERENT ValueError, or any other exception type, returns False here
+    and is left to propagate out of the calling test -- see the module
+    docstring for why matching by message rather than by type matters."""
+    return isinstance(exc, ValueError) and any(
+        fragment in str(exc) for fragment in _KNOWN_URLPARSE_DEFECT_MESSAGE_FRAGMENTS)
 
 
 def _random_url(fdp: atheris.FuzzedDataProvider) -> str:
@@ -119,7 +154,9 @@ class TestDomainFromUrlHasNoHostConfusion:
         for url in _fuzzed_urls(seed=1234, count=ITERATIONS):
             try:
                 domain = domain_from_url(url, create=True)
-            except _KNOWN_UNCAUGHT_URLPARSE_ERRORS:
+            except ValueError as e:
+                if not _is_known_urlparse_defect(e):
+                    raise
                 skipped += 1
                 continue
 
@@ -142,23 +179,29 @@ class TestDomainFromUrlHasNoHostConfusion:
                 f'was recorded as {domain.name!r}, expected {expected!r}')
             checked += 1
 
-        # Both counters non-zero: proves the fuzzer is reaching both the happy
-        # path and the known-crash path, not merely retreading one of them.
+        print(f'domain_from_url: {checked} checked, {skipped} skipped (known urlparse defect)')
+        # Defect-independent: every input was accounted for by exactly one
+        # path, proving the loop ran and the property was evaluated -- this
+        # holds whether or not the known urlparse defect still exists (see
+        # the module docstring). checked > 0 additionally guards against an
+        # over-broad match silently swallowing every iteration.
+        assert checked + skipped == ITERATIONS
         assert checked > 0
-        assert skipped > 0
 
 
 class TestRemoveTrackingFromLinkHasNoHostConfusion:
     """Every host except youtu.be must come back byte-for-byte identical
-    (app/utils.py:3105's `else: return url`); youtu.be is the one documented
-    alias, and only ever becomes youtube.com."""
+    (app/utils.py:3104-3105's `else: / return url`); youtu.be is the one
+    documented alias, and only ever becomes youtube.com."""
 
     def test_no_unhandled_exception_and_no_host_confusion(self, app):
         checked = skipped = 0
         for url in _fuzzed_urls(seed=5678, count=ITERATIONS):
             try:
                 result = remove_tracking_from_link(url)
-            except _KNOWN_UNCAUGHT_URLPARSE_ERRORS:
+            except ValueError as e:
+                if not _is_known_urlparse_defect(e):
+                    raise
                 skipped += 1
                 continue
 
@@ -173,8 +216,9 @@ class TestRemoveTrackingFromLinkHasNoHostConfusion:
                     f'host confusion: non-youtu.be link {url!r} was altered to {result!r}')
             checked += 1
 
+        print(f'remove_tracking_from_link: {checked} checked, {skipped} skipped (known urlparse defect)')
+        assert checked + skipped == ITERATIONS
         assert checked > 0
-        assert skipped > 0
 
 
 class TestFixupUrlParsingHasNoHostConfusion:
@@ -196,7 +240,9 @@ class TestFixupUrlParsingHasNoHostConfusion:
             try:
                 with app.test_request_context('/'):
                     thumbnail_url, embed_url = fixup_url(url)
-            except _KNOWN_UNCAUGHT_URLPARSE_ERRORS:
+            except ValueError as e:
+                if not _is_known_urlparse_defect(e):
+                    raise
                 skipped += 1
                 continue
 
@@ -219,6 +265,12 @@ class TestFixupUrlParsingHasNoHostConfusion:
                         f'{candidate!r}, resolving to host {candidate_host!r}')
             checked += 1
 
+        print(f'fixup_url: {checked} checked, {skipped} skipped (known urlparse defect), '
+              f'{excluded} excluded (peertube-shaped, DB/network)')
+        # Every generated input took exactly one of three paths: checked
+        # against the property, matched the known urlparse defect, or excluded
+        # as peertube-shaped. Defect-independent for the same reason as the
+        # other two tests -- fixing the urlparse ValueError only moves inputs
+        # from `skipped` to `checked`.
+        assert checked + skipped + excluded == ITERATIONS
         assert checked > 0
-        assert skipped > 0
-        assert excluded >= 0  # documents the guard fires at most rarely; never required to
