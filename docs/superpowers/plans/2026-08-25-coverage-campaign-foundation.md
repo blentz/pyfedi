@@ -313,7 +313,7 @@ git commit -m "test: add coverage ratchet and mocking dependencies"
 
 **The proof is `app/instance/util.py` reaching 100%.** Its `bulk_follow` calls `search_for_user`, which does a webfinger fetch then an actor fetch (`app/user/utils.py:113-135`). If that module cannot reach 100% with these fixtures, the fixtures are wrong and this task is not done.
 
-**A gotcha that will cost an hour if you hit it blind:** `get_request` (`app/utils.py:131`) calls `is_invalid_get_request_uri` first, which returns True for any host ending `.local` (`app/utils.py:5225`). The test app's own `SERVER_NAME` is `test.piefed.local`, which is fine because it is never fetched — but **any peer domain you invent must not end in `.local`**, or the request is rejected before `respx` ever sees it. Use a domain like `mastodon.cloud`.
+**A gotcha that will cost an hour if you hit it blind:** `get_request` (`app/utils.py:131`) calls `is_invalid_get_request_uri` first, which returns True for any host ending `.local` (`app/utils.py:5234`). The test app's own `SERVER_NAME` is `test.piefed.local`, which is fine because it is never fetched — but **any peer domain you invent must not end in `.local`**, or the request is rejected before `respx` ever sees it. Use a domain like `mastodon.cloud`.
 
 - [ ] **Step 1: Write the failing test**
 
