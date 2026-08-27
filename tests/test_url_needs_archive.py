@@ -74,19 +74,30 @@ class TestFalsyInput:
         assert url_needs_archive(None) is False
 
 
-class TestHostlessUrlReachesTheBareExcept:
-    """Pins the bare `except:` at app/post/util.py, which the fix left
-    untouched. Two different failure modes land there: 'not-a-url' parses
-    to a hostname of None, so `.lower()` raises AttributeError; 'https://[::1/x'
-    is malformed IPv6-in-brackets syntax, so `urlparse` itself raises
-    ValueError before `.hostname` is even read. Mutation that fails both:
-    removing the try/except entirely (there is no narrower mutation here --
-    deleting only the `.startswith('www.')` guard, for instance, would not
-    touch either path, since both fail earlier, at `.lower()` or at
-    `urlparse()` itself)."""
+class TestHostlessUrlReachesTheGuards:
+    """Two different failure modes, two named handlers, one per test.
+
+    `'not-a-url'` parses fine -- path='not-a-url', netloc='' -- but
+    `parsed_url.hostname` is None, so `.lower()` raises **AttributeError**.
+    `'https://[::1/x'` is malformed IPv6-in-brackets syntax, so **urlparse
+    itself** raises ValueError before `.hostname` is ever read.
+
+    This class used to be named `TestHostlessUrlReachesTheBareExcept` and said
+    the AttributeError arm was caught by a bare `except:`. It no longer is: that
+    clause is `except AttributeError:`, narrowed in the final fix wave (F4).
+    The tests are unchanged because the BEHAVIOUR is unchanged -- which is the
+    point of a narrowing, and what makes the pair below a discriminating check
+    of it rather than a restatement. Each test now fails if its OWN handler is
+    deleted, and neither is caught by the other's: deleting `except
+    AttributeError:` fails only the first, deleting `except ValueError:` fails
+    only the second. Under the old bare clause, deleting `except ValueError:`
+    failed nothing at all.
+    """
 
     def test_a_url_with_no_hostname_is_handled(self):
+        """The AttributeError arm."""
         assert url_needs_archive('not-a-url') is False
 
     def test_a_malformed_bracketed_host_is_handled(self):
+        """The ValueError arm."""
         assert url_needs_archive('https://[::1/x') is False
