@@ -635,6 +635,153 @@ and its member and moderator tests are the pair that rejects an over-broad
 `if community.private: abort(403)` -- which passes both of the other two tests in
 that file.
 
+### Sub-project 1c: `app/utils.py` link parsers
+
+`docs/superpowers/specs/2026-08-27-coverage-utils-links-design.md`. Six tasks
+covered `app/utils.py`'s five link-related functions -- `domain_from_url`,
+`remove_tracking_from_link`, `fixup_url`, `rewrite_href`, `apply_feed_url_rules`
+-- and added a fuzz harness for the first three. Tests:
+`tests/test_domain_from_url.py`, `tests/test_remove_tracking_from_link.py`,
+`tests/test_fixup_url.py`, `tests/test_rewrite_href.py`,
+`tests/test_apply_feed_url_rules.py`, `tests/test_link_parsers_fuzz.py`.
+
+**The `domain_from_url` fix.** Before Task 1's fix (commit `81a3e40e`), line 1443
+read `urlparse(url.lower().replace('www.', ''))` -- a blanket string replacement
+over the WHOLE url, before parsing, removing every occurrence of `www.` rather
+than a leading host label. `https://awww.evil.example/post/1` mangled to
+`aevil.example`, colliding with the unrelated host `aevil.example` in the same
+`Domain` row -- so banning one banned both. The fix moves the strip to AFTER
+parsing and scopes it to a `startswith('www.')` check on the hostname alone.
+**This changes future attribution only.** Existing `Domain` rows created under
+the old mangling are not migrated or backfilled -- an operator who banned a
+domain whose row was created pre-fix keeps that row's behaviour until a new row
+is created for the corrected hostname. This is a deliberate choice: backfilling
+would mean deciding what happens to `DomainBlock` rows, `post_count` totals and
+posts already attributed to the mangled name, a data migration out of
+proportion to a fix that just stops the bleeding. Recorded here so a later
+reader does not mistake the absence of a migration for an oversight.
+
+**Measured and floor.** Re-measured (not carried forward -- see the standing
+rule below) at **71.4776%** (`percent_covered`, the blended statement+branch
+figure from `coverage.json`, same as every earlier ratchet entry here), up from
+1b-ii's 67.6478%. Rounded down, the floor moved from **67 to 71**. Proved to
+bite in both directions against that `coverage.json`: set to 72 the ratchet
+exits 1 with `app/utils.py: 71.48% is below its floor of 72.00%`; restored to
+71 it exits 0 with `All 3 module floors met.` All five functions measure 100%
+statement and 100% branch coverage on their own line ranges (`domain_from_url`
+1442-1457, `remove_tracking_from_link` 3083-3105, `fixup_url` 3110-3167,
+`apply_feed_url_rules` 4486-4521, `rewrite_href` 4968-4991) -- with the caveat
+below about what 100% branch coverage does and does not prove.
+
+**Fuzzing (`tests/test_link_parsers_fuzz.py`).** Targets `domain_from_url`,
+`remove_tracking_from_link`, and fixup_url's YouTube-matrix parsing (never its
+peertube branch at 3115-3129, which performs a DB query and a live HTTP GET and
+is excluded by construction). Property: no unhandled exception, and no host
+confusion -- the output's host must be traceable to the input's host, at most
+`www.`-stripped or youtu.be-aliased. Uses `atheris.FuzzedDataProvider` as a
+structured random-bytes decoder over a fixed-seed `random` stream, NOT
+`atheris.Fuzz()` -- the coverage-guided libFuzzer campaign machinery installs
+its own bytecode tracing and must never run under `--cov` (see "Fuzzing"
+above), and this file is collected by the very suite run that measures
+coverage. 500 iterations per function (1500 total), comfortably under
+pytest.ini's 60s per-test timeout (measured at well under a second per
+function including `domain_from_url`'s DB round trips) while exercising every
+generator branch many times over.
+
+It found a real, unfixed defect, reported per this campaign's rule and NOT
+fixed here: none of the three functions catches the `ValueError` Python's own
+`urlparse` raises for a malformed netloc -- an unbalanced IPv6 bracket
+("Invalid IPv6 URL"), a host that fails urllib's NFKC homograph-confusability
+check, or (for `domain_from_url` specifically, one DB round trip further) a
+hostname containing a literal NUL byte, which parses fine but is then rejected
+by the Postgres driver as a query parameter. A submitted post link containing
+any of these raises, uncaught, out of `domain_from_url`,
+`remove_tracking_from_link` or `fixup_url` alike. The committed test catches
+this specific, documented crash class around each function call so the suite
+stays green while the search keeps running on every future run; anything else
+escaping is a genuinely new finding.
+
+**A bare `except:` blocks mutation testing (Task 3).** `app/utils.py:3126` and
+`:3128`, in `fixup_url`'s peertube branch, catch everything -- including
+`KeyboardInterrupt` and `SystemExit`. Concretely: with the netloc guard at 3117
+mutated wide (`if True:`), the brief's own
+`test_an_unknown_host_makes_no_request` passed unchanged, because with no
+`http_mock` route registered `get_request` raised respx's own
+`AllMockedAssertionError`, and the bare `except:` at 3128 swallowed that
+exception before it ever reached an assertion -- so the test's "makes no
+request" claim was not actually being verified by that test alone. A bare
+`except:` does not merely hide production failures; it makes the code it
+wraps resistant to mutation testing, including mutations that trip
+test-infrastructure errors rather than application ones. Reported, not fixed.
+
+**Guard-level vs. dispatch-level mutations (Task 4, `rewrite_href`).** In an
+`if`/`elif`/`elif`/`else` chain, a mutation to a GUARD inside an already-selected
+arm's body (e.g. the `not community.is_local()` check, or the inner
+`if post_reply:`) stays narrow, because every other arm has already been
+foreclosed by the dispatch chain before that guard ever runs. A mutation to a
+DISPATCH CONDITION itself (the `if`/`elif` tests that choose which arm runs,
+e.g. the URL-shape check at line 4969) goes wide, because it changes WHICH arm
+is selected, stealing inputs that would otherwise have reached a different,
+later arm's tests entirely -- the same chain-geometry hazard this campaign's
+guidance already names for `continue` chains, applying identically to an
+`if`/`elif` dispatch. Confirmed by pairing on the post rule itself: neutralizing
+its own return arms while leaving its dispatch condition untouched (narrow)
+failed 2 of 11 tests, both inside its own test class; over-broadening that same
+dispatch condition to `if True:` (wide) failed 4 of 11, spanning three of the
+other rules' classes with zero overlap against the narrow set. Radius alone is
+not the signal -- the mutation's class determines the expected radius, and
+pairing wide with narrow on the same rule
+is what tells chain geometry apart from fixture coupling.
+
+**Assert the message, not just the count (Task 5).** When several rejection
+paths in the same function all return `False` and append one error to the same
+list, a test asserting only `is False` plus an error count of 1 cannot say
+WHICH path rejected -- two different guards can produce the same
+return-value-and-count shape for the same input. `apply_feed_url_rules`'s dash
+guard (`app/utils.py:4487`) and its downstream regex guard both reject `'-'`
+the same way for that reason; disabling the dash guard alone left the same
+input failing the regex two lines later, so the mutation initially survived
+undetected until the test was changed to assert the exact error message
+(`'- cannot be in Url. Use _ instead?'`).
+
+**The username-regex probe (Task 5).** `apply_feed_url_rules`'s private-mode
+branch (`app/utils.py:4502`) builds
+`r'^[a-zA-Z0-9_]+(?:/' + current_user.user_name.lower() + ')?$'` by
+interpolating `current_user.user_name` into a regex, unescaped. The
+self-registration path is closed:
+`RegistrationForm.validate_user_name` (`app/auth/forms.py:55-60`) rejects any
+username outside `^[a-zA-Z0-9_]+$` before it can reach a `User` row at all. But
+`AddUserForm.validate_user_name` (`app/admin/forms.py:308-319`), the
+ADMIN-created-user path, checks only for a literal `'@'` -- no charset
+restriction -- so an admin-created username such as `a.b` reaches
+`current_user.user_name` with a live regex metacharacter. `a.b`'s `.` then
+matches "any character" instead of a literal dot, so a private feed url
+`myfeed/aXb` (not that user's real `<feed>/<username>`) wrongly validates
+against user `a.b`'s optional-suffix group -- letting that user claim a
+feed url in a namespace that reads as someone else's. Demonstrated directly
+against `apply_feed_url_rules` (bypassing the admin form's HTTP path, driving
+only the DB state it can produce) by
+`TestUsernameRegexMetacharacterProbe::test_username_regex_metacharacters_are_not_escaped`
+in `tests/test_apply_feed_url_rules.py`. `re.escape` on the interpolated
+segment would close it. Reported, not fixed.
+
+**Coverage cannot see inside strings, again.** The same blind spot 1b-ii found
+in a SQL predicate applies here to regex alternations and URL-matching string
+literals: a `100%` branch reading on `apply_feed_url_rules` means the `if`
+that builds the private-mode regex was taken, not that the regex it built is
+correct for every username. The username-regex probe above is exactly that
+gap made concrete -- and it is why "100% branch" is read throughout this
+sub-project's write-ups as "every Python branch that runs", never as "every
+string this code produces behaves correctly".
+
+**YouTube's URL formats have no specification.** `fixup_url`'s YouTube-shape
+expectations (`/shorts/`, `/watch?v=`, `/playlist`, `/post/`, the four
+YouTube hostnames) are derived from the formats the production code already
+handles, and pinned as OBSERVED BEHAVIOUR in `tests/test_fixup_url.py` -- not
+as a specification YouTube publishes or guarantees. WHATWG's URL Standard and
+RFC 3986 govern the parsing underneath; YouTube's own path conventions do not,
+and could change without notice.
+
 ## Every user-influenced redirect target
 
 `is_safe_redirect_target` is the origin check. Three things reach it, and between
