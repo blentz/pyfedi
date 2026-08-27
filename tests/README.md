@@ -70,14 +70,26 @@ would also accept real database names like `attestation` or a URL whose query
 string merely mentions "test". Do not defeat that guard. `tests/test_conftest_guard.py`
 covers it.
 
-`tests/test_activitypub_util.py` predates this setup. It needs live network access
-and a hardcoded username, and is excluded from the standard run.
+`tests/test_activitypub_util.py` used to be excluded from the standard run with
+`--ignore=tests/test_activitypub_util.py`: it built its own app from its own
+`TestConfig` (so no `db_session`, no `redis_double` and no
+`block_outbound_http`), assumed a seeded developer database containing a user
+named `rimuadmin`, and fetched a real community from the real piefed.social. It
+now uses the shared fixtures like every other file here and runs in the standard
+suite; **there is no `--ignore` any more.** Read its module docstring before
+changing it: it records two findings about `find_actor_or_create_cached` that
+the rewrite had to work around.
+
+The dated plan documents under `docs/superpowers/plans/` still quote the old
+`--ignore` command. Those are records of runs that really did use it, with the
+pass counts of the day attached, so they are left alone -- the same rule this
+file applies to any other citation anchored to a past reading.
 
 ## Coverage
 
 `app/request_hooks.py` is held at 100% branch coverage:
 
-    ./run_tests.sh tests/ -q --ignore=tests/test_activitypub_util.py \
+    ./run_tests.sh tests/ -q \
         --cov=app.request_hooks --cov-branch --cov-report=term-missing --cov-fail-under=100
 
 Use the dotted module form (`--cov=app.request_hooks`), not a file path
@@ -233,7 +245,7 @@ one is a sub-project's deliverable, and lowering one to make a run pass defeats
 the ratchet. A module with no entry is ignored, so unfinished modules block
 nobody.
 
-    ./run_tests.sh tests/ -q --ignore=tests/test_activitypub_util.py --cov=app --cov-report=json && \
+    ./run_tests.sh tests/ -q --cov=app --cov-report=json && \
     podman-compose -f compose.test.yaml exec -T test-runner \
         python tests/check_coverage_floors.py coverage.json coverage_floors.ini
 
