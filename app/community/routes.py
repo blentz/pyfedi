@@ -1362,12 +1362,10 @@ def flip_community_theme_allowed(community_id:int,user_id:int):
     if community_theme_allowed:
         resp = make_response(_('Disable theme'))
         resp.headers["HX-Refresh"] = "true"
-        print(resp)
         return resp
     else:
         resp = make_response(_('Enable theme'))
         resp.headers["HX-Refresh"] = "true"
-        print(resp)
         return resp
 
 

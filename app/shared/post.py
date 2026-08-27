@@ -898,8 +898,6 @@ def report_post(post: Post, input, src, auth=None):
                                       targets=targets_data)
                 db.session.add(notify)
                 admin.unread_notifications += 1
-    else:
-        print('no notify_admins', notify_admins)
 
     # Lemmy doesn't process or generate Announce / Flag, so Flags also have to be sent from here to user's and community's instances
     if report_remote:
