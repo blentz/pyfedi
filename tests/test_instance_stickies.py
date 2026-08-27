@@ -503,7 +503,54 @@ class TestInstanceStickyPostsSortBranches:
     actual resulting order rather than just executing the line. 'new'
     itself (:3981-3982) is exercised by every other class in this file and
     is not repeated here.
+
+    :3975's condition is `sort == '' or sort == 'hot'` -- a compound `or`
+    where branch coverage of the whole `if` is satisfied by 'hot' alone,
+    exactly the trap this file's TestAnonymousNsfwFilter/
+    TestAnonymousNsflFilter split rule 1's `post.nsfw or post.nsfl` to
+    avoid. test_empty_string_sort_also_orders_by_ranking_then_posted_at
+    below exercises the `''` operand on its own terms, same shape as
+    test_hot_sort_orders_by_ranking_then_posted_at. Mutation that fails
+    only the new test: deleting `sort == '' or ` from the condition (left
+    with `if sort == 'hot':`) -- `''` would then match no branch and fall
+    through with no ORDER BY applied, same as
+    TestInstanceStickyPostsSortBranches's own unrecognized-sort case below.
+
+    Four posts, not two, and their `ranking` values are deliberately NOT
+    monotonic with creation order (third-created gets the highest ranking,
+    second-created the lowest). A 2-post fixture whose higher-ranked post
+    also happens to be the later insert cannot tell "sorted by ranking"
+    apart from "returned in whatever order an unordered query happens to
+    come back in" -- and an unordered query's order is genuinely
+    unspecified by SQL, not merely unasserted: while proving out this
+    mutation, the same 2-post shape failed as expected run alone
+    (`ids_of(posts) == [1, 2]`, ascending insertion order, wrong) but
+    spuriously PASSED when run after this file's other 25 tests (the
+    now-unordered query happened to come back as [2, 1], matching the
+    sorted expectation by coincidence of physical row layout, not because
+    the code was correct). Neither ascending-id nor descending-id order --
+    the two physical orders actually observed -- equals this fixture's
+    ranking-descending order, so the assertion below discriminates the
+    mutation regardless of which one an unordered scan returns.
     """
+
+    def test_empty_string_sort_also_orders_by_ranking_then_posted_at(self, app, db_session):
+        make_instance('sortemptyhot.example')
+        author = make_user(None, 'sortemptyhotauthor', local=True)
+        community = make_community('sortemptyhotcomm')
+        first = make_sticky(community, author, 'https://sortemptyhot.example/posts/1')
+        second = make_sticky(community, author, 'https://sortemptyhot.example/posts/2')
+        third = make_sticky(community, author, 'https://sortemptyhot.example/posts/3')
+        fourth = make_sticky(community, author, 'https://sortemptyhot.example/posts/4')
+        first.ranking = 3.0
+        second.ranking = 1.0
+        third.ranking = 4.0
+        fourth.ranking = 2.0
+        db.session.commit()
+
+        posts = anon_stickies(app, [community.id], sort='')
+
+        assert ids_of(posts) == [third.id, first.id, fourth.id, second.id]
 
     def test_hot_sort_orders_by_ranking_then_posted_at(self, app, db_session):
         make_instance('sorthot.example')
