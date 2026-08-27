@@ -1506,6 +1506,15 @@ def url_is_parseable(url) -> bool:
         return False
     try:
         urlparse(url)
+        # domain_from_url parses url.lower(), not the raw string, and every
+        # caller of this predicate hands the same string to it. Checking only
+        # one of the two would let a string that diverged between them be
+        # stored AND skip the banned-domain check, since domain_from_url would
+        # return None for it. No divergent shape is known -- raw and lowered
+        # agree for every case-changing codepoint in Python's Unicode tables,
+        # which tests/test_unparseable_url_ingress.py sweeps -- so this costs
+        # nothing today and removes the need to keep re-deriving that.
+        urlparse(url.lower())
     except ValueError:
         # The shapes urlparse itself refuses: an unbalanced IPv6 bracket
         # ('https://youtube.com[abc'), two '::' runs in an address, a netloc

@@ -56,12 +56,14 @@ the two alike.
 import re
 from urllib.parse import urlparse
 
+import httpx
+
 import pytest
 from flask import g, request
 from werkzeug.datastructures import MultiDict
 
 from app import db
-from app.activitypub.util import update_post_from_activity
+from app.activitypub.util import create_post, update_post_from_activity
 from app.community.forms import CreateLinkForm, CreateVideoForm
 from app.models import Domain, Post, Site
 from app.utils import is_video_hosting_site, url_is_parseable
@@ -436,3 +438,241 @@ class TestFederationDoesNotStoreAnUnparseableMicroblogLink:
         })
         stored = db.session.query(Post).filter_by(ap_id='https://ingress.example/notes/1').one()
         assert stored.url == 'https://example.com/story'
+
+
+# ---------------------------------------------------------------------------
+# Round 2: the twin ingress path, the None-dereference sweep, and events.
+# ---------------------------------------------------------------------------
+
+HOSTLESS = 'https:///x'
+
+# The keys Post.new()'s Event branch (app/models.py) reads unconditionally.
+EVENT_KEYS = {
+    'startTime': '2030-01-01T10:00:00',
+    'endTime': '2030-01-01T12:00:00',
+    'timezone': 'Europe/London',
+    'maximumAttendeeCapacity': 50,
+    'participantCount': 0,
+    'onlineLink': '',
+    'joinMode': 'free',
+    'externalParticipationUrl': '',
+    'anonymousParticipation': False,
+    'isOnline': False,
+    'buyTicketsLink': '',
+    'feeCurrency': 'GBP',
+    'feeAmount': 0,
+    'location': {'type': 'Place', 'name': 'somewhere'},
+}
+
+
+@pytest.fixture
+def federated_create(db_session):
+    """An author and a community for a federated Create.
+
+    The Site row comes from this module's `site` usefixtures mark;
+    Post.new() -> blocked_phrases() needs it.
+    """
+    author = make_user(make_instance('create.example'), 'createauthor')
+    community = make_community('createcomm')
+    return author, community
+
+
+def create_activity(obj_extra, seq=1):
+    """A Create wrapping a public, titled Note. Titled on purpose: the
+    microblog branch is covered separately, and a title keeps these tests on
+    the attachment path.
+    """
+    return {
+        'id': f'https://create.example/users/a/statuses/{seq}/activity',
+        'type': 'Create',
+        'to': ['https://www.w3.org/ns/activitystreams#Public'],
+        'object': {
+            'id': f'https://create.example/users/a/statuses/{seq}',
+            'type': 'Note',
+            'name': 'An entirely ordinary title',
+            'content': '<p>hello world, at some length so a title can be derived</p>',
+            'attributedTo': 'https://create.example/users/a',
+            'to': ['https://www.w3.org/ns/activitystreams#Public'],
+            **obj_extra,
+        },
+    }
+
+
+class TestTheFederatedCreatePathRefusesAnUnparseableUrl:
+    """`Post.new()` is the Create twin of `update_post_from_activity`, and it
+    was left unguarded when the Update path was fixed.
+
+    It writes a peer-supplied url from seven places (`app/models.py:1907,
+    :1931, :1933, :1937, :1943, :1952, :1959`) and then does
+    `domain = domain_from_url(post.url)` followed immediately by
+    `domain.notify_mods`. Since the urlparse guard landed, `domain_from_url`
+    returns None for an unparseable url rather than raising, so pre-fix this
+    is `AttributeError: 'NoneType' object has no attribute 'notify_mods'` on
+    peer-controlled input -- and the peer's whole post is lost.
+    """
+
+    def test_an_unparseable_attachment_href_does_not_raise(self, app, db_session, federated_create):
+        author, community = federated_create
+        post = create_post(False, community,
+                           create_activity({'attachment': [{'type': 'Link', 'href': CRAFTED}]}),
+                           author)
+        assert post is not None
+
+    def test_the_post_is_stored_with_no_url(self, app, db_session, federated_create):
+        author, community = federated_create
+        create_post(False, community,
+                    create_activity({'attachment': [{'type': 'Link', 'href': CRAFTED}]}, seq=2),
+                    author)
+        stored = db.session.query(Post).filter_by(
+            ap_id='https://create.example/users/a/statuses/2').one()
+        assert stored.url is None
+        assert stored.title == 'An entirely ordinary title'
+
+    def test_an_ordinary_attachment_href_is_still_stored(self, app, db_session, http_mock,
+                                                         federated_create):
+        """The Create-side over-correction guard. The HEAD is is_image_url's;
+        the path is unique to this test so mime_type_using_head's
+        @cache.memoize key cannot collide with another test's.
+        """
+        author, community = federated_create
+        url = 'https://example.com:8443/create-attachment'
+        http_mock.head(url).respond(200, headers={'Content-Type': 'text/html'})
+        create_post(False, community,
+                    create_activity({'attachment': [{'type': 'Link', 'href': url}]}, seq=3),
+                    author)
+        stored = db.session.query(Post).filter_by(
+            ap_id='https://create.example/users/a/statuses/3').one()
+        assert stored.url == url
+
+
+class TestADomainThatCannotBeResolvedIsNotDereferenced:
+    """The second half of the same shape, found by sweeping every
+    `domain_from_url(...)` call site rather than patching the two that were
+    reported.
+
+    `domain_from_url` returns None for a url that PARSES but has no hostname
+    ('https:///x' -- `urlparse` accepts it, `.hostname` is None), so a
+    parseability check alone does not stop the dereference. Three sites in
+    `app/shared/post.py` (`:192`, `:443`, `:566`) already guard with
+    `if domain:`; these two did not.
+    """
+
+    def test_a_hostless_attachment_href_does_not_crash_the_create_path(
+            self, app, db_session, http_mock, federated_create):
+        """httpx does build a request for a hostless url -- respx sees
+        `HEAD /x`, no host -- so is_image_url's probe has to be answered. It is
+        answered with a CONNECT ERROR, which is what production gets when it
+        tries to connect to no host; mime_type_using_head catches
+        httpx.HTTPError and returns '', is_image_url is False, and the call
+        reaches app/models.py's dereference the same way production does.
+        Answering with a 200 instead would be answering with something
+        production cannot produce, and httpx's cookie handling then raises
+        ValueError('unknown url type') on the hostless request URL.
+        """
+        author, community = federated_create
+        http_mock.route(method='HEAD', path='/x').mock(side_effect=httpx.ConnectError)
+        post = create_post(False, community,
+                           create_activity({'attachment': [{'type': 'Link', 'href': HOSTLESS}]},
+                                           seq=4),
+                           author)
+        assert post is not None
+
+    def test_a_hostless_attachment_href_does_not_crash_the_update_path(
+            self, app, db_session, http_mock, federated_post):
+        # A connect error, not a 200: see the sibling test above for why.
+        http_mock.route(method='HEAD', path='/x').mock(side_effect=httpx.ConnectError)
+        update_post_from_activity(federated_post, {
+            'id': 'https://ingress.example/activities/update/9',
+            'object': {
+                'id': federated_post.ap_id,
+                'type': 'Note',
+                'name': 'a post',
+                'content': '<p>body</p>',
+                'mediaType': 'text/html',
+                'attachment': [{'type': 'Link', 'href': HOSTLESS}],
+            },
+        })
+        stored = db.session.query(Post).filter_by(
+            ap_id='https://ingress.example/notes/1').one()
+        assert stored.title == 'a post'
+
+
+class TestFederatedEventUrlsAreCheckedToo:
+    """`Post.new()`'s Event branch (`app/models.py:2182`) assigns
+    `post.url = attachment_item['href']` AFTER the domain block above it, so
+    nothing validated it at all.
+
+    That is the interaction the two layers were supposed to close: a url
+    `CreateEventForm` refuses on submission still reached a template through
+    its federated copy, and only the render guards from 43138ac7 kept that
+    from being a 500.
+    """
+
+    def test_an_unparseable_event_link_is_not_stored(self, app, db_session, federated_create):
+        author, community = federated_create
+        create_post(False, community,
+                    create_activity({'type': 'Event',
+                                     'attachment': [{'type': 'Link', 'href': CRAFTED}],
+                                     **EVENT_KEYS}, seq=5),
+                    author)
+        stored = db.session.query(Post).filter_by(
+            ap_id='https://create.example/users/a/statuses/5').one()
+        assert stored.url == ''
+
+    def test_an_ordinary_event_link_is_still_stored(self, app, db_session, http_mock,
+                                                    federated_create):
+        author, community = federated_create
+        url = 'https://example.com:8443/event-link'
+        http_mock.head(url).respond(200, headers={'Content-Type': 'text/html'})
+        create_post(False, community,
+                    create_activity({'type': 'Event',
+                                     'attachment': [{'type': 'Link', 'href': url}],
+                                     **EVENT_KEYS}, seq=6),
+                    author)
+        stored = db.session.query(Post).filter_by(
+            ap_id='https://create.example/users/a/statuses/6').one()
+        assert stored.url == url
+
+
+class TestUrlIsParseableChecksTheLoweredFormToo:
+    """`domain_from_url` parses `url.lower()`, not the raw string. A string
+    that parsed raw but failed lowered would be accepted here and then get no
+    ban check at all, because `domain_from_url` would return None for it --
+    a silently skipped policy check rather than a crash.
+
+    `url_is_parseable` now checks both. The sweep below is what says that
+    costs nothing: over every case-changing codepoint in Python's Unicode
+    tables, in three netloc positions, the raw and lowered verdicts agree --
+    so the extra check rejects nothing the raw check accepted. If a future
+    CPython changes that, this fails and names the codepoint instead of
+    letting an over-correction ship silently.
+    """
+
+    @pytest.mark.parametrize('url', LEGITIMATE_URLS)
+    def test_no_legitimate_url_is_lost_to_the_extra_check(self, url):
+        assert url_is_parseable(url) is True
+        assert url_is_parseable(url.upper()) is True
+
+    def test_raw_and_lowered_agree_for_every_case_changing_codepoint(self):
+        templates = ('https://a{0}b.example/x', 'https://{0}.example/x', 'https://ex.{0}/x')
+        divergent = []
+        checked = 0
+        for cp in range(0x110000):
+            ch = chr(cp)
+            if ch.lower() == ch:
+                continue
+            for template in templates:
+                candidate = template.format(ch)
+                checked += 1
+                if _parses(candidate) != _parses(candidate.lower()):
+                    divergent.append((hex(cp), template))
+        assert checked > 4000, f'the sweep degenerated: only {checked} shapes checked'
+        assert divergent == [], f'raw/lowered divergence found: {divergent[:10]}'
+
+
+def _parses(url):
+    try:
+        urlparse(url)
+    except ValueError:
+        return False
+    return True

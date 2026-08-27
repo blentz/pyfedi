@@ -3151,9 +3151,15 @@ def update_post_from_activity(post: Post, request_json: dict):
             # rather than raising, and `new_domain.banned` would then be
             # 'NoneType' object has no attribute 'banned'.
             new_url = '' if post.type == POST_TYPE_EVENT else None  # exactly what new_url was initialised to
+        new_domain = None
         if new_url:
+            # `if new_domain and` for the same reason app/models.py's Post.new and
+            # the three sites in app/shared/post.py use it: domain_from_url returns
+            # None for a url whose host it cannot determine, and the parse guard
+            # above does not cover the hostless-but-parseable case ('https:///x'
+            # parses, .hostname is None). new_url is peer-supplied.
             new_domain = domain_from_url(new_url)
-            if new_domain.banned:
+            if new_domain and new_domain.banned:
                 db.session.commit()
                 return  # reject change to url if new domain is banned
         if old_url != new_url:
@@ -3194,7 +3200,7 @@ def update_post_from_activity(post: Post, request_json: dict):
 
                 # url domain
                 old_domain = domain_from_url(old_url) if old_url else None
-                if old_domain != new_domain:
+                if new_domain and old_domain != new_domain:
                     # notify about links to banned websites.
                     already_notified = set()  # often admins and mods are the same people - avoid notifying them twice
                     targets_data = {'gen': '0',

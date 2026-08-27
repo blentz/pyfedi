@@ -1870,7 +1870,8 @@ class Post(db.Model):
         from app.utils import allowlist_html, markdown_to_html, html_to_text, microblog_content_to_title, \
             microblog_content_to_link, blocked_phrases, get_setting, \
             is_image_url, is_video_url, domain_from_url, opengraph_parse, shorten_string, fixup_url, \
-            is_video_hosting_site, communities_banned_from, recently_upvoted_posts, blocked_users
+            is_video_hosting_site, communities_banned_from, recently_upvoted_posts, blocked_users, \
+            url_is_parseable
 
         microblog = False
         private = False
@@ -2000,6 +2001,16 @@ class Post(db.Model):
             alt_text = None
             post.url = request_json['object']['attachment']['url']
 
+        # Every write above this line takes a url straight from a REMOTE peer.
+        # One site for all of them, the Create twin of the guard in
+        # update_post_from_activity (app/activitypub/util.py): refuse to store a
+        # url urlparse cannot read, rather than rejecting the peer's whole post,
+        # which would hand peers a way to make us drop content. None, not '',
+        # because None is what Post.url holds for every post with no url and
+        # what post_to_page tests for before federating an attachment out again.
+        if post.url and not url_is_parseable(post.url):
+            post.url = None
+
         if post.url:
             thumbnail_url, embed_url = fixup_url(post.url)
             post.url = embed_url
@@ -2053,38 +2064,46 @@ class Post(db.Model):
                     post.body = '\n'.join(lines)
                     post.body_html = markdown_to_html(post.body)
             domain = domain_from_url(post.url)
-            # notify about links to banned websites.
-            already_notified = set()  # often admins and mods are the same people - avoid notifying them twice
-            targets_data = {'gen': '0',
-                            'post_id': post.id,
-                            'orig_post_title': post.title,
-                            'orig_post_body': post.body,
-                            'orig_post_domain': post.domain,
-                            }
-            if domain.notify_mods:
-                for community_member in post.community.moderators():
-                    notify = Notification(title='Suspicious content', url=post.ap_id,
-                                          user_id=community_member.user_id,
-                                          author_id=user.id, notif_type=NOTIF_REPORT,
-                                          subtype='post_from_suspicious_domain',
-                                          targets=targets_data)
-                    db.session.add(notify)
-                    already_notified.add(community_member.user_id)
-            if domain.notify_admins:
-                targets_data = {'gen': '0', 'post_id': post.id}
-                for admin in Site.admins():
-                    if admin.id not in already_notified:
-                        notify = Notification(title='Suspicious content',
-                                              url=post.ap_id, user_id=admin.id,
+            # `if domain:` because domain_from_url returns None for a url whose host
+            # it cannot determine -- unparseable, or parseable but hostless
+            # ('https:///x' parses, .hostname is None). post.url is peer-supplied, so
+            # without this the first dereference below is AttributeError: 'NoneType'
+            # object has no attribute 'notify_mods', and create_post's
+            # `except Exception` silently drops the peer's whole post. Same shape the
+            # three sites in app/shared/post.py (:192, :443, :566) already use.
+            if domain:
+                # notify about links to banned websites.
+                already_notified = set()  # often admins and mods are the same people - avoid notifying them twice
+                targets_data = {'gen': '0',
+                                'post_id': post.id,
+                                'orig_post_title': post.title,
+                                'orig_post_body': post.body,
+                                'orig_post_domain': post.domain,
+                                }
+                if domain.notify_mods:
+                    for community_member in post.community.moderators():
+                        notify = Notification(title='Suspicious content', url=post.ap_id,
+                                              user_id=community_member.user_id,
                                               author_id=user.id, notif_type=NOTIF_REPORT,
                                               subtype='post_from_suspicious_domain',
                                               targets=targets_data)
                         db.session.add(notify)
-            if domain.banned or domain.name.endswith('.pages.dev'):
-                raise Exception(domain.name + ' is blocked by admin')
-            else:
-                domain.post_count += 1
-                post.domain = domain
+                        already_notified.add(community_member.user_id)
+                if domain.notify_admins:
+                    targets_data = {'gen': '0', 'post_id': post.id}
+                    for admin in Site.admins():
+                        if admin.id not in already_notified:
+                            notify = Notification(title='Suspicious content',
+                                                  url=post.ap_id, user_id=admin.id,
+                                                  author_id=user.id, notif_type=NOTIF_REPORT,
+                                                  subtype='post_from_suspicious_domain',
+                                                  targets=targets_data)
+                            db.session.add(notify)
+                if domain.banned or domain.name.endswith('.pages.dev'):
+                    raise Exception(domain.name + ' is blocked by admin')
+                else:
+                    domain.post_count += 1
+                    post.domain = domain
 
             if 'image' in request_json['object'] and post.image is None:
                 image = File(source_url=request_json['object']['image']['url'])
@@ -2223,6 +2242,12 @@ class Post(db.Model):
                             if 'href' in attachment_item:
                                 post.url = attachment_item['href']
                                 break
+                # This write is BELOW the domain block above, so nothing there
+                # saw it: a Mobilizon event's link had no ban check and no parse
+                # check at all. '' rather than None is this branch's own "no
+                # url" value, set a few lines up.
+                if post.url and not url_is_parseable(post.url):
+                    post.url = ''
                 if 'image' in request_json['object'] and post.image is None:
                     image = File(source_url=request_json['object']['image']['url'])
                     db.session.add(image)
