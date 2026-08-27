@@ -72,3 +72,21 @@ class TestFalsyInput:
 
     def test_none(self):
         assert url_needs_archive(None) is False
+
+
+class TestHostlessUrlReachesTheBareExcept:
+    """Pins the bare `except:` at app/post/util.py, which the fix left
+    untouched. Two different failure modes land there: 'not-a-url' parses
+    to a hostname of None, so `.lower()` raises AttributeError; 'https://[::1/x'
+    is malformed IPv6-in-brackets syntax, so `urlparse` itself raises
+    ValueError before `.hostname` is even read. Mutation that fails both:
+    removing the try/except entirely (there is no narrower mutation here --
+    deleting only the `.startswith('www.')` guard, for instance, would not
+    touch either path, since both fail earlier, at `.lower()` or at
+    `urlparse()` itself)."""
+
+    def test_a_url_with_no_hostname_is_handled(self):
+        assert url_needs_archive('not-a-url') is False
+
+    def test_a_malformed_bracketed_host_is_handled(self):
+        assert url_needs_archive('https://[::1/x') is False
