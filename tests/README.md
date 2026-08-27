@@ -350,14 +350,14 @@ fresh, never carry forward" is the standing rule.
 
 The two real gaps, now closed:
 
-- **The empty-`community_ids` early return** (`app/utils.py:3792-3793`). No
+- **The empty-`community_ids` early return** (`app/utils.py:3798-3799`). No
   earlier test called the function with an empty community list.
   `test_empty_community_ids_returns_an_empty_list_without_querying`
   (`tests/test_factories_feed.py`) covers it; neutralizing the guard makes the
   very next branch index `community_ids[0]` on an empty list and raise
   `IndexError`, which is what makes the mutation observable rather than merely
   changing a return value.
-- **The Redis cache-HIT read path** (`app/utils.py:3801-3803`). Task 1 proved
+- **The Redis cache-HIT read path** (`app/utils.py:3807-3809`). Task 1 proved
   only the cache-WRITE side. `test_a_cached_result_id_is_served_without_reaching_the_database`
   primes a result_id's cached value through `redis_double` to something a live
   query could never produce, then asserts the STALE cached value comes back --
@@ -374,15 +374,15 @@ The two real gaps, now closed:
 
 `get_deduped_post_ids` now carries exactly two documented-uncovered regions,
 both legitimately out of this sub-project's scope: the `hashtag` filter
-(`3833-3837`) and the unrecognized-`sort` fallthrough (`3949->3953`, mirrored in
-`post_ids_to_models` at `3976->3978`). There used to be a third, the
-private-community branch at `3860-3861` -- it stopped being uncovered when it
+(`3839-3843`) and the unrecognized-`sort` fallthrough (`3955->3959`, mirrored in
+`post_ids_to_models` at `3982->3984`). There used to be a third, the
+private-community branch at `3866-3867` -- it stopped being uncovered when it
 turned out to be a leak rather than a gap; see "The private-community filter"
 below. Those line numbers moved by seven when the cache-key fix landed and again
 when the private-community fix did, and are re-derived from `coverage.json`, not
 carried forward. `instance_sticky_posts` and
 `get_instance_stickies` are 100% statement and branch. `possible_communities`
-carries its two documented-dead branches (`4354->4353`, `4361->4360`), unchanged.
+carries its two documented-dead branches (`4360->4359`, `4367->4366`), unchanged.
 
 ### The feed cache key
 
@@ -451,7 +451,7 @@ exceptions", and the base restriction must still apply. Same syntax, opposite
 semantics. Do not "fix" the other six.
 
 The fix hoists ONE unconditional site above the anonymous/authenticated split
-(`app/utils.py:3852-3863`), so the base restriction cannot be lost by adding a
+(`app/utils.py:3858-3869`), so the base restriction cannot be lost by adding a
 branch, and membership only widens it:
 
     if current_user.is_authenticated and (private_community_ids := community_membership_private(...)):
@@ -519,6 +519,73 @@ blindness to SQL-string predicates, the two-direction mutation standard, the
 wide/narrow discriminator for chain-of-`continue` functions, and two findings
 reported rather than fixed. Read that document before extending this sub-project's
 tests or starting the one that covers the next slice of `app/utils.py`.
+
+### The private-community picker and post destination
+
+Two layers of the same defect, both pre-existing, fixed together.
+
+`possible_communities` builds the community picker on the "new post" form. Its
+"Others" query filtered only on banned / gone_forever / name, with no
+`Community.private` predicate at all, so **every authenticated user was shown
+every private community's title and `ap_domain`** -- and could select one as a
+post destination. Nothing downstream stopped the post either: `can_create_post`
+had no private check and no membership test, and `add_post` resolves the
+Community straight from the posted form field.
+
+Both layers had to change, and only one of them is authorisation. The picker is
+a disclosure fix; the form field is client-supplied, so a hand-crafted
+submission bypasses it entirely. `can_create_post` is what actually holds.
+
+- **`possible_communities`** (`app/utils.py:4383-4384`) gained ONE unconditional
+  filter on the Others query, base restriction widened by membership:
+
+      filter(or_(Community.private == False,
+                 Community.id.in_(community_membership_private(current_user.get_id()))))
+
+  written as one filter rather than an if/else, for the same reason
+  `get_deduped_post_ids`' equivalent is (above): a branch is a place the base
+  restriction can later be lost. The Moderating and Joined groups needed no
+  change -- both are membership-derived (`moderating_communities`,
+  `joined_communities`, `app/utils.py:2563,2624`), and `community_membership_private`
+  is a SUPERSET of both, asking for the same CommunityMember rows with only the
+  `is_banned is false` condition.
+
+- **`can_create_post`** (`app/utils.py:2360-2361`) gained the canonical check,
+
+      if content.private and content.id not in community_membership_private(user.id):
+          return False
+
+  placed AFTER the `content.is_moderator(user) or user.is_admin(): return True`
+  early return, alongside the `communities_banned_from` check, so the existing
+  moderator/admin model is preserved rather than quietly narrowed.
+
+**A divergence worth knowing, reported and NOT resolved.** That placement makes
+`can_create_post` admin-bypassable for private communities, while the READ-side
+checks built on the same helper are not: `app/post/routes.py:102` and
+`app/api/alpha/views.py:309` refuse an admin who is not a member. The divergence
+is pre-existing in the surrounding design -- every other gate in
+`can_create_post` sits below the same early return -- and widening or narrowing
+admin powers was out of scope for the fix.
+
+`tests/test_possible_communities.py::TestPrivateCommunitiesInOthers` and
+`tests/test_utils_can_post.py::TestCanCreatePostPrivateCommunity` are the
+regression suites. **An existing test file changed its claims here**: that
+module docstring enumerated the Others query's SQL predicates as exactly
+banned / gone_forever / name -- rules 8-10, "three predicates" -- which encoded
+the absence of the private filter as settled fact. It now enumerates four and
+names rule 11, and says outright that rule 11's absence is what the defect was.
+
+One test in that new class looks contrived and is not. `already_added` means a
+private community the viewer belongs to is normally claimed by the Moderating or
+Joined loop before the Others loop sees it, so the obvious "a member still sees
+it" test never reaches the Others query and would pass even for an over-broad
+`Community.private == False`. The one reachable path where a private member DOES
+fall through to Others is `joined_communities`' extra predicate: it drops
+communities whose instance the viewer has an `InstanceBan` against
+(`app/utils.py:2634-2635`), while `community_membership_private` has no such
+filter. `test_a_member_who_has_blocked_the_communitys_instance_still_sees_it`
+drives exactly that, and is the only test that fails when the membership arm of
+the `or_` is deleted.
 
 ## Every user-influenced redirect target
 

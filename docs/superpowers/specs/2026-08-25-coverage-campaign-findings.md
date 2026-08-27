@@ -214,12 +214,12 @@ carried into the brief instead of re-measured.
 
 The two gaps, now closed in `tests/test_factories_feed.py`:
 
-- **The empty-`community_ids` early return** (`app/utils.py:3792-3793`).
+- **The empty-`community_ids` early return** (`app/utils.py:3798-3799`).
   `test_empty_community_ids_returns_an_empty_list_without_querying` calls with
   `community_ids=[]`; the discriminating mutation neutralizes the guard, which
   makes the next line index `community_ids[0]` on an empty list and raise
   `IndexError` rather than silently returning something else.
-- **The Redis cache-HIT read path** (`app/utils.py:3794-3798`).
+- **The Redis cache-HIT read path** (`app/utils.py:3800-3804`).
   `test_a_cached_result_id_is_served_without_reaching_the_database` primes a
   result_id's cached value (through `redis_double`) to something a live query
   could never produce, then asserts that STALE value comes back --
@@ -330,7 +330,7 @@ every viewer not testing one of those two preferences.
 Carried forward as follow-up candidates, not acted on here per this
 campaign's report-don't-fix rule:
 
-- **`app/utils.py:4344` and `:4351`** (verified current against the file at
+- **`app/utils.py:4350` and `:4351`** (verified current against the file at
   commit time) are dead as within-loop duplicate filters inside
   `possible_communities` -- their `if c.id not in already_added:` guards can
   never take their False arm, because `CommunityMember`'s primary key is the

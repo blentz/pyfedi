@@ -2369,6 +2369,12 @@ def can_create_post(user, content: Community) -> bool:
     if content.local_only and not user.is_local():
         return False
 
+    # Private communities are invite-only (Community.private, app/models.py:594):
+    # only members may post. Placed after the moderator/admin early return above,
+    # alongside the ban checks, so the existing mod/admin model is preserved.
+    if content.private and content.id not in community_membership_private(user.id):
+        return False
+
     if content.id in communities_banned_from(user.id):
         return False
 
@@ -4379,9 +4385,19 @@ def possible_communities():
     if len(comms) > 0:
         which_community['Joined communities'] = comms
     comms = []
+    # Private communities are invite-only real access control (Community.private,
+    # app/models.py:594), so they must not be disclosed -- nor offered as a post
+    # destination -- to anyone who is not a member. One unconditional filter,
+    # base restriction widened by membership, rather than an if/else that a later
+    # branch could drop the restriction out of. can_create_post carries the
+    # matching authorisation check; the form field is client-supplied, so hiding
+    # them here is not on its own enough.
     for c in db.session.query(Community.id, Community.ap_id, Community.title, Community.ap_domain).\
             filter(Community.banned == False).join(Instance, Instance.id == Community.instance_id).\
-            filter(Instance.gone_forever == False, Community.name != 'microblogs').order_by(Community.title).all():
+            filter(Instance.gone_forever == False, Community.name != 'microblogs').\
+            filter(or_(Community.private == False,
+                       Community.id.in_(community_membership_private(current_user.get_id())))).\
+            order_by(Community.title).all():
         if c.id not in already_added:
             if c.ap_id is None:
                 display_name = c.title

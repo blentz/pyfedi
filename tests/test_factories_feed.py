@@ -130,7 +130,7 @@ def test_community_block_is_visible_to_blocked_communities(app, db_session):
 
 def test_marked_read_post_is_excluded_from_the_feed_when_hide_read_posts_is_set(app, db_session, redis_double):
     """Fails if mark_post_read writes rows the raw `read_posts` query inside
-    get_deduped_post_ids (app/utils.py:3878-3879) does not read.
+    get_deduped_post_ids (app/utils.py:3884-3885) does not read.
 
     The control assertion (post visible before marking read) rules out the post
     being excluded for some unrelated reason.
@@ -150,7 +150,7 @@ def test_marked_read_post_is_excluded_from_the_feed_when_hide_read_posts_is_set(
 
 def test_hidden_post_is_excluded_from_instance_stickies(app, db_session):
     """Fails if hide_post writes rows the raw `hidden_posts` query inside
-    get_instance_stickies (app/utils.py:4029-4031, 4054) does not read. Proves the
+    get_instance_stickies (app/utils.py:4035-4037, 4054) does not read. Proves the
     hidden_posts reader in get_instance_stickies specifically -- a sibling test
     (test_marked_read_post_is_excluded_from_the_feed...) proves the read_posts /
     hidden_posts readers inside get_deduped_post_ids instead, so between them both
@@ -172,7 +172,7 @@ def test_hidden_post_is_excluded_from_instance_stickies(app, db_session):
 def test_flair_block_is_excluded_from_the_feed(app, db_session, redis_double):
     """Fails if make_post_flair / make_flair_block write rows the raw
     `post_flair` / CommunityFlairBlock query inside get_deduped_post_ids
-    (app/utils.py:3910-3916) does not read.
+    (app/utils.py:3916-3922) does not read.
     """
     make_instance('flaircheck.example')
     viewer = make_feed_viewer(None, 'flairblocker', local=True)
@@ -219,7 +219,7 @@ def test_blocked_users_is_not_cached_between_calls(app, db_session):
 # tests/test_feed_private_communities.py --
 
 def test_empty_community_ids_returns_an_empty_list_without_querying(app, db_session):
-    """Covers the early-return guard at app/utils.py:3792-3793 --
+    """Covers the early-return guard at app/utils.py:3798-3799 --
     `if not community_sql and (community_ids is None or len(community_ids) == 0):
     return []` -- never exercised by any earlier test in this sub-project, since
     every other test calls with at least one real community id.
@@ -227,7 +227,7 @@ def test_empty_community_ids_returns_an_empty_list_without_querying(app, db_sess
     Mutation that would fail this: delete the guard (or just its `return []`).
     With community_sql left at its default (None) and community_ids == [], the
     very next branch taken indexes `community_ids[0]`
-    (`elif community_ids[0] == -1:`, app/utils.py:3808), which raises IndexError
+    (`elif community_ids[0] == -1:`, app/utils.py:3814), which raises IndexError
     on an empty list -- so removing the guard does not quietly change the return
     value, it crashes the call, and this test would fail with that error instead
     of a plain assertion failure.

@@ -673,7 +673,7 @@ Reported, not fixed; deferred for evaluation after the testing work (see Status)
 
     if type == POST_TYPE_VIDEO and can_upload_video():
 
-`can_upload_video` (`app/utils.py:2401`) falls back to `current_user` when no
+`can_upload_video` (`app/utils.py:2407`) falls back to `current_user` when no
 `user` is passed:
 
     upload_user = user or current_user
