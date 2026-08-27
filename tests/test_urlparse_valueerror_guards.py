@@ -25,13 +25,32 @@ the malformed-input tests and still be a regression.
 
 The idiom copied here is `is_safe_redirect_target` (app/utils.py:2043-2048),
 which already caught `ValueError` around its parse before this commit.
+
+SECOND WAVE. Guarding `urlparse` was not enough on its own. Two more things
+refuse these same netlocs, one of them EARLIER in the same call path:
+
+* `httpx.InvalidURL`, raised while building a request, descends straight from
+  `Exception` -- it is neither an `httpx.HTTPError` nor a `ValueError`. It
+  escaped `mime_type_using_head`, which `is_image_url` calls BEFORE it reaches
+  the guarded `urlparse`, so post creation still 500'd. It escaped
+  `get_request` for the same reason, past four handlers whose whole job is to
+  normalise failures into `httpx.HTTPError`.
+* `extract_domain_and_actor` (app/activitypub/util.py) has the same unguarded
+  `urlparse`, on an actor id chosen by a remote peer.
+
+And `inbox_domain` had an adjacent hole with no exception involved at all: a
+URL that parses but carries no host yielded `None`, which two of its callers
+cannot take.
 """
 import httpx
 import pytest
 
+from app.activitypub.util import extract_domain_and_actor
+from app.models import Domain
 from app.post.util import url_needs_archive
-from app.utils import (domain_from_url, fixup_url, inbox_domain, is_image_url,
-                       is_video_url, mimetype_from_url,
+from app.utils import (domain_from_url, fixup_url, get_request, inbox_domain,
+                       instance_allowed, is_image_url,
+                       is_video_url, mime_type_using_head, mimetype_from_url,
                        remove_tracking_from_link)
 
 # Every input that makes urlparse itself raise. Each guarded function is run
@@ -65,7 +84,6 @@ class TestDomainFromUrlSurvivesAMalformedNetloc:
     def test_no_domain_row_is_created_for_a_malformed_netloc(self, app, db_session):
         """The safe value is genuinely "no domain", not a row named after the
         broken host."""
-        from app.models import Domain
         before = db_session.query(Domain).count()
         for url in MALFORMED:
             assert domain_from_url(url, create=True) is None
@@ -295,23 +313,39 @@ class TestInboxDomainStillReducesOrdinaryValues:
 
 
 class TestIsImageUrlSurvivesAMalformedNetloc:
-    """`is_image_url` tries a HEAD request first and only falls through to
-    `urlparse` when that yields no Content-Type, so the ValueError is reached
-    only for a URL httpx accepts and urlparse refuses. 'http://[abc' is such a
-    URL, verified by probe: httpx.URL('http://[abc') constructs fine.
+    """THE USER-PATH TEST. `app/shared/post.py:410` and `:601` call this with a
+    submitted post URL, so whatever escapes here 500s post creation.
 
-    The HEAD is routed to a ConnectError here rather than left to reach the
-    network -- tests/conftest.py's `block_outbound_http` docstring prescribes
-    exactly this for observing a transport failure. The assertion is still on
-    what is_image_url returns.
+    `is_image_url` tries a HEAD request first and only falls through to
+    `urlparse` when that yields no Content-Type. The two steps refuse DIFFERENT
+    inputs, which is why this test iterates all four shapes rather than picking
+    one:
+
+      'http://[abc'            httpx accepts -> HEAD fails as a transport error
+                               -> falls through -> urlparse raises ValueError
+      the other three          httpx.URL() itself raises InvalidURL, one call
+                               BEFORE the urlparse guard
+
+    The first commit of this fix guarded only the `urlparse`, so only
+    'http://[abc' was actually closed and the other three still crashed with
+    `httpx.InvalidURL` out of `mime_type_using_head`. This test is the one the
+    earlier tests could not make: it asserts the whole user path is closed, not
+    one layer of it.
+
+    The HEAD is routed to a ConnectError rather than left to reach the network
+    -- tests/conftest.py's `block_outbound_http` docstring prescribes exactly
+    this for observing a transport failure. `http_mock` asserts its routes are
+    called, and 'http://[abc' is the shape that reaches the transport, so the
+    route is satisfied. The assertion is still on what is_image_url returns.
 
     Its safe value is False, the answer it already gives for a path with no
     image extension.
     """
 
-    def test_a_malformed_netloc_is_not_an_image(self, app, http_mock):
+    def test_no_malformed_netloc_is_an_image(self, app, http_mock):
         http_mock.route().mock(side_effect=httpx.ConnectError('no route in tests'))
-        assert is_image_url('http://[abc') is False
+        for url in MALFORMED:
+            assert is_image_url(url) is False, url
 
 
 class TestIsImageUrlStillRecognisesImages:
@@ -365,3 +399,187 @@ class TestAnOutOfRangePortIsNotAffected:
 
     def test_inbox_domain_reads_the_host(self):
         assert inbox_domain('http://example.com:99999/inbox') == 'example.com'
+
+
+class TestMimeTypeUsingHeadSurvivesAnInvalidUrl:
+    """`httpx.InvalidURL` descends straight from `Exception` -- it is NOT an
+    `httpx.HTTPError` and NOT a `ValueError`:
+
+        issubclass(httpx.InvalidURL, httpx.HTTPError) -> False
+        issubclass(httpx.InvalidURL, ValueError)      -> False
+
+    So `except httpx.HTTPError: return ''` did not catch it, and httpx raises
+    it while BUILDING the request -- before any transport, so respx never sees
+    it and no route can absorb it. It escaped `mime_type_using_head` and, one
+    frame up, `is_image_url`.
+
+    '' is the safe value the existing `except httpx.HTTPError` handler already
+    returns: "no Content-Type could be determined", which sends the caller down
+    the extension-sniffing path.
+    """
+
+    @pytest.mark.parametrize('url', [
+        'https://[::1/x',            # httpx: Invalid port: ':1'
+        'http://[1::2::3]',          # httpx: Invalid IPv6 address
+        'http://exa℀mple.com/',  # httpx: Invalid IDNA hostname
+        'http://[v1.x]/y',           # httpx refuses this one though urlparse accepts it
+    ])
+    def test_a_url_httpx_refuses_yields_no_content_type(self, url, app):
+        """No `http_mock`: these never reach a transport, so registering a
+        route would leave it uncalled and fail the fixture's own assertion."""
+        assert mime_type_using_head(url) == ''
+
+
+class TestMimeTypeUsingHeadStillReadsContentType:
+    """The over-correction guard. '' is also the answer for a transport
+    failure, so only a successful HEAD distinguishes a working guard from one
+    that swallowed the whole function.
+
+    Distinct hosts per test: `mime_type_using_head` is `@cache.memoize`d
+    against a FileSystemCache, so a URL reused across tests would serve a
+    cached answer rather than exercising the route.
+    """
+
+    def test_a_successful_head_still_returns_the_content_type(self, app, http_mock):
+        http_mock.head('https://mime-ok.example/x').mock(
+            return_value=httpx.Response(200, headers={'Content-Type': 'image/png'}))
+        assert mime_type_using_head('https://mime-ok.example/x') == 'image/png'
+
+    def test_octet_stream_is_still_flattened_to_empty(self, app, http_mock):
+        http_mock.head('https://mime-octet.example/x').mock(
+            return_value=httpx.Response(200, headers={'Content-Type': 'application/octet-stream'}))
+        assert mime_type_using_head('https://mime-octet.example/x') == ''
+
+    def test_a_transport_error_is_still_empty(self, app, http_mock):
+        http_mock.head('https://mime-down.example/x').mock(
+            side_effect=httpx.ConnectError('down'))
+        assert mime_type_using_head('https://mime-down.example/x') == ''
+
+
+class TestGetRequestConvertsAnInvalidUrlToHttpError:
+    """`get_request` already normalises `ValueError` and `httpx.StreamError`
+    into `httpx.HTTPError`, because that is what its callers catch. It did not
+    normalise `httpx.InvalidURL`, which is neither -- so the identical hole was
+    open here.
+
+    DEBUG is set for these because `is_invalid_get_request_uri` short-circuits
+    to False under it (app/utils.py), which is the real configuration a dev
+    install runs and is the shortest path to the httpx call. With DEBUG off,
+    'http://[v1.x]/y' reaches httpx anyway -- furl accepts that host and the
+    DNS check fails open -- but it costs a real `getaddrinfo`, so the flag is
+    used instead of relying on a name lookup.
+    """
+
+    @pytest.mark.parametrize('url', [
+        'https://[::1/x',
+        'http://[1::2::3]',
+        'http://exa℀mple.com/',
+        'http://[v1.x]/y',
+    ])
+    def test_a_url_httpx_refuses_raises_the_error_callers_catch(self, url, app, monkeypatch):
+        monkeypatch.setitem(app.config, 'DEBUG', True)
+        with app.test_request_context('/'):
+            with pytest.raises(httpx.HTTPError):
+                get_request(url)
+
+    def test_the_raised_error_is_not_an_invalid_url(self, app, monkeypatch):
+        """The sharp one. `httpx.InvalidURL` is not an `httpx.HTTPError`, so
+        `pytest.raises(httpx.HTTPError)` above already fails if it escapes --
+        this states it directly so the reason is not lost."""
+        monkeypatch.setitem(app.config, 'DEBUG', True)
+        with app.test_request_context('/'):
+            with pytest.raises(Exception) as caught:
+                get_request('https://[::1/x')
+        assert not isinstance(caught.value, httpx.InvalidURL)
+        assert isinstance(caught.value, httpx.HTTPError)
+
+
+class TestGetRequestStillFetchesOrdinaryUrls:
+    """The over-correction guard: a guard that swallowed everything would turn
+    a perfectly good response into an HTTPError."""
+
+    def test_an_ordinary_url_still_returns_its_response(self, app, http_mock, monkeypatch):
+        monkeypatch.setitem(app.config, 'DEBUG', True)
+        http_mock.get('https://get-ok.example/x').mock(
+            return_value=httpx.Response(200, text='hello'))
+        with app.test_request_context('/'):
+            response = get_request('https://get-ok.example/x')
+        assert response.status_code == 200
+        assert response.text == 'hello'
+
+
+class TestExtractDomainAndActorSurvivesAMalformedNetloc:
+    """Remote input, not local: `app/activitypub/actor.py:43`
+    `validate_remote_actor(actor_url)` passes an actor id the PEER chose, on
+    the inbound federation path. A broken or hostile peer picks this string.
+
+    ('', '') is the safe value because it is what urlparse already yields for a
+    string with no authority and no path -- `netloc` is '' and
+    `path.split('/')[-1]` is ''. Nothing is invented. Every caller degrades to
+    "not found": `validate_remote_actor` gets `instance_allowed('')`, which
+    returns True on its own empty-host guard, and the actor fetch that follows
+    fails; the callers that build `'!' + actor + '@' + server` produce '!@',
+    which `search_for_community` splits into two empty strings and finds
+    nothing.
+    """
+
+    @pytest.mark.parametrize('url', MALFORMED)
+    def test_a_malformed_actor_url_yields_no_domain_and_no_actor(self, url):
+        assert extract_domain_and_actor(url) == ('', '')
+
+
+class TestExtractDomainAndActorStillSplitsOrdinaryUrls:
+    """The over-correction guard."""
+
+    def test_an_ordinary_actor_url_still_splits(self):
+        assert extract_domain_and_actor('https://example.com/c/news') == \
+            ('example.com', 'news')
+
+    def test_a_trailing_slash_is_still_stripped_first(self):
+        """The WordPress case the function opens with."""
+        assert extract_domain_and_actor('https://example.com/c/news/') == \
+            ('example.com', 'news')
+
+    def test_a_port_is_still_part_of_the_netloc(self):
+        assert extract_domain_and_actor('https://example.com:8443/u/alice') == \
+            ('example.com:8443', 'alice')
+
+
+class TestInboxDomainAnEmptyHost:
+    """Adjacent to the ValueError guard and pre-existing: a URL that PARSES but
+    carries no host ('https:///x') made `urlparse(...).hostname` return None,
+    and inbox_domain returned that None straight out.
+
+    Its callers cannot take None: `instance_allowed` calls `.strip()` on the
+    result (AttributeError) and `instance_banned` matches it against a compiled
+    regex (TypeError). '' is returned instead, matching the ValueError path in
+    the same function and the empty-input case at the top of it, and leaving
+    every caller on a defined path.
+    """
+
+    @pytest.mark.parametrize('url', ['https:///x', 'http:///', 'https://'])
+    def test_a_url_with_no_host_yields_the_empty_string(self, url):
+        assert inbox_domain(url) == ''
+
+    def test_instance_allowed_no_longer_raises_on_a_hostless_url(self, app, db_session):
+        """The consequence, asserted where it bites. Before this commit
+        `instance_allowed('https:///x')` raised AttributeError on None.strip()."""
+        assert instance_allowed('https:///x') is False
+
+    @pytest.mark.parametrize('value', MALFORMED + [
+        'https:///x', 'http:///', 'https://',
+        'https://example.com/inbox', 'Example.COM', '',
+    ])
+    def test_the_return_is_always_a_string(self, value):
+        """The invariant the callers actually need, stated once over every
+        shape. `instance_banned` matches the result against a compiled regex
+        and `instance_allowed` calls `.strip()` on it -- both need a str, and
+        neither the ValueError path nor the empty-host path may hand them
+        anything else.
+
+        Asserted as a type invariant rather than by driving `instance_banned`
+        with a wildcard ban row: that function is `@cache.memoize`d for 150
+        seconds against a FileSystemCache, so a data-driven version would serve
+        a stale answer on a re-run and could not be trusted as a revert check.
+        """
+        assert isinstance(inbox_domain(value), str)
