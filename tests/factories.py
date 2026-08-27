@@ -5,6 +5,10 @@ has an id. If Postgres rejects an insert for a missing NOT NULL column, add that
 column here rather than in the test.
 """
 
+import uuid
+
+from flask_login import login_user
+
 from app import db
 from app.activitypub.signature import RsaKeys
 from app.models import (Community, CommunityBan, CommunityBlock, CommunityFlair, CommunityFlairBlock,
@@ -12,6 +16,7 @@ from app.models import (Community, CommunityBan, CommunityBlock, CommunityFlair,
                         NotificationSubscription, Post, PostReply, PostReplyBookmark,
                         PostReplyVote, PostVote, Role, RolePermission, Site, User, UserBlock, UserFollower,
                         hidden_posts, read_posts, user_role, utcnow)
+from app.utils import get_deduped_post_ids
 
 
 def make_instance(domain: str, software: str = 'mastodon') -> Instance:
@@ -48,6 +53,60 @@ def make_user(instance, name: str, local: bool = False, with_keys: bool = False)
     db.session.add(user)
     db.session.commit()
     return user
+
+
+def make_feed_viewer(instance, name: str, local: bool = False, with_keys: bool = False) -> User:
+    """make_user, with hide_nsfw/hide_nsfl zeroed for feed-filter tests.
+
+    Both columns default to 1 ("on", app/models.py:984-985), so a plain
+    make_user viewer inherits NSFW/NSFL filtering-on from the moment it is
+    created, unless a test explicitly zeroes them. That coupling is inert
+    today -- make_post defaults nsfw=False, and nothing in this module sets
+    nsfl -- but it inflates the apparent blast radius of any future mutation
+    on app/utils.py's hide_nsfw/hide_nsfl clause across every feed test whose
+    viewer was built with plain make_user, which is exactly the confusion
+    tests/README.md's "sort-chain divergence" section warns wide/narrow
+    blast radius can cause. tests/test_feed_display_preferences.py's module
+    docstring is the worked example: an over-broadened hide_nsfw/hide_nsfl
+    clause there failed six unrelated presence tests as collateral before its
+    viewers were fixed to zero both columns.
+
+    Use this for any User that will be passed as `current_user` into a feed
+    query (get_deduped_post_ids, get_instance_stickies, possible_communities);
+    use plain make_user for an author, booster, or other non-viewing actor.
+    A test that specifically exercises hide_nsfw/hide_nsfl (e.g.
+    tests/test_feed_display_preferences.py's TestHideNsfw/TestHideNsfl) should
+    keep setting them explicitly on its own viewer instead -- this factory
+    only fixes the default for tests that are not testing that preference.
+    """
+    viewer = make_user(instance, name, local=local, with_keys=with_keys)
+    viewer.hide_nsfw = 0
+    viewer.hide_nsfl = 0
+    db.session.commit()
+    return viewer
+
+
+def feed_ids(app, viewer, community_ids, sort='new', **kwargs):
+    """The post ids get_deduped_post_ids returns for `viewer`, logged in.
+
+    A fresh uuid result_id on every call bypasses the Redis cache path
+    (`if cache_key and redis_client.exists(cache_key): return ...`,
+    app/utils.py), so every call genuinely re-runs the query instead of
+    replaying a previous result -- load-bearing wherever a test file makes
+    several calls that must not reuse each other's answer.
+
+    Shared by tests/test_feed_sorts.py, tests/test_feed_visibility_filters.py,
+    tests/test_feed_display_preferences.py, tests/test_factories_feed.py and
+    tests/test_subscribed_feed_microblogs.py, which used to each carry their
+    own copy of this exact body (or a thin variant of it). A file whose own
+    call sites use a different argument order or name (test_feed_sorts.py's
+    (sort, community) order, test_subscribed_feed_microblogs.py's
+    subscribed_feed_ids and its nested class' feed_ids) keeps a local wrapper
+    that delegates here, rather than rewriting every call site.
+    """
+    with app.test_request_context('/'):
+        login_user(viewer)
+        return get_deduped_post_ids(uuid.uuid4().hex, community_ids, sort, **kwargs)
 
 
 def make_community(name: str = 'microblogs') -> Community:

@@ -38,30 +38,11 @@ unaffected since they already expect the post to be absent), 0 after. Left
 unfixed, the next test added here that DOES carry an nsfw/nsfl post would be
 silently filtered by this coupling with no obvious cause.
 """
-import uuid
-
-from flask_login import login_user
-
 from app import db
-from app.utils import get_deduped_post_ids
-from tests.factories import (ban_user_from_community, make_community, make_community_block,
+from tests.factories import (ban_user_from_community, feed_ids, make_community, make_community_block,
                              make_domain, make_domain_block, make_flair_block, make_instance,
                              make_instance_block, make_post, make_post_flair, make_user,
                              make_user_block)
-
-
-def feed_ids(app, viewer, community_ids, **kwargs):
-    """The post ids get_deduped_post_ids returns for `viewer`, logged in.
-
-    A fresh uuid result_id on every call bypasses the Redis short-circuit
-    (`if redis_client.exists(result_id): return ...`, app/utils.py), so every
-    call genuinely re-runs the query instead of replaying an earlier result --
-    load-bearing here since several tests in one file would otherwise risk
-    reusing a stale id.
-    """
-    with app.test_request_context('/'):
-        login_user(viewer)
-        return get_deduped_post_ids(uuid.uuid4().hex, community_ids, 'new', **kwargs)
 
 
 class TestFilteredOutCommunities:

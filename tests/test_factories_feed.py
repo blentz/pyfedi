@@ -32,21 +32,10 @@ from flask_login import login_user
 from app import db
 from app.utils import (blocked_communities, blocked_domains, blocked_or_banned_instances,
                        blocked_users, get_deduped_post_ids, get_instance_stickies)
-from tests.factories import (hide_post, make_community, make_community_block, make_community_member,
-                             make_domain, make_domain_block, make_flair_block, make_instance,
-                             make_instance_block, make_post, make_post_flair, make_user,
-                             make_user_block, mark_post_read)
-
-
-def logged_in_ids(app, viewer, community_ids, **kwargs):
-    """The post ids get_deduped_post_ids returns for `viewer`.
-
-    A fresh uuid result_id on every call, so nothing is ever served from a
-    previously cached key -- each call genuinely re-runs the query.
-    """
-    with app.test_request_context('/'):
-        login_user(viewer)
-        return get_deduped_post_ids(uuid.uuid4().hex, community_ids, 'new', **kwargs)
+from tests.factories import (feed_ids as logged_in_ids, hide_post, make_community, make_community_block,
+                             make_community_member, make_domain, make_domain_block, make_flair_block,
+                             make_feed_viewer, make_instance, make_instance_block, make_post,
+                             make_post_flair, make_user, make_user_block, mark_post_read)
 
 
 def logged_in_stickies(app, viewer, community_ids, sort='new'):
@@ -65,7 +54,7 @@ def test_redis_double_covers_app_redis_client(app, db_session, redis_double):
     untouched, while the real client kept receiving it unnoticed.
     """
     make_instance('redispolicy.example')
-    user = make_user(None, 'redispolicyuser', local=True)
+    user = make_feed_viewer(None, 'redispolicyuser', local=True)
     community = make_community('rediscomm')
     make_community_member(user, community)
     make_post(community, user, 'https://redispolicy.example/posts/1')
@@ -91,7 +80,7 @@ def test_authenticated_feed_calls_do_not_grow_the_real_test_redis(app, db_sessio
     before = real_redis.dbsize()
 
     make_instance('growthcheck.example')
-    user = make_user(None, 'growthcheckuser', local=True)
+    user = make_feed_viewer(None, 'growthcheckuser', local=True)
     community = make_community('growthcomm')
     make_community_member(user, community)
     make_post(community, user, 'https://growthcheck.example/posts/1')
@@ -147,7 +136,7 @@ def test_marked_read_post_is_excluded_from_the_feed_when_hide_read_posts_is_set(
     being excluded for some unrelated reason.
     """
     make_instance('readcheck.example')
-    viewer = make_user(None, 'readhider', local=True)
+    viewer = make_feed_viewer(None, 'readhider', local=True)
     viewer.hide_read_posts = True
     db.session.commit()
     community = make_community('readcomm')
@@ -168,7 +157,7 @@ def test_hidden_post_is_excluded_from_instance_stickies(app, db_session):
     named readers of these factories are exercised.
     """
     make_instance('stickycheck.example')
-    viewer = make_user(None, 'stickyhider', local=True)
+    viewer = make_feed_viewer(None, 'stickyhider', local=True)
     community = make_community('stickycomm')
     make_community_member(viewer, community)
     post = make_post(community, viewer, 'https://stickycheck.example/posts/1')
@@ -186,7 +175,7 @@ def test_flair_block_is_excluded_from_the_feed(app, db_session, redis_double):
     (app/utils.py:3910-3916) does not read.
     """
     make_instance('flaircheck.example')
-    viewer = make_user(None, 'flairblocker', local=True)
+    viewer = make_feed_viewer(None, 'flairblocker', local=True)
     community = make_community('flaircomm')
     make_community_member(viewer, community)
     post = make_post(community, viewer, 'https://flaircheck.example/posts/1')
@@ -244,7 +233,7 @@ def test_empty_community_ids_returns_an_empty_list_without_querying(app, db_sess
     of a plain assertion failure.
     """
     make_instance('emptycommunities.example')
-    viewer = make_user(None, 'emptycommunitiesviewer', local=True)
+    viewer = make_feed_viewer(None, 'emptycommunitiesviewer', local=True)
 
     with app.test_request_context('/'):
         login_user(viewer)
@@ -278,7 +267,7 @@ def test_a_cached_result_id_is_served_without_reaching_the_database(app, db_sess
     stale value, failing the equality assertion.
     """
     make_instance('cachehit.example')
-    viewer = make_user(None, 'cachehitviewer', local=True)
+    viewer = make_feed_viewer(None, 'cachehitviewer', local=True)
     community = make_community('cachehitcomm')
     make_community_member(viewer, community)
     post = make_post(community, viewer, 'https://cachehit.example/posts/1')
@@ -325,7 +314,7 @@ def test_an_authenticated_call_with_an_empty_result_id_writes_no_cache_entry(
     not reach (it uses a truthy result_id).
     """
     make_instance('emptyresultid.example')
-    viewer = make_user(None, 'emptyresultidviewer', local=True)
+    viewer = make_feed_viewer(None, 'emptyresultidviewer', local=True)
     community = make_community('emptyresultidcomm')
     make_community_member(viewer, community)
     post = make_post(community, viewer, 'https://emptyresultid.example/posts/1')

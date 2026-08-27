@@ -54,16 +54,15 @@ return the SAME two Post rows in OPPOSITE order. This is reported, not
 reconciled -- see task-2-report.md.
 """
 
-import uuid
 from datetime import timedelta
 
 import pytest
-from flask_login import login_user
 
 from app import db
 from app.models import utcnow
-from app.utils import get_deduped_post_ids, instance_sticky_posts, post_ids_to_models
-from tests.factories import make_community, make_instance, make_post, make_user
+from app.utils import instance_sticky_posts, post_ids_to_models
+from tests.factories import feed_ids as _feed_ids
+from tests.factories import make_community, make_feed_viewer, make_instance, make_post, make_user
 
 SORTS = ['', 'hot', 'scaled', 'top', 'new', 'old', 'active']
 
@@ -95,7 +94,7 @@ def _setup(prefix, with_viewer=False):
     same ordering tests/test_subscribed_feed_microblogs.py relies on."""
     make_instance(f'{prefix}.example')
     author = make_user(None, f'{prefix}author', local=True)
-    viewer = make_user(None, f'{prefix}viewer', local=True) if with_viewer else None
+    viewer = make_feed_viewer(None, f'{prefix}viewer', local=True) if with_viewer else None
     community = make_community(f'{prefix}community')
     return (author, viewer, community) if with_viewer else (author, community)
 
@@ -126,9 +125,11 @@ STICKY_TOP_FIELD = ('up_votes', 1, 2)
 
 
 def feed_ids(app, viewer, sort, community):
-    with app.test_request_context('/'):
-        login_user(viewer)
-        return get_deduped_post_ids(uuid.uuid4().hex, [community.id], sort)
+    """Delegates to tests.factories.feed_ids, keeping this file's own
+    (sort, community) call-site order rather than rewriting every call site
+    to the shared (community_ids, sort) order.
+    """
+    return _feed_ids(app, viewer, [community.id], sort)
 
 
 class TestGetDedupedPostIdsSorts:

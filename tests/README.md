@@ -312,9 +312,10 @@ setting is read, so the exposure is limited to off-origin candidates.
 
 ### Sub-project 1b-ii: `app/utils.py` feed and query machinery
 
-Sub-project 1b-ii (`tests/test_feed_sorts.py`, `tests/test_feed_top_windows.py`,
-`tests/test_feed_visibility_filters.py`, `tests/test_feed_display_preferences.py`,
-`tests/test_instance_stickies.py`, `tests/test_possible_communities.py`, plus new
+Sub-project 1b-ii (`tests/test_feed_sorts.py` -- which also carries the `top_*`
+window tests, `tests/test_feed_visibility_filters.py`,
+`tests/test_feed_display_preferences.py`, `tests/test_instance_stickies.py`,
+`tests/test_possible_communities.py`, `tests/test_factories_feed.py`, plus new
 factories in `tests/factories.py`) covered `app/utils.py`'s five feed and query
 functions: `get_deduped_post_ids`, `post_ids_to_models`, `instance_sticky_posts`,
 `get_instance_stickies` and `possible_communities`. It re-measured the module at
@@ -652,15 +653,17 @@ exclusion built on it.
   `app.activitypub.routes`. `from app.utils import get_redis_connection` binds a
   new name in the importing module at import time, so patching `app.utils` alone
   leaves those three pointing at the original and talking to the real, shared
-  test Redis. Add any fifth such import to the fixture's list. Still not covered:
-  `app.redis_client` — a module-level global assigned by `create_app()` and read
-  via `from app import redis_client` in roughly 14 modules
-  (`grep -rn 'from app import.*redis_client' app/` for the current set; not
-  listed here because such a list rots). That is a far wider surface than
-  `get_redis_connection`'s four bindings, so a sub-project needing Redis
-  isolation across `app/` should plan to patch `app.redis_client` as well, and
-  to widen this fixture rather than hand-roll its own. Also not covered: the
-  rate limiter and Celery app, built from `Config` at import time.
+  test Redis. Add any fifth such import to the fixture's list. Also covered, as
+  of the coverage-utils-feed sub-project: `app.redis_client` — a module-level
+  global assigned by `create_app()` and read via `from app import redis_client`
+  in roughly 14 modules (`grep -rn 'from app import.*redis_client' app/` for the
+  current set; not listed here because such a list rots). Every one of those
+  sites does the import inside a function body, re-executed on every call, so
+  one `monkeypatch.setattr('app.redis_client', ...)` redirects all of them --
+  see "The feed cache key" above for the test that proves it
+  (`test_redis_double_covers_app_redis_client`,
+  `tests/test_factories_feed.py`). Still not covered: the rate limiter and
+  Celery app, built from `Config` at import time.
 - Celery runs eagerly under test, with `eager_propagates` so a failing task
   raises rather than being swallowed. Configured in the `app` fixture, on
   `celery.conf` directly (**not** `TestConfig` attributes), in the OLD key
