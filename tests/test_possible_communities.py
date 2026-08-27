@@ -69,10 +69,21 @@ both open with `if user_id is None or user_id == 0: return []`
 AnonymousUserMixin.get_id() returns None (app/__init__.py configures no
 custom anonymous_user), so an anonymous viewer gets both lists empty for
 free and only the Others query -- which has no user/membership filter at
-all -- can populate anything. Rules 8-10 are therefore tested through an
-ANONYMOUS viewer below (no membership fixtures needed to isolate them);
-rules 1-7 need an AUTHENTICATED viewer, since moderating_communities/
-joined_communities return [] for anyone else.
+all -- can populate anything. That means rules 8-10 do not NEED an
+authenticated viewer to isolate them, but the tests below (TestOthers
+Exclusions) use one anyway -- an ordinary as_user() viewer with no
+CommunityMember rows, which reaches Rules 8-10 exactly the same way an
+anonymous one would, since an authenticated viewer with no memberships
+also gets both lists empty. That was not a deliberate choice; it is
+plain inconsistency with this docstring's original plan, most likely
+from copying the make_user/login setup out of the TestGrouping methods
+above rather than switching to anon(). The one test in this file that
+actually uses anon() is test_no_eligible_communities_at_all_returns_an_
+empty_dict, which needs it for a different reason -- to prove rule 7's
+omission with NOTHING in the database rather than an Others-only viewer.
+Rules 1-7 need an AUTHENTICATED viewer WITH the relevant membership rows,
+since moderating_communities/joined_communities return [] for anyone
+else.
 
 A finding, not a defect: Step 1 of the brief asks for "a community both
 moderated and joined appears ONCE, under Moderating." That literal state is
