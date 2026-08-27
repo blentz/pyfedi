@@ -19,11 +19,13 @@ directly with no formdata and no CSRF token; apply_feed_url_rules is called
 directly rather than through form.validate(), since it makes no use of the
 other field validators.
 """
+import inspect
 import re
 
 from flask_login import login_user
 
 from app import db
+from app.auth.forms import RegistrationForm
 from app.feed.forms import AddCopyFeedForm, EditFeedForm
 from app.models import Feed
 from app.utils import apply_feed_url_rules
@@ -354,9 +356,5 @@ class TestUsernameRegexMetacharacterProbe:
         every regex metacharacter. Read directly from source rather than
         trusting a paraphrase.
         """
-        import inspect
-
-        from app.auth.forms import RegistrationForm
-
         source = inspect.getsource(RegistrationForm.validate_user_name)
         assert r"re.match(r'^[a-zA-Z0-9_]+$', user_name.data)" in source

@@ -377,7 +377,7 @@ down, the floor moved from 67 to 71, proved to bite in both directions: set to
 figures (all five functions 100% statement and 100% branch on their current
 line ranges) and the fuzz harness's iteration-count rationale, is in
 `tests/README.md`'s "Sub-project 1c" section -- read that alongside this one.
-Four things from this sub-project outlive its tests.
+Five things from this sub-project outlive its tests.
 
 ### 1. `domain_from_url`'s fix changes future attribution only
 
@@ -408,7 +408,37 @@ length for the same reason the design doc records it: so a later reader who
 notices old `Domain` rows still look wrong does not mistake the absence of a
 migration for an oversight this sub-project simply failed to do.
 
-### 2. Coverage's blindness to strings applies to regexes and URL literals too
+### 2. A second fix for the same defect class: `url_needs_archive`
+
+Task 1's `domain_from_url` fix was not the only production change this
+sub-project made. The campaign separately found and, with owner
+authorisation, fixed an identical defect in `app/post/util.py`'s
+`url_needs_archive` (commits `e0d08efc`, `3feab57c`; tests in
+`tests/test_url_needs_archive.py`) -- the same `urlparse(url.replace('www.',
+''))`-over-the-whole-string shape, before parsing, that `domain_from_url` had.
+
+Its severity differs from `domain_from_url`'s: the return value feeds a
+membership test against a hardcoded `paywalled_sites` list that drives a UI
+affordance (whether to offer a `removepaywall.com` archive link), never a
+`Domain` row used for attribution or ban enforcement. It still failed in both
+directions -- `https://awww.nytimes.com/x` mangled to `anytimes.com`, a false
+negative that withholds an archive link from a genuinely paywalled host, and
+`https://nywww.times.com/x` mangled to `ny` + `times.com` = `nytimes.com`, a
+false positive that hands an attacker-registered host a paywall-bypass link.
+The fix mirrors `domain_from_url`'s idiom: parse first, then strip a
+`startswith('www.')` prefix from the parsed hostname alone.
+
+`tests/test_url_needs_archive.py` covers it with 11 tests, and its own report
+is explicit that only 2 of them discriminate the fix:
+`test_an_interior_www_does_not_produce_a_false_positive` and
+`test_www_prefixed_paywalled_host_still_needs_archive`. The false-negative
+test does not discriminate on its own -- it returns `False` both before and
+after the fix, for the wrong reason pre-fix -- and the rest are regression
+guards for adjacent behaviour (the two exemptions, falsy input, the bare
+`except:`'s hostless-URL path). Worth preserving as stated rather than rounded
+up to "11 tests cover the fix."
+
+### 3. Coverage's blindness to strings applies to regexes and URL literals too
 
 The SQL-predicate blind spot 1b-ii found (`OR p.language_id is null`,
 completely untested while coverage read 100%, because coverage.py sees the
@@ -442,7 +472,7 @@ exists specifically because the coverage number cannot make that claim, and a
 no-oracle property check can probe the string's behaviour where line coverage
 cannot.
 
-### 3. A bare `except:` blocks mutation testing
+### 4. A bare `except:` blocks mutation testing
 
 Found in Task 3, and worth stating as a general rule beyond this one
 function: `app/utils.py:3126` and `:3128`, both in `fixup_url`'s peertube
@@ -478,7 +508,7 @@ that block, not just assume the block's line coverage speaks for its
 mutation resistance. Reported here, not fixed -- a change to `app/utils.py`
 is out of this campaign's scope.
 
-### 4. Guard-level vs. dispatch-level mutations
+### 5. Guard-level vs. dispatch-level mutations
 
 Found in Task 4, on `rewrite_href`'s four-rule `if`/`elif`/`elif`/`else`
 chain (`app/utils.py:4968-4991`). The initial mutation-testing pass ran four
@@ -559,6 +589,19 @@ optional suffix group that was meant to require the caller's exact username
 -- letting user `a.b` claim a feed url in what reads as a different user's
 namespace. `re.escape()` on the interpolated segment would close this;
 per this campaign's rule, it was not applied here.
+
+### `domain_from_url` has a second consumer, which matters for mutation runs
+
+`tests/test_link_parsers_fuzz.py` imports and calls `domain_from_url` directly
+-- it is one of the three functions the fuzz harness targets -- making it a
+second, independent test file exercising that function alongside
+`tests/test_domain_from_url.py`. The whole-branch review's own mutation run
+against `domain_from_url` found 3 failures across 11 files, and the fuzz file
+was one of them: proof its property check discriminates rather than merely
+restating the implementation, and proof that a future mutation run scoped only
+to `tests/test_domain_from_url.py` will under-count `domain_from_url`'s real
+kill rate. Include the fuzz file in any future mutation run against this
+function.
 
 ### Findings reported, not fixed
 

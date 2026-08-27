@@ -435,7 +435,7 @@ class TestHideLowQuality:
 
 
 class TestAnonymousContentWarningBranch:
-    """app/utils.py:3874-3865. Anonymous viewers take a config-dependent
+    """app/utils.py:3874-3878. Anonymous viewers take a config-dependent
     branch instead of any per-user preference:
 
         if current_app.config['CONTENT_WARNING']:
