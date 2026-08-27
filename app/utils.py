@@ -143,6 +143,15 @@ def get_request(uri, params=None, headers=None) -> httpx.Response:
         payload_str = urllib.parse.urlencode(params) if params else None
     try:
         response = httpx_client.get(uri, params=payload_str, headers=headers, timeout=timeout, follow_redirects=False)
+    except httpx.InvalidURL as invalid_url:
+        # Same normalisation as the ValueError clause below, for the same
+        # reason: callers of get_request catch httpx.HTTPError. httpx.InvalidURL
+        # is neither an HTTPError nor a ValueError -- it descends straight from
+        # Exception -- so without this it escaped past all four handlers here.
+        # Reachable whenever is_invalid_get_request_uri lets the uri through:
+        # under DEBUG it short-circuits to False, and 'http://[v1.x]/y' passes
+        # its checks even with DEBUG off.
+        raise httpx.HTTPError(f"HTTPError: {str(invalid_url)}") from None
     except ValueError as ex:
         # Convert to a more generic error we handle
         raise httpx.HTTPError(f"HTTPError: {str(ex)}") from None
@@ -298,7 +307,14 @@ def mime_type_using_head(url):
             return content_type
         else:
             return ''
-    except httpx.HTTPError:
+    except (httpx.HTTPError, httpx.InvalidURL):
+        # httpx.InvalidURL is NOT an httpx.HTTPError -- it descends straight
+        # from Exception -- and httpx raises it while BUILDING the request, so
+        # no transport-level handler ever sees it. A submitted post URL like
+        # 'https://[::1/x' or 'http://exa℀mple.com/' lands here, and before
+        # this clause it escaped into is_image_url and 500'd post creation.
+        # '' is the same "no Content-Type could be determined" answer the
+        # HTTPError case returns, which sends the caller to extension sniffing.
         return ''
 
 
@@ -2529,7 +2545,11 @@ def inbox_domain(inbox: str) -> str:
     inbox = inbox.lower()
     if 'https://' in inbox or 'http://' in inbox:
         try:
-            inbox = urlparse(inbox).hostname
+            # `or ''` for the adjacent empty-host case: 'https:///x' PARSES,
+            # but .hostname is None, and returning that None broke the same two
+            # callers named below -- no exception involved, so the guard alone
+            # did not cover it.
+            inbox = urlparse(inbox).hostname or ''
         except ValueError:
             # A remote instance chooses its own `inbox` URL -- refresh_instance
             # copies it verbatim out of the JSON that instance served -- and

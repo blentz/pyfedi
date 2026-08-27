@@ -564,7 +564,17 @@ def extract_domain_and_actor(url_string: str):
     # Parse the URL
     if url_string.endswith('/'):  # WordPress
         url_string = url_string[:-1]
-    parsed_url = urlparse(url_string)
+    try:
+        parsed_url = urlparse(url_string)
+    except ValueError:
+        # The actor id is chosen by the REMOTE peer (validate_remote_actor on
+        # the inbound federation path), so a broken or hostile one can send a
+        # netloc urlparse refuses: an unbalanced IPv6 bracket, an address with
+        # two '::' runs, or a host that fails its NFKC confusability check.
+        # ('', '') is what urlparse already yields for a string with no
+        # authority and no path, so nothing new is invented; every caller
+        # degrades to "actor not found" from there.
+        return '', ''
 
     # Extract the server domain name
     server_domain = parsed_url.netloc
