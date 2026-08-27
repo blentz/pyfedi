@@ -715,16 +715,34 @@ figure from `coverage.json`, same as every earlier ratchet entry here), up from
 1b-ii's 67.6478%. Rounded down, the floor moved from **67 to 71**. Proved to
 bite in both directions against that `coverage.json`: set to 72 the ratchet
 exits 1 with `app/utils.py: 71.48% is below its floor of 72.00%`; restored to
-71 it exits 0 with `All 3 module floors met.` All five functions measure 100%
-statement and 100% branch coverage on their own line ranges (`domain_from_url`
-1442-1457, `remove_tracking_from_link` 3083-3105, `fixup_url` 3110-3167,
-`apply_feed_url_rules` 4486-4516, `rewrite_href` 4968-4991) -- with the caveat
-below about what 100% branch coverage does and does not prove.
+71 it exits 0 with `All 3 module floors met.` All five functions measured 100%
+statement and 100% branch coverage over their own bodies -- `domain_from_url`,
+`remove_tracking_from_link`, `fixup_url`, `apply_feed_url_rules` and
+`rewrite_href` -- with the caveat below about what 100% branch coverage does
+and does not prove. That was measured at this sub-project's own commit; it is a
+record of a past reading, not a claim about `app/utils.py` today.
+
+**No line numbers in this section, deliberately.** It used to give a range for
+each of those five functions and four more for individual branches below. Every
+one of them rotted, and the docstring that cited the same range for
+`rewrite_href` was corrected three times and was stale again each time it was
+committed -- see `tests/test_rewrite_href.py`'s docstring, which records the
+whole sequence and carries the command that derives positions on demand.
+Identify code here by name and behaviour; derive positions when you need them.
+
+Two line numbers below are deliberately kept, and the difference is the rule
+worth learning: "Before Task 1's fix (commit `81a3e40e`), line 1443 read
+`urlparse(url.lower().replace('www.', ''))`" and its `url_needs_archive`
+counterpart are anchored to a NAMED COMMIT and quote the exact source text.
+They were never claims about HEAD, so HEAD moving cannot make them wrong, and
+the quoted text makes them self-verifying. A bare number describing the current
+file has neither property. Keep the first form; do not add the second.
 
 **Fuzzing (`tests/test_link_parsers_fuzz.py`).** Targets `domain_from_url`,
 `remove_tracking_from_link`, and fixup_url's YouTube-matrix parsing (never its
-peertube branch at 3115-3129, which performs a DB query and a live HTTP GET and
-is excluded by construction). Property: no unhandled exception, and no host
+peertube branch -- the `/w/`-shaped path against a known peertube instance --
+which performs a DB query and a live HTTP GET and is excluded by
+construction). Property: no unhandled exception, and no host
 confusion -- the output's host must be traceable to the input's host, at most
 `www.`-stripped or youtu.be-aliased. Uses `atheris.FuzzedDataProvider` as a
 structured random-bytes decoder over a fixed-seed `random` stream, NOT
@@ -749,13 +767,17 @@ this specific, documented crash class around each function call so the suite
 stays green while the search keeps running on every future run; anything else
 escaping is a genuinely new finding.
 
-**A bare `except:` blocks mutation testing (Task 3).** `app/utils.py:3126` and
-`:3128`, in `fixup_url`'s peertube branch, catch everything -- including
-`KeyboardInterrupt` and `SystemExit`. Concretely: with the netloc guard at 3117
+**A bare `except:` blocks mutation testing (Task 3).** Both clauses in
+`fixup_url`'s peertube branch -- the one around the JSON decode and the one
+around the whole `get_request` -- USED TO catch everything, including
+`KeyboardInterrupt` and `SystemExit`. Both were narrowed in `1d1f25be` (to
+`(ValueError, TypeError)` and `httpx.HTTPError`), so the finding below is
+history, not a description of the current file; it is kept because the lesson
+outlived the defect. Concretely, as it stood then: with the netloc guard
 mutated wide (`if True:`), the brief's own
 `test_an_unknown_host_makes_no_request` passed unchanged, because with no
 `http_mock` route registered `get_request` raised respx's own
-`AllMockedAssertionError`, and the bare `except:` at 3128 swallowed that
+`AllMockedAssertionError`, and the outer bare `except:` swallowed that
 exception before it ever reached an assertion -- so the test's "makes no
 request" claim was not actually being verified by that test alone. A bare
 `except:` does not merely hide production failures; it makes the code it
@@ -768,7 +790,7 @@ arm's body (e.g. the `not community.is_local()` check, or the inner
 `if post_reply:`) stays narrow, because every other arm has already been
 foreclosed by the dispatch chain before that guard ever runs. A mutation to a
 DISPATCH CONDITION itself (the `if`/`elif` tests that choose which arm runs,
-e.g. the URL-shape check at line 4969) goes wide, because it changes WHICH arm
+e.g. the post rule's URL-shape check) goes wide, because it changes WHICH arm
 is selected, stealing inputs that would otherwise have reached a different,
 later arm's tests entirely -- the same chain-geometry hazard this campaign's
 guidance already names for `continue` chains, applying identically to an
@@ -786,7 +808,7 @@ paths in the same function all return `False` and append one error to the same
 list, a test asserting only `is False` plus an error count of 1 cannot say
 WHICH path rejected -- two different guards can produce the same
 return-value-and-count shape for the same input. `apply_feed_url_rules`'s dash
-guard (`app/utils.py:4487`) and its downstream regex guard both reject `'-'`
+guard and its downstream regex guard both reject `'-'`
 the same way for that reason; disabling the dash guard alone left the same
 input failing the regex two lines later, so the mutation initially survived
 undetected until the test was changed to assert the exact error message

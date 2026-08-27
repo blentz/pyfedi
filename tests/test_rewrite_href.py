@@ -1,45 +1,66 @@
-"""Covers app/utils.py's rewrite_href (app/utils.py:5136-5168): a four-rule
-if/elif/elif/else chain that rewrites a remote ActivityPub href into a local
-path when a matching row exists locally, and returns the href unchanged
-otherwise.
+"""Covers `rewrite_href` in `app/utils.py`: a four-rule if/elif/elif/else chain
+that rewrites a remote ActivityPub href into a local path when a matching row
+exists locally, and returns the href unchanged otherwise.
 
-Enumerated by AST (podman-compose exec ... python -c "ast.walk(...)"), not by
-reading -- tests/README.md's coverage-ratchet section documents several
-enumerations in this campaign that were wrong when re-derived:
+NO LINE NUMBERS HERE, DELIBERATELY, AND THAT IS THE POINT OF THIS PARAGRAPH.
+This block used to carry a range plus ten AST line numbers. It has been wrong
+four times: written as `4968-4991`; corrected to `5112`; corrected to `5136`;
+and wrong again within the hour, because that last correction was derived
+against the tree BEFORE a fix in the same session inserted 58 lines above the
+function and was then committed AFTER it. Every one of those attempts was
+correct when derived and stale when committed. That is a structural failure,
+not a careless one: a line number in a docstring is a claim about a file that
+keeps changing, with nothing anywhere that can detect the drift. So every
+branch below is identified by NAME AND BEHAVIOUR, which survives an edit
+anywhere else in the module.
 
-    if at line 5137, orelse=1   <- top-level: if <post shape>
-    if at line 5139, orelse=0   <- nested: if post:
-    if at line 5144, orelse=1   <- top-level: elif '/comment/' in url:
-    if at line 5140, orelse=1   <- nested: if post.slug: / else:
-    if at line 5146, orelse=0   <- nested: if post_reply:
-    if at line 5148, orelse=2   <- top-level: elif <community shape>
-    if at line 5150, orelse=0   <- nested: if community and not community.is_local():
-    if at line 5163, orelse=0   <- nested (inside the else body): the
-                                   fallthrough's Post existence test, now
-                                   `if post_id is None:`
-    if at line 5165, orelse=0   <- nested: if post_reply:
+To recover positions, DERIVE them. Do not read them out of prose here or
+anywhere else:
 
-Three If nodes (5137, 5144, 5148) form the top-level if/elif/elif chain; the
-final `else` is not itself an If node (Python's ast represents `elif` as a
-nested If in `orelse`, but a plain `else` is just body statements -- one of
-which happens to be another If, at 5163). So there are FOUR rules, not nine:
-post (5137), comment (5144), community (5148), and the else fallthrough. The
-other six If nodes (5139, 5140, 5146, 5150, 5163, 5165) are lookups nested
-inside a rule's own body, not additional rules -- a URL that exercises every
-branch of the outer chain can still leave most of these lookup paths, and
-their conditional rewrites, unexercised. One class per rule, not one per
-branch: each class carries a MATCH+rewrite case and a MATCH-but-lookup-misses
-case, proving the rewrite is conditional on the lookup succeeding rather than
-on the URL shape alone.
+    podman-compose -f compose.test.yaml exec -T -w /app test-runner python -c "
+    import ast
+    tree = ast.parse(open('app/utils.py').read())
+    for n in ast.walk(tree):
+        if isinstance(n, ast.FunctionDef) and n.name == 'rewrite_href':
+            print('def', n.lineno, n.end_lineno)
+            for i in ast.walk(n):
+                if isinstance(i, ast.If):
+                    print(' if', i.lineno, 'orelse', len(i.orelse))"
 
-THESE NUMBERS ROT, and this block has already been wrong once. It was written
-against `4968-4991`; commit 6cf76423 then edited the very lines it enumerates
-(replacing the fallthrough's `Post.get_by_ap_id` with an id-only query and
-adding a nine-line comment above it) and left every number untouched, so the
-whole block was stale in the commit that changed it. Do not trust a number
-here; re-derive it with the command above and open each line to confirm it is
-what the prose beside it says. That is how the set above was produced, at
-app/utils.py as of the commit that carries this docstring.
+That reports NINE If nodes, in ast.walk order. What each one is:
+
+    1. THE POST RULE'S DISPATCH -- `'/post/' in url`, or the /c/-with-/p/ or
+       /m/-with-/t/ shapes. Top-level, orelse=1 (the elif chain).
+    2. the post rule's LOOKUP TEST -- `if post:`, after `Post.get_by_ap_id`.
+    3. THE COMMENT RULE'S DISPATCH -- `elif '/comment/' in url:`. Top-level,
+       orelse=1.
+    4. the post rule's SLUG-OR-ID CHOICE -- `if post.slug:` / `else:`. The only
+       nested node carrying an else (orelse=1), and the reason the post rule
+       needs three tests rather than two.
+    5. the comment rule's LOOKUP TEST -- `if post_reply:`.
+    6. THE COMMUNITY RULE'S DISPATCH -- `elif` on /c/-without-/p/ or
+       /m/-without-/t/. Top-level, orelse=2 -- the plain `else` body, which is
+       two statements.
+    7. the community rule's LOOKUP-AND-LOCALITY GUARD --
+       `if community and not community.is_local():`.
+    8. THE FALLTHROUGH'S POST EXISTENCE TEST -- `if post_id is None:`, inside
+       the plain `else` body, over an id-only query.
+    9. the fallthrough's REPLY LOOKUP TEST -- `if post_reply:`, nested inside 8.
+
+Nodes 1, 3 and 6 form the top-level if/elif/elif chain. The final `else` is not
+an If node at all: Python's ast represents `elif` as a nested If in `orelse`,
+but a plain `else` is just body statements -- one of which happens to be node 8.
+So there are FOUR rules, not nine: post, comment, community, and the else
+fallthrough. The other six nodes are lookups nested inside a rule's own body,
+not additional rules -- a URL that exercises every branch of the outer chain can
+still leave most of these lookup paths, and their conditional rewrites,
+unexercised. One class per rule, not one per branch: each class carries a
+MATCH+rewrite case and a MATCH-but-lookup-misses case, proving the rewrite is
+conditional on the lookup succeeding rather than on the URL shape alone.
+
+The `orelse` counts are the one piece of AST detail kept in prose, and they are
+kept because they are position-independent: they are what distinguishes an elif
+chain from nesting, and they do not move when the file does.
 """
 from app import db
 from app.utils import rewrite_href
