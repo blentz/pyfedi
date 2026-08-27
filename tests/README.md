@@ -381,15 +381,15 @@ The two real gaps, now closed:
 
 `get_deduped_post_ids` now carries exactly two documented-uncovered regions,
 both legitimately out of this sub-project's scope: the `hashtag` filter
-(`3839-3843`) and the unrecognized-`sort` fallthrough (`3955->3959`, mirrored in
-`post_ids_to_models` at `3982->3984`). There used to be a third, the
-private-community branch at `3866-3867` -- it stopped being uncovered when it
+(`3841-3845`) and the unrecognized-`sort` fallthrough (`3957->3961`, mirrored in
+`post_ids_to_models` at `3984->3986`). There used to be a third, the
+private-community branch at `3868-3869` -- it stopped being uncovered when it
 turned out to be a leak rather than a gap; see "The private-community filter"
 below. Those line numbers moved by seven when the cache-key fix landed and again
 when the private-community fix did, and are re-derived from `coverage.json`, not
 carried forward. `instance_sticky_posts` and
 `get_instance_stickies` are 100% statement and branch. `possible_communities`
-carries its two documented-dead branches (`4360->4359`, `4367->4366`), unchanged.
+carries its two documented-dead branches (`4362->4361`, `4369->4368`), unchanged.
 
 ### The feed cache key
 
