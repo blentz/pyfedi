@@ -274,8 +274,10 @@ def url_needs_archive(url) -> bool:
                        'hilltimes.com']
     if url:
         try:
-            parsed_url = urlparse(url.replace('www.', ''))
+            parsed_url = urlparse(url)
             hostname = parsed_url.hostname.lower()
+            if hostname.startswith('www.'):
+                hostname = hostname[4:]
         except:
             return False
         if hostname == 'nytimes.com' and 'unlocked_article_code' in url:
