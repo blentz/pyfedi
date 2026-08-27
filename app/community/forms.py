@@ -330,14 +330,17 @@ class CreateVideoForm(SubmittedUrlMixin, CreatePostForm):
     image_file = FileField(_l('Video file (mp4 or webm)'), render_kw={'accept': 'video/mp4,video/webm'})    # do not change from image_file even though this is a video
 
     def validate(self, extra_validators=None) -> bool:
-        super().validate(extra_validators)
+        if not super().validate(extra_validators):
+            return False
 
         # video_url has no validate_video_url hook of its own; its domain-ban
-        # check lived here inline. Left where it was rather than moved to an
-        # inline validator, because this override discards super()'s result --
-        # moving the check would make a banned domain (or an unparseable URL)
-        # stop rejecting the form. That discarded result is a separate defect;
-        # reported, not fixed here.
+        # check lives here inline. It used to have to: the guard above was
+        # missing, super()'s result was discarded, and an inline validator's
+        # rejection would have been discarded with it. That is fixed, so this
+        # check could now move into a validate_video_url hook and let the
+        # override go -- left in place because moving it changes when the
+        # error is reported (a hook runs even when another field fails; this
+        # does not), and that is a separate decision.
         return self.url_field_is_acceptable(
             self.video_url, lambda name: _l("Videos from %(domain)s are not allowed.", domain=name))
 
@@ -347,7 +350,8 @@ class CreateImageForm(CreatePostForm):
     image_file = FileField(_l('Image'), validators=[DataRequired()], render_kw={'accept': 'image/*'})
 
     def validate(self, extra_validators=None) -> bool:
-        super().validate(extra_validators)
+        if not super().validate(extra_validators):
+            return False
 
         uploaded_file = request.files['image_file']
         if uploaded_file and uploaded_file.filename != '' and not uploaded_file.filename.endswith('.svg') and not uploaded_file.filename.endswith('.gif'):
@@ -395,7 +399,8 @@ class EditImageForm(CreateImageForm):
     image_file = FileField(_l('Image'), validators=[Optional()], render_kw={'accept': 'image/*'})
 
     def validate(self, extra_validators=None) -> bool:
-        super().validate(extra_validators)
+        if not super().validate(extra_validators):
+            return False
 
         if self.communities:
             community = Community.query.get(self.communities.data)
@@ -426,18 +431,26 @@ class CreateEventForm(SubmittedUrlMixin, CreatePostForm):
         self.event_timezone.choices = get_timezones()
         self.join_mode.choices = [('free', _('Free')), ('donation', _('Donation')), ('paid', _('Paid'))]
 
-    # NOTE: this hook is DEAD, and was already dead before this change --
-    # CreateEventForm has no `link_url` field (its URL fields are
-    # `more_info_url` and `online_link`), so WTForms never looks it up, and its
-    # old body referenced `self.link_url`, which does not exist. Routed through
-    # the shared mixin anyway so the duplication is gone and it is correct if a
-    # link_url field is ever added. Reported, not removed.
-    def validate_link_url(self, field):
+    # These two replace a `validate_link_url` hook that was DEAD: WTForms
+    # resolves a `validate_<name>` hook by field name, and CreateEventForm has
+    # no `link_url` field -- its URL fields are `more_info_url` and
+    # `online_link` -- so the hook was never looked up and never ran. It was
+    # wired to the two fields it was evidently meant to guard rather than
+    # deleted, because deleting it would have left an event's two
+    # user-submitted, stored-and-rendered URLs as the only ones on the site
+    # with no domain-ban and no parseability check at all. Both fields are
+    # Optional, so an empty one short-circuits before either check.
+    def validate_more_info_url(self, field):
+        return self.url_field_is_acceptable(
+            field, lambda name: _l("Links to %(domain)s are not allowed.", domain=name))
+
+    def validate_online_link(self, field):
         return self.url_field_is_acceptable(
             field, lambda name: _l("Links to %(domain)s are not allowed.", domain=name))
 
     def validate(self, extra_validators=None) -> bool:
-        super().validate(extra_validators)
+        if not super().validate(extra_validators):
+            return False
 
         local_tz = ZoneInfo(self.event_timezone.data)
         local_start = self.start_datetime.data.replace(tzinfo=local_tz)
@@ -525,7 +538,8 @@ class CreatePollForm(CreatePostForm):
     choice_15 = StringField('Choice')
 
     def validate(self, extra_validators=None) -> bool:
-        super().validate(extra_validators)
+        if not super().validate(extra_validators):
+            return False
 
         # Polls shouldn't be scheduled more than once
         if self.repeat.data in ['daily', 'weekly', 'monthly']:

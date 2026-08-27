@@ -57,7 +57,8 @@ import re
 from urllib.parse import urlparse
 
 import pytest
-from flask import g
+from flask import g, request
+from werkzeug.datastructures import MultiDict
 
 from app import db
 from app.activitypub.util import update_post_from_activity
@@ -107,12 +108,41 @@ def link_form():
     return form
 
 
+# The CreatePostForm fields a submission must carry for super().validate() to
+# pass. No database rows are needed for them: SelectField.pre_validate only
+# compares the submitted value against `choices`, and CreateVideoForm never
+# looks the community or the language up.
+BASE_SUBMISSION = {
+    'communities': '1',
+    'title': 'An entirely ordinary post title',
+    'language_id': '1',
+    # get_timezones() drops every zone without a '/', so 'UTC' is not a choice.
+    'timezone': 'Europe/London',
+    'repeat': 'none',
+}
+
+
 def video_form():
-    """As link_form, for CreateVideoForm's video_url."""
+    """As link_form, for CreateVideoForm's video_url -- but built on a
+    COMPLETE submission, which link_form does not have to be.
+
+    The difference is where the two checks live. link_url's is an inline
+    `validate_link_url` hook, so WTForms runs it as part of every field's
+    validator chain whether or not other fields failed. video_url's lives in
+    `CreateVideoForm.validate`, AFTER `if not super().validate(...): return
+    False` -- so on a half-empty submission the guard returns first and
+    video_url is never examined. Before that guard existed the override
+    discarded super()'s verdict and reached the check regardless, which is why
+    this helper used to get away with sending video_url alone.
+
+    `request.form` is immutable and was fixed when the caller opened its
+    request context, so the base fields are merged in as explicit formdata
+    instead; `request.files` is untouched.
+    """
     g.site = db.session.query(Site).get(1)
-    form = CreateVideoForm()
-    form.communities.choices = []
-    form.language_id.choices = []
+    form = CreateVideoForm(formdata=MultiDict({**BASE_SUBMISSION, **request.form.to_dict()}))
+    form.communities.choices = [(1, 'a community')]
+    form.language_id.choices = [(1, 'English')]
     form.validate()
     return form
 
@@ -235,9 +265,10 @@ class TestVideoUrlIsCheckedToo:
     def test_the_form_as_a_whole_reports_invalid(self, app, db_session):
         with app.test_request_context('/', method='POST', data={'video_url': CRAFTED}):
             g.site = db.session.query(Site).get(1)
-            form = CreateVideoForm()
-            form.communities.choices = []
-            form.language_id.choices = []
+            form = CreateVideoForm(
+                formdata=MultiDict({**BASE_SUBMISSION, 'video_url': CRAFTED}))
+            form.communities.choices = [(1, 'a community')]
+            form.language_id.choices = [(1, 'English')]
             assert form.validate() is False
 
 
