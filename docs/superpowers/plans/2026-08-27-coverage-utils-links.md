@@ -32,7 +32,7 @@
 
 | file | responsibility |
 |---|---|
-| `app/utils.py:1442-1455` | **Modify** — `domain_from_url` host parsing (Task 1 only) |
+| `app/utils.py:1442-1457` | **Modify** — `domain_from_url` host parsing (Task 1 only) |
 | `tests/test_domain_from_url.py` | **Create** — Task 1 |
 | `tests/test_remove_tracking_from_link.py` | **Create** — Task 2 |
 | `tests/test_fixup_url.py` | **Create** — Task 3 |
@@ -49,7 +49,7 @@ No changes to `tests/factories.py` are anticipated; `make_domain`, `make_instanc
 ### Task 1: Fix `domain_from_url` host confusion, then cover it
 
 **Files:**
-- Modify: `app/utils.py:1442-1455`
+- Modify: `app/utils.py:1442-1457`
 - Test: `tests/test_domain_from_url.py` (create)
 
 **Interfaces:**
@@ -80,7 +80,7 @@ def domain_from_url(url: str, create=True) -> Domain:
 Create `tests/test_domain_from_url.py`:
 
 ```python
-"""domain_from_url (app/utils.py:1442-1455) decides which Domain row a post is
+"""domain_from_url (app/utils.py:1442-1457) decides which Domain row a post is
 attributed to. Domain carries `banned` (site-wide admin ban) and is the target
 of DomainBlock (per-user block), so a defect here is a blocking defect.
 
@@ -267,7 +267,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Consumes: nothing. This is the only pure function in the sub-project — no fixtures beyond `app`.
 - Produces: nothing later tasks depend on.
 
-Current production code (`app/utils.py:3081-3103`):
+Current production code (`app/utils.py:3083-3105`):
 
 ```python
 def remove_tracking_from_link(url):
@@ -294,7 +294,7 @@ def remove_tracking_from_link(url):
 Create `tests/test_remove_tracking_from_link.py`:
 
 ```python
-"""remove_tracking_from_link (app/utils.py:3081-3103) rewrites youtu.be share
+"""remove_tracking_from_link (app/utils.py:3083-3105) rewrites youtu.be share
 links to youtube.com/watch, preserving only the timestamp parameter. Every
 other host passes through untouched.
 
@@ -394,7 +394,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Consumes: `make_instance(domain, software)` from `tests/factories.py`; the `http_mock` fixture (respx router) from `tests/conftest.py`.
 - Produces: nothing later tasks depend on.
 
-`fixup_url` (`app/utils.py:3108-3165`) returns a `(thumbnail_url, embed_url)` tuple. It has two independent halves: a peertube branch that makes an HTTP request, and a YouTube URL matrix.
+`fixup_url` (`app/utils.py:3110-3167`) returns a `(thumbnail_url, embed_url)` tuple. It has two independent halves: a peertube branch that makes an HTTP request, and a YouTube URL matrix.
 
 **The peertube branch needs BOTH a seeded DB row and a mocked route.** It only fires when the URL ends in a `/w/`-shaped path *and* `parsed_url.netloc` appears in `SELECT domain FROM instance WHERE software = 'peertube'`. Seed with `make_instance('peertube.example', software='peertube')`.
 
@@ -405,7 +405,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 Create `tests/test_fixup_url.py`:
 
 ```python
-"""fixup_url (app/utils.py:3108-3165) returns (thumbnail_url, embed_url) for a
+"""fixup_url (app/utils.py:3110-3167) returns (thumbnail_url, embed_url) for a
 submitted link. Two independent halves: a peertube branch that fetches the
 canonical video id over HTTP, and a YouTube URL matrix.
 
@@ -547,11 +547,11 @@ class TestPeertube:
 
 - [ ] **Step 4: Cover what the bare `except:` clauses swallow**
 
-`app/utils.py:3124` and `:3126` are bare `except:`. Each needs a case establishing what it actually catches.
+`app/utils.py:3126` and `:3128` are bare `except:`. Each needs a case establishing what it actually catches.
 
 ```python
 class TestPeertubeErrorSwallowing:
-    """app/utils.py:3124 catches a malformed JSON body; :3126 catches a
+    """app/utils.py:3126 catches a malformed JSON body; :3128 catches a
     transport failure. Both are BARE `except:`, which also catches
     KeyboardInterrupt and SystemExit -- reported as a defect, not fixed here.
     """
@@ -602,7 +602,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Consumes: `make_instance`, `make_user`, `make_community`, `make_post`, `make_post_reply` from `tests/factories.py`.
 - Produces: nothing later tasks depend on.
 
-`rewrite_href` (`app/utils.py:4966-4989`) is a four-branch if/elif over ActivityPub id lookups, with an `else` that re-queries.
+`rewrite_href` (`app/utils.py:4968-4991`) is a four-branch if/elif over ActivityPub id lookups, with an `else` that re-queries.
 
 **One case per rule, not one per branch.** A branch chain reaches full branch coverage while most rules stay unexercised — the failure mode named in 1b-ii's spec for `continue` chains, and it applies identically here.
 
@@ -674,7 +674,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Consumes: `make_user` from `tests/factories.py`; `Feed` from `app.models`.
 - Produces: nothing later tasks depend on.
 
-`apply_feed_url_rules` (`app/utils.py:4484-4514`) is a **form validator bound to `self`**, reading `current_user.user_name`. It needs a form instance, not a plain call. Find the form class it is attached to:
+`apply_feed_url_rules` (`app/utils.py:4486-4516`) is a **form validator bound to `self`**, reading `current_user.user_name`. It needs a form instance, not a plain call. Find the form class it is attached to:
 
 ```bash
 grep -rn 'apply_feed_url_rules' app/ --include=*.py
@@ -785,7 +785,7 @@ Prove it bites in both directions:
 Add a "Sub-project 1c" section to `tests/README.md` and to `docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md`. Cover:
 
 - the `domain_from_url` defect, what it was, and that the fix changes future attribution only — no backfill
-- the bare `except:` clauses at `app/utils.py:3124,3126` as a reported, unfixed defect
+- the bare `except:` clauses at `app/utils.py:3126,3128` as a reported, unfixed defect
 - anything the username-regex probe in Task 5 turned up
 - that YouTube expectations are observed behaviour, not a specification
 

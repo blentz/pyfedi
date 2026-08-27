@@ -30,7 +30,7 @@ convention invented in one route.
 Moderators are covered. `community_membership_private` (app/utils.py) selects
 CommunityMember rows with `cm.is_banned is false` and no role predicate, while
 `moderating_communities` selects the same table with an EXTRA
-`is_moderator OR is_owner` predicate (app/utils.py:2563). The moderator set is
+`is_moderator OR is_owner` predicate (app/utils.py:2565). The moderator set is
 therefore a subset of the membership set, and a private community's moderator
 cannot be locked out by this check. A community's OWNER, likewise, is an
 is_owner CommunityMember row. `test_a_moderator_of_a_private_community_sees_it`

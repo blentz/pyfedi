@@ -357,14 +357,14 @@ fresh, never carry forward" is the standing rule.
 
 The two real gaps, now closed:
 
-- **The empty-`community_ids` early return** (`app/utils.py:3798-3799`). No
+- **The empty-`community_ids` early return** (`app/utils.py:3800-3801`). No
   earlier test called the function with an empty community list.
   `test_empty_community_ids_returns_an_empty_list_without_querying`
   (`tests/test_factories_feed.py`) covers it; neutralizing the guard makes the
   very next branch index `community_ids[0]` on an empty list and raise
   `IndexError`, which is what makes the mutation observable rather than merely
   changing a return value.
-- **The Redis cache-HIT read path** (`app/utils.py:3807-3809`). Task 1 proved
+- **The Redis cache-HIT read path** (`app/utils.py:3809-3811`). Task 1 proved
   only the cache-WRITE side. `test_a_cached_result_id_is_served_without_reaching_the_database`
   primes a result_id's cached value through `redis_double` to something a live
   query could never produce, then asserts the STALE cached value comes back --
@@ -458,7 +458,7 @@ exceptions", and the base restriction must still apply. Same syntax, opposite
 semantics. Do not "fix" the other six.
 
 The fix hoists ONE unconditional site above the anonymous/authenticated split
-(`app/utils.py:3858-3869`), so the base restriction cannot be lost by adding a
+(`app/utils.py:3860-3871`), so the base restriction cannot be lost by adding a
 branch, and membership only widens it:
 
     if current_user.is_authenticated and (private_community_ids := community_membership_private(...)):
@@ -543,7 +543,7 @@ Both layers had to change, and only one of them is authorisation. The picker is
 a disclosure fix; the form field is client-supplied, so a hand-crafted
 submission bypasses it entirely. `can_create_post` is what actually holds.
 
-- **`possible_communities`** (`app/utils.py:4383-4384`) gained ONE unconditional
+- **`possible_communities`** (`app/utils.py:4385-4386`) gained ONE unconditional
   filter on the Others query, base restriction widened by membership:
 
       filter(or_(Community.private == False,
@@ -553,11 +553,11 @@ submission bypasses it entirely. `can_create_post` is what actually holds.
   `get_deduped_post_ids`' equivalent is (above): a branch is a place the base
   restriction can later be lost. The Moderating and Joined groups needed no
   change -- both are membership-derived (`moderating_communities`,
-  `joined_communities`, `app/utils.py:2563,2624`), and `community_membership_private`
+  `joined_communities`, `app/utils.py:2565,2626`), and `community_membership_private`
   is a SUPERSET of both, asking for the same CommunityMember rows with only the
   `is_banned is false` condition.
 
-- **`can_create_post`** (`app/utils.py:2360-2361`) gained the canonical check,
+- **`can_create_post`** (`app/utils.py:2362-2363`) gained the canonical check,
 
       if content.private and content.id not in community_membership_private(user.id):
           return False
@@ -589,7 +589,7 @@ it" test never reaches the Others query and would pass even for an over-broad
 `Community.private == False`. The one reachable path where a private member DOES
 fall through to Others is `joined_communities`' extra predicate: it drops
 communities whose instance the viewer has an `InstanceBan` against
-(`app/utils.py:2634-2635`), while `community_membership_private` has no such
+(`app/utils.py:2636-2637`), while `community_membership_private` has no such
 filter. `test_a_member_who_has_blocked_the_communitys_instance_still_sees_it`
 drives exactly that, and is the only test that fails when the membership arm of
 the `or_` is deleted.

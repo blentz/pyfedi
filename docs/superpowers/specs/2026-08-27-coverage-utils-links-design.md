@@ -151,7 +151,7 @@ Fuzz target.
 URL matrix: `/shorts/`, `/watch?v=`, `/playlist`, `/post/`, bare path, and the
 `start`/`t` timestamp parameters. Mock the fetch with `respx`.
 
-Two bare `except:` clauses (`app/utils.py:3124`, `3126`) swallow everything. Each
+Two bare `except:` clauses (`app/utils.py:3126`, `3128`) swallow everything. Each
 needs a case establishing what it actually swallows — a bare `except:` also catches
 `KeyboardInterrupt` and `SystemExit`. **Report that; do not fix it.** It is outside
 the defect this sub-project addresses.

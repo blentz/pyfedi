@@ -1455,9 +1455,11 @@ def pop_link(link_snippets: list, text: str, placeholder: str) -> str:
 
 
 def domain_from_url(url: str, create=True) -> Domain:
-    parsed_url = urlparse(url.lower().replace('www.', ''))
+    parsed_url = urlparse(url.lower())
     if parsed_url and parsed_url.hostname:
         find_this = parsed_url.hostname.lower()
+        if find_this.startswith('www.'):
+            find_this = find_this[4:]
         if find_this == 'youtu.be':
             find_this = 'youtube.com'
         domain = db.session.query(Domain).filter_by(name=find_this).first()

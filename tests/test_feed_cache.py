@@ -76,7 +76,7 @@ def test_two_users_sharing_a_result_id_each_get_their_own_authorised_posts(
     hidden_posts filter is the discriminator on purpose -- it is appended
     UNCONDITIONALLY for every authenticated viewer (`p.id NOT IN (SELECT
     hidden_post_id FROM "hidden_posts" WHERE user_id = :user_id)`,
-    app/utils.py:3888), so neither user's exclusion depends on any other
+    app/utils.py:3890), so neither user's exclusion depends on any other
     preference, config value or membership state being set a particular way.
 
     Against the unfixed function this fails on the second assertion with

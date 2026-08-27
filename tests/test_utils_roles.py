@@ -30,7 +30,7 @@ class TestUserAccess:
     def test_a_granted_permission_is_permitted(self, app, db_session):
         make_instance('test.piefed.local', software='piefed')  # user.instance_id FK target
         # user_access() special-cases user_id == 1 as the instance superadmin
-        # (app/utils.py:1511), which would make this assertion pass even if
+        # (app/utils.py:1513), which would make this assertion pass even if
         # grant_permission/the role_permission join were broken. A throwaway
         # user consumes id 1 so 'granted' below lands on an ordinary id and
         # the True actually comes from the granted role.
@@ -54,7 +54,7 @@ class TestUserAccess:
     def test_a_user_with_no_role_is_denied(self, app, db_session):
         make_instance('test.piefed.local', software='piefed')  # user.instance_id FK target
         # user_access() special-cases user_id == 1 as the instance superadmin
-        # (app/utils.py:1511) -- a throwaway user consumes id 1 so 'norole'
+        # (app/utils.py:1513) -- a throwaway user consumes id 1 so 'norole'
         # below lands on an ordinary id and the negative assertion is real.
         make_user(None, 'filler', local=True)
         user = make_user(None, 'norole', local=True)
@@ -64,7 +64,7 @@ class TestUserAccess:
         """Fails if the query stops filtering on ur.user_id."""
         make_instance('test.piefed.local', software='piefed')  # user.instance_id FK target
         # user_access() special-cases user_id == 1 as the instance superadmin
-        # (app/utils.py:1511) -- a throwaway user consumes id 1 so 'other'
+        # (app/utils.py:1513) -- a throwaway user consumes id 1 so 'other'
         # below lands on an ordinary id and the negative assertion is real.
         make_user(None, 'filler', local=True)
         granted = make_user(None, 'has', local=True)
