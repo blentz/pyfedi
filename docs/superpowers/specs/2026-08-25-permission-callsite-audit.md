@@ -282,7 +282,7 @@ federation-out only (searches 1-3 return no hits under that directory).
 
 | action | entry point | guard | notes |
 |---|---|---|---|
-| create post | web `community.add_post`, `app/community/routes.py:1011` → `make_post` at `:1086` | `can_create_post` | via `app/shared/post.py:187`. Route also has `@login_required @validation_required @approval_required` and an in-body `banned / ban_posts / user_ip_banned` check. |
+| create post | web `community.add_post`, `app/community/routes.py:1018` → `make_post` at `:1086` | `can_create_post` | via `app/shared/post.py:187`. Route also has `@login_required @validation_required @approval_required` and an in-body `banned / ban_posts / user_ip_banned` check. |
 | create post | API `POST /api/alpha/post` → `post_post`, `app/api/alpha/utils/post.py:1474` | `authorise_api_user` + `can_create_post` | both inside `make_post`. |
 | create post | NNTP `POST` (no `References`), `app/nntp/server.py:645` → `post_post` | `authorise_api_user` + `can_create_post` | delegates to the API function with the client's bearer token. |
 | create post | AP inbox `Create`/`Update` of Page/Article/Link/Note/Question/Event, new object — `app/activitypub/routes.py:2308` | `can_create_post` | the well-guarded case. Rejected posts get a proactive `Delete` back. |
@@ -352,7 +352,7 @@ in the whole codebase (search 5). All three consult `can_upload_video`.
 
 | action | entry point | guard | notes |
 |---|---|---|---|
-| choose video file | web `community.add_post`, `app/community/routes.py:1082` | `can_upload_video()` | no-arg form; `current_user` is the real web user here, so correct. |
+| choose video file | web `community.add_post`, `app/community/routes.py:1089` | `can_upload_video()` | no-arg form; `current_user` is the real web user here, so correct. |
 | admit video ext | `make_post`, `app/shared/post.py:200` | `can_upload_video()` | **no `user` argument** — see F12. |
 | admit video ext | `edit_post`, `app/shared/post.py:464` | `can_upload_video()` | **no `user` argument** — see F12. |
 | admit video ext | `process_upload`, `app/shared/upload.py:22` | `can_upload_video(user)` | correct: the caller's user is passed. |
