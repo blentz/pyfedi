@@ -247,6 +247,26 @@ def make_cache_key(sort=None, post_id=None, view_filter=None):
 def is_image_url(url):
     common_image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp', '.avif', '.svg+xml',
                                '.svg+xml; charset=utf-8']
+    if not url:
+        # THE FALSY GUARD, and the reason every url-shaped helper below carries
+        # one. `except ValueError` cannot stand in for it: urlparse(None) does
+        # NOT raise. It returns a ParseResultBytes whose members are all b'',
+        # and the crash arrives one line later from a str method called on
+        # bytes -- b''.endswith('.jpg') is
+        # "TypeError: endswith first arg must be bytes or a tuple of bytes".
+        # TypeError is not a ValueError, so the guard this branch added for
+        # malformed STRINGS is blind to None.
+        #
+        # A None url is a normal state in this codebase now, not an error: this
+        # branch made Post.url NULL-able in practice (Post.new() and
+        # update_post_from_activity both store None for a url they will not
+        # keep, without resetting post.type). So it belongs in a plain
+        # conditional and not in exception handling.
+        #
+        # False is the same answer this returns for a url with no image
+        # extension, and it also skips the mime_type_using_head HEAD request,
+        # which has nothing to fetch.
+        return False
     mime_type = mime_type_using_head(url)
     if mime_type:
         mime_type_parts = mime_type.split('/')
@@ -273,6 +293,14 @@ def is_local_image_url(url):
 
 def is_video_url(url: str) -> bool:
     common_video_extensions = ['.mp4', '.webm']
+    if not url:
+        # See is_image_url above for why this is a conditional and not a wider
+        # `except`. This is the site the guard's absence actually reached
+        # users: app/post/routes.py's post_edit calls is_video_url(post.url)
+        # while building the form, BEFORE its ownership check, so any logged-in
+        # reader of a VIDEO post with a NULL url got a 500 where the route owed
+        # them a 401. tests/test_post_edit_null_url.py drives that route.
+        return False
     try:
         parsed_url = urlparse(url)
     except ValueError:
@@ -1531,6 +1559,13 @@ def url_is_parseable(url) -> bool:
 
 
 def domain_from_url(url: str, create=True) -> Domain:
+    if not url:
+        # See is_image_url for why this is a conditional. This one does not even
+        # reach urlparse: url.lower() on None is AttributeError, which no
+        # ValueError handler sees either. None is the answer this already gives
+        # for a url whose host it cannot determine, and every caller in app/
+        # writes `if domain:` before dereferencing it.
+        return None
     try:
         parsed_url = urlparse(url.lower())
     except ValueError:
@@ -1819,6 +1854,14 @@ def ensure_directory_exists(directory):
 
 
 def mimetype_from_url(url):
+    if not url:
+        # See is_image_url for why this is a conditional. Without it,
+        # urlparse(None).path is b'' and b''.split('?') raises
+        # "TypeError: a bytes-like object is required, not 'str'". None is the
+        # same "no mimetype could be determined" answer mimetypes.guess_type
+        # gives for an unrecognised path, and every one of the seven RSS
+        # callers already writes `if type and not type.startswith('text/')`.
+        return None
     try:
         parsed_url = urlparse(url)
     except ValueError:
@@ -3206,6 +3249,14 @@ def sha256_digest(input_string):
 
 # still used to hint to a local user that a post to a URL has already been submitted
 def remove_tracking_from_link(url):
+    if not url:
+        # See is_image_url for why this is a conditional. Alone among these
+        # helpers this one SURVIVES None today, and only by accident: the
+        # bytes netloc b'' can never equal the str 'youtu.be', so the rewrite
+        # branch (which does call str methods on the parse result) is never
+        # entered. That is one added line away from being a crash, so the
+        # passthrough is made explicit rather than left to the accident.
+        return url
     try:
         parsed_url = urlparse(url)
     except ValueError:
@@ -3240,6 +3291,13 @@ def remove_tracking_from_link(url):
 # Also duplicates link tracking removal from the function above.
 def fixup_url(url):
     thumbnail_url = embed_url = url
+    if not url:
+        # See is_image_url for why this is a conditional. This one crashes
+        # before the parse result is ever touched -- len(None) at the peertube
+        # length test below is TypeError -- so guarding the urlparse alone
+        # could never have covered it. (url, url) is this function's own
+        # passthrough, and it is what an empty string already returns.
+        return url, url
     try:
         parsed_url = urlparse(url)
     except ValueError:

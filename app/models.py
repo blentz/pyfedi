@@ -2452,6 +2452,25 @@ class Post(db.Model):
         return self.reports > 0 and current_user.is_authenticated and self.community.is_moderator()
 
     def youtube_can_embed(self) -> bool:
+        if not self.url:
+            # `"youtube.com" not in None` is TypeError, and this method was the
+            # only one of the three youtube_* siblings without the `if
+            # self.url:` its neighbours already carry -- youtube_embed and
+            # youtube_video_id both have one.
+            #
+            # NOT a live crash today, and that is worth stating rather than
+            # implying: all four call sites are inside a template block that
+            # already tested post.url --
+            # app/templates/post/post_teaser/_macros.html:397 under `{% if
+            # post.url -%}` at :367, app/templates/themes/dillo/post/
+            # post_teaser/_macros.html:369 under the same at :339, and
+            # app/templates/post/_post_full.html:142 and :190 under
+            # `{% elif post.type == POST_TYPE_LINK and post.url ... %}` at :109
+            # and its VIDEO twin at :150. So this is defence in depth for a
+            # public method whose safe value the templates already agree on:
+            # every call site is `{% if post.youtube_can_embed() %}`, and False
+            # means "render no embed".
+            return False
         if "youtube.com" not in self.url:
             return False
 
