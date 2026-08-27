@@ -187,6 +187,131 @@ the evidence:
   prior credential or tokens to fail to revoke. See the note after F8 in the
   audit doc for both halves.
 
+## Sub-project 1b-ii: `app/utils.py` feed and query machinery
+
+`docs/superpowers/specs/2026-08-26-coverage-utils-feed-design.md`. Covered
+`get_deduped_post_ids`, `post_ids_to_models`, `instance_sticky_posts`,
+`get_instance_stickies` and `possible_communities` -- the feed-assembly and
+sort-chain functions. Raised `app/utils.py`'s floor from 60 to 67 (measured
+`percent_covered` 67.1330%, rounded down). Four things from this sub-project
+outlive its tests.
+
+### 1. The SQL blind spot is a limitation of every number this sub-project reports
+
+Coverage.py measures the Python that *builds* a query, never the predicates
+*inside* a query string. A branch that appends a SQL clause reads as covered
+the instant it runs once -- regardless of whether the clause it appended
+does anything correct, or anything at all, once the database evaluates it.
+
+This sub-project found the concrete case: `get_deduped_post_ids`'s
+`read_language_ids` filter appends `'(p.language_id IN :read_language_ids OR
+p.language_id is null) '`. Three tests exercised the `IN (...)` half; none
+exercised `OR p.language_id is null` -- a post with no language set was never
+seeded -- and coverage read 100% throughout, because the Python `if` that
+appends the whole string had both its arms taken. The gap was only found by
+deleting the `OR ...` term and checking that no test failed; one didn't exist
+yet, so nothing did. `tests/test_feed_display_preferences.py`'s
+`test_a_posts_null_language_is_present` was added to close it, and the same
+deletion now fails exactly that test.
+
+So every "100% branch" result in this sub-project -- and the module floor
+built from it -- means "every Python branch that appends a clause was
+taken", **not** "every clause behaves correctly once appended". Future work
+on `app/utils.py`'s remaining SQL-heavy functions (1b-iii) should not read a
+green coverage number as license to skip enumerating the clauses inside each
+query string by hand.
+
+### 2. The two-direction mutation standard, and why one direction proves nothing about the other
+
+A filter that gates *other people's* content needs two mutations, not one,
+and they are not interchangeable:
+
+- **Delete the clause.** This proves an ABSENCE test is load-bearing: with
+  the clause gone, a thing that should have been filtered out now appears,
+  and the absence test (and only it) fails.
+- **Over-broaden the clause** (make it exclude everything, e.g. rewrite a
+  predicate to `1=0`). This proves a PRESENCE test is load-bearing: with the
+  clause excluding everything, a thing that should have stayed visible is
+  now gone too, and the presence test (and only it) fails.
+
+Deleting a clause can say nothing about whether the presence test is
+load-bearing, because the clause usually sits inside a guard (`if
+current_user.hide_nsfw == 1:`) that is FALSE in the presence-test's fixture
+-- the deletion mutation is unreachable from that test's path entirely.
+Three tasks in this sub-project (visibility filters, display preferences,
+and the display-preferences fix round after review) shipped with only the
+delete direction before both-direction mutation became the standard for
+every filter gating another person's content; single-direction coverage was
+then deliberately kept only for the seven display preferences, which gate
+the viewer's own taste settings and whose failure mode is an annoyance
+rather than a safety issue.
+
+### 3. The wide/narrow discriminator, for a chain of `continue`s or `if`s
+
+In a filter chain built from successive `continue`/`if` guards (
+`get_instance_stickies`'s seven rules, `possible_communities`'s three dedup
+checks), a rule that fires universally will short-circuit every downstream
+presence test -- a wide mutant-detection blast radius is *expected* geometry
+for a broad, early rule, not evidence of a problem.
+
+But a wide blast radius is *also* exactly the symptom of hidden fixture
+coupling between tests that should be independent. This sub-project found a
+concrete instance: `User.hide_nsfw` and `User.hide_nsfl` default to `1`
+(`app/models.py:984-985`), so any test file whose viewers don't explicitly
+zero those two columns shares invisible state through the column default.
+When `hide_nsfl`'s clause was over-broadened during mutation testing, **7 of
+16 tests failed instead of 1** -- six other preferences' presence tests
+collateral-failed because their viewers silently carried `hide_nsfl=1`.
+
+The two failure counts look identical from the outside: "this mutation
+failed more tests than expected." The discriminator is to run the NARROW
+mutation (delete, not over-broaden) on the *same* rule and compare. A rule
+that legitimately fires broadly still produces a narrow, single-test failure
+under deletion (removing a guard's *effect*, not its trigger condition,
+isolates exactly the rule that guard represents); coupled fixtures do not
+self-correct that way, because the shared state that caused the wide result
+under over-broadening is still shared under deletion. `possible_communities`
+Task 7 used exactly this pairing on its `banned` predicate: over-broaden
+gave 9 failures, delete gave exactly 1, on the same rule -- confirming
+chain geometry, not coupling. The `hide_nsfw`/`hide_nsfl` case above was
+caught the same way and then fixed by explicitly zeroing both columns on
+every viewer not testing one of those two preferences.
+
+### 4. Findings reported, not fixed
+
+Carried forward as follow-up candidates, not acted on here per this
+campaign's report-don't-fix rule:
+
+- **`app/utils.py:4337` and `:4344`** (verified current against the file at
+  commit time) are dead as within-loop duplicate filters inside
+  `possible_communities` -- their `if c.id not in already_added:` guards can
+  never take their False arm, because `CommunityMember`'s primary key is the
+  `(user_id, community_id)` pair (`app/models.py:3366-3368`): at most one row
+  per user per community, so `moderating_communities()` and
+  `joined_communities()` can each return a given community at most once, and
+  never both (their filters partition the same row's boolean space with no
+  overlap). Their only live effect is the `already_added.add(c.id)` call each
+  guards, which matters to the LATER "Others" loop's own (real, reachable)
+  dedup check. Verified by instrumenting both dead arms with an assertion
+  and attacking the claim four ways: a second `CommunityMember` row for the
+  same pair (`IntegrityError`, confirming the PK), all nine combinations of
+  `is_moderator`/`is_owner` including `None`, two same-title communities, and
+  `possible_communities()` itself run over the adversarial fixture -- the
+  instrumented arms never fired. This is a DRY target (three near-identical
+  dedup blocks), not a deletion candidate: the guards stay, because the
+  `.add()` they gate is not dead.
+- **Task 5's spurious-ordering hazard.** An ordering test whose fixture rows
+  are inserted in the SAME order the test expects the function to return
+  them asserts nothing -- a function that silently ignored the `ORDER BY`
+  entirely and just returned insertion order would still pass. This is only
+  caught by running the ordering mutation (e.g. flipping `desc` to `asc`) in
+  full-file context and confirming exactly the ordering test fails, never by
+  reading the assertion in isolation. `tests/test_feed_sorts.py`'s pattern
+  --seed `post_a` then `post_b`, assert the WINNING post comes first, i.e.
+  the REVERSE of insertion order-- and `tests/test_possible_communities.py`'s
+  `TestOrdering` --insert `zzzorderlast` before `aaaorderfirst`-- both exist
+  because of this.
+
 ## Ratchet gotchas
 
 - `percent_covered` is a **blended statement+branch figure**. This matters for

@@ -310,6 +310,60 @@ path, so a request served while the session is in a failed state can raise out o
 a helper that previously could not. The same-origin fast path returns before the
 setting is read, so the exposure is limited to off-origin candidates.
 
+### Sub-project 1b-ii: `app/utils.py` feed and query machinery
+
+Sub-project 1b-ii (`tests/test_feed_sorts.py`, `tests/test_feed_top_windows.py`,
+`tests/test_feed_visibility_filters.py`, `tests/test_feed_display_preferences.py`,
+`tests/test_instance_stickies.py`, `tests/test_possible_communities.py`, plus new
+factories in `tests/factories.py`) covered `app/utils.py`'s five feed and query
+functions: `get_deduped_post_ids`, `post_ids_to_models`, `instance_sticky_posts`,
+`get_instance_stickies` and `possible_communities`. It re-measured the module at
+**67.1330%** (`percent_covered`, the blended statement+branch figure -- see "The
+coverage ratchet" above) and raised the floor from 60 to **67**, rounded down. The
+floor was proved to bite: set to 68 against the same `coverage.json`, the ratchet
+exits 1 with `app/utils.py: 67.13% is below its floor of 68.00%`; restored to 67 it
+exits 0 with `All 3 module floors met.`
+
+**The Redis-write decision (Task 1).** `get_deduped_post_ids` ends with
+`redis_client.set(result_id, ..., ex=86400)` for every authenticated call --
+unbounded growth in the test Redis, which nothing but `--down` clears, and this
+campaign forbids `--down` because it forces a replay of ~269 migrations. The
+decision was to widen `redis_double` (`tests/conftest.py`) to also patch
+`app.redis_client`, rather than add a bespoke fixture or delete keys in teardown.
+This works because every `from app import redis_client` site in `app/` (there are
+about fourteen) is an INLINE import re-executed on every call, unlike
+`get_redis_connection`'s four bindings fixed at module-import time -- so one
+`monkeypatch.setattr('app.redis_client', ...)` redirects all of them, with no
+second binding problem to solve. Proved with two permanent tests:
+`test_redis_double_covers_app_redis_client` (the fake instance actually receives
+the write) and `test_authenticated_feed_calls_do_not_grow_the_real_test_redis`
+(a second, unpatched Redis connection's `dbsize()` is unchanged across five
+authenticated calls). This is the same defect shape sub-project 1a found in
+Flask-Limiter's counters, caught before it could repeat.
+
+**The sort-chain divergence (Task 2).** Three functions each dispatch on the same
+seven `sort` values, and two of them disagree on `top`: `post_ids_to_models` and
+`get_deduped_post_ids`'s raw SQL order `top` by `Post.score`, while
+`instance_sticky_posts` orders it by `Post.up_votes - Post.down_votes`. In this
+suite's default config the two are numerically identical, because `Post.vote()`'s
+`SPICY_UNDER_10/30/60` amplification constants default to `1.0` and are unset in
+`.env.test` -- at that value, `score` moves by exactly what `up_votes`/`down_votes`
+move by. But the removal path is asymmetric with the addition path regardless of
+config (`Post.vote()`, `app/models.py:2601-2716`: undoing a vote always subtracts
+exactly `1` from `score`, even if adding it added an amplified `spicy_effect`), so
+on any instance where those constants are not `1.0`, the two orderings drift apart
+permanently once a vote is added and later removed. Reported as a design tension
+between two intentional implementations, not fixed --
+`TestTopOrderingDivergesBetweenImplementations` demonstrates the disagreement
+directly, without mutating config.
+
+Four things the next reader of this sub-project's tests needs, recorded at length
+in `docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md`: coverage.py's
+blindness to SQL-string predicates, the two-direction mutation standard, the
+wide/narrow discriminator for chain-of-`continue` functions, and two findings
+reported rather than fixed. Read that document before extending this sub-project's
+tests or starting the one that covers the next slice of `app/utils.py`.
+
 ## Every user-influenced redirect target
 
 `is_safe_redirect_target` is the origin check. Three things reach it, and between
