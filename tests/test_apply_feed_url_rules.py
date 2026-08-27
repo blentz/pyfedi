@@ -116,6 +116,10 @@ class TestDashIsRejected:
 
         assert result is True
         assert errors == []
+        # Identity rewrite (already lowercase, no slash) -- asserted for
+        # consistency with the file's mutation standard even though nothing
+        # here reshapes the string.
+        assert url_data == 'myfeed'
 
 
 class TestPrivateNoSlashAppendsUsername:
@@ -188,6 +192,15 @@ class TestRegexRejectsNonAlphanumeric:
         assert result is False
         assert len(errors) == 1
         assert url_data == 'my!feed'
+        # 'my!feed' with public.data=True is an identity rewrite (no '-', no
+        # '/'), so under a mutation that forces the '-' guard to always fire
+        # (`if True or '-' in ...`), result stays False, the error count
+        # stays 1, and url_data stays 'my!feed' too -- the dash guard runs
+        # BEFORE the mutation block, so nothing here changes shape. Return
+        # value, count and url_data all agree with a rejection from the
+        # WRONG guard. Only the message distinguishes "rejected by the
+        # regex" from "rejected by the dash guard", so it must be pinned.
+        assert str(errors[0]) == 'Feed urls can only contain letters, numbers, and underscores.'
 
     def test_private_regex_rejects_a_non_alphanumeric_character(self, app, db_session):
         viewer = local_user('regexprivate')
@@ -222,6 +235,9 @@ class TestUniquenessNoFeedId:
 
         assert result is True
         assert errors == []
+        # Identity rewrite -- asserted for consistency with the file's
+        # mutation standard.
+        assert url_data == 'freshname'
 
 
 class TestUniquenessWithFeedId:
@@ -251,6 +267,9 @@ class TestUniquenessWithFeedId:
 
         assert result is True
         assert errors == []
+        # Non-identity rewrite (case-folded) -- asserted for consistency
+        # with the file's mutation standard.
+        assert url_data == 'ownname'
 
 
 class TestEditFormDefaultFeedIdZero:
@@ -293,7 +312,7 @@ class TestUsernameRegexMetacharacterProbe:
       anything on this form.
 
     But a THIRD path has no such charset check: app/admin/forms.py's
-    AddUserForm.validate_user_name (lines 305-317) validates only that '@'
+    AddUserForm.validate_user_name (lines 308-319) validates only that '@'
     is absent -- an instance admin creating a user through the admin panel
     can set an arbitrary user_name, including one containing '.', '(', ')',
     '|', etc. That user then logs in normally and is a fully valid
