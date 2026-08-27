@@ -14,7 +14,9 @@ enumerations in this campaign that were wrong when re-derived:
     if at line 4978, orelse=0   <- nested: if post_reply:
     if at line 4980, orelse=2   <- top-level: elif <community shape>
     if at line 4982, orelse=0   <- nested: if community and not community.is_local():
-    if at line 4986, orelse=0   <- nested (inside the else body): if post is None:
+    if at line 4986, orelse=0   <- nested (inside the else body): the
+                                   fallthrough's Post existence test, now
+                                   `if post_id is None:`
     if at line 4988, orelse=0   <- nested: if post_reply:
 
 Three If nodes (4969, 4976, 4980) form the top-level if/elif/elif chain; the
@@ -188,20 +190,26 @@ class TestFallthroughElseRule:
     def test_a_post_match_in_the_fallthrough_does_not_rewrite(self, app, db_session):
         """A Post row DOES have this ap_id (an unusual shape for a Post, but
         the function does not validate shape against the entity it looked up)
-        -- `if post is None:` is then False, so the reply lookup is skipped
+        -- the existence test is then True, so the reply lookup is skipped
         entirely and the url returns unchanged. Branch-covers the False arm of
-        `if post is None:` at line 4986, distinct from the miss case above
+        the `if post_id is None:` guard, distinct from the miss case above
         where that arm is True.
 
-        This pins a REPORTED DEFECT, not intended behaviour: `post =
-        Post.get_by_ap_id(url)` here is used only as a null check to decide
-        whether to fall through to the reply lookup -- the matched Post itself
-        is never used to rewrite anything, so a Post match in this branch is
-        silently inert. This test asserts CURRENT behaviour deliberately, so a
-        future fix that makes the fallthrough also rewrite a matched Post's
-        href (e.g. to post.slug / f'/post/{post.id}', mirroring the post rule)
-        should change this test's expected value along with it, not be read as
-        breaking a settled contract."""
+        NOT-REWRITING IS NOW DELIBERATE, and the waste that came with it is
+        gone. The reported defect was that this branch ran a full entity query
+        (`Post.get_by_ap_id`, all 56 columns including body and body_html) to
+        serve as a null check, then discarded the Post. It is now
+        `db.session.query(Post.id).filter(Post.ap_id == url).first()` -- an
+        indexed id lookup answering the same yes/no question, with identical
+        behaviour, which is why this test did not have to change.
+
+        The waste was safe to remove because it is the reading that preserves
+        behaviour. The other reading -- that a Post match here SHOULD rewrite
+        to post.slug / f'/post/{post.id}', mirroring the post rule, and its
+        omission is the real bug -- was NOT taken: it would change link
+        resolution across the site and needs product input, not a cleanup.
+        That question stays open; this test is what would have to change first
+        if it is ever answered the other way."""
         instance, owner, community = _base('k')
         make_post(community, owner, ap_id=self.FALLTHROUGH_URL)
 
