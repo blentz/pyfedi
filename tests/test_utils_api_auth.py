@@ -305,7 +305,10 @@ class TestAuthoriseApiUserPasswordRotation:
     reversed comparison. The property the count was evidence for still
     holds either way: both halves of the rotation pair above fail. Verified
     with `./run_tests.sh tests/ -q --ignore=tests/test_activitypub_util.py`
-    against the reversed comparison: `22 failed, 1636 passed`.
+    against the reversed comparison: `22 failed, 1636 passed`. The command and
+    the count are quoted as the run that was actually made; that run predates
+    `tests/test_activitypub_util.py` being repaired, and the standard command
+    today is plain `./run_tests.sh tests/ -q`.
     """
 
     def test_a_token_issued_before_the_password_change_is_refused(self, app, db_session):

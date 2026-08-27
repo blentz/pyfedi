@@ -23,7 +23,10 @@ class TestUserAccess:
         `tests/test_utils_roles.py` alone reported "exactly one" -- that was
         the module-scoped count, not the suite-wide one; verified here with
         `./run_tests.sh tests/ -q --ignore=tests/test_activitypub_util.py`
-        against the mutated guard: `2 failed, 1656 passed`.)
+        against the mutated guard: `2 failed, 1656 passed`. The command and
+        the count are quoted as the run that was actually made; that run
+        predates `tests/test_activitypub_util.py` being repaired, and the
+        standard command today is plain `./run_tests.sh tests/ -q`.)
         """
         assert user_access('change instance settings', 1) is True
 
