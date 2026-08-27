@@ -4614,6 +4614,27 @@ def publish_sse_event(key, value):
     r.publish(key, value)
 
 
+# The one username charset rule, shared by both user-creation paths:
+# RegistrationForm.validate_user_name (app/auth/forms.py, self-registration) and
+# AddUserForm.validate_user_name (app/admin/forms.py, admin-created users).
+# They used to differ -- the admin path checked only for '@' -- and
+# apply_feed_url_rules below interpolates current_user.user_name into a regex,
+# so an admin-created name carrying a metacharacter changed what that pattern
+# matched. Both paths produce local User rows that are indistinguishable
+# downstream (actor url, webfinger, feed namespace), so there is no consumer
+# that could safely accept a wider charset from one of them.
+USER_NAME_CHARSET_RE = re.compile(r'^[a-zA-Z0-9_]+$')
+
+
+def validate_user_name_charset(user_name):
+    """WTForms inline-validator body: reject a user name outside
+    USER_NAME_CHARSET_RE. Called by both forms' validate_user_name hooks rather
+    than copied into each, so the two cannot drift apart again.
+    """
+    if not USER_NAME_CHARSET_RE.match(user_name.data):
+        raise ValidationError(_l('User names can only contain letters, numbers, and underscores.'))
+
+
 def apply_feed_url_rules(self):
     if '-' in self.url.data.strip():
         self.url.errors.append(_l('- cannot be in Url. Use _ instead?'))
@@ -4630,7 +4651,14 @@ def apply_feed_url_rules(self):
     if self.public.data:
         regex = r'^[a-zA-Z0-9_]+$'
     else:
-        regex = r'^[a-zA-Z0-9_]+(?:/' + current_user.user_name.lower() + ')?$'
+        # re.escape: user_name is DATA here, not pattern. Without it a name
+        # carrying a regex metacharacter changes what the optional suffix
+        # group matches -- 'a.b' made '/aXb' validate, letting that user
+        # claim a private feed url in another user's namespace, and 'a(b'
+        # raised re.error out of this function. This is the defence that
+        # holds for names ALREADY in the database; USER_NAME_CHARSET_RE
+        # above only governs names created from now on.
+        regex = r'^[a-zA-Z0-9_]+(?:/' + re.escape(current_user.user_name.lower()) + ')?$'
     if not re.match(regex, self.url.data):
         self.url.errors.append(_l('Feed urls can only contain letters, numbers, and underscores.'))
         return False

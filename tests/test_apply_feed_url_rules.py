@@ -1,4 +1,4 @@
-"""Covers app.utils.apply_feed_url_rules (app/utils.py:4486-4516).
+"""Covers app.utils.apply_feed_url_rules (app/utils.py:4623-4660).
 
 apply_feed_url_rules is a bound form validator, not a plain function: it reads
 self.url, self.public, current_user.user_name and (via try/except AttributeError)
@@ -19,12 +19,14 @@ directly with no formdata and no CSRF token; apply_feed_url_rules is called
 directly rather than through form.validate(), since it makes no use of the
 other field validators.
 """
-import inspect
 import re
 
+import pytest
 from flask_login import login_user
+from wtforms.validators import ValidationError
 
 from app import db
+from app.admin.forms import AddUserForm
 from app.auth.forms import RegistrationForm
 from app.feed.forms import AddCopyFeedForm, EditFeedForm
 from app.models import Feed
@@ -90,7 +92,7 @@ def edit_form(app, viewer, url, public, feed_id=None):
 
 
 class TestDashIsRejected:
-    """Rule at 4487-4489: a literal '-' anywhere in the stripped url rejects
+    """Rule at 4624-4626: a literal '-' anywhere in the stripped url rejects
     outright, before any of the mutation/regex/uniqueness logic runs.
     """
 
@@ -125,7 +127,7 @@ class TestDashIsRejected:
 
 
 class TestPrivateNoSlashAppendsUsername:
-    """Rule at 4491-4492: not public and no '/' in the url appends
+    """Rule at 4628-4629: not public and no '/' in the url appends
     '/<username>' (lowercased) to the stripped/lowered url.
     """
 
@@ -139,7 +141,7 @@ class TestPrivateNoSlashAppendsUsername:
 
 
 class TestPublicWithSlashStripsToFirstSegment:
-    """Rule at 4493-4494: public and '/' present in the url keeps only the
+    """Rule at 4630-4631: public and '/' present in the url keeps only the
     text before the first '/'.
     """
 
@@ -153,7 +155,7 @@ class TestPublicWithSlashStripsToFirstSegment:
 
 
 class TestNeitherRuleStripsAndLowers:
-    """Rule at 4495-4496 (the else branch): public url with no '/', or
+    """Rule at 4632-4633 (the else branch): public url with no '/', or
     private url that already has a '/', is merely stripped and lowercased --
     no segment is added or removed.
     """
@@ -179,7 +181,7 @@ class TestNeitherRuleStripsAndLowers:
 
 
 class TestRegexRejectsNonAlphanumeric:
-    """Rule at 4498-4503: after the mutation block, the (possibly re-shaped)
+    """Rule at 4635-4649: after the mutation block, the (possibly re-shaped)
     url must match an alphanumeric+underscore regex -- a public-mode pattern
     with no suffix allowed, a private-mode pattern that allows exactly
     '/<username>' as an optional suffix.
@@ -216,7 +218,7 @@ class TestRegexRejectsNonAlphanumeric:
 
 
 class TestUniquenessNoFeedId:
-    """Rule at 4505-4509, except-AttributeError branch: AddCopyFeedForm has
+    """Rule at 4651-4657, except-AttributeError branch: AddCopyFeedForm has
     no feed_id, so the uniqueness query has no Feed.id exclusion at all.
     """
 
@@ -243,7 +245,7 @@ class TestUniquenessNoFeedId:
 
 
 class TestUniquenessWithFeedId:
-    """Rule at 4505-4509, else branch (try: self.feed_id succeeds):
+    """Rule at 4651-4657, else branch (try: self.feed_id succeeds):
     EditFeedForm always has feed_id, defaulting to the class attribute 0.
     """
 
@@ -301,38 +303,38 @@ class TestEditFormDefaultFeedIdZero:
 class TestUsernameRegexMetacharacterProbe:
     """Probes the private regex's string interpolation:
 
-        regex = r'^[a-zA-Z0-9_]+(?:/' + current_user.user_name.lower() + ')?$'
+        regex = r'^[a-zA-Z0-9_]+(?:/' + re.escape(current_user.user_name.lower()) + ')?$'
 
-    A username containing a regex metacharacter changes what that group
-    matches. Two self-registration paths were checked and both enforce
-    ^[a-zA-Z0-9_]+$ on user_name, so a metacharacter can never reach this
-    function through them:
+    **This class used to pin a live DEFECT and now pins its fix.** Its
+    docstring and its first test asserted, deliberately, that a username
+    containing a regex metacharacter was interpolated UNESCAPED -- so user
+    `a.b`'s pattern was `^[a-zA-Z0-9_]+(?:/a.b)?$`, in which `.` matches any
+    character, and the private feed url `myfeed/aXb` wrongly validated: a feed
+    claimed in a url namespace that reads as user `aXb`'s. That was reported
+    and left unfixed at the time. It has since been fixed at both ends, so the
+    assertion below is inverted rather than deleted -- the same call, the same
+    fixtures, the same branch, now asserting the behaviour that holds.
 
-    - app/auth/forms.py:59 (RegistrationForm.validate_user_name)
-    - app/feed/forms.py itself imposes no username constraint of its own;
-      it is current_user's *existing* user_name that matters here, not
-      anything on this form.
+    Two paths could produce such a username. Self-registration never could:
+    `app/auth/forms.py` `RegistrationForm.validate_user_name` has always
+    enforced `^[a-zA-Z0-9_]+$`. `app/admin/forms.py` `AddUserForm.validate_user_name`
+    could -- it checked only that '@' was absent -- and now enforces the same
+    charset through the shared `app.utils.validate_user_name_charset`.
 
-    But a THIRD path has no such charset check: app/admin/forms.py's
-    AddUserForm.validate_user_name (lines 308-319) validates only that '@'
-    is absent -- an instance admin creating a user through the admin panel
-    can set an arbitrary user_name, including one containing '.', '(', ')',
-    '|', etc. That user then logs in normally and is a fully valid
-    current_user for this form. This test builds that state directly (bypassing
-    the admin form, which is not itself exercised here) and demonstrates the
-    consequence: because '.' is unescaped in the interpolated regex, it
-    matches any character instead of a literal '.', so a url segment that is
-    NOT the user's real username is wrongly accepted as if it were.
-
-    This is a validation-bypass DEFECT, reported here and not fixed.
+    `re.escape` in `apply_feed_url_rules` is the load-bearing half: the admin
+    charset check governs names created from now on, while any database may
+    already hold a metacharacter name created before it. The wider case set --
+    other metacharacters, the crash that `(` and `[` used to cause, the
+    admin form itself, and the over-correction guards -- lives in
+    `tests/test_username_regex_metacharacters.py`.
     """
 
-    def test_username_regex_metacharacters_are_not_escaped(self, app, db_session):
+    def test_username_regex_metacharacters_are_escaped(self, app, db_session):
         viewer = local_user('a.b')  # '.' is a regex metachar
 
-        # Sanity check this is really an unescaped metachar in the built
-        # pattern: 'a.b' matches 'aXb' under re, but not under literal
-        # equality.
+        # The pre-fix pattern, built here, so this test carries its own proof
+        # that 'aXb' really was matched by an unescaped 'a.b' rather than
+        # relying on the prose above.
         assert re.match(r'^[a-zA-Z0-9_]+(?:/' + viewer.user_name.lower() + ')?$', 'myfeed/aXb')
         assert viewer.user_name != 'aXb'
 
@@ -342,19 +344,24 @@ class TestUsernameRegexMetacharacterProbe:
         # lowers it, leaving 'myfeed/axb' unchanged in shape.
         result, url_data, errors = create_form(app, viewer, 'myfeed/aXb', False)
 
-        # DEFECT: this wrongly validates. A correctly escaped pattern (using
-        # re.escape on the username) would reject it, since 'axb' is not this
-        # user's username.
-        assert result is True
+        # Pre-fix this was `assert result is True`, with a comment naming it
+        # as the defect.
+        assert result is False
+        assert len(errors) == 1
+        assert str(errors[0]) == 'Feed urls can only contain letters, numbers, and underscores.'
         assert url_data == 'myfeed/axb'
-        assert errors == []
 
-    def test_a_locally_registered_username_cannot_contain_metacharacters(self):
-        """Establishes the self-registration path is closed: app/auth/forms.py
-        RegistrationForm.validate_user_name enforces
-        re.match(r'^[a-zA-Z0-9_]+$', user_name.data) (line 59), which rejects
-        every regex metacharacter. Read directly from source rather than
-        trusting a paraphrase.
+    def test_both_user_creation_paths_enforce_the_charset(self, app, db_session):
+        """Establishes that neither path can put a metacharacter into
+        `user_name` any more. This used to be a source-text assertion on
+        `RegistrationForm.validate_user_name` alone (the admin path was the
+        open one, so there was nothing to assert about it); it is now driven
+        as behaviour against both validators, which is what actually matters
+        and survives a refactor of either form.
         """
-        source = inspect.getsource(RegistrationForm.validate_user_name)
-        assert r"re.match(r'^[a-zA-Z0-9_]+$', user_name.data)" in source
+        with app.test_request_context('/'):
+            for form in (RegistrationForm(meta={'csrf': False}), AddUserForm(meta={'csrf': False})):
+                form.user_name.data = 'a.b'
+                with pytest.raises(ValidationError) as caught:
+                    form.validate_user_name(form.user_name)
+                assert str(caught.value) == 'User names can only contain letters, numbers, and underscores.'

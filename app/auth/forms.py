@@ -1,5 +1,3 @@
-import re
-
 from flask_babel import _, lazy_gettext as _l
 from flask_wtf import FlaskForm
 from sqlalchemy import func
@@ -8,7 +6,7 @@ from wtforms import StringField, PasswordField, SubmitField, HiddenField, Boolea
 from wtforms.validators import ValidationError, DataRequired, Email, EqualTo, Length
 
 from app.models import User, Community, Feed
-from app.utils import MultiCheckboxField, CaptchaField, get_setting
+from app.utils import MultiCheckboxField, CaptchaField, get_setting, validate_user_name_charset
 
 
 class LoginForm(FlaskForm):
@@ -55,9 +53,10 @@ class RegistrationForm(FlaskForm):
         if '@' in user_name.data:
             raise ValidationError(_l('User names cannot contain @.'))
 
-        # Allow alphanumeric characters and underscores (a-z, A-Z, 0-9, _)
-        if not re.match(r'^[a-zA-Z0-9_]+$', user_name.data):
-            raise ValidationError(_l('User names can only contain letters, numbers, and underscores.'))
+        # Allow alphanumeric characters and underscores (a-z, A-Z, 0-9, _).
+        # One rule, shared with the admin user-creation path -- see
+        # app/utils.py's validate_user_name_charset.
+        validate_user_name_charset(user_name)
 
         user = User.query.filter(func.lower(User.user_name) == func.lower(user_name.data.strip())).filter_by(ap_id=None).first()
         if user is not None:
