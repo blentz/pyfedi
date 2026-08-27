@@ -278,6 +278,18 @@ def url_needs_archive(url) -> bool:
             hostname = parsed_url.hostname.lower()
             if hostname.startswith('www.'):
                 hostname = hostname[4:]
+        except ValueError:
+            # urlparse refuses some netlocs outright: an unbalanced IPv6 bracket
+            # ('https://[::1/x'), an address with two '::' runs, or a host that
+            # fails its NFKC confusability check. A URL with no determinable
+            # host is not one of the paywalled sites below.
+            #
+            # This clause is explicit rather than left to the bare `except:`
+            # underneath so that narrowing that bare clause -- a separately
+            # reported defect -- does not start crashing this function on a
+            # submitted link. Covered by
+            # tests/test_urlparse_valueerror_guards.py.
+            return False
         except:
             return False
         if hostname == 'nytimes.com' and 'unlocked_article_code' in url:

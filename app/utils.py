@@ -236,7 +236,14 @@ def is_image_url(url):
         mime_type_parts = mime_type.split('/')
         return f'.{mime_type_parts[1]}' in common_image_extensions
     else:
-        parsed_url = urlparse(url)
+        try:
+            parsed_url = urlparse(url)
+        except ValueError:
+            # Malformed netloc (unbalanced IPv6 bracket, bad IPv6 literal, or a
+            # host urllib rejects under NFKC normalization). No path to inspect,
+            # so not an image -- the same answer this gives for a path with no
+            # image extension.
+            return False
         path = parsed_url.path.lower()
         return any(path.endswith(extension) for extension in common_image_extensions)
 
@@ -250,7 +257,14 @@ def is_local_image_url(url):
 
 def is_video_url(url: str) -> bool:
     common_video_extensions = ['.mp4', '.webm']
-    parsed_url = urlparse(url)
+    try:
+        parsed_url = urlparse(url)
+    except ValueError:
+        # Malformed netloc (unbalanced IPv6 bracket, bad IPv6 literal, or a
+        # host urllib rejects under NFKC normalization). No path to inspect, so
+        # not a video -- the same answer this gives for a path with no video
+        # extension.
+        return False
     path = parsed_url.path.lower()
     return any(path.endswith(extension) for extension in common_video_extensions)
 
@@ -1455,7 +1469,20 @@ def pop_link(link_snippets: list, text: str, placeholder: str) -> str:
 
 
 def domain_from_url(url: str, create=True) -> Domain:
-    parsed_url = urlparse(url.lower())
+    try:
+        parsed_url = urlparse(url.lower())
+    except ValueError:
+        # urlparse itself refuses some netlocs a person can put in the URL box:
+        # an unbalanced IPv6 bracket ('https://[::1/x'), an address with two
+        # '::' runs, or a host that fails its NFKC confusability check. No host
+        # could be determined, which is the same answer the else: arm below
+        # gives for a hostless URL.
+        #
+        # Scoped to the parse alone on purpose. The Domain query below raises
+        # its own ValueError from the Postgres driver when the host contains a
+        # NUL byte; widening this guard to cover the query would silently
+        # swallow that (see tests/test_urlparse_valueerror_guards.py).
+        return None
     if parsed_url and parsed_url.hostname:
         find_this = parsed_url.hostname.lower()
         if find_this.startswith('www.'):
@@ -1730,7 +1757,13 @@ def ensure_directory_exists(directory):
 
 
 def mimetype_from_url(url):
-    parsed_url = urlparse(url)
+    try:
+        parsed_url = urlparse(url)
+    except ValueError:
+        # Malformed netloc (unbalanced IPv6 bracket, bad IPv6 literal, or a host
+        # urllib rejects under NFKC normalization). No path to guess from, which
+        # is the same None mimetypes.guess_type returns for an unrecognised one.
+        return None
     path = parsed_url.path.split('?')[0]  # Strip off anything after '?'
     mime_type, _ = mimetypes.guess_type(path)
     return mime_type
@@ -2495,7 +2528,18 @@ def inbox_domain(inbox: str) -> str:
     """
     inbox = inbox.lower()
     if 'https://' in inbox or 'http://' in inbox:
-        inbox = urlparse(inbox).hostname
+        try:
+            inbox = urlparse(inbox).hostname
+        except ValueError:
+            # A remote instance chooses its own `inbox` URL -- refresh_instance
+            # copies it verbatim out of the JSON that instance served -- and
+            # instance_banned() is later handed it whole, so a peer can send a
+            # netloc urlparse refuses. '' is the no-domain answer this already
+            # returns for input with nothing URL-shaped in it, and is the only
+            # one that leaves every caller on a defined path: instance_allowed
+            # calls .strip() on the result and instance_banned matches it
+            # against a regex, neither of which accepts None.
+            return ''
     return inbox
 
 
@@ -3096,7 +3140,13 @@ def sha256_digest(input_string):
 
 # still used to hint to a local user that a post to a URL has already been submitted
 def remove_tracking_from_link(url):
-    parsed_url = urlparse(url)
+    try:
+        parsed_url = urlparse(url)
+    except ValueError:
+        # Malformed netloc (unbalanced IPv6 bracket, bad IPv6 literal, or a
+        # host urllib rejects under NFKC normalization). Nothing to rewrite --
+        # the same answer the else: arm gives for any non-youtu.be link.
+        return url
 
     if parsed_url.netloc == 'youtu.be':
         # Extract video ID
@@ -3124,7 +3174,14 @@ def remove_tracking_from_link(url):
 # Also duplicates link tracking removal from the function above.
 def fixup_url(url):
     thumbnail_url = embed_url = url
-    parsed_url = urlparse(url)
+    try:
+        parsed_url = urlparse(url)
+    except ValueError:
+        # Malformed netloc (unbalanced IPv6 bracket, bad IPv6 literal, or a
+        # host urllib rejects under NFKC normalization). Nothing to fix up --
+        # the same passthrough this returns for any host outside
+        # youtube_domains.
+        return url, url
 
     # fixup embed_url for peertube videos shared outside of the channel
     if len(url) > 25 and url[-25:][:3] == '/w/':
