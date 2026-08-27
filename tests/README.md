@@ -670,7 +670,7 @@ exits 1 with `app/utils.py: 71.48% is below its floor of 72.00%`; restored to
 71 it exits 0 with `All 3 module floors met.` All five functions measure 100%
 statement and 100% branch coverage on their own line ranges (`domain_from_url`
 1442-1457, `remove_tracking_from_link` 3083-3105, `fixup_url` 3110-3167,
-`apply_feed_url_rules` 4486-4521, `rewrite_href` 4968-4991) -- with the caveat
+`apply_feed_url_rules` 4486-4516, `rewrite_href` 4968-4991) -- with the caveat
 below about what 100% branch coverage does and does not prove.
 
 **Fuzzing (`tests/test_link_parsers_fuzz.py`).** Targets `domain_from_url`,
@@ -775,7 +775,7 @@ sub-project's write-ups as "every Python branch that runs", never as "every
 string this code produces behaves correctly".
 
 **YouTube's URL formats have no specification.** `fixup_url`'s YouTube-shape
-expectations (`/shorts/`, `/watch?v=`, `/playlist`, `/post/`, the four
+expectations (`/shorts/`, `/watch?v=`, `/playlist`, `/post/`, the five
 YouTube hostnames) are derived from the formats the production code already
 handles, and pinned as OBSERVED BEHAVIOUR in `tests/test_fixup_url.py` -- not
 as a specification YouTube publishes or guarantees. WHATWG's URL Standard and
