@@ -1484,6 +1484,36 @@ def pop_link(link_snippets: list, text: str, placeholder: str) -> str:
     return text
 
 
+def url_is_parseable(url) -> bool:
+    """Whether urlparse() can read `url` at all, without raising.
+
+    This is an INGRESS check, and it exists because the guards that stop
+    urlparse's ValueError escaping (domain_from_url, remove_tracking_from_link,
+    fixup_url, ...) all return a safe value instead. That is right for those
+    functions, but it means "no domain" and "not a URL at all" arrive at their
+    callers as the same answer -- so a caller that has to REFUSE an unparseable
+    URL cannot tell the two apart from the return value and has to ask here
+    first.
+
+    Deliberately narrow: it answers only "does urlparse accept this", not "is
+    this a good URL". No scheme check, no host check, no length check -- those
+    belong to the callers that want them, and widening this predicate would
+    reject legitimate URLs (ports, userinfo, IDN and percent-encoded hosts all
+    parse fine and must keep passing). A non-str is not parseable; the empty
+    string is, and callers that care about emptiness already say so.
+    """
+    if not isinstance(url, str):
+        return False
+    try:
+        urlparse(url)
+    except ValueError:
+        # The shapes urlparse itself refuses: an unbalanced IPv6 bracket
+        # ('https://youtube.com[abc'), two '::' runs in an address, a netloc
+        # that fails urllib's NFKC confusability check.
+        return False
+    return True
+
+
 def domain_from_url(url: str, create=True) -> Domain:
     try:
         parsed_url = urlparse(url.lower())

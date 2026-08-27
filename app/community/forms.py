@@ -18,7 +18,7 @@ from app import db
 from app.constants import DOWNVOTE_ACCEPT_ALL, DOWNVOTE_ACCEPT_MEMBERS, DOWNVOTE_ACCEPT_INSTANCE, \
     DOWNVOTE_ACCEPT_TRUSTED, DOWNVOTE_ACCEPT_NONE
 from app.models import Community, Site, utcnow, User, Feed
-from app.utils import domain_from_url, MultiCheckboxField, get_timezones
+from app.utils import domain_from_url, MultiCheckboxField, get_timezones, url_is_parseable
 
 
 class AddCommunityForm(FlaskForm):
@@ -271,7 +271,47 @@ class CreateDiscussionForm(CreatePostForm):
     pass
 
 
-class CreateLinkForm(CreatePostForm):
+class SubmittedUrlMixin:
+    """The one place a submitted URL is checked before it can be stored.
+
+    Two checks, in this order, and the order is the whole point:
+
+    1. Can urlparse() read it at all? `^https?://` says nothing about the
+       authority, so 'https://youtube.com[abc' passes it and then makes
+       urlparse raise ValueError('Invalid IPv6 URL').
+    2. Is its domain banned? -- the check this hook has always performed.
+
+    The parseability check has to come FIRST, and cannot be folded into the
+    domain lookup, because domain_from_url(create=False) returns None for two
+    different reasons: "this URL has no host urlparse could find" and "this
+    host has no Domain row yet". Before the ValueError guards landed, the
+    unparseable case RAISED out of domain_from_url -- a 500 at submission, but
+    the URL never reached the database. With the guard it returns None,
+    `if domain and domain.banned` is False, and the URL is accepted and stored.
+    This restores the refusal without restoring the crash.
+
+    Extracted rather than fixed twice: this body was duplicated verbatim in
+    CreateLinkForm and CreateEventForm, and a duplicated fix is how one copy
+    drifts later.
+
+    `banned_message` is a callable taking the domain name, because the two
+    call sites word that message differently ("Links to X" / "Videos from X")
+    and lazy_gettext's interpolation has to happen at the call site to stay
+    translatable.
+    """
+
+    def url_field_is_acceptable(self, field, banned_message) -> bool:
+        if field.data and not url_is_parseable(field.data):
+            field.errors.append(_l('This URL could not be understood. Please check it and try again.'))
+            return False
+        domain = domain_from_url(field.data, create=False)
+        if domain and domain.banned:
+            field.errors.append(banned_message(domain.name))
+            return False
+        return True
+
+
+class CreateLinkForm(SubmittedUrlMixin, CreatePostForm):
     link_url = StringField(_l('URL'), validators=[DataRequired(), Regexp(r'^https?://', message='Submitted links need to start with "http://"" or "https://"')],
                            render_kw={'placeholder': 'https://...',
                                       'hx-get': '/community/check_url_already_posted',
@@ -280,14 +320,11 @@ class CreateLinkForm(CreatePostForm):
     image_alt_text = StringField(_l('Alt text (for links to images)'), validators=[Optional(), Length(min=3, max=1500)])
 
     def validate_link_url(self, field):
-        domain = domain_from_url(field.data, create=False)
-        if domain and domain.banned:
-            self.link_url.errors.append(_l("Links to %(domain)s are not allowed.", domain=domain.name))
-            return False
-        return True
+        return self.url_field_is_acceptable(
+            field, lambda name: _l("Links to %(domain)s are not allowed.", domain=name))
 
 
-class CreateVideoForm(CreatePostForm):
+class CreateVideoForm(SubmittedUrlMixin, CreatePostForm):
     video_url = StringField(_l('URL'), validators=[Regexp(r'^https?://', message='Submitted links need to start with "http://"" or "https://"')],
                             render_kw={'placeholder': 'https://...'})
     image_file = FileField(_l('Video file (mp4 or webm)'), render_kw={'accept': 'video/mp4,video/webm'})    # do not change from image_file even though this is a video
@@ -295,11 +332,14 @@ class CreateVideoForm(CreatePostForm):
     def validate(self, extra_validators=None) -> bool:
         super().validate(extra_validators)
 
-        domain = domain_from_url(self.video_url.data, create=False)
-        if domain and domain.banned:
-            self.video_url.errors.append(_l("Videos from %(domain)s are not allowed.", domain=domain.name))
-            return False
-        return True
+        # video_url has no validate_video_url hook of its own; its domain-ban
+        # check lived here inline. Left where it was rather than moved to an
+        # inline validator, because this override discards super()'s result --
+        # moving the check would make a banned domain (or an unparseable URL)
+        # stop rejecting the form. That discarded result is a separate defect;
+        # reported, not fixed here.
+        return self.url_field_is_acceptable(
+            self.video_url, lambda name: _l("Videos from %(domain)s are not allowed.", domain=name))
 
 
 class CreateImageForm(CreatePostForm):
@@ -365,7 +405,7 @@ class EditImageForm(CreateImageForm):
         return True
 
 
-class CreateEventForm(CreatePostForm):
+class CreateEventForm(SubmittedUrlMixin, CreatePostForm):
     start_datetime = DateTimeLocalField(_l('Start'), validators=[DataRequired()], format="%Y-%m-%dT%H:%M")
     end_datetime = DateTimeLocalField(_l('End'), validators=[DataRequired()], format="%Y-%m-%dT%H:%M")
     image_file = FileField(_l('Banner'), validators=[Optional()], render_kw={'accept': 'image/*'})
@@ -386,12 +426,15 @@ class CreateEventForm(CreatePostForm):
         self.event_timezone.choices = get_timezones()
         self.join_mode.choices = [('free', _('Free')), ('donation', _('Donation')), ('paid', _('Paid'))]
 
+    # NOTE: this hook is DEAD, and was already dead before this change --
+    # CreateEventForm has no `link_url` field (its URL fields are
+    # `more_info_url` and `online_link`), so WTForms never looks it up, and its
+    # old body referenced `self.link_url`, which does not exist. Routed through
+    # the shared mixin anyway so the duplication is gone and it is correct if a
+    # link_url field is ever added. Reported, not removed.
     def validate_link_url(self, field):
-        domain = domain_from_url(field.data, create=False)
-        if domain and domain.banned:
-            self.link_url.errors.append(_l("Links to %(domain)s are not allowed.", domain=domain.name))
-            return False
-        return True
+        return self.url_field_is_acceptable(
+            field, lambda name: _l("Links to %(domain)s are not allowed.", domain=name))
 
     def validate(self, extra_validators=None) -> bool:
         super().validate(extra_validators)
