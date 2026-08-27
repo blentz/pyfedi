@@ -681,7 +681,11 @@ class TestFederatedEventUrlsAreCheckedToo:
                     author)
         stored = db.session.query(Post).filter_by(
             ap_id='https://create.example/users/a/statuses/5').one()
-        assert stored.url == ''
+        # None, not '': the Event branch's "no url" value was aligned to the
+        # column's own, because post_to_page gates the outbound attachment on
+        # `post.url is not None` and '' federated `{"href": ""}` to peers.
+        # tests/test_federated_event_url_sentinel.py carries that reasoning.
+        assert stored.url is None
 
     def test_an_ordinary_event_link_is_still_stored(self, app, db_session, http_mock,
                                                     federated_create):

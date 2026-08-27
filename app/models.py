@@ -2233,7 +2233,20 @@ class Post(db.Model):
                               event_fee_amount=request_json['object']['feeAmount'],
                               location=request_json['object']['location'])
                 db.session.add(event)
-                post.url = ''   # Mobilizon puts the AP ID in request_json['object']['url'] and any attached website links in a request_json['object']['attachment'] list
+                # Mobilizon puts the AP ID in request_json['object']['url'] and any attached website links in a request_json['object']['attachment'] list.
+                # None, not '': Post.url is nullable with no default, so None is
+                # what the column holds for a post that has no url, and it is
+                # what app/shared/post.py:613 already stores for a locally
+                # created event with a banner image. It matters beyond tidiness
+                # because post_to_page (app/activitypub/util.py:170) gates the
+                # outbound attachment on `post.url is not None` -- with '' every
+                # ingested Mobilizon event federated `{"href": ""}` to its
+                # peers, an attachment claiming a link that is not there.
+                # Rows written before this change still hold '';
+                # update_post_from_activity's Links section compares an event's
+                # url with itself rather than with a literal, so it tolerates
+                # both and no migration is needed.
+                post.url = None
                 if ('attachment' in request_json['object'] and
                         isinstance(request_json['object']['attachment'], list) and
                         len(request_json['object']['attachment']) > 0):
@@ -2244,10 +2257,10 @@ class Post(db.Model):
                                 break
                 # This write is BELOW the domain block above, so nothing there
                 # saw it: a Mobilizon event's link had no ban check and no parse
-                # check at all. '' rather than None is this branch's own "no
-                # url" value, set a few lines up.
+                # check at all. None is this branch's own "no url" value, set a
+                # few lines up, and the two must not diverge.
                 if post.url and not url_is_parseable(post.url):
-                    post.url = ''
+                    post.url = None
                 if 'image' in request_json['object'] and post.image is None:
                     image = File(source_url=request_json['object']['image']['url'])
                     db.session.add(image)
