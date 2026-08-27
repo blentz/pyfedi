@@ -284,13 +284,30 @@ def url_needs_archive(url) -> bool:
             # fails its NFKC confusability check. A URL with no determinable
             # host is not one of the paywalled sites below.
             #
-            # This clause is explicit rather than left to the bare `except:`
-            # underneath so that narrowing that bare clause -- a separately
-            # reported defect -- does not start crashing this function on a
-            # submitted link. Covered by
+            # This clause is explicit rather than folded into the AttributeError
+            # one below, because the two describe different failures: this one
+            # is "urlparse would not read the string at all", that one is "it
+            # read it and found no host". Covered by
             # tests/test_urlparse_valueerror_guards.py.
             return False
-        except:
+        except AttributeError:
+            # `parsed_url.hostname` is None for a string with no authority --
+            # 'not-a-url' parses to path='not-a-url', netloc='' -- and
+            # None.lower() is AttributeError. That is the only exception the
+            # two lines above can raise once urlparse has returned: hostname is
+            # otherwise a str, on which .startswith() and the slice cannot
+            # fail.
+            #
+            # This used to be a bare `except:`, carrying a comment calling it "a
+            # separately reported defect". IT WAS NEVER REPORTED -- the two
+            # reported bare clauses were fixup_url's, both narrowed in 1d1f25be
+            # -- so the comment asserted a report that did not exist. Narrowed
+            # here rather than re-labelled, for the reason 1d1f25be documented
+            # at length: a bare `except:` swallows KeyboardInterrupt and
+            # SystemExit, and it swallows the test harness's own errors, which
+            # makes the region it wraps resistant to mutation testing.
+            # tests/test_url_needs_archive.py::TestHostlessUrlReachesTheGuards
+            # covers both arms.
             return False
         if hostname == 'nytimes.com' and 'unlocked_article_code' in url:
             return False

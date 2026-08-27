@@ -692,9 +692,22 @@ explicit that only 2 of them discriminate the fix itself --
 `test_www_prefixed_paywalled_host_still_needs_archive`; the false-negative test
 does not discriminate on its own, since it returns `False` both before and
 after the fix (for the wrong reason pre-fix), and the remaining tests are
-regression guards for adjacent behaviour (exemptions, falsy input, the bare
-`except:`'s hostless-URL path). Worth preserving, since it is the kind of
+regression guards for adjacent behaviour (exemptions, falsy input, the
+hostless-URL path). Worth preserving, since it is the kind of
 honest-negative claim that is easy to silently drop on the next pass.
+
+That hostless-URL path used to be caught by a bare `except:` -- the third one
+on this campaign, after `fixup_url`'s two -- carrying a comment calling it "a
+separately reported defect". It was never reported. It is now
+`except AttributeError:`, which is the only exception the two lines it wraps
+can raise once `urlparse` has returned (`parsed_url.hostname` is None for a
+string with no authority, and `None.lower()` is AttributeError; a str hostname
+cannot fail `.startswith()` or the slice). The narrowing left behaviour
+unchanged, which is what makes
+`TestHostlessUrlReachesTheGuards`' two tests a check of it rather than a
+restatement: each now fails when its OWN handler is deleted and is not caught
+by the other's, where under the bare clause deleting `except ValueError:`
+failed nothing.
 
 **Measured and floor.** Re-measured (not carried forward -- see the standing
 rule below) at **71.4776%** (`percent_covered`, the blended statement+branch
