@@ -18,7 +18,7 @@ Guard order, as read from app/utils.py (~3345-3406):
                otherwise               -> user.id
 
 Coverage: every branch above is exercised except one -- the `if decoded:` false
-side (app/utils.py:3381). It is not pragma'd, and it is left undocumented
+side (app/utils.py:3387). It is not pragma'd, and it is left undocumented
 nowhere else: `jwt.decode` *raises* rather than returning something falsy for
 every malformed, expired, or tampered token, so in practice `decoded` is always
 truthy whenever `jwt.decode` returns at all, and no test here can drive the

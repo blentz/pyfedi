@@ -430,7 +430,7 @@ git commit -m "feat: refuse followers-only and direct content at ingest"
 ## Task 3: Remove the incorrect feed gate
 
 **Files:**
-- Modify: `app/utils.py:3265-3269` — the boost disjunct
+- Modify: `app/utils.py:3271-3275` — the boost disjunct
 - Modify: `tests/factories.py:56-59` — `make_post` microblog mode and docstring
 - Modify: `tests/test_feed_boost_visibility.py`
 

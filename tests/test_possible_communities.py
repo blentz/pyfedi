@@ -1,4 +1,4 @@
-r"""One-case-per-rule coverage for possible_communities (app/utils.py:4347-4379).
+r"""One-case-per-rule coverage for possible_communities (app/utils.py:4353-4395).
 
 possible_communities builds a grouped community picker for the "new post"
 community selector: three optional keys -- 'Moderating', 'Joined
@@ -29,35 +29,47 @@ Rule count, derived with the following command against this checkout
             print('filter/join calls:', calls)
     "
 
-Output: `if statements: [4357, 4364, 4377, 4354, 4361, 4370, 4371] count= 7`
-and `filter/join calls: [(4367, 'filter'), (4367, 'join'), (4367, 'filter')]`
--- confirmed against ``sed -n '4347,4372p' app/utils.py | grep -n '^[ ]*if \|\.filter(\|\.join('``,
-which lists the same seven `if` lines plus the two `.filter(` calls (one
-before the join with one predicate, one after with two comma-joined
-predicates -- SQLAlchemy ANDs positional filter args, so that single call
-carries two independent predicates).
+Output: `if statements: [4363, 4370, 4393, 4360, 4367, 4386, 4387] count= 7`
+and `filter/join calls: [(4380, 'filter'), (4380, 'filter'), (4380, 'join'),
+(4380, 'filter')]` -- all four attributed to 4380 because the Others query is
+one backslash-continued expression and ast reports each call's START line.
+Cross-checked against ``sed -n '4353,4395p' app/utils.py | grep -n '^[ ]*if
+\|\.filter(\|\.join('``, which lists the same seven `if` lines but only ONE
+of the three filter calls: the other two open their continuation line with a
+bare `filter(`, the dot having ended the line above, so the grep's literal
+`\.filter(` cannot see them. Trust the ast probe, not the grep. The second
+filter call carries two comma-joined predicates -- SQLAlchemy ANDs positional
+filter args, so that single call carries two independent predicates.
 
 Seven Python-level rules, in execution order:
-  1. :4354 -- `if c.id not in already_added` inside the Moderating loop
-  2. :4357 -- `if len(comms) > 0` -- omit 'Moderating' when empty
-  3. :4361 -- `if c.id not in already_added` inside the Joined loop
-  4. :4364 -- `if len(comms) > 0` -- omit 'Joined communities' when empty
-  5. :4370 -- `if c.id not in already_added` inside the Others loop
-  6. :4371 -- `if c.ap_id is None` -- display_name branch (title vs title@ap_domain)
-  7. :4377 -- `if len(comms) > 0` -- omit 'Others' when empty
+  1. :4360 -- `if c.id not in already_added` inside the Moderating loop
+  2. :4363 -- `if len(comms) > 0` -- omit 'Moderating' when empty
+  3. :4367 -- `if c.id not in already_added` inside the Joined loop
+  4. :4370 -- `if len(comms) > 0` -- omit 'Joined communities' when empty
+  5. :4386 -- `if c.id not in already_added` inside the Others loop
+  6. :4387 -- `if c.ap_id is None` -- display_name branch (title vs title@ap_domain)
+  7. :4393 -- `if len(comms) > 0` -- omit 'Others' when empty
 
-Plus three predicates the Others query pushes into SQL, invisible to
+Plus four predicates the Others query pushes into SQL, invisible to
 coverage.py as Python branches and exercised only through the rows the
 query returns:
   8. `Community.banned == False`
   9. `Instance.gone_forever == False`
   10. `Community.name != 'microblogs'`
+  11. `or_(Community.private == False,
+          Community.id.in_(community_membership_private(current_user.get_id())))`
 
-None of these three is a compound `a or b`/`a and b` in the sense that
-tripped Task 5 (an OR inside a SQL string) or Task 6 (`sort == '' or sort
-== 'hot'`): they are AND-combined but each is independently falsifiable by
-its own dedicated test below (turn one false while holding the other two
-true), so there is no untested operand to split out.
+Rules 8-10 are not compound in the sense that tripped Task 5 (an OR inside a
+SQL string) or Task 6 (`sort == '' or sort == 'hot'`): they are AND-combined
+but each is independently falsifiable by its own dedicated test below (turn
+one false while holding the others true), so there is no untested operand to
+split out. Rule 11 IS compound, deliberately -- a base restriction widened by
+membership -- and each of its two arms has its own test in
+TestPrivateCommunitiesInOthers below, whose docstring explains why the
+membership arm takes a contrived-looking fixture to reach at all. Rule 11 was
+ABSENT when this file was first written, and this list said so by omission:
+private communities were disclosed to, and selectable by, every
+authenticated user.
 
 current_user.is_anonymous / current_user.get_id(): possible_communities()
 itself has no explicit branch on viewer kind -- there is no `if
@@ -65,7 +77,7 @@ current_user.is_anonymous` anywhere in its body, unlike get_instance_
 stickies. The dependence is indirect and lives in the two functions it
 calls: joined_communities(user_id) and moderating_communities(user_id)
 both open with `if user_id is None or user_id == 0: return []`
-(app/utils.py:2557-2559, 2618-2620). flask_login's default
+(app/utils.py:2563-2565, 2624-2626). flask_login's default
 AnonymousUserMixin.get_id() returns None (app/__init__.py configures no
 custom anonymous_user), so an anonymous viewer gets both lists empty for
 free and only the Others query -- which has no user/membership filter at
@@ -102,10 +114,10 @@ tests exactly that overlap, once for Moderating and once for Joined, and
 the moderating case is the one Step 4 mutates.
 
 A second finding, from running the over-broaden direction on rule 1
-(:4354): replacing `if c.id not in already_added:` with `if True:` inside
+(:4360): replacing `if c.id not in already_added:` with `if True:` inside
 the MODERATING loop changes NOTHING -- 0 test failures -- because
 `already_added` is a freshly-created empty set at that point
-(app/utils.py:4352) and `moderating_communities()`'s query is a plain join
+(app/utils.py:4358) and `moderating_communities()`'s query is a plain join
 against a single user's CommunityMember rows, which cannot return the same
 community twice. Rule 1's condition can therefore never be False in
 practice; it is dead code as a within-loop duplicate filter. Its only
@@ -114,7 +126,7 @@ which is what TestDedup's moderating-vs-Others test, and Step 4's mutation
 on the `.add()` call rather than the `if`, actually exercise.
 
 Ordering: the Others query ends `.order_by(Community.title)`
-(app/utils.py:4369). TestOrdering below seeds two Others-eligible
+(app/utils.py:4385). TestOrdering below seeds two Others-eligible
 communities whose natural (insertion/id) order is the REVERSE of their
 title order, so a removed ORDER BY would produce the wrong sequence rather
 than coincidentally passing -- the trap Task 6 hit on its first attempt.
@@ -132,19 +144,21 @@ from flask_login import login_user
 
 from app import db
 from app.utils import possible_communities
-from tests.factories import make_community, make_community_member, make_instance, make_user
+from tests.factories import (make_community, make_community_member, make_instance, make_instance_ban,
+                             make_user)
 
 
-def make_other_community(name, instance=None, banned=False, ap_id=None, ap_domain=None):
+def make_other_community(name, instance=None, banned=False, ap_id=None, ap_domain=None, private=False):
     """A Community reachable only through possible_communities' raw 'Others'
-    query. Built from the shared factory (banned=False, ap_id=None by
-    column default, instance_id=1) then adjusted for whichever column this
-    particular case is about.
+    query. Built from the shared factory (banned=False, ap_id=None,
+    private=False by column default, instance_id=1) then adjusted for
+    whichever column this particular case is about.
     """
     community = make_community(name)
     if instance is not None:
         community.instance_id = instance.id
     community.banned = banned
+    community.private = private
     if ap_id is not None:
         community.ap_id = ap_id
         community.ap_domain = ap_domain
@@ -177,8 +191,8 @@ def names_in(group):
 
 
 class TestGrouping:
-    """Rules :4354/:4357 (Moderating), :4361/:4364 (Joined communities),
-    :4370/:4377 (Others): each community lands in exactly the group its
+    """Rules :4360/:4363 (Moderating), :4367/:4370 (Joined communities),
+    :4386/:4393 (Others): each community lands in exactly the group its
     membership state predicts, and a group with nothing in it is omitted
     from the dict entirely rather than present as an empty list.
     """
@@ -243,7 +257,7 @@ class TestGrouping:
         assert 'Others' in result
 
     def test_no_eligible_communities_at_all_returns_an_empty_dict(self, app, db_session):
-        """Rule :4377's omission with nothing at all in the database --
+        """Rule :4393's omission with nothing at all in the database --
         confirms the 'Others' key itself is also omitted, not just the
         first two groups.
         """
@@ -253,13 +267,13 @@ class TestGrouping:
 
 
 class TestDedup:
-    """already_added (app/utils.py:4352) prevents a community the viewer
+    """already_added (app/utils.py:4358) prevents a community the viewer
     moderates or has joined from ALSO showing up in the raw 'Others' query,
     which carries no membership filter and would otherwise return every
     non-excluded community regardless of the viewer's relationship to it.
 
     Mutation performed (Step 4 of the task brief): delete
-    `already_added.add(c.id)` from the MODERATING loop (app/utils.py:4356).
+    `already_added.add(c.id)` from the MODERATING loop (app/utils.py:4362).
     Ran `./run_tests.sh tests/test_possible_communities.py -q`: exactly one
     failure, test_a_moderated_community_also_qualifies_for_others_but_
     appears_only_once below (the moderated community now appears a second
@@ -304,8 +318,9 @@ class TestDedup:
 
 
 class TestOthersExclusions:
-    """The three predicates the Others query pushes into SQL
-    (app/utils.py:4368-4369). One case per predicate, each with a
+    """Three of the four predicates the Others query pushes into SQL
+    (app/utils.py:4381-4382; the fourth, the private-community filter at
+    :4383-4384, has its own class below). One case per predicate, each with a
     plain control community present in the same call to prove the
     exclusion is selective rather than emptying the whole query.
 
@@ -388,8 +403,124 @@ class TestOthersExclusions:
         assert control.id in ids_in(result['Others'])
 
 
+class TestPrivateCommunitiesInOthers:
+    """Rule 11: the Others query must not offer a private community to a
+    viewer who is not a member of it.
+
+    `Community.private` is invite-only real access control ("only members
+    can view. no federation.", app/models.py:594) -- NOT `Post.private`,
+    the microblog marker. The Others query used to filter only on banned /
+    gone_forever / name, so every authenticated user was shown every
+    private community's title and ap_domain in the "new post" picker, and
+    could select one as a post destination. The disclosure and the
+    authorisation are separate layers; the second half of this defect is
+    can_create_post, covered in tests/test_utils_can_post.py.
+
+    The filter added is the codebase's standard query-level shape for this
+    (app/domain/routes.py:66, app/tag/routes.py:58, app/topic/routes.py:96,
+    app/feed/routes.py:467): a base restriction widened by membership,
+
+        or_(Community.private == False,
+            Community.id.in_(community_membership_private(...)))
+
+    written as ONE unconditional filter rather than an if/else, so the base
+    restriction cannot be lost by a later branch -- the same reasoning
+    recorded for get_deduped_post_ids in tests/README.md ("The
+    private-community filter").
+
+    Why the membership arm needs its own test, and why the obvious one does
+    not exercise it. `already_added` means a private community the viewer
+    belongs to is normally claimed by the Moderating or Joined loop before
+    the Others loop ever sees it: moderating_communities and
+    joined_communities are both membership-derived (they JOIN
+    CommunityMember on the viewer, filter is_banned == False, and partition
+    the moderator/owner boolean space between them -- app/utils.py:2563,
+    2624), and community_membership_private asks for the same rows with only
+    the is_banned == False condition, so it is a SUPERSET of both. So
+    test_a_member_still_sees_their_private_community below is a genuine
+    legitimate-access regression guard, but it would pass even for an
+    over-broad `Community.private == False` filter on Others, because it
+    never reaches the Others loop.
+
+    The one reachable case where a private member DOES fall through to
+    Others is joined_communities' extra predicate: it drops communities
+    whose instance the viewer has an InstanceBan against
+    (app/utils.py:2634-2635), while community_membership_private has no such
+    filter. test_a_member_who_has_blocked_the_communitys_instance_still_
+    sees_it drives exactly that path, and is the only test here that fails
+    if the membership arm of the or_ is deleted.
+    """
+
+    def test_a_private_community_is_hidden_from_a_non_member(self, app, db_session):
+        make_instance('privhidden.example')
+        viewer = make_user(None, 'privhiddenviewer', local=True)
+        db.session.commit()
+        private = make_other_community('privhiddencomm', private=True)
+        control = make_other_community('privhiddencontrol')
+
+        result = as_user(app, viewer)
+
+        every_id = [c_id for group in result.values() for c_id in ids_in(group)]
+        assert private.id not in every_id
+        assert control.id in ids_in(result['Others'])
+
+    def test_a_member_still_sees_their_private_community(self, app, db_session):
+        """The legitimate-access test. An over-broad fix that dropped every
+        private community from the picker outright would fail here, and
+        would pass every other test in this class.
+        """
+        make_instance('privmember.example')
+        viewer = make_user(None, 'privmemberviewer', local=True)
+        db.session.commit()
+        private = make_other_community('privmembercomm', private=True)
+        make_community_member(viewer, private)
+
+        result = as_user(app, viewer)
+
+        every_id = [c_id for group in result.values() for c_id in ids_in(group)]
+        assert private.id in every_id
+        assert private.id in ids_in(result['Joined communities'])
+
+    def test_a_member_who_has_blocked_the_communitys_instance_still_sees_it(self, app, db_session):
+        """The membership arm of the Others `or_`, isolated.
+
+        joined_communities excludes communities on an instance the viewer
+        has an InstanceBan against; community_membership_private does not.
+        So this viewer is a member of the private community, gets no
+        'Joined communities' entry for it, and falls through to the Others
+        query -- which must still offer it.
+        """
+        make_instance('privblocked.example')
+        viewer = make_user(None, 'privblockedviewer', local=True)
+        db.session.commit()
+        peer = make_instance('privblockedpeer.example')
+        private = make_other_community(
+            'privblockedcomm', instance=peer, ap_id='https://privblockedpeer.example/c/privblockedcomm',
+            ap_domain='privblockedpeer.example', private=True)
+        make_community_member(viewer, private)
+        make_instance_ban(viewer, peer)
+
+        result = as_user(app, viewer)
+
+        assert 'Joined communities' not in result
+        assert private.id in ids_in(result['Others'])
+
+    def test_a_non_private_community_is_unaffected(self, app, db_session):
+        """The control for the whole class: an ordinary community the viewer
+        has no relationship with is still offered under Others.
+        """
+        make_instance('privcontrol.example')
+        viewer = make_user(None, 'privcontrolviewer', local=True)
+        db.session.commit()
+        ordinary = make_other_community('privcontrolcomm')
+
+        result = as_user(app, viewer)
+
+        assert ordinary.id in ids_in(result['Others'])
+
+
 class TestDisplayNameBranch:
-    """Rule :4371: `display_name = c.title` when `c.ap_id is None`, else
+    """Rule :4387: `display_name = c.title` when `c.ap_id is None`, else
     `f"{c.title}@{c.ap_domain}"`. This branch is specific to the Others
     loop's hand-rolled version of Community.display_name() -- the query only
     selects (id, ap_id, title, ap_domain) columns, not a full Community
@@ -428,7 +559,7 @@ class TestDisplayNameBranch:
 
 class TestOrdering:
     """The Others query ends `.order_by(Community.title)`
-    (app/utils.py:4369). Fixture titles are chosen so insertion/id order is
+    (app/utils.py:4385). Fixture titles are chosen so insertion/id order is
     the REVERSE of title order -- a removed ORDER BY would return
     ['zzzorderlast', 'aaaorderfirst'] here, not coincidentally the right
     sequence.

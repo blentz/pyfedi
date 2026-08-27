@@ -19,7 +19,7 @@ actually ordered the rows, not that it happened to preserve insertion order.
 
 ## The 'top' divergence
 
-`post_ids_to_models` orders `top` by `Post.score` (app/utils.py:3971), and
+`post_ids_to_models` orders `top` by `Post.score` (app/utils.py:3977), and
 `get_deduped_post_ids`'s raw SQL agrees (`ORDER BY p.score DESC`, :3928).
 `instance_sticky_posts` orders `top` by `Post.up_votes - Post.down_votes`
 (:3997) instead. These are two implementations of one concept and they do not
@@ -133,7 +133,7 @@ def feed_ids(app, viewer, sort, community):
 
 
 class TestGetDedupedPostIdsSorts:
-    """Ordering for get_deduped_post_ids' seven `sort` branches (app/utils.py:3919-3951)."""
+    """Ordering for get_deduped_post_ids' seven `sort` branches (app/utils.py:3925-3957)."""
 
     @pytest.mark.parametrize('sort', SORTS)
     def test_returns_every_requested_post(self, app, db_session, redis_double, sort):
@@ -161,7 +161,7 @@ class TestGetDedupedPostIdsSorts:
 
 class TestGetDedupedPostIdsScaledAlsoFilters:
     """get_deduped_post_ids' 'scaled' branch appends its own WHERE clause
-    (app/utils.py:3924): `p.ranking_scaled is not null AND p.from_bot is false`.
+    (app/utils.py:3930): `p.ranking_scaled is not null AND p.from_bot is false`.
     That is a filter, not just an ordering -- both directions, on both columns.
     """
 
@@ -187,7 +187,7 @@ class TestGetDedupedPostIdsScaledAlsoFilters:
 
 
 class TestPostIdsToModelsSorts:
-    """Ordering for post_ids_to_models' seven `sort` branches (app/utils.py:3966-3978)."""
+    """Ordering for post_ids_to_models' seven `sort` branches (app/utils.py:3972-3984)."""
 
     @pytest.mark.parametrize('sort', SORTS)
     def test_returns_every_requested_post(self, db_session, sort):
@@ -211,7 +211,7 @@ class TestPostIdsToModelsSorts:
 
 
 class TestInstanceStickyPostsSorts:
-    """Ordering for instance_sticky_posts' seven `sort` branches (app/utils.py:3992-4004).
+    """Ordering for instance_sticky_posts' seven `sort` branches (app/utils.py:3998-4010).
     'top' here orders by Post.up_votes - Post.down_votes, NOT Post.score -- see
     the module docstring on why that diverges from the other two functions' 'top'.
     """
@@ -242,7 +242,7 @@ class TestInstanceStickyPostsSorts:
 
 class TestTopOrderingDivergesBetweenImplementations:
     """post_ids_to_models orders 'top' by Post.score; instance_sticky_posts orders
-    it by Post.up_votes - Post.down_votes (app/utils.py:3971 vs :3997). See the
+    it by Post.up_votes - Post.down_votes (app/utils.py:3977 vs :3997). See the
     module docstring for why and when those disagree in a real deployment. This
     test does not reproduce the SPICY_UNDER_* mechanism that opens the drift; it
     fixes score and up_votes/down_votes independently on the same two Post rows
@@ -265,7 +265,7 @@ class TestTopOrderingDivergesBetweenImplementations:
         assert [p.id for p in by_votes] == [post_y.id, post_x.id]
 
 
-# The eight top_* cutoff windows get_deduped_post_ids applies (app/utils.py:3925-3944).
+# The eight top_* cutoff windows get_deduped_post_ids applies (app/utils.py:3931-3950).
 # Each recognised value sets params['top_cutoff'] to utcnow() minus its own window and
 # appends 'p.posted_at > :top_cutoff ' to the WHERE clause (:3926-3927); top_all is the
 # exception and appends no cutoff clause at all. TOP_WINDOWS pairs each recognised,
@@ -332,7 +332,7 @@ class TestGetDedupedPostIdsTopWindows:
 
 
 class TestGetDedupedPostIdsTopAll:
-    """top_all appends no cutoff clause at all (app/utils.py:3926), rather than a very
+    """top_all appends no cutoff clause at all (app/utils.py:3932), rather than a very
     large one -- a single window value could never tell those two apart, since any
     window long enough to be indistinguishable from "no cutoff" in a fast-running test
     would itself be suspicious. The only test that actually discriminates "no cutoff"

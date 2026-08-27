@@ -15,6 +15,7 @@ Guard order, as read from app/utils.py:
     content.is_moderator(user) or user.is_admin()              -> True  (early return)
     content.restricted_to_mods                                 -> False
     content.local_only and not user.is_local()                 -> False
+    content.private and not a member of it                      -> False
     content.id in communities_banned_from(user.id)              -> False
     content.instance_id in banned_instances(user.id)             -> False
     otherwise                                                  -> True
@@ -399,7 +400,7 @@ class TestCanCreatePostBans:
         """An InstanceBan on the community's instance is refused -- but NOT,
         it turns out, by can_create_post's own tail check
         (`content.instance_id in banned_instances(user.id)`, app/utils.py
-        line ~2360-2361). It is refused by the EARLIER
+        line ~2366-2367). It is refused by the EARLIER
         `content.id in communities_banned_from(user.id)` check instead:
         communities_banned_from()'s own instance-ban half
         (app/utils.py:1546-1548) joins Community to InstanceBan on
@@ -413,7 +414,7 @@ class TestCanCreatePostBans:
         the first can never be false when the second is true for the
         `content` community itself, since `content` is by construction one of
         the rows that join would return. This makes can_create_post's own
-        tail instance-ban check (line 2361's `return False`) DEAD CODE: no
+        tail instance-ban check (line 2367's `return False`) DEAD CODE: no
         input reaches it with a True condition, because
         communities_banned_from() always returns False first for the same
         community. Reported as a defect, not fixed -- see this task's report.
@@ -431,6 +432,70 @@ class TestCanCreatePostBans:
         db.session.commit()
         make_instance_ban(user, remote)
         assert can_create_post(user, community) is False
+
+
+class TestCanCreatePostPrivateCommunity:
+    """`content.private and content.id not in community_membership_private(
+    user.id)` -- a private community is invite-only, so a non-member may not
+    post to it.
+
+    This half of the fix is the one that actually holds. The other half,
+    dropping private communities the viewer does not belong to from
+    possible_communities' picker (tests/test_possible_communities.py::
+    TestPrivateCommunitiesInOthers), only removes the disclosure: the form
+    field carrying the destination community is client-supplied, and
+    add_post resolves the Community straight from it, so nothing but this
+    check stops a hand-crafted submission.
+
+    PLACEMENT. The check sits AFTER `content.is_moderator(user) or
+    user.is_admin(): return True`, alongside the communities_banned_from
+    check, deliberately -- so the existing moderator/admin model is
+    preserved rather than quietly narrowed. A consequence worth knowing:
+    that makes can_create_post admin-bypassable for private communities
+    while the two READ-side checks built on the same helper are not
+    (app/post/routes.py:102 and app/api/alpha/views.py:309 abort/raise for
+    an admin who is not a member). That divergence is pre-existing in the
+    surrounding design and is reported, not resolved, by this change.
+
+    `community_membership_private` (app/utils.py) asks only for a
+    CommunityMember row with `is_banned is false`, so a MODERATOR of a
+    private community is covered by it: moderating_communities' rows are
+    the same table with an extra is_moderator/is_owner predicate. A private
+    community's moderator therefore passes this check on membership alone,
+    quite apart from the is_moderator early return above it.
+    """
+
+    def test_a_non_member_may_not_post_to_a_private_community(self, app, db_session):
+        make_instance('test.piefed.local', software='piefed')  # user.instance_id FK target
+        make_user(None, 'privfiller', local=True)  # occupies id 1, off is_admin()'s path
+        user = make_user(None, 'privoutsider', local=True, with_keys=True)
+        community = make_community('privpostland')
+        community.private = True
+        db.session.commit()
+        assert can_create_post(user, community) is False
+
+    def test_a_member_may_post_to_a_private_community(self, app, db_session):
+        """The legitimate-access test. A fix that simply refused every private
+        community would pass the test above and fail here.
+        """
+        make_instance('test.piefed.local', software='piefed')
+        make_user(None, 'privfiller2', local=True)  # occupies id 1, off is_admin()'s path
+        user = make_user(None, 'privinsider', local=True, with_keys=True)
+        community = make_community('privpostland2')
+        community.private = True
+        db.session.commit()
+        make_community_member(user, community)
+        assert can_create_post(user, community) is True
+
+    def test_a_non_private_community_is_unaffected(self, app, db_session):
+        """The control: the same non-member, the same setup, private left at
+        its column default -- still permitted.
+        """
+        make_instance('test.piefed.local', software='piefed')
+        make_user(None, 'privfiller3', local=True)  # occupies id 1, off is_admin()'s path
+        user = make_user(None, 'privcontroluser', local=True, with_keys=True)
+        community = make_community('privpostland3')
+        assert can_create_post(user, community) is True
 
 
 # ---------------------------------------------------------------------------
@@ -661,7 +726,7 @@ class TestCanCreatePostReplyNewAccountRateLimitAsymmetry:
     """can_create_post limits new accounts to 3 posts in their first 24h
     (`user.created_very_recently() and user.post_count > 3`). This function
     has NO equivalent limit for replies -- confirmed by reading
-    app/utils.py:2366-2398, where the remote branch goes straight from the
+    app/utils.py:2372-2404, where the remote branch goes straight from the
     allowlist/ban check to `if content.banned` with nothing in between.
 
     Pinned deliberately. If a limit is later added here, this test fails and
@@ -756,7 +821,7 @@ class TestCanCreatePostReplyModeratorAndAdminOrdering:
 class TestCanCreatePostReplyRestrictedToModsAsymmetry:
     """can_create_post refuses a non-moderator in a `restricted_to_mods`
     community. can_create_post_reply has NO such check at all -- reading
-    app/utils.py:2366-2398 top to bottom, `content.restricted_to_mods` is
+    app/utils.py:2372-2404 top to bottom, `content.restricted_to_mods` is
     never referenced.
 
     Pinned deliberately, same rationale as the rate-limit asymmetry above: if

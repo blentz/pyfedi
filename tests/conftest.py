@@ -379,7 +379,7 @@ def redis_double(monkeypatch):
     monkeypatching the single attribute `app.redis_client` is enough to redirect
     all ~14 call sites to this fixture's fakeredis instance; there is no second
     binding problem to solve here. Verified for get_deduped_post_ids
-    (app/utils.py:3790-3960), which both checks a cached result and, for an
+    (app/utils.py:3796-3966), which both checks a cached result and, for an
     authenticated caller, writes one back with a 24-hour TTL -- see
     tests/test_factories_feed.py's Redis-policy tests, which show the real test
     Redis (CACHE_REDIS_URL db 1, the one thing `--down` would otherwise be needed

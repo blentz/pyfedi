@@ -346,7 +346,7 @@ def make_follow(local_user, remote_user, is_accepted=True, is_inward=False) -> U
     app/activitypub/routes.py:1144 when a remote target's Accept arrives. It is a
     denormalised counter, not a view over user_follower, and
     `get_deduped_post_ids` reads THAT counter -- not the rows -- to decide whether
-    to add the follow and boost disjuncts at all (app/utils.py:3822). A follow row
+    to add the follow and boost disjuncts at all (app/utils.py:3828). A follow row
     without the counter is a shape production never produces, and it would make a
     feed test silently exercise the no-follows branch.
     """
@@ -416,8 +416,8 @@ def mark_post_read(user: User, post: Post) -> None:
     so the row is inserted directly through it, mirroring grant_permission's use of
     user_role.insert(). get_deduped_post_ids reads
     `SELECT read_post_id FROM "read_posts" WHERE user_id = :user_id` when the
-    viewer's hide_read_posts is set (app/utils.py:3879), and get_instance_stickies
-    reads the identical query under the same condition (app/utils.py:4033).
+    viewer's hide_read_posts is set (app/utils.py:3885), and get_instance_stickies
+    reads the identical query under the same condition (app/utils.py:4039).
     """
     db.session.execute(read_posts.insert().values(user_id=user.id, read_post_id=post.id))
     db.session.commit()
@@ -428,9 +428,9 @@ def hide_post(user: User, post: Post) -> None:
 
     `hidden_posts` has no ORM model either (app/models.py:942). get_deduped_post_ids
     reads `SELECT hidden_post_id FROM "hidden_posts" WHERE user_id = :user_id`
-    unconditionally for every authenticated viewer (app/utils.py:3882), and
+    unconditionally for every authenticated viewer (app/utils.py:3888), and
     get_instance_stickies reads the identical query unconditionally too
-    (app/utils.py:4029).
+    (app/utils.py:4035).
     """
     db.session.execute(hidden_posts.insert().values(user_id=user.id, hidden_post_id=post.id))
     db.session.commit()
@@ -444,7 +444,7 @@ def make_post_flair(post: Post, name: str = 'flair') -> CommunityFlair:
     table (app/models.py:345), exposed as the `Post.flair` relationship. This
     factory follows that shape rather than a per-post model. get_deduped_post_ids's
     blocked-flair filter reads `post_flair` directly (`SELECT post_id FROM
-    "post_flair" WHERE flair_id IN :blocked_flair_ids`, app/utils.py:3915).
+    "post_flair" WHERE flair_id IN :blocked_flair_ids`, app/utils.py:3921).
     """
     flair = CommunityFlair(community_id=post.community_id, flair=name)
     db.session.add(flair)
@@ -457,7 +457,7 @@ def make_post_flair(post: Post, name: str = 'flair') -> CommunityFlair:
 def make_flair_block(user: User, flair: CommunityFlair) -> CommunityFlairBlock:
     """app/utils.py's get_deduped_post_ids reads CommunityFlairBlock rows filtered
     on user_id and community_id, then excludes posts carrying any blocked
-    community_flair_id (app/utils.py:3911-3916) -- matches this factory's columns.
+    community_flair_id (app/utils.py:3917-3922) -- matches this factory's columns.
     community_id is taken from `flair` so the block always targets the community
     the flair belongs to, matching how the query filters
     CommunityFlairBlock.community_id.in_(community_ids).
