@@ -1,6 +1,15 @@
-"""fixup_url (app/utils.py:3110-3167) returns (thumbnail_url, embed_url) for a
+"""fixup_url (in app/utils.py) returns (thumbnail_url, embed_url) for a
 submitted link. Two independent halves: a peertube branch that fetches the
 canonical video id over HTTP, and a YouTube URL matrix.
+
+No line numbers anywhere in this file, deliberately. It used to carry five --
+a range for the function plus four for individual branches -- and by the time
+anyone checked, every one of them pointed at an unrelated opengraph property
+list two hundred lines away, while two of the five contradicted each other
+about which branch lived at 3153. See the docstring of
+tests/test_rewrite_href.py for why this is treated as a structural problem
+rather than a stale-data one, and for the command that derives positions on
+demand. Branches below are named by what they do.
 
 YouTube's URL formats have no specification. The expectations below are derived
 from the formats the production code already handles -- observed behaviour, not
@@ -28,7 +37,9 @@ class TestNonYoutubePassesThrough:
 
 class TestYoutubeVideoForms:
     """Each parametrised case is one path shape the production code handles.
-    Mutation that fails each: deleting that shape's branch at 3145-3150."""
+    Mutation that fails each: deleting that shape's arm of the video-id
+    dispatch -- the `/shorts/` prefix arm, the `/watch` + `v` arm, or the bare
+    `path[1:]` else that catches youtu.be."""
 
     @pytest.mark.parametrize('url,video_id', [
         ('https://www.youtube.com/watch?v=abc123', 'abc123'),
@@ -45,7 +56,7 @@ class TestYoutubeVideoForms:
 
 
 class TestTimestamps:
-    """`start` wins over `t` -- they are checked in that order at 3153-3156.
+    """`start` wins over `t` -- the timestamp if/elif tests `start` first.
     Mutation that fails the third: swapping the elif order."""
 
     def test_a_start_parameter_is_appended(self, app):
@@ -66,8 +77,10 @@ class TestTimestamps:
 
 class TestPassThroughYoutubeForms:
     """Playlists and posts are let through unmolested with an EMPTY thumbnail --
-    a distinct return shape. Mutation that fails these: deleting the early
-    return at 3139-3142."""
+    a distinct return shape. Mutation that fails these: deleting the
+    playlist-and-post early return, the arm guarded by
+    `path == '/playlist' and 'list' in query_params or path.startswith("/post/")`
+    that blanks the thumbnail and returns the url as the embed."""
 
     def test_a_playlist_returns_an_empty_thumbnail(self, app):
         url = 'https://www.youtube.com/playlist?list=PL123'
@@ -86,7 +99,7 @@ class TestPassThroughYoutubeForms:
 
 class TestNoVideoId:
     """A youtube-domain URL with no path segment never sets video_id, so the
-    early return at 3153-3154 fires with both slots unchanged. This is a real
+    `if not video_id:` early return fires with both slots unchanged. This is a real
     coverage gap left by the brief's YouTube matrix cases -- none of them ever
     leaves `path` falsy or empty after the leading slash is stripped.
 
@@ -109,7 +122,8 @@ class TestPeertube:
     make_instance(software='peertube'), and an http_mock route.
 
     Mutation that fails the first test: deleting the `if parsed_url.netloc in
-    peertube_domains` check, or the embed_url assignment at 3122.
+    peertube_domains` check, or the `embed_url = video_json['id']` assignment
+    that lifts the canonical id out of the fetched activity.
 
     There is deliberately no "unknown host makes no request" test built on the
     shared `http_mock` fixture. `assert_all_called=True` there requires every
