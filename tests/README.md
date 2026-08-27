@@ -330,6 +330,12 @@ missed -- see "Correcting a 100% claim" below -- taking the module to
 floor-bites proof was re-run against the new `coverage.json` with the same
 result (68 fails naming the module, 67 passes).
 
+The private-community fix (see "The private-community filter" below) took it to
+**67.5178%** -- still 67 rounded down, so the floor stayed put a third time -- and
+the bites proof was re-run once more against that `coverage.json`: at 68 the
+ratchet exits 1 with `app/utils.py: 67.52% is below its floor of 68.00%`, and back
+at 67 it exits 0 with `All 3 module floors met.`
+
 ### Correcting a 100% claim
 
 The sub-project's own design doc and task briefs stated all five target functions
@@ -365,16 +371,17 @@ The two real gaps, now closed:
   test was replaced in place with the assertion that now holds, same call, same
   fixtures, same branch covered.
 
-`get_deduped_post_ids` now carries exactly three documented-uncovered regions,
-all legitimately out of this sub-project's scope and unchanged by the fix round
-or by the cache-key fix below: the `hashtag` filter (`3833-3837`), the
-anonymous-viewer private-community branch (`3860-3861`), and the
-unrecognized-`sort` fallthrough (`3939->3943`, mirrored in `post_ids_to_models`
-at `3966->3968`). Those line numbers moved by seven when the cache-key fix landed
-and are re-derived from `coverage.json`, not carried forward.
-`instance_sticky_posts` and
+`get_deduped_post_ids` now carries exactly two documented-uncovered regions,
+both legitimately out of this sub-project's scope: the `hashtag` filter
+(`3833-3837`) and the unrecognized-`sort` fallthrough (`3949->3953`, mirrored in
+`post_ids_to_models` at `3976->3978`). There used to be a third, the
+private-community branch at `3860-3861` -- it stopped being uncovered when it
+turned out to be a leak rather than a gap; see "The private-community filter"
+below. Those line numbers moved by seven when the cache-key fix landed and again
+when the private-community fix did, and are re-derived from `coverage.json`, not
+carried forward. `instance_sticky_posts` and
 `get_instance_stickies` are 100% statement and branch. `possible_communities`
-carries its two documented-dead branches (`4344->4343`, `4351->4350`), unchanged.
+carries its two documented-dead branches (`4354->4353`, `4361->4360`), unchanged.
 
 ### The feed cache key
 
@@ -414,20 +421,62 @@ different store entirely.
 No backward compatibility with pre-fix entries was attempted, deliberately: they
 carry a 24h TTL and expire on their own.
 
-**Still open, found while fixing the above and NOT fixed here.** The
-private-community filter is inside a walrus guard:
+### The private-community filter
+
+Found while fixing the cache key, reported there as still open, and now FIXED.
+`get_deduped_post_ids`' only `c.private` guard used to sit inside a walrus:
 
     if private_community_ids := community_membership_private(current_user.id):
         post_id_where.append('(c.private is false OR c.id IN :private_community_ids) ')
 
-A viewer who belongs to no private community at all makes that guard falsy, so
-the clause is never appended and posts from EVERY private community appear in
-their feed. Verified by probe against this suite: a private community, one member
-(Alice) and one non-member (Bob) with no private memberships -- Bob's
-`get_deduped_post_ids` returns Alice's private-community post. This is why
-`tests/test_feed_cache.py`'s leak test discriminates on `hidden_posts` (appended
-unconditionally for every authenticated viewer) rather than on private-community
-membership, which would not have discriminated at all.
+A viewer who belongs to no private community makes that guard falsy, so the
+clause was never appended and NO private restriction applied to the query at all;
+the anonymous branch appended none either. `Community.private` is invite-only real
+access control ("only members can view. no federation.", `app/models.py:594`) --
+not `Post.private`, the microblog marker. On the "All" feed (`community_ids=[-1]`)
+the community filter is just `c.show_all is true` and `Community.show_all`
+defaults to True, so every private community's posts were visible to any
+anonymous visitor and to any authenticated viewer with no private membership.
+The `local` and `popular` views were never affected: they build their own
+`(c.private is false OR c.id IN ...)` at the caller
+(`app/main/routes.py:124,131`) and pass it in as `community_sql`.
+
+**Why exactly one of the seven walrus-guarded filters was wrong.** Six are
+BLOCKLISTS -- blocked domains, blocked instances, blocked communities, blocked
+users, communities banned from -- where an empty list genuinely means "block
+nothing", so skipping the clause is correct and the walrus is right. This one was
+an ALLOWLIST EXCEPTION: the empty list means "this viewer has no private-community
+exceptions", and the base restriction must still apply. Same syntax, opposite
+semantics. Do not "fix" the other six.
+
+The fix hoists ONE unconditional site above the anonymous/authenticated split
+(`app/utils.py:3852-3863`), so the base restriction cannot be lost by adding a
+branch, and membership only widens it:
+
+    if current_user.is_authenticated and (private_community_ids := community_membership_private(...)):
+        post_id_where.append('(c.private is false OR c.id IN :private_community_ids) ')
+        params['private_community_ids'] = tuple(private_community_ids)
+    else:
+        post_id_where.append('c.private is false ')
+
+`tests/test_feed_private_communities.py` is the regression suite. Four tests, and
+the set is what matters: three absence tests (authenticated non-member, anonymous,
+member-of-A-not-B) would ALL pass for an over-broad fix that appended
+`c.private is false` unconditionally with no widening -- i.e. one that hid a
+private community from its own members. The fourth, the presence test, is the only
+thing that rejects it.
+
+Two consequences worth knowing. `tests/test_feed_cache.py`'s leak test
+discriminates on `hidden_posts` rather than on private-community membership; that
+was forced by the defect and is now merely a choice, so leave it as is.
+And `TestTheMicroblogGateBindsToTheWholeCommunityDisjunct`
+(`tests/test_subscribed_feed_microblogs.py`) had to have its fixture amended: its
+viewer was deliberately a member of NEITHER community so the function appended no
+private filter, which only produced rows because of this defect. The viewer is now
+a member of the private community, which is also what
+`app/main/routes.py:126` really implies -- that `community_sql` names the viewer's
+OWN private communities, never an arbitrary private id. The paren-collapse
+mutation was re-proved to still fail that class' first test after the amendment.
 
 **The Redis-write decision (Task 1).** `get_deduped_post_ids` ends with
 `redis_client.set(cache_key, ..., ex=86400)` for every authenticated call with a

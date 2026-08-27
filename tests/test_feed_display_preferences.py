@@ -1,7 +1,7 @@
 """Single-direction coverage for get_deduped_post_ids' DISPLAY PREFERENCE
-filters (app/utils.py:3862-3906): hide_nsfw, hide_nsfl, hide_read_posts,
+filters (app/utils.py:3872-3916): hide_nsfw, hide_nsfl, hide_read_posts,
 hide_gen_ai, ignore_bots, read_language_ids, hide_low_quality. Plus the
-anonymous CONTENT_WARNING branch at 3853-3857.
+anonymous CONTENT_WARNING branch at 3866-3857.
 
 Per the task-5 brief, this is deliberately LIGHTER than task 4's visibility
 filters (tests/test_feed_visibility_filters.py). Those gate OTHER PEOPLE's
@@ -87,7 +87,7 @@ def anon_feed_ids(app, community_ids, **kwargs):
 
 
 class TestHideNsfw:
-    """app/utils.py:3866-3867: `if current_user.hide_nsfw == 1:
+    """app/utils.py:3876-3877: `if current_user.hide_nsfw == 1:
     post_id_where.append('p.nsfw is false ')`. Mutation that fails only the
     absence test: deleting that `if` block. Mutation that fails only the
     presence test: replacing the appended fragment with `1=0 ` inside the
@@ -130,7 +130,7 @@ class TestHideNsfw:
 
 
 class TestHideNsfl:
-    """app/utils.py:3864-3865: `if current_user.hide_nsfl == 1:
+    """app/utils.py:3874-3875: `if current_user.hide_nsfl == 1:
     post_id_where.append('p.nsfl is false ')`. Mutations mirror TestHideNsfw.
     """
 
@@ -165,7 +165,7 @@ class TestHideNsfl:
 
 
 class TestHideReadPosts:
-    """app/utils.py:3868-3869: `if current_user.hide_read_posts:
+    """app/utils.py:3878-3879: `if current_user.hide_read_posts:
     post_id_where.append('p.id NOT IN (SELECT read_post_id FROM
     "read_posts" WHERE user_id = :user_id) ')`. Mutation that fails only the
     absence test: deleting the `if` block. Mutation that fails only the
@@ -215,7 +215,7 @@ class TestHideReadPosts:
 
 
 class TestHideGenAi:
-    """app/utils.py:3870-3871: `if current_user.hide_gen_ai == 1:
+    """app/utils.py:3880-3881: `if current_user.hide_gen_ai == 1:
     post_id_where.append('p.ai_generated is false ')`. hide_gen_ai's column
     default is 2 ("label"), not 1 ("hide") -- 0=show, 1=hide, 2=label,
     3=semi-transparent (app/models.py:986) -- so both tests below set it
@@ -256,7 +256,7 @@ class TestHideGenAi:
 
 
 class TestIgnoreBots:
-    """app/utils.py:3862-3863: `if current_user.ignore_bots == 1:
+    """app/utils.py:3872-3873: `if current_user.ignore_bots == 1:
     post_id_where.append('p.from_bot is false ')`. This is the brief's named
     Step-3 discrimination target. Mutations mirror TestHideNsfw. Measured
     counts are in task-5-report.md.
@@ -295,7 +295,7 @@ class TestIgnoreBots:
 
 
 class TestReadLanguageIds:
-    """app/utils.py:3876-3878: `if current_user.read_language_ids and
+    """app/utils.py:3886-3888: `if current_user.read_language_ids and
     len(current_user.read_language_ids) > 0: post_id_where.append('(p.
     language_id IN :read_language_ids OR p.language_id is null) ')`. List-
     valued, and inclusive rather than exclusive -- a post whose language
@@ -312,7 +312,7 @@ class TestReadLanguageIds:
     coverage.py's statement/branch measurement cannot see it, and the other
     two tests in this class never exercise it (their posts always carry a
     language_id). Without it, deleting `OR p.language_id is null` from
-    app/utils.py:3877 would go completely unnoticed by this file despite its
+    app/utils.py:3887 would go completely unnoticed by this file despite its
     100% statement-and-branch reading. Real production impact
     if it silently broke: any post with no language set would vanish from
     the feed of every user who has chosen specific languages, even though
@@ -376,7 +376,7 @@ class TestReadLanguageIds:
         rather than hide them by default.
 
         Mutation that fails only this test: deleting `OR p.language_id is
-        null` from app/utils.py:3877, leaving `p.language_id IN
+        null` from app/utils.py:3887, leaving `p.language_id IN
         :read_language_ids` as the sole predicate -- a NULL language_id can
         never satisfy an IN list, so the post would vanish.
         """
@@ -452,7 +452,7 @@ class TestHideLowQuality:
 
 
 class TestAnonymousContentWarningBranch:
-    """app/utils.py:3853-3857. Anonymous viewers take a config-dependent
+    """app/utils.py:3866-3857. Anonymous viewers take a config-dependent
     branch instead of any per-user preference:
 
         if current_app.config['CONTENT_WARNING']:

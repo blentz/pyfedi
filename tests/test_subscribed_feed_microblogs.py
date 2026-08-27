@@ -192,10 +192,25 @@ class TestTheMicroblogGateBindsToTheWholeCommunityDisjunct:
     def two_communities(self, db_session, isolated_result_cache):
         """One public community and one private community, each with both kinds of post.
 
-        The viewer is a member of neither: `community_membership_private` must come
-        back empty, or `get_deduped_post_ids` appends its own
-        `(c.private is false OR c.id IN :private_community_ids)` filter and that,
-        not the parens, would decide the outcome.
+        The viewer IS a member of the private community, which is what makes the
+        hand-built `community_sql` below faithful to the one
+        `app/main/routes.py:126` really builds: that string names the viewer's OWN
+        private communities (`community_membership_private`), never an arbitrary
+        private id. Membership also makes `get_deduped_post_ids`' own
+        `(c.private is false OR c.id IN :private_community_ids)` filter widen to
+        the same set, so it admits everything `community_sql` admits and cannot be
+        what decides any assertion here -- the parens still are.
+
+        The viewer used to be a member of NEITHER community, chosen so that
+        `community_membership_private` came back empty and the function appended no
+        private filter at all. That only worked because of a defect: the empty list
+        made a walrus guard falsy and the base `c.private is false` restriction was
+        dropped for the whole query, which is how a non-member could see
+        `private_ordinary` in the first place. With that fixed
+        (tests/test_feed_private_communities.py) a non-member is correctly excluded
+        from the private community's rows, so the second arm of the OR could no
+        longer contribute any and the control below would fail for a reason that
+        has nothing to do with precedence.
         """
         author = make_user(make_instance('m.example'), 'precedenceauthor')
         viewer = make_user(None, 'precedenceviewer', local=True)
@@ -204,6 +219,7 @@ class TestTheMicroblogGateBindsToTheWholeCommunityDisjunct:
         private_community = make_community('private-side')
         private_community.private = True
         db.session.commit()
+        make_community_member(viewer, private_community)
 
         posts = {
             'public_microblog': make_post(public_community, author,

@@ -3864,6 +3864,19 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
             post_id_where.append('p.instance_id NOT IN :filtered_out_instance_ids2 ')
             params['filtered_out_instance_ids2'] = tuple(bi)
 
+    # Private communities are invite-only real access control (Community.private,
+    # not the Post.private microblog marker), so the base restriction applies to
+    # EVERY viewer -- anonymous included -- and membership only WIDENS it. Unlike
+    # the blocklist filters below, an empty list here does not mean "filter
+    # nothing": it means this viewer has no exceptions, so the restriction must
+    # still be appended. Kept as one unconditional site above the
+    # anonymous/authenticated split so no branch can be added that lacks it.
+    if current_user.is_authenticated and (private_community_ids := community_membership_private(current_user.id)):
+        post_id_where.append('(c.private is false OR c.id IN :private_community_ids) ')
+        params['private_community_ids'] = tuple(private_community_ids)
+    else:
+        post_id_where.append('c.private is false ')
+
     # filter out nsfw and nsfl if desired
     if current_user.is_anonymous:
         if current_app.config['CONTENT_WARNING']:
@@ -3871,9 +3884,6 @@ def get_deduped_post_ids(result_id: str, community_ids: List[int], sort: str, ha
         else:
             post_id_where.append('p.from_bot is false AND p.nsfw is false AND p.nsfl is false AND p.deleted is false AND p.status > 0 ')
     else:
-        if private_community_ids := community_membership_private(current_user.id):
-            post_id_where.append('(c.private is false OR c.id IN :private_community_ids) ')
-            params['private_community_ids'] = tuple(private_community_ids)
         if current_user.ignore_bots == 1:
             post_id_where.append('p.from_bot is false ')
         if current_user.hide_nsfl == 1:

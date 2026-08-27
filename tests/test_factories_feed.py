@@ -141,7 +141,7 @@ def test_community_block_is_visible_to_blocked_communities(app, db_session):
 
 def test_marked_read_post_is_excluded_from_the_feed_when_hide_read_posts_is_set(app, db_session, redis_double):
     """Fails if mark_post_read writes rows the raw `read_posts` query inside
-    get_deduped_post_ids (app/utils.py:3868-3869) does not read.
+    get_deduped_post_ids (app/utils.py:3878-3879) does not read.
 
     The control assertion (post visible before marking read) rules out the post
     being excluded for some unrelated reason.
@@ -161,7 +161,7 @@ def test_marked_read_post_is_excluded_from_the_feed_when_hide_read_posts_is_set(
 
 def test_hidden_post_is_excluded_from_instance_stickies(app, db_session):
     """Fails if hide_post writes rows the raw `hidden_posts` query inside
-    get_instance_stickies (app/utils.py:4019-4021, 4044) does not read. Proves the
+    get_instance_stickies (app/utils.py:4029-4031, 4054) does not read. Proves the
     hidden_posts reader in get_instance_stickies specifically -- a sibling test
     (test_marked_read_post_is_excluded_from_the_feed...) proves the read_posts /
     hidden_posts readers inside get_deduped_post_ids instead, so between them both
@@ -183,7 +183,7 @@ def test_hidden_post_is_excluded_from_instance_stickies(app, db_session):
 def test_flair_block_is_excluded_from_the_feed(app, db_session, redis_double):
     """Fails if make_post_flair / make_flair_block write rows the raw
     `post_flair` / CommunityFlairBlock query inside get_deduped_post_ids
-    (app/utils.py:3900-3906) does not read.
+    (app/utils.py:3910-3916) does not read.
     """
     make_instance('flaircheck.example')
     viewer = make_user(None, 'flairblocker', local=True)
@@ -223,9 +223,11 @@ def test_blocked_users_is_not_cached_between_calls(app, db_session):
 
 
 # --- Fix round 1: the two undocumented gaps in get_deduped_post_ids's own body,
-# found during Task 8's fresh re-measurement (neither is the hashtag filter, the
-# anonymous private-community branch, or the unrecognized-sort fallthrough --
-# those three stay documented-uncovered; these two were simply never noticed) --
+# found during Task 8's fresh re-measurement (neither is the hashtag filter nor
+# the unrecognized-sort fallthrough -- those two stay documented-uncovered; these
+# two were simply never noticed). A third, the private-community branch, stopped
+# being uncovered when that branch turned out to be a leak: see
+# tests/test_feed_private_communities.py --
 
 def test_empty_community_ids_returns_an_empty_list_without_querying(app, db_session):
     """Covers the early-return guard at app/utils.py:3792-3793 --
