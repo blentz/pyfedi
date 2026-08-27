@@ -3242,7 +3242,19 @@ def update_post_from_activity(post: Post, request_json: dict):
 
             else:
                 post.type = POST_TYPE_ARTICLE
-                post.url = ''
+                # None, not '': Post.url is nullable with no default, so None is
+                # what the column holds for a post that has no url, and it is what
+                # the other peer-supplied write in this function (the microblog
+                # branch, ~line 2902) already stores. Every consumer in app/ and in
+                # the templates either reads post.url for truth ('if post.url:',
+                # '{% if post.url %}'), which cannot tell '' from None, or is gated
+                # on a post type this branch cannot produce -- it sets
+                # POST_TYPE_ARTICLE on the line above. '' additionally made this
+                # branch non-idempotent: new_url is initialised to None for every
+                # non-Event type (~line 3111), so a stored '' made `old_url !=
+                # new_url` true again on the NEXT Update and re-ran this whole arm
+                # -- clearing image_id and recalculating cross posts -- every time.
+                post.url = None
                 post.image_id = None
                 if post.cross_posts is not None:  # unlikely, but not impossible
                     post.calculate_cross_posts(delete_only=True)
