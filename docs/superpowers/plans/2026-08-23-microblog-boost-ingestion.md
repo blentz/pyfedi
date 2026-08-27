@@ -1470,7 +1470,7 @@ git commit -m "feat: handle Undo of microblog boosts"
 ## Task 7: Surface boosted posts in the feed
 
 **Files:**
-- Modify: `app/utils.py:3250-3254`
+- Modify: `app/utils.py:3252-3256`
 - Test: `tests/test_feed_boost_visibility.py`
 
 **Interfaces:**
@@ -1563,7 +1563,7 @@ def test_clause_matches_the_one_in_utils():
     assert 'uf2.remote_user_id = pb.user_id' in source
 ```
 
-`get_deduped_post_ids` (`app/utils.py:3232`) is the function that builds this SQL.
+`get_deduped_post_ids` (`app/utils.py:3234`) is the function that builds this SQL.
 
 - [ ] **Step 2: Run test to verify it fails**
 

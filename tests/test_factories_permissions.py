@@ -14,7 +14,7 @@ def test_grant_permission_makes_user_access_true(app, db_session):
     """Fails if the factory writes rows user_access does not read."""
     make_instance('test.piefed.local', software='piefed')  # user.instance_id FK target
     # user_access() special-cases user_id == 1 as the instance superadmin and always
-    # returns True for it (app/utils.py:1508) -- a throwaway user consumes id 1 so
+    # returns True for it (app/utils.py:1510) -- a throwaway user consumes id 1 so
     # 'roleuser' below lands on an ordinary id and the negative assertion is real.
     make_user(None, 'filler', local=True)
     user = make_user(None, 'roleuser', local=True)

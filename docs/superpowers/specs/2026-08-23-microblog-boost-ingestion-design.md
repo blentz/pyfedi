@@ -209,7 +209,7 @@ community `Announce` handling still discards duplicates of local content.
 ## Feed surfacing
 
 Without this, ingestion is invisible bookkeeping. The followed-users clause in
-`app/utils.py:3251-3255` currently matches only on the post's author:
+`app/utils.py:3253-3257` currently matches only on the post's author:
 
 ```sql
 EXISTS (SELECT 1 FROM user_follower uf

@@ -403,7 +403,7 @@ class TestCanCreatePostBans:
         line ~2366-2367). It is refused by the EARLIER
         `content.id in communities_banned_from(user.id)` check instead:
         communities_banned_from()'s own instance-ban half
-        (app/utils.py:1546-1548) joins Community to InstanceBan on
+        (app/utils.py:1548-1550) joins Community to InstanceBan on
         `Community.instance_id == InstanceBan.instance_id`, so any community
         sitting on a banned instance is already in that list before
         can_create_post ever reaches its own banned_instances() call.
@@ -726,7 +726,7 @@ class TestCanCreatePostReplyNewAccountRateLimitAsymmetry:
     """can_create_post limits new accounts to 3 posts in their first 24h
     (`user.created_very_recently() and user.post_count > 3`). This function
     has NO equivalent limit for replies -- confirmed by reading
-    app/utils.py:2372-2404, where the remote branch goes straight from the
+    app/utils.py:2374-2406, where the remote branch goes straight from the
     allowlist/ban check to `if content.banned` with nothing in between.
 
     Pinned deliberately. If a limit is later added here, this test fails and
@@ -821,7 +821,7 @@ class TestCanCreatePostReplyModeratorAndAdminOrdering:
 class TestCanCreatePostReplyRestrictedToModsAsymmetry:
     """can_create_post refuses a non-moderator in a `restricted_to_mods`
     community. can_create_post_reply has NO such check at all -- reading
-    app/utils.py:2372-2404 top to bottom, `content.restricted_to_mods` is
+    app/utils.py:2374-2406 top to bottom, `content.restricted_to_mods` is
     never referenced.
 
     Pinned deliberately, same rationale as the rate-limit asymmetry above: if

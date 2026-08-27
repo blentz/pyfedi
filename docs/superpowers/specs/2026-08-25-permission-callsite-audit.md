@@ -673,7 +673,7 @@ Reported, not fixed; deferred for evaluation after the testing work (see Status)
 
     if type == POST_TYPE_VIDEO and can_upload_video():
 
-`can_upload_video` (`app/utils.py:2407`) falls back to `current_user` when no
+`can_upload_video` (`app/utils.py:2409`) falls back to `current_user` when no
 `user` is passed:
 
     upload_user = user or current_user
@@ -734,7 +734,7 @@ Decorators apply bottom-up, so `permission_required` runs **first**, before
 `login_required` has had a chance to redirect an anonymous visitor.
 
 Traced: for an anonymous user `current_user.get_id()` returns `None`;
-`user_access(permission, None)` (`app/utils.py:1508`) fails `user_id == 0`,
+`user_access(permission, None)` (`app/utils.py:1510`) fails `user_id == 0`,
 fails `user_id == 1`, and runs the `role_permission` join with `ur.user_id =
 NULL`, which matches nothing in SQL, so it returns `False`.
 

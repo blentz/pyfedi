@@ -21,7 +21,7 @@ The boost feed clause added in the previous project does not work. It reads:
 (p.private is false AND EXISTS (SELECT 1 FROM post_boost pb ...))
 ```
 
-`app/utils.py:3271`. It was written believing `Post.private` marks a followers-only
+`app/utils.py:3273`. It was written believing `Post.private` marks a followers-only
 post. It does not. `Post.new` sets it for *any* object without a `name`:
 
 ```python
@@ -51,7 +51,7 @@ asserted against a fiction.
 - community listings — `app/community/routes.py:377,715`
 - profiles — `app/user/utils.py:175`
 
-while the subscribed feed deliberately skips it (`app/utils.py:3281-3282` applies it
+while the subscribed feed deliberately skips it (`app/utils.py:3283-3284` applies it
 only when `not include_following`).
 
 That is unlisted behaviour: excluded from discovery, visible to followers. `private`
@@ -156,7 +156,7 @@ and duplicated security checks rot.
 
 ### Removing the incorrect gate
 
-`app/utils.py:3271` drops `p.private is false AND`, leaving the boost disjunct as the
+`app/utils.py:3273` drops `p.private is false AND`, leaving the boost disjunct as the
 `EXISTS` alone. This restores the boost feature.
 
 **Ordering matters.** Removing the gate before refusal is in place would reopen a

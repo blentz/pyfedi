@@ -58,7 +58,7 @@ part least likely to be covered for free.
   vulnerability" below. Reporting is in scope; a security fix to production code
   is a separate decision.
 - The pre-existing inline imports, including the `import c2pa` inside
-  `inspect_image_c2pa` (`app/utils.py:4703`) noticed while partitioning. It
+  `inspect_image_c2pa` (`app/utils.py:4705`) noticed while partitioning. It
   violates the project rule and belongs to the catalogued inline-import project.
 
 ## The partition is measured, but it is a heuristic
@@ -83,15 +83,15 @@ which is a bonus rather than an obligation.
 Four functions in scope exist to reject hostile input, and two of them parse
 untrusted bytes by hand:
 
-- `is_valid_xml_utf8` (`app/utils.py:4067`, 21 uncovered) — a hand-rolled UTF-8
+- `is_valid_xml_utf8` (`app/utils.py:4069`, 21 uncovered) — a hand-rolled UTF-8
   byte scanner looking for forbidden codepoints and surrogates. It indexes
   `s[i+1]` and `s[i+2]` inside a `while i < c_end - 2` loop and then runs a
   second loop over the tail. Hand-written index arithmetic over attacker-supplied
   bytes is the canonical fuzz target.
-- `sanitize_svg_bytes` (`app/utils.py:4637`, 9 uncovered) — strips XML
+- `sanitize_svg_bytes` (`app/utils.py:4639`, 9 uncovered) — strips XML
   declarations and processing instructions by regex to prevent XXE and billion
   laughs, then delegates to `py-svg-hush`'s `filter_svg`.
-- `sanitize_svg` (`app/utils.py:4662`, 11 uncovered) — the file-based wrapper.
+- `sanitize_svg` (`app/utils.py:4664`, 11 uncovered) — the file-based wrapper.
 - `allowlist_html` (`app/utils.py:318`, 6 uncovered) — the XSS boundary for all
   remote content.
 
