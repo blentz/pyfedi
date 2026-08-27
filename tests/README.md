@@ -337,6 +337,13 @@ the bites proof was re-run once more against that `coverage.json`: at 68 the
 ratchet exits 1 with `app/utils.py: 67.52% is below its floor of 68.00%`, and back
 at 67 it exits 0 with `All 3 module floors met.`
 
+The two private-community access-control fixes below ("The private-community
+picker and post destination" and "The private community page") took it to
+**67.6478%** -- 67 rounded down for a fourth time, so the floor still did not
+move -- and the bites proof was re-run against that `coverage.json` too: at 68
+the ratchet exits 1 with `app/utils.py: 67.65% is below its floor of 68.00%`, and
+back at 67 it exits 0 with `All 3 module floors met.`
+
 ### Correcting a 100% claim
 
 The sub-project's own design doc and task briefs stated all five target functions
@@ -586,6 +593,47 @@ communities whose instance the viewer has an `InstanceBan` against
 filter. `test_a_member_who_has_blocked_the_communitys_instance_still_sees_it`
 drives exactly that, and is the only test that fails when the membership arm of
 the `or_` is deleted.
+
+### The private community page
+
+`show_community` (`app/community/routes.py`) never checked `community.private`.
+The only `.private` matches in its body were `community.private_mods` -- a
+different column -- and a comment about the `Post` microblog marker. The RSS view
+(`app/community/routes.py:720`) and the iCal view (`:784`) of the SAME community
+have always aborted 403 on it. So a private community's feeds were forbidden
+while its HTML page -- posts, sidebar, moderators, description, and the one a
+browser actually reaches -- rendered in full for anyone.
+
+The check is the canonical one, immediately after the existing `community.banned`
+guard:
+
+    if community.private and community.id not in community_membership_private(current_user.get_id()):
+        abort(403)
+
+**403, not 404, and the neighbouring 404 is why that needs saying.**
+`show_community` aborts **404** for `community.banned`, so the two statuses now
+sit a few lines apart. There is no convention in this codebase of using 404 to
+avoid confirming a private community exists: every other private-community
+refusal is a 403 or its API equivalent -- `app/community/routes.py:720` and
+`:784`, `app/post/routes.py:96` and `:102`, `app/activitypub/routes.py:526`,
+`:2124`, `:2153`, `:2756`, `app/shared/tasks/pages.py:153`, with
+`app/api/alpha/views.py:309,614,640` raising `Private community - membership
+required`. Nothing anywhere aborts 404 on `.private`. Matching the two sibling
+views on the same community was the only consistent choice.
+
+`current_user.get_id()` rather than `current_user.id`, because
+`show_community` is reachable anonymously when the instance is not private, and
+`get_id()` returns None there (the same form `app/feed/routes.py:467` uses).
+
+Moderators are covered and are not locked out: `community_membership_private`
+selects CommunityMember rows with `cm.is_banned is false` and NO role predicate,
+while `moderating_communities` selects the same table with an extra
+`is_moderator OR is_owner`, so the moderator set is a subset of the membership
+set. Owners likewise are `is_owner` CommunityMember rows.
+`tests/test_private_community_page.py` drives that path rather than asserting it,
+and its member and moderator tests are the pair that rejects an over-broad
+`if community.private: abort(403)` -- which passes both of the other two tests in
+that file.
 
 ## Every user-influenced redirect target
 

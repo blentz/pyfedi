@@ -48,7 +48,7 @@ asserted against a fiction.
 - search — `app/search/routes.py:59`
 - tags — `app/tag/routes.py:38`
 - domains — `app/domain/routes.py:53,127`
-- community listings — `app/community/routes.py:370,715`
+- community listings — `app/community/routes.py:377,715`
 - profiles — `app/user/utils.py:175`
 
 while the subscribed feed deliberately skips it (`app/utils.py:3281-3282` applies it

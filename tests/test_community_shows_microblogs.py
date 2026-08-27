@@ -40,7 +40,7 @@ def logged_in_client(app, user):
 
 
 def test_microblog_post_is_listed_when_browsing_its_community(app, community_with_a_microblog):
-    """app/community/routes.py:370 filtered these out of the listing."""
+    """app/community/routes.py:377 filtered these out of the listing."""
     viewer, community, microblog, ordinary = community_with_a_microblog
 
     body = logged_in_client(app, viewer).get(f'/c/{community.name}').get_data(as_text=True)
@@ -50,7 +50,7 @@ def test_microblog_post_is_listed_when_browsing_its_community(app, community_wit
 
 
 def test_microblog_post_is_in_the_community_rss_feed(app, community_with_a_microblog):
-    """app/community/routes.py:715 carried the same filter on the RSS route."""
+    """app/community/routes.py:722 carried the same filter on the RSS route."""
     viewer, community, microblog, ordinary = community_with_a_microblog
 
     body = logged_in_client(app, viewer).get(f'/community/{community.name}/feed').get_data(as_text=True)

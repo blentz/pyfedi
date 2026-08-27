@@ -266,6 +266,13 @@ def show_community(community: Community):
     if community.banned:
         abort(404)
 
+    # Community.private is invite-only real access control (app/models.py:594):
+    # only members may view. 403 matches the RSS and iCal views of this same
+    # community below, which have always refused private communities while this,
+    # the page a browser actually reaches, did not.
+    if community.private and community.id not in community_membership_private(current_user.get_id()):
+        abort(403)
+
     block_honey_pot()
 
     if current_user.is_anonymous:

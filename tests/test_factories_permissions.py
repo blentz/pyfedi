@@ -33,7 +33,7 @@ def test_community_member_is_visible_to_the_model(app, db_session):
 
     # Community.is_member() returns the CommunityMember query's .all() result
     # (app/models.py:707-717), not a bool -- production call sites (e.g.
-    # app/community/routes.py:2641) use it truthily, never `is True`, so this
+    # app/community/routes.py:2648) use it truthily, never `is True`, so this
     # test follows the model rather than the brief's assumed boolean shape.
     assert community.is_member(user)
 
