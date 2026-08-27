@@ -110,6 +110,18 @@ class TestPeertube:
 
     Mutation that fails the first test: deleting the `if parsed_url.netloc in
     peertube_domains` check, or the embed_url assignment at 3122.
+
+    There is deliberately no "unknown host makes no request" test built on the
+    shared `http_mock` fixture. `assert_all_called=True` there requires every
+    registered route to be called, so such a test cannot register a response
+    that would prove the branch was skipped without also failing on correct
+    code. And a route-free version proves nothing: the bare `except:` at 3128
+    swallows block_outbound_http's AllMockedAssertionError just as readily as
+    a real failure, so "no request was made" is unobservable from outcome
+    alone -- confirmed by mutation, `if parsed_url.netloc in peertube_domains:`
+    replaced with `if True:` still returns (url, url) with no such test present.
+    `test_an_unknown_host_never_reaches_a_route_that_would_change_the_result`
+    below is the only way this campaign found to make that branch observable.
     """
 
     def test_a_known_peertube_host_uses_the_canonical_id(self, app, db_session, http_mock):
@@ -121,24 +133,11 @@ class TestPeertube:
         assert embed == 'https://peertube.example/videos/watch/real-id'
         assert thumbnail == url
 
-    def test_an_unknown_host_makes_no_request(self, app, db_session, http_mock):
-        """No instance row seeded, so the netloc test fails and no HTTP call is
-        made. If the production code called out anyway, block_outbound_http
-        would raise rather than reach the network."""
-        url = 'https://unknown.example/w/aaaaaaaaaaaaaaaaaaaaaa'
-        with app.test_request_context('/'):
-            thumbnail, embed = fixup_url(url)
-        assert (thumbnail, embed) == (url, url)
-
     def test_an_unknown_host_never_reaches_a_route_that_would_change_the_result(self, app, db_session):
-        """The test above alone does not discriminate `if parsed_url.netloc in
-        peertube_domains:` replaced by `if True:` -- block_outbound_http's
-        AllMockedAssertionError, raised when the widened mutant calls out with
-        no route registered, is itself swallowed by fixup_url's bare `except:`
-        at 3128, so the mutant still returns (url, url) and that test still
-        passes. This test uses its own respx router (assert_all_called=False,
-        so an unused route is not itself a failure) carrying a response that
-        WOULD change the result if fetched, and asserts it was not.
+        """Uses its own respx router (assert_all_called=False, so an unused
+        route is not itself a failure) carrying a response that WOULD change
+        the result if fetched, and asserts it was not -- proving the netloc
+        gate rather than merely the absence of an exception.
 
         Mutation that fails this: replacing the netloc membership check with
         `if True:`.
