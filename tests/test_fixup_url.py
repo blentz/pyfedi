@@ -11,7 +11,7 @@ import httpx
 import pytest
 import respx
 
-from app.utils import fixup_url
+from app.utils import fixup_url, get_request
 from tests.factories import make_instance
 
 
@@ -115,13 +115,21 @@ class TestPeertube:
     shared `http_mock` fixture. `assert_all_called=True` there requires every
     registered route to be called, so such a test cannot register a response
     that would prove the branch was skipped without also failing on correct
-    code. And a route-free version proves nothing: the bare `except:` at 3128
-    swallows block_outbound_http's AllMockedAssertionError just as readily as
-    a real failure, so "no request was made" is unobservable from outcome
-    alone -- confirmed by mutation, `if parsed_url.netloc in peertube_domains:`
-    replaced with `if True:` still returns (url, url) with no such test present.
+    code.
+
+    A route-free version used to prove nothing either, and that is worth
+    recording because it is what motivated narrowing the excepts: while the
+    outer handler was a bare `except:`, it swallowed block_outbound_http's
+    respx AllMockedAssertionError just as readily as a real transport failure,
+    so "no request was made" was unobservable from outcome alone. The outer
+    handler now catches httpx.HTTPError only, and AllMockedAssertionError is an
+    AssertionError, so a request that escapes the netloc gate with no matching
+    route now propagates instead of vanishing.
+
     `test_an_unknown_host_never_reaches_a_route_that_would_change_the_result`
-    below is the only way this campaign found to make that branch observable.
+    below remains the primary proof of the gate, because it discriminates
+    positively (a response that WOULD change the result is left unfetched)
+    rather than merely on an exception escaping.
     """
 
     def test_a_known_peertube_host_uses_the_canonical_id(self, app, db_session, http_mock):
@@ -169,12 +177,35 @@ class TestPeertube:
 
 
 class TestPeertubeErrorSwallowing:
-    """app/utils.py:3126 catches a malformed JSON body; :3128 catches a
-    transport failure. Both are BARE `except:`, which also catches
-    KeyboardInterrupt and SystemExit -- reported as a defect, not fixed here.
+    """The peertube branch's two handlers used to be BARE `except:`. They are
+    now narrowed: the inner one to `(ValueError, TypeError)`, the outer one to
+    `httpx.HTTPError`.
+
+    Every test below drives one of the exception types actually reachable
+    there, so the set is what proves the narrowing did not drop anything:
+
+    - `ValueError` -- httpx's `.json()` is `json.loads(self.content)` over
+      BYTES, and CPython's json decodes bytes itself. Some malformed bodies
+      surface as `json.JSONDecodeError` (b'not json'), others as
+      `UnicodeDecodeError` (b'\\x80\\x81\\x82'); neither descends from the
+      other, and `ValueError` is their nearest common base. Catching
+      `json.JSONDecodeError` alone would have let the second class escape.
+    - `TypeError` -- a body that is valid JSON but not a mapping. `'id' in
+      None` and `'id' in 5` raise on the membership test; a bare string body
+      containing the substring "id" passes the membership test and raises on
+      the subscript instead.
+    - `httpx.HTTPError` -- every transport failure get_request can raise. It
+      normalises the lot: the is_invalid_get_request_uri refusal,
+      httpx.InvalidURL, ValueError, httpx.StreamError, and both retry paths.
+
+    What is deliberately NOT caught any more: KeyboardInterrupt, SystemExit,
+    and any AssertionError from the test harness -- see TestPeertube's
+    docstring for why the last of those mattered.
     """
 
     def test_a_malformed_json_body_is_swallowed(self, app, db_session, http_mock):
+        """json.JSONDecodeError. Fails if the inner handler stops catching
+        ValueError."""
         make_instance('peertube.example', software='peertube')
         url = 'https://peertube.example/w/aaaaaaaaaaaaaaaaaaaaaa'
         http_mock.get(url).respond(status_code=200, content=b'not json')
@@ -182,10 +213,74 @@ class TestPeertubeErrorSwallowing:
             thumbnail, embed = fixup_url(url)
         assert (thumbnail, embed) == (url, url)
 
+    def test_a_body_that_is_not_valid_utf8_is_swallowed(self, app, db_session, http_mock):
+        """UnicodeDecodeError, NOT json.JSONDecodeError -- the case that
+        rules out narrowing the inner handler to JSONDecodeError alone.
+        Fails if the inner handler is narrowed that far."""
+        make_instance('peertube.example', software='peertube')
+        url = 'https://peertube.example/w/aaaaaaaaaaaaaaaaaaaaaa'
+        http_mock.get(url).respond(status_code=200, content=b'\x80\x81\x82')
+        with app.test_request_context('/'):
+            thumbnail, embed = fixup_url(url)
+        assert (thumbnail, embed) == (url, url)
+
+    @pytest.mark.parametrize('body,why', [
+        (b'null', "'id' in None raises on the membership test"),
+        (b'5', "'id' in 5 raises on the membership test"),
+        (b'"a valid id string"', "the membership test passes, the subscript raises"),
+    ])
+    def test_a_json_body_that_is_not_a_mapping_is_swallowed(self, app, db_session, http_mock,
+                                                            body, why):
+        """TypeError. Fails if the inner handler stops catching TypeError."""
+        make_instance('peertube.example', software='peertube')
+        url = 'https://peertube.example/w/aaaaaaaaaaaaaaaaaaaaaa'
+        http_mock.get(url).respond(status_code=200, content=body)
+        with app.test_request_context('/'):
+            thumbnail, embed = fixup_url(url)
+        assert (thumbnail, embed) == (url, url), why
+
     def test_a_transport_failure_is_swallowed(self, app, db_session, http_mock):
+        """httpx.ConnectError reaches get_request's `except httpx.HTTPError`
+        retry arm; the retry fails too, and it re-raises httpx.HTTPError."""
         make_instance('peertube.example', software='peertube')
         url = 'https://peertube.example/w/aaaaaaaaaaaaaaaaaaaaaa'
         http_mock.get(url).mock(side_effect=httpx.ConnectError('boom'))
         with app.test_request_context('/'):
             thumbnail, embed = fixup_url(url)
         assert (thumbnail, embed) == (url, url)
+
+    def test_a_read_failure_on_both_attempts_is_swallowed(self, app, db_session, http_mock):
+        """The one get_request path that did NOT normalise to httpx.HTTPError.
+
+        httpx.ReadError takes get_request's dedicated `except httpx.ReadError`
+        arm, whose failed retry re-raised `httpx_client.ReadError(...)` --
+        httpx_client is an httpx.Client INSTANCE with no such attribute, so
+        that spelling raised AttributeError instead. The old bare `except:`
+        here hid it; a handler narrowed to httpx.HTTPError does not, so this
+        test fails with AttributeError unless get_request raises httpx.ReadError
+        as intended. It is the load-bearing proof that narrowing the outer
+        handler introduced no crash.
+        """
+        make_instance('peertube.example', software='peertube')
+        url = 'https://peertube.example/w/aaaaaaaaaaaaaaaaaaaaaa'
+        http_mock.get(url).mock(side_effect=httpx.ReadError('boom'))
+        with app.test_request_context('/'):
+            thumbnail, embed = fixup_url(url)
+        assert (thumbnail, embed) == (url, url)
+
+
+class TestGetRequestNormalisesTransportFailure:
+    """fixup_url's outer handler catches httpx.HTTPError only, which is safe
+    exactly as far as get_request's normalisation invariant holds. Asserted
+    directly here as well as through fixup_url, because roughly every other
+    caller of get_request in app/ relies on the same invariant.
+    """
+
+    def test_a_read_failure_on_both_attempts_raises_an_http_error(self, app, http_mock):
+        """Fails with AttributeError, not httpx.HTTPError, if the retry arm
+        goes back to raising `httpx_client.ReadError`."""
+        url = 'https://peertube.example/w/aaaaaaaaaaaaaaaaaaaaaa'
+        http_mock.get(url).mock(side_effect=httpx.ReadError('boom'))
+        with app.test_request_context('/'):
+            with pytest.raises(httpx.HTTPError):
+                get_request(url)

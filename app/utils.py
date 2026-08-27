@@ -162,7 +162,14 @@ def get_request(uri, params=None, headers=None) -> httpx.Response:
                                         follow_redirects=False)
         except Exception as e:
             current_app.logger.info(f"{uri} {connection_error}")
-            raise httpx_client.ReadError(f"HTTPReadError: {str(e)}") from connection_error
+            # httpx.ReadError, not httpx_client.ReadError: httpx_client is an
+            # httpx.Client INSTANCE and carries no such attribute, so the old
+            # spelling raised AttributeError out of this handler instead of the
+            # intended read error. That broke the invariant every caller relies
+            # on -- that get_request normalises transport failure to
+            # httpx.HTTPError -- and it is load-bearing for fixup_url's narrowed
+            # except below, which would otherwise let the AttributeError escape.
+            raise httpx.ReadError(f"HTTPReadError: {str(e)}") from connection_error
     except httpx.HTTPError as read_timeout:
         try:  # retry, this time with a longer timeout
             sleep(random.randint(3, 10))
@@ -3254,9 +3261,26 @@ def fixup_url(url):
                         if 'id' in video_json:
                             embed_url = video_json['id']
                         response.close()
-                    except:
+                    except (ValueError, TypeError):
+                        # ValueError: the body is not JSON at all. httpx's
+                        # .json() is json.loads(self.content) over BYTES, so a
+                        # malformed body surfaces as json.JSONDecodeError for
+                        # some inputs (b'not json') and UnicodeDecodeError for
+                        # others (b'\x80\x81\x82'). Both descend from
+                        # ValueError; neither descends from the other.
+                        # TypeError: the body is valid JSON but not a mapping.
+                        # `'id' in None` and `'id' in 5` raise, and a bare
+                        # string body that happens to contain "id" gets past
+                        # the membership test and raises on the subscript
+                        # ("string indices must be integers").
                         response.close()
-            except:
+            except httpx.HTTPError:
+                # get_request normalises every transport failure it can raise
+                # to httpx.HTTPError: the is_invalid_get_request_uri refusal,
+                # httpx.InvalidURL, ValueError, httpx.StreamError, and both
+                # retry paths (one re-raises httpx.ReadError, an HTTPError
+                # subclass). urlparse's own ValueError cannot reach here -- it
+                # is caught at the top of this function.
                 pass
 
     youtube_domains = ['www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtube.com', 'youtu.be']
