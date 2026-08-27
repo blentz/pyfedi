@@ -191,8 +191,8 @@ def names_in(group):
 
 
 class TestGrouping:
-    """Rules :4362/:4363 (Moderating), :4369/:4370 (Joined communities),
-    :4388/:4393 (Others): each community lands in exactly the group its
+    """Rules :4362/:4365 (Moderating), :4369/:4372 (Joined communities),
+    :4388/:4395 (Others): each community lands in exactly the group its
     membership state predicts, and a group with nothing in it is omitted
     from the dict entirely rather than present as an empty list.
     """
@@ -320,7 +320,7 @@ class TestDedup:
 class TestOthersExclusions:
     """Three of the four predicates the Others query pushes into SQL
     (app/utils.py:4383-4384; the fourth, the private-community filter at
-    :4387-4388, has its own class below). One case per predicate, each with a
+    :4385-4386, has its own class below). One case per predicate, each with a
     plain control community present in the same call to prove the
     exclusion is selective rather than emptying the whole query.
 
