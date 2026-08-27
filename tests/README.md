@@ -320,9 +320,60 @@ functions: `get_deduped_post_ids`, `post_ids_to_models`, `instance_sticky_posts`
 `get_instance_stickies` and `possible_communities`. It re-measured the module at
 **67.1330%** (`percent_covered`, the blended statement+branch figure -- see "The
 coverage ratchet" above) and raised the floor from 60 to **67**, rounded down. The
-floor was proved to bite: set to 68 against the same `coverage.json`, the ratchet
+floor was proved to bite: set to 68 against that `coverage.json`, the ratchet
 exits 1 with `app/utils.py: 67.13% is below its floor of 68.00%`; restored to 67 it
 exits 0 with `All 3 module floors met.`
+
+A fix round then closed two gaps the sub-project's own last-measurement claim had
+missed -- see "Correcting a 100% claim" below -- taking the module to
+**67.2558%** (still rounds down to 67, so the floor did not move again) and the
+floor-bites proof was re-run against the new `coverage.json` with the same
+result (68 fails naming the module, 67 passes).
+
+### Correcting a 100% claim
+
+The sub-project's own design doc and task briefs stated all five target functions
+were at 100% line and branch coverage except `possible_communities`'s two
+documented-dead arms. That claim was carried forward across task reports rather
+than re-derived, and it was wrong: `get_deduped_post_ids` had two real,
+previously unnoticed gaps, on top of three legitimately out-of-scope ones. This
+is the sixth hand-carried figure in this campaign to be wrong on re-derivation --
+this time inside a brief rather than a report, which is exactly why "measure
+fresh, never carry forward" is the standing rule.
+
+The two real gaps, now closed:
+
+- **The empty-`community_ids` early return** (`app/utils.py:3792-3793`). No
+  earlier test called the function with an empty community list.
+  `test_empty_community_ids_returns_an_empty_list_without_querying`
+  (`tests/test_factories_feed.py`) covers it; neutralizing the guard makes the
+  very next branch index `community_ids[0]` on an empty list and raise
+  `IndexError`, which is what makes the mutation observable rather than merely
+  changing a return value.
+- **The Redis cache-HIT read path** (`app/utils.py:3794-3798`). Task 1 proved
+  only the cache-WRITE side. `test_a_cached_result_id_is_served_without_reaching_the_database`
+  primes a result_id's cached value through `redis_double` to something a live
+  query could never produce, then asserts the STALE cached value comes back --
+  discriminating a real cache hit from a test that would pass either way.
+  `test_an_authenticated_call_with_an_empty_result_id_still_writes_a_wasted_cache_entry`
+  closes the one remaining branch in this area (the outer `if result_id:`'s
+  False arm) and, in the same test, proves the sub-project's suspected defect
+  #1 is LIVE rather than theoretical: an authenticated call with an empty
+  `result_id` still writes a key literally named `''`. `grep -rn
+  'get_deduped_post_ids(' app/` shows two real call sites passing a literal
+  `''`: `app/feed/routes.py:719` (`show_feed_rss`) and `app/topic/routes.py:230`
+  (`show_topic_rss`). Neither route carries `@login_required`, so most
+  requests are anonymous, but neither excludes an authenticated session
+  either -- a logged-in browser opening either RSS URL reaches this exact
+  path. Reported, not fixed.
+
+`get_deduped_post_ids` now carries exactly three documented-uncovered regions,
+all legitimately out of this sub-project's scope and unchanged by the fix round:
+the `hashtag` filter (`3826-3830`), the anonymous-viewer private-community
+branch (`3853-3854`), and the unrecognized-`sort` fallthrough (`3932->3936`,
+mirrored in `post_ids_to_models` at `3959->3961`). `instance_sticky_posts` and
+`get_instance_stickies` are 100% statement and branch. `possible_communities`
+carries its two documented-dead branches (`4337->4336`, `4344->4343`), unchanged.
 
 **The Redis-write decision (Task 1).** `get_deduped_post_ids` ends with
 `redis_client.set(result_id, ..., ex=86400)` for every authenticated call --

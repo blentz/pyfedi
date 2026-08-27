@@ -193,10 +193,58 @@ the evidence:
 `get_deduped_post_ids`, `post_ids_to_models`, `instance_sticky_posts`,
 `get_instance_stickies` and `possible_communities` -- the feed-assembly and
 sort-chain functions. Raised `app/utils.py`'s floor from 60 to 67 (measured
-`percent_covered` 67.1330%, rounded down). Four things from this sub-project
-outlive its tests.
+`percent_covered` 67.1330%, rounded down). A fix round then closed two
+previously undocumented gaps in `get_deduped_post_ids` (below), taking the
+module to 67.2558% -- still rounds down to 67, so the floor did not move a
+second time; both measurements had the floor-bites proof (68 fails, 67
+passes) re-run against them. Five things from this sub-project outlive its
+tests.
 
-### 1. The SQL blind spot is a limitation of every number this sub-project reports
+### 1. A sixth hand-carried figure, wrong on re-derivation -- this time in a brief
+
+This sub-project's own design doc and task briefs stated all five target
+functions were at 100% line and branch coverage except `possible_communities`'s
+two documented-dead arms. Re-deriving it during the ratchet task showed
+`get_deduped_post_ids` was NOT at 100%: two real gaps existed alongside its
+three legitimately out-of-scope ones (the `hashtag` filter, the
+anonymous-viewer private-community branch, and the unrecognized-`sort`
+fallthrough). Nobody had decided to leave the other two uncovered -- they were
+simply never noticed, because a "100%" claim from an earlier report was
+carried into the brief instead of re-measured.
+
+The two gaps, now closed in `tests/test_factories_feed.py`:
+
+- **The empty-`community_ids` early return** (`app/utils.py:3792-3793`).
+  `test_empty_community_ids_returns_an_empty_list_without_querying` calls with
+  `community_ids=[]`; the discriminating mutation neutralizes the guard, which
+  makes the next line index `community_ids[0]` on an empty list and raise
+  `IndexError` rather than silently returning something else.
+- **The Redis cache-HIT read path** (`app/utils.py:3794-3798`).
+  `test_a_cached_result_id_is_served_without_reaching_the_database` primes a
+  result_id's cached value (through `redis_double`) to something a live query
+  could never produce, then asserts that STALE value comes back --
+  discriminating a genuine cache hit from a test that would pass regardless of
+  which path answered it.
+  `test_an_authenticated_call_with_an_empty_result_id_still_writes_a_wasted_cache_entry`
+  closes the branch's last arm and, in the same test, upgrades the design doc's
+  suspected defect #1 from theoretical to **confirmed live**: two real call
+  sites pass a literal `''` result_id (`grep -rn 'get_deduped_post_ids(' app/`
+  --> `app/feed/routes.py:719`, `show_feed_rss`, and `app/topic/routes.py:230`,
+  `show_topic_rss`). Neither route carries `@login_required`; both are
+  reachable by an authenticated session anyway (no code path excludes one), so
+  a logged-in browser opening either RSS URL performs the wasted write to a
+  key literally named `''`. Reported, not fixed.
+
+`get_deduped_post_ids` now carries exactly three documented-uncovered regions
+(the three named above), unchanged by this fix round.
+`post_ids_to_models`, `instance_sticky_posts` and `get_instance_stickies` are
+100% statement and branch except `post_ids_to_models`'s own copy of the
+sort-fallthrough branch. `possible_communities` carries its two
+documented-dead branches, unchanged. Every one of the five functions is now
+either 100% or carries a named, verified reason -- the standard this
+sub-project's own verification criteria set.
+
+### 2. The SQL blind spot is a limitation of every number this sub-project reports
 
 Coverage.py measures the Python that *builds* a query, never the predicates
 *inside* a query string. A branch that appends a SQL clause reads as covered
@@ -221,7 +269,7 @@ on `app/utils.py`'s remaining SQL-heavy functions (1b-iii) should not read a
 green coverage number as license to skip enumerating the clauses inside each
 query string by hand.
 
-### 2. The two-direction mutation standard, and why one direction proves nothing about the other
+### 3. The two-direction mutation standard, and why one direction proves nothing about the other
 
 A filter that gates *other people's* content needs two mutations, not one,
 and they are not interchangeable:
@@ -246,7 +294,7 @@ then deliberately kept only for the seven display preferences, which gate
 the viewer's own taste settings and whose failure mode is an annoyance
 rather than a safety issue.
 
-### 3. The wide/narrow discriminator, for a chain of `continue`s or `if`s
+### 4. The wide/narrow discriminator, for a chain of `continue`s or `if`s
 
 In a filter chain built from successive `continue`/`if` guards (
 `get_instance_stickies`'s seven rules, `possible_communities`'s three dedup
@@ -277,7 +325,7 @@ chain geometry, not coupling. The `hide_nsfw`/`hide_nsfl` case above was
 caught the same way and then fixed by explicitly zeroing both columns on
 every viewer not testing one of those two preferences.
 
-### 4. Findings reported, not fixed
+### 5. Findings reported, not fixed
 
 Carried forward as follow-up candidates, not acted on here per this
 campaign's report-don't-fix rule:
