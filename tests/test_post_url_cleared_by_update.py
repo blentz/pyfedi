@@ -12,13 +12,15 @@ quietly breaks a render path:
 
 - Every `post.url` method call in the templates (`.endswith`, `.startswith`,
   `.replace`, `in`) sits behind a truthiness guard -- `{% if post.url %}` or
-  `and post.url` -- which cannot tell `''` from `None`. The one exception is the
-  dillo theme's `render_video` macro
-  (`app/templates/themes/dillo/post/post_teaser/_macros.html:339-374`), which
-  omits the `{% if post.url %}` its main-theme counterpart
-  (`app/templates/post/post_teaser/_macros.html:367`) has. It is reached only
-  for `post.type == POST_TYPE_VIDEO`, and this branch sets POST_TYPE_ARTICLE on
-  the line above, so it cannot be reached from here.
+  `and post.url` -- which cannot tell `''` from `None`. There used to be one
+  exception: the dillo theme's `render_video` macro
+  (`app/templates/themes/dillo/post/post_teaser/_macros.html`) omitted the
+  `{% if post.url %}` its main-theme counterpart
+  (`app/templates/post/post_teaser/_macros.html:367`) has. That gap is now
+  closed and `tests/test_dillo_video_teaser.py` is its regression suite. It was
+  never reachable from HERE in any case: the macro runs only for
+  `post.type == POST_TYPE_VIDEO`, and this branch sets POST_TYPE_ARTICLE on the
+  line above.
 - Every bare `{{ post.url }}` interpolation is gated on
   `post.type == POST_TYPE_LINK`/`VIDEO`/`IMAGE`, likewise excluded by the
   POST_TYPE_ARTICLE on the preceding line.
