@@ -54,27 +54,10 @@ the True/False shape the other six share.
 """
 import uuid
 
-from flask_login import login_user
-
 from app import db
 from app.models import Language
 from app.utils import get_deduped_post_ids
-from tests.factories import make_community, make_instance, make_post, make_user, mark_post_read
-
-
-def feed_ids(app, viewer, community_ids, **kwargs):
-    """The post ids get_deduped_post_ids returns for `viewer`, logged in.
-
-    A fresh uuid result_id on every call bypasses the Redis short-circuit
-    (`if redis_client.exists(result_id): return ...`), so every call
-    genuinely re-runs the query rather than replaying an earlier result.
-    This is a fresh copy of test_feed_visibility_filters.py's helper of the
-    same name -- written locally rather than imported across test files,
-    since neither file is a shared module and the function is four lines.
-    """
-    with app.test_request_context('/'):
-        login_user(viewer)
-        return get_deduped_post_ids(uuid.uuid4().hex, community_ids, 'new', **kwargs)
+from tests.factories import feed_ids, make_community, make_instance, make_post, make_user, mark_post_read
 
 
 def anon_feed_ids(app, community_ids, **kwargs):

@@ -15,30 +15,15 @@ pins that.
 
 import uuid
 
-import fakeredis
 import pytest
 from flask_login import login_user
 
-import app as app_package
 from app import db
 from app.activitypub.util import record_boost
 from app.utils import get_deduped_post_ids
-from tests.factories import (make_community, make_community_member, make_follow, make_instance,
-                             make_post, make_user)
-
-
-@pytest.fixture
-def isolated_result_cache(monkeypatch):
-    """get_deduped_post_ids memoises its result list into `app.redis_client`.
-
-    That module-level client points at the shared test Redis, which survives every
-    test and every run (see tests/README.md on `disable_rate_limiter`). Two tests
-    that happened to pass the same result_id would otherwise read each other's
-    answer instead of running the query. `get_deduped_post_ids` does
-    `from app import redis_client` inside the function body, so rebinding the
-    attribute on the package is enough -- it is re-read on every call.
-    """
-    monkeypatch.setattr(app_package, 'redis_client', fakeredis.FakeStrictRedis())
+from tests.factories import feed_ids as _feed_ids
+from tests.factories import (make_community, make_community_member, make_feed_viewer, make_follow,
+                             make_instance, make_post, make_user)
 
 
 def subscribed_feed_ids(app, viewer, community):
@@ -46,17 +31,14 @@ def subscribed_feed_ids(app, viewer, community):
 
     Mirrors app/main/routes.py:141 for view_filter == 'subscribed': the viewer's
     community memberships as community_ids, and include_following=True because the
-    viewer is authenticated. A fresh result_id per call so nothing is served from
-    the cache.
+    viewer is authenticated. Delegates to tests.factories.feed_ids, keeping this
+    file's own (viewer, community) call-site shape.
     """
-    with app.test_request_context('/'):
-        login_user(viewer)
-        return get_deduped_post_ids(uuid.uuid4().hex, [community.id], 'new',
-                                    include_following=True)
+    return _feed_ids(app, viewer, [community.id], include_following=True)
 
 
 @pytest.fixture
-def subscribed(db_session, isolated_result_cache):
+def subscribed(db_session, redis_double):
     """A local user subscribed to a community that carries both kinds of post.
 
     The community is remote-flavoured on purpose: this reproduces
@@ -67,7 +49,7 @@ def subscribed(db_session, isolated_result_cache):
     """
     remote = make_instance('m.example')
     author = make_user(remote, 'mastodonauthor')
-    viewer = make_user(None, 'subscriber', local=True)
+    viewer = make_feed_viewer(None, 'subscriber', local=True)
     community = make_community('aggregator')
     make_community_member(viewer, community)
     microblog = make_post(community, author, 'https://m.example/notes/1', microblog=True)
@@ -189,7 +171,7 @@ class TestTheMicroblogGateBindsToTheWholeCommunityDisjunct:
     """
 
     @pytest.fixture
-    def two_communities(self, db_session, isolated_result_cache):
+    def two_communities(self, db_session, redis_double):
         """One public community and one private community, each with both kinds of post.
 
         The viewer IS a member of the private community, which is what makes the
@@ -213,7 +195,7 @@ class TestTheMicroblogGateBindsToTheWholeCommunityDisjunct:
         has nothing to do with precedence.
         """
         author = make_user(make_instance('m.example'), 'precedenceauthor')
-        viewer = make_user(None, 'precedenceviewer', local=True)
+        viewer = make_feed_viewer(None, 'precedenceviewer', local=True)
 
         public_community = make_community('public-side')
         private_community = make_community('private-side')
@@ -238,12 +220,9 @@ class TestTheMicroblogGateBindsToTheWholeCommunityDisjunct:
         """Mirrors app/main/routes.py:141 for the `local` and `popular` views:
         community_ids is the placeholder [0] and community_sql carries the real
         predicate. include_following is False, as it is for every caller that
-        supplies community_sql.
+        supplies community_sql. Delegates to tests.factories.feed_ids.
         """
-        with app.test_request_context('/'):
-            login_user(viewer)
-            return get_deduped_post_ids(uuid.uuid4().hex, [0], 'new',
-                                        community_sql=community_sql)
+        return _feed_ids(app, viewer, [0], community_sql=community_sql)
 
     def test_the_gate_applies_to_the_or_s_first_branch(self, app, two_communities):
         """The leak. Collapsing the parens puts this post back in the feed."""
