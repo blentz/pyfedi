@@ -10,7 +10,7 @@ from flask_babel import _, lazy_gettext as _l
 from app.constants import DOWNVOTE_ACCEPT_ALL, DOWNVOTE_ACCEPT_MEMBERS, DOWNVOTE_ACCEPT_INSTANCE, \
     DOWNVOTE_ACCEPT_TRUSTED, DOWNVOTE_ACCEPT_NONE
 from app.models import Community, User, CmsPage
-from app.utils import get_setting, REDIRECT_POLICY_ALL_REFERRERS, REDIRECT_POLICY_FEDERATED_SERVERS, REDIRECT_POLICY_SAME_ORIGIN, REDIRECT_POLICY_TRUSTED_SERVERS
+from app.utils import get_setting, REDIRECT_POLICY_ALL_REFERRERS, REDIRECT_POLICY_FEDERATED_SERVERS, REDIRECT_POLICY_SAME_ORIGIN, REDIRECT_POLICY_TRUSTED_SERVERS, validate_user_name_charset
 
 
 class SiteProfileForm(FlaskForm):
@@ -319,6 +319,11 @@ class AddUserForm(FlaskForm):
     def validate_user_name(self, user_name):
         if '@' in user_name.data:
             raise ValidationError(_l('User names cannot contain @.'))
+        # The same charset self-registration enforces, not a more permissive
+        # admin variant: an admin-created user is an ordinary local User row
+        # downstream, and app/utils.py's apply_feed_url_rules interpolates
+        # user_name into a regex. See validate_user_name_charset.
+        validate_user_name_charset(user_name)
         user = User.query.filter(func.lower(User.user_name) == func.lower(user_name.data.strip())).filter_by(ap_id=None).first()
         if user is not None:
             if user.deleted:

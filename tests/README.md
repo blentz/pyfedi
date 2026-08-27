@@ -779,26 +779,51 @@ input failing the regex two lines later, so the mutation initially survived
 undetected until the test was changed to assert the exact error message
 (`'- cannot be in Url. Use _ instead?'`).
 
-**The username-regex probe (Task 5).** `apply_feed_url_rules`'s private-mode
-branch (`app/utils.py:4502`) builds
+**The username-regex probe (Task 5) -- found here, since FIXED.**
+`apply_feed_url_rules`'s private-mode branch built
 `r'^[a-zA-Z0-9_]+(?:/' + current_user.user_name.lower() + ')?$'` by
 interpolating `current_user.user_name` into a regex, unescaped. The
-self-registration path is closed:
-`RegistrationForm.validate_user_name` (`app/auth/forms.py:55-60`) rejects any
+self-registration path was already closed:
+`RegistrationForm.validate_user_name` (`app/auth/forms.py`) rejects any
 username outside `^[a-zA-Z0-9_]+$` before it can reach a `User` row at all. But
-`AddUserForm.validate_user_name` (`app/admin/forms.py:308-319`), the
-ADMIN-created-user path, checks only for a literal `'@'` -- no charset
-restriction -- so an admin-created username such as `a.b` reaches
+`AddUserForm.validate_user_name` (`app/admin/forms.py`), the
+ADMIN-created-user path, checked only for a literal `'@'` -- no charset
+restriction -- so an admin-created username such as `a.b` reached
 `current_user.user_name` with a live regex metacharacter. `a.b`'s `.` then
-matches "any character" instead of a literal dot, so a private feed url
-`myfeed/aXb` (not that user's real `<feed>/<username>`) wrongly validates
+matched "any character" instead of a literal dot, so a private feed url
+`myfeed/aXb` (not that user's real `<feed>/<username>`) wrongly validated
 against user `a.b`'s optional-suffix group -- letting that user claim a
-feed url in a namespace that reads as someone else's. Demonstrated directly
-against `apply_feed_url_rules` (bypassing the admin form's HTTP path, driving
-only the DB state it can produce) by
-`TestUsernameRegexMetacharacterProbe::test_username_regex_metacharacters_are_not_escaped`
-in `tests/test_apply_feed_url_rules.py`. `re.escape` on the interpolated
-segment would close it. Reported, not fixed.
+feed url in a namespace that reads as someone else's. `a(b` and `a[b` were
+worse still: they made the pattern syntactically invalid, so `re.match` raised
+`re.error` out of the form validator and the feed form 500'd.
+
+**Both ends are now fixed, and only one of them is load-bearing.**
+`apply_feed_url_rules` wraps the interpolated segment in `re.escape()`, and
+`AddUserForm.validate_user_name` now applies the same charset
+self-registration does, through the single shared
+`app.utils.validate_user_name_charset` / `USER_NAME_CHARSET_RE`. The escape is
+the half that holds unconditionally: any database may already contain a
+metacharacter username created before the admin form learned to refuse one, and
+new validation does not clean old rows. The admin check is defence in depth,
+and closes the gap between the two user-creation paths.
+
+**The admin path is deliberately IDENTICAL to self-registration, not more
+permissive.** An admin-created user is an ordinary local `User` row downstream
+-- same actor url, same webfinger, same feed namespace -- so there is no
+consumer that could safely accept a wider charset from one path than the other,
+and a "service account" name is expressible in `[a-zA-Z0-9_]` anyway
+(`service_account`, `feed_bot_2`). `EditUserForm` has no `user_name` field, so
+`AddUserForm` was the only admin route that set one.
+
+`tests/test_username_regex_metacharacters.py` is the regression suite: the
+foreign-namespace claim, the crash cases, the admin form, and -- the tests that
+matter most -- the over-correction guards that fail for a `re.escape()` done
+wrong or a fix that simply locked user `a.b` out of their own namespace.
+`TestUsernameRegexMetacharacterProbe` in `tests/test_apply_feed_url_rules.py`
+used to pin the defect deliberately (`test_username_regex_metacharacters_are_not_escaped`
+asserted `result is True` and said so); it was inverted in place rather than
+deleted, and its source-text assertion about `RegistrationForm` was replaced by
+a behavioural one driving both validators.
 
 **Coverage cannot see inside strings, again.** The same blind spot 1b-ii found
 in a SQL predicate applies here to regex alternations and URL-matching string
