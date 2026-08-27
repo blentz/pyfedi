@@ -88,7 +88,6 @@ class EditFeedForm(FlaskForm):
                     return False
 
         input_communities = self.communities.data.strip().split('\n')
-        print(f"input_communities: {input_communities}")
         for community_ap_id in input_communities:
             if not community_ap_id.strip():
                 continue
