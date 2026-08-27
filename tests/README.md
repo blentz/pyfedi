@@ -722,6 +722,15 @@ statement and 100% branch coverage over their own bodies -- `domain_from_url`,
 and does not prove. That was measured at this sub-project's own commit; it is a
 record of a past reading, not a claim about `app/utils.py` today.
 
+A later re-measurement, taken fresh from the full suite rather than carried
+forward, read **73.2449%** and moved the floor from **71 to 73**. That raise
+banks the gains from the tasks between (the redirect-target audit and the
+`url_needs_archive` narrowing among them) as well as nothing of its own; it is a
+ratchet entry, not a sub-project. Proved to bite in both directions against that
+`coverage.json`: set to 74 the ratchet exits 1 with `app/utils.py: 73.24% is
+below its floor of 74.00%`; restored to 73 it exits 0 with `All 3 module floors
+met.`
+
 **No line numbers in this section, deliberately.** It used to give a range for
 each of those five functions and four more for individual branches below. Every
 one of them rotted, and the docstring that cited the same range for
