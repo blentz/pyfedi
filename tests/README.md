@@ -973,6 +973,43 @@ only ever returns the LOCAL `microblogs` community. A remote aggregator communit
 such as `microblogs@piefed.social` is invisible to it, and to the `local` view's
 exclusion built on it.
 
+## Reaching a THEMED template from a test
+
+Themes are not a template search path. `app/utils.py`'s theme-aware
+`render_template` swaps only the ONE top-level template it is handed:
+
+    if theme != '' and os.path.exists(f'app/templates/themes/{theme}/{template_name}'):
+        content = flask.render_template(f'themes/{theme}/{template_name}', **context)
+
+Jinja's `{% include %}` and `{% from ... import %}` take a literal loader path
+with no theme awareness, so a themed page reaches its themed partials only
+because it names them explicitly — `themes/dillo/index.html` includes
+`themes/dillo/post/_post_teaser.html`, which imports
+`themes/dillo/post/post_teaser/_macros.html`.
+
+The consequence, which is easy to get wrong: a theme that overrides a MACRO file
+but not the page that imports it is unreachable through that page. `dillo` ships
+`index.html` but no `community/community.html`, so `/c/<name>` renders the base
+`community/community.html`, which imports the BASE
+`post/post_teaser/_macros.html` no matter what theme is selected. A test that
+sets a theme and then requests `/c/<name>` silently exercises the main theme —
+green, and testing nothing.
+
+So: find which top-level template the theme actually overrides
+(`find app/templates/themes/<theme> -name '*.html'`) and drive a route that
+renders THAT. For dillo's post teasers the route is
+`/home/<sort>/<view_filter>`. `/post/<id>` is unusable in this harness for any
+theme: `app/templates/base.html:1` calls `csrf_token()` and TestConfig disables
+CSRF.
+
+Select the theme with `user.theme` on the logged-in viewer —
+`app.utils.current_theme()` reads it ahead of `Site.default_theme`, so nothing in
+the shared `site` fixture has to change. And assert something only that theme
+emits (`themes/dillo/styles.css`, from `themes/dillo/base.html`) in a test of its
+own, or the rest of the file cannot distinguish "the themed macro is correct"
+from "the themed macro never ran".
+`tests/test_dillo_video_teaser.py` is the worked example.
+
 ## Fixtures for external services
 
 - `http_mock` — respx router over outbound httpx. `assert_all_called=True`, so a
