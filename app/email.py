@@ -292,7 +292,13 @@ class SMTPEmailService:
         if self.username and self.password:
             self.smtpserver.login(self.username, self.password)
         self.connected = True
-        print("Connected to {}".format(self.server_name))
+        # The one line here worth keeping, and kept at debug rather than
+        # printed: it is the only signal that separates "could not reach or log
+        # in to the SMTP server" from "reached it and the send failed", and
+        # send_async_email swallows neither -- an operator reading a bug report
+        # about undelivered mail has nothing else to distinguish the two. The
+        # server name is config, not user data.
+        current_app.logger.debug('SMTP connected to %s', self.server_name)
 
     def disconnect(self):
         self.smtpserver.close()
@@ -306,15 +312,9 @@ class SMTPEmailService:
             raise ConnectionError(
                 "Not connected to any server. Try self.connect() first")
 
-        print("Message: {}".format(self.msg.get_payload()))
-
         for recipient in self.recipients:
             self.msg.replace_header("To", recipient)
-            print("Sending to {}".format(recipient))
             self.smtpserver.send_message(self.msg)
-
-        print("All messages sent")
 
         if close_connection:
             self.disconnect()
-            print("Connection closed")
