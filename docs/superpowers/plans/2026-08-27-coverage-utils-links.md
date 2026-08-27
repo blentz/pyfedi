@@ -35,7 +35,7 @@
 | `app/utils.py:1442-1457` | **Modify** — `domain_from_url` host parsing (Task 1 only) |
 | `tests/test_domain_from_url.py` | **Create** — Task 1 |
 | `tests/test_remove_tracking_from_link.py` | **Create** — Task 2 |
-| `tests/test_fixup_url.py` | **Create** — Task 3 |
+| `tests/test_fixup_url.py` | **Modify** — Task 3 (pre-dates this branch, commit `847b2fc4`; Task 3 replaced three pre-existing `unittest.TestCase` tests — `test_basic_usage`, `test_playlist`, `test_post` — with the new suite, and their coverage is preserved by `TestYoutubeVideoForms` and `TestPassThroughYoutubeForms`) |
 | `tests/test_rewrite_href.py` | **Create** — Task 4 |
 | `tests/test_apply_feed_url_rules.py` | **Create** — Task 5 |
 | `tests/test_link_parsers_fuzz.py` | **Create** — Task 6 |
@@ -388,7 +388,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ### Task 3: `fixup_url`
 
 **Files:**
-- Test: `tests/test_fixup_url.py` (create)
+- Test: `tests/test_fixup_url.py` (modify — pre-dates this branch, commit `847b2fc4`; this task replaces three pre-existing `unittest.TestCase` tests, `test_basic_usage`/`test_playlist`/`test_post`, with the new suite below, and their coverage is preserved by `TestYoutubeVideoForms`/`TestPassThroughYoutubeForms`)
 
 **Interfaces:**
 - Consumes: `make_instance(domain, software)` from `tests/factories.py`; the `http_mock` fixture (respx router) from `tests/conftest.py`.
@@ -402,7 +402,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Write the YouTube matrix tests**
 
-Create `tests/test_fixup_url.py`:
+Modify `tests/test_fixup_url.py`:
 
 ```python
 """fixup_url (app/utils.py:3110-3167) returns (thumbnail_url, embed_url) for a

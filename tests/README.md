@@ -150,9 +150,17 @@ Use `python -m`, from the repository root. Running the file by path puts
 
 **Never run a campaign under `--cov`.** atheris installs its own bytecode
 instrumentation to guide mutation and coverage.py is already tracing; they must
-not fight. They never meet, because nothing pytest collects imports atheris:
-`harnesses.py` holds plain functions, and `run_campaign.py` is neither named
-`test_*.py` nor holds test functions.
+not fight. They never meet, because a bare `import atheris` installs no
+instrumentation by itself -- only `atheris.instrument_imports()` (called from
+`run_campaign.py`, which pytest never collects: it is neither named `test_*.py`
+nor holds test functions) or `atheris.Fuzz()` turns on bytecode tracing.
+`tests/test_link_parsers_fuzz.py` **does** `import atheris` at line 80 and
+**is** collected by the coverage run -- but it only uses
+`atheris.FuzzedDataProvider` as a structured bytes decoder (see Sub-project 1c
+below) and calls neither `instrument_imports()` nor `Fuzz()`, so it installs no
+instrumentation either. The conclusion still holds; the reason is that nothing
+in the coverage run's collected files calls the two functions that actually
+instrument, not that nothing collected imports atheris at all.
 
 `run_campaign.py` instruments only `app` and `tests` (`atheris.instrument_imports(include=...)`).
 Without instrumentation libFuzzer gets no feedback and degenerates into blind
@@ -661,6 +669,33 @@ posts already attributed to the mangled name, a data migration out of
 proportion to a fix that just stops the bleeding. Recorded here so a later
 reader does not mistake the absence of a migration for an oversight.
 
+**A second fix for the same defect class: `url_needs_archive`.** While Task 1
+was authorised and scoped to `domain_from_url`, the campaign found an
+identical defect in `app/post/util.py`'s `url_needs_archive` (commits
+`e0d08efc`, `3feab57c`; tests in `tests/test_url_needs_archive.py`) and it was
+separately owner-authorised and fixed. Before the fix, line 277 read
+`urlparse(url.replace('www.', ''))` -- the exact same blanket string
+replacement over the whole URL, before parsing, that `domain_from_url` had.
+Its severity differs from `domain_from_url`'s: the result feeds a membership
+test against a hardcoded `paywalled_sites` list that drives a UI affordance
+(whether to offer a `removepaywall.com` archive link), not `Domain` row
+attribution or ban enforcement. It still failed in both directions:
+`https://awww.nytimes.com/x` mangled to `anytimes.com`, a false negative (no
+archive link offered for a genuinely paywalled host), and
+`https://nywww.times.com/x` mangled to `ny` + `times.com` = `nytimes.com`, a
+false positive (an attacker-registered host treated as paywalled and handed a
+`removepaywall.com` link). The fix matches `domain_from_url`'s idiom: parse
+first, then strip a `startswith('www.')` prefix from the hostname alone.
+`tests/test_url_needs_archive.py` covers it with 11 tests, but the report is
+explicit that only 2 of them discriminate the fix itself --
+`test_an_interior_www_does_not_produce_a_false_positive` and
+`test_www_prefixed_paywalled_host_still_needs_archive`; the false-negative test
+does not discriminate on its own, since it returns `False` both before and
+after the fix (for the wrong reason pre-fix), and the remaining tests are
+regression guards for adjacent behaviour (exemptions, falsy input, the bare
+`except:`'s hostless-URL path). Worth preserving, since it is the kind of
+honest-negative claim that is easy to silently drop on the next pass.
+
 **Measured and floor.** Re-measured (not carried forward -- see the standing
 rule below) at **71.4776%** (`percent_covered`, the blended statement+branch
 figure from `coverage.json`, same as every earlier ratchet entry here), up from
@@ -773,6 +808,18 @@ correct for every username. The username-regex probe above is exactly that
 gap made concrete -- and it is why "100% branch" is read throughout this
 sub-project's write-ups as "every Python branch that runs", never as "every
 string this code produces behaves correctly".
+
+**`domain_from_url` has a second consumer, which matters for future mutation
+runs.** `tests/test_link_parsers_fuzz.py` imports and calls `domain_from_url`
+directly (it is one of the three functions the fuzz harness targets), which
+makes it a second, independent test file exercising that function alongside
+`tests/test_domain_from_url.py`. The whole-branch review's own mutation run
+against `domain_from_url` found 3 failures across 11 files, and the fuzz file
+was one of them -- proof its property check discriminates rather than merely
+restating the implementation, and proof that a future mutation run scoped only
+to `tests/test_domain_from_url.py` will under-count `domain_from_url`'s real
+kill rate. Include the fuzz file in any future mutation run against this
+function, or the run will report a weaker suite than actually exists.
 
 **YouTube's URL formats have no specification.** `fixup_url`'s YouTube-shape
 expectations (`/shorts/`, `/watch?v=`, `/playlist`, `/post/`, the five
