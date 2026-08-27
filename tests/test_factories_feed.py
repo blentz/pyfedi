@@ -10,7 +10,9 @@ read would let every later test built on it pass without exercising the thing it
 names.
 
 Redis policy: get_deduped_post_ids's cache-write
-(`redis_client.set(result_id, ..., ex=86400)`, app/utils.py:3942) targets whatever
+(`redis_client.set(cache_key, ..., ex=86400)`, where cache_key is
+`feed:<user id>:<result_id>` -- see tests/test_feed_cache.py for why it is
+namespaced per user) targets whatever
 `app.redis_client` currently is. redis_double (tests/conftest.py) now patches that
 attribute, in addition to the four get_redis_connection bindings it already
 covered -- see its docstring for why a single monkeypatch is enough here (every
@@ -139,7 +141,7 @@ def test_community_block_is_visible_to_blocked_communities(app, db_session):
 
 def test_marked_read_post_is_excluded_from_the_feed_when_hide_read_posts_is_set(app, db_session, redis_double):
     """Fails if mark_post_read writes rows the raw `read_posts` query inside
-    get_deduped_post_ids (app/utils.py:3861-3862) does not read.
+    get_deduped_post_ids (app/utils.py:3868-3869) does not read.
 
     The control assertion (post visible before marking read) rules out the post
     being excluded for some unrelated reason.
@@ -159,7 +161,7 @@ def test_marked_read_post_is_excluded_from_the_feed_when_hide_read_posts_is_set(
 
 def test_hidden_post_is_excluded_from_instance_stickies(app, db_session):
     """Fails if hide_post writes rows the raw `hidden_posts` query inside
-    get_instance_stickies (app/utils.py:4012-4014, 4037) does not read. Proves the
+    get_instance_stickies (app/utils.py:4019-4021, 4044) does not read. Proves the
     hidden_posts reader in get_instance_stickies specifically -- a sibling test
     (test_marked_read_post_is_excluded_from_the_feed...) proves the read_posts /
     hidden_posts readers inside get_deduped_post_ids instead, so between them both
@@ -181,7 +183,7 @@ def test_hidden_post_is_excluded_from_instance_stickies(app, db_session):
 def test_flair_block_is_excluded_from_the_feed(app, db_session, redis_double):
     """Fails if make_post_flair / make_flair_block write rows the raw
     `post_flair` / CommunityFlairBlock query inside get_deduped_post_ids
-    (app/utils.py:3893-3899) does not read.
+    (app/utils.py:3900-3906) does not read.
     """
     make_instance('flaircheck.example')
     viewer = make_user(None, 'flairblocker', local=True)
@@ -234,7 +236,7 @@ def test_empty_community_ids_returns_an_empty_list_without_querying(app, db_sess
     Mutation that would fail this: delete the guard (or just its `return []`).
     With community_sql left at its default (None) and community_ids == [], the
     very next branch taken indexes `community_ids[0]`
-    (`elif community_ids[0] == -1:`, app/utils.py:3801), which raises IndexError
+    (`elif community_ids[0] == -1:`, app/utils.py:3808), which raises IndexError
     on an empty list -- so removing the guard does not quietly change the return
     value, it crashes the call, and this test would fail with that error instead
     of a plain assertion failure.
@@ -248,24 +250,30 @@ def test_empty_community_ids_returns_an_empty_list_without_querying(app, db_sess
 
 
 def test_a_cached_result_id_is_served_without_reaching_the_database(app, db_session, redis_double):
-    """Covers the Redis cache-HIT read path at app/utils.py:3794-3798 -- `if
-    result_id: if redis_client.exists(result_id): return
-    json.loads(redis_client.get(result_id))` -- which no earlier test in this
+    """Covers the Redis cache-HIT read path in get_deduped_post_ids -- `if
+    cache_key and redis_client.exists(cache_key): return
+    json.loads(redis_client.get(cache_key))` -- which no earlier test in this
     sub-project exercised. Task 1's tests (above) proved only the cache-WRITE
     side of this same mechanism.
 
+    The key is `feed:<user id>:<result_id>`, not the bare result_id. That changed
+    when the cross-user cache leak was fixed: result_id is client-controlled, so
+    an unnamespaced key let two sessions sharing one result_id share a cache entry
+    filtered for a single viewer's authorisation. tests/test_feed_cache.py holds
+    the regression tests for that; this test only had to learn the new key format.
+
     Primes app.redis_client (via redis_double, so this never touches the real
-    test Redis) at a result_id with a cached value that is NOT the id of a real,
+    test Redis) at that key with a cached value that is NOT the id of a real,
     currently-visible post. A real post is also seeded in the same
     community. If get_deduped_post_ids fell through to the live query instead of
     taking the cache-hit branch, the live query would return [post.id] and the
     assertion below would fail -- so a test that merely checked "some list came
     back" would pass either way, and this one does not.
 
-    Mutation that would fail this: delete the `if redis_client.exists(result_id):
-    return json.loads(...)` block. The call would then fall through to the live
-    query and return [post.id] instead of the primed stale value, failing the
-    equality assertion.
+    Mutation that would fail this: delete the `if cache_key and
+    redis_client.exists(cache_key): return json.loads(...)` block. The call would
+    then fall through to the live query and return [post.id] instead of the primed
+    stale value, failing the equality assertion.
     """
     make_instance('cachehit.example')
     viewer = make_user(None, 'cachehitviewer', local=True)
@@ -275,7 +283,7 @@ def test_a_cached_result_id_is_served_without_reaching_the_database(app, db_sess
 
     result_id = uuid.uuid4().hex
     stale_cached_ids = [-999999]  # deliberately not post.id, and not a real post
-    redis_double.set(result_id, json.dumps(stale_cached_ids), ex=86400)
+    redis_double.set(f'feed:{viewer.id}:{result_id}', json.dumps(stale_cached_ids), ex=86400)
 
     with app.test_request_context('/'):
         login_user(viewer)
@@ -283,34 +291,36 @@ def test_a_cached_result_id_is_served_without_reaching_the_database(app, db_sess
 
     assert returned == stale_cached_ids, (
         f'expected the primed cache value {stale_cached_ids} to be served as-is; '
-        f'got {returned!r} instead -- the cache-hit branch (app/utils.py:3795-3796) '
-        f'was not taken. A live query here would have returned [{post.id}]'
+        f'got {returned!r} instead -- the cache-hit branch was not taken. '
+        f'A live query here would have returned [{post.id}]'
     )
     assert post.id not in returned
 
 
-def test_an_authenticated_call_with_an_empty_result_id_still_writes_a_wasted_cache_entry(
+def test_an_authenticated_call_with_an_empty_result_id_writes_no_cache_entry(
         app, db_session, redis_double):
-    """Confirms the design doc's suspected defect is LIVE, not merely
-    theoretical: the cache READ is guarded by `if result_id:` (app/utils.py:3794)
-    but the cache WRITE at the end of the function is guarded only by `if
-    current_user.is_authenticated:` (app/utils.py:3942) -- an authenticated call
-    with an empty result_id (the caller's own way of saying "do not cache") still
-    performs the write, to a key literally named ''.
+    """REPLACES test_an_authenticated_call_with_an_empty_result_id_still_writes_a_wasted_cache_entry,
+    which asserted the defect that has now been fixed. Same call, same fixtures,
+    inverted assertion -- the branch it was written to cover is still covered.
 
-    Two real call sites pass a literal '' result_id: app/feed/routes.py:719
-    (show_feed_rss) and app/topic/routes.py:230 (show_topic_rss). Neither route
-    carries @login_required, so most requests are anonymous -- but neither
-    excludes an authenticated session either (confirmed by reading both routes'
-    full decorator stacks), so a logged-in browser opening either RSS URL
-    reaches exactly this path. This test proves the write happens for an
-    authenticated caller; it reports the defect, it does not fix it, per this
-    campaign's report-don't-fix rule.
+    The defect it pinned: the cache READ was guarded by `if result_id:` while the
+    cache WRITE at the end of the function was guarded only by `if
+    current_user.is_authenticated:`. An authenticated call with an empty result_id
+    -- the caller's own way of saying "do not cache" -- still performed the write,
+    to a key literally named '' that the read path could never return.
 
-    Also closes the last uncovered branch in get_deduped_post_ids's own
-    result_id handling, app/utils.py:3794->3798 -- the False arm of `if
-    result_id:`, skipping the cache-hit check entirely for a falsy result_id --
-    which the cache-hit test above does not reach (it uses a truthy result_id).
+    Both guards are now the one derived `cache_key`, which is None unless
+    result_id is non-empty AND the caller is authenticated, so the two can no
+    longer disagree. Two real call sites pass a literal '' result_id:
+    app/feed/routes.py:719 (show_feed_rss) and app/topic/routes.py:230
+    (show_topic_rss). Neither route carries @login_required, so most requests are
+    anonymous -- but neither excludes an authenticated session either, so a
+    logged-in browser opening either RSS URL reaches exactly this path.
+
+    Also still closes the same branch in get_deduped_post_ids's result_id
+    handling -- the False arm of the cache_key condition, skipping the cache-hit
+    check entirely for a falsy result_id -- which the cache-hit test above does
+    not reach (it uses a truthy result_id).
     """
     make_instance('emptyresultid.example')
     viewer = make_user(None, 'emptyresultidviewer', local=True)
@@ -318,13 +328,13 @@ def test_an_authenticated_call_with_an_empty_result_id_still_writes_a_wasted_cac
     make_community_member(viewer, community)
     post = make_post(community, viewer, 'https://emptyresultid.example/posts/1')
 
-    assert not redis_double.exists('')
+    assert redis_double.dbsize() == 0
     with app.test_request_context('/'):
         login_user(viewer)
         returned = get_deduped_post_ids('', [community.id], 'new')
 
     assert returned == [post.id]
-    assert redis_double.exists(''), (
-        "expected the wasted-write defect: an authenticated call with an empty "
-        "result_id should still write a key literally named ''"
+    assert redis_double.keys('*') == [], (
+        f"an empty result_id means 'do not cache', but the call wrote "
+        f"{redis_double.keys('*')!r}"
     )

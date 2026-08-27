@@ -1,4 +1,4 @@
-r"""One-case-per-rule coverage for possible_communities (app/utils.py:4330-4362).
+r"""One-case-per-rule coverage for possible_communities (app/utils.py:4337-4369).
 
 possible_communities builds a grouped community picker for the "new post"
 community selector: three optional keys -- 'Moderating', 'Joined
@@ -29,22 +29,22 @@ Rule count, derived with the following command against this checkout
             print('filter/join calls:', calls)
     "
 
-Output: `if statements: [4340, 4347, 4360, 4337, 4344, 4353, 4354] count= 7`
-and `filter/join calls: [(4350, 'filter'), (4350, 'join'), (4350, 'filter')]`
--- confirmed against ``sed -n '4330,4362p' app/utils.py | grep -n '^[ ]*if \|\.filter(\|\.join('``,
+Output: `if statements: [4347, 4354, 4367, 4344, 4351, 4360, 4361] count= 7`
+and `filter/join calls: [(4357, 'filter'), (4357, 'join'), (4357, 'filter')]`
+-- confirmed against ``sed -n '4337,4362p' app/utils.py | grep -n '^[ ]*if \|\.filter(\|\.join('``,
 which lists the same seven `if` lines plus the two `.filter(` calls (one
 before the join with one predicate, one after with two comma-joined
 predicates -- SQLAlchemy ANDs positional filter args, so that single call
 carries two independent predicates).
 
 Seven Python-level rules, in execution order:
-  1. :4337 -- `if c.id not in already_added` inside the Moderating loop
-  2. :4340 -- `if len(comms) > 0` -- omit 'Moderating' when empty
-  3. :4344 -- `if c.id not in already_added` inside the Joined loop
-  4. :4347 -- `if len(comms) > 0` -- omit 'Joined communities' when empty
-  5. :4353 -- `if c.id not in already_added` inside the Others loop
-  6. :4354 -- `if c.ap_id is None` -- display_name branch (title vs title@ap_domain)
-  7. :4360 -- `if len(comms) > 0` -- omit 'Others' when empty
+  1. :4344 -- `if c.id not in already_added` inside the Moderating loop
+  2. :4347 -- `if len(comms) > 0` -- omit 'Moderating' when empty
+  3. :4351 -- `if c.id not in already_added` inside the Joined loop
+  4. :4354 -- `if len(comms) > 0` -- omit 'Joined communities' when empty
+  5. :4360 -- `if c.id not in already_added` inside the Others loop
+  6. :4361 -- `if c.ap_id is None` -- display_name branch (title vs title@ap_domain)
+  7. :4367 -- `if len(comms) > 0` -- omit 'Others' when empty
 
 Plus three predicates the Others query pushes into SQL, invisible to
 coverage.py as Python branches and exercised only through the rows the
@@ -102,10 +102,10 @@ tests exactly that overlap, once for Moderating and once for Joined, and
 the moderating case is the one Step 4 mutates.
 
 A second finding, from running the over-broaden direction on rule 1
-(:4337): replacing `if c.id not in already_added:` with `if True:` inside
+(:4344): replacing `if c.id not in already_added:` with `if True:` inside
 the MODERATING loop changes NOTHING -- 0 test failures -- because
 `already_added` is a freshly-created empty set at that point
-(app/utils.py:4335) and `moderating_communities()`'s query is a plain join
+(app/utils.py:4342) and `moderating_communities()`'s query is a plain join
 against a single user's CommunityMember rows, which cannot return the same
 community twice. Rule 1's condition can therefore never be False in
 practice; it is dead code as a within-loop duplicate filter. Its only
@@ -114,7 +114,7 @@ which is what TestDedup's moderating-vs-Others test, and Step 4's mutation
 on the `.add()` call rather than the `if`, actually exercise.
 
 Ordering: the Others query ends `.order_by(Community.title)`
-(app/utils.py:4352). TestOrdering below seeds two Others-eligible
+(app/utils.py:4359). TestOrdering below seeds two Others-eligible
 communities whose natural (insertion/id) order is the REVERSE of their
 title order, so a removed ORDER BY would produce the wrong sequence rather
 than coincidentally passing -- the trap Task 6 hit on its first attempt.
@@ -177,8 +177,8 @@ def names_in(group):
 
 
 class TestGrouping:
-    """Rules :4337/:4340 (Moderating), :4344/:4347 (Joined communities),
-    :4353/:4360 (Others): each community lands in exactly the group its
+    """Rules :4344/:4347 (Moderating), :4351/:4354 (Joined communities),
+    :4360/:4367 (Others): each community lands in exactly the group its
     membership state predicts, and a group with nothing in it is omitted
     from the dict entirely rather than present as an empty list.
     """
@@ -243,7 +243,7 @@ class TestGrouping:
         assert 'Others' in result
 
     def test_no_eligible_communities_at_all_returns_an_empty_dict(self, app, db_session):
-        """Rule :4360's omission with nothing at all in the database --
+        """Rule :4367's omission with nothing at all in the database --
         confirms the 'Others' key itself is also omitted, not just the
         first two groups.
         """
@@ -253,13 +253,13 @@ class TestGrouping:
 
 
 class TestDedup:
-    """already_added (app/utils.py:4335) prevents a community the viewer
+    """already_added (app/utils.py:4342) prevents a community the viewer
     moderates or has joined from ALSO showing up in the raw 'Others' query,
     which carries no membership filter and would otherwise return every
     non-excluded community regardless of the viewer's relationship to it.
 
     Mutation performed (Step 4 of the task brief): delete
-    `already_added.add(c.id)` from the MODERATING loop (app/utils.py:4339).
+    `already_added.add(c.id)` from the MODERATING loop (app/utils.py:4346).
     Ran `./run_tests.sh tests/test_possible_communities.py -q`: exactly one
     failure, test_a_moderated_community_also_qualifies_for_others_but_
     appears_only_once below (the moderated community now appears a second
@@ -305,7 +305,7 @@ class TestDedup:
 
 class TestOthersExclusions:
     """The three predicates the Others query pushes into SQL
-    (app/utils.py:4351-4352). One case per predicate, each with a
+    (app/utils.py:4358-4359). One case per predicate, each with a
     plain control community present in the same call to prove the
     exclusion is selective rather than emptying the whole query.
 
@@ -389,7 +389,7 @@ class TestOthersExclusions:
 
 
 class TestDisplayNameBranch:
-    """Rule :4354: `display_name = c.title` when `c.ap_id is None`, else
+    """Rule :4361: `display_name = c.title` when `c.ap_id is None`, else
     `f"{c.title}@{c.ap_domain}"`. This branch is specific to the Others
     loop's hand-rolled version of Community.display_name() -- the query only
     selects (id, ap_id, title, ap_domain) columns, not a full Community
@@ -428,7 +428,7 @@ class TestDisplayNameBranch:
 
 class TestOrdering:
     """The Others query ends `.order_by(Community.title)`
-    (app/utils.py:4352). Fixture titles are chosen so insertion/id order is
+    (app/utils.py:4359). Fixture titles are chosen so insertion/id order is
     the REVERSE of title order -- a removed ORDER BY would return
     ['zzzorderlast', 'aaaorderfirst'] here, not coincidentally the right
     sequence.

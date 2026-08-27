@@ -1,6 +1,6 @@
 """Both-direction coverage for get_deduped_post_ids' visibility filters --
 the WHERE clauses that keep OTHER PEOPLE'S content out of a viewer's feed
-(app/utils.py:3832-3899). A defect here shows a user posts from an account
+(app/utils.py:3839-3906). A defect here shows a user posts from an account
 they blocked, a domain they blocked, or a community they were banned from --
 a safety failure, not an annoyance -- which is why every filter below gets a
 PAIR of tests rather than one: an absence test alone would also pass for a
@@ -30,7 +30,7 @@ creation. Both column-default to 1 ("on", app/models.py:984-985) for a fresh
 user, and this file never sets `nsfw`/`nsfl` on any post, so the coupling is
 inert for every assertion here today -- but task 5
 (tests/test_feed_display_preferences.py) found that an over-broadened
-hide_nsfw/hide_nsfl clause (`app/utils.py:3857-3860` rewritten to exclude
+hide_nsfw/hide_nsfl clause (`app/utils.py:3864-3867` rewritten to exclude
 everything once the preference is on) fails presence tests here as
 collateral, not because of anything this file is testing: 9 of these 17
 tests failed before this fix (all presence halves; the 8 absence halves are
@@ -65,12 +65,12 @@ def feed_ids(app, viewer, community_ids, **kwargs):
 
 
 class TestFilteredOutCommunities:
-    """filtered_out_communities (app/utils.py:3833-3837): the viewer's own
+    """filtered_out_communities (app/utils.py:3840-3844): the viewer's own
     `community_keyword_filter`, ILIKE-matched against Community.name/title.
     Both tests seed an identical community+post; they differ only in whether
     the viewer's keyword filter matches the community's name. Mutation that
     fails the absent test: deleting the `if len(filtered_out_community_ids):`
-    block at 3835-3837 (or the `if current_user.is_authenticated:` guard
+    block at 3842-3844 (or the `if current_user.is_authenticated:` guard
     around it). The present test seeds a keyword that matches nothing, so
     that mutation leaves it passing -- there was nothing to filter back in.
     """
@@ -108,14 +108,14 @@ class TestFilteredOutCommunities:
 
 class TestBlockedOrBannedInstancesCommunitySide:
     """blocked_or_banned_instances, applied to the COMMUNITY's own
-    instance_id (app/utils.py:3839-3843): `c.instance_id NOT IN
+    instance_id (app/utils.py:3846-3850): `c.instance_id NOT IN
     :filtered_out_instance_ids`. The post's own instance is kept UNBLOCKED in
     both tests (author stays local, instance id 1, matching the community's
     default before it is moved) so this isolates the community-side clause
     from the post-side clause the next class covers -- only the COMMUNITY's
     host instance is reassigned and blocked. Mutation that fails the absent
     test: deleting the `if bi := blocked_or_banned_instances(...)` block at
-    3839-3843 (both its `c.instance_id` and `p.instance_id` appends -- see the
+    3846-3850 (both its `c.instance_id` and `p.instance_id` appends -- see the
     post-side class for why that second append is separately exercised).
     """
 
@@ -156,14 +156,14 @@ class TestBlockedOrBannedInstancesCommunitySide:
 
 class TestBlockedOrBannedInstancesPostSide:
     """blocked_or_banned_instances, applied to the POST's own instance_id
-    (app/utils.py:3879-3881): `(p.instance_id NOT IN :instance_ids OR
+    (app/utils.py:3886-3888): `(p.instance_id NOT IN :instance_ids OR
     p.instance_id is null)`. The community's own instance is kept UNBLOCKED
     (community stays on the default local instance, id 1, from
     make_community's hardcoded instance_id=1) so this isolates the post-side
     clause from the previous class' community-side clause -- only the
     AUTHOR's (and so the post's) instance is remote and blocked. Mutation
     that fails the absent test: deleting the `if instance_ids :=
-    blocked_or_banned_instances(...)` block at 3879-3881.
+    blocked_or_banned_instances(...)` block at 3886-3888.
     """
 
     def test_a_blocked_authors_instance_post_is_absent(self, app, db_session, redis_double):
@@ -198,10 +198,10 @@ class TestBlockedOrBannedInstancesPostSide:
 
 
 class TestBlockedDomains:
-    """blocked_domains (app/utils.py:3876-3878): `(p.domain_id NOT IN
+    """blocked_domains (app/utils.py:3883-3885): `(p.domain_id NOT IN
     :domain_ids OR p.domain_id is null)`. Mutation that fails the absent
     test: deleting the `if domains_ids := blocked_domains(...)` block at
-    3876-3878.
+    3883-3885.
     """
 
     def test_a_blocked_domains_post_is_absent(self, app, db_session, redis_double):
@@ -240,10 +240,10 @@ class TestBlockedDomains:
 
 
 class TestBlockedCommunities:
-    """blocked_communities (app/utils.py:3882-3884): `p.community_id NOT IN
+    """blocked_communities (app/utils.py:3889-3891): `p.community_id NOT IN
     :blocked_community_ids`. Mutation that fails the absent test: deleting
     the `if blocked_community_ids := blocked_communities(...)` block at
-    3882-3884.
+    3889-3891.
     """
 
     def test_a_blocked_communitys_post_is_absent(self, app, db_session, redis_double):
@@ -276,10 +276,10 @@ class TestBlockedCommunities:
 
 
 class TestBlockedUsers:
-    """blocked_users (app/utils.py:3886-3888): `p.user_id NOT IN
+    """blocked_users (app/utils.py:3893-3895): `p.user_id NOT IN
     :blocked_accounts`. One of this task's two Step-3 discrimination targets:
     deleting the `if blocked_accounts := blocked_users(...)` block at
-    3886-3888 makes ONLY test_a_blocked_authors_post_is_absent fail --
+    3893-3895 makes ONLY test_a_blocked_authors_post_is_absent fail --
     test_an_unblocked_authors_post_is_present keeps passing, because nothing
     was filtering its post to begin with. Measured counts are in
     task-4-report.md.
@@ -318,9 +318,9 @@ class TestBlockedUsers:
 
 
 class TestCommunitiesBannedFrom:
-    """communities_banned_from (app/utils.py:3890-3892): `p.community_id NOT
+    """communities_banned_from (app/utils.py:3897-3899): `p.community_id NOT
     IN :banned_from`. The other Step-3 discrimination target: deleting the
-    `if banned_from := communities_banned_from(...)` block at 3890-3892 makes
+    `if banned_from := communities_banned_from(...)` block at 3897-3899 makes
     ONLY test_a_banned_from_communitys_post_is_absent fail --
     test_an_unbanned_communitys_post_is_present keeps passing. Measured
     counts are in task-4-report.md.
@@ -356,14 +356,14 @@ class TestCommunitiesBannedFrom:
 
 
 class TestBlockedFlair:
-    """The direct CommunityFlairBlock / post_flair query (app/utils.py:3893-
-    3899), reached only when `community_ids[0] != -1` -- the first two tests
+    """The direct CommunityFlairBlock / post_flair query (app/utils.py:3900-
+    3906), reached only when `community_ids[0] != -1` -- the first two tests
     below pass a specific community id, never [-1], to stay on this branch.
     Mutation that fails the absent test: deleting the `if blocked_flair:`
-    block at 3896-3899 (or the query at 3894-3895 that feeds it).
+    block at 3903-3906 (or the query at 3901-3902 that feeds it).
 
     A third test below takes the guard's OTHER arm: `community_ids[0] == -1`
-    short-circuits the whole flair-filter block (app/utils.py:3893's `if
+    short-circuits the whole flair-filter block (app/utils.py:3900's `if
     community_ids[0] != -1:` going False), so a flair the viewer HAS blocked
     still lets its post through when the request is for -- as the show_all
     query builds -- every community. Mutation that fails it: deleting the
@@ -405,7 +405,7 @@ class TestBlockedFlair:
     def test_a_blocked_flairs_post_is_present_when_querying_all_communities(
             self, app, db_session, redis_double):
         """community_ids=[-1] ('all communities', c.show_all is true) takes
-        the `if community_ids[0] != -1:` guard's False arm at app/utils.py:3893,
+        the `if community_ids[0] != -1:` guard's False arm at app/utils.py:3900,
         so the flair-block filter never runs -- a post whose flair the viewer
         blocked is still returned. This is real, by-design behaviour (flair
         blocks are inherently community-scoped) rather than an oversight, and
