@@ -1,4 +1,4 @@
-"""Covers app/utils.py's rewrite_href (app/utils.py:4968-4991): a four-rule
+"""Covers app/utils.py's rewrite_href (app/utils.py:5136-5168): a four-rule
 if/elif/elif/else chain that rewrites a remote ActivityPub href into a local
 path when a matching row exists locally, and returns the href unchanged
 otherwise.
@@ -7,30 +7,39 @@ Enumerated by AST (podman-compose exec ... python -c "ast.walk(...)"), not by
 reading -- tests/README.md's coverage-ratchet section documents several
 enumerations in this campaign that were wrong when re-derived:
 
-    if at line 4969, orelse=1   <- top-level: if <post shape>
-    if at line 4971, orelse=0   <- nested: if post:
-    if at line 4976, orelse=1   <- top-level: elif '/comment/' in url:
-    if at line 4972, orelse=1   <- nested: if post.slug: / else:
-    if at line 4978, orelse=0   <- nested: if post_reply:
-    if at line 4980, orelse=2   <- top-level: elif <community shape>
-    if at line 4982, orelse=0   <- nested: if community and not community.is_local():
-    if at line 4986, orelse=0   <- nested (inside the else body): the
+    if at line 5137, orelse=1   <- top-level: if <post shape>
+    if at line 5139, orelse=0   <- nested: if post:
+    if at line 5144, orelse=1   <- top-level: elif '/comment/' in url:
+    if at line 5140, orelse=1   <- nested: if post.slug: / else:
+    if at line 5146, orelse=0   <- nested: if post_reply:
+    if at line 5148, orelse=2   <- top-level: elif <community shape>
+    if at line 5150, orelse=0   <- nested: if community and not community.is_local():
+    if at line 5163, orelse=0   <- nested (inside the else body): the
                                    fallthrough's Post existence test, now
                                    `if post_id is None:`
-    if at line 4988, orelse=0   <- nested: if post_reply:
+    if at line 5165, orelse=0   <- nested: if post_reply:
 
-Three If nodes (4969, 4976, 4980) form the top-level if/elif/elif chain; the
+Three If nodes (5137, 5144, 5148) form the top-level if/elif/elif chain; the
 final `else` is not itself an If node (Python's ast represents `elif` as a
 nested If in `orelse`, but a plain `else` is just body statements -- one of
-which happens to be another If, at 4986). So there are FOUR rules, not nine:
-post (4969), comment (4976), community (4980), and the else fallthrough. The
-other six If nodes (4971, 4972, 4978, 4982, 4986, 4988) are lookups nested
+which happens to be another If, at 5163). So there are FOUR rules, not nine:
+post (5137), comment (5144), community (5148), and the else fallthrough. The
+other six If nodes (5139, 5140, 5146, 5150, 5163, 5165) are lookups nested
 inside a rule's own body, not additional rules -- a URL that exercises every
 branch of the outer chain can still leave most of these lookup paths, and
 their conditional rewrites, unexercised. One class per rule, not one per
 branch: each class carries a MATCH+rewrite case and a MATCH-but-lookup-misses
 case, proving the rewrite is conditional on the lookup succeeding rather than
 on the URL shape alone.
+
+THESE NUMBERS ROT, and this block has already been wrong once. It was written
+against `4968-4991`; commit 6cf76423 then edited the very lines it enumerates
+(replacing the fallthrough's `Post.get_by_ap_id` with an id-only query and
+adding a nine-line comment above it) and left every number untouched, so the
+whole block was stale in the commit that changed it. Do not trust a number
+here; re-derive it with the command above and open each line to confirm it is
+what the prose beside it says. That is how the set above was produced, at
+app/utils.py as of the commit that carries this docstring.
 """
 from app import db
 from app.utils import rewrite_href
