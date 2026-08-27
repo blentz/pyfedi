@@ -58,7 +58,7 @@ part least likely to be covered for free.
   vulnerability" below. Reporting is in scope; a security fix to production code
   is a separate decision.
 - The pre-existing inline imports, including the `import c2pa` inside
-  `inspect_image_c2pa` (`app/utils.py:5487`) noticed while partitioning. It
+  `inspect_image_c2pa` (`app/utils.py:5488`) noticed while partitioning. It
   violates the project rule and belongs to the catalogued inline-import project.
 
 ## The partition is measured, but it is a heuristic
