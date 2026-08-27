@@ -3108,7 +3108,21 @@ def update_post_from_activity(post: Post, request_json: dict):
 
         # Links
         old_url = post.url
-        new_url = '' if post.type == POST_TYPE_EVENT else None      # events don't have a url to set new_url to '' to avoid triggering the "this url has changed" code.
+        # An Event with no Link attachment must compare EQUAL to what it already
+        # holds, so the "this url has changed" arm below does not run: that arm's
+        # `else` sets POST_TYPE_ARTICLE and clears image_id, silently turning an
+        # event into a discussion and deleting its banner on an Update that
+        # touched neither. This used to be the literal '' -- Post.new()'s Event
+        # branch's own "no url" value -- which only matched events created that
+        # way. app/shared/post.py:613 stores None for a locally created event
+        # with a banner image, and Post.new() now does too (None is the column's
+        # value for "no url", and post_to_page gates the outbound attachment on
+        # `post.url is not None`, so '' federated `{"href": ""}` to peers).
+        # Comparing old_url with itself matches whichever sentinel is stored,
+        # including the '' in rows written before that change -- which is what
+        # makes it safe without a migration. An attachment in this Update still
+        # overwrites new_url below, so a real url change is still detected.
+        new_url = old_url if post.type == POST_TYPE_EVENT else None
         if ('attachment' in request_json['object'] and
                 isinstance(request_json['object']['attachment'], list) and
                 len(request_json['object']['attachment']) > 0 and
@@ -3150,7 +3164,7 @@ def update_post_from_activity(post: Post, request_json: dict):
             # urlparse guard landed, domain_from_url returns None for these
             # rather than raising, and `new_domain.banned` would then be
             # 'NoneType' object has no attribute 'banned'.
-            new_url = '' if post.type == POST_TYPE_EVENT else None  # exactly what new_url was initialised to
+            new_url = old_url if post.type == POST_TYPE_EVENT else None  # exactly what new_url was initialised to
         new_domain = None
         if new_url:
             # `if new_domain and` for the same reason app/models.py's Post.new and
