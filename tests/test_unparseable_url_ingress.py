@@ -65,7 +65,8 @@ from werkzeug.datastructures import MultiDict
 from app import db
 from app.activitypub.util import create_post, update_post_from_activity
 from app.community.forms import CreateLinkForm, CreateVideoForm
-from app.models import Domain, Post, Site
+from app.constants import POST_TYPE_LINK
+from app.models import Domain, File, Post, Site
 from app.utils import is_video_hosting_site, url_is_parseable
 from tests.factories import make_community, make_domain, make_instance, make_post, make_user
 
@@ -406,8 +407,31 @@ class TestFederationDoesNotStoreAnUnparseableMicroblogLink:
     is 'Video' here for a reason and it is not decoration: the Links section
     further down overwrites post.url for every object type that reaches it, so
     the only way this write survives the function at all is one of the two
-    early returns above it. That is worth recording -- for a plain Note the
-    microblog write is immediately superseded, which is a separate finding.
+    early returns above it.
+
+    **That "separate finding" was chased down and is closed: the write is NOT
+    dead, and must not be removed.** Two things keep it:
+
+    - Two object types reach it and keep the value outright, by returning
+      before the Links section -- 'Video' (`app/activitypub/util.py`, the
+      PeerTube early return, which commits first) and 'Question' (the Poll
+      early returns, four of them). 'Video' is the one these two tests drive.
+    - For every other type the value is READ before it is overwritten:
+      `old_url = post.url` at the top of the Links section is this write's
+      output. It decides whether the `old_url != new_url` arm runs at all --
+      and that arm deletes the post's image, retypes the post, recalculates
+      cross posts and drives the banned-domain notification. Store a different
+      value here and a plain Note takes a different branch there. A write whose
+      result is consumed six lines later is an intermediate value, not dead
+      code.
+
+    Concretely, for a nameless Note (the only shape that reaches the microblog
+    branch) whose anchor href will not parse, sent to a post that already has a
+    url and an image: this write stores None, so `old_url` is None, `new_url` is
+    None, and the arm is SKIPPED -- the post keeps its type and its image.
+    Delete the write and `old_url` is the post's previous url instead, the arm
+    fires, and the post is retyped to POST_TYPE_ARTICLE with its image dropped.
+    Same activity, opposite outcome.
     """
 
     def test_a_microblog_link_that_will_not_parse_is_not_stored(
@@ -438,6 +462,46 @@ class TestFederationDoesNotStoreAnUnparseableMicroblogLink:
         })
         stored = db.session.query(Post).filter_by(ap_id='https://ingress.example/notes/1').one()
         assert stored.url == 'https://example.com/story'
+
+    def test_the_write_is_read_by_the_links_section_before_it_is_overwritten(
+            self, app, db_session, federated_post):
+        """The write is not dead for the types that DON'T return early either.
+
+        A nameless Note (the only shape that reaches the microblog branch) whose
+        anchor href will not parse, sent to a post that already has a url and an
+        image. This write stores None, so `old_url` is None, `new_url` is None
+        (no attachment), the `old_url != new_url` arm is skipped, and the post
+        keeps its type and its image.
+
+        Neutralize the write and `old_url` is the post's previous url instead:
+        the arm fires, the post is retyped to POST_TYPE_ARTICLE, image_id is
+        cleared and the File row is deleted at the end of the function. Verified
+        both ways by neutralizing the line, which is why this asserts type and
+        image alongside url -- `url is None` alone holds in both directions and
+        would not discriminate.
+        """
+        image = File(source_url='https://ingress.example/pic.png', file_name='pic.png')
+        db.session.add(image)
+        db.session.commit()
+        federated_post.url = 'https://ingress.example/previous'
+        federated_post.type = POST_TYPE_LINK
+        federated_post.image_id = image.id
+        db.session.commit()
+
+        update_post_from_activity(federated_post, {
+            'id': 'https://ingress.example/activities/update/6',
+            'object': {
+                'id': federated_post.ap_id,
+                'type': 'Note',
+                'content': f'<h1><a href="{CRAFTED}">A crafted microblog headline</a></h1>',
+                'mediaType': 'text/html',
+            },
+        })
+        stored = db.session.query(Post).filter_by(ap_id='https://ingress.example/notes/1').one()
+        assert stored.url is None
+        assert stored.type == POST_TYPE_LINK
+        assert stored.image_id == image.id
+        assert db.session.query(File).filter_by(id=image.id).count() == 1
 
 
 # ---------------------------------------------------------------------------
