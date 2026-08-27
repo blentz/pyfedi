@@ -5165,8 +5165,17 @@ def rewrite_href(url: str) -> str:
         if community and not community.is_local():
             url = f'/c/{community.link()}'
     else:
-        post = Post.get_by_ap_id(url)
-        if post is None:
+        # An EXISTENCE test, deliberately, and the only consumer of the result
+        # is the `if` below. This branch never rewrites on a Post: when one is
+        # found it falls straight through to `return url`, so the entity was
+        # loaded and discarded. Post.get_by_ap_id selects all 56 columns --
+        # body and body_html among them -- and builds an ORM instance, to
+        # answer a yes/no question an indexed id lookup answers. Same idiom as
+        # app/activitypub/util.py:1769. Behaviour is unchanged; whether a Post
+        # match here SHOULD rewrite is a separate product question, pinned as
+        # current behaviour by tests/test_rewrite_href.py::TestFallthroughElseRule.
+        post_id = db.session.query(Post.id).filter(Post.ap_id == url).first()
+        if post_id is None:
             post_reply = PostReply.get_by_ap_id(url)
             if post_reply:
                 return f'/comment/{post_reply.id}'
