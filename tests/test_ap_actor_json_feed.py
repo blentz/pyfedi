@@ -160,8 +160,10 @@ docstring saying more:
      return 200, or returns 200 with an empty orderedItems, raises IndexError;
      an entry find_actor_or_create rejects puts None in the list and raises
      AttributeError. TestOwnersCollection.
-  3. The same shape in the /following loop: an entry find_actor_or_create
-     rejects reaches `c.id` as None. TestFollowingCollection.
+  3. FIXED, and so no longer a finding: an entry of the /following collection
+     that find_actor_or_create rejects used to reach `c.id` as None, after the
+     Feed had been committed. It is now skipped and logged.
+     TestFollowingCollection.
   4. A feed with neither attributedTo nor moderators reaches get_request(None),
      which raises httpx.HTTPError out of the function. TestOwnersUrl.
   5. `ap_following_url=... if 'following' in activity_json else None` can never
@@ -649,11 +651,17 @@ class TestFollowingCollection:
     FeedItem, so the count on the returned row is what says how many were
     linked.
 
-    FINDING (3) -- the same unguarded shape as the owners loop: an entry
-    find_actor_or_create rejects is appended as None and reaches `c.id`. Here
-    the crash lands AFTER the feed has been committed, so the peer is left with
-    a persisted Feed and the caller sees an exception -- a partially applied
-    ingest rather than a clean rejection.
+    FIXED (was FINDING (3)) -- an entry find_actor_or_create rejects used to be
+    appended as None and to reach `c.id` in the FeedItem loop. That crash
+    landed AFTER the feed had been committed, so the peer was left with a
+    persisted Feed, no FeedItems, and an exception at the caller -- a
+    partially applied ingest rather than a clean rejection. The resolver's
+    return is now tested before the append and a rejected entry is skipped and
+    logged, see
+    test_a_followed_community_the_resolver_rejects_is_skipped_and_the_rest_link.
+
+    The owners loop above still has the unguarded shape (FINDING (2), out of
+    this task's scope); the two are no longer the same.
 
     Mutation that fails test_a_non_200_following_collection_links_nothing:
     replacing the status guard with `True`, which reaches .json() on a body
@@ -699,18 +707,45 @@ class TestFollowingCollection:
         assert db.session.query(FeedItem).count() == 0
         assert feed.num_communities == 0
 
-    def test_a_followed_community_the_resolver_rejects_crashes_after_the_commit(
+    def test_a_followed_community_the_resolver_rejects_is_skipped_and_the_rest_link(
             self, app, db_session, http_mock):
-        _peer_with_one_owner(
-            http_mock, following=['https://www.w3.org/ns/activitystreams#Public'])
+        """The rejected entry is deliberately in the MIDDLE of the collection,
+        between two the resolver accepts. The Public collective is the
+        rejection: find_actor_or_create returns None for it.
 
-        with pytest.raises(AttributeError) as excinfo:
-            actor_json_to_model(_owned_feed(), '~news', PEER)
+        The counts are what separate 'skipped the bad entry' from 'skipped the
+        whole collection': both good communities become FeedItems and
+        num_communities is 2, so a guard that dropped everything, or that
+        abandoned the loop at the rejected entry, fails here even though
+        nothing raised.
 
-        assert "'NoneType' object has no attribute 'id'" in str(excinfo.value)
-        # The Feed row survives the exception: the crash is after the commit.
+        Mutation, both directions, and they are distinct because this guard is
+        a `continue` rather than an early return:
+
+        - delete the guard: the None is appended again, the AttributeError on
+          `c.id` comes back, and this test fails on the exception.
+        - broaden it to `if True:` (or to `if community is not None:`): every
+          entry is skipped, nothing raises, and this test fails on the FeedItem
+          list and num_communities instead.
+        """
+        instance = peer_instance(PEER)
+        owner = _owner(instance)
+        first = _remote_community(instance, 'memes')
+        second = _remote_community(instance, 'news_comm')
+        _register_owners(http_mock, [owner.ap_profile_id])
+        _register_following(http_mock, [
+            first.ap_profile_id,
+            'https://www.w3.org/ns/activitystreams#Public',
+            second.ap_profile_id,
+        ])
+
+        feed = actor_json_to_model(_owned_feed(), '~news', PEER)
+
+        assert feed is not None
         assert db.session.query(Feed).count() == 1
-        assert db.session.query(FeedItem).count() == 0
+        items = db.session.query(FeedItem).filter_by(feed_id=feed.id).all()
+        assert sorted(i.community_id for i in items) == sorted([first.id, second.id])
+        assert feed.num_communities == 2
 
 
 class TestRequiredFieldsMissing:

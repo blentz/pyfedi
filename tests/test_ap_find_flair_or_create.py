@@ -84,11 +84,10 @@ present -- to the unrelated sibling function find_flair a few lines below
 it; that gap is now closed by
 TestNotFoundCreatesNewFlair.test_no_match_creates_new_flair_from_preferred_username_alone.)
 """
-import pytest
-
 from app import db
 from app.activitypub.util import find_flair_or_create
 from app.models import CommunityFlair
+from app.utils import get_task_session
 from tests.factories import make_community, make_community_flair, seed_community_owner
 
 
@@ -470,32 +469,36 @@ class TestApIdBackfill:
         assert result.ap_id == community.local_url() + f"/tag/{existing.id}"
 
 
-class TestSuspectedMissingIdKeyCrash:
-    """Records a suspected defect; the test below pins CURRENT behaviour
-    (that this raises), it is NOT asserting that raising is intended.
+class TestMissingIdKeyOnTheBackfill:
+    """The backfill's absent-'id' arm. FIXED behaviour, not pinned defect.
 
     Once a row is found via preferredUsername or display_name (not ap_id)
-    and that row's ap_id column is falsy, the backfill block reads
-    `flair['id']` unconditionally -- there is no `'id' in flair` guard on
-    that access, unlike every other optional-field read in this function.
-    A flair dict with no 'id' key at all reaches this and raises KeyError.
+    and that row's ap_id column is falsy, the backfill decides where the new
+    ap_id comes from. It used to read `flair['id']` with no `'id' in flair`
+    guard -- unlike every other optional-field read in this function -- so a
+    flair dict with no 'id' key raised KeyError. The guard is now
+    `if 'id' in flair and flair['id']:`, which sends an entry that names no
+    usable id down the same else arm an entry with an EMPTY id already took:
+    derive the ap_id locally via get_ap_id(). Nothing about the entry is
+    dropped -- what is skipped is the peer's id, not the flair -- and the
+    skip is logged so the substitution is not silent.
 
-    Call-site analysis (corrected after review -- an earlier pass wrongly
-    attributed this to actor_json_to_model; the trigger is a different
-    function): refresh_community_profile_task's legacy 'lemmy:tagsForPosts'
-    handling (app/activitypub/util.py, the block guarded by `if
-    len(community.flair) == 0` inside `'lemmy:tagsForPosts' in activity_json
-    and ... "tag" not in activity_json`) builds `flair_dict =
+    Why this mattered: refresh_community_profile_task's legacy
+    'lemmy:tagsForPosts' handling (the block guarded by
+    `if len(community.flair) == 0` inside `'lemmy:tagsForPosts' in
+    activity_json and ... "tag" not in activity_json`) builds `flair_dict =
     {'display_name': flair['display_name']}` plus optional
-    text_color/background_color/blur_images -- NEVER an 'id' key. Contrast
-    actor_json_to_model's OWN 'lemmy:tagsForPosts' handling a few hundred
-    lines later, which conditionally copies 'id' across (`if 'id' in flair:
-    flair_dict['id'] = flair['id']`) and so cannot hit this KeyError through
-    that key at all.
+    text_color/background_color/blur_images -- NEVER an 'id' key. That task
+    commits the community's refreshed profile fields BEFORE running the
+    loop, so the KeyError was a partially-applied ingest: a committed
+    community, no flair, and an exception at the caller. Contrast
+    actor_json_to_model's OWN 'lemmy:tagsForPosts' handling, which
+    conditionally copies 'id' across (`if 'id' in flair: flair_dict['id'] =
+    flair['id']`) and so could not reach the KeyError through that key.
 
-    The two functions also differ in the session -- and therefore the
-    autoflush behaviour -- they call find_flair_or_create with, and that
-    difference is why the crash mechanism only holds in one of them.
+    The two callers also differ in the session -- and therefore the
+    autoflush behaviour -- they pass, and that difference is the whole
+    reason the crash held in one of them and not the other.
     refresh_community_profile_task takes its session from
     get_task_session(), which returns a plain `sqlalchemy.orm.Session(bind=
     db.engine)` (app/utils.py) with no autoflush override, so it defaults to
@@ -505,44 +508,132 @@ class TestSuspectedMissingIdKeyCrash:
     `session_options={"autoflush": False}` (app/__init__.py). Because
     refresh_community_profile_task's session autoflushes, two entries in the
     SAME peer-supplied 'lemmy:tagsForPosts' list sharing one display_name
-    reach this KeyError without needing a second activity or delivery: the
-    first entry's call creates a CommunityFlair with ap_id=None (since
-    new_ap_id is None whenever 'id' is absent from flair_dict) and it is
-    visible to the second entry's query via autoflush despite never being
-    explicitly flushed or committed; the second entry's call finds that
-    just-created row by display_name, sees its ap_id is still falsy, and
-    crashes reading flair['id'] from a dict that was never given one.
-    refresh_community_profile_task wraps its whole body in `try: ... except
-    Exception: session.rollback(); raise finally: session.close()`, so the
-    crash rolls back cleanly and closes the task's session rather than
-    leaking a broken transaction, then re-raises -- this task did not trace
-    which Celery layer above that ultimately catches the re-raised
-    exception, but the crash is at minimum an availability defect (that
-    community's periodic profile refresh fails) rather than an
-    authentication or authorization bypass, the same category as
-    find_community's two recorded KeyError/AttributeError defects in
-    tests/test_ap_find_community.py.
+    were enough, with no second activity or delivery: the first entry's call
+    adds a CommunityFlair with ap_id=None (new_ap_id is None whenever 'id'
+    is absent from flair_dict), autoflush makes that pending insert visible
+    to the second entry's query, and the second call finds it, sees the
+    falsy ap_id, and read the key that was not there.
 
-    Is this reachable from actor_json_to_model by some OTHER route, given
-    that its own 'lemmy:tagsForPosts' handling copies 'id' when present? Two
-    reasons say no, for its current call sites: first, actor_json_to_model
-    only reaches its tag-processing block when the Community row was JUST
-    newly inserted (the preceding `try: db.session.add(community);
-    db.session.commit() except IntegrityError: ... return ...` returns
-    immediately for an already-existing community, before the tag block),
-    so there is never a pre-existing, already-persisted CommunityFlair row
-    for that community_id for a name-based lookup to find. Second, even
-    within that one call, db.session's autoflush=False means a same-call
-    duplicate-name collision (the mechanism that works for
-    refresh_community_profile_task) does not expose an unflushed insert to
-    a later iteration's query -- so no in-loop trigger either, including in
-    the sibling 'tag'/CommunityPostTag branch (whose entries are copied
-    verbatim as flair_dict = flair and so could themselves lack 'id').
+    test_two_entries_sharing_a_name_under_autoflush_derive_a_local_ap_id
+    reproduces exactly that, on a real get_task_session(). Its companion
+    test_the_same_two_entries_under_autoflush_off_never_form_the_collision
+    is why it has to: run the identical list against db.session and no
+    collision forms at all, so a test written only against db.session goes
+    green on the defective code and characterises nothing. That companion
+    also records a SEPARATE consequence of the same autoflush asymmetry,
+    reported and not fixed here: under autoflush=False the two entries
+    produce two CommunityFlair rows with the same name for the same
+    community, because neither call can see the other's pending insert.
+
+    Is the backfill reachable from actor_json_to_model by some OTHER route,
+    given that its own 'lemmy:tagsForPosts' handling copies 'id' when
+    present? Two reasons say no, for its current call sites: first,
+    actor_json_to_model only reaches its tag-processing block when the
+    Community row was JUST newly inserted (the preceding `try:
+    db.session.add(community); db.session.commit() except IntegrityError:
+    ... return ...` returns immediately for an already-existing community,
+    before the tag block), so there is never a pre-existing,
+    already-persisted CommunityFlair row for that community_id for a
+    name-based lookup to find. Second, even within that one call,
+    db.session's autoflush=False means a same-call duplicate-name collision
+    does not expose an unflushed insert to a later iteration's query -- so
+    no in-loop trigger either, including in the sibling
+    'tag'/CommunityPostTag branch (whose entries are copied verbatim as
+    flair_dict = flair and so could themselves lack 'id').
+
+    Mutation, both directions, on `if 'id' in flair and flair['id']:`:
+
+    - narrowed back to `if flair['id']:` (deleting the guard): the KeyError
+      returns. All three tests below fail.
+    - broadened to `if 'id' in flair or flair['id']:` -- or to a bare
+      `True`: the else arm becomes unreachable for an entry with an empty
+      'id', which is what
+      TestApIdBackfill.test_ap_id_is_derived_via_get_ap_id_when_flairs_id_is_falsy
+      already pins.
     """
 
-    def test_missing_id_key_with_no_existing_ap_id_raises_keyerror(self, app, db_session):
+    def test_an_entry_with_no_id_key_derives_the_ap_id_instead_of_raising(self, app, db_session):
+        """The guard in isolation, on the default session: an existing row
+        with a null ap_id and a dict carrying no 'id' at all. The assertion
+        is on the value that landed in the column, not merely that nothing
+        raised -- a fix that returned early, or that skipped the whole
+        backfill, would leave ap_id None and fail it."""
         seed_community_owner()
-        community = make_community('missingidcrash')
-        make_community_flair(community, name='crashme', ap_id=None)
-        with pytest.raises(KeyError):
-            find_flair_or_create({'preferredUsername': 'crashme'}, community.id)
+        community = make_community('missingidbackfill')
+        existing = make_community_flair(community, name='noidkey', ap_id=None)
+        result = find_flair_or_create({'preferredUsername': 'noidkey'}, community.id)
+        db.session.commit()
+        assert result.id == existing.id
+        assert result.ap_id == community.local_url() + f"/tag/{existing.id}"
+        assert CommunityFlair.query.filter_by(community_id=community.id).count() == 1
+
+    def test_two_entries_sharing_a_name_under_autoflush_derive_a_local_ap_id(self, app, db_session):
+        """The reachable path, reproduced on the session the reachable
+        caller actually uses.
+
+        The list is the shape refresh_community_profile_task builds: three
+        legacy entries, none with an 'id', two of them sharing one
+        display_name. On get_task_session()'s autoflush=True session the
+        first 'Discussion' entry's pending insert is visible to the second
+        entry's query, so the second call lands on the backfill with no
+        'id' to read -- the exact collision that used to raise KeyError
+        after the caller had already committed.
+
+        The row counts are what make this stronger than 'nothing raised':
+        two rows, not one (a fix that abandoned the loop or the second entry
+        would give one) and not three (autoflush is genuinely deduplicating
+        by name, which is what distinguishes this from the companion test
+        below).
+        """
+        seed_community_owner()
+        community = make_community('autoflushbackfill')
+        entries = [{'display_name': 'Discussion'},
+                   {'display_name': 'Discussion'},
+                   {'display_name': 'Meta'}]
+
+        session = get_task_session()
+        try:
+            returned = [find_flair_or_create(entry, community.id, session) for entry in entries]
+            session.commit()
+        finally:
+            session.close()
+
+        assert all(flair is not None for flair in returned)
+        db.session.rollback()
+        rows = CommunityFlair.query.filter_by(community_id=community.id) \
+            .order_by(CommunityFlair.flair).all()
+        assert [row.flair for row in rows] == ['Discussion', 'Meta']
+        discussion, meta = rows
+        # The colliding entry took the derive arm; the entry that created its
+        # own row never reaches the backfill at all, so its ap_id stays null.
+        assert discussion.ap_id == community.local_url() + f"/tag/{discussion.id}"
+        assert meta.ap_id is None
+
+    def test_the_same_two_entries_under_autoflush_off_never_form_the_collision(self, app, db_session):
+        """Why the test above cannot be written against db.session.
+
+        Identical input, default session, autoflush=False: the first
+        entry's insert is still pending and invisible, so the second
+        entry's query finds nothing and CREATES a second row rather than
+        reaching the backfill. This test therefore passed against the
+        DEFECTIVE code exactly as it passes now -- it is here to record
+        that, not to characterise the guard.
+
+        PINS PRESENT BEHAVIOUR, NOT DESIRED BEHAVIOUR for the count: two
+        rows named 'Discussion' for one community is duplicate flair, a
+        consequence of the same autoflush asymmetry. Reported in this
+        campaign's findings and deliberately not fixed here.
+        """
+        seed_community_owner()
+        community = make_community('noautoflushbackfill')
+        entries = [{'display_name': 'Discussion'},
+                   {'display_name': 'Discussion'},
+                   {'display_name': 'Meta'}]
+
+        returned = [find_flair_or_create(entry, community.id) for entry in entries]
+        db.session.commit()
+
+        assert all(flair is not None for flair in returned)
+        rows = CommunityFlair.query.filter_by(community_id=community.id).all()
+        assert sorted(row.flair for row in rows) == ['Discussion', 'Discussion', 'Meta']
+        assert all(row.ap_id is None for row in rows)
