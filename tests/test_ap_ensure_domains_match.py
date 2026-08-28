@@ -107,11 +107,10 @@ class TestActorTakesPrecedenceOverAttributedTo:
         }) is False
 
 
-class TestSuspectedNetlocDefect:
-    """The spec records that this function compares `urlparse(...).netloc`,
-    not `.hostname`. `netloc` carries userinfo and port, and the tests below
-    pin CURRENT behaviour for that -- they are NOT asserting that this is the
-    intended or correct behaviour. Confirmed with a direct probe:
+class TestHostComparisonIgnoresUserinfoAndPort:
+    """This function now compares `host_of(...)` (urlparse's `.hostname`),
+    not `urlparse(...).netloc`. `netloc` carries userinfo and port, neither
+    of which identifies the host. Confirmed with a direct probe:
 
         https://peer.example/x                       netloc=peer.example
         https://peer.example@attacker.example/x       netloc=peer.example@attacker.example  hostname=attacker.example
@@ -120,17 +119,16 @@ class TestSuspectedNetlocDefect:
     `hostname` is derived purely from `netloc`'s own string (userinfo and
     port stripped, then lowercased), which makes it impossible for two
     inputs with an EQUAL `netloc` to ever have a DIFFERENT `hostname` -- the
-    string that decided the match also decides the would-be-correct answer.
-    So userinfo cannot make this function ACCEPT (return True for) two
-    genuinely different real hosts; every construction tried here that
-    reaches `True` has the same real host (by hostname) on both sides too.
-    What userinfo actually does, demonstrated below, is let one side's
-    netloc carry an embedded, unrelated-looking domain token (the userinfo)
-    while the two sides still match on their real host -- current code does
-    not strip or validate that token at all, it is just along for the ride.
-    Reported as a suspected defect, not fixed here. See the call-site
-    analysis in the task report for whether it is reachable by a peer.
-    """
+    string that decided the old match also decides the new one. So userinfo
+    never made this function ACCEPT (return True for) two genuinely
+    different real hosts; every construction below that reaches `True` has
+    the same real host (by hostname) on both sides too. What userinfo does,
+    demonstrated below, is let one side's netloc carry an embedded,
+    unrelated-looking domain token (the userinfo) while the two sides still
+    match on their real host -- the comparison does not strip or validate
+    that token, it is just along for the ride. The port case is the one
+    place the switch to `hostname` changes the boolean outcome: a legitimate
+    peer serving its inbox on a non-default port is no longer rejected."""
 
     def test_userinfo_is_carried_whole_into_a_still_matching_comparison(self, app):
         """id and actor are both truly hosted on attacker.example (that is
@@ -165,15 +163,31 @@ class TestSuspectedNetlocDefect:
             'actor': 'https://peer.example/u/alice',
         }) is False
 
-    def test_a_port_makes_the_same_host_compare_unequal(self, app):
-        """id's netloc is 'peer.example:8443' and actor's netloc is the bare
-        host 'peer.example'. hostname-based comparison would see the SAME
-        host and accept; netloc-based comparison sees different strings and
-        refuses -- a legitimate peer serving its inbox on a non-default port
-        would be rejected by this function today. This is the one case in
-        this class where netloc and hostname genuinely disagree on the
-        boolean outcome."""
+    def test_a_port_does_not_make_the_same_host_compare_unequal(self, app):
+        """id's host is 'peer.example:8443' and actor's host is the bare
+        host 'peer.example'. hostname-based comparison sees the SAME host
+        (the port is not part of it) and accepts -- a legitimate peer
+        serving its inbox on a non-default port is no longer rejected. This
+        is the one case in this class where netloc and hostname would have
+        disagreed on the boolean outcome; hostname is authoritative now."""
         assert ensure_domains_match({
             'id': 'https://peer.example:8443/activities/1',
             'actor': 'https://peer.example/u/alice',
+        }) is True
+
+
+class TestUnparseableHostsAreNeverTreatedAsMatching:
+    """host_of degrades to '' when urlparse rejects a netloc (an unbalanced
+    IPv6 bracket, here). '' is deliberately not None, because the two
+    failed-parse results must not compare equal to each other -- otherwise
+    two documents that each supply a host urlparse refuses would be accepted
+    as a matching pair. Mutation that fails this: replacing
+    `if id_domain and id_domain == actor_domain:` with
+    `if id_domain == actor_domain:` in ensure_domains_match, which drops the
+    truthiness guard and lets two '' results compare equal."""
+
+    def test_two_unparseable_hosts_are_refused_not_matched(self, app):
+        assert ensure_domains_match({
+            'id': 'https://[unbalanced/activities/1',
+            'actor': 'https://[also-unbalanced/u/alice',
         }) is False

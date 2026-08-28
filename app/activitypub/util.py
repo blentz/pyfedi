@@ -561,6 +561,28 @@ def remove_outdated_community_flair(community: Community, keep_ap_ids: set, keep
         session.delete(flair)
 
 
+def host_of(url_string: str) -> str:
+    """The lowercased host of a URL, or '' when it has none.
+
+    RFC 3986 section 3.2: the authority may carry userinfo and a port, neither
+    of which identifies the host. urlparse's `hostname` strips both and
+    lowercases what is left; `netloc` does not, which is the defect this
+    closes at every call site.
+
+    Every string reaching this function is chosen by a remote peer, and
+    urlparse raises ValueError on a netloc it refuses -- an unbalanced IPv6
+    bracket, two '::' runs, a host failing its NFKC confusability check. We
+    degrade to '' rather than propagate, matching extract_domain_and_actor.
+
+    '' rather than None is deliberate: callers compare two of these, and two
+    failed parses must not compare equal to each other.
+    """
+    try:
+        return urlparse(url_string).hostname or ''
+    except ValueError:
+        return ''
+
+
 def extract_domain_and_actor(url_string: str):
     # Parse the URL
     if url_string.endswith('/'):  # WordPress
@@ -3915,12 +3937,10 @@ def ensure_domains_match(activity: dict) -> bool:
                     break
 
     if note_id and note_actor:
-        parsed_url = urlparse(note_id)
-        id_domain = parsed_url.netloc
-        parsed_url = urlparse(note_actor)
-        actor_domain = parsed_url.netloc
+        id_domain = host_of(note_id)
+        actor_domain = host_of(note_actor)
 
-        if id_domain == actor_domain:
+        if id_domain and id_domain == actor_domain:
             return True
 
     return False
