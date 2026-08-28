@@ -739,15 +739,17 @@ class TestTheme:
     """`if 'theme' in activity_json and activity_json['theme']:
     community.theme = activity_json['theme']`.
 
-    Mutation that fails test_absent_theme_leaves_the_default: dropping the
-    `'theme' in activity_json` operand, which turns an absent theme into a
-    KeyError.
+    Both operands are pinned:
 
-    The OTHER operand -- the truthiness test -- has no mutation named against
-    it, deliberately: the column's own default is '', which is exactly what
-    dropping it would write for `{'theme': ''}`, so no assertion this harness
-    can make distinguishes the two. test_empty_theme_is_not_copied is here to
-    execute that arm, not to claim it is pinned.
+    - dropping `'theme' in activity_json` turns an absent theme into a KeyError,
+      which test_absent_theme_leaves_the_default catches.
+    - dropping the truthiness test lets a falsy value through to the column,
+      which test_falsy_non_string_theme_is_not_copied catches. The empty string
+      is the ONE falsy value that cannot catch it -- '' is also the column's
+      default, so both sides of the mutation store the same thing -- and a JSON
+      null is the other. Every other falsy value a peer can send in JSON is
+      distinguishable, because the String column coerces it to a non-empty
+      string on the way in.
     """
 
     def test_theme_is_copied(self, app, db_session):
@@ -759,6 +761,18 @@ class TestTheme:
     def test_empty_theme_is_not_copied(self, app, db_session):
         _peer_instance()
         document = _group('memes', fields={'theme': ''})
+        community = actor_json_to_model(document, '!memes', PEER)
+        assert community.theme == ''
+
+    def test_falsy_non_string_theme_is_not_copied(self, app, db_session):
+        """This is what pins the truthiness operand. A JSON `false` is falsy, so
+        the guard skips it and the column keeps its '' default; drop the operand
+        and the same value reaches a String column, which stores it as the
+        four-character string 'false'. Any falsy JSON value except '' and null
+        works the same way -- 0 becomes '0', [] becomes '{}' -- because the
+        column coerces them all to something non-empty on the way in."""
+        _peer_instance()
+        document = _group('memes', fields={'theme': False})
         community = actor_json_to_model(document, '!memes', PEER)
         assert community.theme == ''
 
