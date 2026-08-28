@@ -436,6 +436,24 @@ def hide_post(user: User, post: Post) -> None:
     db.session.commit()
 
 
+def make_community_flair(community: Community, name: str = 'flair', ap_id: str = None) -> CommunityFlair:
+    """A CommunityFlair scoped to `community`, with no post attached.
+
+    find_flair_or_create (app/activitypub/util.py) resolves and updates
+    CommunityFlair rows at the community level only -- it never reads or
+    writes Post.flair -- so tests targeting it need just this, not the
+    Post (and the User and Community a Post drags in) that make_post_flair
+    below builds solely to reach the post_flair attachment step
+    find_flair_or_create never touches. make_post_flair is written in terms
+    of this factory rather than duplicating the CommunityFlair construction
+    a second time.
+    """
+    flair = CommunityFlair(community_id=community.id, flair=name, ap_id=ap_id)
+    db.session.add(flair)
+    db.session.commit()
+    return flair
+
+
 def make_post_flair(post: Post, name: str = 'flair') -> CommunityFlair:
     """A CommunityFlair scoped to `post`'s community, attached to `post`.
 
@@ -446,9 +464,7 @@ def make_post_flair(post: Post, name: str = 'flair') -> CommunityFlair:
     blocked-flair filter reads `post_flair` directly (`SELECT post_id FROM
     "post_flair" WHERE flair_id IN :blocked_flair_ids`, app/utils.py:3923).
     """
-    flair = CommunityFlair(community_id=post.community_id, flair=name)
-    db.session.add(flair)
-    db.session.commit()
+    flair = make_community_flair(post.community, name)
     post.flair.append(flair)
     db.session.commit()
     return flair
