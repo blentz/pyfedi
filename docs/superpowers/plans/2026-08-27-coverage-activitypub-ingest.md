@@ -445,27 +445,35 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-### Tasks 6, 7 and 8: `actor_json_to_model`, split by actor type
-
-**Files:**
-- Test: `tests/test_ap_actor_json_person.py` (Task 6), `tests/test_ap_actor_json_group.py` (Task 7), `tests/test_ap_actor_json_feed.py` (Task 8)
-- Modify: `tests/factories.py` if a shared peer-actor document builder is warranted
-
-**Interfaces:**
-- Consumes: `make_instance` and a peer actor JSON fixture. **Task 6 produces the shared base document; Tasks 7 and 8 consume it.** Name it explicitly in Task 6's report so the later tasks can find it.
-- Signature: `actor_json_to_model(activity_json, address, server)`.
+## `actor_json_to_model` is split across Tasks 6, 7 and 8
 
 This is the largest single function this campaign has targeted — 194 uncovered statements across roughly 372 lines, with three top-level branches on `activity_json['type']`:
 
-| task | branch | produces |
-|---|---|---|
-| 6 | `'Person'` or `'Service'` | a `User` |
-| 7 | `'Group'` | a `Community` |
-| 8 | `'Feed'` | a `Feed` |
+| task | branch | produces | test file |
+|---|---|---|---|
+| 6 | `'Person'` or `'Service'` | a `User` | `tests/test_ap_actor_json_person.py` |
+| 7 | `'Group'` | a `Community` | `tests/test_ap_actor_json_group.py` |
+| 8 | `'Feed'` | a `Feed` | `tests/test_ap_actor_json_feed.py` |
 
-Two guards run before the type branch, and **both belong to Task 6** since it goes first: `'type' not in activity_json` returns `None`, and `server not in activity_json['id']` returns `None`.
+Signature in all three: `actor_json_to_model(activity_json, address, server)`.
 
-- [ ] **Step 1 (Task 6 only): probe and report the suspected substring defect**
+---
+
+### Task 6: `actor_json_to_model` — Person and Service
+
+**Files:**
+- Test: `tests/test_ap_actor_json_person.py` (create)
+- Modify: `tests/factories.py` — add the shared peer-actor document builder
+
+**Interfaces:**
+- Consumes: `make_instance` from `tests/factories.py`.
+- Produces: **the shared peer-actor document builder that Tasks 7 and 8 consume.** Name it explicitly in your report so they can find it, and give it a shape that suits all three actor types rather than only Person.
+
+Two guards run before the type branch and **both belong to this task**, since it goes first: `'type' not in activity_json` returns `None`, and `server not in activity_json['id']` returns `None`.
+
+This task also covers `Person` versus `Service` — the latter sets `bot=True` — and the `PropertyValue` attachment handling.
+
+- [ ] **Step 1: probe and report the suspected substring defect**
 
 The second guard is a substring test, not a host comparison. Probed at spec time:
 
@@ -501,24 +509,134 @@ Then restrict to your branch's line span. Put the enumeration in your report; th
 
 Each optional field needs both: present with a value, and absent so the default applies. A test that always supplies every field exercises none of the defaults, while branch coverage reports the `if`s as covered.
 
-Also cover, per branch:
+Also cover:
 - the actor already exists (looked up by `ap_profile_id`) and is returned without creating a second
 - the actor does not exist and is created
 - required fields missing — establish what happens and pin it
-
-Task 6 additionally covers: `'type'` absent → `None`; `server` not in `id` → `None`; `Person` versus `Service` (the latter sets `bot=True`); and the `PropertyValue` attachment handling.
+- `'type'` absent → `None`
+- `server` not in `id` → `None`
+- `Person` versus `Service`, the latter setting `bot=True`
+- the `PropertyValue` attachment handling
 
 - [ ] **Step 4: Both mutation directions**
 
-Target your branch's type test and one optional-field guard. Report counts. Expect the type test's over-broadening to be wide — it redirects control to a different actor type entirely — and pair it with the narrow mutation on the same guard.
+Target the `Person`/`Service` type test and one optional-field guard. Report counts. Expect the type test's over-broadening to be wide — it redirects control to a different actor type entirely — and pair it with the narrow mutation on the same guard.
 
 - [ ] **Step 5: Confirm coverage and commit**
 
-Confirm your branch's span is fully covered. The three tasks together must leave `actor_json_to_model` with no uncovered statements; Task 8 confirms the whole function.
+Confirm the Person/Service branch and the two pre-branch guards are fully covered.
 
 ```bash
-git add tests/test_ap_actor_json_<type>.py tests/factories.py
-git commit -m "test: cover actor_json_to_model's <Type> branch
+git add tests/test_ap_actor_json_person.py tests/factories.py
+git commit -m "test: cover actor_json_to_model's Person and Service branch
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 7: `actor_json_to_model` — Group
+
+**Files:**
+- Test: `tests/test_ap_actor_json_group.py` (create)
+
+**Interfaces:**
+- Consumes: `make_instance`, and **the shared peer-actor document builder Task 6 added to `tests/factories.py`** — read Task 6's report for its name and signature rather than writing a second one.
+- Signature: `actor_json_to_model(activity_json, address, server)`.
+
+The `'Group'` branch produces a `Community`. The two pre-branch guards belong to Task 6 and are already covered — do not duplicate them.
+
+- [ ] **Step 1: Enumerate the Group branch's optional fields with a command**
+
+```bash
+podman-compose -f compose.test.yaml exec -T -w /app test-runner python -c "
+import ast
+src = open('app/activitypub/util.py').read()
+for n in ast.walk(ast.parse(src)):
+    if isinstance(n, ast.FunctionDef) and n.name == 'actor_json_to_model':
+        for s in ast.walk(n):
+            if isinstance(s, ast.If):
+                print('If at', s.lineno, 'orelse=', len(s.orelse))
+"
+```
+
+Restrict to the Group branch's span. Put the enumeration in your report; the number of optional fields determines how many tests you need, and guessing it is how seven counts in this campaign came out wrong.
+
+- [ ] **Step 2: Cover present-and-absent for every optional field**
+
+Each optional field needs both: present with a value, and absent so the default applies. A test that always supplies every field exercises none of the defaults, while branch coverage reports the `if`s as covered.
+
+Also cover:
+- the community already exists (looked up by `ap_profile_id`) and is returned without creating a second
+- the community does not exist and is created
+- required fields missing — establish what happens and pin it
+- the `lemmy:tagsForPosts` flair handling, which calls `find_flair_or_create`
+
+- [ ] **Step 3: Both mutation directions**
+
+Target the `'Group'` type test and one optional-field guard. Report counts, and pair the wide mutation with the narrow one on the same guard.
+
+- [ ] **Step 4: Confirm coverage and commit**
+
+```bash
+git add tests/test_ap_actor_json_group.py
+git commit -m "test: cover actor_json_to_model's Group branch
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 8: `actor_json_to_model` — Feed, and whole-function confirmation
+
+**Files:**
+- Test: `tests/test_ap_actor_json_feed.py` (create)
+
+**Interfaces:**
+- Consumes: `make_instance`, and **the shared peer-actor document builder Task 6 added to `tests/factories.py`** — read Task 6's report for its name and signature rather than writing a second one.
+- Signature: `actor_json_to_model(activity_json, address, server)`.
+
+The `'Feed'` branch produces a `Feed`. The two pre-branch guards belong to Task 6 — do not duplicate them.
+
+- [ ] **Step 1: Enumerate the Feed branch's optional fields with a command**
+
+```bash
+podman-compose -f compose.test.yaml exec -T -w /app test-runner python -c "
+import ast
+src = open('app/activitypub/util.py').read()
+for n in ast.walk(ast.parse(src)):
+    if isinstance(n, ast.FunctionDef) and n.name == 'actor_json_to_model':
+        for s in ast.walk(n):
+            if isinstance(s, ast.If):
+                print('If at', s.lineno, 'orelse=', len(s.orelse))
+"
+```
+
+Restrict to the Feed branch's span. Put the enumeration in your report.
+
+- [ ] **Step 2: Cover present-and-absent for every optional field**
+
+Each optional field needs both: present with a value, and absent so the default applies.
+
+Also cover:
+- the feed already exists (looked up by `ap_profile_id`) and is returned without creating a second
+- the feed does not exist and is created
+- required fields missing — establish what happens and pin it
+- an unrecognised `type` value, which falls past all three branches — establish what the function returns and pin it
+
+- [ ] **Step 3: Both mutation directions**
+
+Target the `'Feed'` type test and one optional-field guard. Report counts, and pair the wide mutation with the narrow one on the same guard.
+
+- [ ] **Step 4: Confirm the WHOLE function is covered**
+
+This is the last of the three. Run coverage over `actor_json_to_model` in full — not just the Feed branch — and confirm the three tasks together leave no uncovered statement or branch. Report the figure and any residue, with a documented reason for anything that cannot be reached.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tests/test_ap_actor_json_feed.py
+git commit -m "test: cover actor_json_to_model's Feed branch and confirm the whole function
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
