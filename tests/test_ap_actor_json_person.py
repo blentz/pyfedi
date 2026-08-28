@@ -89,8 +89,9 @@ above, `== 'Person' or == 'Service'` and `if user:`, are not in this list):
     user.cover_id and get_setting('cache_remote_images_locally', True)
 
 The first two `if`s in the function body -- `'type' not in activity_json` and
-`server not in activity_json['id']` -- are not optional fields but guards that
-return None, and are covered by TestTypeGuard and TestServerInIdGuard below.
+the comparison of the id's host against `server` -- are not optional fields but
+guards that return None, and are covered by TestTypeGuard and
+TestIdHostMatchesServerGuard below.
 
 Every test builds the peer's Instance row first with peer_instance. Without it
 find_instance_id inserts a sparse Instance and then calls new_instance_profile,
@@ -139,21 +140,20 @@ class TestTypeGuard:
         assert isinstance(result, User)
 
 
-class TestServerInIdGuard:
-    """`if server not in activity_json['id']: return None`.
+class TestIdHostMatchesServerGuard:
+    """`if host_of(activity_json['id']) != host_of(f'//{server}'): return None`.
 
-    SUSPECTED DEFECT -- this is a substring test, not a host comparison, and
-    the tests below pin the current behaviour rather than the intended one.
-    A document whose id lives on a completely different host is accepted as
-    long as the `server` string appears anywhere in that id: as a domain
-    prefix ('good.example' inside 'good.example.attacker.net') or merely in
-    the query string ('?ref=good.example' on attacker.net). Both are the same
-    shape as the substring gate that produced a stored denial of service
-    earlier in this campaign.
+    The guard asks whether the id's HOST is the server. It used to ask whether
+    the `server` string appeared anywhere in the id, which two shapes of id
+    satisfied without living on that host at all: a suffix-extended host
+    ('good.example' inside 'good.example.attacker.net') and a query parameter
+    ('?ref=good.example' on attacker.net). Both are pinned below, now as
+    rejections. That substring shape is the same one that produced a stored
+    denial of service earlier in this campaign.
 
-    Severity, established from the call sites rather than from the shape:
-    `server` is never peer-supplied. Every caller derives it locally from the
-    address it is resolving --
+    Severity of what was closed, established from the call sites rather than
+    from the shape: `server` is never peer-supplied. Every caller derives it
+    locally from the address it is resolving --
 
       app/activitypub/actor.py's create_actor_from_remote takes it from
       extract_domain_and_actor(url) for a URL, or normalise_actor_string(handle)
@@ -166,20 +166,29 @@ class TestServerInIdGuard:
       ap_json['id'] as the new query whenever query != ap_json['id'], so by the
       time it calls actor_json_to_model the two already agree exactly.
 
-    So a peer cannot choose the `server` it is checked against, and cannot use
-    this to be admitted as an actor of an instance it does not control. What it
-    CAN do is mint a row whose ap_public_url/ap_profile_id point at a host that
-    is not the one PieFed fetched from and not the one recorded in ap_id,
-    ap_domain and instance_id -- cross-host actor smuggling that needs the
-    fetched peer's cooperation. The two tests below assert exactly that split
-    row, which is what makes the weakness observable rather than theoretical.
-    Reported, not fixed.
+    So a peer could not choose the `server` it was checked against, and could
+    not use this to be admitted as an actor of an instance it does not control.
+    What it COULD do is mint a row whose ap_public_url/ap_profile_id point at a
+    host that is neither the one PieFed fetched from nor the one recorded in
+    ap_id, ap_domain and instance_id -- cross-host actor smuggling that needed
+    the fetched peer's cooperation. That split row is what the two rejection
+    tests below now assert can no longer be created.
 
-    Mutation that fails test_id_on_a_different_host_is_rejected: deleting the
-    guard, or widening it to `if False`. Mutations that would fail the two
-    defect tests are the FIXES (comparing urlparse(id).netloc to server), which
-    is why those tests say "suspected defect" in their names -- they are a
-    record of today's behaviour, and a fix is expected to rewrite them.
+    Both sides of the comparison go through host_of, which is what makes it
+    symmetric: `server` is an authority and may carry a port, so comparing it
+    raw against a host would reintroduce the same class of mistake.
+    test_server_carrying_a_port_matches_an_id_on_that_port is the test that
+    fails if either side stops being normalised.
+
+    Mutation, both directions. Deleting the guard, or widening it to `if
+    False`, fails the three rejection tests and says nothing about the
+    acceptance tests, whose documents the deleted code never refused.
+    Narrowing it to `if True` fails the three acceptance tests and says nothing
+    about the rejection tests. Dropping the '//' from the `server` side makes
+    host_of return '' for every server -- urlparse reads an authority-less
+    string as a path -- so every document is refused and the acceptance tests
+    fail. Comparing `urlparse(...).netloc` instead of `hostname` on both sides
+    fails only test_server_carrying_a_port_matches_an_id_on_that_port.
     """
 
     def test_id_on_a_different_host_is_rejected(self, app, db_session):
@@ -196,42 +205,60 @@ class TestServerInIdGuard:
         assert user.ap_profile_id == 'https://good.example/u/alice'
         assert user.ap_domain == 'good.example'
 
-    def test_suspected_defect_subdomain_suffix_passes_the_substring_test(self, app, db_session):
+    def test_suffix_extended_host_is_rejected(self, app, db_session):
         """'good.example' is a substring of 'good.example.attacker.net', whose
-        real host is attacker.net's subdomain and not good.example at all."""
+        real host is a subdomain of attacker.net and not good.example at all.
+        The old substring gate admitted it and produced a User whose
+        ap_profile_id pointed at attacker.net while its ap_domain and ap_id
+        said good.example."""
         peer_instance('good.example')
         document = peer_actor_json(
             name='alice', server='good.example',
             fields={'id': 'https://good.example.attacker.net/u/alice'})
-        user = actor_json_to_model(document, 'alice', 'good.example')
-        assert user is not None
-        assert user.ap_profile_id == 'https://good.example.attacker.net/u/alice'
-        # the row that results claims one host and points at another
-        assert user.ap_domain == 'good.example'
-        assert user.ap_id == 'alice@good.example'
+        assert actor_json_to_model(document, 'alice', 'good.example') is None
+        assert db.session.query(User).count() == 0
 
-    def test_upper_cased_host_in_the_id_is_rejected(self, app, db_session):
-        """The substring test is case-sensitive as well as host-blind, so a
-        peer that publishes its own id with an upper-cased host is refused
-        even though the host is the right one. Pins current behaviour: the
-        same rewrite that would fix the two defect tests above (comparing
-        urlparse(id).netloc.lower() to server) also fixes this."""
+    def test_upper_cased_host_in_the_id_is_accepted(self, app, db_session):
+        """A host is case-insensitive, so a peer that publishes its own id with
+        an upper-cased host is publishing the right host. The old substring
+        gate was case-sensitive and refused it; host_of lowercases, so both
+        sides now agree.
+
+        The row keeps the id exactly as published in ap_public_url -- the guard
+        normalises only for the comparison -- while ap_profile_id is lowercased
+        by the branch itself."""
         peer_instance('good.example')
         document = peer_actor_json(name='alice', server='good.example',
                                    fields={'id': 'https://GOOD.EXAMPLE/u/alice'})
-        assert actor_json_to_model(document, 'alice', 'good.example') is None
+        user = actor_json_to_model(document, 'alice', 'good.example')
+        assert user is not None
+        assert user.ap_public_url == 'https://GOOD.EXAMPLE/u/alice'
+        assert user.ap_profile_id == 'https://good.example/u/alice'
 
-    def test_suspected_defect_query_string_mention_passes_the_substring_test(self, app, db_session):
+    def test_server_name_only_in_the_query_string_is_rejected(self, app, db_session):
         """The server name appears only in the query string; the real host is
-        attacker.net."""
+        attacker.net. The old substring gate admitted this too."""
         peer_instance('good.example')
         document = peer_actor_json(
             name='alice', server='good.example',
             fields={'id': 'https://attacker.net/u/x?ref=good.example'})
-        user = actor_json_to_model(document, 'alice', 'good.example')
+        assert actor_json_to_model(document, 'alice', 'good.example') is None
+        assert db.session.query(User).count() == 0
+
+    def test_server_carrying_a_port_matches_an_id_on_that_port(self, app, db_session):
+        """`server` is an authority, not a host, and a development or private
+        peer reaches these call sites with its port attached. Both sides go
+        through host_of, which drops the port from each, so the two agree.
+
+        This is the test that the '//' prefix and the choice of hostname over
+        netloc are both load-bearing for: without the prefix the server side
+        parses as a path and yields '', and with netloc the two sides would
+        only agree while the port text matched character for character."""
+        peer_instance('peer.example:8443')
+        document = peer_actor_json(name='alice', server='peer.example:8443')
+        user = actor_json_to_model(document, 'alice', 'peer.example:8443')
         assert user is not None
-        assert user.ap_public_url == 'https://attacker.net/u/x?ref=good.example'
-        assert user.ap_domain == 'good.example'
+        assert user.ap_public_url == 'https://peer.example:8443/u/alice'
 
 
 class TestPersonAndService:
@@ -315,10 +342,10 @@ class TestPersonAndService:
     def test_lookup_of_an_existing_user_lowercases_the_id(self, app, db_session):
         """The lookup compares against id.lower(), so a peer that upper-cases
         the path of its own id on a later fetch still matches the stored row.
-        Only the path is varied here: the host cannot be, because the
-        `server not in activity_json['id']` guard above is a case-sensitive
-        substring test and rejects the document before the lookup runs --
-        see test_upper_cased_host_in_the_id_is_rejected below."""
+        Only the path is varied here, to keep this test about the lookup: the
+        host guard above lowercases the host on both sides before comparing,
+        so an upper-cased host reaches the lookup too and is covered there by
+        test_upper_cased_host_in_the_id_is_accepted."""
         instance = peer_instance(PEER)
         existing = make_user(instance, 'alice')
         document = peer_actor_json(name='alice',

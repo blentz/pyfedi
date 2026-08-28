@@ -2,7 +2,8 @@
 into a Feed row.
 
 The `Person`/`Service` branch and the two guards that run before the type
-dispatch (`'type' not in activity_json` and `server not in activity_json['id']`)
+dispatch (`'type' not in activity_json` and the id-host-versus-server
+comparison)
 are covered in tests/test_ap_actor_json_person.py; the `Group` branch is
 covered in tests/test_ap_actor_json_group.py. Neither is repeated here. Every
 test in this file asserts on the Feed that came back (or on None, or on the
@@ -390,9 +391,11 @@ class TestExistingFeed:
 
     def test_lookup_of_an_existing_feed_lowercases_the_id(self, app, db_session, http_mock):
         """A peer that upper-cases the path of its own id on a later fetch
-        still matches the stored row. Only the path is varied: the host cannot
-        be, because the `server not in activity_json['id']` guard is a
-        case-sensitive substring test that would reject the document first.
+        still matches the stored row. Only the path is varied, to keep this
+        test about the lookup: the guard ahead of it lowercases the host on
+        both sides, so varying the host would exercise that guard and not this
+        lookup. The Person file's
+        test_upper_cased_host_in_the_id_is_accepted covers the host.
 
         'following' is stripped so a failed match cannot masquerade as a hit --
         the rebuild would raise KeyError at the /following fetch.

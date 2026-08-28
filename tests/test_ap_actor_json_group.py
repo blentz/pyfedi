@@ -2,7 +2,8 @@
 into a Community row.
 
 The `Person`/`Service` branch and the two guards that run before the type
-dispatch (`'type' not in activity_json` and `server not in activity_json['id']`)
+dispatch (`'type' not in activity_json` and the id-host-versus-server
+comparison)
 are covered in tests/test_ap_actor_json_person.py and are deliberately not
 repeated here. The `Feed` branch is covered elsewhere again. Every test in this
 file therefore asserts on the Community that came back (or on None, or on the
@@ -256,9 +257,11 @@ class TestExistingCommunity:
 
     def test_lookup_of_an_existing_community_lowercases_the_id(self, app, db_session):
         """A peer that upper-cases the path of its own id on a later fetch still
-        matches the stored row. Only the path is varied: the host cannot be,
-        because the `server not in activity_json['id']` guard is a
-        case-sensitive substring test that rejects the document first.
+        matches the stored row. Only the path is varied, to keep this test
+        about the lookup: the guard ahead of it lowercases the host on both
+        sides, so varying the host would exercise that guard and not this
+        lookup. The Person file's
+        test_upper_cased_host_in_the_id_is_accepted covers the host.
 
         'outbox' is stripped so a failed match cannot masquerade as a hit --
         see this class's docstring."""
@@ -578,9 +581,9 @@ class TestApIdFromAddress:
 
     def test_both_arms_lower_case_the_address_and_the_server(self, app, db_session):
         """ap_domain is lower-cased separately from ap_id, so both are asserted.
-        The document's id must still contain the server verbatim, or the
-        case-sensitive `server not in activity_json['id']` guard rejects it
-        before this branch is reached."""
+        The address argument is what varies in case here; the document's id is
+        left on the server's own host, which is all the guard ahead of this
+        branch looks at."""
         peer_instance(PEER)
         community = actor_json_to_model(_group('memes'), '!MEMES', PEER)
         assert community.ap_id == f'memes@{PEER}'
