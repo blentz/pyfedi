@@ -517,9 +517,10 @@ class TestWhitespaceInThePeersNames:
     with the suite still green -- no test fed a padded value, so the
     stripping was asserted nowhere.
 
-    The Person/Service branch has the same two calls and was already pinned
-    (its TestScalarOptionalFields supplies `'name': '  Alice Liddell  '`);
-    this class and its Feed counterpart close the other two branches.
+    The Person/Service and Feed branches have the same two calls. All three
+    branches now carry a test per call site; before this class and its two
+    counterparts, only Person's `name` was pinned, by the padded
+    `'name': '  Alice Liddell  '` in its TestScalarOptionalFields.
 
     A padded name is not a contrived input. `preferredUsername` and `name`
     are free text a remote admin types into a form, and nothing between

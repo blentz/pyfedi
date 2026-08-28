@@ -902,9 +902,9 @@ class TestWhitespaceInThePeersNames:
     Feed-creating test in this file already executes, so the branch
     reported full statement and branch coverage while both could be deleted
     with the suite still green -- no test fed a padded value, so the
-    stripping was asserted nowhere. The Person/Service branch's pair was
-    already pinned; this class and its Group counterpart close the other
-    two branches.
+    stripping was asserted nowhere. The Person/Service and Group branches
+    have the same two calls; all three branches now carry a test per call
+    site, where before only Person's `name` was pinned.
     """
 
     def test_a_padded_preferred_username_is_stripped_into_the_name_column(
