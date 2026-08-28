@@ -460,6 +460,43 @@ class TestScalarOptionalFields:
         assert user.accept_private_messages == 3
         assert user.ap_inbox_url == ''
 
+
+class TestWhitespaceInThePeersNames:
+    """`user_name=activity_json['preferredUsername'].strip()` and
+    `title=activity_json['name'].strip() if ...` in the User() call.
+
+    Only the second of the two was pinned before this class existed, by
+    TestScalarOptionalFields's `'name': '  Alice Liddell  '`. The first was
+    not: deleting `activity_json['preferredUsername'].strip()`'s `.strip()`
+    left the entire suite green, because no test had ever fed a padded
+    preferredUsername to any branch of this function. The review that
+    prompted these tests recorded the Person branch as the one that pinned
+    its stripping properly, and named three tests failing on removal;
+    re-derived by mutating each call site on its own against the full
+    suite, it is one test for `name` and none at all for
+    `preferredUsername`. The test below closes that.
+    """
+
+    def test_a_padded_preferred_username_is_stripped_into_the_user_name_column(self, app, db_session):
+        """Production change that fails this: deleting
+        `activity_json['preferredUsername'].strip()`'s `.strip()`, after
+        which user_name holds ' alice ' and the equality fails.
+
+        ap_preferred_username is asserted too, unstripped, because it reads
+        the SAME key without a `.strip()` of its own. That assertion pins
+        present behaviour rather than endorsing it: without it, a `.strip()`
+        later added to ap_preferred_username would change what the column
+        holds while leaving this test green. The Feed branch has the same
+        split, between `name` and `machine_name`.
+        """
+        peer_instance(PEER)
+        document = peer_actor_json(name='alice', fields={'preferredUsername': ' alice '})
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert user.user_name == 'alice'
+        assert db.session.query(User).one().user_name == 'alice'
+        assert user.ap_preferred_username == ' alice ', \
+            'ap_preferred_username reads the same key without stripping'
+
     def test_present_but_empty_name_falls_back_to_no_title(self, app, db_session):
         """`'name' in activity_json and activity_json['name']` -- the second
         operand is what an empty display name falsifies, and it is the only
