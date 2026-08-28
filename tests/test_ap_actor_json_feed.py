@@ -74,11 +74,11 @@ repeat):
         print('  IfExp', ast.unparse(s.test)[:95])
     "
 
-That prints `If total: 26  IfExp: 9  For: 5`. Two of the twenty-six are not
+That prints `If total: 27  IfExp: 9  For: 5`. Two of the twenty-seven are not
 optional-field guards -- the type dispatch itself (`== 'Feed'`) and the
 `if feed:` early return for a feed already in the database -- so the branch
-holds **9 conditional expressions + 24 `if` statements = 33 conditional
-sites**, or 35 counting the dispatch and the early return. Both of those two
+holds **9 conditional expressions + 25 `if` statements = 34 conditional
+sites**, or 36 counting the dispatch and the early return. Both of those two
 are covered as well, by TestFeedDispatch and TestExistingFeed.
 
 The nine conditional expressions are all inside the Feed() constructor call:
@@ -96,7 +96,7 @@ The nine conditional expressions are all inside the Feed() constructor call:
     'endpoints' in activity_json     -> ap_inbox_url from endpoints.sharedInbox,
                                         else activity_json['inbox']
 
-and twenty-four `if` statements (the two excluded above are not in this list):
+and twenty-five `if` statements (the two excluded above are not in this list):
 
     'attributedTo' ... and isinstance(attributedTo, str)   -> owners_url
     'moderators' in activity_json                          (elif; else None)
@@ -104,6 +104,7 @@ and twenty-four `if` statements (the two excluded above are not in this list):
     'nsfl' ... and nsfl and not site.enable_nsfl           (returns None)
     owners_data.status_code == 200
     following_data.status_code == 200
+      community is None                        (the /following skip guard)
     'summary' in activity_json                             -> description_html
     'content' in activity_json                             (elif; else '')
     description_html is not None and description_html != ''
