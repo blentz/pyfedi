@@ -74,11 +74,11 @@ repeat):
         print('  IfExp', ast.unparse(s.test)[:95])
     "
 
-That prints `If total: 30  IfExp: 9  For: 5`. Two of the thirty are not
+That prints `If total: 31  IfExp: 9  For: 5`. Two of the thirty-one are not
 optional-field guards -- the type dispatch itself (`== 'Feed'`) and the
 `if feed:` early return for a feed already in the database -- so the branch
-holds **9 conditional expressions + 28 `if` statements = 37 conditional
-sites**, or 39 counting the dispatch and the early return. Both of those two
+holds **9 conditional expressions + 29 `if` statements = 38 conditional
+sites**, or 40 counting the dispatch and the early return. Both of those two
 are covered as well, by TestFeedDispatch and TestExistingFeed.
 
 The nine conditional expressions are all inside the Feed() constructor call:
@@ -96,7 +96,7 @@ The nine conditional expressions are all inside the Feed() constructor call:
     'endpoints' in activity_json     -> ap_inbox_url from endpoints.sharedInbox,
                                         else activity_json['inbox']
 
-and twenty-eight `if` statements (the two excluded above are not in this list):
+and twenty-nine `if` statements (the two excluded above are not in this list):
 
     'attributedTo' ... and isinstance(attributedTo, str)   -> owners_url
     'moderators' in activity_json                          (elif; else None)
@@ -127,6 +127,7 @@ and twenty-eight `if` statements (the two excluded above are not in this list):
     feed.icon_id                     -> make_image_sizes
     feed.image_id                    -> make_image_sizes
     'childFeeds' in activity_json
+      isinstance(childFeeds, list)   (else the value is ignored and logged)
 
 and five `for` loops: the owners collection, the /following collection, the
 FeedMember inserts, the FeedItem inserts, and the childFeeds loop. Every one of
@@ -186,6 +187,15 @@ to record the defect can be traced back to it:
   5. `ap_following_url=... if 'following' in activity_json else None` can never
      take its else arm: the same key is read unconditionally, earlier, by the
      get_request that fetches the /following collection. TestScalarOptionalFields.
+  6. FIXED, and so no longer a finding: `for child_feed in
+     activity_json['childFeeds']` was guarded only by the `in` test, and three
+     shapes of value got through it. `null` (or any other scalar) raised
+     TypeError after the Feed, FeedMember and FeedItem commits. A string
+     iterated its own characters and fed each one to populate_child_feed
+     WITHOUT raising. A mapping iterated its keys, also without raising, so a
+     child feed sent as an object key was linked as if it had been sent in a
+     list. The value must now be a list; anything else is ignored and logged.
+     TestChildFeeds.
 """
 from datetime import datetime
 
@@ -1524,19 +1534,19 @@ class TestChildFeeds:
     Mutation that fails test_a_child_feed_is_linked_to_its_parent: deleting the
     `if`, which stops the link being made. The absent side is exercised by
     every other test in this file.
+
+    The `isinstance(activity_json['childFeeds'], list)` test inside that `if`
+    is a fix, not an original guard -- see the three tests at the end of this
+    class. Only ONE of the three malformed values it turns away used to raise;
+    the other two were ingested silently, which is why those two are written as
+    characterisation tests of what the code did rather than as flipped
+    assertions about an exception.
     """
 
     def test_a_child_feed_is_linked_to_its_parent(self, app, db_session, http_mock):
         instance = peer_instance(PEER)
         owner = _owner(instance)
-        child = Feed(name='childfeed', title='Child', instance_id=instance.id,
-                     ap_id=f'childfeed@{PEER}', ap_domain=PEER,
-                     ap_profile_id=f'https://{PEER}/f/childfeed',
-                     ap_public_url=f'https://{PEER}/f/childfeed',
-                     ap_fetched_at=utcnow())
-        db.session.add(child)
-        db.session.commit()
-        child_id = child.id
+        child_id = _child_feed(instance)
         _register_owners(http_mock, [owner.ap_profile_id])
         _register_following(http_mock)
         document = _owned_feed(fields={'childFeeds': [f'https://{PEER}/f/childfeed']})
@@ -1560,8 +1570,19 @@ class TestChildFeeds:
         assert feed is not None
         assert db.session.query(Feed).filter(Feed.parent_feed_id.isnot(None)).count() == 0
 
-    def test_null_child_feeds_leaves_the_feed_ingested(self, app, db_session, http_mock):
-        """CHARACTERISATION of the current defect."""
+    def test_null_child_feeds_leaves_the_feed_fully_ingested(self, app, db_session, http_mock):
+        """FIXED, and the loudest of the three -- `childFeeds: null` passed the
+        `in` test and raised `TypeError: 'NoneType' object is not iterable` out
+        of actor_json_to_model, after the Feed, a commit per FeedMember and a
+        commit per FeedItem. The caller got an exception and could not know any
+        of that had been written.
+
+        The FeedMember and FeedItem counts are the point: they are the rows
+        that used to survive the raise with nobody to record them, and they
+        must still be there now that nothing raises. A fix that refused the
+        whole document instead of ignoring one key would fail on all three
+        counts.
+        """
         instance = peer_instance(PEER)
         owner = _owner(instance)
         community = _remote_community(instance, 'memes')
@@ -1569,15 +1590,46 @@ class TestChildFeeds:
         _register_following(http_mock, [community.ap_profile_id])
         document = _owned_feed(fields={'childFeeds': None})
 
-        with pytest.raises(TypeError):
-            actor_json_to_model(document, '~news', PEER)
+        feed = actor_json_to_model(document, '~news', PEER)
 
+        assert feed is not None
         assert db.session.query(Feed).filter_by(ap_profile_id=_feed_id()).count() == 1
         assert db.session.query(FeedMember).count() == 1
         assert db.session.query(FeedItem).count() == 1
+        assert db.session.query(Feed).filter(Feed.parent_feed_id.isnot(None)).count() == 0
 
     def test_a_string_of_child_feeds_links_nothing(self, app, db_session, http_mock):
-        """CHARACTERISATION of the current defect."""
+        """FIXED, and this one never raised -- which is why it needed a
+        characterisation test rather than a flipped one.
+
+        A string passes the `in` test and is iterable, so the loop iterated its
+        CHARACTERS and handed each single character to populate_child_feed.
+        extract_domain_and_actor('a') yields ('', 'a'), search_for_feed is
+        asked for '~a@', and any feed whose ap_id is 'a@' is reparented onto
+        the feed being ingested. The decoy this test pre-creates is exactly
+        such a feed, so before the fix its parent_feed_id came back set: a peer
+        could rewrite a feed's parentage by sending a bare string. In
+        production populate_child_feed dispatches with .delay(), so what the
+        operator saw was N failing celery tasks and an ingest that returned
+        normally; only under DEBUG did the failure surface inline.
+
+        The assertions are that the decoy is untouched AND that the feed was
+        ingested anyway -- a fix that refused the document would leave the
+        decoy untouched too.
+
+        Mutation, both directions, distinct because the guard wraps the loop
+        rather than replacing it:
+
+        - delete the isinstance test (leaving the loop unconditional): the
+          string is iterated again and this test fails on the decoy's
+          parent_feed_id.
+        - broaden it to `isinstance(..., (list, str))`, or to `True`: same
+          failure, the string is iterated again. The direction that IS
+          distinct is narrowing it to something no list satisfies, e.g.
+          `isinstance(..., tuple)` -- every childFeeds list is then dropped,
+          which this test cannot see but
+          test_a_child_feed_is_linked_to_its_parent fails on.
+        """
         instance = peer_instance(PEER)
         owner = _owner(instance)
         decoy_id = _single_character_feed(instance, 'a')
@@ -1588,11 +1640,25 @@ class TestChildFeeds:
         feed = actor_json_to_model(document, '~news', PEER)
 
         assert feed is not None
-        parent = db.session.query(Feed).filter_by(ap_profile_id=_feed_id()).one()
-        assert db.session.get(Feed, decoy_id).parent_feed_id == parent.id
+        assert db.session.query(Feed).filter_by(ap_profile_id=_feed_id()).count() == 1
+        assert db.session.get(Feed, decoy_id).parent_feed_id is None
 
     def test_a_mapping_of_child_feeds_links_nothing(self, app, db_session, http_mock):
-        """CHARACTERISATION of the current defect."""
+        """FIXED, and the quietest of the three -- it never raised either, and
+        unlike the string case it LOOKED like it worked.
+
+        A JSON object passes the `in` test and iterates its keys, so a peer
+        sending `{"<child feed url>": ...}` instead of `["<child feed url>"]`
+        got the child linked as though the document had been well formed. That
+        is the case the defect register does not mention at all. Accepting it
+        by accident is its own problem: the values were never read, so
+        whatever the peer put on the right-hand side was silently discarded,
+        and the shape this code accepts drifts away from the one it documents.
+
+        The child feed here is the same one
+        test_a_child_feed_is_linked_to_its_parent uses through a list, so the
+        pair is a matched set: the list links it, the mapping no longer does.
+        """
         instance = peer_instance(PEER)
         owner = _owner(instance)
         child_id = _child_feed(instance)
@@ -1604,8 +1670,8 @@ class TestChildFeeds:
         feed = actor_json_to_model(document, '~news', PEER)
 
         assert feed is not None
-        parent = db.session.query(Feed).filter_by(ap_profile_id=_feed_id()).one()
-        assert db.session.get(Feed, child_id).parent_feed_id == parent.id
+        assert db.session.query(Feed).filter_by(ap_profile_id=_feed_id()).count() == 1
+        assert db.session.get(Feed, child_id).parent_feed_id is None
 
 
 class TestFeedRefetchAfterCommit:

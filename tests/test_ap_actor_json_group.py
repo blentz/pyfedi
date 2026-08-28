@@ -54,11 +54,11 @@ line numbers the script prints and this docstring deliberately does not repeat):
         print('  IfExp', ast.unparse(s.test)[:95])
     "
 
-That prints `If total: 35  IfExp: 16`. Two of the thirty-five are not
+That prints `If total: 36  IfExp: 16`. Two of the thirty-six are not
 optional-field guards: the type dispatch itself (`== 'Group'`) and the
 `if community:` early return for a community already in the database. So the
-branch holds **16 conditional expressions + 33 optional-field `if` statements =
-49 conditional sites**, or 51 counting the dispatch and the early return. Both
+branch holds **16 conditional expressions + 34 optional-field `if` statements =
+50 conditional sites**, or 52 counting the dispatch and the early return. Both
 of those two are covered as well, by TestGroupDispatch and
 TestExistingCommunity.
 
@@ -84,7 +84,7 @@ call, and are the scalar optional fields:
     'featured' in activity_json                 -> ap_featured_url, else ''
     'postUrlType' in activity_json              -> post_url_type, else None
 
-and thirty-three `if` statements, which are the block-shaped ones (the two
+and thirty-four `if` statements, which are the block-shaped ones (the two
 excluded above, `== 'Group'` and `if community:`, are not in this list):
 
     'attributedTo' ... and isinstance(attributedTo, str)   -> mods_url
@@ -109,6 +109,7 @@ excluded above, `== 'Group'` and `if community:`, are not in this list):
       image_entry
     'language' in activity_json and isinstance(language, list)
     'tag' in activity_json and isinstance(tag, list)       (new-style flair)
+      not isinstance(flair, dict) or 'type' not in flair   (skips the entry)
       flair['type'] == 'CommunityPostTag'
       flair_obj
     'lemmy:tagsForPosts' ... and isinstance(..., list)     (legacy flair)
@@ -1109,7 +1110,34 @@ class TestNewStylePostFlair:
         assert community.flair == []
 
     def test_a_tag_entry_without_a_type_is_skipped_and_the_rest_ingest(self, app, db_session):
-        """CHARACTERISATION of the current defect."""
+        """FIXED -- `if flair["type"] == "CommunityPostTag"` used to be an
+        unguarded read, so a tag object omitting the key raised KeyError out of
+        actor_json_to_model. The Community had already been committed by then,
+        so the peer ended up with a community, no flair at all (the loop's own
+        commit is below it), and an exception at the caller -- a
+        partially-applied ingest, the same one the legacy loop below had. The
+        read now sits behind `if not isinstance(flair, dict) or "type" not in
+        flair: continue`, and the skip is logged.
+
+        The malformed entry is deliberately in the MIDDLE of the list, and the
+        row counts are what separate 'skipped the bad entry' from 'skipped the
+        loop': both good entries are present, so a guard that swallowed the
+        whole list, or that abandoned the loop at the first bad entry, fails
+        here even though nothing raised.
+
+        Mutation, both directions, and they are distinct because this guard is
+        a `continue` rather than an early return:
+
+        - delete the guard: the KeyError comes back and this test fails on the
+          exception, not on a count.
+        - broaden it to `if True:` (or drop the `"type" not in flair` half in
+          favour of a key every entry has): every entry is skipped, nothing
+          raises, and this test fails on the flair list and the row count.
+
+        Narrowing the guard to the isinstance half alone is not a distinct
+        third direction -- it is the delete direction for this test, which
+        supplies a dict.
+        """
         peer_instance(PEER)
         document = _group('memes', fields={'tag': [
             {'type': 'CommunityPostTag', 'id': f'https://{PEER}/c/memes/tag/1',
@@ -1118,13 +1146,27 @@ class TestNewStylePostFlair:
             {'type': 'CommunityPostTag', 'id': f'https://{PEER}/c/memes/tag/3',
              'preferredUsername': 'Meta'},
         ]})
-        with pytest.raises(KeyError):
-            actor_json_to_model(document, '!memes', PEER)
+        community = actor_json_to_model(document, '!memes', PEER)
+        assert community is not None
         assert db.session.query(Community).count() == 1
-        assert db.session.query(CommunityFlair).count() == 0
+        assert sorted(f.flair for f in community.flair) == ['Discussion', 'Meta']
+        assert db.session.query(CommunityFlair).count() == 2
 
     def test_a_tag_entry_that_is_not_an_object_is_skipped_and_the_rest_ingest(self, app, db_session):
-        """CHARACTERISATION of the current defect."""
+        """FIXED -- the other half of the same defect. A `tag` element that is
+        not a dict at all raised TypeError on the subscript, again after the
+        Community was committed. A bare string is the entry used here because
+        `"type" not in "CommunityPostTag"` is a perfectly legal SUBSTRING test
+        that answers False, so the isinstance half of the guard is the only
+        thing standing between this document and the old TypeError.
+
+        Mutation, both directions:
+
+        - delete the isinstance half: the TypeError comes back and this test
+          fails on the exception. (Deleting the whole guard does the same.)
+        - broaden the guard to `if True:`: both good entries are dropped too
+          and this test fails on the flair list and the row count.
+        """
         peer_instance(PEER)
         document = _group('memes', fields={'tag': [
             {'type': 'CommunityPostTag', 'id': f'https://{PEER}/c/memes/tag/1',
@@ -1133,10 +1175,11 @@ class TestNewStylePostFlair:
             {'type': 'CommunityPostTag', 'id': f'https://{PEER}/c/memes/tag/3',
              'preferredUsername': 'Meta'},
         ]})
-        with pytest.raises(TypeError):
-            actor_json_to_model(document, '!memes', PEER)
+        community = actor_json_to_model(document, '!memes', PEER)
+        assert community is not None
         assert db.session.query(Community).count() == 1
-        assert db.session.query(CommunityFlair).count() == 0
+        assert sorted(f.flair for f in community.flair) == ['Discussion', 'Meta']
+        assert db.session.query(CommunityFlair).count() == 2
 
 
 class TestLegacyPostFlair:
