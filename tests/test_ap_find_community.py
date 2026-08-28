@@ -308,6 +308,100 @@ class TestPeerTubeVideoStrategy:
         assert find_community({'type': 'Video', 'attributedTo': None}) is None
 
 
+class TestCaseInsensitiveActorMatching:
+    """Every lookup in this function normalises the peer's URI before
+    querying, because `ap_profile_id` is stored lower-cased.
+
+    There are four such call sites, one per lookup. Derived against this
+    checkout with:
+
+        podman-compose -f compose.test.yaml exec -T -w /app test-runner python -c "
+        import ast
+        src = open('app/activitypub/util.py').read()
+        for n in ast.walk(ast.parse(src)):
+            if isinstance(n, ast.FunctionDef) and n.name == 'find_community':
+                for c in ast.walk(n):
+                    if (isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
+                            and c.func.attr == 'lower'):
+                        print(ast.unparse(c))
+        "
+
+    Output, four lines:
+
+        potential_id.lower()   -- addressing loop, string branch
+        c.lower()              -- addressing loop, list branch
+        a.lower()              -- Video attributedTo, bare-string item
+        a['id'].lower()        -- Video attributedTo, Group-dict item
+
+    Coverage cannot see any of them. Each sits inside a `filter_by(...)`
+    argument on a line that every existing test in this file already
+    executes, so the whole function reported 100% statement and branch
+    coverage while all four could be deleted with the full suite still
+    green -- proved live by the reviewer. Nothing tested a mixed-case URI,
+    so case-insensitive matching was asserted nowhere.
+
+    Each test below feeds a mixed-case URI to exactly one of the four sites
+    and asserts the stored Community comes back. `.upper()` on the whole
+    URI would not do: 'HTTPS://...' is not what a peer sends, and the point
+    is a document a real peer could serve. The host and the final path
+    segment are the two parts a peer varies in practice.
+
+    Only the four addressing and Video lookups are covered here. The
+    inReplyTo strategy has no `.lower()` of its own -- it hands the URI to
+    Post.get_by_ap_id / PostReply.get_by_ap_id unmodified -- so there is no
+    fifth site, and this class does not invent a test for one.
+    """
+
+    def test_a_mixed_case_audience_string_still_matches_the_stored_community(self, app, db_session):
+        """The addressing loop's STRING branch. Production change that fails
+        this: deleting `potential_id.lower()`, after which the query looks up
+        the peer's mixed-case URI verbatim, misses the lower-cased stored
+        row, and the function falls through to None."""
+        seed_community_owner()
+        community = make_community('stringcasematch')
+        result = find_community({'audience': 'https://Test.PieFed.Local/c/STRINGCASEMATCH'})
+        assert result == community
+
+    def test_a_mixed_case_cc_list_entry_still_matches_the_stored_community(self, app, db_session):
+        """The addressing loop's LIST branch, whose `c.lower()` is a
+        textually separate call site from the string branch's: a mutation to
+        either one alone is invisible to the other's test, the same reason
+        this file already carries paired tests for the Public-collection and
+        `/followers` exclusions."""
+        seed_community_owner()
+        community = make_community('listcasematch')
+        result = find_community({'cc': ['https://Test.PieFed.Local/c/LISTCASEMATCH']})
+        assert result == community
+
+    def test_a_mixed_case_bare_string_in_attributed_to_still_matches(self, app, db_session):
+        """The Video strategy's bare-string item, `a.lower()`. No addressing
+        key is present, so the addressing loop cannot reach a match first
+        and the assertion can only be satisfied by this site."""
+        seed_community_owner()
+        community = make_community('videostringcasematch')
+        result = find_community({
+            'type': 'Video',
+            'attributedTo': ['https://Test.PieFed.Local/c/VIDEOSTRINGCASEMATCH'],
+        })
+        assert result == community
+
+    def test_a_mixed_case_group_dict_id_in_attributed_to_still_matches(self, app, db_session):
+        """The Video strategy's Group-dict item, `a['id'].lower()` -- the
+        fourth and last site. The list carries a Person entry first so the
+        dict arm is reached through the `elif a['type'] == 'Group'` rather
+        than being the only thing in the list."""
+        seed_community_owner()
+        community = make_community('videodictcasematch')
+        result = find_community({
+            'type': 'Video',
+            'attributedTo': [
+                {'type': 'Person', 'id': 'https://peer.example/u/creator'},
+                {'type': 'Group', 'id': 'https://Test.PieFed.Local/c/VIDEODICTCASEMATCH'},
+            ],
+        })
+        assert result == community
+
+
 class TestNothingMatchesAnywhere:
     def test_an_activity_with_no_addressing_no_reply_and_no_video_match_returns_none(self, app, db_session):
         result = find_community({

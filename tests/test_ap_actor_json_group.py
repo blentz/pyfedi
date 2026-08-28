@@ -507,6 +507,52 @@ class TestScalarOptionalFields:
         assert community.post_url_type is None
 
 
+class TestWhitespaceInThePeersNames:
+    """`name=activity_json['preferredUsername'].strip()` and
+    `title=activity_json['name'].strip()` in the Community() call.
+
+    Coverage cannot see inside either. Both sit on lines that every
+    Group-creating test in this file already executes, so the branch
+    reported full statement and branch coverage while both could be deleted
+    with the suite still green -- no test fed a padded value, so the
+    stripping was asserted nowhere.
+
+    The Person/Service branch has the same two calls and was already pinned
+    (its TestScalarOptionalFields supplies `'name': '  Alice Liddell  '`);
+    this class and its Feed counterpart close the other two branches.
+
+    A padded name is not a contrived input. `preferredUsername` and `name`
+    are free text a remote admin types into a form, and nothing between
+    that form and this constructor trims them.
+    """
+
+    def test_a_padded_preferred_username_is_stripped_into_the_name_column(self, app, db_session):
+        """Production change that fails this: deleting
+        `activity_json['preferredUsername'].strip()`'s `.strip()`, after
+        which the Community's name column holds ' memes ' and the equality
+        fails. The second assertion pins the value that was persisted, not
+        just the one the constructor was handed."""
+        peer_instance(PEER)
+        document = _group('memes', fields={'preferredUsername': ' memes '})
+        community = actor_json_to_model(document, '!memes', PEER)
+        assert community.name == 'memes'
+        assert db.session.query(Community).one().name == 'memes'
+
+    def test_a_padded_name_is_stripped_into_the_title_column(self, app, db_session):
+        """The second, textually separate call site. Production change that
+        fails this: deleting `activity_json['name'].strip()`'s `.strip()`.
+
+        The padding differs from the preferredUsername test's on purpose --
+        a tab and a newline, not two spaces -- so that a `.strip(' ')`
+        narrowing (stripping only literal spaces) is caught here rather
+        than passing."""
+        peer_instance(PEER)
+        document = _group('memes', fields={'name': '\t Memes and Such \n'})
+        community = actor_json_to_model(document, '!memes', PEER)
+        assert community.title == 'Memes and Such'
+        assert db.session.query(Community).one().title == 'Memes and Such'
+
+
 class TestApIdFromAddress:
     """`ap_id = f"{address[1:].lower()}@{server.lower()}" if
     address.startswith('!') else f"{address.lower()}@{server.lower()}"`.
