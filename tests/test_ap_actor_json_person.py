@@ -23,23 +23,35 @@ this docstring deliberately does not repeat):
     podman-compose -f compose.test.yaml exec -T -w /app test-runner python -c "
     import ast
     src = open('app/activitypub/util.py').read()
-    tree = ast.parse(src)
-    for n in ast.walk(tree):
+    for n in ast.walk(ast.parse(src)):
         if isinstance(n, ast.FunctionDef) and n.name == 'actor_json_to_model':
             func = n
     # the Person/Service branch is func.body's first If whose test names Person
     for stmt in func.body:
         if isinstance(stmt, ast.If) and 'Person' in ast.unparse(stmt.test):
-            lo, hi = stmt.lineno, stmt.body[-1].lineno
-    for s in ast.walk(func):
-        if isinstance(s, ast.If) and lo <= s.lineno <= hi:
-            print('If  ', ast.unparse(s.test)[:100])
-        if isinstance(s, ast.IfExp) and lo <= s.lineno <= hi:
-            print('IfExp', ast.unparse(s.test)[:100])
+            branch = stmt
+    lo, hi = branch.lineno, branch.body[-1].lineno
+    ifs    = [s for s in ast.walk(func) if isinstance(s, ast.If)    and lo <= s.lineno <= hi]
+    ifexps = [s for s in ast.walk(func) if isinstance(s, ast.IfExp) and lo <= s.lineno <= hi]
+    print('If total:', len(ifs), ' IfExp:', len(ifexps))
+    for s in sorted(ifs, key=lambda s: s.lineno):
+        print('  If   ', ast.unparse(s.test)[:88])
     "
 
-Eleven conditional expressions in the User() constructor call, which are the
-scalar optional fields:
+That prints `If total: 18  IfExp: 11`. Two of the eighteen are not optional-field
+guards: the type dispatch itself (`== 'Person' or == 'Service'`) and the
+`if user:` early return for an actor already in the database. So the branch holds
+**11 conditional expressions + 16 optional-field `if` statements = 27 conditional
+sites**, or 29 counting the dispatch and the early return. Both of those two are
+covered as well, by TestPersonAndService.
+
+(An earlier revision of this docstring said "12 `if` statements", which was
+wrong: it was a hand count of the bullet list below, and it both undercounted
+the list and omitted `if user:` from it. The figures above come from the command
+as printed, not from reading.)
+
+The eleven conditional expressions are in the User() constructor call, and are
+the scalar optional fields:
 
     'name' in activity_json and activity_json['name']  -> title, else None
     'matrixUserId' in activity_json                    -> matrix_user_id, else ''
@@ -56,7 +68,8 @@ scalar optional fields:
     'acceptPrivateMessages' in activity_json           -> accept_private_messages,
                                                           else 3
 
-and twelve `if` statements, which are the block-shaped ones:
+and sixteen `if` statements, which are the block-shaped ones (the two excluded
+above, `== 'Person' or == 'Service'` and `if user:`, are not in this list):
 
     'summary' in activity_json                     (else about_html = '')
       about_html is not None and not about_html.startswith('<')   (PeerTube wrap)
@@ -83,17 +96,21 @@ Every test builds the peer's Instance row first with make_instance. Without it
 find_instance_id inserts a sparse Instance and then calls new_instance_profile,
 which fetches the peer's nodeinfo over HTTP.
 
-Not covered here, and why: the IntegrityError fallback around
-`db.session.add(user); db.session.commit()`. The only unique constraint the
+The IntegrityError fallback around `db.session.add(user);
+db.session.commit()` is a concurrency race -- the only unique constraint the
 insert can violate is User.ap_profile_id, and the branch's first statement
-returns early when a row already holds that value -- so reaching the handler
-needs a second writer committing the same ap_profile_id between the lookup and
-the commit. That is a concurrency race, not a state a single-session test can
-construct.
+returns early when a row already holds that value, so reaching the handler
+needs a second writer committing the same ap_profile_id between that lookup
+and the commit. TestConcurrentInsert simulates exactly that second writer,
+without a pragma and without asserting on the simulation; its docstring says
+how.
 """
+from datetime import datetime
+
 from app import db
+from app.activitypub import util as activitypub_util
 from app.activitypub.util import actor_json_to_model
-from app.models import File, User, UserExtraField
+from app.models import Community, File, User, UserExtraField, utcnow
 from app.utils import set_setting
 from tests.factories import make_instance, make_user, peer_actor_json
 
@@ -229,14 +246,23 @@ class TestPersonAndService:
     """`if activity_json['type'] == 'Person' or activity_json['type'] == 'Service'`,
     and the `bot=True if activity_json['type'] == 'Service' else False` inside it.
 
-    Both mutation directions on that type test are exercised here:
+    Both mutation directions on that type test are exercised here, and the
+    broadening direction has TWO shapes, because the dispatch has two siblings:
 
     - narrowed to `== 'Person'` alone: test_service_document_creates_a_bot_user
       stops getting a User back, because a Service document then falls through
       to the Group branch and dies on activity_json['outbox'].
-    - broadened to `!= 'Group'` (or to a bare `True`): a Group document would
-      be built as a User, which test_group_document_is_not_handled_here
-      catches by asserting the Group branch still owns it.
+    - broadened to `!= 'Feed'`: a Group document is built as a User, which
+      test_group_document_is_not_handled_here catches by asserting a Community
+      comes back.
+    - broadened to `!= 'Group'`: a Feed document is built as a User, which
+      test_feed_document_is_not_handled_here catches. A bare `True` is caught
+      by either.
+
+    Both broadenings are needed. `!= 'Group'` leaves Group dispatch correct and
+    so survives every Group test; `!= 'Feed'` leaves Feed dispatch correct and
+    survives every Feed test. Naming only one of them would name a mutation the
+    other test cannot fail.
     """
 
     def test_person_document_creates_a_user_that_is_not_a_bot(self, app, db_session):
@@ -256,12 +282,30 @@ class TestPersonAndService:
 
     def test_group_document_is_not_handled_here(self, app, db_session):
         """A Group falls to the Group branch, which builds a Community, not a
-        User. Broadening the Person/Service test to admit Group would make this
-        return a User instead."""
+        User. Broadening the Person/Service test to admit Group (`!= 'Feed'`)
+        would make this return a User instead."""
         _peer_instance()
         document = peer_actor_json('Group', name='memes')
         result = actor_json_to_model(document, '!memes', PEER)
-        assert not isinstance(result, User)
+        assert isinstance(result, Community)
+        assert result.name == 'memes'
+        assert db.session.query(User).count() == 0
+
+    def test_feed_document_is_not_handled_here(self, app, db_session, site):
+        """A Feed falls to the Feed branch. Broadening the Person/Service test
+        to admit Feed (`!= 'Group'`) would build a User out of this document
+        instead, which is what the count assertion below catches.
+
+        The document is marked sensitive and the Site has enable_nsfw off, so
+        the Feed branch returns None at its own nsfw guard -- before the point
+        where it would dereference the owners and following collections over
+        HTTP. That keeps this test about dispatch, which is all it claims, and
+        leaves the Feed branch's own behaviour to its own tests."""
+        _peer_instance()
+        document = peer_actor_json('Feed', name='news', fields={'sensitive': True})
+        result = actor_json_to_model(document, '~news', PEER)
+        assert result is None
+        assert db.session.query(User).count() == 0
 
     def test_existing_user_is_returned_without_creating_a_second(self, app, db_session):
         """The branch's first statement looks the actor up by
@@ -289,6 +333,56 @@ class TestPersonAndService:
                                    fields={'id': f'https://{PEER}/users/ALICE'})
         result = actor_json_to_model(document, 'alice', PEER)
         assert result.id == existing.id
+        assert db.session.query(User).count() == 1
+
+
+class TestConcurrentInsert:
+    """`except IntegrityError: db.session.rollback(); return ...one()`.
+
+    The handler is only reachable when a second writer commits the same
+    ap_profile_id AFTER this call's early-return lookup found nothing and
+    BEFORE its own commit. That window is real but narrow, so the test opens it
+    deliberately rather than waiting for it.
+
+    The seam is find_instance_id: `instance_id=find_instance_id(server)` is
+    evaluated inside the try block, after the early-return lookup has already
+    run and before the insert. Substituting a function that commits the rival
+    row and then delegates to the real one puts a genuine, already-committed
+    duplicate in the database at exactly the right moment, and the collision
+    that follows is a real Postgres unique violation rather than a raised
+    stand-in.
+
+    Nothing here asserts on the substitution. The assertions are that the row
+    which came back is the rival that won -- identified by a title the peer's
+    document does not contain, so a newly built row could not carry it -- and
+    that the table holds one row, not two.
+
+    Mutation that fails this: deleting the handler (the IntegrityError escapes
+    to the caller), or dropping the db.session.rollback() before the re-query
+    (the session is left in a failed transaction and the .one() raises).
+    """
+
+    def test_a_rival_commit_during_the_call_returns_the_row_that_won(
+            self, app, db_session, monkeypatch):
+        instance = _peer_instance()
+        document = peer_actor_json(name='alice')
+        real_find_instance_id = activitypub_util.find_instance_id
+
+        def commit_the_rival_row_first(server):
+            instance_id = real_find_instance_id(server)
+            rival = make_user(instance, 'alice')
+            rival.ap_profile_id = document['id'].lower()
+            rival.title = 'the row that won'
+            db.session.commit()
+            return instance_id
+
+        monkeypatch.setattr(activitypub_util, 'find_instance_id',
+                            commit_the_rival_row_first)
+        result = actor_json_to_model(document, 'alice', PEER)
+
+        assert result is not None
+        assert result.title == 'the row that won'
+        assert result.ap_profile_id == document['id'].lower()
         assert db.session.query(User).count() == 1
 
 
@@ -351,7 +445,7 @@ class TestScalarOptionalFields:
         assert user.matrix_user_id == '@alice:matrix.example'
         assert user.indexable is False
         assert user.searchable is False
-        assert user.created.year == 2024
+        assert user.created == datetime(2024, 1, 2, 3, 4, 5)
         assert user.ap_followers_url == f'https://{PEER}/u/alice/followers'
         assert user.ap_manually_approves_followers is True
         assert user.accept_private_messages == 1
@@ -359,12 +453,16 @@ class TestScalarOptionalFields:
 
     def test_every_scalar_optional_absent_takes_its_default(self, app, db_session):
         _peer_instance()
+        before = utcnow()
         user = actor_json_to_model(peer_actor_json(name='alice'), 'alice', PEER)
         assert user.title is None
         assert user.matrix_user_id == ''
         assert user.indexable is True
         assert user.searchable is True
-        assert user.created is not None
+        # utcnow(), not the peer's value: distinguishable from the 2024 timestamp
+        # the present-side test supplies, which `is not None` would also accept.
+        assert user.created > before
+        assert user.created <= utcnow()
         assert user.ap_followers_url is None
         assert user.ap_manually_approves_followers is False
         assert user.accept_private_messages == 3
@@ -438,11 +536,15 @@ class TestSummaryAndSource:
 
     def test_null_summary_is_not_wrapped(self, app, db_session):
         """`about_html is not None` guards the wrap; the key is present with a
-        null value, which several peers do send."""
+        null value, which several peers do send. The null reaches
+        allowlist_html, which returns '' for it, so the outcome is an empty
+        about -- and specifically NOT the '<p>None</p>' that dropping the
+        `is not None` half of the guard would produce."""
         _peer_instance()
         document = peer_actor_json(name='alice', fields={'summary': None})
         user = actor_json_to_model(document, 'alice', PEER)
-        assert user.about_html in (None, '')
+        assert user.about_html == ''
+        assert user.about == ''
 
     def test_absent_summary_gives_an_empty_about(self, app, db_session):
         _peer_instance()

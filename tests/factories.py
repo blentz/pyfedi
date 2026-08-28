@@ -538,8 +538,24 @@ def peer_actor_json(actor_type: str = 'Person', name: str = 'alice',
 
       Person/Service  type, id, preferredUsername, publicKey.publicKeyPem
       Group           the above, plus name, inbox, outbox
-      Feed            the above, plus following and attributedTo (the Feed
-                      branch dereferences both over HTTP before building the row)
+      Feed            the above, plus following
+
+    `inbox` earns its place in the Group and Feed baselines even though it is
+    read through a conditional: the expression is
+    `activity_json['endpoints']['sharedInbox'] if 'endpoints' in activity_json
+    else activity_json['inbox']`, whose else-arm has no further fallback, so a
+    document with neither key raises KeyError. A test wanting the sharedInbox
+    arm passes an 'endpoints' key; a test wanting no inbox at all passes
+    omit=('inbox',) and expects the KeyError handler.
+
+    `attributedTo` is deliberately NOT in the Feed baseline, even though the
+    Feed branch dereferences the resulting owners_url over HTTP. It is read
+    through `if 'attributedTo' ... elif 'moderators' ... else owners_url =
+    None`, so its absence is a default and not a KeyError -- putting it in the
+    baseline would hand every Feed test the first arm and leave the 'moderators'
+    elif and the None else permanently unreachable. Feed tests must pass
+    fields={'attributedTo': ...} or fields={'moderators': ...} explicitly, and
+    a Feed document with neither reaches get_request(None).
 
     Everything else those branches read is optional, and deliberately left out
     of the baseline: a document that always carried every optional key would
@@ -578,7 +594,6 @@ def peer_actor_json(actor_type: str = 'Person', name: str = 'alice',
         document['outbox'] = f'{actor_id}/outbox'
     if actor_type == 'Feed':
         document['following'] = f'{actor_id}/following'
-        document['attributedTo'] = f'{actor_id}/moderators'
     if fields:
         document.update(fields)
     for key in omit:
