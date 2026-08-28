@@ -575,20 +575,47 @@ class TestMissingIdKeyOnTheBackfill:
       already pins.
     """
 
-    def test_an_entry_with_no_id_key_derives_the_ap_id_instead_of_raising(self, app, db_session):
+    def test_an_entry_with_no_id_key_derives_the_ap_id_instead_of_raising(self, app, db_session, caplog):
         """The guard in isolation, on the default session: an existing row
         with a null ap_id and a dict carrying no 'id' at all. The assertion
         is on the value that landed in the column, not merely that nothing
         raised -- a fix that returned early, or that skipped the whole
-        backfill, would leave ap_id None and fail it."""
+        backfill, would leave ap_id None and fail it.
+
+        The log is pinned here, and the LEVEL is part of what is pinned. Every
+        other guard this campaign added logs at WARNING because it drops
+        something the peer sent; this one drops nothing -- the flair is kept
+        in full and only the peer's id is substituted for a derived one -- so
+        it is deliberately INFO, and a change to WARNING would be a claim
+        about severity that this arm does not support. caplog.at_level('INFO')
+        is therefore load-bearing: the default capture level would hide the
+        record and an assertion on caplog.text alone would pass at either
+        level.
+
+        Content, not merely a record: the message names the flair, the
+        community and the reason, so a line reading "error" would not satisfy
+        it. Deleting the logger.info call fails this test and nothing else --
+        it is the only test in this file that reaches the arm with the log
+        asserted.
+        """
         seed_community_owner()
         community = make_community('missingidbackfill')
         existing = make_community_flair(community, name='noidkey', ap_id=None)
-        result = find_flair_or_create({'preferredUsername': 'noidkey'}, community.id)
+        with caplog.at_level('INFO'):
+            result = find_flair_or_create({'preferredUsername': 'noidkey'}, community.id)
         db.session.commit()
         assert result.id == existing.id
         assert result.ap_id == community.local_url() + f"/tag/{existing.id}"
         assert CommunityFlair.query.filter_by(community_id=community.id).count() == 1
+
+        substitutions = [r for r in caplog.records
+                         if 'find_flair_or_create' in r.getMessage()]
+        assert len(substitutions) == 1
+        assert substitutions[0].levelname == 'INFO'
+        assert "'noidkey'" in substitutions[0].getMessage()
+        assert f'community {community.id}' in substitutions[0].getMessage()
+        assert "supplies no usable 'id'" in substitutions[0].getMessage()
+        assert 'deriving a local ap_id instead' in substitutions[0].getMessage()
 
     def test_two_entries_sharing_a_name_under_autoflush_derive_a_local_ap_id(self, app, db_session):
         """The reachable path, reproduced on the session the reachable
