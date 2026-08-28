@@ -1645,6 +1645,42 @@ So the discharge is 2 explicit + 2 incidental + 1 path-dependent, not "four the
 same way". An explicit guard survives a refactor of the fetch; an incidental one
 does not.
 
+**D30 and D31 are now fixed**, on branch `fix-ingest-shape`, under separate
+owner authorisation. D32 and D33 remain registered and unfixed. Both fixes are
+the guard-and-skip that D13 established: the malformed optional value is tested
+for, skipped, and **logged**, matching how the code beside it already treats
+every other optional key. D30's `tag` loop gained `if not isinstance(flair,
+dict) or "type" not in flair: continue`; D31's `childFeeds` value must now be a
+list, and anything else is ignored with a warning naming the type it got.
+
+**Two corrections to D31 as this table states it.** Both were found by fixing
+it, and both change what a fix has to be tested against:
+
+- **"the deepest instance of the shape in the file by number of preceding
+  commits" is not established.** It holds only among the six *registered*
+  instances. `refresh_community_profile_task`'s featured-collection walk —
+  unregistered at the time of writing — sits behind more, and the read-only
+  sweep in `.superpowers/sdd/fix-ingest-shape-sweep.md` records eleven further
+  candidates besides. The claim has been dropped rather than re-scoped, because
+  a superlative over a set that is still growing is not worth maintaining.
+- **The row names the string case but omits the MAPPING case, and omits that
+  the string case can succeed.** `childFeeds: {...}` does not raise either: it
+  iterates the object's keys, so a child feed url sent as a key is linked
+  exactly as though the peer had sent a list. That is the quietest of the three
+  — it looks like it worked. And the string case is not only "quieter", it can
+  *complete*: each single character resolves through `search_for_feed('~a@')`,
+  and any feed whose `ap_id` is `a@` is reparented onto the feed being
+  ingested. Under `.delay()` that is N celery tasks in production and an ingest
+  that returns normally; the failure surfaces inline only under DEBUG. Neither
+  silent case would have been caught by a test written from the `null` case
+  alone, which is why the fix's three tests are one flipped and two
+  characterisation.
+
+**One thing NOT fixed, and reported rather than repaired** because it is outside
+D30/D31: a `childFeeds` value that *is* a list, whose elements are not strings,
+still reaches `extract_domain_and_actor` inside `populate_child_feed_worker`.
+Same shape, one level down.
+
 **Correction to D33 as it was handed over.** The review said "Feed and Person
 order these safely". They do not order anything — **neither try contains a
 `current_app.config` read at all**, so there is nothing to order. The Group
@@ -1685,12 +1721,13 @@ In `app/activitypub/util.py`:
 - **Fixed:** D9 (`find_flair_or_create`'s ap_id backfill, via
   `refresh_community_profile_task`), D13 (`actor_json_to_model`'s Group branch,
   legacy `lemmy:tagsForPosts` loop), D16 (`actor_json_to_model`'s Feed branch,
-  the /following collection's rejected entries).
+  the /following collection's rejected entries), and now D30 (the Group
+  branch's new-style `tag` loop) and D31 (the Feed branch's `childFeeds` loop).
 - **Registered and unfixed:** D26 (`refresh_community_profile_task`'s own legacy
-  flair loop), D30 (the Group branch's new-style `tag` loop), D31 (the Feed
-  branch's `childFeeds` loop).
+  flair loop).
 
-Three plus three. Derivable from this document rather than counted by hand:
+Five plus one, as of the `fix-ingest-shape` work; three plus three when this
+section was written. Derivable from this document rather than counted by hand:
 
 ```bash
 grep -ciE '^\| \*{0,2}D[0-9]+.*partially-applied.ingest' \
