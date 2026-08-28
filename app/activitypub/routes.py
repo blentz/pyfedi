@@ -1192,9 +1192,11 @@ def process_inbox_request(request_json, store_ap_json):
                 # Create is new content. Update is often an edit, but Updates from Lemmy can also be new content
                 if core_activity['type'] == 'Create' or core_activity['type'] == 'Update':
                     if isinstance(core_activity['object'], str):
-                        core_activity = verify_object_from_source(core_activity)  # change core_activity['object'] from str to dict, then process normally
+                        # change core_activity['object'] from str to dict, then process normally
+                        core_activity, unverified_reason = verify_object_from_source(core_activity)
                         if not core_activity:
-                            log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, 'Could not verify unsigned request from source')
+                            log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json,
+                                            f'Could not verify unsigned request from source: {unverified_reason}')
                             return
 
                     if core_activity['object']['type'] == 'ChatMessage':

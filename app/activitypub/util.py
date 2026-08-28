@@ -4209,15 +4209,37 @@ def resolve_remote_post_from_search(uri: str) -> Union[Post, None]:
 
 
 # called from activitypub/routes if something is posted to us without any kind of signature (typically from PeerTube)
-def verify_object_from_source(request_json):
-    uri = request_json['object']
-    uri_domain = urlparse(uri).netloc
-    if not uri_domain:
-        return None
+def verify_object_from_source(request_json) -> Tuple[Union[dict, None], Union[str, None]]:
+    """Decide whether the object URI an unsigned activity names really belongs
+    to the peer that announced it, and on success replace request_json's
+    'object' with the fetched document.
 
-    create_domain = urlparse(request_json['actor']).netloc
+    Returns `(request_json, None)` on success and `(None, reason)` on every
+    refusal, where the reason names which check refused. The caller writes it
+    into the incoming-activity log: without it every one of these paths logged
+    the same sentence, and an operator holding that log could not tell a
+    malformed URI from an impersonation attempt from a peer that was simply
+    unreachable.
+
+    HOSTS, NOT AUTHORITIES. Both comparisons go through host_of, so a peer
+    that is inconsistent about the port between 'actor', 'object' and the
+    fetched 'attributedTo' is no longer falsely refused -- the port and any
+    userinfo are not part of who the peer is. host_of degrades an unparseable
+    URL to '', and '' == '' is true, so an empty host must never be allowed to
+    satisfy either comparison. Nothing here compares two possibly-empty hosts:
+    the `not uri_domain` guard below returns before either comparison runs, so
+    uri_domain is non-empty at both of them and an empty create_domain or
+    actor_domain can only ever compare unequal. Any later edit that weakens or
+    reorders that first guard has to restore the emptiness check explicitly.
+    """
+    uri = request_json['object']
+    uri_domain = host_of(uri)
+    if not uri_domain:
+        return None, 'the object URI has no host'
+
+    create_domain = host_of(request_json['actor'])
     if create_domain != uri_domain:
-        return None
+        return None, 'the announcing actor is on a different host than the object URI'
 
     try:
         object_request = get_request(uri, headers={'Accept': 'application/activity+json'})
@@ -4226,13 +4248,13 @@ def verify_object_from_source(request_json):
         try:
             object_request = get_request(uri, headers={'Accept': 'application/activity+json'})
         except httpx.HTTPError:
-            return None
+            return None, 'the object could not be fetched'
     if object_request.status_code == 200:
         try:
             object = object_request.json()
-        except:
+        except JSONDecodeError:
             object_request.close()
-            return None
+            return None, 'the object response was not JSON'
         object_request.close()
     elif object_request.status_code == 401:
         site = Site.query.get(1)
@@ -4243,43 +4265,42 @@ def verify_object_from_source(request_json):
             try:
                 object_request = signed_get_request(uri, site.private_key, f"{current_app.config['SERVER_URL']}/actor#main-key")
             except httpx.HTTPError:
-                return None
+                return None, 'the object could not be fetched with a signed request'
         try:
             object = object_request.json()
-        except:
+        except JSONDecodeError:
             object_request.close()
-            return None
+            return None, 'the signed object response was not JSON'
         object_request.close()
     else:
-        return None
+        return None, f'the object fetch returned HTTP {object_request.status_code}'
 
     if not 'id' in object or not 'type' in object or not 'attributedTo' in object:
-        return None
+        return None, 'the fetched object has no id, type or attributedTo'
 
     actor_domain = ''
     if isinstance(object['attributedTo'], str):
-        actor_domain = urlparse(object['attributedTo']).netloc
+        actor_domain = host_of(object['attributedTo'])
     elif isinstance(object['attributedTo'], dict) and 'id' in object['attributedTo']:
-        actor_domain = urlparse(object['attributedTo']['id']).netloc
+        actor_domain = host_of(object['attributedTo']['id'])
     elif isinstance(object['attributedTo'], list):
         for a in object['attributedTo']:
             if isinstance(a, str):
-                actor_domain = urlparse(a).netloc
+                actor_domain = host_of(a)
                 break
             elif isinstance(a, dict) and a.get('type') == 'Person':
                 actor = a.get('id')
                 if isinstance(actor, str):
-                    parsed_url = urlparse(actor)
-                    actor_domain = parsed_url.netloc
+                    actor_domain = host_of(actor)
                 break
     else:
-        return None
+        return None, 'the fetched object has an attributedTo of an unusable type'
 
     if uri_domain != actor_domain:
-        return None
+        return None, 'the fetched object is attributed to a different host than its URI'
 
     request_json['object'] = object
-    return request_json
+    return request_json, None
 
 
 def log_incoming_ap(id, aplog_type, aplog_result, saved_json, message=None, session=None):

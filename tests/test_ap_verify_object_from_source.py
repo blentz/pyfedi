@@ -2,23 +2,32 @@
 defence for Announce-wrapped objects. A peer sends an activity naming an
 `object` URI; the function decides whether to believe that object really
 belongs to the peer named in `actor`, and on success REPLACES
-request_json['object'] with the document it fetched, returning the same
-(mutated) request_json. On every refusal it returns None and leaves
-request_json['object'] as the bare URI string.
+request_json['object'] with the document it fetched.
 
-TWO SEPARATE GUARDS, not one. The function compares domains twice, around
+IT RETURNS A PAIR: `(request_json, None)` on success, `(None, reason)` on
+every refusal. The reason is a short string naming which check refused, and
+it exists because there are ten distinct refusal paths and the single caller
+(app/activitypub/routes.py) used to log the same sentence for all of them --
+an operator reading the incoming-activity log could not tell a malformed URI
+from an impersonation attempt from a peer that was simply unreachable. Every
+refusal test below therefore asserts WHICH reason came back, not merely that
+something was refused; a reason no test observes is a refusal path no test
+covers.
+
+TWO SEPARATE GUARDS, not one. The function compares hosts twice, around
 the fetch:
 
-  guard 1 (pre-fetch)  the object URI's domain vs the actor's domain
-  guard 2 (post-fetch) the object URI's domain vs the fetched document's
-                       attributedTo domain
+  guard 1 (pre-fetch)  the object URI's host vs the actor's host
+  guard 2 (post-fetch) the object URI's host vs the fetched document's
+                       attributedTo host
 
 A test that fails guard 1 returns before the fetch and so never reaches
-guard 2, which means one "mismatched domain" test cannot prove both work.
+guard 2, which means one "mismatched host" test cannot prove both work.
 Each guard gets its own refusal case AND its own acceptance case below, in
-TestPreFetchDomainComparison and TestPostFetchDomainComparison
+TestPreFetchHostComparison and TestPostFetchHostComparison
 respectively; TestSuccessfulVerification is the shared acceptance case that
-both guards must pass through.
+both guards must pass through. The two guards now also return DIFFERENT
+reasons, which is what lets a test say which of them refused.
 
 PROVING THE PRE-FETCH REFUSALS DO NOT FETCH. The guard-1 refusal tests do
 not request the `http_mock` fixture at all, and register no route anywhere.
@@ -29,34 +38,32 @@ httpx.HTTPError nor any of the five exception types app.utils.get_request
 handles -- its clauses are httpx.InvalidURL, ValueError, httpx.ReadError,
 httpx.HTTPError and httpx.StreamError -- so it is normalised
 by nothing in app.utils.get_request and caught by nothing in
-verify_object_from_source -- the function's only bare `except:` wraps
-`object_request.json()`, not the network call -- so it propagates and the
-test ERRORS. "No fetch happened" is therefore proved by the absence of a
-route plus a passing test, not by interrogating a mock.
+verify_object_from_source -- the function's two `except JSONDecodeError`
+clauses wrap `object_request.json()`, not the network call -- so it
+propagates and the test ERRORS. "No fetch happened" is therefore proved by
+the absence of a route plus a passing test, not by interrogating a mock.
 
-THE netloc-VERSUS-hostname BEHAVIOUR. Both guards compare
-`urlparse(...).netloc`, never `.hostname`. TestNetlocRatherThanHostname
-pins the current behaviour and records it as a suspected defect (it is not
-fixed here). `hostname` is a pure function of `netloc`'s own string, so two
-EQUAL netlocs can never yield different hostnames: userinfo
-(https://peer.example@attacker.example/x) cannot make two different real
-hosts compare equal, and this is not an impersonation hole.
+HOSTS RATHER THAN AUTHORITIES. Both guards go through `host_of`, which
+reads `urlparse(...).hostname`: userinfo and port stripped, the remainder
+lowercased. The authority string they used to compare instead
+(`urlparse(...).netloc`) carries both, and the port is where that bit: a
+peer inconsistent about the port between `actor`, `object` and
+`attributedTo` names the same host every time and was falsely REFUSED, which
+in this function means the announced content was dropped rather than merely
+one activity declined. TestHostRatherThanAuthority is where that acceptance
+is now pinned, at each guard separately. Userinfo never was a hole in the
+other direction -- `hostname` is a pure function of `netloc`'s own string,
+so two EQUAL authorities can never yield different hosts -- and the test
+that records this keeps refusing under either reading.
 
-Does a peer control both strings? YES -- a peer authors `actor`, `object`
-and the fetched document's `attributedTo` alike, so it supplies every input
-to both comparisons. That is what makes the question worth asking, and
-`hostname` being a pure function of `netloc` is what makes the answer
-harmless: controlling both strings still cannot make two different real
-hosts compare equal.
-
-The genuine divergence is the PORT: https://peer.example:8443/x and
-https://peer.example/x are the same host by `hostname` but different
-strings by `netloc`, so a peer that is INCONSISTENT about the port between
-`actor`, `object` and `attributedTo` is falsely REFUSED. A peer that
-carries the same port on all three compares equal and passes -- the
-false reject needs the inconsistency, which is what the tests below
-construct. That is an availability defect, and it bites at both guards
-independently -- so both are pinned.
+THE EMPTY HOST. `host_of` returns '' for a URL with no host and for one
+urlparse refuses outright, and '' == '' is true, so an empty host must never
+be allowed to satisfy a comparison. It cannot here: the `not uri_domain`
+guard returns before either comparison runs, so the object URI's host is
+non-empty at both of them and an empty host on the other side can only ever
+compare unequal. That is a claim about behaviour, so it is tested at both
+guards -- see the two "will not parse" tests. Under the previous authority
+comparison those two inputs raised ValueError out of the function instead.
 
 TIMING. app/utils.py carries both `import time` and `from time import
 sleep`, and get_request runs its OWN retry through that second binding,
@@ -81,20 +88,17 @@ assigns a real keypair. tests/test_ap_remote_object_to_json.py covers the
 identical fetch-and-retry structure in a sibling function and needs exactly
 the same row, which is why that helper is shared rather than restated here.
 
-test_a_404_returns_none goes the other way and calls neither, so no Site row
+test_a_404_refuses goes the other way and calls neither, so no Site row
 exists in it at all. That is the point: a `status_code == 401` mutation
 misrouting its 404 into the signed branch crashes on None.private_key
 instead of passing quietly. "No Site row exists" and "the Site row carries
 private_key=None" are statements about different tests, not a contradiction.
 
-REPORTED, NOT FIXED. The `.json()` calls in both the 200 and the 401 branch
-are wrapped in a bare `except:`. Structurally it encloses only the parse,
-not the fetch, so it cannot swallow respx's AllMockedAssertionError the way
-sub-project 1c's fixup_url hazard did -- but it is still a bare except and
-is left in place per this task's "report defects; do not fix them"
-instruction. Both copies are covered separately below, because a
-duplicated construct with only one copy tested lets a mutation on the
-untested copy survive silently.
+THE TWO JSON PARSES. The `.json()` calls in the 200 branch and the 401
+branch each have their own `except JSONDecodeError`. Both copies are
+covered separately below, because a duplicated construct with only one copy
+tested lets a mutation on the untested copy survive silently -- and because
+the two now return different reasons, each test can say which copy ran.
 """
 import httpx
 import pytest
@@ -107,6 +111,20 @@ HOST = PEER_OBJECT_HOST
 ACTOR = PEER_ACTOR_URI
 URI = PEER_OBJECT_URI
 OTHER_HOST = 'attacker.example'
+
+# A URL urlparse refuses: an opening IPv6 bracket with no closing one makes
+# urlsplit raise ValueError, which host_of turns into ''.
+UNPARSEABLE = 'https://[oops/u/mallory'
+
+NO_HOST = 'the object URI has no host'
+ACTOR_MISMATCH = 'the announcing actor is on a different host than the object URI'
+FETCH_FAILED = 'the object could not be fetched'
+NOT_JSON = 'the object response was not JSON'
+SIGNED_FETCH_FAILED = 'the object could not be fetched with a signed request'
+SIGNED_NOT_JSON = 'the signed object response was not JSON'
+MISSING_KEYS = 'the fetched object has no id, type or attributedTo'
+UNUSABLE_ATTRIBUTED_TO = 'the fetched object has an attributedTo of an unusable type'
+ATTRIBUTED_ELSEWHERE = 'the fetched object is attributed to a different host than its URI'
 
 # Both sleep call sites reachable from this function are neutralised by the
 # shared no_real_sleeping fixture -- see the module docstring's TIMING
@@ -122,138 +140,177 @@ class TestSuccessfulVerification:
 
     def test_a_same_host_object_attributed_to_that_host_replaces_the_object(self, app, db_session, http_mock):
         """Production change that fails this: inverting either `!=` to `==`,
-        or dropping the `request_json['object'] = object` assignment."""
+        dropping the `request_json['object'] = object` assignment, or
+        returning a reason alongside a successful object."""
         http_mock.get(URI).respond(200, json=note_document())
         request_json = announce_activity()
 
-        result = verify_object_from_source(request_json)
+        result, reason = verify_object_from_source(request_json)
 
         assert result is request_json
+        assert reason is None
         assert result['object'] == note_document()
         assert result['actor'] == ACTOR
 
 
-class TestPreFetchDomainComparison:
-    """Guard 1, which runs BEFORE the fetch. Neither test requests
+class TestPreFetchHostComparison:
+    """Guard 1, which runs BEFORE the fetch. No test here requests
     `http_mock` or registers any route, so a fetch would raise out of
     get_request and error the test -- see the module docstring's PROVING THE
     PRE-FETCH REFUSALS DO NOT FETCH paragraph.
     """
 
-    def test_an_object_uri_with_no_domain_returns_none_without_fetching(self, app, db_session):
-        """`urlparse('objects/1').netloc` is '', which the `if not
-        uri_domain` guard refuses outright. Production change that fails
-        this: deleting that guard (the function would then fetch a
-        schemeless URI) or inverting it to `if uri_domain`."""
+    def test_an_object_uri_with_no_host_refuses_without_fetching(self, app, db_session):
+        """`host_of('objects/1')` is '', which the `if not uri_domain` guard
+        refuses outright. Production change that fails this: deleting that
+        guard (the function would then fetch a schemeless URI) or inverting
+        it to `if uri_domain`."""
         request_json = announce_activity(object_uri='objects/1')
 
-        assert verify_object_from_source(request_json) is None
+        assert verify_object_from_source(request_json) == (None, NO_HOST)
         assert request_json['object'] == 'objects/1'
 
-    def test_an_actor_on_a_different_host_returns_none_without_fetching(self, app, db_session):
+    def test_an_object_uri_that_will_not_parse_refuses_without_fetching(self, app, db_session):
+        """host_of degrades urlparse's ValueError to '', so an object URI
+        urlparse refuses reaches the same guard as one with no host at all,
+        rather than raising out of the function as it did when the guard read
+        `netloc` directly."""
+        request_json = announce_activity(object_uri=UNPARSEABLE)
+
+        assert verify_object_from_source(request_json) == (None, NO_HOST)
+        assert request_json['object'] == UNPARSEABLE
+
+    def test_an_actor_on_a_different_host_refuses_without_fetching(self, app, db_session):
         """Production change that fails this: deleting `if create_domain !=
-        uri_domain: return None`, or weakening it to compare something both
-        sides share. The presence half of this pair is
-        TestSuccessfulVerification, which the inverted (`==`) mutation
-        fails."""
+        uri_domain`, or weakening it to compare something both sides share.
+        The presence half of this pair is TestSuccessfulVerification, which
+        the inverted (`==`) mutation fails."""
         request_json = announce_activity(actor=f'https://{OTHER_HOST}/u/mallory')
 
-        assert verify_object_from_source(request_json) is None
+        assert verify_object_from_source(request_json) == (None, ACTOR_MISMATCH)
+        assert request_json['object'] == URI
+
+    def test_an_actor_that_will_not_parse_refuses_without_fetching(self, app, db_session):
+        """The empty-host obligation at guard 1: host_of returns '' for an
+        actor urlparse refuses, and '' must not be allowed to satisfy the
+        comparison. It cannot, because the guard above has already proved the
+        object URI's host non-empty -- this test is what would fail if that
+        ordering were ever undone, and it also pins that the ValueError is
+        absorbed rather than propagated."""
+        request_json = announce_activity(actor=UNPARSEABLE)
+
+        assert verify_object_from_source(request_json) == (None, ACTOR_MISMATCH)
         assert request_json['object'] == URI
 
 
-class TestPostFetchDomainComparison:
+class TestPostFetchHostComparison:
     """Guard 2, which runs AFTER the fetch and compares the object URI's
-    domain against the fetched document's attributedTo. Reaching it at all
+    host against the fetched document's attributedTo. Reaching it at all
     requires guard 1 to pass, which is why these tests keep actor and
     object on the same host and vary only the FETCHED document.
     """
 
-    def test_a_document_attributed_to_a_different_host_returns_none(self, app, db_session, http_mock):
+    def test_a_document_attributed_to_a_different_host_refuses(self, app, db_session, http_mock):
         """The impersonation case this guard exists for: the peer names an
         object URI on its own host, but the document that URI actually
         serves claims to belong to someone else. Production change that
-        fails this: deleting `if uri_domain != actor_domain: return None`.
-        Its presence half is TestSuccessfulVerification, which the inverted
-        (`==`) mutation fails."""
+        fails this: deleting `if uri_domain != actor_domain`. Its presence
+        half is TestSuccessfulVerification, which the inverted (`==`)
+        mutation fails."""
         http_mock.get(URI).respond(200, json=note_document(attributed_to=f'https://{OTHER_HOST}/u/mallory'))
         request_json = announce_activity()
 
-        assert verify_object_from_source(request_json) is None
+        assert verify_object_from_source(request_json) == (None, ATTRIBUTED_ELSEWHERE)
         assert request_json['object'] == URI
 
-    def test_a_document_with_an_empty_attributed_to_string_returns_none(self, app, db_session, http_mock):
-        """`urlparse('').netloc` is '', which cannot equal a real
-        uri_domain. Distinct from the case above because it exercises the
-        comparison against the '' that `actor_domain` is initialised to,
-        rather than against a rival host."""
+    def test_a_document_with_an_empty_attributed_to_string_refuses(self, app, db_session, http_mock):
+        """`host_of('')` is '', which cannot equal a real uri_domain.
+        Distinct from the case above because it exercises the comparison
+        against '' rather than against a rival host."""
         http_mock.get(URI).respond(200, json=note_document(attributed_to=''))
         request_json = announce_activity()
 
-        assert verify_object_from_source(request_json) is None
+        assert verify_object_from_source(request_json) == (None, ATTRIBUTED_ELSEWHERE)
+
+    def test_a_document_whose_attributed_to_will_not_parse_refuses(self, app, db_session, http_mock):
+        """The empty-host obligation at guard 2, and the mirror of
+        test_an_actor_that_will_not_parse_refuses_without_fetching: host_of
+        absorbs urlparse's ValueError into '', which the comparison must
+        refuse rather than let match another ''."""
+        http_mock.get(URI).respond(200, json=note_document(attributed_to=UNPARSEABLE))
+        request_json = announce_activity()
+
+        assert verify_object_from_source(request_json) == (None, ATTRIBUTED_ELSEWHERE)
 
 
 class TestRequiredKeys:
     """`if not 'id' in object or not 'type' in object or not 'attributedTo'
     in object` -- three operands, one test each, so dropping any single
-    operand is caught.
+    operand is caught. All three share one reason, because an operator's
+    next step is the same whichever key is missing.
     """
 
-    def test_a_document_without_id_returns_none(self, app, db_session, http_mock):
+    def test_a_document_without_id_refuses(self, app, db_session, http_mock):
         document = note_document()
         del document['id']
         http_mock.get(URI).respond(200, json=document)
         request_json = announce_activity()
 
-        assert verify_object_from_source(request_json) is None
+        assert verify_object_from_source(request_json) == (None, MISSING_KEYS)
         assert request_json['object'] == URI
 
-    def test_a_document_without_type_returns_none(self, app, db_session, http_mock):
+    def test_a_document_without_type_refuses(self, app, db_session, http_mock):
         document = note_document()
         del document['type']
         http_mock.get(URI).respond(200, json=document)
 
-        assert verify_object_from_source(announce_activity()) is None
+        assert verify_object_from_source(announce_activity()) == (None, MISSING_KEYS)
 
-    def test_a_document_without_attributed_to_returns_none(self, app, db_session, http_mock):
+    def test_a_document_without_attributed_to_refuses(self, app, db_session, http_mock):
         document = note_document()
         del document['attributedTo']
         http_mock.get(URI).respond(200, json=document)
 
-        assert verify_object_from_source(announce_activity()) is None
+        assert verify_object_from_source(announce_activity()) == (None, MISSING_KEYS)
 
 
 class TestAttributedToShapes:
     """The four shapes attributedTo is destructured into before guard 2
     compares it: a string, a dict carrying 'id', a list (first string, or
     first dict whose type is 'Person'), and anything else -- which falls to
-    the chain's `else: return None`.
+    the chain's `else`, the only refusal here that is not guard 2's.
     """
 
     def test_a_dict_with_an_id_matches_on_that_ids_host(self, app, db_session, http_mock):
         """Production change that fails this: dropping the `isinstance(...,
         dict) and 'id' in ...` branch, which would send this input to the
-        `else: return None`."""
+        `else`."""
         http_mock.get(URI).respond(200, json=note_document(attributed_to={'type': 'Person', 'id': ACTOR}))
+        request_json = announce_activity()
 
-        assert verify_object_from_source(announce_activity()) is not None
+        result, reason = verify_object_from_source(request_json)
 
-    def test_a_dict_with_an_id_on_another_host_returns_none(self, app, db_session, http_mock):
+        assert result is request_json
+        assert reason is None
+
+    def test_a_dict_with_an_id_on_another_host_refuses(self, app, db_session, http_mock):
         """The dict branch's refusal half: the branch must read the host out
-        of 'id', not merely accept any dict."""
+        of 'id', not merely accept any dict. The reason proves it reached
+        guard 2 rather than the shape chain's `else`."""
         http_mock.get(URI).respond(
             200, json=note_document(attributed_to={'type': 'Person', 'id': f'https://{OTHER_HOST}/u/mallory'}))
 
-        assert verify_object_from_source(announce_activity()) is None
+        assert verify_object_from_source(announce_activity()) == (None, ATTRIBUTED_ELSEWHERE)
 
-    def test_a_dict_without_an_id_returns_none(self, app, db_session, http_mock):
+    def test_a_dict_without_an_id_refuses_as_an_unusable_shape(self, app, db_session, http_mock):
         """No 'id' key means the dict branch's second operand is False, so
-        the chain falls through the list branch to `else: return None`.
-        Production change that fails this: dropping the `'id' in ...`
-        operand, which would then raise KeyError rather than refuse."""
+        the chain falls through the list branch to the `else` -- which the
+        reason distinguishes from a guard-2 refusal. Production change that
+        fails this: dropping the `'id' in ...` operand, which would then
+        raise KeyError rather than refuse."""
         http_mock.get(URI).respond(200, json=note_document(attributed_to={'type': 'Person', 'name': 'alice'}))
 
-        assert verify_object_from_source(announce_activity()) is None
+        assert verify_object_from_source(announce_activity()) == (None, UNUSABLE_ATTRIBUTED_TO)
 
     def test_a_list_matches_on_the_first_string(self, app, db_session, http_mock):
         """The loop breaks on the first string, so a later entry on a rival
@@ -262,17 +319,21 @@ class TestAttributedToShapes:
         last entry win instead of the first."""
         http_mock.get(URI).respond(
             200, json=note_document(attributed_to=[ACTOR, f'https://{OTHER_HOST}/u/mallory']))
+        request_json = announce_activity()
 
-        assert verify_object_from_source(announce_activity()) is not None
+        result, reason = verify_object_from_source(request_json)
 
-    def test_a_list_whose_first_string_is_on_another_host_returns_none(self, app, db_session, http_mock):
+        assert result is request_json
+        assert reason is None
+
+    def test_a_list_whose_first_string_is_on_another_host_refuses(self, app, db_session, http_mock):
         """The mirror of the test above, and the reason it is worth having
         both: first-wins is only proved by showing that a matching entry
         LATER in the list does not rescue a mismatching first one."""
         http_mock.get(URI).respond(
             200, json=note_document(attributed_to=[f'https://{OTHER_HOST}/u/mallory', ACTOR]))
 
-        assert verify_object_from_source(announce_activity()) is None
+        assert verify_object_from_source(announce_activity()) == (None, ATTRIBUTED_ELSEWHERE)
 
     def test_a_list_matches_on_the_first_person_dicts_id(self, app, db_session, http_mock):
         """A non-Person dict matches neither loop branch, so iteration
@@ -283,113 +344,138 @@ class TestAttributedToShapes:
             {'type': 'Group', 'id': f'https://{OTHER_HOST}/c/news'},
             {'type': 'Person', 'id': ACTOR},
         ]))
+        request_json = announce_activity()
 
-        assert verify_object_from_source(announce_activity()) is not None
+        result, reason = verify_object_from_source(request_json)
 
-    def test_a_person_dict_whose_id_is_not_a_string_returns_none(self, app, db_session, http_mock):
+        assert result is request_json
+        assert reason is None
+
+    def test_a_person_dict_whose_id_is_not_a_string_refuses(self, app, db_session, http_mock):
         """The loop breaks on the first Person dict whether or not its 'id'
         is usable, leaving actor_domain at '' -- so a Person entry with a
-        non-string id refuses, and does NOT fall through to the usable
-        entry behind it."""
+        non-string id refuses at guard 2, and does NOT fall through to the
+        usable entry behind it."""
         http_mock.get(URI).respond(200, json=note_document(attributed_to=[
             {'type': 'Person', 'id': 12345},
             ACTOR,
         ]))
 
-        assert verify_object_from_source(announce_activity()) is None
+        assert verify_object_from_source(announce_activity()) == (None, ATTRIBUTED_ELSEWHERE)
 
-    def test_an_empty_list_returns_none(self, app, db_session, http_mock):
+    def test_an_empty_list_refuses(self, app, db_session, http_mock):
         """The loop body never runs, so actor_domain stays '' and guard 2
         refuses. Production change that fails this: initialising
         actor_domain to uri_domain rather than ''."""
         http_mock.get(URI).respond(200, json=note_document(attributed_to=[]))
 
-        assert verify_object_from_source(announce_activity()) is None
+        assert verify_object_from_source(announce_activity()) == (None, ATTRIBUTED_ELSEWHERE)
 
-    def test_an_integer_attributed_to_returns_none(self, app, db_session, http_mock):
+    def test_an_integer_attributed_to_refuses_as_an_unusable_shape(self, app, db_session, http_mock):
         """The fourth shape -- anything that is not a str, an id-carrying
-        dict, or a list reaches the if/elif chain's `else: return None`.
-        Production change that fails this: deleting that `else`, which
-        would let actor_domain stay '' and reach guard 2 instead (still
-        None here, but by a different route -- which is why the shapes above
-        that DO produce '' are tested separately)."""
+        dict, or a list reaches the if/elif chain's `else`. The reason is
+        what separates it from the shapes above that produce '' and refuse
+        at guard 2 instead; deleting the `else` would let this input reach
+        guard 2 and come back with the other reason."""
         http_mock.get(URI).respond(200, json=note_document(attributed_to=12345))
 
-        assert verify_object_from_source(announce_activity()) is None
+        assert verify_object_from_source(announce_activity()) == (None, UNUSABLE_ATTRIBUTED_TO)
 
 
-class TestNetlocRatherThanHostname:
-    """Both guards compare `urlparse(...).netloc`, not `.hostname`. These
-    tests PIN CURRENT BEHAVIOUR and record a SUSPECTED DEFECT; they do not
-    endorse it and nothing is fixed here.
+class TestHostRatherThanAuthority:
+    """Both guards compare `host_of(...)`, which is `urlparse(...).hostname`,
+    rather than the authority string `urlparse(...).netloc` they compared
+    before. The authority carries userinfo and a port; neither identifies the
+    host.
 
-    `hostname` is derived purely from `netloc`'s own string (userinfo and
-    port stripped, then lowercased), so two inputs with an equal netloc can
-    never have different hostnames -- userinfo cannot make two DIFFERENT
-    real hosts compare equal, and this is not an impersonation hole. The
-    real divergence is the PORT, and it runs the other way: the same host on
-    a non-default port is a different netloc STRING, so a legitimate peer is
-    falsely refused. That is availability, not impersonation, and because
-    this function gates whether a fetched object is believed at all, the
-    refusal drops the announced content rather than merely declining one
-    activity.
+    The port is where that bit. https://remote.example:8443/x and
+    https://remote.example/x are the same host but different authority
+    STRINGS, so a peer INCONSISTENT about the port between `actor`, `object`
+    and `attributedTo` was falsely REFUSED -- and because this function gates
+    whether a fetched object is believed at all, the refusal dropped the
+    announced content rather than merely declining one activity. Both guards
+    had the defect independently, so both acceptances are pinned.
+
+    Userinfo never ran the other way: `hostname` is a pure function of
+    `netloc`'s own string, so two EQUAL authorities can never yield different
+    hosts, and controlling both strings still cannot make two different real
+    hosts compare equal. The last test records that, and refuses under either
+    reading.
     """
 
-    def test_a_port_on_the_object_uri_makes_the_pre_fetch_guard_refuse(self, app, db_session):
-        """actor netloc 'remote.example', object netloc
-        'remote.example:8443' -- the SAME host by `hostname`, refused by
-        `netloc`. No route is registered, so this also shows the refusal
-        happens before any fetch."""
-        request_json = announce_activity(object_uri=f'https://{HOST}:8443/objects/1')
+    def test_a_port_only_on_the_object_uri_is_accepted(self, app, db_session, http_mock):
+        """actor host 'remote.example', object authority
+        'remote.example:8443' -- the same host, and now accepted. Under the
+        authority comparison this refused before any fetch, which is why it
+        needed no route; it needs one now, and that route being HIT is the
+        behaviour change."""
+        uri = f'https://{HOST}:8443/objects/1'
+        http_mock.get(uri).respond(200, json=note_document(uri=uri))
+        request_json = announce_activity(object_uri=uri)
 
-        assert verify_object_from_source(request_json) is None
+        result, reason = verify_object_from_source(request_json)
 
-    def test_a_port_only_on_attributed_to_makes_the_post_fetch_guard_refuse(self, app, db_session, http_mock):
-        """The same suspected defect at guard 2, which needs its own case
-        because guard 1 returns before guard 2 is reached. actor and object
-        agree on netloc 'remote.example:8443'; the document is attributed to
-        the same host without the port, so `hostname` would accept and
-        `netloc` refuses."""
+        assert result is request_json
+        assert reason is None
+        assert request_json['object'] == note_document(uri=uri)
+
+    def test_a_port_absent_only_from_attributed_to_is_accepted(self, app, db_session, http_mock):
+        """The same fix at guard 2, which needs its own case because guard 1
+        returns before guard 2 is reached. actor and object agree on
+        authority 'remote.example:8443'; the document is attributed to the
+        same host without the port, so the authority comparison refused and
+        the host comparison accepts."""
         uri = f'https://{HOST}:8443/objects/1'
         http_mock.get(uri).respond(200, json=note_document(attributed_to=ACTOR, uri=uri))
         request_json = announce_activity(object_uri=uri, actor=f'https://{HOST}:8443/u/alice')
 
-        assert verify_object_from_source(request_json) is None
+        result, reason = verify_object_from_source(request_json)
+
+        assert result is request_json
+        assert reason is None
+        assert request_json['object'] == note_document(attributed_to=ACTOR, uri=uri)
 
     def test_userinfo_naming_the_peer_does_not_make_a_rival_host_pass(self, app, db_session):
-        """`https://remote.example@attacker.example/objects/1` has netloc
-        'remote.example@attacker.example' and hostname 'attacker.example'.
-        Both a netloc comparison and a hostname comparison refuse it against
-        actor netloc 'remote.example' -- recorded to show that the userinfo
-        form, which LOOKS like an impersonation vector, is not one here."""
+        """`https://remote.example@attacker.example/objects/1` has authority
+        'remote.example@attacker.example' and host 'attacker.example'. Both
+        readings refuse it against actor host 'remote.example' -- recorded to
+        show that the userinfo form, which LOOKS like an impersonation
+        vector, is not one, and that reading the host rather than the
+        authority did not open one."""
         request_json = announce_activity(object_uri=f'https://{HOST}@{OTHER_HOST}/objects/1')
 
-        assert verify_object_from_source(request_json) is None
+        assert verify_object_from_source(request_json) == (None, ACTOR_MISMATCH)
 
 
 class TestFetchOutcomes:
     """The fetch itself, between the two guards. Every one of these is a
     refusal, so each also confirms request_json['object'] is left as the
-    bare URI -- an unfetched object is never treated as verified.
+    bare URI -- an unfetched object is never treated as verified -- and each
+    names a different reason, which is what tells an operator whether the
+    peer was unreachable, answered with something that was not JSON, or
+    answered with a status this function does not handle.
     """
 
-    def test_an_unparseable_200_body_returns_none(self, app, db_session, http_mock):
-        """The 200 branch's bare `except:` around `.json()`. Production
-        change that fails this: removing that handler, which would raise
-        instead of returning None. Reported, not narrowed."""
+    def test_an_unparseable_200_body_refuses(self, app, db_session, http_mock):
+        """The 200 branch's `except JSONDecodeError` around `.json()`.
+        Production change that fails this: removing that handler, which
+        would raise instead of refusing, or narrowing it to an exception
+        httpx's json() does not raise."""
         http_mock.get(URI).respond(200, content=b'not json', headers={'content-type': 'application/json'})
         request_json = announce_activity()
 
-        assert verify_object_from_source(request_json) is None
+        assert verify_object_from_source(request_json) == (None, NOT_JSON)
         assert request_json['object'] == URI
 
-    def test_a_404_returns_none(self, app, db_session, http_mock):
+    def test_a_404_refuses_and_names_the_status(self, app, db_session, http_mock):
         """No Site row exists in this test, so a `status_code == 401`
         mutation that routed this response into the signed branch would
-        crash on Site.query.get(1) being None rather than pass quietly."""
+        crash on Site.query.get(1) being None rather than pass quietly. The
+        status is carried in the reason because it is the one thing an
+        operator needs and the response itself is not kept."""
         http_mock.get(URI).respond(404, json=note_document())
 
-        assert verify_object_from_source(announce_activity()) is None
+        assert verify_object_from_source(announce_activity()) == (None, 'the object fetch returned HTTP 404')
 
     def test_a_401_retries_with_a_signed_request_and_uses_its_body(self, app, db_session, http_mock):
         """respx matches by (method, url), so both fetches share one route
@@ -405,21 +491,25 @@ class TestFetchOutcomes:
         ])
         request_json = announce_activity()
 
-        assert verify_object_from_source(request_json) is request_json
+        result, reason = verify_object_from_source(request_json)
+
+        assert result is request_json
+        assert reason is None
         assert request_json['object'] == signed_document
 
-    def test_an_unparseable_signed_body_returns_none(self, app, db_session, http_mock):
-        """The 401 branch's OWN bare `except:` around `.json()` -- a second
-        copy of the construct covered by
-        test_an_unparseable_200_body_returns_none, tested separately so a
-        mutation on either copy is caught."""
+    def test_an_unparseable_signed_body_refuses(self, app, db_session, http_mock):
+        """The 401 branch's OWN `except JSONDecodeError` around `.json()` --
+        a second copy of the construct covered by
+        test_an_unparseable_200_body_refuses, tested separately so a mutation
+        on either copy is caught. The two reasons differ, so this test also
+        proves which copy ran."""
         seed_signing_site()
         http_mock.get(URI).mock(side_effect=[
             httpx.Response(401),
             httpx.Response(200, content=b'not json', headers={'content-type': 'application/json'}),
         ])
 
-        assert verify_object_from_source(announce_activity()) is None
+        assert verify_object_from_source(announce_activity()) == (None, SIGNED_NOT_JSON)
 
     def test_a_signed_fetch_failure_then_a_successful_retry_returns_the_fetched_object(self, app, db_session,
                                                                                        http_mock):
@@ -435,14 +525,18 @@ class TestFetchOutcomes:
         ])
         request_json = announce_activity()
 
-        assert verify_object_from_source(request_json) is request_json
+        result, reason = verify_object_from_source(request_json)
+
+        assert result is request_json
+        assert reason is None
         assert request_json['object'] == note_document()
 
-    def test_both_signed_fetch_attempts_failing_returns_none(self, app, db_session, http_mock):
+    def test_both_signed_fetch_attempts_failing_refuses(self, app, db_session, http_mock):
         """Production change that fails this: the 401 branch's inner `except
-        httpx.HTTPError: return None` re-raising or returning non-None -- a
-        second copy of the handler covered by
-        test_four_transport_failures_returns_none, tested separately."""
+        httpx.HTTPError` re-raising or refusing with the plain path's reason
+        -- a second copy of the handler covered by
+        test_four_transport_failures_refuses, tested separately, and the two
+        reasons are what keep the copies distinguishable."""
         seed_signing_site()
         http_mock.get(URI).mock(side_effect=[
             httpx.Response(401),
@@ -451,7 +545,7 @@ class TestFetchOutcomes:
         ])
         request_json = announce_activity()
 
-        assert verify_object_from_source(request_json) is None
+        assert verify_object_from_source(request_json) == (None, SIGNED_FETCH_FAILED)
         assert request_json['object'] == URI
 
     def test_two_transport_failures_then_a_success_returns_the_fetched_object(self, app, db_session, http_mock):
@@ -467,14 +561,18 @@ class TestFetchOutcomes:
         ])
         request_json = announce_activity()
 
-        assert verify_object_from_source(request_json) is request_json
+        result, reason = verify_object_from_source(request_json)
+
+        assert result is request_json
+        assert reason is None
         assert request_json['object'] == note_document()
 
-    def test_four_transport_failures_returns_none(self, app, db_session, http_mock):
+    def test_four_transport_failures_refuses(self, app, db_session, http_mock):
         """Production change that fails this: the inner `except
-        httpx.HTTPError: return None` re-raising or returning non-None."""
+        httpx.HTTPError` re-raising or refusing with the signed path's
+        reason."""
         http_mock.get(URI).mock(side_effect=[httpx.ConnectError('boom')] * 4)
         request_json = announce_activity()
 
-        assert verify_object_from_source(request_json) is None
+        assert verify_object_from_source(request_json) == (None, FETCH_FAILED)
         assert request_json['object'] == URI
