@@ -445,6 +445,27 @@ class TestNonStringAddressingElementIsSkipped:
     def test_a_non_string_element_in_a_cc_list_is_skipped_and_returns_none(self, app, db_session):
         assert find_community({'cc': [{'type': 'Person', 'id': 'https://peer.example/u/mallory'}]}) is None
 
+    def test_a_non_string_element_followed_by_a_matching_string_still_finds_the_community(self, app, db_session):
+        """SKIPS the bad entry rather than STOPPING at it.
+
+        The test above cannot tell those two apart: with a single bad element
+        the list is exhausted either way and the answer is None from both. Put
+        a matching community id AFTER the bad element and they separate --
+        skipping returns the community, stopping returns None. That is the
+        whole behavioural content of `isinstance(c, str) and ...` being a
+        per-element condition inside the loop rather than a guard around it,
+        and until this test it rested on reading the source.
+
+        Mutation that fails this: hoisting the element type check out of the
+        loop (refusing the whole list when any element is not a string), or
+        replacing the guard with a `break`. Both leave the test above passing.
+        """
+        seed_community_owner()
+        community = make_community('afterbadentry')
+        result = find_community({'cc': [{'type': 'Person', 'id': 'https://peer.example/u/mallory'},
+                                        community.ap_profile_id]})
+        assert result == community
+
 
 class TestMissingTypeKeyReturnsNone:
     """Was `TestSuspectedMissingTypeKeyCrash`: the test here used to pin the

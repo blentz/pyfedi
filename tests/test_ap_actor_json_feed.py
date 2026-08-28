@@ -189,6 +189,7 @@ to record the defect can be traced back to it:
 """
 from datetime import datetime
 
+import httpx
 import pytest
 
 from app import db
@@ -523,6 +524,30 @@ class TestOwnersUrl:
         monkeypatch.setitem(app.config, 'DEBUG', debug)
         peer_instance(PEER)
         assert actor_json_to_model(_feed(), '~news', PEER) is None
+        assert db.session.query(Feed).count() == 0
+
+    def test_a_null_moderators_is_refused(self, app, db_session):
+        """`moderators` present with a null value.
+
+        This reaches the refusal through the SECOND arm, not the third: the
+        elif tests only `'moderators' in activity_json`, which a null value
+        satisfies, so owners_url is assigned None by the elif and the else is
+        never entered. The guard's own comment names this case as one of the
+        two that leave owners_url None; nothing pinned it until here.
+
+        That the elif arm is the one taken was confirmed by mutation rather
+        than by reading: making the elif assign a non-None sentinel instead of
+        the document's value fails this test (the sentinel is fetched, and
+        http_mock has no route for it) while
+        test_neither_attributed_to_nor_moderators_is_refused, which reaches
+        the same refusal through the else, keeps passing.
+
+        No http_mock route is registered because the guard runs before any
+        fetch, exactly as in the two refusal tests above.
+        """
+        peer_instance(PEER)
+        document = _feed(fields={'moderators': None})
+        assert actor_json_to_model(document, '~news', PEER) is None
         assert db.session.query(Feed).count() == 0
 
 
@@ -872,19 +897,25 @@ class TestRequiredFieldsMissing:
     mutation -- both let the KeyError escape again, and the tests it covers
     fail on the uncaught exception rather than on an assertion.
 
-    Broadening to `except Exception` is not a distinct direction here: the
-    KeyError is still caught and these tests still pass. NOTHING in the suite
-    catches it any more, and that is a consequence of fixing the owners defect
-    rather than an oversight in this file. It used to be caught by
-    TestOwnersCollection, whose three tests needed IndexError and AttributeError
-    to keep escaping the same constructor -- verified by running that mutation
-    against the commit before the fix, where exactly those three tests failed,
-    and against this one, where the whole file passes. Now that owner_users is
-    guaranteed non-empty and free of Nones before the constructor runs, no test
-    makes anything but a KeyError arise inside either try. The handlers are
-    still correct as narrowed; what is gone is the accident that was policing
-    them. The /following handler was never policed at all: the same broadening
-    applied to it survives at the earlier commit too.
+    Broadening to `except Exception` is a distinct direction, and it is caught
+    by the last two tests here rather than by the KeyError tests -- the
+    KeyError is still caught under that mutation and every test above still
+    passes.
+
+    It used to be caught incidentally, by TestOwnersCollection, whose three
+    tests needed IndexError and AttributeError to keep escaping the same
+    constructor -- verified by running that mutation against the commit before
+    the owners fix, where exactly those three tests failed, and against this
+    one, where the whole file passed. Once owner_users became guaranteed
+    non-empty and free of Nones, nothing in the suite made anything but a
+    KeyError arise inside either try, so fixing that defect silently removed
+    the only evidence that either handler was narrow. The /following handler
+    was never policed even then: the same broadening applied to it survives at
+    the earlier commit too.
+
+    The two tests below restore that evidence deliberately instead of
+    incidentally, one per handler, by sending a document that raises a
+    non-KeyError inside each `try` and asserting it propagates.
     """
 
     @pytest.mark.parametrize('missing', ['preferredUsername', 'name', 'outbox',
@@ -907,6 +938,68 @@ class TestRequiredFieldsMissing:
         _register_owners(http_mock, [owner.ap_profile_id])
         document = _owned_feed(omit=('following',))
         assert actor_json_to_model(document, '~news', PEER) is None
+        assert db.session.query(Feed).count() == 0
+
+    def test_a_non_key_error_from_the_constructor_is_not_swallowed(
+            self, app, db_session, http_mock):
+        """The constructor handler is narrow, and this is what says so.
+
+        A `publicKey` whose value is a string rather than an object makes
+        `activity_json['publicKey']['publicKeyPem']` raise TypeError inside
+        the same `try` the KeyError tests above use. TypeError is not a
+        KeyError, so it must travel out of actor_json_to_model rather than be
+        turned into a None -- a handler that swallowed it would report a
+        malformed document and a genuinely broken one identically.
+
+        The Feed row count is asserted for the same reason as in the tests
+        above: the constructor is the last statement before anything is
+        written, so an escaping exception must leave nothing behind.
+
+        This test exists because the branch has nothing else policing that
+        breadth. Broadening the handler to `except Exception` failed three
+        tests before D15 was fixed; after the fix it failed none, because the
+        IndexError and AttributeError those three relied on can no longer
+        arise. The evidence went with the defect.
+        """
+        _peer_with_one_owner(http_mock)
+        document = _owned_feed(fields={'publicKey': 'not an object'})
+        with pytest.raises(TypeError):
+            actor_json_to_model(document, '~news', PEER)
+        assert db.session.query(Feed).count() == 0
+
+    def test_a_non_key_error_from_the_following_fetch_is_not_swallowed(
+            self, app, db_session, http_mock, monkeypatch):
+        """The /following handler is narrow too, and it was never policed at
+        all -- the same broadening survives even at the commit before D15's
+        fix.
+
+        A `following` whose value is not a string is passed straight to
+        get_request, which refuses it and raises httpx.HTTPError from inside
+        the handler's `try`. Nothing about that is a KeyError, so it must
+        escape.
+
+        DEBUG is pinned because the exception's TYPE depends on it, for the
+        same reason FINDING (4) records: with DEBUG off
+        is_invalid_get_request_uri reaches `furl(uri)`, whose failure its own
+        `except Exception` turns into a True, and get_request raises
+        httpx.HTTPError; with DEBUG on that function short-circuits to False
+        and the `'washingtonpost.com' in uri` membership test raises TypeError
+        one line later instead. Either way a non-KeyError escapes, which is
+        the property under test; pinning the setting is what makes the type
+        nameable in a `pytest.raises`.
+
+        Only the owners route is registered. http_mock's assert_all_called
+        requires it to have been used -- so the owners collection was fetched
+        -- while the absence of a /following route is not itself evidence,
+        since get_request never reaches respx here.
+        """
+        monkeypatch.setitem(app.config, 'DEBUG', False)
+        instance = peer_instance(PEER)
+        owner = _owner(instance)
+        _register_owners(http_mock, [owner.ap_profile_id])
+        document = _owned_feed(fields={'following': 12345})
+        with pytest.raises(httpx.HTTPError):
+            actor_json_to_model(document, '~news', PEER)
         assert db.session.query(Feed).count() == 0
 
 
