@@ -1661,8 +1661,11 @@ it, and both change what a fix has to be tested against:
   instances. `refresh_community_profile_task`'s featured-collection walk —
   unregistered at the time of writing — sits behind more, and the read-only
   sweep in `.superpowers/sdd/fix-ingest-shape-sweep.md` records eleven further
-  candidates besides. The claim has been dropped rather than re-scoped, because
-  a superlative over a set that is still growing is not worth maintaining.
+  candidates besides. The claim still stands verbatim in the row above, per this
+  table's convention that corrections are recorded under their rows rather than
+  quietly applied — so read the row and this note together. Treat the
+  superlative as withdrawn: it is not worth re-scoping, because a superlative
+  over a set that is still growing will be wrong again by the next sweep.
 - **The row names the string case but omits the MAPPING case, and omits that
   the string case can succeed.** `childFeeds: {...}` does not raise either: it
   iterates the object's keys, so a child feed url sent as a key is linked
