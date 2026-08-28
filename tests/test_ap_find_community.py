@@ -69,8 +69,6 @@ there is no clean input that discriminates this operand in isolation without
 first resolving that separate, unguarded access. Reported, not fixed, and
 not synthesized into a misleading test.
 """
-import pytest
-
 from app import db
 from app.activitypub.util import find_community
 from tests.factories import (make_community, make_post, make_post_reply, make_user,
@@ -412,62 +410,69 @@ class TestNothingMatchesAnywhere:
         assert result is None
 
 
-class TestSuspectedNonStringAddressingElementCrash:
-    """Records a suspected defect; the tests below pin CURRENT behaviour
-    (that this raises), they are NOT asserting that raising is intended.
+class TestNonStringAddressingElementIsSkipped:
+    """Was `TestSuspectedNonStringAddressingElementCrash`: the tests here
+    used to pin the AttributeError this function raised. That defect is
+    fixed -- a non-string element in the list branch is now skipped like any
+    other non-matching entry, instead of crashing on `.startswith`.
 
     The list branch of the addressing loop calls `c.startswith(...)` /
     `c.endswith(...)` on every element of a 'cc'/'to'/'audience'/'target'
-    list with no per-element isinstance check -- only the list ITSELF is
-    type-checked (`isinstance(potential_id, list)`), never its members. A
-    non-string element (e.g. a dict, which the Activity Streams vocabulary
-    permits in these fields for an embedded object) raises AttributeError.
+    list. Only the list ITSELF was type-checked (`isinstance(potential_id,
+    list)`), never its members, so a non-string element (e.g. a dict, which
+    the Activity Streams vocabulary permits in these fields for an embedded
+    object) used to raise AttributeError. The guard now checks
+    `isinstance(c, str)` per element before calling either string method,
+    mirroring the isinstance check already used one branch up for
+    `potential_id` itself.
 
-    Call-site analysis (see the task report for the full trace): every
-    caller of find_community passes JSON that reaches it without any
-    upstream validation of the addressing lists' element types --
-    app/activitypub/routes.py's Create/Update/Add/Remove handling (lines
-    named, not numbered, since they move: the `find_community(request_json)`
-    and `find_community(core_activity)` call sites inside
+    Call-site analysis: every caller of find_community passes JSON that
+    reaches it without any upstream validation of the addressing lists'
+    element types -- app/activitypub/routes.py's Create/Update/Add/Remove
+    handling (the `find_community(request_json)` and
+    `find_community(core_activity)` call sites inside
     `process_inbox_request`) all pass a directly-inbound peer activity
     verbatim. This IS reachable by an untrusted remote peer's inbox POST.
     `process_inbox_request` wraps its whole body in `except Exception:
-    session.rollback(); raise`, so the crash rolls back cleanly and
-    propagates out of the Celery task rather than corrupting state or
-    crashing the worker process -- an availability/reliability defect (that
-    one activity fails processing), not an authentication or authorization
-    bypass.
+    session.rollback(); raise`, so before this fix the crash rolled back
+    cleanly and propagated out of the Celery task rather than corrupting
+    state or crashing the worker process -- but since `process_inbox_request`
+    is invoked with `.delay()`, the HTTP inbox response had already gone out;
+    the crash just meant that activity's processing silently failed with no
+    retry, not an authentication or authorization bypass.
     """
 
-    def test_a_non_string_element_in_a_cc_list_raises_attributeerror(self, app, db_session):
-        with pytest.raises(AttributeError):
-            find_community({'cc': [{'type': 'Person', 'id': 'https://peer.example/u/mallory'}]})
+    def test_a_non_string_element_in_a_cc_list_is_skipped_and_returns_none(self, app, db_session):
+        assert find_community({'cc': [{'type': 'Person', 'id': 'https://peer.example/u/mallory'}]}) is None
 
 
-class TestSuspectedMissingTypeKeyCrash:
-    """Records a suspected defect; the test below pins CURRENT behaviour
-    (that this raises), it is NOT asserting that raising is intended.
+class TestMissingTypeKeyReturnsNone:
+    """Was `TestSuspectedMissingTypeKeyCrash`: the test here used to pin the
+    KeyError this function raised. That defect is fixed -- an object with no
+    'type' key is now treated as not-a-Video and returns None, instead of
+    crashing.
 
     Once both the addressing and inReplyTo strategies miss, the function
-    unconditionally reads `rj['type']` to check for a PeerTube Video, with no
-    'type' in rj guard. An object with no 'type' key raises KeyError.
+    checks for a PeerTube Video via `rj.get('type') == 'Video'` -- previously
+    an unconditional `rj['type']` read, with no 'type' in rj guard, which
+    raised KeyError on an object with no 'type' key.
 
-    Call-site analysis (see the task report): app/activitypub/routes.py's
-    'Add' and 'Remove' handling calls `find_community(core_activity)`
-    directly. Only `core_activity['type']` (the OUTER activity's type, 'Add'
-    or 'Remove') is validated before that call -- nothing checks that
+    Call-site analysis: app/activitypub/routes.py's 'Add' and 'Remove'
+    handling calls `find_community(core_activity)` directly. Only
+    `core_activity['type']` (the OUTER activity's type, 'Add' or 'Remove') is
+    validated before that call -- nothing checks that
     `core_activity['object']` itself carries a 'type' key, and find_community
     resolves its working `rj` to that inner object whenever 'object' is
-    present. A peer sending an Add/Remove whose object has no 'type' reaches
-    this KeyError. Separately, `resolve_remote_post_from_search` in
+    present. A peer sending an Add/Remove whose object has no 'type' used to
+    reach this KeyError. Separately, `resolve_remote_post_from_search` in
     app/activitypub/util.py (triggered from the UI's 'search' / 'Retrieve a
     post from the original server' action) calls `find_community(post_data)`
     where post_data is the raw JSON fetched from whatever URI was searched --
     also with no 'type' guard before that call. Both are genuinely reachable
-    by peer-controlled content; like the AttributeError above, the practical
-    effect is that one activity's processing fails rather than any bypass.
+    by peer-controlled content; like the list-element case above, the
+    practical effect was that one activity's processing failed rather than
+    any bypass.
     """
 
-    def test_an_object_with_no_type_key_raises_keyerror(self, app, db_session):
-        with pytest.raises(KeyError):
-            find_community({'type': 'Add', 'object': {'id': 'https://peer.example/x'}})
+    def test_an_object_with_no_type_key_returns_none(self, app, db_session):
+        assert find_community({'type': 'Add', 'object': {'id': 'https://peer.example/x'}}) is None
