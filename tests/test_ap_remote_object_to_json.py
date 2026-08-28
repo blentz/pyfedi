@@ -20,7 +20,8 @@ of those retries, and app.utils.get_request has ITS OWN internal retry (a
 app/utils.py) nested inside the plain fetch path -- a single "transport
 error twice" case can involve two get_request calls, each of which can make
 two real httpx attempts before raising, so up to four real sleeps stack
-without patching. Both sleeps are patched here: `time.sleep` (module-level,
+without patching. The shared `no_real_sleeping` fixture in conftest, which
+this module opts into by pytestmark, patches both: `time.sleep` (module-level,
 covers app.activitypub.util's `time.sleep(3)`, since `time` is a shared
 module object and every `import time; time.sleep(...)` caller sees the same
 patched attribute) and `app.utils.sleep` (the name `from time import sleep`
