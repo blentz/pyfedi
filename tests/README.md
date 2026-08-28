@@ -1084,6 +1084,48 @@ container then cannot read it -- `PermissionError: [Errno 13]` on a file whose
 mode and owner are both correct. Write files in place, or relabel afterwards with
 `chcon --reference=<a file that works>`. The failure looks nothing like its cause.
 
+### Sub-project 2c: fixing fifteen of 2a's twenty defects
+
+`docs/superpowers/plans/2026-08-28-fix-activitypub-ingest-defects.md`. Sub-project
+2a wrote characterisation tests for twenty defects and fixed none of them, so 2c
+began every fix from a test that was already red for the right reason. Fifteen
+are now fixed. **Five are still open -- D6, D8, D18, D19 and D20** -- and the
+register in `docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md`
+carries the split, a commit per fixed row, and five new defects D25-D29 that the
+fixing found and did not fix.
+
+One test file was added, `tests/test_audit_cross_host_actors.py`, for the
+read-only audit command described under "Auditing existing rows for a cross-host
+`ap_profile_id`" above. Otherwise the eight files 2a wrote are the same eight,
+with tests renamed where the behaviour they described stopped existing -- a Group or Feed
+document missing a required key is now *refused*, not raised out of, so
+`test_missing_unconditional_key_raises_key_error` became
+`test_a_missing_constructor_key_is_refused` and asserts both `None` and a row
+count of zero. If you are looking for a test by its 2a name and it is not there,
+this is why.
+
+**The floor did not move, and the reason is worth knowing before you re-measure
+it.** `app/activitypub/util.py` came back at **35.653153153153156** against
+35.06818181818182 when 2a set the floor -- 1583 of 4440, the **blended
+statement+branch figure**, not a statement percentage. Rounded down that is still
+35, so `coverage_floors.ini` was left alone, which is the honest outcome of "set
+it to the measured value, rounded down". The floor was still exercised: at 36 the
+ratchet exits 1 with `app/activitypub/util.py: 35.65% is below its floor of
+36.00%`, and back at 35 it exits 0 with `All 4 module floors met.`
+
+The direction is what a fixing sub-project should check here. Guards add branch
+arcs, so a guard whose new arm no test exercises pulls the blended figure
+**down**. If yours falls, you have shipped an untested guard -- go and find it.
+This one rose.
+
+**Three test gaps found by reviewers and not filled**, recorded so they are not
+lost: pinning tests for the breadth of the Feed branch's two `except KeyError`
+handlers (fixing D15 removed the only thing policing one of them, and the other
+was never policed at all), a test for the `moderators: null` path that D17's
+comment claims to cover, and `find_community` given a bad addressing element
+followed by a good one -- the difference between "skips the bad entry" and "stops
+at the bad entry", which is what the D3 fix actually claims.
+
 ## Every user-influenced redirect target
 
 `is_safe_redirect_target` is the origin check. Three things reach it, and between
