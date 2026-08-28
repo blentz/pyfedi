@@ -949,7 +949,7 @@ by that patch. It matters because `get_request` has its own internal retry
 sleeping a random 3-10 seconds, nested inside the outer one, so a single "transport
 error twice" case can chain up to four unpatched sleeps.
 
-### 6. The defect register: 19 found, 19 reported, 0 fixed
+### 6. The defect register: 20 found, 20 reported, 0 fixed
 
 Derived by extracting each task report's own defects section and counting its
 entries, excluding the two entries those reports themselves label "(Observation,
@@ -967,6 +967,10 @@ That yields 17. Two more are carried in the singular-heading reports that state
 one defect in prose rather than as a numbered list -- Task 1's ("## Defect
 reported (not fixed)") and Task 5's ("## Defect found (reported, not fixed)").
 Task 3 found none new. **17 + 2 = 19.**
+
+D20 is not in that count and cannot be: it was found during the whole-branch
+review that closed the sub-project, after the last task report was written. It
+is described in full in section 8 below.
 
 | # | function | defect |
 |---|---|---|
@@ -989,6 +993,7 @@ Task 3 found none new. **17 + 2 = 19.**
 | D17 | `actor_json_to_model`, Feed | a document with neither `attributedTo` nor `moderators` sends `None` into `get_request`, which raises `httpx.HTTPError` out of the function; the failure's exception *type* differs depending on whether `DEBUG` is on |
 | D18 | `actor_json_to_model`, Feed | `ap_following_url`'s else arm is dead code (see section 3) |
 | D19 | `actor_json_to_model`, Feed | the post-commit re-fetch guard protects nothing -- always true, and the statement after the block it guards dereferences the same value anyway |
+| D20 | `find_flair_or_create` | the update path writes the peer's flair name back **unstripped**, where the lookup and create paths both strip it; a peer sending a padded name gets one value on the first delivery and a different one on the second (see section 8) |
 
 Two qualifications on how this register is often summarised. **They are not all
 peer-triggerable.** D8 is cosmetic and nothing triggers it; D6 needs a missing
@@ -1042,6 +1047,121 @@ intersecting each function's own AST span against the file's `executed_lines`,
 the false side of the Feed branch's post-commit re-fetch guard, which is
 unreachable (D19). No pragma was added for it; the arc is left visible and
 explained in the test that names it.
+
+### 8. Coverage cannot see inside a string -- and one defect that hid behind that
+
+The whole-branch review that closed this sub-project raised the same failure
+against three separate functions, all of which reported **100% statement and
+branch coverage**. In each case the unprotected code was a string normalisation
+-- `.lower()` or `.strip()` -- sitting inside an expression on a line that some
+existing test already executed. Coverage records the line as covered whichever
+way the call goes, so these could be deleted with the full suite green.
+
+Thirteen call sites in total:
+
+| function | sites | what they normalise |
+|---|---|---|
+| `find_community` | 4 `.lower()` | a peer's actor URI, against a lower-cased `ap_profile_id` |
+| `find_flair_or_create` | 3 `.strip()` | a peer's flair name, on both lookup arms and on create |
+| `actor_json_to_model` | 6 `.strip()` | `preferredUsername` and `name`, twice per branch, in all three branches |
+
+Twelve of the thirteen were open; the thirteenth (the Person branch's `name`)
+was already pinned. Each is now pinned by a test that feeds input where the
+transformation decides the outcome -- a mixed-case actor URI, a padded flair
+name -- rather than a test that merely executes the line again. Every mutation
+was run on its own against the full suite: each site fails exactly one test, and
+no site is carried by another's.
+
+Re-derive the sites with:
+
+```bash
+podman-compose -f compose.test.yaml exec -T -w /app test-runner python -c "
+import ast
+src = open('app/activitypub/util.py').read()
+for n in ast.walk(ast.parse(src)):
+    if isinstance(n, ast.FunctionDef) and n.name in (
+            'find_community', 'find_flair_or_create', 'actor_json_to_model'):
+        for c in ast.walk(n):
+            if (isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
+                    and c.func.attr in ('lower', 'strip')):
+                print(n.name, '|', ast.unparse(c))
+" | sort | uniq -c
+```
+
+For `find_community` and `find_flair_or_create` that output *is* the table above.
+For `actor_json_to_model` it is not: the table's six are
+`activity_json['preferredUsername'].strip()` and `activity_json['name'].strip()`,
+three of each, one pair per branch. **The same command lists ten further
+normalisation sites in that function which this fix wave did not audit** --
+`activity_json['id'].lower()` (10 occurrences), `server.lower()` (7),
+`address.lower()` (3), `address[1:].lower()` (2), `user.title.strip()`,
+`user.title.strip().lower()`, `field_data['name'].strip()` and
+`field_data['value'].strip()`. Some are pinned by tests written earlier in this
+sub-project (`TestApIdFromAddress` covers the address and server pair;
+`test_lookup_of_an_existing_community_lowercases_the_id` and its Feed
+counterpart cover the id); the rest were simply not examined. Anyone extending
+this work should start there rather than assume the function is done.
+
+**This is the generalisable lesson, and it applies to every remaining
+sub-project.** A function at 100% on both metrics tells you nothing about its
+string handling. If the code normalises, the suite must contain an input where
+normalising is what makes the assertion true. The same blindness was already
+recorded for regexes and URL literals in sub-project 1c's section 3; case and
+whitespace normalisation is the third member of that family, and the easiest to
+miss because the call is one word long and never on a line of its own.
+
+**A count in the review was wrong on re-derivation**, in the usual direction.
+The review recorded `actor_json_to_model`'s Person branch as pinning its
+stripping properly, with three tests failing on removal, and asked only that the
+Group and Feed branches be brought up to it. Mutating each of the Person
+branch's two sites separately against the full suite gave one test for `name`
+and **zero** for `preferredUsername` -- Person had one of its two sites open too.
+All six sites in that function are now pinned, one test each. Re-derive before
+carrying a figure forward; this is the eighth time in this campaign.
+
+**D20.** Reading `find_flair_or_create`'s three `.strip()` calls surfaced a
+fourth place that should have one and does not. The function resolves a
+peer-supplied flair dict to a `CommunityFlair` row, and there are three paths
+through it:
+
+- the **lookup** strips: `CommunityFlair.flair == flair['preferredUsername'].strip()`
+  and `... == flair['display_name'].strip()`
+- the **create** path strips: `CommunityFlair(flair=flair_text.strip(), ...)`
+- the **update** path does not: `existing_flair.flair = flair["display_name"]`,
+  and its `elif` arm `existing_flair.flair = flair['preferredUsername']`
+
+So a peer that sends `' spoiler '` creates the row as `'spoiler'`, and the next
+delivery of the *same document* finds that row (the lookup strips, so it
+matches) and overwrites its name with `' spoiler '`. The stored value flips on
+the second delivery, and every delivery after the first leaves the padded form
+in the column.
+
+**Where the input comes from, and how bad that is.** The flair dict is
+peer-supplied and reaches this function without whitespace validation, from
+`actor_json_to_model`'s `tag` / `lemmy:tagsForPosts` handling and from
+`refresh_community_profile_task`. A remote community admin controls the string.
+The consequence is a display and matching defect, not a security one: the flair
+renders with leading and trailing whitespace, and any lookup elsewhere that
+compares an unstripped column value against a stripped input stops matching. It
+does not cross a trust boundary, does not bypass a check, and cannot corrupt
+another community's rows -- `community_id` scopes every query. It is also
+partially self-correcting, in that the *lookup* still finds the row.
+
+Rated **low**, and left unfixed like every other entry in this register.
+`tests/test_ap_find_flair_or_create.py::TestWhitespaceInThePeersFlairName`
+carries two tests that assert the unstripped value, one per arm of the update
+block, with docstrings saying in as many words that they pin present behaviour
+and not desired behaviour. If someone adds the missing `.strip()`, those two
+tests fail -- deliberately, so the fix has to come with a considered update to
+the assertions rather than sliding through green.
+
+Two smaller asymmetries of the same shape were found alongside D20 and are
+**not** filed as defects, because in both cases the unstripped column plausibly
+wants the peer's raw value: `actor_json_to_model` strips `preferredUsername`
+into `User.user_name` but not into `User.ap_preferred_username`, and strips it
+into `Feed.name` but not into `Feed.machine_name`. Both are asserted, unstripped,
+in the tests that pin the stripped column next to them, so a later change to
+either cannot pass unnoticed.
 
 ## Ratchet gotchas
 
