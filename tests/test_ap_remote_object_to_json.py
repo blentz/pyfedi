@@ -49,37 +49,23 @@ private_key=None -- nothing before this task needed a real key on it. The
 401 path calls HttpSignature.signed_request, which loads that column as a
 PEM private key (cryptography.hazmat's load_pem_private_key) to sign the
 request; None fails there before any network call happens. Every 401-path
-test in this file therefore assigns a real keypair from
+test in this file therefore goes through `seed_signing_site`
+(tests/factories.py), which assigns a real keypair from
 app.activitypub.signature.RsaKeys.generate_keypair() onto the Site row after
 make_site() and commits, rather than relying on make_site()'s default.
 """
 import httpx
 import pytest
 
-from app import db
-from app.activitypub.signature import RsaKeys
 from app.activitypub.util import remote_object_to_json
-from tests.factories import make_site
+from tests.factories import PEER_OBJECT_URI, seed_signing_site
 
-URI = 'https://remote.example/objects/1'
+URI = PEER_OBJECT_URI
 
-
-def _seed_signing_site():
-    """A Site row (id 1) carrying a real RSA keypair, required before the
-    401 branch's signed_get_request call can run at all."""
-    site = make_site()
-    private_key, _public_key = RsaKeys.generate_keypair()
-    site.private_key = private_key
-    db.session.commit()
-    return site
-
-
-@pytest.fixture(autouse=True)
-def _no_real_sleeping(monkeypatch):
-    """Patches both sleep call sites reachable from this function -- see the
-    module docstring's Timing decision paragraph for why both are needed."""
-    monkeypatch.setattr('time.sleep', lambda *a, **k: None)
-    monkeypatch.setattr('app.utils.sleep', lambda *a, **k: None)
+# Both sleep call sites reachable from this function are neutralised by the
+# shared no_real_sleeping fixture -- see the module docstring's Timing
+# decision paragraph for why both are needed.
+pytestmark = pytest.mark.usefixtures('no_real_sleeping')
 
 
 class TestSuccessfulPlainFetch:
@@ -160,7 +146,7 @@ class TestSignedRetryOnUnauthorized:
     """
 
     def test_a_401_then_a_successful_signed_fetch_returns_the_parsed_dict(self, app, db_session, http_mock):
-        _seed_signing_site()
+        seed_signing_site()
         http_mock.get(URI).mock(side_effect=[
             httpx.Response(401),
             httpx.Response(200, json={'type': 'Note', 'id': URI, 'via': 'signed'}),
@@ -173,7 +159,7 @@ class TestSignedRetryOnUnauthorized:
         SEPARATE copy of the same pattern covered for the 200 branch above,
         per the task's note that a guard/handler duplicated across two
         locations needs its own test per location."""
-        _seed_signing_site()
+        seed_signing_site()
         http_mock.get(URI).mock(side_effect=[
             httpx.Response(401),
             httpx.Response(200, content=b'not json', headers={'content-type': 'application/json'}),
@@ -185,7 +171,7 @@ class TestSignedRetryOnUnauthorized:
         TestUnsignedTransportFailureRetry because signed_get_request (unlike
         get_request) has no internal retry of its own, so only ONE failure
         per attempt is needed here rather than two."""
-        _seed_signing_site()
+        seed_signing_site()
         http_mock.get(URI).mock(side_effect=[
             httpx.Response(401),
             httpx.ConnectError('boom'),
@@ -197,7 +183,7 @@ class TestSignedRetryOnUnauthorized:
         """Mutation that fails this: the 401 branch's inner `except
         httpx.HTTPError: return None` being replaced with something that
         re-raises or returns a non-None value."""
-        _seed_signing_site()
+        seed_signing_site()
         http_mock.get(URI).mock(side_effect=[
             httpx.Response(401),
             httpx.ConnectError('boom'),

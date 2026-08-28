@@ -117,7 +117,7 @@ excluded above, `== 'Group'` and `if community:`, are not in this list):
     community.icon_id                           -> make_image_sizes
     community.image_id                          -> make_image_sizes
 
-Every test builds the peer's Instance row first with make_instance. Without it
+Every test builds the peer's Instance row first with peer_instance. Without it
 find_instance_id inserts a sparse Instance and then calls new_instance_profile,
 which fetches the peer's nodeinfo over HTTP. The Instance is also read back
 twice by this branch, for show_popular and show_all -- see
@@ -145,17 +145,9 @@ from app.activitypub import util as activitypub_util
 from app.activitypub.util import actor_json_to_model
 from app.models import Community, CommunityFlair, File, Language, User, utcnow
 from app.utils import set_setting
-from tests.factories import make_instance, peer_actor_json
+from tests.factories import peer_actor_json, peer_instance
 
 PEER = 'peer.example'
-
-
-def _peer_instance(domain=PEER):
-    """The Instance row find_instance_id looks up, created before the call so
-    that function takes its found-existing path instead of inserting a sparse
-    row and calling new_instance_profile (which fetches the peer's nodeinfo).
-    """
-    return make_instance(domain)
 
 
 def _group(name='memes', **kwargs):
@@ -186,7 +178,7 @@ class TestGroupDispatch:
     """
 
     def test_group_document_creates_a_community(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         community = actor_json_to_model(_group('memes'), '!memes', PEER)
         assert isinstance(community, Community)
         assert community.name == 'memes'
@@ -204,7 +196,7 @@ class TestGroupDispatch:
         off the end of the if/elif chain, so the function returns None
         implicitly. Broadening the Group test to `!= 'Feed'` builds a Community
         out of it instead."""
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'type': 'Organization'})
         assert actor_json_to_model(document, '!memes', PEER) is None
         assert db.session.query(Community).count() == 0
@@ -213,7 +205,7 @@ class TestGroupDispatch:
         """The Person/Service test runs first, so a Person never reaches this
         branch. Asserting it comes back as a User keeps the Group tests honest
         about which branch built the row they are looking at."""
-        _peer_instance()
+        peer_instance(PEER)
         result = actor_json_to_model(peer_actor_json(name='alice', server=PEER), 'alice', PEER)
         assert isinstance(result, User)
         assert db.session.query(Community).count() == 0
@@ -243,7 +235,7 @@ class TestExistingCommunity:
     """
 
     def test_a_second_call_with_the_same_document_returns_the_same_row(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes')
         first = actor_json_to_model(document, '!memes', PEER)
         second = actor_json_to_model(document, '!memes', PEER)
@@ -255,7 +247,7 @@ class TestExistingCommunity:
         a document stripped of preferredUsername, name and outbox still yields
         the stored row. Without the early return the same document raises
         KeyError -- see TestRequiredFieldsMissing."""
-        _peer_instance()
+        peer_instance(PEER)
         existing = actor_json_to_model(_group('memes'), '!memes', PEER)
         stripped = _group('memes', omit=('preferredUsername', 'name', 'outbox'))
         result = actor_json_to_model(stripped, '!memes', PEER)
@@ -270,7 +262,7 @@ class TestExistingCommunity:
 
         'outbox' is stripped so a failed match cannot masquerade as a hit --
         see this class's docstring."""
-        _peer_instance()
+        peer_instance(PEER)
         existing = actor_json_to_model(_group('memes'), '!memes', PEER)
         document = _group('memes', fields={'id': f'https://{PEER}/c/MEMES'},
                           omit=('outbox',))
@@ -303,7 +295,7 @@ class TestRequiredFieldsMissing:
 
     @pytest.mark.parametrize('missing', ['preferredUsername', 'name', 'outbox', 'inbox'])
     def test_missing_unconditional_key_raises_key_error(self, app, db_session, missing):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', omit=(missing,))
         with pytest.raises(KeyError) as excinfo:
             actor_json_to_model(document, '!memes', PEER)
@@ -311,14 +303,14 @@ class TestRequiredFieldsMissing:
         assert db.session.query(Community).count() == 0
 
     def test_missing_public_key_raises_key_error(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', omit=('publicKey',))
         with pytest.raises(KeyError):
             actor_json_to_model(document, '!memes', PEER)
         assert db.session.query(Community).count() == 0
 
     def test_public_key_without_a_pem_raises_key_error(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'publicKey': {'id': 'x'}})
         with pytest.raises(KeyError) as excinfo:
             actor_json_to_model(document, '!memes', PEER)
@@ -336,13 +328,13 @@ class TestModeratorsUrl:
     """
 
     def test_attributed_to_string_becomes_the_moderators_url(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'attributedTo': f'https://{PEER}/c/memes/moderators'})
         community = actor_json_to_model(document, '!memes', PEER)
         assert community.ap_moderators_url == f'https://{PEER}/c/memes/moderators'
 
     def test_moderators_is_used_when_attributed_to_is_absent(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'moderators': f'https://{PEER}/c/memes/mods'})
         community = actor_json_to_model(document, '!memes', PEER)
         assert community.ap_moderators_url == f'https://{PEER}/c/memes/mods'
@@ -350,7 +342,7 @@ class TestModeratorsUrl:
     def test_non_string_attributed_to_falls_through_to_moderators(self, app, db_session):
         """Mastodon-style peers publish attributedTo as a list of actors. The
         isinstance test rejects that shape and the kbin 'moderators' key wins."""
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={
             'attributedTo': [{'type': 'Person', 'id': f'https://{PEER}/u/mod'}],
             'moderators': f'https://{PEER}/c/memes/mods',
@@ -359,7 +351,7 @@ class TestModeratorsUrl:
         assert community.ap_moderators_url == f'https://{PEER}/c/memes/mods'
 
     def test_attributed_to_wins_over_moderators_when_both_are_strings(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={
             'attributedTo': f'https://{PEER}/c/memes/moderators',
             'moderators': f'https://{PEER}/c/memes/mods',
@@ -368,7 +360,7 @@ class TestModeratorsUrl:
         assert community.ap_moderators_url == f'https://{PEER}/c/memes/moderators'
 
     def test_neither_key_leaves_no_moderators_url(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         community = actor_json_to_model(_group('memes'), '!memes', PEER)
         assert community.ap_moderators_url is None
 
@@ -390,14 +382,14 @@ class TestNsfwAndNsflGuards:
     """
 
     def test_sensitive_document_is_rejected_when_nsfw_is_off(self, app, db_session, site):
-        _peer_instance()
+        peer_instance(PEER)
         assert site.enable_nsfw is not True
         document = _group('memes', fields={'sensitive': True})
         assert actor_json_to_model(document, '!memes', PEER) is None
         assert db.session.query(Community).count() == 0
 
     def test_sensitive_document_is_accepted_when_the_instance_enables_nsfw(self, app, db_session, site):
-        _peer_instance()
+        peer_instance(PEER)
         site.enable_nsfw = True
         db.session.commit()
         document = _group('memes', fields={'sensitive': True})
@@ -408,14 +400,14 @@ class TestNsfwAndNsflGuards:
     def test_sensitive_false_is_not_blocked(self, app, db_session, site):
         """The middle operand: the key is present, so `'sensitive' in
         activity_json` is true, and only the value stops the guard."""
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'sensitive': False})
         community = actor_json_to_model(document, '!memes', PEER)
         assert community is not None
         assert community.nsfw is False
 
     def test_nsfl_document_is_rejected_when_nsfl_is_off(self, app, db_session, site):
-        _peer_instance()
+        peer_instance(PEER)
         assert site.enable_nsfl is not True
         document = _group('memes', fields={'nsfl': True})
         assert actor_json_to_model(document, '!memes', PEER) is None
@@ -424,7 +416,7 @@ class TestNsfwAndNsflGuards:
     def test_nsfl_document_is_accepted_when_the_instance_enables_nsfl(self, app, db_session, site):
         """nsfl has no column of its own on Community -- only the guard reads
         it -- so the observable outcome is that a row exists at all."""
-        _peer_instance()
+        peer_instance(PEER)
         site.enable_nsfl = True
         db.session.commit()
         document = _group('memes', fields={'nsfl': True})
@@ -433,7 +425,7 @@ class TestNsfwAndNsflGuards:
         assert db.session.query(Community).count() == 1
 
     def test_nsfl_false_is_not_blocked(self, app, db_session, site):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'nsfl': False})
         assert actor_json_to_model(document, '!memes', PEER) is not None
 
@@ -460,7 +452,7 @@ class TestScalarOptionalFields:
     """
 
     def test_every_scalar_optional_present_is_copied(self, app, db_session, site):
-        _peer_instance()
+        peer_instance(PEER)
         site.enable_nsfw = True
         db.session.commit()
         document = _group('memes', fields={
@@ -494,7 +486,7 @@ class TestScalarOptionalFields:
         assert community.post_url_type == 'thumbnail'
 
     def test_every_scalar_optional_absent_takes_its_default(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         before = utcnow()
         community = actor_json_to_model(_group('memes'), '!memes', PEER)
         assert community.nsfw is False
@@ -528,12 +520,12 @@ class TestApIdFromAddress:
     """
 
     def test_sigil_prefixed_address_loses_the_sigil(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         community = actor_json_to_model(_group('memes'), '!memes', PEER)
         assert community.ap_id == f'memes@{PEER}'
 
     def test_bare_address_keeps_all_of_its_characters(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         community = actor_json_to_model(_group('memes'), 'memes', PEER)
         assert community.ap_id == f'memes@{PEER}'
 
@@ -542,7 +534,7 @@ class TestApIdFromAddress:
         The document's id must still contain the server verbatim, or the
         case-sensitive `server not in activity_json['id']` guard rejects it
         before this branch is reached."""
-        _peer_instance()
+        peer_instance(PEER)
         community = actor_json_to_model(_group('memes'), '!MEMES', PEER)
         assert community.ap_id == f'memes@{PEER}'
         assert community.ap_domain == PEER
@@ -563,13 +555,13 @@ class TestInboxResolution:
     """
 
     def test_shared_inbox_wins_when_endpoints_present(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'endpoints': {'sharedInbox': f'https://{PEER}/inbox'}})
         community = actor_json_to_model(document, '!memes', PEER)
         assert community.ap_inbox_url == f'https://{PEER}/inbox'
 
     def test_inbox_used_when_endpoints_absent(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         community = actor_json_to_model(_group('memes'), '!memes', PEER)
         assert community.ap_inbox_url == f'https://{PEER}/c/memes/inbox'
 
@@ -584,13 +576,13 @@ class TestInstanceDerivedVisibility:
     """
 
     def test_defaults_come_from_an_ordinary_instance(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         community = actor_json_to_model(_group('memes'), '!memes', PEER)
         assert community.show_popular is True
         assert community.show_all is True
 
     def test_a_silenced_unpopular_instance_hides_its_communities(self, app, db_session):
-        instance = _peer_instance()
+        instance = peer_instance(PEER)
         instance.popular = False
         instance.silenced = True
         db.session.commit()
@@ -613,7 +605,7 @@ class TestLowQualityMemeCommunities:
     """
 
     def test_setting_on_marks_a_memes_community_low_quality(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         set_setting('meme_comms_low_quality', True)
         community = actor_json_to_model(_group('memes'), '!memes', PEER)
         assert community.low_quality is True
@@ -621,19 +613,19 @@ class TestLowQualityMemeCommunities:
     def test_setting_on_marks_a_shitpost_community_low_quality(self, app, db_session):
         """The second operand of the `or`, which the 'memes' test alone leaves
         unfalsified."""
-        _peer_instance()
+        peer_instance(PEER)
         set_setting('meme_comms_low_quality', True)
         community = actor_json_to_model(_group('shitposting'), '!shitposting', PEER)
         assert community.low_quality is True
 
     def test_setting_on_leaves_an_ordinary_community_alone(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         set_setting('meme_comms_low_quality', True)
         community = actor_json_to_model(_group('gardening'), '!gardening', PEER)
         assert community.low_quality is False
 
     def test_setting_off_leaves_a_meme_community_alone(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         community = actor_json_to_model(_group('memes'), '!memes', PEER)
         assert community.low_quality is False
 
@@ -649,7 +641,7 @@ class TestDescription:
     """
 
     def test_html_summary_is_allowlisted_not_wrapped(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'summary': '<p>hello <script>x</script></p>'})
         community = actor_json_to_model(document, '!memes', PEER)
         assert '<script>' not in community.description_html
@@ -657,20 +649,20 @@ class TestDescription:
         assert community.description_html.startswith('<p>')
 
     def test_plain_text_summary_is_wrapped_in_a_paragraph(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'summary': 'just words'})
         community = actor_json_to_model(document, '!memes', PEER)
         assert community.description_html.strip().startswith('<p>')
         assert 'just words' in community.description_html
 
     def test_content_is_used_when_summary_is_absent(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'content': '<p>from content</p>'})
         community = actor_json_to_model(document, '!memes', PEER)
         assert 'from content' in community.description_html
 
     def test_summary_wins_over_content_when_both_are_present(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'summary': '<p>from summary</p>',
                                            'content': '<p>from content</p>'})
         community = actor_json_to_model(document, '!memes', PEER)
@@ -678,7 +670,7 @@ class TestDescription:
         assert 'from content' not in community.description_html
 
     def test_neither_key_leaves_the_description_unset(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         community = actor_json_to_model(_group('memes'), '!memes', PEER)
         assert not community.description_html
         assert not community.description
@@ -689,7 +681,7 @@ class TestDescription:
         Person branch -- which passes the null on to allowlist_html and stores
         the '' that comes back -- this branch skips the block entirely, so the
         column is never assigned at all."""
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'summary': None})
         community = actor_json_to_model(document, '!memes', PEER)
         assert community.description_html is None
@@ -697,13 +689,13 @@ class TestDescription:
 
     def test_empty_summary_leaves_the_description_unset(self, app, db_session):
         """`description_html != ''` -- the second operand of the same guard."""
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'summary': ''})
         community = actor_json_to_model(document, '!memes', PEER)
         assert community.description_html is None
 
     def test_markdown_source_overwrites_the_html_derived_description(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={
             'summary': '<p>from html</p>',
             'source': {'mediaType': 'text/markdown', 'content': '**from markdown**'},
@@ -713,7 +705,7 @@ class TestDescription:
         assert '<strong>from markdown</strong>' in community.description_html
 
     def test_source_with_another_media_type_leaves_the_description_from_the_html(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={
             'summary': '<p>from html</p>',
             'source': {'mediaType': 'text/html', 'content': '**from markdown**'},
@@ -726,7 +718,7 @@ class TestDescription:
         block, so a peer that sends a source but no summary or content gets
         neither -- which is a shape the Person/Service branch does not share,
         since its own source handling is outside the summary block."""
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={
             'source': {'mediaType': 'text/markdown', 'content': '**ignored**'},
         })
@@ -758,13 +750,13 @@ class TestTheme:
     """
 
     def test_theme_is_copied(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'theme': 'high_contrast'})
         community = actor_json_to_model(document, '!memes', PEER)
         assert community.theme == 'high_contrast'
 
     def test_empty_theme_is_not_copied(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'theme': ''})
         community = actor_json_to_model(document, '!memes', PEER)
         assert community.theme == ''
@@ -778,13 +770,13 @@ class TestTheme:
         raises ProgrammingError, "can't adapt type 'dict'", so {} never reaches
         the column at all. '' and a JSON null are the two that leave theme
         unchanged, and so cannot pin this operand."""
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'theme': False})
         community = actor_json_to_model(document, '!memes', PEER)
         assert community.theme == ''
 
     def test_absent_theme_leaves_the_default(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         community = actor_json_to_model(_group('memes'), '!memes', PEER)
         assert community.theme == ''
 
@@ -799,14 +791,14 @@ class TestIcon:
     """
 
     def test_icon_as_a_dict(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'icon': {'url': f'https://{PEER}/a.png'}})
         community = actor_json_to_model(document, '!memes', PEER)
         assert community.icon_id is not None
         assert db.session.get(File, community.icon_id).source_url == f'https://{PEER}/a.png'
 
     def test_icon_as_a_list_takes_the_last_entry(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'icon': [
             {'url': f'https://{PEER}/small.png'},
             {'url': f'https://{PEER}/large.png'},
@@ -815,7 +807,7 @@ class TestIcon:
         assert db.session.get(File, community.icon_id).source_url == f'https://{PEER}/large.png'
 
     def test_icon_as_a_bare_string(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'icon': f'https://{PEER}/a.png'})
         community = actor_json_to_model(document, '!memes', PEER)
         assert db.session.get(File, community.icon_id).source_url == f'https://{PEER}/a.png'
@@ -823,20 +815,20 @@ class TestIcon:
     def test_icon_of_an_unrecognised_shape_creates_no_file(self, app, db_session):
         """A dict with no 'url' matches none of the three shapes, so icon_entry
         stays None and the File is never built."""
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'icon': {'mediaType': 'image/png'}})
         community = actor_json_to_model(document, '!memes', PEER)
         assert community.icon_id is None
         assert db.session.query(File).count() == 0
 
     def test_null_icon_creates_no_file(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'icon': None})
         community = actor_json_to_model(document, '!memes', PEER)
         assert community.icon_id is None
 
     def test_absent_icon_creates_no_file(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         community = actor_json_to_model(_group('memes'), '!memes', PEER)
         assert community.icon_id is None
         assert db.session.query(File).count() == 0
@@ -852,13 +844,13 @@ class TestImage:
     """
 
     def test_image_as_a_dict(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'image': {'url': f'https://{PEER}/c.png'}})
         community = actor_json_to_model(document, '!memes', PEER)
         assert db.session.get(File, community.image_id).source_url == f'https://{PEER}/c.png'
 
     def test_image_as_a_list_takes_the_first_entry(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'image': [
             {'url': f'https://{PEER}/first.png'},
             {'url': f'https://{PEER}/second.png'},
@@ -869,20 +861,20 @@ class TestImage:
     def test_image_as_a_bare_string_creates_no_file(self, app, db_session):
         """The shape the icon block accepts and this one does not: neither
         isinstance test matches, so image_entry stays None."""
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'image': f'https://{PEER}/c.png'})
         community = actor_json_to_model(document, '!memes', PEER)
         assert community.image_id is None
         assert db.session.query(File).count() == 0
 
     def test_null_image_creates_no_file(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'image': None})
         community = actor_json_to_model(document, '!memes', PEER)
         assert community.image_id is None
 
     def test_absent_image_creates_no_file(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         community = actor_json_to_model(_group('memes'), '!memes', PEER)
         assert community.image_id is None
 
@@ -911,14 +903,14 @@ class TestRemoteImageResizing:
     """
 
     def test_icon_is_sent_for_resizing(self, app, db_session, http_mock):
-        _peer_instance()
+        peer_instance(PEER)
         http_mock.get(f'https://{PEER}/a.png').respond(404)
         document = _group('memes', fields={'icon': {'url': f'https://{PEER}/a.png'}})
         community = actor_json_to_model(document, '!memes', PEER)
         assert community.icon_id is not None
 
     def test_banner_is_sent_for_resizing(self, app, db_session, http_mock):
-        _peer_instance()
+        peer_instance(PEER)
         http_mock.get(f'https://{PEER}/c.png').respond(404)
         document = _group('memes', fields={'image': {'url': f'https://{PEER}/c.png'}})
         community = actor_json_to_model(document, '!memes', PEER)
@@ -935,7 +927,7 @@ class TestLanguages:
     """
 
     def test_languages_are_created_and_linked(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'language': [
             {'identifier': 'en', 'name': 'English'},
             {'identifier': 'de', 'name': 'German'},
@@ -945,7 +937,7 @@ class TestLanguages:
         assert db.session.query(Language).filter_by(code='de').one().name == 'German'
 
     def test_an_existing_language_is_reused_not_duplicated(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         db.session.add(Language(code='en', name='English'))
         db.session.commit()
         document = _group('memes', fields={'language': [{'identifier': 'en', 'name': 'Englisch'}]})
@@ -957,13 +949,13 @@ class TestLanguages:
         assert db.session.query(Language).filter_by(code='en').one().name == 'English'
 
     def test_language_that_is_not_a_list_is_ignored(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'language': {'identifier': 'en', 'name': 'English'}})
         community = actor_json_to_model(document, '!memes', PEER)
         assert community.languages.count() == 0
 
     def test_absent_language_leaves_no_languages(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         community = actor_json_to_model(_group('memes'), '!memes', PEER)
         assert community.languages.count() == 0
 
@@ -990,7 +982,7 @@ class TestNewStylePostFlair:
     """
 
     def test_community_post_tag_becomes_community_flair(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'tag': [{
             'type': 'CommunityPostTag',
             'id': f'https://{PEER}/c/memes/tag/1',
@@ -1009,7 +1001,7 @@ class TestNewStylePostFlair:
         assert stored.blur_images is True
 
     def test_non_community_post_tag_entries_are_skipped(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'tag': [
             {'type': 'Hashtag', 'name': '#memes', 'href': f'https://{PEER}/tag/memes'},
             {'type': 'lemmy:CommunityTag', 'id': f'https://{PEER}/c/memes/tag/9',
@@ -1024,7 +1016,7 @@ class TestNewStylePostFlair:
     def test_a_tag_find_flair_or_create_rejects_is_not_appended(self, app, db_session):
         """`if flair_obj:` -- find_flair_or_create returns None when the tag
         carries no usable name, and the branch must not append that None."""
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'tag': [{
             'type': 'CommunityPostTag',
             'id': f'https://{PEER}/c/memes/tag/1',
@@ -1035,7 +1027,7 @@ class TestNewStylePostFlair:
         assert db.session.query(CommunityFlair).count() == 0
 
     def test_tag_that_is_not_a_list_is_ignored(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'tag': {'type': 'CommunityPostTag',
                                                    'preferredUsername': 'Discussion'}})
         community = actor_json_to_model(document, '!memes', PEER)
@@ -1043,7 +1035,7 @@ class TestNewStylePostFlair:
         assert db.session.query(CommunityFlair).count() == 0
 
     def test_absent_tag_leaves_no_flair(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         community = actor_json_to_model(_group('memes'), '!memes', PEER)
         assert community.flair == []
 
@@ -1078,7 +1070,7 @@ class TestLegacyPostFlair:
     """
 
     def test_a_tag_with_every_optional_key_copies_all_of_them(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'lemmy:tagsForPosts': [{
             'display_name': 'Discussion',
             'text_color': '#ffffff',
@@ -1099,7 +1091,7 @@ class TestLegacyPostFlair:
         """The absent side of all four optional guards at once. The defaults
         are find_flair_or_create's, not this block's: empty strings for the two
         colours, False for blur_images and a null ap_id."""
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'lemmy:tagsForPosts': [{'display_name': 'Discussion'}]})
         community = actor_json_to_model(document, '!memes', PEER)
         stored = db.session.query(CommunityFlair).one()
@@ -1111,7 +1103,7 @@ class TestLegacyPostFlair:
         assert [f.id for f in community.flair] == [stored.id]
 
     def test_several_tags_all_become_flair(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'lemmy:tagsForPosts': [
             {'display_name': 'Discussion'},
             {'display_name': 'Meta'},
@@ -1123,14 +1115,14 @@ class TestLegacyPostFlair:
     def test_a_tag_with_an_empty_display_name_is_not_appended(self, app, db_session):
         """`if flair_obj:` -- find_flair_or_create returns None for a tag whose
         display_name is empty, and the branch must not append that None."""
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'lemmy:tagsForPosts': [{'display_name': ''}]})
         community = actor_json_to_model(document, '!memes', PEER)
         assert community.flair == []
         assert db.session.query(CommunityFlair).count() == 0
 
     def test_tags_for_posts_that_is_not_a_list_is_ignored(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'lemmy:tagsForPosts': {'display_name': 'Discussion'}})
         community = actor_json_to_model(document, '!memes', PEER)
         assert community.flair == []
@@ -1140,7 +1132,7 @@ class TestLegacyPostFlair:
         """The two blocks are an if/elif, so a peer publishing both gets only
         the 'tag' one. Turning the elif into a second `if` would apply both and
         leave the legacy flair in place, which the count assertion catches."""
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={
             'tag': [{'type': 'CommunityPostTag', 'id': f'https://{PEER}/c/memes/tag/1',
                      'preferredUsername': 'New'}],
@@ -1156,7 +1148,7 @@ class TestLegacyPostFlair:
         out of actor_json_to_model. The community row has already been
         committed by then, so the peer ends up with a community and no flair
         and the caller sees an exception. Pinned, not fixed."""
-        _peer_instance()
+        peer_instance(PEER)
         document = _group('memes', fields={'lemmy:tagsForPosts': [{'id': 'https://x/1'}]})
         with pytest.raises(KeyError) as excinfo:
             actor_json_to_model(document, '!memes', PEER)
@@ -1193,7 +1185,7 @@ class TestConcurrentInsert:
 
     def test_a_rival_commit_during_the_call_returns_the_row_that_won(
             self, app, db_session, monkeypatch):
-        instance = _peer_instance()
+        instance = peer_instance(PEER)
         document = _group('memes')
         real_find_instance_id = activitypub_util.find_instance_id
 
