@@ -41,6 +41,33 @@ own exclusion-and-match pair, 2 for the inReplyTo strategy (presence check,
 Post-found check, with a 2-branch else for the PostReply fallback), and
 3 for the Video strategy (type check, attributedTo-is-list check, per-item
 str-vs-Group dict check). Every one of them is exercised below.
+
+Compound `and` conditions, and checks repeated in two code locations, need a
+test on EACH operand and EACH location -- coverage.py branch coverage is
+satisfied once both outcomes of the whole expression are observed, so a
+single test can report full branch coverage while leaving one operand (or
+one of two textually-duplicated copies of the same check) never
+independently falsified. This file was reviewed and found short on that
+twice: the Public-collection and `/followers` exclusions each appear once in
+the addressing loop's string branch and once in its list branch, and the
+original test set covered only one branch per exclusion (Public via string,
+`/followers` via list) -- proved live by the reviewer, who mutated the
+string branch's `/followers` check alone and got 19/19 still passing. Both
+gaps are closed below, each exclusion now tested via both branches. The same
+sweep found two more real two-operand gaps and closed them: the inReplyTo
+guard's `is not None` operand (`'inReplyTo' in rj and rj['inReplyTo'] is not
+None`) and the Video guard's `isinstance(..., list)` operand (`'attributedTo'
+in rj and isinstance(rj['attributedTo'], list)`) were each previously
+exercised on only one operand. One further instance of the same SHAPE exists
+-- `'object' in request_json and isinstance(request_json['object'], dict)`
+-- and was deliberately NOT closed with a test: a non-dict 'object' value
+also reaches the unguarded `rj = request_json['object'] if 'object' in
+request_json else request_json` reassignment a few lines later, which has no
+isinstance guard of its own, so any input built to isolate THIS operand
+crashes there regardless of what the addressing loop's own guard does --
+there is no clean input that discriminates this operand in isolation without
+first resolving that separate, unguarded access. Reported, not fixed, and
+not synthesized into a misleading test.
 """
 import pytest
 
@@ -113,28 +140,102 @@ class TestAddressingStrategy:
         })
         assert result == community
 
-    def test_the_public_collection_is_never_looked_up_even_if_it_would_match(self, app, db_session):
+    def test_a_non_matching_addressing_value_does_not_prevent_a_video_match(self, app, db_session):
+        """Review finding 2: the fallthrough test above proves the
+        addressing-over-broaden mutation is wide by demonstrating the
+        inReplyTo half of the short-circuit; this is the Video half,
+        combining a non-matching addressing value with a Video fixture that
+        would otherwise match. Mutation that fails this: the same
+        `if potential_community:` deletion as the test above."""
+        _seed_owner_and_instance()
+        community = make_community('videoafteraudiencemiss')
+        result = find_community({
+            'audience': 'https://peer.example/c/doesnotexist',
+            'type': 'Video',
+            'attributedTo': [community.ap_profile_id],
+        })
+        assert result == community
+
+    def test_the_public_collection_is_never_looked_up_via_the_string_branch(self, app, db_session):
         """Constructs the case that actually discriminates the exclusion: a
         Community whose ap_profile_id happens to equal the Public collection
         URI. Without the `not potential_id.startswith('https://www.w3.org')`
         guard, this would be found by an ordinary ap_profile_id lookup --
         the exclusion is what prevents the query being attempted at all.
-        Mutation that fails this: deleting that guard."""
+        Mutation that fails this: deleting that guard. Exercises the STRING
+        branch's copy of the exclusion (`potential_id.startswith`) -- see the
+        list-branch counterpart below. Review finding 1: these two branches
+        each check the same two conditions independently, so a mutation to
+        either copy alone needs its own branch's test to catch it."""
         _seed_owner_and_instance()
         community = make_community('publiclookalike')
         community.ap_profile_id = 'https://www.w3.org/ns/activitystreams#Public'
         db.session.commit()
         assert find_community({'type': 'Note', 'to': 'https://www.w3.org/ns/activitystreams#Public'}) is None
 
-    def test_a_url_ending_followers_is_never_looked_up_even_if_it_would_match(self, app, db_session):
+    def test_the_public_collection_is_never_looked_up_via_the_list_branch(self, app, db_session):
+        """The list-branch counterpart of the test above (`c.startswith`
+        rather than `potential_id.startswith`) -- review finding 1. Before
+        this test existed, a mutation deleting only the list branch's
+        Public exclusion survived undetected, because the string-branch test
+        above never reaches the list branch's code at all."""
+        _seed_owner_and_instance()
+        community = make_community('publiclistlookalike')
+        community.ap_profile_id = 'https://www.w3.org/ns/activitystreams#Public'
+        db.session.commit()
+        assert find_community({'type': 'Note', 'cc': ['https://www.w3.org/ns/activitystreams#Public']}) is None
+
+    def test_a_url_ending_followers_is_never_looked_up_via_the_list_branch(self, app, db_session):
         """Same technique as the Public case, for the `/followers` exclusion:
         a Community whose ap_profile_id itself ends '/followers'. Mutation
-        that fails this: deleting the `not c.endswith('/followers')` guard."""
+        that fails this: deleting the `not c.endswith('/followers')` guard.
+        Exercises the LIST branch's copy -- see the string-branch counterpart
+        below. Review finding 1: the reviewer proved that mutating the
+        STRING branch's `/followers` exclusion alone, with only this
+        list-branch test in place, survived all 19 prior tests -- this test
+        alone was never going to catch a mutation in a branch it never
+        reaches."""
         _seed_owner_and_instance()
         community = make_community('followerslookalike')
         community.ap_profile_id = 'https://peer.example/c/followerslookalike/followers'
         db.session.commit()
         assert find_community({'type': 'Note', 'cc': [community.ap_profile_id]}) is None
+
+    def test_a_url_ending_followers_is_never_looked_up_via_the_string_branch(self, app, db_session):
+        """The string-branch counterpart -- review finding 1's second
+        missing case. Mutation that fails this: deleting the
+        `not potential_id.endswith('/followers')` guard in the STRING
+        branch specifically, which the list-branch test above cannot catch."""
+        _seed_owner_and_instance()
+        community = make_community('followersstringlookalike')
+        community.ap_profile_id = 'https://peer.example/c/followersstringlookalike/followers'
+        db.session.commit()
+        assert find_community({'type': 'Note', 'to': community.ap_profile_id}) is None
+
+    def test_in_reply_to_present_but_explicitly_none_is_not_treated_as_a_lookup_key(self, app, db_session):
+        """Same-shape audit (review finding 1's sweep): the inReplyTo guard,
+        `'inReplyTo' in rj and rj['inReplyTo'] is not None`, also has two
+        operands, and no earlier test exercised the second one independently
+        -- every earlier test either omitted 'inReplyTo' entirely or gave it
+        a real string. A Post exists here with ap_id literally None (the
+        column carries no NOT NULL constraint); if the `is not None` operand
+        were dropped, `Post.get_by_ap_id(None)` would spuriously match it
+        instead of falling through to the Video match also present here, so
+        the assertion is on WHICH community comes back, not merely that one
+        is found."""
+        instance = _seed_owner_and_instance()
+        owner = make_user(instance, 'nonemarker')
+        wrong_community = make_community('wrongvianone')
+        decoy_post = make_post(wrong_community, owner, ap_id='https://peer.example/post/decoy')
+        decoy_post.ap_id = None
+        db.session.commit()
+        right_community = make_community('rightvianone')
+        result = find_community({
+            'type': 'Video',
+            'inReplyTo': None,
+            'attributedTo': [right_community.ap_profile_id],
+        })
+        assert result == right_community
 
 
 class TestInReplyToStrategy:
@@ -204,6 +305,16 @@ class TestPeerTubeVideoStrategy:
 
     def test_video_with_an_empty_attributed_to_list_returns_none(self, app, db_session):
         assert find_community({'type': 'Video', 'attributedTo': []}) is None
+
+    def test_video_with_a_non_list_attributed_to_value_returns_none(self, app, db_session):
+        """Same-shape audit (review finding 1's sweep): the Video guard,
+        `'attributedTo' in rj and isinstance(rj['attributedTo'], list)`, also
+        has two operands. `None` exercises the second independently of the
+        first: `'attributedTo' in rj` is True, but `for a in
+        rj['attributedTo']:` cannot iterate a None without the isinstance
+        guard (TypeError) -- current code's guard is what makes this return
+        cleanly instead of crashing."""
+        assert find_community({'type': 'Video', 'attributedTo': None}) is None
 
 
 class TestNothingMatchesAnywhere:
