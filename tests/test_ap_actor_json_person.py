@@ -1,0 +1,697 @@
+"""actor_json_to_model turns a peer's actor document into a database row.
+
+This file covers the two guards that run before the type branch, and the
+`Person`/`Service` branch that builds a User. The `Group` and `Feed` branches
+of the same function are covered elsewhere; every test here therefore asserts
+on the User row that came back (or on None), never on the other two.
+
+The peer document itself is built by tests.factories.peer_actor_json, which is
+shared with the Group and Feed tests. Its baseline carries only the keys this
+branch reads unconditionally -- type, id, preferredUsername and
+publicKey.publicKeyPem -- so every optional key is opted into by name and the
+"absent" side of each guard is the default, not something a test has to
+remember to delete.
+
+Optional-field enumeration
+--------------------------
+
+Derived fresh against this checkout, restricted to the Person/Service branch
+(from the branch's `elif`-free `if activity_json['type'] == 'Person' or ... ==
+'Service':` down to its `return user`, whose line numbers the script prints and
+this docstring deliberately does not repeat):
+
+    podman-compose -f compose.test.yaml exec -T -w /app test-runner python -c "
+    import ast
+    src = open('app/activitypub/util.py').read()
+    tree = ast.parse(src)
+    for n in ast.walk(tree):
+        if isinstance(n, ast.FunctionDef) and n.name == 'actor_json_to_model':
+            func = n
+    # the Person/Service branch is func.body's first If whose test names Person
+    for stmt in func.body:
+        if isinstance(stmt, ast.If) and 'Person' in ast.unparse(stmt.test):
+            lo, hi = stmt.lineno, stmt.body[-1].lineno
+    for s in ast.walk(func):
+        if isinstance(s, ast.If) and lo <= s.lineno <= hi:
+            print('If  ', ast.unparse(s.test)[:100])
+        if isinstance(s, ast.IfExp) and lo <= s.lineno <= hi:
+            print('IfExp', ast.unparse(s.test)[:100])
+    "
+
+Eleven conditional expressions in the User() constructor call, which are the
+scalar optional fields:
+
+    'name' in activity_json and activity_json['name']  -> title, else None
+    'matrixUserId' in activity_json                    -> matrix_user_id, else ''
+    'indexable' in activity_json                       -> indexable, else True
+    'discoverable' in activity_json                    -> searchable, else True
+    'published' in activity_json                       -> created, else utcnow()
+    'endpoints' in activity_json                       -> ap_inbox_url from
+      'inbox' in activity_json                            endpoints.sharedInbox,
+                                                          else inbox, else ''
+    'followers' in activity_json                       -> ap_followers_url, else None
+    'manuallyApprovesFollowers' in activity_json       -> ap_manually_approves_
+                                                          followers, else False
+    activity_json['type'] == 'Service'                 -> bot, else False
+    'acceptPrivateMessages' in activity_json           -> accept_private_messages,
+                                                          else 3
+
+and twelve `if` statements, which are the block-shaped ones:
+
+    'summary' in activity_json                     (else about_html = '')
+      about_html is not None and not about_html.startswith('<')   (PeerTube wrap)
+    'source' ... and source['mediaType'] == 'text/markdown'  (else html_to_text)
+    user.title and user.title.strip().lower() == '[deleted]'
+    'icon' in activity_json and activity_json['icon'] is not None
+      isinstance(icon, dict) and 'url' in icon
+      isinstance(icon, list) and 'url' in icon[-1]
+      isinstance(icon, str)
+      icon_entry                                   (the else leaves it None)
+    'image' ... isinstance(image, dict) and 'url' in image
+    'image' ... isinstance(image, list) and len(image) > 0       (bridgy-fed)
+    'attachment' in activity_json and isinstance(attachment, list)
+      field_data['type'] == 'PropertyValue'
+      '<a ' in field_data['value']
+    user.avatar_id and get_setting('cache_remote_images_locally', True)
+    user.cover_id and get_setting('cache_remote_images_locally', True)
+
+The first two `if`s in the function body -- `'type' not in activity_json` and
+`server not in activity_json['id']` -- are not optional fields but guards that
+return None, and are covered by TestTypeGuard and TestServerInIdGuard below.
+
+Every test builds the peer's Instance row first with make_instance. Without it
+find_instance_id inserts a sparse Instance and then calls new_instance_profile,
+which fetches the peer's nodeinfo over HTTP.
+
+Not covered here, and why: the IntegrityError fallback around
+`db.session.add(user); db.session.commit()`. The only unique constraint the
+insert can violate is User.ap_profile_id, and the branch's first statement
+returns early when a row already holds that value -- so reaching the handler
+needs a second writer committing the same ap_profile_id between the lookup and
+the commit. That is a concurrency race, not a state a single-session test can
+construct.
+"""
+from app import db
+from app.activitypub.util import actor_json_to_model
+from app.models import File, User, UserExtraField
+from app.utils import set_setting
+from tests.factories import make_instance, make_user, peer_actor_json
+
+PEER = 'peer.example'
+
+
+def _peer_instance(domain=PEER):
+    """The Instance row find_instance_id looks up, created before the call so
+    that function takes its found-existing path instead of inserting a sparse
+    row and calling new_instance_profile (which fetches the peer's nodeinfo).
+    """
+    return make_instance(domain)
+
+
+class TestTypeGuard:
+    """`if 'type' not in activity_json: return None` -- Akkoma has been seen
+    serving an actor document with no type at all.
+
+    Mutation that fails these two together: deleting the guard, which turns the
+    first test's document into a KeyError on activity_json['type'] at the
+    branch test rather than a clean None. Negating it to `if 'type' in
+    activity_json` fails the second, which supplies a type and expects a User.
+    """
+
+    def test_document_without_a_type_returns_none(self, app, db_session):
+        _peer_instance()
+        document = peer_actor_json(name='notype', omit=('type',))
+        assert actor_json_to_model(document, 'notype', PEER) is None
+        assert db.session.query(User).count() == 0
+
+    def test_document_with_a_type_is_not_rejected_by_this_guard(self, app, db_session):
+        _peer_instance()
+        result = actor_json_to_model(peer_actor_json(name='hastype'), 'hastype', PEER)
+        assert isinstance(result, User)
+
+
+class TestServerInIdGuard:
+    """`if server not in activity_json['id']: return None`.
+
+    SUSPECTED DEFECT -- this is a substring test, not a host comparison, and
+    the tests below pin the current behaviour rather than the intended one.
+    A document whose id lives on a completely different host is accepted as
+    long as the `server` string appears anywhere in that id: as a domain
+    prefix ('good.example' inside 'good.example.attacker.net') or merely in
+    the query string ('?ref=good.example' on attacker.net). Both are the same
+    shape as the substring gate that produced a stored denial of service
+    earlier in this campaign.
+
+    Severity, established from the call sites rather than from the shape:
+    `server` is never peer-supplied. Every caller derives it locally from the
+    address it is resolving --
+
+      app/activitypub/actor.py's create_actor_from_remote takes it from
+      extract_domain_and_actor(url) for a URL, or normalise_actor_string(handle)
+      for a handle;
+      app/community/util.py's and app/feed/util.py's search_for_* and
+      app/user/utils.py's remote user lookup take it from the handle they
+      webfinger;
+      app/api/alpha/utils/misc.py's get_resolve_object takes it from
+      urlparse(query).netloc, and additionally re-enters itself with
+      ap_json['id'] as the new query whenever query != ap_json['id'], so by the
+      time it calls actor_json_to_model the two already agree exactly.
+
+    So a peer cannot choose the `server` it is checked against, and cannot use
+    this to be admitted as an actor of an instance it does not control. What it
+    CAN do is mint a row whose ap_public_url/ap_profile_id point at a host that
+    is not the one PieFed fetched from and not the one recorded in ap_id,
+    ap_domain and instance_id -- cross-host actor smuggling that needs the
+    fetched peer's cooperation. The two tests below assert exactly that split
+    row, which is what makes the weakness observable rather than theoretical.
+    Reported, not fixed.
+
+    Mutation that fails test_id_on_a_different_host_is_rejected: deleting the
+    guard, or widening it to `if False`. Mutations that would fail the two
+    defect tests are the FIXES (comparing urlparse(id).netloc to server), which
+    is why those tests say "suspected defect" in their names -- they are a
+    record of today's behaviour, and a fix is expected to rewrite them.
+    """
+
+    def test_id_on_a_different_host_is_rejected(self, app, db_session):
+        _peer_instance('good.example')
+        document = peer_actor_json(name='alice', server='good.example',
+                                   fields={'id': 'https://other.example/u/alice'})
+        assert actor_json_to_model(document, 'alice', 'good.example') is None
+        assert db.session.query(User).count() == 0
+
+    def test_id_on_the_real_host_is_accepted(self, app, db_session):
+        _peer_instance('good.example')
+        document = peer_actor_json(name='alice', server='good.example')
+        user = actor_json_to_model(document, 'alice', 'good.example')
+        assert user.ap_profile_id == 'https://good.example/u/alice'
+        assert user.ap_domain == 'good.example'
+
+    def test_suspected_defect_subdomain_suffix_passes_the_substring_test(self, app, db_session):
+        """'good.example' is a substring of 'good.example.attacker.net', whose
+        real host is attacker.net's subdomain and not good.example at all."""
+        _peer_instance('good.example')
+        document = peer_actor_json(
+            name='alice', server='good.example',
+            fields={'id': 'https://good.example.attacker.net/u/alice'})
+        user = actor_json_to_model(document, 'alice', 'good.example')
+        assert user is not None
+        assert user.ap_profile_id == 'https://good.example.attacker.net/u/alice'
+        # the row that results claims one host and points at another
+        assert user.ap_domain == 'good.example'
+        assert user.ap_id == 'alice@good.example'
+
+    def test_upper_cased_host_in_the_id_is_rejected(self, app, db_session):
+        """The substring test is case-sensitive as well as host-blind, so a
+        peer that publishes its own id with an upper-cased host is refused
+        even though the host is the right one. Pins current behaviour: the
+        same rewrite that would fix the two defect tests above (comparing
+        urlparse(id).netloc.lower() to server) also fixes this."""
+        _peer_instance('good.example')
+        document = peer_actor_json(name='alice', server='good.example',
+                                   fields={'id': 'https://GOOD.EXAMPLE/u/alice'})
+        assert actor_json_to_model(document, 'alice', 'good.example') is None
+
+    def test_suspected_defect_query_string_mention_passes_the_substring_test(self, app, db_session):
+        """The server name appears only in the query string; the real host is
+        attacker.net."""
+        _peer_instance('good.example')
+        document = peer_actor_json(
+            name='alice', server='good.example',
+            fields={'id': 'https://attacker.net/u/x?ref=good.example'})
+        user = actor_json_to_model(document, 'alice', 'good.example')
+        assert user is not None
+        assert user.ap_public_url == 'https://attacker.net/u/x?ref=good.example'
+        assert user.ap_domain == 'good.example'
+
+
+class TestPersonAndService:
+    """`if activity_json['type'] == 'Person' or activity_json['type'] == 'Service'`,
+    and the `bot=True if activity_json['type'] == 'Service' else False` inside it.
+
+    Both mutation directions on that type test are exercised here:
+
+    - narrowed to `== 'Person'` alone: test_service_document_creates_a_bot_user
+      stops getting a User back, because a Service document then falls through
+      to the Group branch and dies on activity_json['outbox'].
+    - broadened to `!= 'Group'` (or to a bare `True`): a Group document would
+      be built as a User, which test_group_document_is_not_handled_here
+      catches by asserting the Group branch still owns it.
+    """
+
+    def test_person_document_creates_a_user_that_is_not_a_bot(self, app, db_session):
+        _peer_instance()
+        user = actor_json_to_model(peer_actor_json(name='alice'), 'alice', PEER)
+        assert isinstance(user, User)
+        assert user.user_name == 'alice'
+        assert user.bot is False
+        assert user.email == f'alice@{PEER}'
+        assert user.ap_preferred_username == 'alice'
+
+    def test_service_document_creates_a_bot_user(self, app, db_session):
+        _peer_instance()
+        user = actor_json_to_model(peer_actor_json('Service', name='botty'), 'botty', PEER)
+        assert isinstance(user, User)
+        assert user.bot is True
+
+    def test_group_document_is_not_handled_here(self, app, db_session):
+        """A Group falls to the Group branch, which builds a Community, not a
+        User. Broadening the Person/Service test to admit Group would make this
+        return a User instead."""
+        _peer_instance()
+        document = peer_actor_json('Group', name='memes')
+        result = actor_json_to_model(document, '!memes', PEER)
+        assert not isinstance(result, User)
+
+    def test_existing_user_is_returned_without_creating_a_second(self, app, db_session):
+        """The branch's first statement looks the actor up by
+        ap_profile_id == activity_json['id'].lower() and returns it. Deleting
+        that early return makes the insert collide on the unique
+        ap_profile_id."""
+        instance = _peer_instance()
+        existing = make_user(instance, 'alice')
+        document = peer_actor_json(name='alice',
+                                   fields={'id': existing.ap_profile_id})
+        result = actor_json_to_model(document, 'alice', PEER)
+        assert result.id == existing.id
+        assert db.session.query(User).count() == 1
+
+    def test_lookup_of_an_existing_user_lowercases_the_id(self, app, db_session):
+        """The lookup compares against id.lower(), so a peer that upper-cases
+        the path of its own id on a later fetch still matches the stored row.
+        Only the path is varied here: the host cannot be, because the
+        `server not in activity_json['id']` guard above is a case-sensitive
+        substring test and rejects the document before the lookup runs --
+        see test_upper_cased_host_in_the_id_is_rejected below."""
+        instance = _peer_instance()
+        existing = make_user(instance, 'alice')
+        document = peer_actor_json(name='alice',
+                                   fields={'id': f'https://{PEER}/users/ALICE'})
+        result = actor_json_to_model(document, 'alice', PEER)
+        assert result.id == existing.id
+        assert db.session.query(User).count() == 1
+
+
+class TestRequiredFieldsMissing:
+    """`except KeyError: ... return None` around the User() construction.
+
+    Only two keys are read unconditionally there: preferredUsername and
+    publicKey.publicKeyPem. Mutation that fails these: narrowing the handler to
+    a key that is never missing, or deleting it -- the KeyError then escapes to
+    the caller instead of becoming None.
+    """
+
+    def test_missing_preferred_username_returns_none(self, app, db_session):
+        _peer_instance()
+        document = peer_actor_json(name='alice', omit=('preferredUsername',))
+        assert actor_json_to_model(document, 'alice', PEER) is None
+        assert db.session.query(User).count() == 0
+
+    def test_missing_public_key_returns_none(self, app, db_session):
+        _peer_instance()
+        document = peer_actor_json(name='alice', omit=('publicKey',))
+        assert actor_json_to_model(document, 'alice', PEER) is None
+        assert db.session.query(User).count() == 0
+
+    def test_public_key_without_a_pem_returns_none(self, app, db_session):
+        _peer_instance()
+        document = peer_actor_json(name='alice', fields={'publicKey': {'id': 'x'}})
+        assert actor_json_to_model(document, 'alice', PEER) is None
+        assert db.session.query(User).count() == 0
+
+
+class TestScalarOptionalFields:
+    """The eleven conditional expressions in the User() call, both ways round.
+
+    The present/absent pair is the point: a suite that always supplies every
+    key would leave every `else` of these expressions unexecuted while branch
+    coverage reported the whole constructor as covered.
+
+    Mutation that fails test_every_scalar_optional_absent_takes_its_default:
+    flipping any one guard to its negation (e.g. `'indexable' not in
+    activity_json`) -- the default then stops being applied and the assertion
+    on that column fails.
+    """
+
+    def test_every_scalar_optional_present_is_copied(self, app, db_session):
+        _peer_instance()
+        document = peer_actor_json(name='alice', fields={
+            'name': '  Alice Liddell  ',
+            'matrixUserId': '@alice:matrix.example',
+            'indexable': False,
+            'discoverable': False,
+            'published': '2024-01-02T03:04:05Z',
+            'followers': f'https://{PEER}/u/alice/followers',
+            'manuallyApprovesFollowers': True,
+            'acceptPrivateMessages': 1,
+            'endpoints': {'sharedInbox': f'https://{PEER}/inbox'},
+        })
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert user.title == 'Alice Liddell'
+        assert user.matrix_user_id == '@alice:matrix.example'
+        assert user.indexable is False
+        assert user.searchable is False
+        assert user.created.year == 2024
+        assert user.ap_followers_url == f'https://{PEER}/u/alice/followers'
+        assert user.ap_manually_approves_followers is True
+        assert user.accept_private_messages == 1
+        assert user.ap_inbox_url == f'https://{PEER}/inbox'
+
+    def test_every_scalar_optional_absent_takes_its_default(self, app, db_session):
+        _peer_instance()
+        user = actor_json_to_model(peer_actor_json(name='alice'), 'alice', PEER)
+        assert user.title is None
+        assert user.matrix_user_id == ''
+        assert user.indexable is True
+        assert user.searchable is True
+        assert user.created is not None
+        assert user.ap_followers_url is None
+        assert user.ap_manually_approves_followers is False
+        assert user.accept_private_messages == 3
+        assert user.ap_inbox_url == ''
+
+    def test_present_but_empty_name_falls_back_to_no_title(self, app, db_session):
+        """`'name' in activity_json and activity_json['name']` -- the second
+        operand is what an empty display name falsifies, and it is the only
+        one of the eleven that tests the VALUE rather than the key."""
+        _peer_instance()
+        document = peer_actor_json(name='alice', fields={'name': ''})
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert user.title is None
+
+
+class TestInboxResolution:
+    """`endpoints.sharedInbox`, else `inbox`, else ''. Three outcomes, so
+    three tests: the middle one is unreachable from either of the others.
+
+    Mutation that fails test_inbox_used_when_endpoints_absent: reordering the
+    expression to try 'inbox' first, which would make the first test below
+    read the per-actor inbox instead of the shared one.
+    """
+
+    def test_shared_inbox_wins_when_endpoints_present(self, app, db_session):
+        _peer_instance()
+        document = peer_actor_json(name='alice', fields={
+            'endpoints': {'sharedInbox': f'https://{PEER}/inbox'},
+            'inbox': f'https://{PEER}/u/alice/inbox',
+        })
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert user.ap_inbox_url == f'https://{PEER}/inbox'
+
+    def test_inbox_used_when_endpoints_absent(self, app, db_session):
+        _peer_instance()
+        document = peer_actor_json(name='alice',
+                                   fields={'inbox': f'https://{PEER}/u/alice/inbox'})
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert user.ap_inbox_url == f'https://{PEER}/u/alice/inbox'
+
+    def test_empty_string_when_neither_present(self, app, db_session):
+        _peer_instance()
+        user = actor_json_to_model(peer_actor_json(name='alice'), 'alice', PEER)
+        assert user.ap_inbox_url == ''
+
+
+class TestSummaryAndSource:
+    """about_html comes from 'summary' (allowlisted), and 'source' overwrites
+    both about and about_html when it declares text/markdown.
+
+    Mutation that fails test_plain_text_summary_is_wrapped_in_a_paragraph:
+    dropping the `not about_html.startswith('<')` PeerTube wrap, which leaves
+    the bare text unwrapped.
+    """
+
+    def test_html_summary_is_allowlisted_not_wrapped(self, app, db_session):
+        _peer_instance()
+        document = peer_actor_json(name='alice',
+                                   fields={'summary': '<p>hello <script>x</script></p>'})
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert '<script>' not in user.about_html
+        assert 'hello' in user.about_html
+        assert user.about_html.startswith('<p>')
+
+    def test_plain_text_summary_is_wrapped_in_a_paragraph(self, app, db_session):
+        _peer_instance()
+        document = peer_actor_json(name='alice', fields={'summary': 'just words'})
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert user.about_html.strip().startswith('<p>')
+        assert 'just words' in user.about_html
+
+    def test_null_summary_is_not_wrapped(self, app, db_session):
+        """`about_html is not None` guards the wrap; the key is present with a
+        null value, which several peers do send."""
+        _peer_instance()
+        document = peer_actor_json(name='alice', fields={'summary': None})
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert user.about_html in (None, '')
+
+    def test_absent_summary_gives_an_empty_about(self, app, db_session):
+        _peer_instance()
+        user = actor_json_to_model(peer_actor_json(name='alice'), 'alice', PEER)
+        assert user.about_html == ''
+        assert user.about == ''
+
+    def test_markdown_source_overwrites_the_html_derived_about(self, app, db_session):
+        _peer_instance()
+        document = peer_actor_json(name='alice', fields={
+            'summary': '<p>from html</p>',
+            'source': {'mediaType': 'text/markdown', 'content': '**from markdown**'},
+        })
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert user.about == '**from markdown**'
+        assert '<strong>from markdown</strong>' in user.about_html
+
+    def test_source_with_another_media_type_leaves_about_from_the_html(self, app, db_session):
+        _peer_instance()
+        document = peer_actor_json(name='alice', fields={
+            'summary': '<p>from html</p>',
+            'source': {'mediaType': 'text/html', 'content': '**from markdown**'},
+        })
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert user.about.strip() == 'from html'
+
+
+class TestDeletedTitle:
+    """`if user.title and user.title.strip().lower() == '[deleted]': user.title = ''`
+
+    Mutation that fails this: dropping the .lower(), which lets the
+    upper-cased spelling through.
+    """
+
+    def test_deleted_display_name_is_blanked(self, app, db_session):
+        _peer_instance()
+        document = peer_actor_json(name='alice', fields={'name': ' [Deleted] '})
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert user.title == ''
+
+    def test_an_ordinary_display_name_is_kept(self, app, db_session):
+        _peer_instance()
+        document = peer_actor_json(name='alice', fields={'name': 'Alice'})
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert user.title == 'Alice'
+
+
+class TestIcon:
+    """The avatar. Four shapes of 'icon' are recognised (dict with url, list
+    whose LAST entry has a url, bare string, and nothing else) plus the
+    `icon_entry` guard that skips the File when none matched.
+
+    Mutation that fails test_icon_as_a_list_takes_the_last_entry: changing the
+    [-1] index to [0], which picks the wrong url.
+    """
+
+    def test_icon_as_a_dict(self, app, db_session):
+        _peer_instance()
+        document = peer_actor_json(name='alice',
+                                   fields={'icon': {'url': f'https://{PEER}/a.png'}})
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert user.avatar_id is not None
+        assert db.session.get(File, user.avatar_id).source_url == f'https://{PEER}/a.png'
+
+    def test_icon_as_a_list_takes_the_last_entry(self, app, db_session):
+        _peer_instance()
+        document = peer_actor_json(name='alice', fields={'icon': [
+            {'url': f'https://{PEER}/small.png'},
+            {'url': f'https://{PEER}/large.png'},
+        ]})
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert db.session.get(File, user.avatar_id).source_url == f'https://{PEER}/large.png'
+
+    def test_icon_as_a_bare_string(self, app, db_session):
+        _peer_instance()
+        document = peer_actor_json(name='alice', fields={'icon': f'https://{PEER}/a.png'})
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert db.session.get(File, user.avatar_id).source_url == f'https://{PEER}/a.png'
+
+    def test_icon_of_an_unrecognised_shape_creates_no_file(self, app, db_session):
+        """A dict with no 'url' matches none of the three shapes, so icon_entry
+        stays None and the File is never built."""
+        _peer_instance()
+        document = peer_actor_json(name='alice', fields={'icon': {'mediaType': 'image/png'}})
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert user.avatar_id is None
+        assert db.session.query(File).count() == 0
+
+    def test_null_icon_creates_no_file(self, app, db_session):
+        _peer_instance()
+        document = peer_actor_json(name='alice', fields={'icon': None})
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert user.avatar_id is None
+
+    def test_absent_icon_creates_no_file(self, app, db_session):
+        _peer_instance()
+        user = actor_json_to_model(peer_actor_json(name='alice'), 'alice', PEER)
+        assert user.avatar_id is None
+        assert db.session.query(File).count() == 0
+
+
+class TestImage:
+    """The cover banner. Only two shapes are recognised here, and unlike the
+    icon block above they are written as an if/elif over two separate
+    `'image' in activity_json` tests rather than one nested chain -- the list
+    form takes entry [0], not [-1].
+
+    Mutation that fails test_image_as_a_list_takes_the_first_entry: changing
+    that [0] to [-1].
+    """
+
+    def test_image_as_a_dict(self, app, db_session):
+        _peer_instance()
+        document = peer_actor_json(name='alice',
+                                   fields={'image': {'url': f'https://{PEER}/c.png'}})
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert db.session.get(File, user.cover_id).source_url == f'https://{PEER}/c.png'
+
+    def test_image_as_a_list_takes_the_first_entry(self, app, db_session):
+        _peer_instance()
+        document = peer_actor_json(name='alice', fields={'image': [
+            {'url': f'https://{PEER}/first.png'},
+            {'url': f'https://{PEER}/second.png'},
+        ]})
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert db.session.get(File, user.cover_id).source_url == f'https://{PEER}/first.png'
+
+    def test_empty_image_list_creates_no_file(self, app, db_session):
+        """`len(activity_json['image']) > 0` -- the empty list matches neither
+        arm."""
+        _peer_instance()
+        document = peer_actor_json(name='alice', fields={'image': []})
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert user.cover_id is None
+
+    def test_null_image_creates_no_file(self, app, db_session):
+        _peer_instance()
+        document = peer_actor_json(name='alice', fields={'image': None})
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert user.cover_id is None
+
+    def test_absent_image_creates_no_file(self, app, db_session):
+        _peer_instance()
+        user = actor_json_to_model(peer_actor_json(name='alice'), 'alice', PEER)
+        assert user.cover_id is None
+
+
+class TestPropertyValueAttachments:
+    """`if 'attachment' in activity_json and isinstance(..., list)`, then one
+    UserExtraField per entry whose type is PropertyValue.
+
+    Mutation that fails test_non_property_value_attachments_are_skipped:
+    dropping the `field_data['type'] == 'PropertyValue'` test, which would
+    build an extra field out of an Image attachment that carries no 'name'
+    and raise KeyError instead.
+    """
+
+    def test_property_value_becomes_an_extra_field(self, app, db_session):
+        _peer_instance()
+        document = peer_actor_json(name='alice', fields={'attachment': [
+            {'type': 'PropertyValue', 'name': '  Website  ', 'value': '  example.org  '},
+        ]})
+        user = actor_json_to_model(document, 'alice', PEER)
+        rows = db.session.query(UserExtraField).filter_by(user_id=user.id).all()
+        assert len(rows) == 1
+        assert rows[0].label == 'Website'
+        assert rows[0].text == 'example.org'
+
+    def test_anchor_valued_field_is_reduced_to_its_href(self, app, db_session):
+        """`if '<a ' in field_data['value']` routes the value through
+        mastodon_extra_field_link, which returns the first anchor's href."""
+        _peer_instance()
+        document = peer_actor_json(name='alice', fields={'attachment': [
+            {'type': 'PropertyValue', 'name': 'Website',
+             'value': '<a href="https://example.org/alice" rel="me">example.org</a>'},
+        ]})
+        user = actor_json_to_model(document, 'alice', PEER)
+        rows = db.session.query(UserExtraField).filter_by(user_id=user.id).all()
+        assert rows[0].text == 'https://example.org/alice'
+
+    def test_non_property_value_attachments_are_skipped(self, app, db_session):
+        _peer_instance()
+        document = peer_actor_json(name='alice', fields={'attachment': [
+            {'type': 'Image', 'url': f'https://{PEER}/banner.png'},
+            {'type': 'PropertyValue', 'name': 'Pronouns', 'value': 'she/her'},
+        ]})
+        user = actor_json_to_model(document, 'alice', PEER)
+        rows = db.session.query(UserExtraField).filter_by(user_id=user.id).all()
+        assert len(rows) == 1
+        assert rows[0].label == 'Pronouns'
+
+    def test_attachment_that_is_not_a_list_is_ignored(self, app, db_session):
+        """Some peers send a single object rather than an array; the isinstance
+        test is what stops the for-loop iterating a dict's keys."""
+        _peer_instance()
+        document = peer_actor_json(name='alice', fields={
+            'attachment': {'type': 'PropertyValue', 'name': 'Website', 'value': 'example.org'}})
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert db.session.query(UserExtraField).count() == 0
+
+    def test_absent_attachment_leaves_no_extra_fields(self, app, db_session):
+        _peer_instance()
+        user = actor_json_to_model(peer_actor_json(name='alice'), 'alice', PEER)
+        assert db.session.query(UserExtraField).count() == 0
+
+
+class TestRemoteImageCaching:
+    """`if user.avatar_id and get_setting('cache_remote_images_locally', True)`
+    and the matching cover guard, which call make_image_sizes.
+
+    make_image_sizes runs inline under this harness (Celery is eager), and the
+    only thing it does that a test can see is fetch the image's source_url. So
+    the positive case registers that url in http_mock: assert_all_called=True
+    means the test fails if the fetch never happens, which is what proves the
+    guard was taken. A 404 is served so make_image_sizes_async stops there
+    instead of resizing and writing files.
+
+    The negative case turns the setting off. Its absence of a fetch is not
+    directly observable -- make_image_sizes_async wraps get_request in a bare
+    except, so the harness's own block would be swallowed rather than raised --
+    so that test asserts the row state and leaves the fetch unasserted, which
+    is the honest limit of what this harness can see. The `user.avatar_id`
+    half of each guard IS independently falsified, by every test above whose
+    actor has no icon.
+    """
+
+    def test_avatar_is_sent_for_resizing_when_caching_is_on(self, app, db_session, http_mock):
+        _peer_instance()
+        http_mock.get(f'https://{PEER}/a.png').respond(404)
+        document = peer_actor_json(name='alice',
+                                   fields={'icon': {'url': f'https://{PEER}/a.png'}})
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert user.avatar_id is not None
+
+    def test_cover_is_sent_for_resizing_when_caching_is_on(self, app, db_session, http_mock):
+        _peer_instance()
+        http_mock.get(f'https://{PEER}/c.png').respond(404)
+        document = peer_actor_json(name='alice',
+                                   fields={'image': {'url': f'https://{PEER}/c.png'}})
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert user.cover_id is not None
+
+    def test_images_are_still_recorded_when_caching_is_off(self, app, db_session):
+        _peer_instance()
+        set_setting('cache_remote_images_locally', False)
+        document = peer_actor_json(name='alice', fields={
+            'icon': {'url': f'https://{PEER}/a.png'},
+            'image': {'url': f'https://{PEER}/c.png'},
+        })
+        user = actor_json_to_model(document, 'alice', PEER)
+        assert db.session.get(File, user.avatar_id).source_url == f'https://{PEER}/a.png'
+        assert db.session.get(File, user.cover_id).source_url == f'https://{PEER}/c.png'

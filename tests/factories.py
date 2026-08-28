@@ -3,9 +3,14 @@
 Each builder sets the minimum needed for a valid row and commits, so the object
 has an id. If Postgres rejects an insert for a missing NOT NULL column, add that
 column here rather than in the test.
+
+One builder here is not a row builder: peer_actor_json returns the plain
+ActivityPub actor document a peer would serve, for the tests that drive
+actor_json_to_model. Its docstring says why it lives here.
 """
 
 import uuid
+from collections.abc import Iterable
 
 from flask_login import login_user
 
@@ -501,3 +506,81 @@ def make_post_vote(user: User, post: Post, effect: float) -> PostVote:
     db.session.add(vote)
     db.session.commit()
     return vote
+
+
+# The public key every peer actor document below carries. actor_json_to_model
+# copies activity_json['publicKey']['publicKeyPem'] straight into a Text column
+# and never parses it, so a marker string is enough and avoids paying
+# RsaKeys.generate_keypair()'s ~1s per document.
+PEER_ACTOR_PUBLIC_KEY_PEM = '-----BEGIN PUBLIC KEY-----\nnot-a-real-key\n-----END PUBLIC KEY-----\n'
+
+# Where each actor type's id lives on a peer, following the Lemmy/PieFed URL
+# convention the rest of this suite uses (/u/, /c/, /f/).
+_PEER_ACTOR_PATH = {'Person': 'u', 'Service': 'u', 'Group': 'c', 'Feed': 'f'}
+
+
+def peer_actor_json(actor_type: str = 'Person', name: str = 'alice',
+                    server: str = 'peer.example',
+                    fields: dict = None,
+                    omit: Iterable[str] = ()) -> dict:
+    """A peer's actor document, shaped as actor_json_to_model receives it.
+
+    Not a database-row builder like the rest of this module: it returns the
+    plain dict that actor_json_to_model's `activity_json` parameter takes, so
+    a test drives production code with `actor_json_to_model(peer_actor_json(...),
+    address, server)`.
+
+    Shared by the Person/Service, Group and Feed branches of that function.
+    Each branch reads an overlapping but different set of keys, so the baseline
+    here is per-type and holds ONLY the keys that branch reads unconditionally
+    -- the keys whose absence raises KeyError rather than falling back to a
+    default:
+
+      Person/Service  type, id, preferredUsername, publicKey.publicKeyPem
+      Group           the above, plus name, inbox, outbox
+      Feed            the above, plus following and attributedTo (the Feed
+                      branch dereferences both over HTTP before building the row)
+
+    Everything else those branches read is optional, and deliberately left out
+    of the baseline: a document that always carried every optional key would
+    exercise none of the defaults while branch coverage still reported the
+    guards as covered. Tests opt in per key through `fields`.
+
+    `fields` is a mapping merged over the baseline. It is a mapping rather than
+    **kwargs because several keys these branches read are not Python
+    identifiers -- 'lemmy:tagsForPosts' and '@context' among them -- and could
+    not be passed as keyword arguments at all.
+
+    `omit` names top-level keys to delete after the merge, which is how a test
+    reaches the absent side of a guard over a key the baseline supplies (no
+    'type' at all, no publicKey, no outbox). A sentinel value would not do:
+    None is a value these branches genuinely distinguish from absence, since
+    several guards read `'x' in activity_json and activity_json['x'] is not
+    None`.
+
+    `name` doubles as the actor's preferredUsername and as the last path
+    segment of its id, matching how real peers publish actors; pass
+    fields={'id': ...} to break that correspondence, which is what the
+    `server not in activity_json['id']` guard's tests need.
+    """
+    path = _PEER_ACTOR_PATH.get(actor_type, 'u')
+    actor_id = f'https://{server}/{path}/{name}'
+    document = {
+        'type': actor_type,
+        'id': actor_id,
+        'preferredUsername': name,
+        'publicKey': {'id': f'{actor_id}#main-key', 'owner': actor_id,
+                      'publicKeyPem': PEER_ACTOR_PUBLIC_KEY_PEM},
+    }
+    if actor_type in ('Group', 'Feed'):
+        document['name'] = name.replace('_', ' ').title()
+        document['inbox'] = f'{actor_id}/inbox'
+        document['outbox'] = f'{actor_id}/outbox'
+    if actor_type == 'Feed':
+        document['following'] = f'{actor_id}/following'
+        document['attributedTo'] = f'{actor_id}/moderators'
+    if fields:
+        document.update(fields)
+    for key in omit:
+        document.pop(key, None)
+    return document
