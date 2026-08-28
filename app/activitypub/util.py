@@ -1402,13 +1402,50 @@ def actor_json_to_model(activity_json, address, server):
 
         # get the owners list
         # these users will be added to feedmember db entries at the bottom of this function
+        if owners_url is None:
+            # The third arm of the owners_url choice above, and a 'moderators'
+            # key whose value is null, both leave owners_url as None. Passing
+            # that to get_request used to be the only way this branch reported
+            # the problem, and it reported it inconsistently: with DEBUG off
+            # is_invalid_get_request_uri refused the uri and get_request raised
+            # httpx.HTTPError, while with DEBUG on that check short-circuits to
+            # False and the `in uri` membership test a line later raised
+            # TypeError instead. Refusing here makes the outcome the same in
+            # both modes, and the same shape as the branch's other refusals.
+            current_app.logger.error(
+                f"actor_json_to_model: {activity_json['id']} names no owners "
+                f"collection -- it has neither a string attributedTo nor a "
+                f"moderators url, so the feed has no owner to belong to")
+            return None
         owner_users = []
         owners_data = get_request(owners_url, headers={'Accept': 'application/activity+json'})
         if owners_data.status_code == 200:
             owners_json = owners_data.json()
             for owner in owners_json['orderedItems']:
                 owner_user = find_actor_or_create(owner)
+                if owner_user is None:
+                    # The resolver refused this entry, so there is no user to
+                    # own the feed or to build a FeedMember from. Skip it here
+                    # rather than letting the None reach `owner_users[0].id`
+                    # below, or `ou.id` in the FeedMember loop that runs after
+                    # the Feed has been committed.
+                    current_app.logger.warning(
+                        f"actor_json_to_model: skipping {owner} in the owners "
+                        f"collection of {activity_json['id']} -- it does not "
+                        f"resolve to a user")
+                    continue
                 owner_users.append(owner_user)
+        if not owner_users:
+            # `user_id=owner_users[0].id` in the Feed() call below indexes this
+            # list unconditionally. It is empty whenever the status guard above
+            # took its false arm, whenever orderedItems was empty, and whenever
+            # every entry in it was skipped. A feed with no owner cannot be
+            # built, so refuse before anything is written -- nothing has been
+            # committed at this point, so no partial row is left behind.
+            current_app.logger.error(
+                f"actor_json_to_model: the owners collection at {owners_url} "
+                f"yielded no resolvable user for {activity_json['id']}")
+            return None
 
         # also get the communities in the remote feed's /following list 
         feed_following = []
