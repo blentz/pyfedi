@@ -1163,6 +1163,263 @@ into `Feed.name` but not into `Feed.machine_name`. Both are asserted, unstripped
 in the tests that pin the stripped column next to them, so a later change to
 either cannot pass unnoticed.
 
+## Sub-project 2b: the `netloc` reads the ingest fixes did not reach
+
+Sub-project 2b replaced `netloc` with a real host comparison in
+`ensure_domains_match`, `verify_object_from_source` and `actor_json_to_model`.
+The same shape survives elsewhere in `app/activitypub/util.py`, in three
+functions this campaign has never tested: `resolve_remote_post`,
+`create_resolved_object` and `resolve_remote_post_from_search`. They are
+registered here as D21–D24 and **not fixed** — fixing untested code is how this
+campaign would start producing the defects it exists to find.
+
+### 1. The enumeration, re-derived — and a brief that was wrong about it
+
+The task brief said "twenty lines, one a comment", of which "seven reads are in
+the two already-fixed functions". Against the checkout this section was written
+from, that is wrong in three ways: there are twelve reads, not twenty; none of
+them is a comment; and the already-fixed functions contain **zero** — the fixes
+removed every one, which is exactly what a completed fix should look like. The
+"seven" was a pre-fix figure carried forward in prose. The running count of
+hand-carried numbers in this campaign found wrong on re-derivation stood at
+seven before this one (see sub-project 1c), so this is the eighth — and it was
+wrong in a way none of the others were: it did not merely go stale, it described
+a state of the tree that the brief's own sub-project had already superseded.
+
+The brief's *load-bearing* claim — ten reads in the three named functions — is
+correct. Derived, without line numbers so the derivation stays checkable as the
+file moves:
+
+```bash
+grep -c '\.netloc' app/activitypub/util.py
+awk '/^def /{fn=$2; sub(/\(.*/,"",fn)} /\.netloc/{print fn}' \
+  app/activitypub/util.py | sort | uniq -c | sort -rn
+```
+
+```
+12
+
+      5 resolve_remote_post_from_search
+      3 create_resolved_object
+      2 resolve_remote_post
+      1 process_microblog_announce
+      1 extract_domain_and_actor
+```
+
+5 + 3 + 2 = 10 in the three named functions. The remaining two are elsewhere:
+`extract_domain_and_actor` (already hardened by this campaign against the
+`urlparse` `ValueError` described below, and its `netloc` return feeds
+name-and-server splitting rather than a trust comparison), and
+`process_microblog_announce`.
+
+**`process_microblog_announce`'s read belongs to this defect family even though
+the brief excluded it.** It is the expression `urlparse(uri).netloc` passed as
+`create_resolved_object`'s `uri_domain` argument, so it is not an eleventh
+independent comparison — it is one of the *operands* of `create_resolved_object`'s
+comparison, supplied from a different place than the other callers supply it.
+Treating it as out of scope would have hidden a call-site difference that turns
+out to matter (see section 3).
+
+### 2. Ten reads, three comparisons
+
+The ten reads do not make ten defects. Every one of them is an operand of
+exactly one of three `!=` tests:
+
+- **C1, in `resolve_remote_post`:** `announce_actor_domain != uri_domain`, where
+  `uri_domain` is the netloc of the Announce's object URI and
+  `announce_actor_domain` is the netloc of `community.ap_profile_id`. Gates
+  whether an announcing community may vouch for an object URI at all.
+- **C2, in `create_resolved_object`:** `uri_domain != actor_domain`, where
+  `uri_domain` is a parameter and `actor_domain` is the netloc of whichever
+  `attributedTo` form the fetched document carries (three reads, one per shape:
+  a bare string, a `Person` dict inside a list, a string inside a list). This is
+  the impersonation check the function's own comment advertises.
+- **C3, in `resolve_remote_post_from_search`:** the same `uri_domain !=
+  actor_domain` test, with its own inlined copies of both the `attributedTo`
+  walk (three reads) and the `uri_domain` derivation (two reads — an initial one
+  and a re-derivation inside the NodeBB `OrderedCollection` branch).
+
+C2 and C3 are textual near-duplicates of each other. A fix applied to one and
+not the other would leave the defect standing, which is the practical reason to
+register them as separate entries rather than one.
+
+### 3. The severity reverses again — and this time it is worse in one direction
+
+The `netloc`-versus-host reversal that sub-project 2a established holds here.
+Re-probed against this checkout, exhaustively over a sample of authorities
+covering case, port, userinfo, IPv6 literals and IDNA:
+
+```
+netloc-equal-but-host-different pairs: []
+```
+
+There are none, and there cannot be: `hostname` is a pure function of the
+`netloc` string, so equal netlocs always yield equal hosts. **A netloc
+comparison is strictly stricter than a host comparison. It can only false-refuse;
+it can never false-accept.** So the "userinfo lets a peer impersonate another
+host" reading is wrong here for the same reason it was wrong in 2a, and all four
+of these entries are availability defects, not boundary bypasses. This judgement
+is **probe-backed**.
+
+What is *new* here, and not present in the functions 2a fixed, is a **case
+asymmetry that makes the false refusal systematic rather than conditional**. 2a's
+finding was that a netloc comparison only misfires when a peer is internally
+inconsistent about the port across the two fields being compared — a peer that
+carries the same authority everywhere passes. That escape hatch is closed in two
+of these three comparisons, because one side is lowercased and the other is not:
+
+- **C1** compares `community.ap_profile_id`'s netloc against the object URI's.
+  `Community.ap_profile_id` is stored lowercased (`actor_json_to_model` writes
+  `activity_json['id'].lower()`, and every lookup filters on `.lower()`), while
+  the object URI's netloc is the peer's raw string. So a peer whose community
+  actor id and object URIs agree perfectly still fails C1 if its authority
+  contains any uppercase character. No inconsistency on the peer's part is
+  required — internal consistency is not a defence.
+- **C2 reached from the API** has the same shape. `get_resolve_object` in
+  `app/api/alpha/utils/misc.py` computes `server` as
+  `urlparse(query).netloc.lower()` and passes it as `uri_domain`, while
+  `actor_domain` is derived raw. Same systematic refusal.
+- **C2 reached from `resolve_remote_post` or `process_microblog_announce`**, and
+  **C3**, derive both sides raw, so they retain 2a's weaker "requires peer
+  inconsistency" character.
+
+That is a severity *difference between call sites of one function*, which is
+precisely the thing a flat defect list destroys. `create_resolved_object` is
+strictly worse when the API calls it than when the inbox does, and reading the
+function alone cannot show that.
+
+Two further consequences of `netloc` being carried unstripped, both in C2's
+scope: `uri_domain` is interpolated into a synthesised activity id
+(`f"https://{uri_domain}/activities/..."`), and the API path interpolates the
+same string into `announce_id`. Userinfo or a port present in the peer's URI
+therefore rides into a synthesised identifier. Because C2 has already forced
+`uri_domain == actor_domain` by that point, this does not let a peer name a host
+it does not control; it is a hygiene defect in a synthesised string, rated
+informational and folded into D22 rather than filed separately.
+
+### 4. Reachability — the question that governs everything else
+
+All three functions are reachable from peer-controlled input. This was traced,
+not assumed.
+
+- **`resolve_remote_post`** is called from `process_announce_of_uri`, which
+  `process_inbox_request` calls for an `Announce` addressed to a community. The
+  `uri` is `announce_target_uri(request_json)` — the peer's own Announce body.
+  **A peer chooses `uri_domain` outright**; `announce_actor_domain` comes from
+  the local database row for the community it announced into. Peer-triggerable
+  at will; blast radius is one announced post silently not created.
+- **`create_resolved_object`** has three callers with three different provenances
+  for `uri_domain`: `resolve_remote_post` (peer's Announce URI),
+  `process_microblog_announce` (peer's Announce URI, for the microblog boost
+  path), and the alpha API's `get_resolve_object` (the *local* user's search
+  query URL, lowercased). `actor_domain` is peer-controlled on all three —
+  it is read out of a document fetched from the remote host. So on two of three
+  call sites a peer controls both operands, and on the third a local user
+  controls one and a peer the other.
+- **`resolve_remote_post_from_search`** the brief implied is UI-only. It is not.
+  Two callers: the `retrieve_remote_post` form in `app/search/routes.py`
+  (login-required, local user supplies the URI), **and the `Move` activity
+  handler in `app/activitypub/routes.py`**, which passes
+  `core_activity['object'].replace('/context', '')` — a peer-chosen string,
+  reached whenever a peer sends a `Move` naming an origin and target community
+  that both resolve. That second caller is what makes D24 a peer-triggerable
+  defect rather than a user-visible annoyance, and it is worth stating plainly
+  that reading the function's own comment ("called from UI, via 'search' option
+  in navbar") would have led to the wrong answer. The comment is stale.
+
+### 5. A second defect in the same reads: `urlparse` itself raises
+
+Every one of the ten reads is preceded by a bare `urlparse(...)` with no
+`try`/`except`. On the interpreter this suite runs, `urlparse` raises
+`ValueError` before any attribute access, for inputs a hostile or merely broken
+peer can send. Probed:
+
+```
+'https://[::1/x'          -> urlparse ValueError: Invalid IPv6 URL
+'https://a<U+2100>b.example/x'  -> urlparse ValueError: netloc contains invalid
+                             characters under NFKC normalization
+'https://[1::2::3]/x'     -> urlparse ValueError: does not appear to be an IPv4
+                             or IPv6 address
+```
+
+This is the **same defect class `extract_domain_and_actor` was hardened against
+earlier in this campaign** — that function now wraps its `urlparse` and returns
+`('', '')` — and the three functions here were not given the same treatment,
+because nobody was looking at them. On the inbox path the exception escapes
+through `process_inbox_request`'s `except Exception: session.rollback(); raise`,
+so it does not reach the peer (the inbox has already returned and dispatched to
+Celery); it fails the task and drops the activity with a traceback. Availability
+and log-noise, not a bypass. Probe-backed for the raising behaviour;
+**reading-only** for the claim about how the Celery task disposes of it.
+
+### 6. Two adjacent findings that are *not* this defect
+
+Both surfaced from the call-site tracing and neither is a `netloc`-versus-host
+problem. They are recorded because a future fix to C1 will touch the same
+expression and should not silently inherit them.
+
+- **A hardcoded per-instance trust exemption.** C1's guard reads
+  `if announce_actor_domain != 'ovo.st' and not nodebb and announce_actor_domain
+  != uri_domain`. When the announcing community lives on `ovo.st`, the
+  domain check is skipped entirely and that instance may announce an object URI
+  on any host. This is a named-instance carve-out in a trust boundary, not a
+  parsing bug.
+- **The NodeBB reply fan-out skips the same guard.**
+  `get_nodebb_replies_in_background` calls `resolve_remote_post` with
+  `nodebb=True`, which also short-circuits C1. The URI list it iterates is
+  `topic_post_data['orderedItems'][1:]`, taken verbatim from a document the
+  remote host served, so a peer can list reply URIs on arbitrary third-party
+  hosts and have each resolved into the community without C1 ever running. C2
+  still applies to each one, so the resulting content must genuinely be served
+  by, and attributed to, the host in its own URI — this is cross-host content
+  *injection into a community*, not forgery. Related: inside
+  `resolve_remote_post_from_search`, the `OrderedCollection` branch **re-derives
+  `uri_domain` from `post_data['orderedItems'][0]`**, so a host asked for one URI
+  can redirect the whole resolution to a different host and the C3 comparison
+  then compares that host against itself and passes.
+
+### 7. What the tests pin: nothing, near enough
+
+Measured, not assumed — a full suite run with `--cov=app.activitypub.util`,
+reading `executed_lines` against each function's span:
+
+```
+resolve_remote_post              executed 1   missing 11
+create_resolved_object           executed 25  missing 33
+resolve_remote_post_from_search  executed 1   missing 71
+```
+
+The single executed statement in each of `resolve_remote_post` and
+`resolve_remote_post_from_search` is the `def` itself. **Of the ten `netloc`
+reads, exactly one ever executes**: `create_resolved_object`'s bare-string
+`attributedTo` branch, reached incidentally by
+`tests/test_process_microblog_announce.py`'s success-path test, and only on the
+matching-domain outcome. The other nine never run. `tests/test_announce_dispatch.py`
+monkeypatches `resolve_remote_post` out, so it pins the call, not the body.
+
+The consequence is the point of registering this at all: **nothing pins the
+current behaviour of these comparisons.** A future fix here has no safety net —
+no test would fail if the fix were wrong, and none would fail if the fix were
+right either. Anyone taking D21–D24 should expect to write characterisation
+tests for the present behaviour first, exactly as sub-project 2a did before its
+own fixes.
+
+### 8. Register
+
+Severities below are for the *availability* consequence; none of D21–D24 is a
+trust-boundary bypass, and that conclusion is probe-backed.
+
+| # | function | defect | severity | evidence |
+|---|---|---|---|---|
+| D21 | `resolve_remote_post` | C1 compares raw `netloc` strings, one side lowercased from the database and one side the peer's raw authority. Any peer with uppercase in its authority is refused unconditionally; port and userinfo differences refuse too. Plus an unguarded `urlparse` on a peer-supplied URI. | medium — systematic, peer-triggerable, silent | probe (comparison + `urlparse` raise); reading (Celery disposal) |
+| D22 | `create_resolved_object` | C2, same shape. Systematic refusal only on the alpha-API call path, where `server` is lowercased and `actor_domain` is not; inconsistency-dependent on the two inbox paths. `uri_domain` also rides unstripped into a synthesised activity id. | medium on the API path, low on the inbox paths | probe (comparison); reading (call-site provenance) |
+| D23 | `create_resolved_object` / `resolve_remote_post_from_search` duplication | C2 and C3 are textual near-duplicates, including both `attributedTo` walks. Fixing one leaves the other. | low, but it is the reason a fix can half-land | reading |
+| D24 | `resolve_remote_post_from_search` | C3, same shape, both sides raw, so inconsistency-dependent. Reachable from peer-controlled input via the `Move` handler, which the function's own stale comment denies. | low–medium | reading (both call sites traced) |
+
+Adjacent, filed but explicitly *not* the same defect: the `ovo.st` carve-out and
+the `nodebb=True` bypass of C1, and the `OrderedCollection` re-derivation of
+`uri_domain` — all described in section 6, all reading-only.
+
 ## Ratchet gotchas
 
 - `percent_covered` is a **blended statement+branch figure**. This matters for
