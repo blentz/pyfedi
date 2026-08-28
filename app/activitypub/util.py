@@ -1351,6 +1351,18 @@ def actor_json_to_model(activity_json, address, server):
             # New-style post flair
             community.flair = []
             for flair in activity_json["tag"]:
+                if not isinstance(flair, dict) or "type" not in flair:
+                    # An entry that is not an object, or an object with no
+                    # 'type', has nothing for the test below to read: it used
+                    # to raise TypeError and KeyError respectively, out of
+                    # actor_json_to_model and after the Community above had
+                    # already been committed. Skip it the way the sibling
+                    # legacy loop skips an entry with no 'display_name'.
+                    current_app.logger.warning(
+                        f"actor_json_to_model: skipping a 'tag' entry of "
+                        f"{activity_json['id']} -- it is not an object carrying "
+                        f"a 'type'")
+                    continue
                 if flair["type"] == "CommunityPostTag":
                     flair_dict = flair
                     flair_obj = find_flair_or_create(flair_dict, community.id)
@@ -1580,8 +1592,32 @@ def actor_json_to_model(activity_json, address, server):
             make_image_sizes(feed.image_id, 700, 1600, 'feeds')
 
         if 'childFeeds' in activity_json:
-            for child_feed in activity_json['childFeeds']:
-                populate_child_feed(feed.id, child_feed)
+            if isinstance(activity_json['childFeeds'], list):
+                for child_feed in activity_json['childFeeds']:
+                    populate_child_feed(feed.id, child_feed)
+            else:
+                # Only a list can be iterated as the collection of child feed
+                # urls this loop means, and the three ways of getting that
+                # wrong failed three different ways, all of them after the
+                # Feed, its FeedMembers and its FeedItems had been committed.
+                # null and any other scalar raised TypeError out of
+                # actor_json_to_model. A string did not raise at all: it
+                # iterated its own characters, and each single character
+                # reached populate_child_feed, which resolves '~<char>@' and
+                # reparents whatever feed answers to it -- in production N
+                # failing celery tasks nobody reads, inline and visible only
+                # under DEBUG. A mapping did not raise either: it iterated its
+                # keys, so a peer could link child feeds through an object
+                # this code never meant to accept. The isinstance test matches
+                # the Group branch's `'tag' in activity_json and
+                # isinstance(activity_json['tag'], list)`, and the warning is
+                # here because the two silent cases would otherwise stay
+                # silent.
+                current_app.logger.warning(
+                    f"actor_json_to_model: ignoring the 'childFeeds' of "
+                    f"{activity_json['id']} -- it is a "
+                    f"{type(activity_json['childFeeds']).__name__}, not a list, "
+                    f"so no child feed is linked to this feed")
         return feed
 
 
