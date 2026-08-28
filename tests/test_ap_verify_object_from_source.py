@@ -194,9 +194,13 @@ class TestPreFetchHostComparison:
         """The empty-host obligation at guard 1: host_of returns '' for an
         actor urlparse refuses, and '' must not be allowed to satisfy the
         comparison. It cannot, because the guard above has already proved the
-        object URI's host non-empty -- this test is what would fail if that
-        ordering were ever undone, and it also pins that the ValueError is
-        absorbed rather than propagated."""
+        object URI's host non-empty. This test pins the refusal and that the
+        ValueError is absorbed rather than propagated; it does not pin the
+        ordering, because its own object URI parses, so removing the earlier
+        guard leaves this case refusing for the same reason it does now. The
+        test that pins the ordering is
+        test_an_object_uri_that_will_not_parse_refuses_without_fetching,
+        whose NO_HOST reason becomes ACTOR_MISMATCH if that guard goes."""
         request_json = announce_activity(actor=UNPARSEABLE)
 
         assert verify_object_from_source(request_json) == (None, ACTOR_MISMATCH)
