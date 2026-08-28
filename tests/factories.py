@@ -609,8 +609,8 @@ def peer_actor_json(actor_type: str = 'Person', name: str = 'alice',
 
     `name` doubles as the actor's preferredUsername and as the last path
     segment of its id, matching how real peers publish actors; pass
-    fields={'id': ...} to break that correspondence, which is what the
-    `server not in activity_json['id']` guard's tests need.
+    fields={'id': ...} to break that correspondence, which is what the tests
+    for the guard comparing the id's host against `server` need.
 
     A key in `omit` that the document does not carry raises KeyError. The
     lenient `document.pop(key, None)` this replaced made a misspelling a
