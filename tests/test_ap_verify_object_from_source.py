@@ -62,7 +62,8 @@ TIMING. app/utils.py carries both `import time` and `from time import
 sleep`, and get_request runs its OWN retry through that second binding,
 nested inside this function's `time.sleep(3)` retry. Patching only
 `time.sleep` would leave the inner one sleeping for real, so
-`_no_real_sleeping` below patches both, function-scoped. Neither patch
+the shared `no_real_sleeping` fixture in conftest patches both,
+function-scoped, and this module opts into it by pytestmark. Neither patch
 touches get_request or verify_object_from_source, so no test here asserts
 retry TIMING -- only that a second attempt happens and that its outcome is
 what comes back.
