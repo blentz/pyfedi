@@ -116,16 +116,29 @@ def feed_ids(app, viewer, community_ids, sort='new', **kwargs):
         return get_deduped_post_ids(uuid.uuid4().hex, community_ids, sort, **kwargs)
 
 
-def make_community(name: str = 'microblogs') -> Community:
+def make_community(name: str = 'microblogs', host: str = 'test.piefed.local') -> Community:
+    """A Community whose ActivityPub identity is published on `host`.
+
+    `host` defaults to the value every caller before the resolver sub-project
+    hardcoded, so existing callers are unaffected. It is a parameter because
+    resolve_remote_post (app/activitypub/util.py) derives its announce-actor
+    domain from `ap_profile_id`'s netloc and compares it against the netloc of
+    the post URI it is asked to fetch -- a test of that comparison has to be
+    able to make the two agree, disagree, or differ only in case, and cannot do
+    any of that while the community's host is a constant. '.local' is also the
+    one suffix get_request refuses outright (is_invalid_get_request_uri), so a
+    test that wants the announce host and the post host to AGREE on a fetchable
+    URI has to move the community off the default.
+    """
     community = Community(
         name=name,
         title=name,
         instance_id=1,
         user_id=1,
-        ap_profile_id=f'https://test.piefed.local/c/{name}',
-        ap_public_url=f'https://test.piefed.local/c/{name}',
-        ap_followers_url=f'https://test.piefed.local/c/{name}/followers',
-        ap_domain='test.piefed.local',
+        ap_profile_id=f'https://{host}/c/{name}',
+        ap_public_url=f'https://{host}/c/{name}',
+        ap_followers_url=f'https://{host}/c/{name}/followers',
+        ap_domain=host,
         subscriptions_count=0,
         local_only=False,
         nsfw=False,
@@ -674,14 +687,33 @@ def announce_activity(object_uri: str = PEER_OBJECT_URI, actor: str = PEER_ACTOR
             'actor': actor, 'object': object_uri}
 
 
-def note_document(attributed_to: str = PEER_ACTOR_URI, uri: str = PEER_OBJECT_URI) -> dict:
+def note_document(attributed_to: str = PEER_ACTOR_URI, uri: str = PEER_OBJECT_URI,
+                  fields: dict = None) -> dict:
     """The Note an announce_activity's 'object' URI dereferences to.
 
     'attributedTo' is a parameter for the same reason 'actor' is on
     announce_activity: the interesting inputs are the ones where the object's
     stated author and the URI it was served from name different hosts.
+
+    `fields` is a mapping merged over the baseline, following peer_actor_json's
+    convention above. The baseline carries NO addressing, which is deliberate:
+    activitypub_visibility (app/activitypub/util.py) classifies an object with
+    neither 'to' nor 'cc' as 'direct', and create_post refuses a 'direct'
+    object outright -- so a test that wants the document to become a Post has
+    to opt in with fields={'to': [AS_PUBLIC_URI]} and is thereby forced to say
+    so. Giving the baseline public addressing would have hidden that refusal
+    behind every caller.
     """
-    return {'id': uri, 'type': 'Note', 'content': 'hello', 'attributedTo': attributed_to}
+    document = {'id': uri, 'type': 'Note', 'content': 'hello', 'attributedTo': attributed_to}
+    if fields:
+        document.update(fields)
+    return document
+
+
+# The addressing value activitypub_visibility (app/activitypub/util.py) reads
+# as 'public' when it appears in an object's 'to'. Its AS_PUBLIC tuple also
+# accepts the 'as:Public' and 'Public' spellings; this is the canonical one.
+AS_PUBLIC_URI = 'https://www.w3.org/ns/activitystreams#Public'
 
 
 def seed_signing_site() -> Site:
@@ -693,3 +725,76 @@ def seed_signing_site() -> Site:
     site.private_key = private_key
     db.session.commit()
     return site
+
+
+def serve_remote_object(http_mock, uri: str = PEER_OBJECT_URI, document: dict = None,
+                        status: int = 200, content: bytes = None):
+    """Register the ONE respx route a resolver's fetch of `uri` will hit, and
+    return the document it serves.
+
+    The fetch half of the fetch-plus-database shape the three remote-object
+    resolvers need (resolve_remote_post, create_resolved_object's callers, and
+    resolve_remote_post_from_search, all in app/activitypub/util.py). Those
+    functions fetch, then parse, then write, so every test of them needs a
+    mocked HTTP conversation as well as a database assertion; this is the
+    first half and `resolvable_remote_author` below is the second.
+
+    What it guarantees:
+
+    - Exactly one GET route for `uri` exists on `http_mock`, answering with
+      `status`. Nothing else is registered, so any OTHER request the code
+      under test makes -- an actor fetch, a nodeinfo probe, an image
+      dereference -- is an unmatched request, which the session-scoped autouse
+      `block_outbound_http` router raises on rather than letting it reach the
+      network. A resolver that fetches more than the caller intended fails
+      loudly instead of silently passing.
+    - `http_mock`'s assert_all_called=True means the converse holds too: a
+      route registered here and never fetched fails the test at teardown, so
+      this helper is never a silent no-op.
+    - With `content` unset the body is `document` serialised as JSON, and the
+      SAME dict object is returned, so a caller can assert on identity between
+      what the peer served and what the resolver stored. `document` defaults to
+      `note_document(uri=uri)` -- a well-formed Note whose 'attributedTo' is
+      PEER_ACTOR_URI, i.e. on PEER_OBJECT_HOST, the host the default `uri` is
+      also on. That default is the shape that gets THROUGH
+      create_resolved_object's author-host comparison; a test wanting the
+      refusing side passes its own document.
+    - `content` overrides the body with raw bytes and returns None, which is
+      how a test reaches remote_object_to_json's parse-failure return without
+      also changing the status code.
+
+    `document` is passed through untouched -- `{}` and `[]` are legitimate
+    arguments, since a peer serving a 200 with an empty JSON body is exactly
+    how remote_object_to_json returns a value that is falsy but not None.
+    """
+    if content is not None:
+        http_mock.get(uri).respond(status, content=content,
+                                   headers={'content-type': 'application/json'})
+        return None
+    if document is None:
+        document = note_document(uri=uri)
+    http_mock.get(uri).respond(status, json=document)
+    return document
+
+
+def resolvable_remote_author(instance: Instance, name: str = 'alice') -> User:
+    """A remote User row that find_actor_or_create resolves WITHOUT any HTTP.
+
+    The database half of the fetch-plus-database shape. `make_user` alone is
+    not enough: find_actor_or_create finds the row and then calls
+    schedule_actor_refresh (app/activitypub/actor.py), which fires
+    refresh_user_profile for any non-local actor whose `ap_fetched_at` is None
+    or older than a day. Under eager Celery that refresh runs inline and
+    fetches the actor's profile, which -- with only the object route from
+    `serve_remote_object` registered -- surfaces as an unmatched request.
+
+    So this stamps `ap_fetched_at` to now, which is the one thing that makes
+    the actor lookup a pure database read. The row's identity URIs come from
+    `make_user`, i.e. https://{instance.domain}/users/{name}: pass an author
+    URI of exactly that form as the served document's 'attributedTo' for the
+    author-host comparison in create_resolved_object to pass.
+    """
+    user = make_user(instance, name)
+    user.ap_fetched_at = utcnow()
+    db.session.commit()
+    return user
