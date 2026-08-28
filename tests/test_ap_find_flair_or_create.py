@@ -216,6 +216,136 @@ class TestNotFoundCreatesNewFlair:
         assert CommunityFlair.query.filter_by(community_id=community.id).count() == 0
 
 
+class TestWhitespaceInThePeersFlairName:
+    """The three `.strip()` calls, and the one place that has none.
+
+    Derived against this checkout with:
+
+        podman-compose -f compose.test.yaml exec -T -w /app test-runner python -c "
+        import ast
+        src = open('app/activitypub/util.py').read()
+        for n in ast.walk(ast.parse(src)):
+            if isinstance(n, ast.FunctionDef) and n.name == 'find_flair_or_create':
+                for c in ast.walk(n):
+                    if (isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
+                            and c.func.attr == 'strip'):
+                        print(ast.unparse(c))
+        "
+
+    Output, three lines:
+
+        flair['preferredUsername'].strip()  -- lookup, preferredUsername arm
+        flair['display_name'].strip()       -- lookup, display_name arm
+        flair_text.strip()                  -- create, the new row's name
+
+    Coverage cannot see any of them: each sits inside an expression on a
+    line every existing test in this file already executes, so all three
+    could be deleted with the full suite still green. Nothing fed a padded
+    name, so stripping was asserted nowhere. Each test below constructs the
+    input where the transformation decides the outcome.
+    """
+
+    def test_a_padded_preferred_username_finds_the_unpadded_row(self, app, db_session):
+        """The lookup's preferredUsername arm. The stored row's flair is
+        'spoiler' with no padding, so the query only matches if the peer's
+        ' spoiler ' is stripped first.
+
+        Production change that fails this: deleting
+        `flair['preferredUsername'].strip()`'s `.strip()`, after which the
+        lookup misses, the function falls to the create block, and a SECOND
+        row is added -- both assertions catch it, the row count as well as
+        the identity."""
+        seed_community_owner()
+        community = make_community('paddedusernamelookup')
+        existing = make_community_flair(community, name='spoiler', ap_id='https://peer.example/tag/pad1')
+        result = find_flair_or_create({'preferredUsername': ' spoiler '}, community.id)
+        db.session.commit()
+        assert result.id == existing.id
+        assert CommunityFlair.query.filter_by(community_id=community.id).count() == 1
+
+    def test_a_padded_display_name_finds_the_unpadded_row(self, app, db_session):
+        """The lookup's display_name arm -- a textually separate `.strip()`
+        from the preferredUsername arm's, so a mutation to either alone is
+        invisible to the other's test. No 'preferredUsername' key at all,
+        which is what makes the elif the arm taken.
+
+        Production change that fails this: deleting
+        `flair['display_name'].strip()`'s `.strip()`."""
+        seed_community_owner()
+        community = make_community('paddeddisplaylookup')
+        existing = make_community_flair(community, name='meta', ap_id='https://peer.example/tag/pad2')
+        result = find_flair_or_create({'display_name': '  meta\t'}, community.id)
+        db.session.commit()
+        assert result.id == existing.id
+        assert CommunityFlair.query.filter_by(community_id=community.id).count() == 1
+
+    def test_a_new_flair_is_created_with_its_name_stripped(self, app, db_session):
+        """The create block's `flair_text.strip()`. Nothing matches, so a
+        row is built, and the assertion is on the value that landed in the
+        column -- not merely that a row exists.
+
+        Production change that fails this: deleting that `.strip()`, after
+        which the row is stored as ' brand new ' and the equality fails.
+        The second assertion is what makes this test the create block's and
+        not the lookup's: a lookup-arm mutation cannot reach it."""
+        seed_community_owner()
+        community = make_community('paddedcreate')
+        result = find_flair_or_create({'display_name': ' brand new '}, community.id)
+        db.session.commit()
+        assert result.flair == 'brand new'
+        persisted = CommunityFlair.query.filter_by(community_id=community.id).one()
+        assert persisted.flair == 'brand new'
+
+    def test_the_update_path_writes_the_name_back_unstripped(self, app, db_session):
+        """PINS PRESENT BEHAVIOUR, NOT DESIRED BEHAVIOUR.
+
+        The update block assigns `existing_flair.flair = flair["display_name"]`
+        with no `.strip()`, unlike the lookup arms above it and the create
+        block below it. So a peer sending a padded name twice gets two
+        different outcomes from the same input: the first call creates the
+        row as 'spoiler', and the second call finds that row (the lookup
+        strips, so it matches) and then overwrites its name with the padded
+        ' spoiler '. The stored value flips on the second delivery of an
+        identical document.
+
+        This test asserts the padded value, which is what the code does
+        today. It is recorded as a defect in
+        docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md and
+        deliberately NOT fixed here, per this campaign's report-do-not-fix
+        rule. If someone later adds the missing `.strip()`, this test fails
+        -- which is the intent: the fix should be a deliberate update to
+        this assertion, not something that slips through green.
+        """
+        seed_community_owner()
+        community = make_community('unstrippedupdate')
+        created = find_flair_or_create({'display_name': ' spoiler '}, community.id)
+        db.session.commit()
+        assert created.flair == 'spoiler', 'the create path strips'
+
+        updated = find_flair_or_create(
+            {'display_name': ' spoiler ', 'id': 'https://peer.example/tag/pad3'}, community.id)
+        db.session.commit()
+        assert updated.id == created.id, 'the lookup strips, so the same row is found'
+        assert updated.flair == ' spoiler ', 'the update path does not strip'
+        assert CommunityFlair.query.filter_by(community_id=community.id).one().flair == ' spoiler '
+
+    def test_the_update_paths_preferred_username_arm_is_unstripped_too(self, app, db_session):
+        """PINS PRESENT BEHAVIOUR, NOT DESIRED BEHAVIOUR.
+
+        The same missing `.strip()`, on the update block's other arm:
+        `existing_flair.flair = flair['preferredUsername']`. Reached by
+        omitting 'display_name' entirely so the elif is what runs. Recorded
+        and not fixed for the same reason as the test above.
+        """
+        seed_community_owner()
+        community = make_community('unstrippedusernameupdate')
+        existing = make_community_flair(community, name='nsfw', ap_id='https://peer.example/tag/pad4')
+        result = find_flair_or_create({'id': existing.ap_id, 'preferredUsername': ' nsfw '}, community.id)
+        db.session.commit()
+        assert result.id == existing.id
+        assert result.flair == ' nsfw '
+
+
 class TestSessionParameter:
     def test_session_parameter_passed_explicitly_works_same_as_default(self, app, db_session):
         """Mutation that fails this: breaking the `if session is None: session

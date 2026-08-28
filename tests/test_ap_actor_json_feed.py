@@ -894,6 +894,53 @@ class TestScalarOptionalFields:
         assert feed.description == ''
 
 
+class TestWhitespaceInThePeersNames:
+    """`name=activity_json['preferredUsername'].strip()` and
+    `title=activity_json['name'].strip()` in the Feed() call.
+
+    Coverage cannot see inside either. Both sit on lines every
+    Feed-creating test in this file already executes, so the branch
+    reported full statement and branch coverage while both could be deleted
+    with the suite still green -- no test fed a padded value, so the
+    stripping was asserted nowhere. The Person/Service branch's pair was
+    already pinned; this class and its Group counterpart close the other
+    two branches.
+    """
+
+    def test_a_padded_preferred_username_is_stripped_into_the_name_column(
+            self, app, db_session, http_mock):
+        """Production change that fails this: deleting
+        `activity_json['preferredUsername'].strip()`'s `.strip()`, after
+        which the Feed's name column holds ' news ' and the equality fails.
+
+        `machine_name` is asserted here too, unstripped, because it reads
+        the SAME key without a `.strip()` of its own -- a fact this test
+        would otherwise silently straddle. That assertion is pinning
+        present behaviour, not endorsing it; without it, a future `.strip()`
+        added to machine_name would leave this test green while changing
+        what the column holds.
+        """
+        _peer_with_one_owner(http_mock)
+        document = _owned_feed(fields={'preferredUsername': ' news '})
+        feed = actor_json_to_model(document, '~news', PEER)
+        assert feed.name == 'news'
+        assert db.session.query(Feed).one().name == 'news'
+        assert feed.machine_name == ' news ', 'machine_name reads the same key without stripping'
+
+    def test_a_padded_name_is_stripped_into_the_title_column(
+            self, app, db_session, http_mock):
+        """The second, textually separate call site. Production change that
+        fails this: deleting `activity_json['name'].strip()`'s `.strip()`.
+
+        The padding is a tab and a newline rather than spaces, so a
+        `.strip(' ')` narrowing is caught here rather than passing."""
+        _peer_with_one_owner(http_mock)
+        document = _owned_feed(fields={'name': '\t The News \n'})
+        feed = actor_json_to_model(document, '~news', PEER)
+        assert feed.title == 'The News'
+        assert db.session.query(Feed).one().title == 'The News'
+
+
 class TestDescription:
     """The description block: `summary` / `content` / neither into
     description_html, the PeerTube `<p>` wrap, allowlist_html, and the
