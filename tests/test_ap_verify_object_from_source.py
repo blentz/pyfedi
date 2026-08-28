@@ -25,7 +25,9 @@ not request the `http_mock` fixture at all, and register no route anywhere.
 The session-scoped autouse `block_outbound_http` router (tests/conftest.py)
 is still active, and it registers zero routes, so any outbound httpx
 request raises respx's AllMockedAssertionError. That error is neither
-httpx.HTTPError nor a ValueError/InvalidURL/ReadError, so it is normalised
+httpx.HTTPError nor any of the five exception types app.utils.get_request
+handles -- its clauses are httpx.InvalidURL, ValueError, httpx.ReadError,
+httpx.HTTPError and httpx.StreamError -- so it is normalised
 by nothing in app.utils.get_request and caught by nothing in
 verify_object_from_source -- the function's only bare `except:` wraps
 `object_request.json()`, not the network call -- so it propagates and the
@@ -38,12 +40,23 @@ pins the current behaviour and records it as a suspected defect (it is not
 fixed here). `hostname` is a pure function of `netloc`'s own string, so two
 EQUAL netlocs can never yield different hostnames: userinfo
 (https://peer.example@attacker.example/x) cannot make two different real
-hosts compare equal, and this is not an impersonation hole. The genuine
-divergence is the PORT: https://peer.example:8443/x and
+hosts compare equal, and this is not an impersonation hole.
+
+Does a peer control both strings? YES -- a peer authors `actor`, `object`
+and the fetched document's `attributedTo` alike, so it supplies every input
+to both comparisons. That is what makes the question worth asking, and
+`hostname` being a pure function of `netloc` is what makes the answer
+harmless: controlling both strings still cannot make two different real
+hosts compare equal.
+
+The genuine divergence is the PORT: https://peer.example:8443/x and
 https://peer.example/x are the same host by `hostname` but different
-strings by `netloc`, so a legitimate peer serving on a non-default port is
-falsely REFUSED. That is an availability defect, and it bites at both
-guards independently -- so both are pinned.
+strings by `netloc`, so a peer that is INCONSISTENT about the port between
+`actor`, `object` and `attributedTo` is falsely REFUSED. A peer that
+carries the same port on all three compares equal and passes -- the
+false reject needs the inconsistency, which is what the tests below
+construct. That is an availability defect, and it bites at both guards
+independently -- so both are pinned.
 
 TIMING. app/utils.py carries both `import time` and `from time import
 sleep`, and get_request runs its OWN retry through that second binding,
@@ -54,12 +67,23 @@ touches get_request or verify_object_from_source, so no test here asserts
 retry TIMING -- only that a second attempt happens and that its outcome is
 what comes back.
 
-Site's row in this suite (make_site(), tests/factories.py) carries
-private_key=None. The 401 branch signs its retry with that column, which
-fails on None before any network call, so the 401 test seeds a real keypair
-first -- the same `_seed_signing_site` shape as
+THE Site ROW. Nothing seeds one automatically: `db_session` truncates, and a
+Site row exists in a test only if that test calls make_site()
+(tests/factories.py) itself. Two consequences pull in opposite directions
+and are both deliberate here.
+
+The 401 branch reads Site.query.get(1).private_key, so a test that reaches
+it must create the row -- and make_site()'s row carries private_key=None,
+which fails as a PEM key before any network call. Hence `_seed_signing_site`
+below, which calls make_site() AND assigns a real keypair; the same shape as
 tests/test_ap_remote_object_to_json.py, which covers the identical
 fetch-and-retry structure in a sibling function.
+
+test_a_404_returns_none goes the other way and calls neither, so no Site row
+exists in it at all. That is the point: a `status_code == 401` mutation
+misrouting its 404 into the signed branch crashes on None.private_key
+instead of passing quietly. "No Site row exists" and "the Site row carries
+private_key=None" are statements about different tests, not a contradiction.
 
 REPORTED, NOT FIXED. The `.json()` calls in both the 200 and the 401 branch
 are wrapped in a bare `except:`. Structurally it encloses only the parse,
