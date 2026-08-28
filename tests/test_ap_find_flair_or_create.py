@@ -42,24 +42,47 @@ Enumeration, derived fresh against this checkout with:
             print(f'line {node.lineno}: if {k1!r} ... elif {k2!r}')
     "
 
-Output (both the 'found' update block and the 'not found' create block carry
-their own copy of each pair -- six rows, not three, because each of the
-three genuine spelling pairs appears twice, once per block; two more rows
-are the id-lookup guard and the preferredUsername/display_name lookup
-priority, which are shape-alike but not spelling pairs). The script above
-prints each pair's line number as `node.lineno`; that number is omitted
-below since it moves on the next edit -- re-run the command to see it:
+Note that the command is reproduced above with the indentation this docstring
+gives it; dedent it before feeding it to `python -c`, which rejects a leading
+indent.
 
-    if 'id' ... elif None                            -- ap_id lookup guard
+Output -- NINETEEN rows, not the ten this transcript used to carry. Both the
+'found' update block and the 'not found' create block hold their own copy of
+each pair, so each of the three genuine spelling pairs appears twice; two
+further rows are the id-lookup guard and the preferredUsername/display_name
+lookup priority, which are shape-alike but not spelling pairs. That accounts
+for the first ten rows. The remaining nine are the SAME `elif`s seen a second
+time in their own right: an `elif` is an `ast.If` sitting in its parent's
+`orelse`, so `ast.walk` yields it as a node of its own, and it prints again
+as an `if ... elif None` row. Nine and not ten because the id-lookup guard is
+the one row of the ten whose elif is None already -- it has no nested `if` to
+be revisited. The earlier transcript silently dropped all nine, which made
+the output look like a clean one-row-per-pair listing when it is not.
+
+`ast.walk` is breadth-first, so the ten parents print before the nine
+children rather than interleaved with them. The script prints each row's line
+number as `node.lineno`; those are omitted below since they move on the next
+edit -- re-run the command to see them.
+
+    if 'id' ... elif None                             -- ap_id lookup guard
     if 'preferredUsername' ... elif 'display_name'    -- lookup priority (not a spelling pair)
     if 'text_color' ... elif 'textColor'              -- update block
     if 'background_color' ... elif 'backgroundColor'  -- update block
-    if 'blur_images' ... elif 'blurImages'             -- update block
+    if 'blur_images' ... elif 'blurImages'            -- update block
     if 'display_name' ... elif 'preferredUsername'    -- update block: which name wins
     if 'text_color' ... elif 'textColor'              -- create block
     if 'background_color' ... elif 'backgroundColor'  -- create block
-    if 'blur_images' ... elif 'blurImages'             -- create block
+    if 'blur_images' ... elif 'blurImages'            -- create block
     if 'display_name' ... elif 'preferredUsername'    -- create block: which name wins
+    if 'display_name' ... elif None                   -- the lookup priority's own elif
+    if 'textColor' ... elif None                      -- update block elif
+    if 'backgroundColor' ... elif None                -- update block elif
+    if 'blurImages' ... elif None                     -- update block elif
+    if 'preferredUsername' ... elif None              -- update block elif
+    if 'textColor' ... elif None                      -- create block elif
+    if 'backgroundColor' ... elif None                -- create block elif
+    if 'blurImages' ... elif None                     -- create block elif
+    if 'preferredUsername' ... elif None              -- create block elif
 
 Three genuine dual-spelling property pairs, each needing both halves tested
 in BOTH the update block and the create block (six coverage points, not

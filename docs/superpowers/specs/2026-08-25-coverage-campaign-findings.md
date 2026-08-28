@@ -1056,8 +1056,9 @@ says which numbers are taken. So there is one now, and it is this file:
   function and behaviour", applied to the writing side rather than the reading
   side.
 - **The allocation ledger, kept current:** D1–D20 sub-project 2a, D21–D24
-  sub-project 2b, D25–D29 sub-project 2c. **Next free number: D30.** If you take
-  it, say so here in the change that takes it.
+  sub-project 2b, D25–D29 sub-project 2c, D30–D33 sub-project 2c's whole-branch
+  review. **Next free number: D34.** If you take it, say so here in the change
+  that takes it.
 
 Two entries in the reports were deliberately **not** counted as defects, and are
 recorded here so nobody re-files them: the Group and Feed branches both ignore
@@ -1579,11 +1580,14 @@ to be one — was found by re-deriving a claim, not by a red test. That is the
 campaign's standing lesson restated: the suite does not report a false
 explanation, so nothing but re-derivation will.
 
-### 4. Three test gaps found but not filled
+### 4. Three test gaps found but not filled — since filled, in `6f1ef32a`
 
-Each was found by a reviewer, is cheap, and is not held by anything in the suite.
-They were carried to the whole-branch review; they are written down here so they
-survive it not picking them up.
+Each was found by a reviewer, is cheap, and was not held by anything in the
+suite. They were carried to the whole-branch review, and written down here so
+they would survive it not picking them up. It did pick them up: all three are
+closed by `6f1ef32a`, and the mutation evidence for each is in that commit's
+message and in the test docstrings. The descriptions are kept as written, since
+they are what the tests were built to satisfy.
 
 1. **Two handler-breadth pinning tests, one per Feed handler** (about twenty
    lines, no new fixtures). Broadening the Feed constructor's `except KeyError`
@@ -1599,6 +1603,127 @@ survive it not picking them up.
    Written during Task 6's review, passing, never committed. It is the
    difference between "skips the bad entry" and "stops at the bad entry", and
    only one of those is what the D3 fix claims.
+
+## Sub-project 2c's whole-branch review: four more defects — D30–D33
+
+The review that closed `fix-ap-ingest-defects` read the branch as a whole rather
+than task by task, and found four more. **None is fixed.** Same rule as D25–D29:
+authorisation covered the fifteen defects in the plan and none of these four is
+one of them, so they are registered rather than repaired. D30–D33 are taken here,
+in the commit that writes these rows.
+
+Every claim below was re-verified against source when the row was written, and
+**two of the four descriptions handed over by the review were wrong in detail** —
+right about the defect, wrong about the surrounding code. Both corrections are
+recorded under their rows rather than quietly applied, because the pattern of
+"right in substance, wrong in detail" is this campaign's standing hazard and the
+count of how often it happens is itself evidence.
+
+| # | function | defect | how it was found |
+|---|---|---|---|
+| D30 | `actor_json_to_model`, Group | the new-style flair loop reads `flair["type"]` on every element of the peer's `tag` list with no guard of any kind, and the loop runs **after** the Community has been committed. A dict without a `type` key raises `KeyError`; anything that is not a dict raises `TypeError`. Both abort the walk with the Community row already in the database and the remaining flair entries unprocessed — **partially-applied ingest**, the same shape as D13 one loop away. D13's fix guarded the legacy `lemmy:tagsForPosts` loop in the `elif`; this is the `if` arm above it and was outside that defect's scope. | reading the Group branch end to end for post-commit surfaces, during the whole-branch review |
+| D31 | `actor_json_to_model`, Feed | `for child_feed in activity_json['childFeeds']:` is guarded only by `'childFeeds' in activity_json`, so `childFeeds: null` raises `TypeError: 'NoneType' object is not iterable`. The loop runs after **three** commits — the Feed, then a commit per FeedMember, then a commit per FeedItem — so the feed, its owners and its followed communities are all already written. **Partially-applied ingest**, and the deepest instance of the shape in the file by number of preceding commits. A non-null scalar (`childFeeds: 5`) raises the same way; a *string* value does not raise at all, it iterates the string's characters and hands each one to `populate_child_feed`, which is a separate and quieter wrong. | the same read, one branch over |
+| D32 | `actor_json_to_model` | the host gate `host_of(activity_json['id']) != host_of(f'//{server}')` is sound only while `server` is non-empty: `host_of` degrades an unparseable string to `''`, and `'' != ''` is False, so two failed parses pass the gate. Four of the five call sites keep `server` non-empty; the fifth, `create_actor_from_remote` in `app/activitypub/actor.py`, does not — on its `https://`/`http://` path it takes `server` from `extract_domain_and_actor`, which returns `('', '')` on a `urlparse` `ValueError`, and then fetches with `actor_address`, a different variable, so nothing ever exercises `server`. **Reachability is UNPROVEN and is not claimed:** it needs httpx to accept and successfully fetch a URL that Python's `urlparse` refuses. Nobody has exhibited such a URL. This is filed as a latent gap in an assumption `host_of`'s own docstring records, not as a demonstrated hole. | tracing `host_of`'s stated caller obligation to each call site while correcting its docstring |
+| D33 | `actor_json_to_model`, Group | the branch's `except KeyError` wraps a `Community(...)` call whose keyword arguments include `instance_id=find_instance_id(server)` — which **commits an `Instance` row** when the peer is new — followed, later in the same argument list, by `content_retention=current_app.config['DEFAULT_CONTENT_RETENTION']`. Keyword arguments evaluate in source order, so a missing config key raises `KeyError` after the Instance commit has landed, and the handler swallows it and returns `None`. The caller sees "malformed peer document"; the truth is a misconfigured deployment, and a sparse Instance row plus a `new_instance_profile` fetch are left behind. Deployment error rather than peer input, which is why it is filed separately from D30/D31 rather than as another instance of the shape. | the same read; `find_instance_id` is easy to miss as a writing call because it is spelled as a lookup |
+
+**Correction to D32 as it was handed over.** The review said the four safe call
+sites "guarantee `server` non-empty by building their fetch URL from it". They do
+not all do that, and the distinction matters to anyone auditing a new call site:
+
+- `search_for_user` in `app/user/utils.py` and `get_resolve_object` in
+  `app/api/alpha/utils/misc.py` carry an **explicit `if not server:` refusal**
+  before they fetch anything.
+- `search_for_community` in `app/community/util.py` and `search_for_feed` in
+  `app/feed/util.py` carry no such guard and rely entirely on the webfinger URL
+  being built as `f"https://{server}/.well-known/webfinger"`, which cannot answer
+  200 with an empty `server`.
+- The fifth site has **two** paths and only one is unguarded. Its webfinger path
+  reaches `fetch_actor_from_webfinger(address, server)`, which does build its URL
+  from `server`; only the `https://`/`http://` path is exposed.
+
+So the discharge is 2 explicit + 2 incidental + 1 path-dependent, not "four the
+same way". An explicit guard survives a refactor of the fetch; an incidental one
+does not.
+
+**Correction to D33 as it was handed over.** The review said "Feed and Person
+order these safely". They do not order anything — **neither try contains a
+`current_app.config` read at all**, so there is nothing to order. The Group
+branch is the only one of the three with a config read inside a `try`. Derived,
+not read:
+
+```bash
+podman-compose -f compose.test.yaml exec -T -w /app test-runner python -c "
+import ast
+src = open('app/activitypub/util.py').read()
+func = next(n for n in ast.walk(ast.parse(src))
+            if isinstance(n, ast.FunctionDef) and n.name == 'actor_json_to_model')
+for t in ast.walk(func):
+    if isinstance(t, ast.Try):
+        names = [ast.unparse(h.type) if h.type else 'bare' for h in t.handlers]
+        cfg = [ast.unparse(c) for c in ast.walk(t) if isinstance(c, ast.Subscript)
+               and 'current_app.config' in ast.unparse(c)]
+        fii = [ast.unparse(c) for c in ast.walk(t) if isinstance(c, ast.Call)
+               and ast.unparse(c.func) == 'find_instance_id']
+        print('handlers=', names, '| config:', cfg, '| find_instance_id:', fii)
+"
+```
+
+That prints seven `Try` nodes. Three carry `except KeyError` and call
+`find_instance_id`; exactly **one** of those three also carries a
+`current_app.config` read, and it is the Group one. The other four handle
+`IntegrityError` and carry neither.
+
+### The partially-applied-ingest shape, counted honestly: six, not five
+
+The review's handover said the shape "has now been found five times in this
+file", and then listed six. Six is the number. It is worth stating exactly
+because the shape is the single most productive reading heuristic this campaign
+has produced, and undercounting it makes it look like a closed set.
+
+In `app/activitypub/util.py`:
+
+- **Fixed:** D9 (`find_flair_or_create`'s ap_id backfill, via
+  `refresh_community_profile_task`), D13 (`actor_json_to_model`'s Group branch,
+  legacy `lemmy:tagsForPosts` loop), D16 (`actor_json_to_model`'s Feed branch,
+  the /following collection's rejected entries).
+- **Registered and unfixed:** D26 (`refresh_community_profile_task`'s own legacy
+  flair loop), D30 (the Group branch's new-style `tag` loop), D31 (the Feed
+  branch's `childFeeds` loop).
+
+Three plus three. Derivable from this document rather than counted by hand:
+
+```bash
+grep -ciE '^\| \*{0,2}D[0-9]+.*partially-applied.ingest' \
+  docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md
+```
+
+That prints **6**, and `-i` is load-bearing rather than habit: one of the six
+rows opens the sentence with the phrase and so capitalises it. Dropping `-i`
+prints 5, which is exactly the undercount this section exists to correct.
+
+**And `find_flair_or_create` contains no commits at all.** This is the part of
+D9 most easily lost, and it explains why the shape is a property of a *pair* of
+functions rather than of one:
+
+```bash
+podman-compose -f compose.test.yaml exec -T -w /app test-runner python -c "
+import ast
+src = open('app/activitypub/util.py').read()
+func = next(n for n in ast.walk(ast.parse(src))
+            if isinstance(n, ast.FunctionDef) and n.name == 'find_flair_or_create')
+print([ast.unparse(c) for c in ast.walk(func)
+       if isinstance(c, ast.Call) and ast.unparse(c.func).endswith('.commit')])
+"
+```
+
+That prints `[]`. The partial-ingest risk at that function was never its own —
+it belonged to whichever caller had already committed before calling it. Which
+is precisely why D9 fires from `refresh_community_profile_task`, whose session
+comes from `get_task_session()` and commits the refreshed profile first, and
+*not* from `actor_json_to_model`, whose `db.session` is constructed with
+`autoflush=False` so the same-call collision never forms. The defect is in the
+composition, not in either function alone. **Read every ingestion function
+together with its callers, or this shape is invisible.**
 
 ## Ratchet gotchas
 
