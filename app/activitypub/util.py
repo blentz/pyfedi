@@ -598,6 +598,15 @@ def host_of(url_string: str) -> str:
       locally and non-empty at every call site. Were that ever untrue, an
       unparseable id would compare equal to an unparseable server and the
       gate would accept.
+    - find_cross_host_actors, in app/cli.py, discharges it by DIRECTION
+      rather than by a check: only one of its two operands comes from here,
+      and the other is the row's own ap_domain, lowercased. An ap_profile_id
+      this function refuses becomes '' and so compares UNEQUAL to any
+      non-empty ap_domain -- the row is reported, which is the wanted
+      outcome. The pair goes unreported only when ap_domain is empty too,
+      and then the audit under-reports rather than over-reports. For a
+      read-only report that is the safe direction: the failure mode is a
+      missed row, never a truthful peer named as a suspect.
     """
     try:
         return urlparse(url_string).hostname or ''
