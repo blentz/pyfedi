@@ -889,6 +889,24 @@ def refresh_community_profile_task(community_id, activity_json):
                     if 'lemmy:tagsForPosts' in activity_json and isinstance(activity_json['lemmy:tagsForPosts'], list) and "tag" not in activity_json:
                         if len(community.flair) == 0:  # for now, all we do is populate community flair if there is not yet any. simpler.
                             for flair in activity_json['lemmy:tagsForPosts']:
+                                if not isinstance(flair, dict) or 'display_name' not in flair:
+                                    # An entry that is not an object, or an object with no
+                                    # 'display_name', has nothing to name the flair by: reading
+                                    # flair['display_name'] used to raise TypeError and KeyError
+                                    # respectively, AFTER the session.commit() above had written
+                                    # the community's refreshed profile. This function's
+                                    # `except Exception: session.rollback(); raise` cannot undo a
+                                    # commit, so that left a refreshed community, no flair, an
+                                    # exception at the caller and -- because the raise skips
+                                    # log_incoming_ap -- nothing recording the half-ingest. Skip
+                                    # the entry the way the three optional keys below it are
+                                    # skipped, and say so, rather than dropping it silently.
+                                    current_app.logger.warning(
+                                        f"refresh_community_profile_task: skipping the "
+                                        f"'lemmy:tagsForPosts' entry {flair!r} of "
+                                        f"{community.ap_profile_id} -- it is not an object "
+                                        f"carrying a 'display_name'")
+                                    continue
                                 flair_dict = {'display_name': flair['display_name']}
                                 if 'text_color' in flair:
                                     flair_dict['text_color'] = flair['text_color']
