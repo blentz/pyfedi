@@ -12,14 +12,15 @@ exception that escaped), never on a User or a Feed.
 The peer document is built by tests.factories.peer_actor_json, shared with the
 Person/Service and Feed files. Its Group baseline holds only the keys this
 branch reads unconditionally -- type, id, preferredUsername,
-publicKey.publicKeyPem, name, inbox and outbox -- so every optional key is
+publicKey.publicKeyPem, name and outbox -- so every optional key is
 opted into by name and the "absent" side of each guard is what the baseline
-already gives you. `inbox` is unconditional in effect rather than in form: it
-is reached through `activity_json['endpoints']['sharedInbox'] if 'endpoints' in
-activity_json else activity_json['inbox']`, whose else-arm has no further
-fallback (unlike the Person branch's, which ends in `else ''`), so a document
-carrying neither key raises KeyError. That asymmetry is pinned by
-TestInboxResolution.
+already gives you. `inbox` is in that baseline too, but it is no longer
+unconditional: the expression
+`activity_json['endpoints']['sharedInbox'] if 'endpoints' in activity_json
+else activity_json['inbox'] if 'inbox' in activity_json else ''` now ends in
+the same empty-string fallback the Person/Service branch has, so a document
+carrying neither key stores '' rather than raising. All three arms are pinned
+by TestInboxResolution.
 
 Optional-field enumeration
 --------------------------
@@ -53,15 +54,15 @@ line numbers the script prints and this docstring deliberately does not repeat):
         print('  IfExp', ast.unparse(s.test)[:95])
     "
 
-That prints `If total: 34  IfExp: 15`. Two of the thirty-four are not
+That prints `If total: 35  IfExp: 16`. Two of the thirty-five are not
 optional-field guards: the type dispatch itself (`== 'Group'`) and the
 `if community:` early return for a community already in the database. So the
-branch holds **15 conditional expressions + 32 optional-field `if` statements =
-47 conditional sites**, or 49 counting the dispatch and the early return. Both
+branch holds **16 conditional expressions + 33 optional-field `if` statements =
+49 conditional sites**, or 51 counting the dispatch and the early return. Both
 of those two are covered as well, by TestGroupDispatch and
 TestExistingCommunity.
 
-The fifteen conditional expressions are all inside the Community() constructor
+The sixteen conditional expressions are all inside the Community() constructor
 call, and are the scalar optional fields:
 
     'sensitive' in activity_json                -> nsfw, else False
@@ -77,12 +78,13 @@ call, and are the scalar optional fields:
     address.startswith('!')                     -> ap_id drops the '!', else not
     'followers' in activity_json                -> ap_followers_url, else None
     'endpoints' in activity_json                -> ap_inbox_url from
-                                                   endpoints.sharedInbox,
-                                                   else activity_json['inbox']
+                                                   endpoints.sharedInbox
+    'inbox' in activity_json                    -> ap_inbox_url from the
+                                                   actor's own inbox, else ''
     'featured' in activity_json                 -> ap_featured_url, else ''
     'postUrlType' in activity_json              -> post_url_type, else None
 
-and thirty-two `if` statements, which are the block-shaped ones (the two
+and thirty-three `if` statements, which are the block-shaped ones (the two
 excluded above, `== 'Group'` and `if community:`, are not in this list):
 
     'attributedTo' ... and isinstance(attributedTo, str)   -> mods_url
@@ -110,6 +112,7 @@ excluded above, `== 'Group'` and `if community:`, are not in this list):
       flair['type'] == 'CommunityPostTag'
       flair_obj
     'lemmy:tagsForPosts' ... and isinstance(..., list)     (legacy flair)
+      'display_name' not in flair                          (skips the entry)
       'text_color' in flair
       'background_color' in flair
       'blur_images' in flair
@@ -130,12 +133,13 @@ unconditionally and both guards dereference it. A document with neither key
 short-circuits before the dereference, which is why most tests here do not
 need it.
 
-FINDING -- unlike the Person/Service branch, whose whole User() construction
-sits inside `try: ... except KeyError: ... return None`, the Group branch wraps
-nothing. A peer document missing preferredUsername, name, outbox, publicKey or
-inbox raises KeyError straight out of actor_json_to_model instead of returning
-None. TestRequiredFieldsMissing pins that, and its docstring records the
-asymmetry. Reported, not fixed.
+The Group branch now has the Person/Service branch's `try: ... except KeyError:
+current_app.logger.error(...); return None` around its Community()
+construction, so a peer document missing preferredUsername, name, outbox or
+publicKey is refused with None instead of raising out of actor_json_to_model.
+TestRequiredFieldsMissing pins that. The `inbox` case left that group when the
+expression gained its empty-string fallback: it is now a stored '', not a
+refusal.
 """
 from datetime import datetime
 
@@ -275,49 +279,53 @@ class TestExistingCommunity:
 
 
 class TestRequiredFieldsMissing:
-    """FINDING -- the Group branch has no `except KeyError` at all.
+    """The Group branch's `try: ... except KeyError:
+    current_app.logger.error(...); return None` around the Community() call,
+    the same handler the Person/Service branch wraps its User() call in.
 
-    The Person/Service branch builds its User inside
-    `try: ... except KeyError: current_app.logger.error(...); return None`, so a
-    malformed peer document there becomes a logged None. The Group branch's
-    Community() construction is not wrapped, so the same malformation escapes to
-    the caller as a KeyError. These tests pin today's behaviour rather than the
-    intended one; a fix that adds the handler is expected to rewrite them into
-    `is None` assertions.
+    Four keys are still read unconditionally by that call, and each is tested
+    separately because any one of them alone is enough to raise:
+    preferredUsername, name, outbox and publicKey (for ['publicKeyPem']).
+    `inbox` used to belong to this list and no longer does -- the expression
+    reading it now ends in an empty-string fallback, so its absence is a stored
+    '' rather than a refusal, and TestInboxResolution owns that case.
 
-    Five keys are read unconditionally, and each is tested separately because
-    any one of them alone is enough to raise:
+    Every test asserts BOTH halves of the refusal: None came back, and no
+    Community row exists. The row count is what separates "refused cleanly"
+    from "wrote something and then returned None" -- the failure mode a handler
+    added ahead of its branch's post-commit guards would have introduced.
+    Nothing in this branch commits before the handler: the only statements
+    between `elif activity_json['type'] == 'Group':` and the try are two
+    queries (the existing-community lookup and the Site load) and the mods_url
+    reads, and `db.session.add(community)` with its commit is below the
+    handler, not inside it.
 
-      preferredUsername, name, outbox, publicKey (for ['publicKeyPem']), and
-      inbox -- the last only when 'endpoints' is absent, which is what makes it
-      a required key in practice rather than in form.
-
-    Mutation that fails all of these: adding the Person branch's try/except
-    KeyError around the Community() call, which turns each raise into None.
+    Mutation. Deleting the handler and narrowing its exception type are the
+    same mutation -- both let the KeyError escape again, and every test here
+    fails on the uncaught exception rather than on an assertion. Broadening it
+    to `except Exception` is not a distinct direction for these tests: the
+    KeyError is still caught and they still pass. That direction is pinned in
+    the Feed file, whose owners-collection tests require IndexError and
+    AttributeError to keep escaping.
     """
 
-    @pytest.mark.parametrize('missing', ['preferredUsername', 'name', 'outbox', 'inbox'])
-    def test_missing_unconditional_key_raises_key_error(self, app, db_session, missing):
+    @pytest.mark.parametrize('missing', ['preferredUsername', 'name', 'outbox'])
+    def test_a_missing_constructor_key_is_refused(self, app, db_session, missing):
         peer_instance(PEER)
         document = _group('memes', omit=(missing,))
-        with pytest.raises(KeyError) as excinfo:
-            actor_json_to_model(document, '!memes', PEER)
-        assert excinfo.value.args[0] == missing
+        assert actor_json_to_model(document, '!memes', PEER) is None
         assert db.session.query(Community).count() == 0
 
-    def test_missing_public_key_raises_key_error(self, app, db_session):
+    def test_a_missing_public_key_is_refused(self, app, db_session):
         peer_instance(PEER)
         document = _group('memes', omit=('publicKey',))
-        with pytest.raises(KeyError):
-            actor_json_to_model(document, '!memes', PEER)
+        assert actor_json_to_model(document, '!memes', PEER) is None
         assert db.session.query(Community).count() == 0
 
-    def test_public_key_without_a_pem_raises_key_error(self, app, db_session):
+    def test_a_public_key_without_a_pem_is_refused(self, app, db_session):
         peer_instance(PEER)
         document = _group('memes', fields={'publicKey': {'id': 'x'}})
-        with pytest.raises(KeyError) as excinfo:
-            actor_json_to_model(document, '!memes', PEER)
-        assert excinfo.value.args[0] == 'publicKeyPem'
+        assert actor_json_to_model(document, '!memes', PEER) is None
         assert db.session.query(Community).count() == 0
 
 
@@ -592,12 +600,15 @@ class TestApIdFromAddress:
 
 class TestInboxResolution:
     """`activity_json['endpoints']['sharedInbox'] if 'endpoints' in
-    activity_json else activity_json['inbox']`.
+    activity_json else activity_json['inbox'] if 'inbox' in activity_json else
+    ''`.
 
-    Two arms, and unlike the Person/Service branch there is no third: the
-    else-arm has no `if 'inbox' in activity_json` of its own and no `else ''`.
-    The KeyError that a document with neither key raises is pinned in
-    TestRequiredFieldsMissing.
+    Three arms, matching the Person/Service branch: the shared inbox, the
+    actor's own inbox, and the empty string for a document carrying neither
+    key. That last arm used to be a KeyError, and the third test below is what
+    fails if the `if 'inbox' in activity_json else ''` tail is dropped again --
+    the document would then be refused by the branch's except KeyError and
+    `community` would be None.
 
     Mutation that fails test_inbox_used_when_endpoints_absent: reordering the
     expression to try 'inbox' first, which would make the first test below read
@@ -614,6 +625,14 @@ class TestInboxResolution:
         peer_instance(PEER)
         community = actor_json_to_model(_group('memes'), '!memes', PEER)
         assert community.ap_inbox_url == f'https://{PEER}/c/memes/inbox'
+
+    def test_neither_endpoints_nor_inbox_stores_an_empty_string(self, app, db_session):
+        peer_instance(PEER)
+        document = _group('memes', omit=('inbox',))
+        community = actor_json_to_model(document, '!memes', PEER)
+        assert community is not None
+        assert community.ap_inbox_url == ''
+        assert db.session.query(Community).count() == 1
 
 
 class TestInstanceDerivedVisibility:

@@ -27,11 +27,13 @@ and both were checked against the source rather than assumed:
   inbox      reached through `activity_json['endpoints']['sharedInbox'] if
              'endpoints' in activity_json else activity_json['inbox']`, whose
              else-arm has no further fallback (unlike the Person branch's,
-             which ends in `else ''`). A document carrying neither key raises
-             KeyError. Pinned by TestInboxResolution.
+             which ends in `else ''`, and unlike the Group branch's, which was
+             given that same tail). A document carrying neither key is refused
+             by the branch's except KeyError. Pinned by TestInboxResolution.
   following  read unconditionally by the get_request that fetches the feed's
-             /following collection, which runs BEFORE the Feed() call. Pinned
-             by TestRequiredFieldsMissing.
+             /following collection, which runs BEFORE the Feed() call, and
+             refused there by a handler of its own. Pinned by
+             TestRequiredFieldsMissing.
 
 `attributedTo` is deliberately NOT in that baseline: it is the first of three
 arms and putting it in the baseline would make the other two unreachable. This
@@ -154,8 +156,13 @@ nodeinfo.
 FINDINGS pinned by this file, reported and not fixed -- each has its own class
 docstring saying more:
 
-  1. The Feed branch has no `except KeyError`, exactly like the Group branch
-     and unlike the Person/Service branch. TestRequiredFieldsMissing.
+  1. FIXED, and so no longer a finding: the Feed branch had no `except
+     KeyError` at all. It now has two, one on the /following fetch and one on
+     the Feed() call, and a malformed document is refused with None instead of
+     raising. What remains of the asymmetry is the inbox expression, which
+     still has no empty-string fallback where Person's and Group's both do, so
+     a document with neither 'endpoints' nor 'inbox' is refused here and
+     accepted there. TestRequiredFieldsMissing and TestInboxResolution.
   2. `owner_users[0].id` is unguarded. An owners collection that does not
      return 200, or returns 200 with an empty orderedItems, raises IndexError;
      an entry find_actor_or_create rejects puts None in the list and raises
@@ -400,7 +407,8 @@ class TestExistingFeed:
         test_upper_cased_host_in_the_id_is_accepted covers the host.
 
         'following' is stripped so a failed match cannot masquerade as a hit --
-        the rebuild would raise KeyError at the /following fetch.
+        the rebuild is refused at the /following fetch and returns None, which
+        has no `.id`.
         """
         _peer_with_one_owner(http_mock)
         existing = actor_json_to_model(_owned_feed(), '~news', PEER)
@@ -749,49 +757,56 @@ class TestFollowingCollection:
 
 
 class TestRequiredFieldsMissing:
-    """FINDING (1) -- the Feed branch has no `except KeyError` at all.
+    """The Feed branch's two `except KeyError:
+    current_app.logger.error(...); return None` handlers, the same handler the
+    Person/Service branch wraps its User() call in.
 
-    The Person/Service branch builds its User inside
-    `try: ... except KeyError: current_app.logger.error(...); return None`, so
-    a malformed peer document there becomes a logged None and the caller
-    carries on. The Feed branch's Feed() construction is not wrapped, so the
-    same malformation escapes to the caller as a KeyError. These tests pin
-    today's behaviour, not the desirable behaviour; a fix that adds the handler
-    is expected to rewrite them into `is None` assertions.
+    The branch reads the peer document unconditionally at two points, so it
+    takes two handlers rather than one:
 
-    'following' is the odd one out and has its own test below: it is read by
-    the get_request that fetches the /following collection, which runs before
-    the constructor, so it raises earlier than the other four -- early enough
-    that the /following route is never requested at all, which is why that test
-    registers only the owners route.
+      - the get_request that fetches the /following collection, which reads
+        activity_json['following'] before the constructor runs;
+      - the Feed() constructor itself, for preferredUsername, name, outbox,
+        publicKey and -- when 'endpoints' is absent -- inbox.
 
-    'inbox' raises only when 'endpoints' is also absent -- see
-    TestInboxResolution.
+    Each try holds exactly that one statement, which is what keeps the
+    committing calls out of them: find_actor_or_create, in the owners loop and
+    in the /following loop, writes User, Community and Instance rows, and both
+    loops sit outside the try bodies. Nothing inside either try writes any part
+    of the Feed: db.session.add(feed) and its commit, the FeedMember loop and
+    the FeedItem loop are all below the second handler. The row-count assertion
+    in every test here is what pins that -- it separates "refused cleanly" from
+    "wrote something and then returned None".
+
+    Mutation. Deleting a handler and narrowing its exception type are the same
+    mutation -- both let the KeyError escape again, and the tests it covers
+    fail on the uncaught exception rather than on an assertion. Broadening to
+    `except Exception` is not a distinct direction here: the KeyError is still
+    caught and these tests still pass. It is caught instead by
+    TestOwnersCollection, whose three tests require IndexError and
+    AttributeError to keep escaping the same constructor.
     """
 
     @pytest.mark.parametrize('missing', ['preferredUsername', 'name', 'outbox',
                                          'publicKey'])
-    def test_a_missing_constructor_key_raises_key_error(
+    def test_a_missing_constructor_key_is_refused(
             self, app, db_session, http_mock, missing):
         _peer_with_one_owner(http_mock)
         document = _owned_feed(omit=(missing,))
-        with pytest.raises(KeyError) as excinfo:
-            actor_json_to_model(document, '~news', PEER)
-        assert excinfo.value.args[0] == missing
+        assert actor_json_to_model(document, '~news', PEER) is None
         assert db.session.query(Feed).count() == 0
 
-    def test_a_missing_following_raises_before_the_following_fetch(
+    def test_a_missing_following_is_refused_before_the_following_fetch(
             self, app, db_session, http_mock):
         """Only the owners route is registered. http_mock's assert_all_called
-        would fail this test if a /following request were somehow made, and
-        the KeyError proves the read is unconditional."""
+        would fail this test if a /following request were somehow made, so the
+        refusal is reached without one, which is what places the read ahead of
+        the fetch."""
         instance = peer_instance(PEER)
         owner = _owner(instance)
         _register_owners(http_mock, [owner.ap_profile_id])
         document = _owned_feed(omit=('following',))
-        with pytest.raises(KeyError) as excinfo:
-            actor_json_to_model(document, '~news', PEER)
-        assert excinfo.value.args[0] == 'following'
+        assert actor_json_to_model(document, '~news', PEER) is None
         assert db.session.query(Feed).count() == 0
 
 
@@ -801,9 +816,12 @@ class TestInboxResolution:
 
     The else arm has NO further fallback, unlike the Person/Service branch's,
     which ends `else activity_json['inbox'] if 'inbox' in activity_json else
-    ''`. A Feed document carrying neither key is therefore a hard KeyError
-    where the same document on the Person branch would store an empty string.
-    That asymmetry is why 'inbox' is in peer_actor_json's Feed baseline.
+    ''` -- and unlike the Group branch's, which was given that same tail. A
+    Feed document carrying neither key is therefore refused outright by the
+    branch's except KeyError, where the same document on either of the other
+    two branches stores an empty string and yields a row. That asymmetry is
+    still open, reported and not fixed, and it is why 'inbox' is in
+    peer_actor_json's Feed baseline.
 
     Mutation that fails test_shared_inbox_wins_when_endpoints_is_present:
     reordering the expression to try 'inbox' first.
@@ -822,13 +840,15 @@ class TestInboxResolution:
         feed = actor_json_to_model(_owned_feed(), '~news', PEER)
         assert feed.ap_inbox_url == f'{_feed_id()}/inbox'
 
-    def test_neither_endpoints_nor_inbox_raises_key_error(
+    def test_neither_endpoints_nor_inbox_is_refused(
             self, app, db_session, http_mock):
+        """The missing fallback makes this a KeyError inside the constructor,
+        which the branch's handler turns into a refusal: no Feed comes back and
+        no Feed row is written. On the Person and Group branches the same
+        document is accepted with an empty ap_inbox_url."""
         _peer_with_one_owner(http_mock)
         document = _owned_feed(omit=('inbox',))
-        with pytest.raises(KeyError) as excinfo:
-            actor_json_to_model(document, '~news', PEER)
-        assert excinfo.value.args[0] == 'inbox'
+        assert actor_json_to_model(document, '~news', PEER) is None
         assert db.session.query(Feed).count() == 0
 
 
@@ -879,7 +899,7 @@ class TestScalarOptionalFields:
     in activity_json else None` can NEVER take its else arm. The same key is
     read unconditionally, earlier in the branch, by the get_request that
     fetches the /following collection, so a document without it has already
-    raised KeyError by the time the constructor runs (pinned by
+    been refused by the time the constructor runs (pinned by
     TestRequiredFieldsMissing). The `else None` is dead code. No test here can
     reach it, and none pretends to.
 

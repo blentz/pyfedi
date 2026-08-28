@@ -1246,35 +1246,39 @@ def actor_json_to_model(activity_json, address, server):
         if 'nsfl' in activity_json and activity_json['nsfl'] and not site.enable_nsfl:
             return None
 
-        community = Community(name=activity_json['preferredUsername'].strip(),
-                              title=activity_json['name'].strip(),
-                              nsfw=activity_json['sensitive'] if 'sensitive' in activity_json else False,
-                              ai_generated=activity_json['genAI'] if 'genAI' in activity_json else False,
-                              restricted_to_mods=activity_json['postingRestrictedToMods'] if 'postingRestrictedToMods' in activity_json else False,
-                              new_mods_wanted=activity_json['newModsWanted'] if 'newModsWanted' in activity_json else False,
-                              private_mods=activity_json['privateMods'] if 'privateMods' in activity_json else False,
-                              question_answer=activity_json['questionAnswer'] if 'questionAnswer' in activity_json else False,
-                              default_post_type=activity_json['defaultPostType'] if 'defaultPostType' in activity_json else 'link',
-                              created_at=activity_json['published'] if 'published' in activity_json else utcnow(),
-                              last_active=activity_json['updated'] if 'updated' in activity_json else utcnow(),
-                              posting_warning=activity_json['postingWarning'] if 'postingWarning' in activity_json else None,
-                              ap_id=f"{address[1:].lower()}@{server.lower()}" if address.startswith('!') else f"{address.lower()}@{server.lower()}",
-                              ap_public_url=activity_json['id'],
-                              ap_profile_id=activity_json['id'].lower(),
-                              ap_followers_url=activity_json['followers'] if 'followers' in activity_json else None,
-                              ap_inbox_url=activity_json['endpoints']['sharedInbox'] if 'endpoints' in activity_json else activity_json['inbox'],
-                              ap_outbox_url=activity_json['outbox'],
-                              ap_featured_url=activity_json['featured'] if 'featured' in activity_json else '',
-                              ap_moderators_url=mods_url,
-                              ap_fetched_at=utcnow(),
-                              ap_domain=server.lower(),
-                              public_key=activity_json['publicKey']['publicKeyPem'],
-                              # language=community_json['language'][0]['identifier'] # todo: language
-                              instance_id=find_instance_id(server),
-                              content_retention=current_app.config['DEFAULT_CONTENT_RETENTION'],
-                              first_federated_at=utcnow(),
-                              post_url_type=activity_json['postUrlType'] if 'postUrlType' in activity_json else None,
-                              )
+        try:
+            community = Community(name=activity_json['preferredUsername'].strip(),
+                                  title=activity_json['name'].strip(),
+                                  nsfw=activity_json['sensitive'] if 'sensitive' in activity_json else False,
+                                  ai_generated=activity_json['genAI'] if 'genAI' in activity_json else False,
+                                  restricted_to_mods=activity_json['postingRestrictedToMods'] if 'postingRestrictedToMods' in activity_json else False,
+                                  new_mods_wanted=activity_json['newModsWanted'] if 'newModsWanted' in activity_json else False,
+                                  private_mods=activity_json['privateMods'] if 'privateMods' in activity_json else False,
+                                  question_answer=activity_json['questionAnswer'] if 'questionAnswer' in activity_json else False,
+                                  default_post_type=activity_json['defaultPostType'] if 'defaultPostType' in activity_json else 'link',
+                                  created_at=activity_json['published'] if 'published' in activity_json else utcnow(),
+                                  last_active=activity_json['updated'] if 'updated' in activity_json else utcnow(),
+                                  posting_warning=activity_json['postingWarning'] if 'postingWarning' in activity_json else None,
+                                  ap_id=f"{address[1:].lower()}@{server.lower()}" if address.startswith('!') else f"{address.lower()}@{server.lower()}",
+                                  ap_public_url=activity_json['id'],
+                                  ap_profile_id=activity_json['id'].lower(),
+                                  ap_followers_url=activity_json['followers'] if 'followers' in activity_json else None,
+                                  ap_inbox_url=activity_json['endpoints']['sharedInbox'] if 'endpoints' in activity_json else activity_json['inbox'] if 'inbox' in activity_json else '',
+                                  ap_outbox_url=activity_json['outbox'],
+                                  ap_featured_url=activity_json['featured'] if 'featured' in activity_json else '',
+                                  ap_moderators_url=mods_url,
+                                  ap_fetched_at=utcnow(),
+                                  ap_domain=server.lower(),
+                                  public_key=activity_json['publicKey']['publicKeyPem'],
+                                  # language=community_json['language'][0]['identifier'] # todo: language
+                                  instance_id=find_instance_id(server),
+                                  content_retention=current_app.config['DEFAULT_CONTENT_RETENTION'],
+                                  first_federated_at=utcnow(),
+                                  post_url_type=activity_json['postUrlType'] if 'postUrlType' in activity_json else None,
+                                  )
+        except KeyError:
+            current_app.logger.error(f'KeyError for {address}@{server} while parsing ' + str(activity_json))
+            return None
         if get_setting('meme_comms_low_quality', False):
             community.low_quality = 'memes' in activity_json['preferredUsername'] or 'shitpost' in activity_json['preferredUsername']
         description_html = ''
@@ -1408,7 +1412,11 @@ def actor_json_to_model(activity_json, address, server):
 
         # also get the communities in the remote feed's /following list 
         feed_following = []
-        following_data = get_request(activity_json['following'], headers={'Accept': 'application/activity+json'})
+        try:
+            following_data = get_request(activity_json['following'], headers={'Accept': 'application/activity+json'})
+        except KeyError:
+            current_app.logger.error(f'KeyError for {address}@{server} while parsing ' + str(activity_json))
+            return None
         if following_data.status_code == 200:
             following_json = following_data.json()
             for c_ap_id in following_json['items']:
@@ -1425,30 +1433,34 @@ def actor_json_to_model(activity_json, address, server):
                     continue
                 feed_following.append(community)
 
-        feed = Feed(name=activity_json['preferredUsername'].strip(),
-                    user_id=owner_users[0].id,
-                    title=activity_json['name'].strip(),
-                    nsfw=activity_json['sensitive'] if 'sensitive' in activity_json else False,
-                    machine_name=activity_json['preferredUsername'],
-                    description_html=activity_json['summary'] if 'summary' in activity_json else '',
-                    description=piefed_markdown_to_lemmy_markdown(activity_json['source']['content']) if 'source' in activity_json else '',
-                    created_at=activity_json['published'] if 'published' in activity_json else utcnow(),
-                    last_edit=activity_json['updated'] if 'updated' in activity_json else utcnow(),
-                    num_communities=0,
-                    ap_id=f"{address[1:].lower()}@{server.lower()}" if address.startswith('~') else f"{address.lower()}@{server.lower()}",
-                    ap_public_url=activity_json['id'],
-                    ap_profile_id=activity_json['id'].lower(),
-                    ap_followers_url=activity_json['followers'] if 'followers' in activity_json else None,
-                    ap_following_url=activity_json['following'] if 'following' in activity_json else None,
-                    ap_inbox_url=activity_json['endpoints']['sharedInbox'] if 'endpoints' in activity_json else activity_json['inbox'],
-                    ap_outbox_url=activity_json['outbox'],
-                    ap_moderators_url=owners_url,
-                    ap_fetched_at=utcnow(),
-                    ap_domain=server.lower(),
-                    public_key=activity_json['publicKey']['publicKeyPem'],
-                    instance_id=find_instance_id(server),
-                    public=True
-                    )
+        try:
+            feed = Feed(name=activity_json['preferredUsername'].strip(),
+                        user_id=owner_users[0].id,
+                        title=activity_json['name'].strip(),
+                        nsfw=activity_json['sensitive'] if 'sensitive' in activity_json else False,
+                        machine_name=activity_json['preferredUsername'],
+                        description_html=activity_json['summary'] if 'summary' in activity_json else '',
+                        description=piefed_markdown_to_lemmy_markdown(activity_json['source']['content']) if 'source' in activity_json else '',
+                        created_at=activity_json['published'] if 'published' in activity_json else utcnow(),
+                        last_edit=activity_json['updated'] if 'updated' in activity_json else utcnow(),
+                        num_communities=0,
+                        ap_id=f"{address[1:].lower()}@{server.lower()}" if address.startswith('~') else f"{address.lower()}@{server.lower()}",
+                        ap_public_url=activity_json['id'],
+                        ap_profile_id=activity_json['id'].lower(),
+                        ap_followers_url=activity_json['followers'] if 'followers' in activity_json else None,
+                        ap_following_url=activity_json['following'] if 'following' in activity_json else None,
+                        ap_inbox_url=activity_json['endpoints']['sharedInbox'] if 'endpoints' in activity_json else activity_json['inbox'],
+                        ap_outbox_url=activity_json['outbox'],
+                        ap_moderators_url=owners_url,
+                        ap_fetched_at=utcnow(),
+                        ap_domain=server.lower(),
+                        public_key=activity_json['publicKey']['publicKeyPem'],
+                        instance_id=find_instance_id(server),
+                        public=True
+                        )
+        except KeyError:
+            current_app.logger.error(f'KeyError for {address}@{server} while parsing ' + str(activity_json))
+            return None
 
         description_html = ''
         if 'summary' in activity_json:
