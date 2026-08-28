@@ -1782,10 +1782,15 @@ In `app/activitypub/util.py`:
   legacy `lemmy:tagsForPosts` loop), D16 (`actor_json_to_model`'s Feed branch,
   the /following collection's rejected entries), and now D30 (the Group
   branch's new-style `tag` loop) and D31 (the Feed branch's `childFeeds` loop).
-- **Registered and unfixed:** D26 (`refresh_community_profile_task`'s own legacy
-  flair loop).
+- **Also fixed, after this section was first written:** D26
+  (`refresh_community_profile_task`'s own legacy flair loop), which brought that
+  task its first tests, since nothing had ever called it.
+- **Registered and unfixed:** none of the six. Eleven further candidates for the
+  same shape are recorded in the read-only sweep at
+  `.superpowers/sdd/fix-ingest-shape-sweep.md`, none of them registered here yet
+  and none in tested code.
 
-Five plus one, as of the `fix-ingest-shape` work; three plus three when this
+Six of six, as of the `fix-ingest-shape` work; three plus three when this
 section was written. Derivable from this document rather than counted by hand:
 
 ```bash
