@@ -1109,7 +1109,7 @@ class TestNewStylePostFlair:
         community = actor_json_to_model(_group('memes'), '!memes', PEER)
         assert community.flair == []
 
-    def test_a_tag_entry_without_a_type_is_skipped_and_the_rest_ingest(self, app, db_session):
+    def test_a_tag_entry_without_a_type_is_skipped_and_the_rest_ingest(self, app, db_session, caplog):
         """FIXED -- `if flair["type"] == "CommunityPostTag"` used to be an
         unguarded read, so a tag object omitting the key raised KeyError out of
         actor_json_to_model. The Community had already been committed by then,
@@ -1140,6 +1140,14 @@ class TestNewStylePostFlair:
           nothing raises, and this test fails on the flair list and the row
           count -- along with three other tests in this class and the
           new-style-wins test in TestLegacyPostFlair.
+
+        The warning is pinned here rather than in the non-object sibling
+        because this test drops exactly one entry, so the record count is
+        meaningful. The assertion is on what the message says -- the key, the
+        document, and the reason -- since a record count alone would be
+        satisfied by a warning reading "error". Deleting the logger.warning
+        call fails this test and its sibling, which is the pair that reaches
+        this one call site.
         """
         peer_instance(PEER)
         document = _group('memes', fields={'tag': [
@@ -1149,13 +1157,21 @@ class TestNewStylePostFlair:
             {'type': 'CommunityPostTag', 'id': f'https://{PEER}/c/memes/tag/3',
              'preferredUsername': 'Meta'},
         ]})
-        community = actor_json_to_model(document, '!memes', PEER)
+        with caplog.at_level('WARNING'):
+            community = actor_json_to_model(document, '!memes', PEER)
         assert community is not None
         assert db.session.query(Community).count() == 1
         assert sorted(f.flair for f in community.flair) == ['Discussion', 'Meta']
         assert db.session.query(CommunityFlair).count() == 2
 
-    def test_a_tag_entry_that_is_not_an_object_is_skipped_and_the_rest_ingest(self, app, db_session):
+        skips = [r for r in caplog.records if 'actor_json_to_model' in r.getMessage()]
+        assert len(skips) == 1
+        assert skips[0].levelname == 'WARNING'
+        assert "'tag' entry" in skips[0].getMessage()
+        assert f'https://{PEER}/c/memes' in skips[0].getMessage()
+        assert "not an object carrying a 'type'" in skips[0].getMessage()
+
+    def test_a_tag_entry_that_is_not_an_object_is_skipped_and_the_rest_ingest(self, app, db_session, caplog):
         """FIXED -- the other half of the same defect. A `tag` element that is
         not a dict at all raised TypeError on the subscript, again after the
         Community was committed.
@@ -1177,6 +1193,12 @@ class TestNewStylePostFlair:
           back and this test fails on the exception.
         - broaden the guard to `if True:`: both good entries are dropped too
           and this test fails on the flair list and the row count.
+
+        Two entries are dropped here and the warning fires once per entry, so
+        the count is 2 rather than 1 -- one aggregate warning for the pair
+        would leave an operator unable to tell how much of the peer's list was
+        lost. The message content is asserted too, for the reason its sibling
+        gives.
         """
         peer_instance(PEER)
         document = _group('memes', fields={'tag': [
@@ -1187,11 +1209,19 @@ class TestNewStylePostFlair:
             {'type': 'CommunityPostTag', 'id': f'https://{PEER}/c/memes/tag/3',
              'preferredUsername': 'Meta'},
         ]})
-        community = actor_json_to_model(document, '!memes', PEER)
+        with caplog.at_level('WARNING'):
+            community = actor_json_to_model(document, '!memes', PEER)
         assert community is not None
         assert db.session.query(Community).count() == 1
         assert sorted(f.flair for f in community.flair) == ['Discussion', 'Meta']
         assert db.session.query(CommunityFlair).count() == 2
+
+        skips = [r for r in caplog.records if 'actor_json_to_model' in r.getMessage()]
+        assert len(skips) == 2
+        assert all(r.levelname == 'WARNING' for r in skips)
+        assert all("'tag' entry" in r.getMessage() for r in skips)
+        assert all(f'https://{PEER}/c/memes' in r.getMessage() for r in skips)
+        assert all("not an object carrying a 'type'" in r.getMessage() for r in skips)
 
 
 class TestLegacyPostFlair:
@@ -1298,7 +1328,7 @@ class TestLegacyPostFlair:
         assert [f.flair for f in community.flair] == ['New']
         assert db.session.query(CommunityFlair).count() == 1
 
-    def test_a_tag_without_a_display_name_is_skipped_and_the_rest_ingest(self, app, db_session):
+    def test_a_tag_without_a_display_name_is_skipped_and_the_rest_ingest(self, app, db_session, caplog):
         """FIXED -- `flair_dict = {'display_name': flair['display_name']}` used
         to be an unguarded read, so a legacy tag omitting the key raised
         KeyError out of actor_json_to_model. The community had already been
@@ -1321,6 +1351,14 @@ class TestLegacyPostFlair:
         - broaden it to `if True:` (or to a key every entry has, e.g.
           `'display_name' in flair`): every entry is skipped, nothing raises,
           and this test fails on the flair list and the row count instead.
+
+        The log is asserted on as well as the rows, because "the skip is
+        logged" is half of the argument for skipping at all -- dropping a
+        peer's data silently is the failure this campaign started from. The
+        assertion is on the message's content, not on a record count: it has
+        to name the key that was dropped and the document it came from, so
+        that a warning reading "error" would not satisfy it. Deleting the
+        logger.warning call fails this test and nothing else.
         """
         peer_instance(PEER)
         document = _group('memes', fields={'lemmy:tagsForPosts': [
@@ -1328,11 +1366,19 @@ class TestLegacyPostFlair:
             {'id': 'https://x/1'},
             {'display_name': 'Meta'},
         ]})
-        community = actor_json_to_model(document, '!memes', PEER)
+        with caplog.at_level('WARNING'):
+            community = actor_json_to_model(document, '!memes', PEER)
         assert community is not None
         assert db.session.query(Community).count() == 1
         assert sorted(f.flair for f in community.flair) == ['Discussion', 'Meta']
         assert db.session.query(CommunityFlair).count() == 2
+
+        skips = [r for r in caplog.records if 'actor_json_to_model' in r.getMessage()]
+        assert len(skips) == 1
+        assert skips[0].levelname == 'WARNING'
+        assert "'lemmy:tagsForPosts' entry" in skips[0].getMessage()
+        assert f'https://{PEER}/c/memes' in skips[0].getMessage()
+        assert "carries no 'display_name'" in skips[0].getMessage()
 
 
 class TestConcurrentInsert:

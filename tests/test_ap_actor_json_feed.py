@@ -879,7 +879,7 @@ class TestFollowingCollection:
         assert feed.num_communities == 0
 
     def test_a_followed_community_the_resolver_rejects_is_skipped_and_the_rest_link(
-            self, app, db_session, http_mock):
+            self, app, db_session, http_mock, caplog):
         """The rejected entry is deliberately in the MIDDLE of the collection,
         between two the resolver accepts. The Public collective is the
         rejection: find_actor_or_create returns None for it.
@@ -898,6 +898,16 @@ class TestFollowingCollection:
         - broaden it to `if True:` (or to `if community is not None:`): every
           entry is skipped, nothing raises, and this test fails on the FeedItem
           list and num_communities instead.
+
+        The warning is pinned as well as the rows, because "the skip is
+        logged" is half of the argument for skipping rather than refusing the
+        document: an entry the peer sent and this instance dropped has to be
+        recoverable from the log. The assertion names the entry that was
+        dropped, the collection it came from and the reason, so a warning
+        reading "error" would not satisfy it. Only one entry is rejected here,
+        so the record count is meaningful; the owners collection above has its
+        own warning, at its own call site, and this filter excludes it by
+        matching on the '/following' wording.
         """
         instance = peer_instance(PEER)
         owner = _owner(instance)
@@ -910,13 +920,21 @@ class TestFollowingCollection:
             second.ap_profile_id,
         ])
 
-        feed = actor_json_to_model(_owned_feed(), '~news', PEER)
+        with caplog.at_level('WARNING'):
+            feed = actor_json_to_model(_owned_feed(), '~news', PEER)
 
         assert feed is not None
         assert db.session.query(Feed).count() == 1
         items = db.session.query(FeedItem).filter_by(feed_id=feed.id).all()
         assert sorted(i.community_id for i in items) == sorted([first.id, second.id])
         assert feed.num_communities == 2
+
+        skips = [r for r in caplog.records if '/following' in r.getMessage()]
+        assert len(skips) == 1
+        assert skips[0].levelname == 'WARNING'
+        assert 'https://www.w3.org/ns/activitystreams#Public' in skips[0].getMessage()
+        assert _feed_id() in skips[0].getMessage()
+        assert 'does not resolve to a community' in skips[0].getMessage()
 
 
 class TestRequiredFieldsMissing:
@@ -1570,7 +1588,7 @@ class TestChildFeeds:
         assert feed is not None
         assert db.session.query(Feed).filter(Feed.parent_feed_id.isnot(None)).count() == 0
 
-    def test_null_child_feeds_leaves_the_feed_fully_ingested(self, app, db_session, http_mock):
+    def test_null_child_feeds_leaves_the_feed_fully_ingested(self, app, db_session, http_mock, caplog):
         """FIXED, and the loudest of the three -- `childFeeds: null` passed the
         `in` test and raised `TypeError: 'NoneType' object is not iterable` out
         of actor_json_to_model, after the Feed, a commit per FeedMember and a
@@ -1582,6 +1600,16 @@ class TestChildFeeds:
         must still be there now that nothing raises. A fix that refused the
         whole document instead of ignoring one key would fail on all three
         counts.
+
+        The warning is pinned here, on the null case, because this guard drops
+        the peer's whole `childFeeds` value rather than one entry of it, and
+        the two silent cases below it (a string and a mapping) would otherwise
+        stay silent in exactly the way the guard exists to end. The assertion
+        names the key, the document and the type that was refused -- the type
+        in particular, because 'NoneType' versus 'str' versus 'dict' is the
+        only thing distinguishing the three cases in an operator's log.
+        Deleting the logger.warning call fails this test and nothing else: the
+        string and mapping tests assert on rows only.
         """
         instance = peer_instance(PEER)
         owner = _owner(instance)
@@ -1590,13 +1618,21 @@ class TestChildFeeds:
         _register_following(http_mock, [community.ap_profile_id])
         document = _owned_feed(fields={'childFeeds': None})
 
-        feed = actor_json_to_model(document, '~news', PEER)
+        with caplog.at_level('WARNING'):
+            feed = actor_json_to_model(document, '~news', PEER)
 
         assert feed is not None
         assert db.session.query(Feed).filter_by(ap_profile_id=_feed_id()).count() == 1
         assert db.session.query(FeedMember).count() == 1
         assert db.session.query(FeedItem).count() == 1
         assert db.session.query(Feed).filter(Feed.parent_feed_id.isnot(None)).count() == 0
+
+        ignored = [r for r in caplog.records if "'childFeeds'" in r.getMessage()]
+        assert len(ignored) == 1
+        assert ignored[0].levelname == 'WARNING'
+        assert _feed_id() in ignored[0].getMessage()
+        assert 'it is a NoneType, not a list' in ignored[0].getMessage()
+        assert 'no child feed is linked' in ignored[0].getMessage()
 
     def test_a_string_of_child_feeds_links_nothing(self, app, db_session, http_mock):
         """FIXED, and this one never raised -- which is why it needed a
