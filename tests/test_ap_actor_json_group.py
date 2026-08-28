@@ -744,12 +744,17 @@ class TestTheme:
     - dropping `'theme' in activity_json` turns an absent theme into a KeyError,
       which test_absent_theme_leaves_the_default catches.
     - dropping the truthiness test lets a falsy value through to the column,
-      which test_falsy_non_string_theme_is_not_copied catches. The empty string
-      is the ONE falsy value that cannot catch it -- '' is also the column's
-      default, so both sides of the mutation store the same thing -- and a JSON
-      null is the other. Every other falsy value a peer can send in JSON is
-      distinguishable, because the String column coerces it to a non-empty
-      string on the way in.
+      which test_falsy_non_string_theme_is_not_copied catches.
+
+    Not every falsy value catches it, and they do not all behave alike: there
+    are three outcomes, not one. '' and a JSON null leave theme unchanged (''
+    is also the column's default, so both sides of the mutation store the same
+    thing); falsy scalars and lists are coerced to a non-empty string and so are
+    distinguishable (0 -> '0', false -> 'false', [] -> '{}'); and a falsy dict
+    is not stored at all -- psycopg raises ProgrammingError, "can't adapt type
+    'dict'", before it reaches the column. The test below uses `false`, which is
+    both the likeliest thing a peer sends and one of the two values that pin
+    the operand cleanly.
     """
 
     def test_theme_is_copied(self, app, db_session):
@@ -768,9 +773,11 @@ class TestTheme:
         """This is what pins the truthiness operand. A JSON `false` is falsy, so
         the guard skips it and the column keeps its '' default; drop the operand
         and the same value reaches a String column, which stores it as the
-        four-character string 'false'. Any falsy JSON value except '' and null
-        works the same way -- 0 becomes '0', [] becomes '{}' -- because the
-        column coerces them all to something non-empty on the way in."""
+        four-character string 'false'. Falsy scalars and lists behave that way
+        too (0 becomes '0', [] becomes '{}'), but a falsy dict does NOT: psycopg
+        raises ProgrammingError, "can't adapt type 'dict'", so {} never reaches
+        the column at all. '' and a JSON null are the two that leave theme
+        unchanged, and so cannot pin this operand."""
         _peer_instance()
         document = _group('memes', fields={'theme': False})
         community = actor_json_to_model(document, '!memes', PEER)
