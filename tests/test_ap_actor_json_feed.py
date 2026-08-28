@@ -74,11 +74,11 @@ repeat):
         print('  IfExp', ast.unparse(s.test)[:95])
     "
 
-That prints `If total: 27  IfExp: 9  For: 5`. Two of the twenty-seven are not
+That prints `If total: 30  IfExp: 9  For: 5`. Two of the thirty are not
 optional-field guards -- the type dispatch itself (`== 'Feed'`) and the
 `if feed:` early return for a feed already in the database -- so the branch
-holds **9 conditional expressions + 25 `if` statements = 34 conditional
-sites**, or 36 counting the dispatch and the early return. Both of those two
+holds **9 conditional expressions + 28 `if` statements = 37 conditional
+sites**, or 39 counting the dispatch and the early return. Both of those two
 are covered as well, by TestFeedDispatch and TestExistingFeed.
 
 The nine conditional expressions are all inside the Feed() constructor call:
@@ -96,13 +96,16 @@ The nine conditional expressions are all inside the Feed() constructor call:
     'endpoints' in activity_json     -> ap_inbox_url from endpoints.sharedInbox,
                                         else activity_json['inbox']
 
-and twenty-five `if` statements (the two excluded above are not in this list):
+and twenty-eight `if` statements (the two excluded above are not in this list):
 
     'attributedTo' ... and isinstance(attributedTo, str)   -> owners_url
     'moderators' in activity_json                          (elif; else None)
     'sensitive' ... and sensitive and not site.enable_nsfw (returns None)
     'nsfl' ... and nsfl and not site.enable_nsfl           (returns None)
+    owners_url is None                       (the no-owners-collection refusal)
     owners_data.status_code == 200
+      owner_user is None                         (the owners-collection skip)
+    not owner_users                                (the empty-owners refusal)
     following_data.status_code == 200
       community is None                        (the /following skip guard)
     'summary' in activity_json                             -> description_html
@@ -154,8 +157,9 @@ the same reason the Group file does: otherwise find_instance_id inserts a
 sparse Instance and calls new_instance_profile, which fetches the peer's
 nodeinfo.
 
-FINDINGS pinned by this file, reported and not fixed -- each has its own class
-docstring saying more:
+FINDINGS pinned by this file -- each has its own class docstring saying more.
+Those still marked FIXED are kept in the list so the pinning tests that used
+to record the defect can be traced back to it:
 
   1. FIXED, and so no longer a finding: the Feed branch had no `except
      KeyError` at all. It now has two, one on the /following fetch and one on
@@ -164,23 +168,27 @@ docstring saying more:
      still has no empty-string fallback where Person's and Group's both do, so
      a document with neither 'endpoints' nor 'inbox' is refused here and
      accepted there. TestRequiredFieldsMissing and TestInboxResolution.
-  2. `owner_users[0].id` is unguarded. An owners collection that does not
-     return 200, or returns 200 with an empty orderedItems, raises IndexError;
-     an entry find_actor_or_create rejects puts None in the list and raises
-     AttributeError. TestOwnersCollection.
+  2. FIXED, and so no longer a finding: `owner_users[0].id` used to be
+     unguarded. An owners collection that does not return 200, or returns 200
+     with an empty orderedItems, raised IndexError there; an entry
+     find_actor_or_create rejects put None in the list and raised
+     AttributeError. The rejected entry is now skipped, and an owners list with
+     nothing left in it is refused with None before anything is written.
+     TestOwnersCollection.
   3. FIXED, and so no longer a finding: an entry of the /following collection
      that find_actor_or_create rejects used to reach `c.id` as None, after the
      Feed had been committed. It is now skipped and logged.
      TestFollowingCollection.
-  4. A feed with neither attributedTo nor moderators reaches get_request(None),
-     which raises httpx.HTTPError out of the function. TestOwnersUrl.
+  4. FIXED, and so no longer a finding: a feed with neither attributedTo nor
+     moderators used to reach get_request(None), and what came out depended on
+     DEBUG -- httpx.HTTPError with it off, TypeError with it on. The None is
+     now refused before the call, identically in both modes. TestOwnersUrl.
   5. `ap_following_url=... if 'following' in activity_json else None` can never
      take its else arm: the same key is read unconditionally, earlier, by the
      get_request that fetches the /following collection. TestScalarOptionalFields.
 """
 from datetime import datetime
 
-import httpx
 import pytest
 
 from app import db
@@ -436,15 +444,30 @@ class TestOwnersUrl:
     independently of the `in` operand by a document whose attributedTo is a
     list rather than a string -- the shape Mastodon-family software publishes.
 
-    FINDING (4) -- the third arm is not a graceful default. owners_url = None
-    goes straight into get_request, whose is_invalid_get_request_uri returns
-    True for it, so the call raises httpx.HTTPError("HTTPError: invalid uri")
-    out of actor_json_to_model rather than returning None. Every caller of
-    actor_json_to_model would have to catch that. Pinned as today's behaviour.
+    FINDING (4), FIXED and so no longer a finding -- the third arm used not to
+    be a graceful default. owners_url = None went straight into get_request,
+    and what happened next depended on the app's DEBUG setting:
+    is_invalid_get_request_uri short-circuits to False under DEBUG, so with
+    DEBUG off get_request refused the uri and raised
+    httpx.HTTPError("HTTPError: invalid uri"), while with DEBUG on it got past
+    that check and the `'washingtonpost.com' in uri` membership test raised
+    TypeError instead. The branch now refuses a None owners_url itself, before
+    the call, and returns None. test_neither_attributed_to_nor_moderators_is_
+    refused runs under both DEBUG settings and asserts the same outcome from
+    each, which is the property the old behaviour did not have.
 
-    Mutation that fails test_attributed_to_that_is_not_a_string_falls_through:
-    dropping the isinstance operand, which would put the list itself into
-    owners_url and then into ap_moderators_url.
+    Mutations:
+
+    - dropping the isinstance operand, which would put the list itself into
+      owners_url and then into ap_moderators_url: fails
+      test_attributed_to_that_is_not_a_string_is_refused, which would then get
+      a Feed back instead of None (and, with no route registered for a list's
+      worth of nonsense, an unmocked request).
+    - deleting the `if owners_url is None: return None` guard, or narrowing it
+      to a condition no document meets: both of the refusal tests below get an
+      exception out instead of None.
+    - broadening that guard to refuse unconditionally: every other test in this
+      file that expects a Feed back gets None.
     """
 
     def test_attributed_to_string_is_used(self, app, db_session, http_mock):
@@ -468,24 +491,38 @@ class TestOwnersUrl:
         feed = actor_json_to_model(document, '~news', PEER)
         assert feed.ap_moderators_url == _owners_url()
 
-    def test_attributed_to_that_is_not_a_string_falls_through(
+    def test_attributed_to_that_is_not_a_string_is_refused(
             self, app, db_session):
         """attributedTo present but not a string, and no moderators: the else
-        arm is taken and owners_url is None, so the fetch raises. No http_mock
-        route is registered because no HTTP request is ever made -- get_request
-        rejects the uri before the transport sees it."""
+        arm is taken and owners_url is None, so the document is refused. No
+        http_mock route is registered because no HTTP request is ever made --
+        the guard runs before the fetch."""
         peer_instance(PEER)
         document = _feed(fields={'attributedTo': [{'id': f'https://{PEER}/u/x'}]})
-        with pytest.raises(httpx.HTTPError) as excinfo:
-            actor_json_to_model(document, '~news', PEER)
-        assert 'invalid uri' in str(excinfo.value)
+        assert actor_json_to_model(document, '~news', PEER) is None
         assert db.session.query(Feed).count() == 0
 
-    def test_neither_attributed_to_nor_moderators_raises(self, app, db_session):
+    @pytest.mark.parametrize('debug', [False, True])
+    def test_neither_attributed_to_nor_moderators_is_refused(
+            self, app, db_session, monkeypatch, debug):
+        """Refused the same way whether or not the app is in DEBUG.
+
+        That parametrisation is the point of this test rather than decoration.
+        The behaviour this replaced was DEBUG-dependent -- httpx.HTTPError with
+        DEBUG off, TypeError with it on -- because is_invalid_get_request_uri
+        short-circuits to False under DEBUG and let the None travel one line
+        further into get_request. A guard in actor_json_to_model itself is
+        reached before either of those, so both settings now return None.
+
+        monkeypatch.setitem is what restores the setting: the app fixture is
+        session-scoped, and current_app.debug reads config['DEBUG'] live.
+        is_invalid_get_request_uri is memoized, but the test config's cache is
+        a NullCache, so the memoization cannot carry one setting's answer into
+        the other's run.
+        """
+        monkeypatch.setitem(app.config, 'DEBUG', debug)
         peer_instance(PEER)
-        with pytest.raises(httpx.HTTPError) as excinfo:
-            actor_json_to_model(_feed(), '~news', PEER)
-        assert 'invalid uri' in str(excinfo.value)
+        assert actor_json_to_model(_feed(), '~news', PEER) is None
         assert db.session.query(Feed).count() == 0
 
 
@@ -570,25 +607,55 @@ class TestOwnersCollection:
     `if owners_data.status_code == 200:` guard, the loop over orderedItems, and
     the `FeedMember(..., is_owner=True)` rows written after the commit.
 
-    FINDING (2) -- `user_id=owner_users[0].id` is unguarded, and owner_users is
-    empty whenever the guard's false arm is taken. So a peer whose moderators
-    collection 404s, or answers 200 with an empty orderedItems, makes
-    actor_json_to_model raise IndexError instead of returning None or a
-    feed with no owner. The same line raises AttributeError when
-    find_actor_or_create rejects an entry, because the None it returns is
-    appended to the list unchecked. Both are pinned below as today's behaviour.
+    FINDING (2), FIXED and so no longer a finding -- `user_id=owner_users[0].id`
+    used to index this list unguarded. Three different documents left nothing
+    usable in it and all three crashed there: a moderators collection that does
+    not answer 200 and one that answers 200 with an empty orderedItems both
+    left it empty and raised IndexError, and an entry find_actor_or_create
+    rejects put the None it returns into the list unchecked and raised
+    AttributeError. The rejected entry is now skipped and logged, and an owners
+    list left with nothing in it is refused with None.
 
-    The rejected-entry test uses the Public collection URI, which
+    All three crashed BEFORE the `db.session.commit()` that writes the Feed, so
+    refusing leaves no row rather than half of one. That is not assumed here:
+    every one of the three tests below asserted `Feed.count() == 0` alongside
+    the exception before the fix and asserts it alongside the None after, and
+    the assertion held both times. The same is true of the FeedMember rows,
+    which are written after that commit and so were never reached at all.
+
+    The rejected-entry tests use the Public collection URI, which
     validate_remote_actor refuses by name -- the cheapest rejection available,
     and one that needs no HTTP and no BannedInstances row.
 
-    Mutation that fails test_a_non_200_owners_collection_raises_index_error:
-    replacing the status guard with `True`, which reaches .json() on a body
-    that is not JSON. That kill depends on the 404 body being plain text --
-    see _register_owners, where the first version of this file served an empty
-    JSON collection instead and the mutation SURVIVED. Mutation that fails
-    test_two_owners_become_two_feed_members: replacing the guard with `False`,
-    which takes the IndexError path instead.
+    Mutations:
+
+    - replacing the status guard with `True`: reaches .json() on a body that is
+      not JSON, failing test_a_non_200_owners_collection_is_refused. That kill
+      depends on the 404 body being plain text -- see _register_owners, where
+      the first version of this file served an empty JSON collection instead
+      and the mutation SURVIVED.
+    - replacing the status guard with `False`: no owner is ever appended, so
+      test_two_owners_become_two_feed_members gets None instead of a Feed.
+    - deleting the `if owner_user is None: continue` skip: the None goes back
+      into the list and test_an_owner_the_resolver_rejects_is_skipped_and_the_
+      rest_owns_the_feed gets AttributeError instead of a Feed.
+    - broadening that skip to `continue` unconditionally: every owner is
+      dropped, so test_the_first_owner_becomes_the_feeds_user gets None.
+    - deleting the `if not owner_users: return None` refusal, or narrowing it to
+      a condition no empty list meets: the three refusal tests get IndexError
+      back instead of None.
+    - broadening that refusal to return unconditionally: every test in this
+      file that expects a Feed gets None.
+
+    The two guards are separately pinned, which is why the rejected entry
+    appears twice below -- once alongside an owner that does resolve, where
+    only the skip decides the outcome, and once alone, where only the refusal
+    does.
+
+    None of the three refusal tests registers a /following route. That is the
+    assertion, not an omission: http_mock's assert_all_called would fail the
+    test if the route existed and went uncalled, so its absence pins that the
+    refusal happens before the second remote fetch rather than after it.
     """
 
     def test_the_first_owner_becomes_the_feeds_user(self, app, db_session, http_mock):
@@ -614,41 +681,55 @@ class TestOwnersCollection:
         assert sorted(m.user_id for m in members) == sorted([first.id, second.id])
         assert all(m.is_owner is True for m in members)
 
-    def test_a_non_200_owners_collection_raises_index_error(
+    def test_an_owner_the_resolver_rejects_is_skipped_and_the_rest_owns_the_feed(
+            self, app, db_session, http_mock):
+        """find_actor_or_create returns None for the Public collection URI. It
+        is skipped, and the owner that does resolve becomes the feed's user and
+        its only FeedMember -- so this test turns on the skip alone, with the
+        empty-list refusal never reached."""
+        instance = peer_instance(PEER)
+        owner = _owner(instance)
+        _register_owners(http_mock, ['https://www.w3.org/ns/activitystreams#Public',
+                                     owner.ap_profile_id])
+        _register_following(http_mock)
+
+        feed = actor_json_to_model(_owned_feed(), '~news', PEER)
+
+        assert feed.user_id == owner.id
+        members = db.session.query(FeedMember).filter_by(feed_id=feed.id).all()
+        assert [m.user_id for m in members] == [owner.id]
+
+    def test_a_non_200_owners_collection_is_refused(
             self, app, db_session, http_mock):
         instance = peer_instance(PEER)
         _owner(instance)
         _register_owners(http_mock, [], status=404)
-        _register_following(http_mock)
 
-        with pytest.raises(IndexError):
-            actor_json_to_model(_owned_feed(), '~news', PEER)
+        assert actor_json_to_model(_owned_feed(), '~news', PEER) is None
         assert db.session.query(Feed).count() == 0
+        assert db.session.query(FeedMember).count() == 0
 
-    def test_an_empty_owners_collection_raises_index_error(
+    def test_an_empty_owners_collection_is_refused(
             self, app, db_session, http_mock):
         instance = peer_instance(PEER)
         _owner(instance)
         _register_owners(http_mock, [])
-        _register_following(http_mock)
 
-        with pytest.raises(IndexError):
-            actor_json_to_model(_owned_feed(), '~news', PEER)
+        assert actor_json_to_model(_owned_feed(), '~news', PEER) is None
         assert db.session.query(Feed).count() == 0
+        assert db.session.query(FeedMember).count() == 0
 
-    def test_an_owner_the_resolver_rejects_is_appended_as_none(
+    def test_an_owners_collection_of_only_rejected_entries_is_refused(
             self, app, db_session, http_mock):
-        """find_actor_or_create returns None for the Public collection URI, and
-        the loop appends it without checking, so the None reaches `.id`."""
+        """The skip empties the list, and the refusal then turns that into a
+        None -- the two guards in series."""
         instance = peer_instance(PEER)
         _owner(instance)
         _register_owners(http_mock, ['https://www.w3.org/ns/activitystreams#Public'])
-        _register_following(http_mock)
 
-        with pytest.raises(AttributeError) as excinfo:
-            actor_json_to_model(_owned_feed(), '~news', PEER)
-        assert "'NoneType' object has no attribute 'id'" in str(excinfo.value)
+        assert actor_json_to_model(_owned_feed(), '~news', PEER) is None
         assert db.session.query(Feed).count() == 0
+        assert db.session.query(FeedMember).count() == 0
 
 
 class TestFollowingCollection:
