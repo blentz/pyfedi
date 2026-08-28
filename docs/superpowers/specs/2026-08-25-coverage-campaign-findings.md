@@ -655,6 +655,394 @@ them. A future YouTube URL shape that this matrix does not recognise is
 expected, not a coverage gap in the sense the rest of this document uses
 that phrase.
 
+## Sub-project 2a: `app/activitypub/util.py` actor and object ingestion
+
+`docs/superpowers/specs/2026-08-27-coverage-activitypub-ingest-design.md`. Eight
+tasks covered the six functions through which a remote peer's ActivityPub
+documents first become rows in this database: `ensure_domains_match`,
+`find_community`, `remote_object_to_json`, `verify_object_from_source`,
+`find_flair_or_create`, and `actor_json_to_model` (split three ways, one task per
+actor branch -- Person/Service, Group, Feed). Eight test files, 290 tests, and
+the module's **first** coverage floor, set at 35.
+
+This is the campaign's first sub-project on a file it does not attempt to cover
+whole. `app/activitypub/util.py` is far too large for that, so the unit of work
+was the function, not the module, and the floor reflects the module. All six
+target functions are fully covered; the floor is 35 because everything else in
+the file is still untested. A future sub-project raising it should say which
+functions it added, not just which number went up.
+
+### 1. The two suspected defects the spec named in advance
+
+Both were named before any test was written, and in **both cases the call-site
+analysis reversed the predicted severity**. That is the transferable finding, not
+either defect: a comparison that looks like a security boundary when you read it
+in isolation may be one that no caller can drive, and the only way to tell is to
+enumerate every caller and trace where each compared string comes from. Reading
+the comparison tells you what it does; reading the call sites tells you what it
+is worth.
+
+#### `netloc` instead of `hostname`
+
+`ensure_domains_match` and `verify_object_from_source` both compare
+`urlparse(...).netloc` strings rather than `.hostname`. Probe, re-run against
+this checkout for this write-up:
+
+```
+https://peer.example/x                    netloc='peer.example'                hostname='peer.example'
+https://peer.example@attacker.example/x   netloc='peer.example@attacker.example' hostname='attacker.example'
+https://peer.example:8443/x               netloc='peer.example:8443'           hostname='peer.example'
+https://PEER.example/x                    netloc='PEER.example'                hostname='peer.example'
+```
+
+**The userinfo row is the one that looks dangerous and is not.** `hostname` is a
+pure function of the `netloc` string itself -- strip userinfo up to the last `@`,
+strip a trailing `:port`, lowercase -- so two inputs with an **equal** `netloc`
+can never have **different** `hostname`s. No input makes two genuinely different
+real hosts compare equal under a netloc test that would have compared unequal
+under a hostname test. The "userinfo lets a peer impersonate another host"
+reading does not hold, and it cannot be made to hold by a peer that controls both
+strings, because such a peer can simply make them identical outright. What
+userinfo *does* do is ride along unstripped into whatever downstream code or log
+re-displays the extracted "domain", which is a readability concern, not a
+boundary bypass.
+
+**The port row is the real divergence, and it runs the other way.**
+`peer.example:8443` and `peer.example` are the same host and different strings,
+so the comparison **falsely refuses** a peer that is inconsistent about the port
+across the fields being compared. (A peer that carries the same port everywhere
+compares equal and passes -- an earlier draft of the Task 4 report had this
+premise inverted and claimed the refusal was total for any ported peer. It is
+not. It requires inconsistency, and once that inconsistency exists it is
+deterministic, because URI generation is.) This is an availability defect.
+
+Call sites, and why they give the two functions different severities:
+
+- `ensure_domains_match` has exactly one call site, inside `process_inbox_request`
+  in `app/activitypub/routes.py`. The dict it receives is the raw inbound POST
+  body, or the announced object inside it, or -- in the one branch that replaces
+  it -- the peer's own HTTP response to a fetch aimed at the domain the peer's
+  own `actor` field names. **The peer controls both compared strings on every
+  path.** That makes the false reject genuinely peer-triggerable, but its blast
+  radius is one activity declined.
+- `verify_object_from_source` is materially worse, and this is a severity
+  *difference between two instances of the same defect*, which is the kind of
+  thing a defect list flattens if you let it. That function is the gate deciding
+  whether an `Announce`-wrapped object is believed **at all**; a refusal returns
+  `None` and the announced content is dropped, not merely declined once. It has
+  two netloc comparisons, one before the fetch and one after, and the pre-fetch
+  one refuses without ever contacting the peer -- so there is no response, no
+  status code and no transport error for anyone to diagnose from.
+
+The diagnosis problem compounds it. All ten of `verify_object_from_source`'s
+refusal paths return a bare `None`, and the caller logs every one of them as the
+single string `'Could not verify unsigned request from source'`. The refusal *is*
+recorded -- an earlier draft of the Task 4 report wrongly said nothing logged it
+-- but an operator can see that verification failed and cannot see which of the
+ten causes fired. A port mismatch, a fetch failure, a malformed document and an
+`attributedTo` of the wrong type are indistinguishable in the log.
+
+One rewrite (`urlparse(x).hostname` on both sides) closes the port false-reject
+in both functions.
+
+#### The substring server gate
+
+`actor_json_to_model` opens with `if server not in activity_json['id']: return
+None` -- a substring test against the whole id string, not a host comparison.
+Probe, re-run for this write-up, with `server = 'good.example'`:
+
+```
+https://good.example/u/alice                passes    real host = good.example
+https://good.example.attacker.net/u/alice   passes    real host = good.example.attacker.net
+https://attacker.net/u/x?ref=good.example   passes    real host = attacker.net
+https://other.example/u/alice               REJECTED  real host = other.example
+https://GOOD.EXAMPLE/u/alice                REJECTED  real host = good.example
+```
+
+Rows two and three are the weakness: a suffix-extended host and a query parameter
+both satisfy a substring test. Row five is a second, separate defect found while
+writing the tests and not predicted by the spec -- the test is **case-sensitive**
+as well as host-blind, so a peer publishing its own id with an upper-cased host is
+rejected outright. Same false-reject shape as the port case above.
+
+**The call-site analysis is what settles the severity, and it deflates it.**
+There are five call sites, and in every one `server` is derived locally from the
+address PieFed is resolving -- `urlparse(...).netloc` of a URL being fetched, or
+the host half of a `name@host` handle being webfingered, or (in the alpha API's
+object resolver) `urlparse(query).netloc.lower()`, in a function that re-enters
+itself with the document's own `id` as the new query whenever the two disagree,
+so by the time it reaches `actor_json_to_model` they agree exactly. **A peer never
+supplies `server`.** The predicted "impersonate any instance" reading therefore
+does not hold: a peer cannot choose the string it is checked against, so it cannot
+use this to be admitted as an actor of an instance it does not control.
+
+What a peer **can** do, with the cooperation of the host being fetched, is mint a
+row whose `ap_profile_id` and `ap_public_url` point at a host that is neither the
+host PieFed fetched from nor the host recorded in the same row's `ap_id`,
+`ap_domain` and `instance_id` -- cross-host actor smuggling. The resulting `User`
+claims to be `alice@good.example` while the column every inbound activity is
+matched against lives on `attacker.net`. One amplifier is worth recording for
+whoever fixes it: on the webfinger paths the actor document is fetched from the
+`href` in the peer's own webfinger response, which that peer chooses freely, so
+`server` is pinned to the handle's host while the fetch can be redirected
+anywhere. The substring gate is the only thing left tying the two together, and a
+substring test does not tie them.
+
+The same one-line rewrite (`urlparse(id).netloc.lower() == server`) closes both
+the smuggling weakness and the case-sensitivity false reject.
+
+### 2. Partially-applied ingest -- three defects that share one shape
+
+Three of this sub-project's nineteen defects are the same bug wearing different
+clothes, and they are far more legible as a group than as three entries in a
+list. In each, a peer-supplied document causes a row to be **committed** and then
+causes an exception to escape the function. The caller gets an exception instead
+of a return value, so it has no way to know a row was written; the row survives
+because it is already committed and no rollback covers it. The peer ends up
+half-ingested, and nothing records that.
+
+- **`actor_json_to_model`, Group branch, legacy flair.** The `lemmy:tagsForPosts`
+  loop reads `flair['display_name']` unguarded, unlike the four optional keys
+  that follow it, each of which sits behind an `in` test. That loop runs *after*
+  the community is added and committed. A legacy tag entry with no
+  `display_name` therefore leaves a persisted `Community` with no flair and
+  raises `KeyError` at the caller. Pinned by a test asserting the `KeyError`,
+  a `Community` row count of 1, and a `CommunityFlair` row count of 0.
+- **`actor_json_to_model`, Feed branch, the following collection.** Entries of
+  the fetched `/following` collection are resolved and appended without checking
+  the resolver's return, and the later loop builds a `FeedItem` from each
+  entry's `.id`. That second loop runs *after* the feed is added and committed,
+  so an entry the resolver rejects leaves a persisted `Feed` with no `FeedItem`s
+  and raises `AttributeError` at the caller. Pinned the same way.
+- **`find_flair_or_create`, reached from `refresh_community_profile_task`.** The
+  ap_id backfill block reads `flair['id']` unconditionally -- again, unlike every
+  other optional read in that function. The caller commits the community's
+  refreshed profile fields and *then* runs its `lemmy:tagsForPosts` loop, which
+  builds each dict from `display_name` plus optional colour and blur keys and
+  never an `'id'`. That caller's session comes from `get_task_session()`, which
+  leaves `autoflush` at its default of on, so two entries in the same
+  peer-supplied list sharing one `display_name` are enough: the first call adds a
+  flair row with a null `ap_id`, autoflush makes it visible to the second call's
+  query, and the second call finds it, sees the falsy `ap_id`, and reads the key
+  that is not there.
+
+That last one is also the sub-project's sharpest example of **the same defect
+being reachable from one caller and not another, for a reason that is nowhere
+near the defect.** `actor_json_to_model` calls `find_flair_or_create` with no
+session argument, so it gets `db.session`, and this application constructs
+Flask-SQLAlchemy with `session_options={"autoflush": False}`. Without autoflush
+the first call's pending insert is invisible to the second call's query, so the
+same-call collision never forms. The reachability of a `KeyError` in one function
+turns on a session option set in the application factory. A defect list that
+records only "unguarded key read" loses that entirely, and the next person
+re-derives it.
+
+The general shape to look for when reading ingestion code: find every commit, and
+ask what runs after it. Anything that can raise after a commit and before the
+return is a partially-applied ingest waiting for a malformed document.
+
+### 3. Dead code that no coverage number can surface
+
+The Feed branch builds `ap_following_url` from a conditional expression whose
+else arm supplies `None` when the document has no `following` key. **That arm can
+never be taken.** The same key is read *unconditionally*, earlier in the same
+branch, to fetch the feed's following collection over HTTP, so a document lacking
+it has already raised `KeyError` before the constructor runs. Pinned by a test
+that asserts exactly that ordering.
+
+The reason to give this its own section is the *mechanism by which it stayed
+hidden*, which generalises well beyond this file:
+
+- **Statement coverage cannot see it.** The line executes on every call. It reads
+  100% covered and always will.
+- **Branch coverage cannot see it either.** coverage.py emits **no branch arc for
+  a conditional expression**. There is no arc to be missing, so the branch number
+  is not merely uninformative here -- it is structurally incapable of carrying
+  the information. The whole-function measurement for `actor_json_to_model` is
+  177 of 178 arcs, and not one of those 178 has anything to say about this
+  expression or about any of the other conditional expressions in the three actor
+  branches, of which there are many.
+- **What found it was the discipline, not the tooling.** Someone enumerated the
+  branch's conditional expressions, sat down to write the absent-side test for
+  each, and discovered that for this one there was no absent side to write.
+
+This is the campaign's clearest argument for present-and-absent testing as a
+standing requirement rather than a nice-to-have. Any function with conditional
+expressions has, in the coverage report, a region about which the report says
+nothing at all while looking fully green. The only instrument that reaches into
+that region is a human required to construct both inputs, who is then forced to
+notice when one of them cannot be constructed.
+
+The corollary for reading any number this campaign produces on a file with many
+conditional expressions: arcs are evidence about `if`/`elif` statements and `for`
+loops; statements are evidence that no line is dead to the suite; neither is
+evidence about a conditional expression. Present-and-absent test pairs are, and a
+two-direction mutation on the guard is what confirms a pair discriminates rather
+than merely executing both spellings.
+
+### 4. Bare `except:` and mutation resistance -- what was observed, not assumed
+
+Finding 4 of sub-project 1c states the general hazard: a bare handler swallows
+respx's own `AllMockedAssertionError`, so a test whose entire claim is "this makes
+no request" passes under a mutation that makes the request. This sub-project went
+looking for live instances in the two network functions,
+`remote_object_to_json` and `verify_object_from_source`, which carry two bare
+`except:` clauses each. The result was **more mixed than the general principle
+predicts**, and the details are the useful part.
+
+**In both network functions the bare handlers wrap only the `.json()` parse, not
+the fetch.** The fetch is guarded by `except httpx.HTTPError`. respx's error is
+an `AssertionError` subclass, which matches none of that, and matches none of
+`get_request`'s five handler clauses either (`httpx.InvalidURL`, `ValueError`,
+`httpx.ReadError`, `httpx.HTTPError`, `httpx.StreamError` -- enumerated by
+reading the function, after an earlier draft listed only three). So an unwanted
+fetch does still error the test, and "register no route, let the suite-wide
+blocker prove nothing was fetched" is a valid proof in those two files. All the
+mutations aimed at those regions were killed.
+
+**But that is a property of how the tests were built, not of the handlers.** The
+`remote_object_to_json` tests deliberately serve the *wrong* branch a body that
+parses as valid JSON carrying a distinguishing marker, so an over-broadening
+mutation is caught by an observably wrong return value rather than by an
+accidental raise the bare handler could have absorbed. Shaped the other way, the
+same mutations would have been swallowed. The Feed task hit exactly that mirror
+image and had to fix it: two `status_code == 200` guards mutated to `True`
+**survived the first battery**, because the test helpers served JSON bodies on
+non-200 responses, so the mutated code's `.json()` succeeded and produced the
+same empty list the unmutated code produces by skipping the block. Serving a
+plain-text body on any non-200 status killed both. Those two mutations had been
+*named as killed* in docstrings at the moment they were surviving; running every
+mutation you name is what caught it.
+
+**The live instance of the 1c hazard in this sub-project is somewhere else
+entirely:** `make_image_sizes_async` wraps its `get_request` in a bare
+`except: pass`. Four mutations across the Group and Feed tasks -- deleting the
+icon and image resize guards -- cannot be killed by any assertion, because the
+only observable effect of those guards is the fetch, and the bare handler eats
+the harness's own block. They are killed only by `http_mock`'s
+`assert_all_called=True` turning "a registered route was never fetched" into a
+teardown error. That is a real kill, but it is the only signal available, and it
+is also why the Person task's negative image-caching test can assert which `File`
+rows exist and cannot assert that no fetch happened.
+
+The rule to carry forward, sharper than 1c's: when a bare `except:` is in scope,
+determine whether it wraps the **call** or only the **parse**, and check whether
+your own fixtures can raise inside it. Both answers occur in this one file.
+
+### 5. Patching `time.sleep(3)` is not a mock of the code under test
+
+Both network functions retry twice and sleep three seconds before the second
+attempt. Tests patch that out, and it is worth writing down why that is not the
+thing this campaign otherwise forbids.
+
+The patch replaces the clock. It chooses no branch, supplies no return value, and
+is never asserted against; every assertion remains on the document the function
+returns. Every mutation against the retry structure is still caught. A test that
+patched `get_request` would be mocking the code under test; a test that patches
+`sleep` is removing three seconds of real time from a deterministic path.
+
+Two separate bound names must be patched, and missing the second is the trap:
+`app/activitypub/util.py` does `import time` and calls `time.sleep(...)`, so
+patching the attribute on the shared module object reaches it -- but `app/utils.py`
+does `from time import sleep`, a different name in a different module, unreached
+by that patch. It matters because `get_request` has its own internal retry
+sleeping a random 3-10 seconds, nested inside the outer one, so a single "transport
+error twice" case can chain up to four unpatched sleeps.
+
+### 6. The defect register: 19 found, 19 reported, 0 fixed
+
+Derived by extracting each task report's own defects section and counting its
+entries, excluding the two entries those reports themselves label "(Observation,
+not a defect)":
+
+```bash
+cd .superpowers/sdd/2026-08-27-coverage-activitypub-ingest
+for f in task-{1,2,3,4,5,6,7,8}-report.md; do
+  awk '/^## Defects? /{on=1;next} /^#{1,2} [^#]/{on=0} on' "$f" \
+  | grep -E '^(### )?[0-9]+\. ' | grep -vc 'Observation, not a defect'
+done
+```
+
+That yields 17. Two more are carried in the singular-heading reports that state
+one defect in prose rather than as a numbered list -- Task 1's ("## Defect
+reported (not fixed)") and Task 5's ("## Defect found (reported, not fixed)").
+Task 3 found none new. **17 + 2 = 19.**
+
+| # | function | defect |
+|---|---|---|
+| D1 | `ensure_domains_match` | compares `netloc`, not `hostname`; falsely refuses a peer inconsistent about its port |
+| D2 | `find_community` | `KeyError` reading `type` from an object that has none; reachable from the `Add`/`Remove` inbox handlers and from the search-driven remote post resolver |
+| D3 | `find_community` | `AttributeError` calling `.startswith` on a non-string element of a `cc`/`to`/`audience`/`target` list; reachable from every call site, including the one guarded against D2 |
+| D4 | `verify_object_from_source` | the same `netloc`-not-`hostname` comparison, in both guards, with a worse consequence (see section 1) |
+| D5 | `verify_object_from_source` | two bare `except:` clauses around the JSON parse; they will swallow any error `.json()` raises, including a programming error inside httpx |
+| D6 | `verify_object_from_source` | the signed-retry branch dereferences the `Site` row without a null check, so a missing row raises `AttributeError` instead of returning `None` like every other failure path |
+| D7 | `verify_object_from_source` | ten distinct refusal paths collapse into one undifferentiated log message |
+| D8 | `verify_object_from_source` | `object` shadows the builtin throughout the function body (cosmetic) |
+| D9 | `find_flair_or_create` | ap_id backfill reads `flair['id']` unguarded -- **partially-applied ingest** via `refresh_community_profile_task` (see section 2) |
+| D10 | `actor_json_to_model` | the `server` gate is a substring test, not a host comparison (see section 1) |
+| D11 | `actor_json_to_model` | that same gate is case-sensitive, so an upper-cased host in a peer's own id is rejected |
+| D12 | `actor_json_to_model`, Group | the branch has no `except KeyError` at all, unlike Person/Service; five unconditional keys raise straight out of the function, and its inbox expression has no fallback where Person's ends in an empty string |
+| D13 | `actor_json_to_model`, Group | legacy flair entry without `display_name` -- **partially-applied ingest** (see section 2) |
+| D14 | `actor_json_to_model`, Feed | the branch has no `except KeyError` either; same asymmetry as D12 |
+| D15 | `actor_json_to_model`, Feed | the first owner is indexed out of the owners list with no guard: three distinct crashes (non-200 collection, empty collection, an entry the resolver rejects), all before the commit |
+| D16 | `actor_json_to_model`, Feed | the following collection's rejected entries -- **partially-applied ingest** (see section 2) |
+| D17 | `actor_json_to_model`, Feed | a document with neither `attributedTo` nor `moderators` sends `None` into `get_request`, which raises `httpx.HTTPError` out of the function; the failure's exception *type* differs depending on whether `DEBUG` is on |
+| D18 | `actor_json_to_model`, Feed | `ap_following_url`'s else arm is dead code (see section 3) |
+| D19 | `actor_json_to_model`, Feed | the post-commit re-fetch guard protects nothing -- always true, and the statement after the block it guards dereferences the same value anyway |
+
+Two qualifications on how this register is often summarised. **They are not all
+peer-triggerable.** D8 is cosmetic and nothing triggers it; D6 needs a missing
+`Site` row, which is a deployment state a peer reaches but does not create. The
+other seventeen are driven by a peer-supplied document. **And numbering is not
+stable across summaries** -- the Task 9 brief refers to the `ap_following_url`
+finding as "defect 17", which is what you get if you drop the cosmetic D8. It is
+D18 here. Cite these by function and behaviour, not by ordinal.
+
+Two entries in the reports were deliberately **not** counted as defects, and are
+recorded here so nobody re-files them: the Group and Feed branches both ignore
+the `cache_remote_images_locally` setting that the Person/Service branch honours
+on the same two image-resize calls. That asymmetry may well be intentional. It is
+noted in the relevant test docstrings.
+
+### 7. The first floor, and what 35 means
+
+Measured from the whole suite, which was green at the time: **2528 passed, 3
+skipped, 0 failed.**
+
+```bash
+./run_tests.sh tests/ -q --cov=app --cov-report=json
+podman-compose -f compose.test.yaml exec -T -w /app test-runner python -c "
+import json; d=json.load(open('coverage.json'))
+s=d['files']['app/activitypub/util.py']['summary']
+print(s['percent_covered'], s['num_statements'], len(d['files']['app/activitypub/util.py']['missing_lines']))
+"
+```
+
+`percent_covered` came back **35.06818181818182**, over 2816 statements with 1778
+missing. Floor set at **35**, rounded down, as an added line in
+`coverage_floors.ini`; the three existing floors were left untouched.
+
+That figure is the **blended statement+branch** number (`.coveragerc` sets
+`branch = True`, so it is blended whether or not `--cov-branch` appears on the
+command line), and it is what `tests/check_coverage_floors.py` reads. It is not a
+statement percentage: statements alone are 1038 of 2816 and branches alone are
+505 of 1584, and 1543/4400 is where 35.07 comes from. Anyone comparing this floor
+against a `--cov-report=term` statement column will conclude, wrongly, that the
+floor is miscalibrated.
+
+The floor was confirmed to bite in both directions before being committed: at 36
+the checker exits 1 naming the module (`app/activitypub/util.py: 35.07% is below
+its floor of 36.00%`), and at 35 it exits 0 reporting all four module floors met.
+
+Do not read 35 as a quality grade for this module. Every one of the six target
+functions has zero missing statements and, with a single documented exception,
+zero missing branch arcs -- re-derivable from any run's `coverage.json` by
+intersecting each function's own AST span against the file's `executed_lines`,
+`missing_lines`, `executed_branches` and `missing_branches`. The one exception is
+the false side of the Feed branch's post-commit re-fetch guard, which is
+unreachable (D19). No pragma was added for it; the arc is left visible and
+explained in the test that names it.
+
 ## Ratchet gotchas
 
 - `percent_covered` is a **blended statement+branch figure**. This matters for
