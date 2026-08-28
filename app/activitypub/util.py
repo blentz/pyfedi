@@ -574,8 +574,20 @@ def host_of(url_string: str) -> str:
     bracket, two '::' runs, a host failing its NFKC confusability check. We
     degrade to '' rather than propagate, matching extract_domain_and_actor.
 
-    '' rather than None is deliberate: callers compare two of these, and two
-    failed parses must not compare equal to each other.
+    '' rather than None is deliberate, but it does not by itself stop two
+    failed parses comparing equal -- '' == '' just as None == None. The
+    return value only makes the obligation checkable; discharging it is the
+    caller's job, and each caller does so differently:
+
+    - ensure_domains_match refuses an empty side explicitly, because both of
+      its operands are peer-supplied and either can fail to parse.
+    - verify_object_from_source returns early when the object URI has no
+      host, which leaves that operand provably non-empty at both later
+      comparisons, so an empty other side can only compare unequal.
+    - actor_json_to_model's server gate relies on `server` being derived
+      locally and non-empty at every call site. Were that ever untrue, an
+      unparseable id would compare equal to an unparseable server and the
+      gate would accept.
     """
     try:
         return urlparse(url_string).hostname or ''
