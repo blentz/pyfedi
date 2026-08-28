@@ -914,13 +914,20 @@ class TestDescription:
     ['content']) if 'source' ... else ''`. Whatever the constructor put there
     is then overwritten by this block whenever description_html is neither None
     nor empty, which is why the constructor's value is only observable when it
-    is not.
+    is not -- the one test below where neither 'summary' nor 'content' is
+    present, so description_html stays '' and the overwrite never runs.
 
     Mutation that fails test_html_summary_is_not_wrapped: deleting the
     `not description_html.startswith('<')` guard, which would wrap an already
     wrapped summary a second time. Mutation that fails
     test_markdown_source_overrides_the_html: dropping the mediaType operand,
     which would take the markdown arm for a source that is not markdown.
+    Mutation that fails test_source_without_summary_or_content_reaches_the_constructors_description:
+    forcing the constructor's `description=...` conditional expression's true
+    arm to `''`, which every other test in this file cannot catch because their
+    non-empty description_html sends the overwrite block back over the same
+    'source' key and reproduces the same value regardless of what the
+    constructor stored.
     """
 
     def test_summary_becomes_the_description(self, app, db_session, http_mock):
@@ -1005,6 +1012,31 @@ class TestDescription:
         assert feed.description_html == '<p>the html</p>'
         assert 'the html' in feed.description
         assert '**markdown**' not in feed.description
+
+    def test_source_without_summary_or_content_reaches_the_constructors_description(
+            self, app, db_session, http_mock):
+        """The Feed() constructor's own `description=...` conditional expression,
+        pinned where its true arm is actually observable.
+
+        Every other test in this class supplies 'summary' (or 'content'), so the
+        description-handling block below the constructor call always overwrites
+        whatever piefed_markdown_to_lemmy_markdown produced there -- the
+        constructor's value is built and then immediately discarded. Here
+        'summary' and 'content' are both absent, so description_html stays '',
+        the `if description_html is not None and description_html != '':` guard
+        is false, the block does nothing, and feed.description is left holding
+        exactly what the constructor put there.
+
+        piefed_markdown_to_lemmy_markdown only rewrites a soft-break
+        (non-whitespace immediately followed by \\r\\n); this source has none,
+        so it is returned unchanged -- confirmed by calling the function
+        directly with this input before writing the assertion, not assumed.
+        """
+        _peer_with_one_owner(http_mock)
+        document = _owned_feed(fields={'source': {'content': 'the *source* only'}})
+        feed = actor_json_to_model(document, '~news', PEER)
+        assert feed.description_html == ''
+        assert feed.description == 'the *source* only'
 
 
 class TestIcon:
