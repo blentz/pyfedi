@@ -910,6 +910,162 @@ as a specification YouTube publishes or guarantees. WHATWG's URL Standard and
 RFC 3986 govern the parsing underneath; YouTube's own path conventions do not,
 and could change without notice.
 
+### Sub-project 2a: `app/activitypub/util.py` actor and object ingestion
+
+`docs/superpowers/specs/2026-08-27-coverage-activitypub-ingest-design.md`. Eight
+tasks covered the six functions through which a peer's ActivityPub documents
+first become rows in this database: `ensure_domains_match`, `find_community`,
+`remote_object_to_json`, `verify_object_from_source`, `find_flair_or_create`,
+and `actor_json_to_model` (split three ways, one task per actor branch --
+Person/Service, Group, Feed). Tests: `tests/test_ap_ensure_domains_match.py`,
+`tests/test_ap_find_community.py`, `tests/test_ap_remote_object_to_json.py`,
+`tests/test_ap_verify_object_from_source.py`,
+`tests/test_ap_find_flair_or_create.py`, `tests/test_ap_actor_json_person.py`,
+`tests/test_ap_actor_json_group.py`, `tests/test_ap_actor_json_feed.py`.
+
+Eight files, 290 tests. Derived, not counted by hand:
+
+    ./run_tests.sh tests/test_ap_ensure_domains_match.py \
+        tests/test_ap_find_community.py tests/test_ap_remote_object_to_json.py \
+        tests/test_ap_verify_object_from_source.py \
+        tests/test_ap_find_flair_or_create.py tests/test_ap_actor_json_person.py \
+        tests/test_ap_actor_json_group.py tests/test_ap_actor_json_feed.py \
+        --collect-only -q | tail -1
+
+**This module's first floor is 35, and 35 is not a coverage grade.** The module
+is very large and this sub-project deliberately covered six functions inside it,
+not the module. Every one of those six is fully covered; the floor is low because
+everything else in the file is still untested. Read the floor as "the six
+ingestion functions are pinned, do not regress them", not as "this module is 35%
+good". Per-function coverage, re-derived from the whole suite's `coverage.json`
+by intersecting each function's own AST span against the file's
+`executed_lines` / `missing_lines` / `executed_branches` / `missing_branches`:
+
+| function | statements | branch arcs |
+|---|---|---|
+| `ensure_domains_match` | all covered | all covered |
+| `find_community` | all covered | all covered |
+| `remote_object_to_json` | all covered | all covered |
+| `verify_object_from_source` | all covered | all covered |
+| `find_flair_or_create` | all covered | all covered |
+| `actor_json_to_model` | all covered | one arc missing |
+
+The single missing arc is the false side of the `if` guarding the Feed branch's
+post-commit re-fetch of the row it has just committed, looked up by its own
+unique `ap_profile_id` in the same session. It is unreachable, and if it ever
+were reached the statement after the guarded block dereferences the same `None`
+anyway -- so the guard protects nothing. No pragma was added; the arc is left
+visible.
+
+**Dead code that no coverage number can surface.** The Feed branch builds
+`ap_following_url` from a conditional expression that falls back to `None` when
+the document has no `following` key. That else arm can never be taken: the same
+key is read *unconditionally*, earlier in the same branch, to fetch the feed's
+following collection, so a document without it has already raised `KeyError`
+before the constructor runs. Nothing in a coverage report says so. Statements
+read 100% because the line executes on every call, and coverage.py emits **no
+branch arc at all for a conditional expression**, so the branch number is silent
+too. It was found only by enumerating the branch's conditional expressions and
+sitting down to write the absent-side test, at which point there was no absent
+side to write. This is the sub-project's clearest argument for why the
+present-and-absent discipline earns its cost: a `IfExp` is invisible to both
+halves of the coverage number, and the only thing that interrogates it is a
+human trying to construct both inputs.
+
+The corollary for anyone reading a branch percentage on this file: arcs are
+evidence about `if`/`elif` statements and `for` loops. They say nothing about
+conditional expressions, of which the three `actor_json_to_model` branches
+contain many. What covers those is one present-and-absent test pair per
+expression, and the way to check that a pair actually discriminates rather than
+merely executing both spellings is to mutate the guard in both directions.
+
+**Patching `time.sleep` is not a mock of the code under test.**
+`remote_object_to_json` and `verify_object_from_source` each retry twice, and
+each retry path sleeps for three seconds before the second attempt. Tests patch
+that out. Two separate bound names have to be patched, and missing the second is
+the trap:
+
+- `time.sleep` -- `app/activitypub/util.py` does `import time` and calls
+  `time.sleep(...)`, so patching the attribute on the shared `time` module
+  object reaches it.
+- `app.utils.sleep` -- `app/utils.py` does `from time import sleep`, which is a
+  *different* name bound in a different module and is not reached by patching
+  `time.sleep`. It matters because `get_request`, which both functions call, has
+  its own internal retry that sleeps a random 3-10 seconds. That retry nests
+  inside the outer one, so a single "transport error twice" case can chain up to
+  four unpatched sleeps.
+
+Both are standard-library patches: they replace the clock, not the function being
+tested. No branch is chosen, no return value is supplied, and no assertion is
+made against the patch. Every mutation on the retry structure is still caught,
+because what the tests assert on is the returned document. With both patched the
+network-function files run in about a second instead of tens of seconds.
+
+**Bare `except:` and mutation resistance -- what was actually observed here.**
+Sub-project 1c established the general hazard in `fixup_url` (see "A bare
+`except:` blocks mutation testing" above): a bare handler swallows respx's own
+`AllMockedAssertionError`, so a test whose whole claim is "this makes no request"
+passes under a mutation that makes the request. This sub-project looked for live
+instances in `remote_object_to_json` and `verify_object_from_source`, which have
+two bare `except:` clauses each. The honest result is mixed and worth stating
+precisely, because the general principle over-predicts here:
+
+- In both network functions, the bare handlers wrap only the `.json()` parse, not
+  the fetch. The fetch is guarded by `except httpx.HTTPError`, and respx's error
+  is an `AssertionError` subclass, so it is not caught there either -- nor by any
+  of `get_request`'s five handler clauses (`httpx.InvalidURL`, `ValueError`,
+  `httpx.ReadError`, `httpx.HTTPError`, `httpx.StreamError`). An unwanted fetch
+  therefore still errors the test, which is what makes "register no route and let
+  the suite-wide blocker prove no fetch happened" a valid proof in those two
+  files. Every mutation aimed at those regions was killed.
+- That is a property of how the tests were built, not of the handlers.
+  `remote_object_to_json`'s tests deliberately serve the *wrong* branch a body
+  that parses as valid JSON carrying a distinguishing marker, so an
+  over-broadening mutation is caught by an observably wrong return value rather
+  than by an accidental raise the bare handler could have absorbed. Shaped the
+  other way -- serving unparseable bodies -- the same mutations would have been
+  swallowed. The Feed task hit the mirror image of this and had to fix it: two
+  status-code guards mutated to `True` **survived** because the helpers served
+  JSON on non-200 responses, so the mutated code's `.json()` succeeded and
+  produced the same empty list the unmutated code produces by skipping the block.
+  Serving a plain-text body on any non-200 status killed both.
+- The live instance of the 1c hazard in this sub-project is elsewhere:
+  `make_image_sizes_async` wraps its `get_request` in a bare `except: pass`. Four
+  mutations across the Group and Feed tasks -- deleting the icon and image resize
+  guards -- could not be killed by any assertion, because the only observable
+  effect of those guards is the fetch and the bare handler eats the harness's
+  block. They are killed only by `http_mock`'s `assert_all_called=True` turning
+  "a registered route was never fetched" into a teardown error. That is a real
+  kill (the run is red), but it is the only signal available, and it is why the
+  Person task's negative caching test can assert which `File` rows exist but
+  cannot assert that no fetch happened.
+
+The rule to carry forward: when a bare `except:` is in scope, work out whether it
+wraps the *call* or only the *parse*, and check whether your own fixtures can
+raise inside it. Do not assume either way.
+
+**Nineteen defects, all reported and none fixed.** They are catalogued in
+`docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md` under
+"Sub-project 2a", with the call-site analysis that fixed each one's severity.
+Three of them share a shape named there as **partially-applied ingest**: a peer
+document commits a row and then raises, so the caller sees an exception rather
+than a return value while the row survives. If you touch ingestion in this file,
+read that group first.
+
+**A peer's document is not a peer's `server`.** Two of the analyses in this
+sub-project reversed a predicted severity, and both reversals came from asking
+where each compared string comes from rather than from reading the comparison.
+A weakness that callers make unreachable is a different thing from one a peer can
+drive, and the only way to tell them apart is to enumerate the call sites. Budget
+for that: on this file it was the most expensive and the most load-bearing part
+of every task.
+
+**The SELinux relabelling trap.** Rewriting a test file by `mv`-ing a rebuilt
+copy in from `/tmp` gives it the `user_tmp_t` label, and the test-runner
+container then cannot read it -- `PermissionError: [Errno 13]` on a file whose
+mode and owner are both correct. Write files in place, or relabel afterwards with
+`chcon --reference=<a file that works>`. The failure looks nothing like its cause.
+
 ## Every user-influenced redirect target
 
 `is_safe_redirect_target` is the origin check. Three things reach it, and between
