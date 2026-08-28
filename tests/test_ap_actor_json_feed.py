@@ -642,10 +642,18 @@ class TestOwnersCollection:
     - broadening that skip to `continue` unconditionally: every owner is
       dropped, so test_the_first_owner_becomes_the_feeds_user gets None.
     - deleting the `if not owner_users: return None` refusal, or narrowing it to
-      a condition no empty list meets: the three refusal tests get IndexError
-      back instead of None.
+      a condition no empty list meets: the three refusal tests stop getting
+      None. What they get instead is respx's AllMockedAssertionError for the
+      unregistered /following route, which the mutated code reaches before it
+      reaches the IndexError the unguarded index used to raise -- the refusal
+      sits ahead of that second fetch, which is exactly what the missing route
+      pins.
     - broadening that refusal to return unconditionally: every test in this
       file that expects a Feed gets None.
+
+    Counts, each from running one mutation at a time against this file: the two
+    directions of the skip fail 2 tests and 56, the two of the refusal fail 3
+    and 56.
 
     The two guards are separately pinned, which is why the rejected entry
     appears twice below -- once alongside an owner that does resolve, where
@@ -862,11 +870,21 @@ class TestRequiredFieldsMissing:
 
     Mutation. Deleting a handler and narrowing its exception type are the same
     mutation -- both let the KeyError escape again, and the tests it covers
-    fail on the uncaught exception rather than on an assertion. Broadening to
-    `except Exception` is not a distinct direction here: the KeyError is still
-    caught and these tests still pass. It is caught instead by
-    TestOwnersCollection, whose three tests require IndexError and
-    AttributeError to keep escaping the same constructor.
+    fail on the uncaught exception rather than on an assertion.
+
+    Broadening to `except Exception` is not a distinct direction here: the
+    KeyError is still caught and these tests still pass. NOTHING in the suite
+    catches it any more, and that is a consequence of fixing the owners defect
+    rather than an oversight in this file. It used to be caught by
+    TestOwnersCollection, whose three tests needed IndexError and AttributeError
+    to keep escaping the same constructor -- verified by running that mutation
+    against the commit before the fix, where exactly those three tests failed,
+    and against this one, where the whole file passes. Now that owner_users is
+    guaranteed non-empty and free of Nones before the constructor runs, no test
+    makes anything but a KeyError arise inside either try. The handlers are
+    still correct as narrowed; what is gone is the accident that was policing
+    them. The /following handler was never policed at all: the same broadening
+    applied to it survives at the earlier commit too.
     """
 
     @pytest.mark.parametrize('missing', ['preferredUsername', 'name', 'outbox',
