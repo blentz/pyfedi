@@ -69,6 +69,16 @@ so each half is tested with ONLY that spelling present.
 Every Community factory call here is preceded by make_instance(...) and
 make_user(None, ..., local=True), per tests/README.md and make_community's
 hardcoded instance_id=1 / user_id=1.
+
+Confirmed against this checkout via `coverage.json`'s per-file
+`missing_lines` / `missing_branches`, filtered to this function's span
+(427-504): both are empty. 100% line and branch coverage of
+find_flair_or_create, this file alone. (An earlier pass here mistakenly
+attributed a real gap at line 493 -- `flair_text =
+flair['preferredUsername']` in the create block's preferredUsername-alone
+path -- to the unrelated sibling function find_flair a few lines below;
+that gap is now closed by
+TestNotFoundCreatesNewFlair.test_no_match_creates_new_flair_from_preferred_username_alone.)
 """
 import pytest
 
@@ -168,6 +178,23 @@ class TestNotFoundCreatesNewFlair:
         assert result.community_id == community.id
         persisted = CommunityFlair.query.filter_by(community_id=community.id).one()
         assert persisted.id == result.id
+
+    def test_no_match_creates_new_flair_from_preferred_username_alone(self, app, db_session):
+        """No 'display_name' key at all, so the create block's `if
+        "display_name" in flair:` (line 490) is False and control falls to
+        `elif "preferredUsername" in flair:` (line 492) -- `flair_text =
+        flair['preferredUsername']` (line 493). Every other
+        preferredUsername-bearing test in this file either also supplies
+        display_name (which wins, landing on line 490 instead) or finds an
+        existing row and lands on the update block, not this one. Mutation
+        that fails this: deleting or negating this elif."""
+        _seed_owner_and_instance()
+        community = make_community('createfromusername')
+        result = find_flair_or_create({'preferredUsername': 'username only'}, community.id)
+        db.session.commit()
+        assert result is not None
+        assert result.flair == 'username only'
+        assert result.community_id == community.id
 
     def test_display_name_takes_priority_over_preferred_username_for_new_flair_text(self, app, db_session):
         """Same priority as the lookup and the update block (line 490 vs
@@ -320,31 +347,64 @@ class TestSuspectedMissingIdKeyCrash:
     that access, unlike every other optional-field read in this function.
     A flair dict with no 'id' key at all reaches this and raises KeyError.
 
-    Call-site analysis: actor_json_to_model's legacy 'lemmy:tagsForPosts'
-    handling for a Group actor (app/activitypub/util.py, the block guarded
-    by `'lemmy:tagsForPosts' in activity_json and ... "tag" not in
-    activity_json`) builds `flair_dict = {'display_name': flair['display_name']}`
-    plus optional text_color/background_color/blur_images -- NEVER an 'id'
-    key, unlike the sibling 'tag'/CommunityPostTag branch a few lines below
-    it, which does copy 'id' across when present. That block runs once per
-    entry in `activity_json['lemmy:tagsForPosts']`, calling
-    find_flair_or_create with the session it was itself given, and
-    SQLAlchemy autoflushes pending inserts before a query -- so two entries
-    in the SAME peer-supplied list sharing one display_name reach this
-    KeyError without needing a second activity or a second delivery: the
+    Call-site analysis (corrected after review -- an earlier pass wrongly
+    attributed this to actor_json_to_model; the trigger is a different
+    function): refresh_community_profile_task's legacy 'lemmy:tagsForPosts'
+    handling (app/activitypub/util.py, the block guarded by `if
+    len(community.flair) == 0` inside `'lemmy:tagsForPosts' in activity_json
+    and ... "tag" not in activity_json`) builds `flair_dict =
+    {'display_name': flair['display_name']}` plus optional
+    text_color/background_color/blur_images -- NEVER an 'id' key. Contrast
+    actor_json_to_model's OWN 'lemmy:tagsForPosts' handling a few hundred
+    lines later, which conditionally copies 'id' across (`if 'id' in flair:
+    flair_dict['id'] = flair['id']`) and so cannot hit this KeyError through
+    that key at all.
+
+    The two functions also differ in the session -- and therefore the
+    autoflush behaviour -- they call find_flair_or_create with, and that
+    difference is why the crash mechanism only holds in one of them.
+    refresh_community_profile_task takes its session from
+    get_task_session(), which returns a plain `sqlalchemy.orm.Session(bind=
+    db.engine)` (app/utils.py) with no autoflush override, so it defaults to
+    autoflush=True. actor_json_to_model's 'lemmy:tagsForPosts' block calls
+    find_flair_or_create with no session argument, defaulting to db.session
+    -- Flask-SQLAlchemy configured app-wide with
+    `session_options={"autoflush": False}` (app/__init__.py). Because
+    refresh_community_profile_task's session autoflushes, two entries in the
+    SAME peer-supplied 'lemmy:tagsForPosts' list sharing one display_name
+    reach this KeyError without needing a second activity or delivery: the
     first entry's call creates a CommunityFlair with ap_id=None (since
-    new_ap_id is None whenever 'id' is absent from flair_dict); the second
-    entry's call finds that just-created row by display_name, sees its
-    ap_id is still falsy, and crashes reading flair['id'] from a dict that
-    was never given one. actor_json_to_model itself has no try/except
-    around this loop, and neither does its caller create_actor_from_remote
-    (app/activitypub/actor.py) -- this task did not trace every caller of
-    actor_json_to_model up to whichever request or Celery task eventually
-    catches it, but the crash is at minimum an availability defect (that
-    Group actor's update fails) rather than an authentication or
-    authorization bypass, the same category as find_community's two
-    recorded KeyError/AttributeError defects in
+    new_ap_id is None whenever 'id' is absent from flair_dict) and it is
+    visible to the second entry's query via autoflush despite never being
+    explicitly flushed or committed; the second entry's call finds that
+    just-created row by display_name, sees its ap_id is still falsy, and
+    crashes reading flair['id'] from a dict that was never given one.
+    refresh_community_profile_task wraps its whole body in `try: ... except
+    Exception: session.rollback(); raise finally: session.close()`, so the
+    crash rolls back cleanly and closes the task's session rather than
+    leaking a broken transaction, then re-raises -- this task did not trace
+    which Celery layer above that ultimately catches the re-raised
+    exception, but the crash is at minimum an availability defect (that
+    community's periodic profile refresh fails) rather than an
+    authentication or authorization bypass, the same category as
+    find_community's two recorded KeyError/AttributeError defects in
     tests/test_ap_find_community.py.
+
+    Is this reachable from actor_json_to_model by some OTHER route, given
+    that its own 'lemmy:tagsForPosts' handling copies 'id' when present? Two
+    reasons say no, for its current call sites: first, actor_json_to_model
+    only reaches its tag-processing block when the Community row was JUST
+    newly inserted (the preceding `try: db.session.add(community);
+    db.session.commit() except IntegrityError: ... return ...` returns
+    immediately for an already-existing community, before the tag block),
+    so there is never a pre-existing, already-persisted CommunityFlair row
+    for that community_id for a name-based lookup to find. Second, even
+    within that one call, db.session's autoflush=False means a same-call
+    duplicate-name collision (the mechanism that works for
+    refresh_community_profile_task) does not expose an unflushed insert to
+    a later iteration's query -- so no in-loop trigger either, including in
+    the sibling 'tag'/CommunityPostTag branch (whose entries are copied
+    verbatim as flair_dict = flair and so could themselves lack 'id').
     """
 
     def test_missing_id_key_with_no_existing_ap_id_raises_keyerror(self, app, db_session):
