@@ -1007,6 +1007,62 @@ is described in full in section 8 below.
 | **D19** | **OPEN** | `actor_json_to_model`, Feed | the post-commit re-fetch guard protects nothing -- always true, and the statement after the block it guards dereferences the same value anyway |
 | **D20** | **OPEN** | `find_flair_or_create` | the update path writes the peer's flair name back **unstripped**, where the lookup and create paths both strip it; a peer sending a padded name gets one value on the first delivery and a different one on the second (see section 8) |
 
+**Correction to D13's status: `539f0b81` fixed half of it, and the guard it
+added raised on the other half.** The row above still reads `fixed 539f0b81`,
+per this table's convention that corrections are recorded under their rows
+rather than quietly applied — so read the row and this note together. D13 is
+**completed by `ed88341f`** on branch `fix-ingest-shape`, under separate owner
+authorisation.
+
+- **What `539f0b81` covered.** `if 'display_name' not in flair: continue` in
+  `actor_json_to_model`'s legacy `lemmy:tagsForPosts` loop. That turns away a
+  **dict missing the key** — the `KeyError` the row describes — and it was
+  reviewed twice and marked fixed on that basis.
+- **What it missed.** Every entry that is not a dict at all. `'display_name'
+  not in 5` is itself `TypeError: argument of type 'int' is not iterable`, so
+  the guard *raised on the case it was meant to catch*; and for a string the
+  same expression is a legal substring test, so an entry like
+  `'{"display_name": "Doubled"}'` passed the guard and died one line later on
+  `TypeError: string indices must be integers`. Both were reproduced against
+  the code as `539f0b81` left it: the exception escaped `actor_json_to_model`
+  with the `Community` row already committed and no flair — the
+  partially-applied ingest unchanged. So the *shape* survived its own fix.
+- **What completes it.** `if not isinstance(flair, dict) or 'display_name' not
+  in flair:`, matching D26's guard in `refresh_community_profile_task` and
+  D30's in the `tag` loop one arm above. The asymmetry was the bug: three loops
+  doing the same job, one of them guarded differently.
+- **Why this took a second pass to notice.** A compound guard's two halves can
+  both look exercised while one is vacuous for the chosen data — D30 hit this
+  first, with string entries for which the membership half alone sufficed. The
+  completing tests use a string that *contains* `display_name` (only
+  `isinstance` refuses it), an integer, and a dict missing the key (only
+  membership refuses it), so each half is killed on its own. All four mutations
+  — drop either half, delete the guard, broaden to `if True:` — were run.
+
+The general lesson, and the reason this is filed as a correction rather than a
+tidy-up: **a membership test is not a type test.** `KEY not in entry` is a call
+into `entry`, so using it as the guard against a malformed `entry` is circular
+— it raises for a non-container and silently answers the wrong question for a
+string.
+
+**The same gap was searched for in the rest of the module and no third instance
+was found.** After `ed88341f`, every `KEY not in X` where `X` is peer-supplied:
+
+```bash
+grep -nE "^ +(el)?if .*(\"|')[A-Za-z:_]+(\"|') not in " app/activitypub/util.py
+```
+
+That prints six lines. Three are the three flair-loop guards, and all three now
+carry `isinstance`; a fourth, `refresh_community_profile_task`'s outer
+`"tag" not in activity_json` test, is a membership test on the *document*. The
+remaining two — `actor_json_to_model`'s opening `'type' not in activity_json`
+and `process_report`'s `'summary' not in request_json` — are guards on a whole
+request document rather than on an element of a peer-supplied *list*, so the
+malformed value is one the caller supplies, not one a peer can vary inside an
+otherwise well-formed document. **Reported, not fixed**, per this task's scope:
+they are a weaker version of the same shape and would need their own
+authorisation.
+
 The Status column was derived from git rather than from the fixing sub-project's
 prose ledger, by listing every commit on `fix-ap-ingest-defects` that touched the
 module and reading each one's hunk headers, which carry the enclosing function
