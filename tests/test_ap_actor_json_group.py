@@ -1108,6 +1108,36 @@ class TestNewStylePostFlair:
         community = actor_json_to_model(_group('memes'), '!memes', PEER)
         assert community.flair == []
 
+    def test_a_tag_entry_without_a_type_is_skipped_and_the_rest_ingest(self, app, db_session):
+        """CHARACTERISATION of the current defect."""
+        peer_instance(PEER)
+        document = _group('memes', fields={'tag': [
+            {'type': 'CommunityPostTag', 'id': f'https://{PEER}/c/memes/tag/1',
+             'preferredUsername': 'Discussion'},
+            {'id': f'https://{PEER}/c/memes/tag/2', 'preferredUsername': 'Nameless'},
+            {'type': 'CommunityPostTag', 'id': f'https://{PEER}/c/memes/tag/3',
+             'preferredUsername': 'Meta'},
+        ]})
+        with pytest.raises(KeyError):
+            actor_json_to_model(document, '!memes', PEER)
+        assert db.session.query(Community).count() == 1
+        assert db.session.query(CommunityFlair).count() == 0
+
+    def test_a_tag_entry_that_is_not_an_object_is_skipped_and_the_rest_ingest(self, app, db_session):
+        """CHARACTERISATION of the current defect."""
+        peer_instance(PEER)
+        document = _group('memes', fields={'tag': [
+            {'type': 'CommunityPostTag', 'id': f'https://{PEER}/c/memes/tag/1',
+             'preferredUsername': 'Discussion'},
+            'CommunityPostTag',
+            {'type': 'CommunityPostTag', 'id': f'https://{PEER}/c/memes/tag/3',
+             'preferredUsername': 'Meta'},
+        ]})
+        with pytest.raises(TypeError):
+            actor_json_to_model(document, '!memes', PEER)
+        assert db.session.query(Community).count() == 1
+        assert db.session.query(CommunityFlair).count() == 0
+
 
 class TestLegacyPostFlair:
     """`elif 'lemmy:tagsForPosts' in activity_json and isinstance(..., list)`,
