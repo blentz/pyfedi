@@ -70,14 +70,16 @@ Every Community factory call here is preceded by make_instance(...) and
 make_user(None, ..., local=True), per tests/README.md and make_community's
 hardcoded instance_id=1 / user_id=1.
 
-Confirmed against this checkout via `coverage.json`'s per-file
-`missing_lines` / `missing_branches`, filtered to this function's span
-(427-504): both are empty. 100% line and branch coverage of
-find_flair_or_create, this file alone. (An earlier pass here mistakenly
-attributed a real gap at line 493 -- `flair_text =
-flair['preferredUsername']` in the create block's preferredUsername-alone
-path -- to the unrelated sibling function find_flair a few lines below;
-that gap is now closed by
+Coverage can be re-derived at any time with `coverage.json`'s per-file
+`missing_lines` / `missing_branches`, restricted to find_flair_or_create's
+own statements (its body ends where the sibling find_flair's `def` begins,
+a few lines below) rather than read off the whole module. Doing so against
+this file alone currently reports both empty for find_flair_or_create's
+statements. (An earlier pass here mistakenly attributed a real gap -- the
+create block's preferredUsername branch, `flair_text =
+flair['preferredUsername']`, reached only when no display_name key is
+present -- to the unrelated sibling function find_flair a few lines below
+it; that gap is now closed by
 TestNotFoundCreatesNewFlair.test_no_match_creates_new_flair_from_preferred_username_alone.)
 """
 import pytest
@@ -180,14 +182,14 @@ class TestNotFoundCreatesNewFlair:
         assert persisted.id == result.id
 
     def test_no_match_creates_new_flair_from_preferred_username_alone(self, app, db_session):
-        """No 'display_name' key at all, so the create block's `if
-        "display_name" in flair:` (line 490) is False and control falls to
-        `elif "preferredUsername" in flair:` (line 492) -- `flair_text =
-        flair['preferredUsername']` (line 493). Every other
-        preferredUsername-bearing test in this file either also supplies
-        display_name (which wins, landing on line 490 instead) or finds an
-        existing row and lands on the update block, not this one. Mutation
-        that fails this: deleting or negating this elif."""
+        """No 'display_name' key at all, so the create block's
+        display_name check is False and control falls to its
+        preferredUsername elif -- flair_text is set from
+        flair['preferredUsername']. Every other preferredUsername-bearing
+        test in this file either also supplies display_name (which wins,
+        taking the display_name branch instead) or finds an existing row
+        and lands on the update block, not this one. Mutation that fails
+        this: deleting or negating this elif."""
         _seed_owner_and_instance()
         community = make_community('createfromusername')
         result = find_flair_or_create({'preferredUsername': 'username only'}, community.id)
