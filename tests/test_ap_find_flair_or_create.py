@@ -43,21 +43,23 @@ Enumeration, derived fresh against this checkout with:
     "
 
 Output (both the 'found' update block and the 'not found' create block carry
-their own copy of each pair -- six lines, not three, because each of the
-three genuine spelling pairs appears twice, once per block; two more lines
+their own copy of each pair -- six rows, not three, because each of the
+three genuine spelling pairs appears twice, once per block; two more rows
 are the id-lookup guard and the preferredUsername/display_name lookup
-priority, which are shape-alike but not spelling pairs):
+priority, which are shape-alike but not spelling pairs). The script above
+prints each pair's line number as `node.lineno`; that number is omitted
+below since it moves on the next edit -- re-run the command to see it:
 
-    line 430: if 'id' ... elif None                            -- ap_id lookup guard
-    line 436: if 'preferredUsername' ... elif 'display_name'    -- lookup priority (not a spelling pair)
-    line 445: if 'text_color' ... elif 'textColor'              -- update block
-    line 450: if 'background_color' ... elif 'backgroundColor'  -- update block
-    line 455: if 'blur_images' ... elif 'blurImages'             -- update block
-    line 460: if 'display_name' ... elif 'preferredUsername'    -- update block: which name wins
-    line 475: if 'text_color' ... elif 'textColor'              -- create block
-    line 480: if 'background_color' ... elif 'backgroundColor'  -- create block
-    line 485: if 'blur_images' ... elif 'blurImages'             -- create block
-    line 490: if 'display_name' ... elif 'preferredUsername'    -- create block: which name wins
+    if 'id' ... elif None                            -- ap_id lookup guard
+    if 'preferredUsername' ... elif 'display_name'    -- lookup priority (not a spelling pair)
+    if 'text_color' ... elif 'textColor'              -- update block
+    if 'background_color' ... elif 'backgroundColor'  -- update block
+    if 'blur_images' ... elif 'blurImages'             -- update block
+    if 'display_name' ... elif 'preferredUsername'    -- update block: which name wins
+    if 'text_color' ... elif 'textColor'              -- create block
+    if 'background_color' ... elif 'backgroundColor'  -- create block
+    if 'blur_images' ... elif 'blurImages'             -- create block
+    if 'display_name' ... elif 'preferredUsername'    -- create block: which name wins
 
 Three genuine dual-spelling property pairs, each needing both halves tested
 in BOTH the update block and the create block (six coverage points, not
@@ -118,8 +120,9 @@ class TestApIdLookup:
 class TestPreferredUsernameLookup:
     def test_found_by_preferred_username_when_no_id_key_present(self, app, db_session):
         """No 'id' key at all -- the ap_id branch is skipped entirely
-        (existing_flair stays None from the else at line 433), so this
-        exercises the preferredUsername branch in isolation. ap_id is
+        (existing_flair stays None, since the ap_id lookup guard's else
+        runs when no 'id' key is present), so this exercises the
+        preferredUsername branch in isolation. ap_id is
         pre-set on the factory row so the ap_id-backfill block later in the
         function (which reads flair['id'] unconditionally) is skipped --
         see TestSuspectedMissingIdKeyCrash for what happens when it is not."""
@@ -199,8 +202,9 @@ class TestNotFoundCreatesNewFlair:
         assert result.community_id == community.id
 
     def test_display_name_takes_priority_over_preferred_username_for_new_flair_text(self, app, db_session):
-        """Same priority as the lookup and the update block (line 490 vs
-        492): when creating, display_name names the new row over
+        """Same priority as the lookup and the update block: in the create
+        block, the display_name check is the `if` and the preferredUsername
+        check is its `elif`, so display_name names the new row over
         preferredUsername when both are present. Mutation that fails this:
         swapping which branch is the `if` and which is the `elif`."""
         _seed_owner_and_instance()
@@ -235,9 +239,12 @@ class TestSessionParameter:
 
 
 class TestSpellingPairsOnTheUpdateBlock:
-    """The found/update block (lines 445-463). Each of the two tests below
-    supplies only one spelling per property, alternated between the two
-    tests, so every if AND every elif in this block is independently
+    """The found/update block -- the branch taken when an existing
+    CommunityFlair row was matched by the lookup chain, which updates that
+    row's text_color/background_color/blur_images from whichever spelling
+    is present. Each of the two tests below supplies only one spelling per
+    property, alternated between the two tests, so every if AND every elif
+    in this block is independently
     exercised and asserted -- not merely covered by branch coverage's
     weaker both-outcomes-of-the-whole-if bar.
 
@@ -276,11 +283,13 @@ class TestSpellingPairsOnTheUpdateBlock:
 
 
 class TestSpellingPairsOnTheCreateBlock:
-    """The not-found/create block (lines 475-491) -- the create-path
-    counterpart of the class above. Coverage.py tracks these as separate
-    branches from the update block's identically-named guards, since they
-    are different line numbers; a test set that only exercised the update
-    block would leave this block's elifs uncovered."""
+    """The not-found/create block -- the branch taken when no existing row
+    was matched, which builds a new CommunityFlair from whichever spelling
+    is present; the create-path counterpart of the class above. Coverage.py
+    tracks these as separate branches from the update block's
+    identically-named guards, since they are a distinct set of if/elif
+    statements in the function body; a test set that only exercised the
+    update block would leave this block's elifs uncovered."""
 
     def test_snake_case_spellings_are_used_for_the_new_flair(self, app, db_session):
         _seed_owner_and_instance()
@@ -312,8 +321,8 @@ class TestSpellingPairsOnTheCreateBlock:
 
 
 class TestApIdBackfill:
-    """The block that runs only when a row was FOUND (not created) and it
-    has no ap_id yet (lines 465-469). Reached via the preferredUsername or
+    """The backfill block -- runs only when a row was FOUND (not created)
+    and it has no ap_id yet. Reached via the preferredUsername or
     display_name lookups, since a row found via the ap_id lookup already
     has one."""
 
