@@ -177,18 +177,27 @@ class TestIdHostMatchesServerGuard:
     Both sides of the comparison go through host_of, which is what makes it
     symmetric: `server` is an authority and may carry a port, so comparing it
     raw against a host would reintroduce the same class of mistake.
-    test_server_carrying_a_port_matches_an_id_on_that_port is the test that
-    fails if either side stops being normalised.
 
-    Mutation, both directions. Deleting the guard, or widening it to `if
-    False`, fails the three rejection tests and says nothing about the
-    acceptance tests, whose documents the deleted code never refused.
-    Narrowing it to `if True` fails the three acceptance tests and says nothing
-    about the rejection tests. Dropping the '//' from the `server` side makes
-    host_of return '' for every server -- urlparse reads an authority-less
-    string as a path -- so every document is refused and the acceptance tests
-    fail. Comparing `urlparse(...).netloc` instead of `hostname` on both sides
-    fails only test_server_carrying_a_port_matches_an_id_on_that_port.
+    Mutation, both directions, each measured against this file:
+
+      deleted, and widened to `if False`  -- 3 failures, the three rejection
+        tests. Neither says anything about the acceptance tests, whose
+        documents the removed code never refused.
+      narrowed to `if True`               -- 42 failures. Every other test in
+        this file builds its document on the server's own host, so refusing
+        everything takes the whole file down with the acceptance tests.
+      the '//' dropped from the server side, `host_of(server)` -- 42 failures,
+        the same set. urlparse reads an authority-less string as a path, so
+        host_of returns '' for every server and nothing can match it.
+      `urlparse(...).netloc` on both sides instead of `hostname` -- 1 failure,
+        test_upper_cased_host_in_the_id_is_accepted. netloc keeps the port on
+        both sides, so the port test below survives it; netloc does not
+        lowercase, which is what the upper-cased test catches.
+      `host_of(id) != server.lower()`, comparing a host against a raw
+        authority -- 1 failure, and it is the port test below. That mutation
+        is the reason that test exists: it is the only one whose server
+        carries a port, so it is the only one where a host and an authority
+        differ.
     """
 
     def test_id_on_a_different_host_is_rejected(self, app, db_session):
