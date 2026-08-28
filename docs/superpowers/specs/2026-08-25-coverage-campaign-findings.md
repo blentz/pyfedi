@@ -949,7 +949,19 @@ by that patch. It matters because `get_request` has its own internal retry
 sleeping a random 3-10 seconds, nested inside the outer one, so a single "transport
 error twice" case can chain up to four unpatched sleeps.
 
-### 6. The defect register: 20 found, 20 reported, 0 fixed
+### 6. The defect register: 20 found — 15 fixed, 5 still open
+
+**Read this line first: five of the twenty are still true of the code.** They are
+**D6, D8, D18, D19 and D20**. The other fifteen were fixed on branch
+`fix-ap-ingest-defects` (sub-project 2c, section "Sub-project 2c" below) and each
+carries its commit in the Status column of the table. If you are looking for work
+here, the five open rows are the whole list; the fifteen fixed rows are history
+and re-investigating one is wasted effort.
+
+The two that are open for reasons other than "nobody got to them yet": D8 is
+cosmetic and nothing triggers it, and D18 and D19 are dead code, whose removal is
+a behaviour-preserving edit nobody has authorised. D6 and D20 are genuine
+unfixed defects.
 
 Derived by extracting each task report's own defects section and counting its
 entries, excluding the two entries those reports themselves label "(Observation,
@@ -972,28 +984,44 @@ D20 is not in that count and cannot be: it was found during the whole-branch
 review that closed the sub-project, after the last task report was written. It
 is described in full in section 8 below.
 
-| # | function | defect |
-|---|---|---|
-| D1 | `ensure_domains_match` | compares `netloc`, not `hostname`; falsely refuses a peer inconsistent about its port |
-| D2 | `find_community` | `KeyError` reading `type` from an object that has none; reachable from the `Add`/`Remove` inbox handlers and from the search-driven remote post resolver |
-| D3 | `find_community` | `AttributeError` calling `.startswith` on a non-string element of a `cc`/`to`/`audience`/`target` list; reachable from every call site, including the one guarded against D2 |
-| D4 | `verify_object_from_source` | the same `netloc`-not-`hostname` comparison, in both guards, with a worse consequence (see section 1) |
-| D5 | `verify_object_from_source` | two bare `except:` clauses around the JSON parse; they will swallow any error `.json()` raises, including a programming error inside httpx |
-| D6 | `verify_object_from_source` | the signed-retry branch dereferences the `Site` row without a null check, so a missing row raises `AttributeError` instead of returning `None` like every other failure path |
-| D7 | `verify_object_from_source` | ten distinct refusal paths collapse into one undifferentiated log message |
-| D8 | `verify_object_from_source` | `object` shadows the builtin throughout the function body (cosmetic) |
-| D9 | `find_flair_or_create` | ap_id backfill reads `flair['id']` unguarded -- **partially-applied ingest** via `refresh_community_profile_task` (see section 2) |
-| D10 | `actor_json_to_model` | the `server` gate is a substring test, not a host comparison (see section 1) |
-| D11 | `actor_json_to_model` | that same gate is case-sensitive, so an upper-cased host in a peer's own id is rejected |
-| D12 | `actor_json_to_model`, Group | the branch has no `except KeyError` at all, unlike Person/Service; five unconditional keys raise straight out of the function, and its inbox expression has no fallback where Person's ends in an empty string |
-| D13 | `actor_json_to_model`, Group | legacy flair entry without `display_name` -- **partially-applied ingest** (see section 2) |
-| D14 | `actor_json_to_model`, Feed | the branch has no `except KeyError` either; same asymmetry as D12 |
-| D15 | `actor_json_to_model`, Feed | the first owner is indexed out of the owners list with no guard: three distinct crashes (non-200 collection, empty collection, an entry the resolver rejects), all before the commit |
-| D16 | `actor_json_to_model`, Feed | the following collection's rejected entries -- **partially-applied ingest** (see section 2) |
-| D17 | `actor_json_to_model`, Feed | a document with neither `attributedTo` nor `moderators` sends `None` into `get_request`, which raises `httpx.HTTPError` out of the function; the failure's exception *type* differs depending on whether `DEBUG` is on |
-| D18 | `actor_json_to_model`, Feed | `ap_following_url`'s else arm is dead code (see section 3) |
-| D19 | `actor_json_to_model`, Feed | the post-commit re-fetch guard protects nothing -- always true, and the statement after the block it guards dereferences the same value anyway |
-| D20 | `find_flair_or_create` | the update path writes the peer's flair name back **unstripped**, where the lookup and create paths both strip it; a peer sending a padded name gets one value on the first delivery and a different one on the second (see section 8) |
+| # | status | function | defect |
+|---|---|---|---|
+| D1 | fixed `9666112f` | `ensure_domains_match` | compares `netloc`, not `hostname`; falsely refuses a peer inconsistent about its port |
+| D2 | fixed `9aa44e45` | `find_community` | `KeyError` reading `type` from an object that has none; reachable from the `Add`/`Remove` inbox handlers and from the search-driven remote post resolver |
+| D3 | fixed `9aa44e45` | `find_community` | `AttributeError` calling `.startswith` on a non-string element of a `cc`/`to`/`audience`/`target` list; reachable from every call site, including the one guarded against D2 |
+| D4 | fixed `2a8a0a98` | `verify_object_from_source` | the same `netloc`-not-`hostname` comparison, in both guards, with a worse consequence (see section 1) |
+| D5 | fixed `2a8a0a98` | `verify_object_from_source` | two bare `except:` clauses around the JSON parse; they will swallow any error `.json()` raises, including a programming error inside httpx |
+| **D6** | **OPEN** | `verify_object_from_source` | the signed-retry branch dereferences the `Site` row without a null check, so a missing row raises `AttributeError` instead of returning `None` like every other failure path |
+| D7 | fixed `2a8a0a98` | `verify_object_from_source` | ten distinct refusal paths collapse into one undifferentiated log message |
+| **D8** | **OPEN** | `verify_object_from_source` | `object` shadows the builtin throughout the function body (cosmetic) |
+| D9 | fixed `539f0b81` | `find_flair_or_create` | ap_id backfill reads `flair['id']` unguarded -- **partially-applied ingest** via `refresh_community_profile_task` (see section 2) |
+| D10 | fixed `43cba4b2` | `actor_json_to_model` | the `server` gate is a substring test, not a host comparison (see section 1) |
+| D11 | fixed `43cba4b2` | `actor_json_to_model` | that same gate is case-sensitive, so an upper-cased host in a peer's own id is rejected |
+| D12 | fixed `07089cf1` | `actor_json_to_model`, Group | the branch has no `except KeyError` at all, unlike Person/Service; five unconditional keys raise straight out of the function, and its inbox expression has no fallback where Person's ends in an empty string |
+| D13 | fixed `539f0b81` | `actor_json_to_model`, Group | legacy flair entry without `display_name` -- **partially-applied ingest** (see section 2) |
+| D14 | fixed `07089cf1` | `actor_json_to_model`, Feed | the branch has no `except KeyError` either; same asymmetry as D12 |
+| D15 | fixed `e283764c` | `actor_json_to_model`, Feed | the first owner is indexed out of the owners list with no guard: three distinct crashes (non-200 collection, empty collection, an entry the resolver rejects), all before the commit |
+| D16 | fixed `539f0b81` | `actor_json_to_model`, Feed | the following collection's rejected entries -- **partially-applied ingest** (see section 2) |
+| D17 | fixed `e283764c` | `actor_json_to_model`, Feed | a document with neither `attributedTo` nor `moderators` sends `None` into `get_request`, which raises `httpx.HTTPError` out of the function; the failure's exception *type* differs depending on whether `DEBUG` is on |
+| **D18** | **OPEN** | `actor_json_to_model`, Feed | `ap_following_url`'s else arm is dead code (see section 3) |
+| **D19** | **OPEN** | `actor_json_to_model`, Feed | the post-commit re-fetch guard protects nothing -- always true, and the statement after the block it guards dereferences the same value anyway |
+| **D20** | **OPEN** | `find_flair_or_create` | the update path writes the peer's flair name back **unstripped**, where the lookup and create paths both strip it; a peer sending a padded name gets one value on the first delivery and a different one on the second (see section 8) |
+
+The Status column was derived from git rather than from the fixing sub-project's
+prose ledger, by listing every commit on `fix-ap-ingest-defects` that touched the
+module and reading each one's hunk headers, which carry the enclosing function
+name:
+
+```bash
+git log --reverse --format='COMMIT %h %s' -p -U0 blentz..HEAD -- app/activitypub/util.py \
+  | grep -E '^COMMIT |^@@'
+```
+
+That prints eight commits, one of which (`7d74fd51`) is a docstring correction in
+`host_of` and fixes no register entry; the other seven are the fifteen fixes.
+Where one commit closes several rows it is because the defects share a function
+and were briefed as one task -- D4/D5/D7 in `verify_object_from_source`, D2/D3 in
+`find_community`, D9/D13/D16 across the three partially-applied-ingest sites.
 
 Two qualifications on how this register is often summarised. **They are not all
 peer-triggerable.** D8 is cosmetic and nothing triggers it; D6 needs a missing
@@ -1002,6 +1030,34 @@ other seventeen are driven by a peer-supplied document. **And numbering is not
 stable across summaries** -- the Task 9 brief refers to the `ap_following_url`
 finding as "defect 17", which is what you get if you drop the cosmetic D8. It is
 D18 here. Cite these by function and behaviour, not by ordinal.
+
+That second warning came true, and it is worth reading the way it happened.
+Sub-project 2c found five new defects across its tasks and its ledger
+provisionally called them D21–D25; sub-project 2b, running its own closing task,
+committed D21–D24 for the `netloc` reads. Two tasks each reached for "the next
+free number" and got the same answer, because each was reading a register that
+did not yet contain the other's entries. The committed numbers won and the five
+became D25–D29.
+
+**How to allocate a number so this cannot happen again.** The collision was not
+caused by careless counting; it was caused by there being no single place that
+says which numbers are taken. So there is one now, and it is this file:
+
+- **A defect number exists only once it is a committed row in this document.**
+  A number written in a task report, a brief or a working ledger is a proposal,
+  not an allocation. Two proposals can hold the same number without either being
+  wrong.
+- **Allocate at the point of writing the row, not at the point of finding the
+  defect** -- read the highest number in the file, take the next one, and commit
+  the row in the same change. The window in which a number can collide is then
+  the length of one commit rather than the length of a sub-project.
+- **Tasks that find defects report them by function and behaviour and leave the
+  numbering to whichever task files them.** That is the same rule as "cite by
+  function and behaviour", applied to the writing side rather than the reading
+  side.
+- **The allocation ledger, kept current:** D1–D20 sub-project 2a, D21–D24
+  sub-project 2b, D25–D29 sub-project 2c. **Next free number: D30.** If you take
+  it, say so here in the change that takes it.
 
 Two entries in the reports were deliberately **not** counted as defects, and are
 recorded here so nobody re-files them: the Group and Feed branches both ignore
@@ -1419,6 +1475,130 @@ trust-boundary bypass, and that conclusion is probe-backed.
 Adjacent, filed but explicitly *not* the same defect: the `ovo.st` carve-out and
 the `nodebb=True` bypass of C1, and the `OrderedCollection` re-derivation of
 `uri_domain` — all described in section 6, all reading-only.
+
+## Sub-project 2c: fixing fifteen of sub-project 2a's twenty defects
+
+`docs/superpowers/plans/2026-08-28-fix-activitypub-ingest-defects.md`, on branch
+`fix-ap-ingest-defects`. Ten tasks: seven that changed production code, one that
+added a read-only audit command, and two documentation tasks (2b's register above
+is one of them, and this section is the other). Fifteen of sub-project 2a's
+twenty defects are fixed and carry their commits in that sub-project's register;
+five are still open and are named at the top of it.
+
+Sub-project 2a deliberately fixed nothing, on the ground that fixing untested
+code is how a coverage campaign starts producing defects. 2c is the other half of
+that bargain: every defect it fixed was already pinned by a characterisation test
+written in 2a, so every fix began from a known-red state rather than from an
+argument.
+
+### 1. Five new defects found while fixing the old ones — D25–D29
+
+None of these is fixed. Authorisation covered the fifteen defects in the plan and
+none of these five is one of them, so they are registered rather than repaired —
+the same rule 2a and 2b followed. Each was found by a task working on something
+adjacent, and each was verified against source again when it was filed.
+
+| # | function | defect | how it was found |
+|---|---|---|---|
+| D25 | `actor_json_to_model`, Person/Service | the branch stores `ap_domain=server` with the peer's authority unlowered, where the Group and Feed branches both store `server.lower()`. With `extract_domain_and_actor` also returning its authority unlowered, a legitimate `User` row can end up with an `ap_domain` that differs from `ap_profile_id`'s host in case alone — `ap_profile_id` is lowercased on the same constructor call. | the cross-host audit command (Task 4), which needs a case fold in its comparison purely because of this; without the fold it reports honest peers as smuggling suspects |
+| D26 | `refresh_community_profile_task` | the unguarded `flair['display_name']` read that D13 registered in `actor_json_to_model` appears a **second** time, in this task's own legacy `lemmy:tagsForPosts` loop, with the same partially-applied-ingest shape: the task commits the refreshed community profile and only then walks the peer's flair entries, so an entry missing the key aborts the walk after the commit has already landed. No test file calls this function at all — the two that name it do so only in docstrings. | fixing D13 one caller over (Task 5) |
+| D27 | `find_flair_or_create` | under `autoflush=False`, two entries in one peer-supplied list sharing a `display_name` create two `CommunityFlair` rows with the same name for the same community, because neither call can see the other's pending insert. Present-not-desired behaviour, pinned by a test rather than left to be rediscovered. | the D9 autoflush investigation (Task 5), whose two sessions behave differently for exactly this reason |
+| D28 | `find_community` | the Video block's `attributedTo` walk reads `a['type']` and then `a['id']` with no guard, so a malformed element raises `KeyError`, or `TypeError` if it is neither a string nor a dict. A third crash site in this function, outside both D2 and D3 and untouched by their fixes. | fixing D2 and D3 in the same function (Task 6) |
+| D29 | `actor_json_to_model`, Feed | the inbox expression ends at `activity_json['inbox']` where Person/Service and Group both end in an empty-string fallback. A Feed document carrying neither `endpoints` nor `inbox` is therefore refused where the other two branches accept it and store `''`. D12's fix gave Group the fallback; the Feed branch was outside that defect's scope, so what used to be a two-way asymmetry is now a three-way one. | adding the Feed branch's `except KeyError` (Task 7), which turned this from a crash into a silent refusal and so made it visible |
+
+D25, D26, D28 and D29 are all reachable from a peer-supplied document. D27 needs
+only a peer sending two flair entries with the same name.
+
+### 2. The floor after the fixes: it rose, but not by a whole point
+
+Measured on the full suite, green at **2566 passed, 3 skipped, 0 failed**:
+
+```bash
+./run_tests.sh tests/ -q --cov=app --cov-report=json
+podman-compose -f compose.test.yaml exec -T -w /app test-runner \
+  python tests/check_coverage_floors.py coverage.json coverage_floors.ini
+```
+
+`percent_covered` for `app/activitypub/util.py` came back **35.653153153153156**,
+against 35.06818181818182 when sub-project 2a set the floor. The checker reports
+all four module floors met. Rounded down that is **35** — which is the floor
+already in `coverage_floors.ini`, so the floor **holds and is not raised**. The
+file is unchanged, and that is the honest outcome rather than a missed step: a
+ratchet only moves when a whole point has been earned, and 0.58 of a point has.
+
+As in section 7 of sub-project 2a, `percent_covered` is the **blended
+statement+branch figure** — `.coveragerc` sets `branch = True`, so it is blended
+whether or not `--cov-branch` appears on the command line, and this run is
+1583 of 4440: 1068 of 2846 statements plus 515 of 1594 branches. Anyone comparing
+35.65 against a statement column will conclude, wrongly, that the floor is
+miscalibrated.
+
+**The direction is the thing worth checking, and it is the right one.** These
+fixes added guarded branches, and a guard whose new arm no test exercises pushes
+the blended figure *down*. The figure went up, so no guard went in untested.
+
+The floor was exercised anyway, because a floor nobody has seen fail is not a
+floor: set to 36 against this run's `coverage.json` the checker exits 1 with
+`app/activitypub/util.py: 35.65% is below its floor of 36.00%`, and back at 35 it
+exits 0 with `All 4 module floors met.` The file was returned to its committed
+contents; all four floors, including the two 100s and `app/utils.py`'s 73, are
+untouched.
+
+### 3. Every test failure this sub-project did not predict
+
+Two, across ten tasks — plus one notable failure that was predicted and did not
+arrive, which turned out to matter more than either.
+
+1. **Task 7, and it found D29.** The brief listed the tests that adding
+   `except KeyError` to the Group and Feed branches would flip. The list was one
+   short: the Feed file's `test_neither_endpoints_nor_inbox_raises_key_error`
+   flipped too. It meant the Feed inbox read happens *inside* the `Feed(...)`
+   constructor call, so it sits inside the new `try` and the new handler catches
+   it. The implementer investigated the extra flip instead of adjusting the
+   expected count, which is what turned a miscounted brief into D29 above.
+2. **Task 8, an exception type rather than a test name.** The brief said D15
+   "raises `IndexError`". Two of its three crashes do; the case where the
+   resolver rejects the first owner raises `AttributeError` instead
+   (`'NoneType' object has no attribute 'id'`). A pinning test written to the
+   brief's `pytest.raises(IndexError)` would have failed on that case. It meant
+   the brief named one of two failure modes; both needed guarding, and both were
+   guarded.
+3. **The inverse, in Task 2, and it was the more informative of the three.**
+   Changing `verify_object_from_source` to return a tuple was predicted to fail
+   all 28 tests in its file. It failed 25. The three that passed did so because
+   `is not None` is true of a tuple — their assertions had stopped meaning
+   anything the moment the return type changed, and would have gone on passing
+   forever. All three were strengthened. A test that fails to fail is the same
+   defect as this campaign's dominant failure mode, seen from the other side, and
+   a signature change is an unusually good detector for it.
+
+Everything else this sub-project's briefs got wrong — three stale enumerations, a
+mutation table that had been reasoned rather than run, a `netloc` count that was
+correct when derived and stale when used, two mutation directions that turned out
+to be one — was found by re-deriving a claim, not by a red test. That is the
+campaign's standing lesson restated: the suite does not report a false
+explanation, so nothing but re-derivation will.
+
+### 4. Three test gaps found but not filled
+
+Each was found by a reviewer, is cheap, and is not held by anything in the suite.
+They were carried to the whole-branch review; they are written down here so they
+survive it not picking them up.
+
+1. **Two handler-breadth pinning tests, one per Feed handler** (about twenty
+   lines, no new fixtures). Broadening the Feed constructor's `except KeyError`
+   to `except Exception` failed three tests before D15 was fixed and fails none
+   after — fixing D15 removed the only thing policing that handler's breadth.
+   The `/following` handler's equivalent broadening was never policed at any
+   point. Both handlers are correct as written; what is gone is the evidence.
+   Each test should send a document that raises a non-`KeyError` inside the
+   `try` and assert the exception propagates with `Feed.count() == 0`.
+2. **A test for the `moderators: null` path** — three lines in `TestOwnersUrl`.
+   D17's fix carries a comment claiming to cover it and nothing pins it.
+3. **`find_community` given a bad addressing element followed by a good one.**
+   Written during Task 6's review, passing, never committed. It is the
+   difference between "skips the bad entry" and "stops at the bad entry", and
+   only one of those is what the D3 fix claims.
 
 ## Ratchet gotchas
 
