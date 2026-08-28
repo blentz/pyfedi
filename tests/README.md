@@ -85,6 +85,24 @@ The dated plan documents under `docs/superpowers/plans/` still quote the old
 pass counts of the day attached, so they are left alone -- the same rule this
 file applies to any other citation anchored to a past reading.
 
+## Auditing existing rows for a cross-host `ap_profile_id`
+
+`app/cli.py`'s `find_cross_host_actors(session=None)` reports `User`, `Community`
+and `Feed` rows whose `ap_profile_id` host disagrees with the row's own
+`ap_domain`. It is read-only: it only queries and returns a list of
+`(model_name, row_id, ap_profile_id, ap_domain)` tuples, and issues no `UPDATE`,
+`DELETE`, or migration.
+
+`actor_json_to_model`'s gate (see `app/activitypub/util.py`'s `host_of`) now
+refuses to mint a new row like that; this function is how an existing database
+is checked for rows that predate the gate. It reports and changes nothing --
+what to do about anything it finds is a separate decision. Run it with:
+
+    flask audit-cross-host-actors
+
+or call `find_cross_host_actors` directly, the way `tests/test_audit_cross_host_actors.py`
+does, to get the list back without printing it.
+
 ## Coverage
 
 `app/request_hooks.py` is held at 100% branch coverage:

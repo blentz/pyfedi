@@ -26,7 +26,7 @@ from sqlalchemy import or_, desc, text, create_engine
 
 from app import db, plugins
 from app.activitypub.signature import RsaKeys, send_post_request, default_context
-from app.activitypub.util import extract_domain_and_actor, notify_about_post
+from app.activitypub.util import extract_domain_and_actor, notify_about_post, host_of
 from app.auth.util import random_token
 from app.community.util import is_bad_name
 from app.constants import NOTIF_COMMUNITY, NOTIF_POST, NOTIF_REPLY, POST_STATUS_SCHEDULED, POST_STATUS_PUBLISHED, \
@@ -35,7 +35,7 @@ from app.email import send_email
 from app.models import CronJobLog, Settings, BannedInstances, Role, User, RolePermission, Domain, ActivityPubLog, \
     utcnow, Site, Instance, File, Notification, Post, CommunityMember, NotificationSubscription, PostReply, Language, \
     Community, SendQueue, _store_files_in_s3, PostVote, Poll, \
-    ActivityBatch, Reminder, RssFeed, RssFeedItem
+    ActivityBatch, Reminder, RssFeed, RssFeedItem, Feed
 from app.shared.tasks import task_selector
 from app.shared.tasks.maintenance import add_remote_communities, remove_old_bot_content, pwn_bots
 from app.shared.post import make_post
@@ -2229,6 +2229,84 @@ def register(app):
                 raise
             finally:
                 session.close()
+
+    @app.cli.command("audit-cross-host-actors")
+    def audit_cross_host_actors():
+        """Report User, Community and Feed rows whose ap_profile_id host disagrees with ap_domain.
+
+        Read-only: issues no UPDATE, DELETE or migration. See
+        find_cross_host_actors for what counts as a mismatch and why.
+        """
+        with app.app_context():
+            session = get_task_session()
+            try:
+                with patch_db_session(session):
+                    mismatches = find_cross_host_actors(session)
+            finally:
+                session.close()
+
+            if not mismatches:
+                print("No cross-host actor rows found.")
+                return
+            print(f"{len(mismatches)} row(s) with a profile host that disagrees with ap_domain:")
+            for model_name, row_id, ap_profile_id, ap_domain in mismatches:
+                print(f"  {model_name} id={row_id}: ap_profile_id={ap_profile_id!r} ap_domain={ap_domain!r}")
+
+
+def find_cross_host_actors(session=None):
+    """Report User, Community and Feed rows whose ap_profile_id host disagrees with ap_domain.
+
+    Read-only: this only queries and returns a list; it issues no UPDATE,
+    DELETE or migration. Task 3 closed the gate in actor_json_to_model that
+    let a cooperating peer mint a row whose ap_profile_id host differs from
+    both the host PieFed fetched from and the row's own ap_domain. Closing
+    the gate stops new ones; this is how an existing database is checked for
+    rows that predate it.
+
+    Uses host_of -- the same host-extraction function actor_json_to_model's
+    gate uses -- so a row the gate would now reject is a row this reports.
+    Comparing on the same function is what rules out the audit and the gate
+    disagreeing about what a host is; there is no separate SQL host
+    extraction here for that reason.
+
+    A row is skipped, not reported, when ap_profile_id or ap_domain is NULL:
+    both columns are nullable, and a local row (one never fetched from a
+    remote peer) carries neither -- create_new_user and the local-community
+    path in community/routes.py leave ap_profile_id and ap_domain unset. A
+    NULL cannot disagree with anything; reporting one would be a false
+    positive; a local user reported as a cross-host actor would make the
+    report useless.
+
+    ap_domain is compared case-insensitively. actor_json_to_model always
+    lowercases ap_profile_id, but only lowercases ap_domain on the Community
+    and Feed branches -- the User branch stores ap_domain as the `server`
+    argument it was given, unlowered. When that argument reaches
+    actor_json_to_model already mixed-case (extract_domain_and_actor returns
+    urlparse's `netloc` verbatim, without lowercasing it, on the ordinary
+    https:// fetch path), the stored User.ap_domain can differ from
+    ap_profile_id's host only in case. That is a pre-existing casing
+    inconsistency in actor_json_to_model, not a cross-host mismatch, and is
+    reported separately rather than fixed here; folding case in this
+    comparison is what keeps it from being reported as a false positive.
+
+    Returns a list of (model_name, row_id, ap_profile_id, ap_domain) tuples,
+    ordered by table (User, Community, Feed) then primary key.
+    """
+    session = session or db.session
+    mismatches = []
+    for model in (User, Community, Feed):
+        rows = (
+            session.query(model)
+            .filter(model.ap_profile_id.isnot(None), model.ap_domain.isnot(None))
+            .order_by(model.id)
+            .all()
+        )
+        for row in rows:
+            profile_host = host_of(row.ap_profile_id)
+            domain = row.ap_domain.lower()
+            if profile_host != domain:
+                mismatches.append((model.__name__, row.id, row.ap_profile_id, row.ap_domain))
+    return mismatches
 
 
 def parse_communities(interests_source, segment):
