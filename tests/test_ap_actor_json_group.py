@@ -1093,8 +1093,10 @@ class TestNewStylePostFlair:
 class TestLegacyPostFlair:
     """`elif 'lemmy:tagsForPosts' in activity_json and isinstance(..., list)`,
     which rebuilds a smaller dict per tag before calling find_flair_or_create --
-    always 'display_name', and then 'text_color', 'background_color',
-    'blur_images' and 'id' each conditionally.
+    'display_name' for every entry that has one (an entry without one is skipped
+    and logged, see
+    test_a_tag_without_a_display_name_is_skipped_and_the_rest_ingest), and then
+    'text_color', 'background_color', 'blur_images' and 'id' each conditionally.
 
     Those four `if`s are the reason this block exists rather than passing the
     tag through as-is, so each is tested present AND absent: the absent side is
@@ -1192,19 +1194,41 @@ class TestLegacyPostFlair:
         assert [f.flair for f in community.flair] == ['New']
         assert db.session.query(CommunityFlair).count() == 1
 
-    def test_a_tag_without_a_display_name_raises_key_error(self, app, db_session):
-        """FINDING -- `flair_dict = {'display_name': flair['display_name']}` is
-        an unguarded read, so a legacy tag that omits the key raises KeyError
-        out of actor_json_to_model. The community row has already been
-        committed by then, so the peer ends up with a community and no flair
-        and the caller sees an exception. Pinned, not fixed."""
+    def test_a_tag_without_a_display_name_is_skipped_and_the_rest_ingest(self, app, db_session):
+        """FIXED -- `flair_dict = {'display_name': flair['display_name']}` used
+        to be an unguarded read, so a legacy tag omitting the key raised
+        KeyError out of actor_json_to_model. The community had already been
+        committed by then, so the peer ended up with a community, no flair, and
+        an exception at the caller -- a partially-applied ingest. The read now
+        sits behind `if 'display_name' not in flair: continue`, matching the
+        four optional guards below it, and the skip is logged.
+
+        The malformed entry is deliberately in the MIDDLE of the list. The
+        assertions are what separate 'skipped the bad entry' from 'skipped the
+        loop': both good entries are present, so a guard that swallowed the
+        whole list, or that abandoned the loop at the first bad entry, fails
+        here even though nothing raised.
+
+        Mutation, both directions, and they are distinct because this guard is
+        a `continue` rather than an early return:
+
+        - delete the guard: the KeyError comes back and this test fails on the
+          exception, not on a count.
+        - broaden it to `if True:` (or to a key every entry has, e.g.
+          `'display_name' in flair`): every entry is skipped, nothing raises,
+          and this test fails on the flair list and the row count instead.
+        """
         peer_instance(PEER)
-        document = _group('memes', fields={'lemmy:tagsForPosts': [{'id': 'https://x/1'}]})
-        with pytest.raises(KeyError) as excinfo:
-            actor_json_to_model(document, '!memes', PEER)
-        assert excinfo.value.args[0] == 'display_name'
+        document = _group('memes', fields={'lemmy:tagsForPosts': [
+            {'display_name': 'Discussion'},
+            {'id': 'https://x/1'},
+            {'display_name': 'Meta'},
+        ]})
+        community = actor_json_to_model(document, '!memes', PEER)
+        assert community is not None
         assert db.session.query(Community).count() == 1
-        assert db.session.query(CommunityFlair).count() == 0
+        assert sorted(f.flair for f in community.flair) == ['Discussion', 'Meta']
+        assert db.session.query(CommunityFlair).count() == 2
 
 
 class TestConcurrentInsert:

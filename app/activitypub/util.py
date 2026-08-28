@@ -463,9 +463,19 @@ def find_flair_or_create(flair: dict, community_id: int, session=None) -> Commun
             existing_flair.flair = flair['preferredUsername']
 
         if not existing_flair.ap_id:
-            if flair['id']:
+            if 'id' in flair and flair['id']:
                 existing_flair.ap_id = flair['id']
             else:
+                # The peer named no ap_id for this entry: either the key is absent
+                # (legacy 'lemmy:tagsForPosts' entries never carry one) or it is empty.
+                # Skip the peer's id the way every other optional key here is skipped,
+                # and derive a local one instead. Reading flair['id'] unconditionally
+                # used to raise KeyError out of refresh_community_profile_task AFTER
+                # that task had committed the community's refreshed profile.
+                current_app.logger.info(
+                    f"find_flair_or_create: skipping the ap_id backfill for flair "
+                    f"{existing_flair.flair!r} on community {community_id} -- the peer's "
+                    f"entry supplies no usable 'id'; deriving a local ap_id instead")
                 existing_flair.ap_id = existing_flair.get_ap_id()
 
         return existing_flair
@@ -1338,6 +1348,14 @@ def actor_json_to_model(activity_json, address, server):
             # Legacy post flair
             community.flair = []
             for flair in activity_json['lemmy:tagsForPosts']:
+                if 'display_name' not in flair:
+                    # Nothing to name the flair by. Skip this entry the way the four
+                    # optional keys below it are skipped, rather than raising KeyError
+                    # after the Community above has already been committed.
+                    current_app.logger.warning(
+                        f"actor_json_to_model: skipping a 'lemmy:tagsForPosts' entry of "
+                        f"{activity_json['id']} -- it carries no 'display_name'")
+                    continue
                 flair_dict = {'display_name': flair['display_name']}
                 if 'text_color' in flair:
                     flair_dict['text_color'] = flair['text_color']
@@ -1395,6 +1413,16 @@ def actor_json_to_model(activity_json, address, server):
             following_json = following_data.json()
             for c_ap_id in following_json['items']:
                 community = find_actor_or_create(c_ap_id, community_only=True)
+                if community is None:
+                    # The resolver refused this entry, so there is no community to
+                    # build a FeedItem from. Skip it here rather than letting the
+                    # None reach `c.id` in the FeedItem loop, which runs after the
+                    # Feed above has already been committed.
+                    current_app.logger.warning(
+                        f"actor_json_to_model: skipping {c_ap_id} in the /following "
+                        f"collection of {activity_json['id']} -- it does not resolve "
+                        f"to a community")
+                    continue
                 feed_following.append(community)
 
         feed = Feed(name=activity_json['preferredUsername'].strip(),
