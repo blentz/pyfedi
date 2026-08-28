@@ -396,6 +396,25 @@ def redis_double(monkeypatch):
 
 
 @pytest.fixture
+def no_real_sleeping(monkeypatch):
+    """Neutralise both sleep call sites the ActivityPub fetch helpers reach.
+
+    Two patches, not one. `time.sleep` covers callers that reach the module
+    attribute; `app.utils.sleep` covers app/utils.py's `from time import
+    sleep` binding, which was resolved at import and does not see a patch to
+    the module attribute. A test file that patches only one still waits the
+    real seconds through the other.
+
+    Not autouse: it is opted into per module with
+    `pytestmark = pytest.mark.usefixtures('no_real_sleeping')`, so a test
+    elsewhere that genuinely wants to observe a delay is not silently
+    stripped of it.
+    """
+    monkeypatch.setattr('time.sleep', lambda *a, **k: None)
+    monkeypatch.setattr('app.utils.sleep', lambda *a, **k: None)
+
+
+@pytest.fixture
 def s3_bucket():
     """A moto-backed S3 bucket, yielding its name."""
     with mock_aws():

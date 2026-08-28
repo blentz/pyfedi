@@ -14,11 +14,11 @@ three strategies checked in order:
 The function returns on the first hit; nothing later fires once something
 earlier has matched. DB-backed, no network.
 
-Every Community factory call here is preceded by make_instance(...) and
-make_user(None, ..., local=True): make_community hardcodes instance_id=1 and
-user_id=1, so both foreign keys must already exist -- this is the ordering
-tests/README.md and the task context both call out (make_instance before
-make_user(None, ...)).
+Every Community factory call here is preceded by seed_community_owner(),
+which builds the Instance and the local User in that order: make_community
+hardcodes instance_id=1 and user_id=1, so both foreign keys must already
+exist, and the Instance must precede the User -- the ordering tests/README.md
+and the task context both call out.
 
 Branch enumeration, derived fresh against this checkout (not carried
 forward):
@@ -73,17 +73,8 @@ import pytest
 
 from app import db
 from app.activitypub.util import find_community
-from tests.factories import make_community, make_instance, make_post, make_post_reply, make_user
-
-
-def _seed_owner_and_instance(domain='peer.example'):
-    """Creates the Instance (id=1) and local User (id=1) that make_community's
-    hardcoded instance_id=1 / user_id=1 columns require to exist first, and
-    returns the Instance for tests that also need a remote actor on it.
-    """
-    instance = make_instance(domain)
-    make_user(None, 'communityowner', local=True)
-    return instance
+from tests.factories import (make_community, make_post, make_post_reply, make_user,
+                            seed_community_owner)
 
 
 class TestAddressingStrategy:
@@ -93,18 +84,18 @@ class TestAddressingStrategy:
     """
 
     def test_audience_string_matching_a_community_is_found(self, app, db_session):
-        instance = _seed_owner_and_instance()
+        instance = seed_community_owner()
         community = make_community('audiencematch')
         assert find_community({'audience': community.ap_profile_id}) == community
 
     def test_cc_list_containing_a_matching_id_is_found(self, app, db_session):
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('ccmatch')
         result = find_community({'cc': ['https://peer.example/u/someone', community.ap_profile_id]})
         assert result == community
 
     def test_outer_has_no_addressing_but_object_does(self, app, db_session):
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('innermatch')
         result = find_community({'type': 'Create', 'object': {'to': community.ap_profile_id}})
         assert result == community
@@ -114,7 +105,7 @@ class TestAddressingStrategy:
         object and returns the first hit -- this is behaviour, not incident.
         Mutation that fails this: swapping the outer-then-inner order (e.g.
         building rjs as [request_json['object'], request_json] instead)."""
-        _seed_owner_and_instance()
+        seed_community_owner()
         outer_community = make_community('outerwins')
         inner_community = make_community('innerloses')
         result = find_community({
@@ -130,7 +121,7 @@ class TestAddressingStrategy:
         to inReplyTo. That mutation is wide -- see the task report's mutation
         section -- because it also forecloses the Video strategy for every
         input whose first present addressing location fails to match."""
-        instance = _seed_owner_and_instance()
+        instance = seed_community_owner()
         owner = make_user(instance, 'replyauthor')
         community = make_community('replytarget')
         post = make_post(community, owner, ap_id='https://peer.example/post/1')
@@ -147,7 +138,7 @@ class TestAddressingStrategy:
         combining a non-matching addressing value with a Video fixture that
         would otherwise match. Mutation that fails this: the same
         `if potential_community:` deletion as the test above."""
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('videoafteraudiencemiss')
         result = find_community({
             'audience': 'https://peer.example/c/doesnotexist',
@@ -167,7 +158,7 @@ class TestAddressingStrategy:
         list-branch counterpart below. Review finding 1: these two branches
         each check the same two conditions independently, so a mutation to
         either copy alone needs its own branch's test to catch it."""
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('publiclookalike')
         community.ap_profile_id = 'https://www.w3.org/ns/activitystreams#Public'
         db.session.commit()
@@ -179,7 +170,7 @@ class TestAddressingStrategy:
         this test existed, a mutation deleting only the list branch's
         Public exclusion survived undetected, because the string-branch test
         above never reaches the list branch's code at all."""
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('publiclistlookalike')
         community.ap_profile_id = 'https://www.w3.org/ns/activitystreams#Public'
         db.session.commit()
@@ -195,7 +186,7 @@ class TestAddressingStrategy:
         list-branch test in place, survived all 19 prior tests -- this test
         alone was never going to catch a mutation in a branch it never
         reaches."""
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('followerslookalike')
         community.ap_profile_id = 'https://peer.example/c/followerslookalike/followers'
         db.session.commit()
@@ -206,7 +197,7 @@ class TestAddressingStrategy:
         missing case. Mutation that fails this: deleting the
         `not potential_id.endswith('/followers')` guard in the STRING
         branch specifically, which the list-branch test above cannot catch."""
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('followersstringlookalike')
         community.ap_profile_id = 'https://peer.example/c/followersstringlookalike/followers'
         db.session.commit()
@@ -223,7 +214,7 @@ class TestAddressingStrategy:
         instead of falling through to the Video match also present here, so
         the assertion is on WHICH community comes back, not merely that one
         is found."""
-        instance = _seed_owner_and_instance()
+        instance = seed_community_owner()
         owner = make_user(instance, 'nonemarker')
         wrong_community = make_community('wrongvianone')
         decoy_post = make_post(wrong_community, owner, ap_id='https://peer.example/post/decoy')
@@ -243,7 +234,7 @@ class TestInReplyToStrategy:
     rj['inReplyTo'] is not None:` guard (e.g. `if False:`)."""
 
     def test_in_reply_to_naming_a_known_post_returns_its_community(self, app, db_session):
-        instance = _seed_owner_and_instance()
+        instance = seed_community_owner()
         author = make_user(instance, 'postauthor')
         community = make_community('postcommunity')
         post = make_post(community, author, ap_id='https://peer.example/post/2')
@@ -253,7 +244,7 @@ class TestInReplyToStrategy:
         """No Post has this ap_id, so the Post lookup misses and the function
         falls to PostReply -- proving the fallback fires, not just that a
         reply row with a community exists."""
-        instance = _seed_owner_and_instance()
+        instance = seed_community_owner()
         author = make_user(instance, 'replyauthor2')
         community = make_community('replycommunity')
         post = make_post(community, author, ap_id='https://peer.example/post/3')
@@ -268,7 +259,7 @@ class TestInReplyToStrategy:
 
 class TestPeerTubeVideoStrategy:
     def test_attributed_to_a_group_dict_returns_its_community(self, app, db_session):
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('videogroupcommunity')
         result = find_community({
             'type': 'Video',
@@ -280,7 +271,7 @@ class TestPeerTubeVideoStrategy:
         assert result == community
 
     def test_attributed_to_a_bare_string_returns_its_community(self, app, db_session):
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('videostringcommunity')
         result = find_community({'type': 'Video', 'attributedTo': [community.ap_profile_id]})
         assert result == community

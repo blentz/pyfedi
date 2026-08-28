@@ -4,9 +4,11 @@ Each builder sets the minimum needed for a valid row and commits, so the object
 has an id. If Postgres rejects an insert for a missing NOT NULL column, add that
 column here rather than in the test.
 
-One builder here is not a row builder: peer_actor_json returns the plain
+Not everything here is a row builder. peer_actor_json returns the plain
 ActivityPub actor document a peer would serve, for the tests that drive
-actor_json_to_model. Its docstring says why it lives here.
+actor_json_to_model; announce_activity and note_document do the same for the
+activity envelope and the object it names. Their docstrings say why they live
+here.
 """
 
 import uuid
@@ -131,6 +133,37 @@ def make_community(name: str = 'microblogs') -> Community:
     db.session.add(community)
     db.session.commit()
     return community
+
+
+def peer_instance(domain: str = 'peer.example') -> Instance:
+    """The Instance row find_instance_id looks up, created before the call so
+    that function takes its found-existing path instead of inserting a sparse
+    row and calling new_instance_profile (which fetches the peer's nodeinfo).
+
+    A thin wrapper over make_instance: the value is the reason, not the
+    construction. It was written out three times over -- once each in the
+    Person, Group and Feed actor_json_to_model test files -- before being
+    promoted here.
+    """
+    return make_instance(domain)
+
+
+def seed_community_owner(domain: str = 'peer.example') -> Instance:
+    """Creates the Instance (id=1) and local User (id=1) that make_community's
+    hardcoded instance_id=1 / user_id=1 columns require to exist first, and
+    returns the Instance.
+
+    Returning the Instance is the single contract, deliberately: the two
+    copies this replaced had drifted to two different ones under one name --
+    find_community's tests returned the Instance so they could hang a remote
+    actor off it, find_flair_or_create's returned None because its own tests
+    never needed the row. A caller that does not want the Instance can ignore
+    it; a caller that does cannot conjure it back from a None. Nothing here
+    varies by call site, so nothing needs a flag or a second name.
+    """
+    instance = make_instance(domain)
+    make_user(None, 'communityowner', local=True)
+    return instance
 
 
 def make_post(community, user, ap_id: str, title: str = 'a post', private: bool = False,
@@ -578,6 +611,14 @@ def peer_actor_json(actor_type: str = 'Person', name: str = 'alice',
     segment of its id, matching how real peers publish actors; pass
     fields={'id': ...} to break that correspondence, which is what the
     `server not in activity_json['id']` guard's tests need.
+
+    A key in `omit` that the document does not carry raises KeyError. The
+    lenient `document.pop(key, None)` this replaced made a misspelling a
+    silent no-op: `omit=('publickey',)` deleted nothing, the document kept
+    its publicKey, and a test named for the missing-key branch passed while
+    exercising the ordinary happy path instead. Since `omit` is applied
+    after `fields` is merged, a key `fields` supplied is omittable too --
+    the check is against the finished document, not against the baseline.
     """
     path = _PEER_ACTOR_PATH.get(actor_type, 'u')
     actor_id = f'https://{server}/{path}/{name}'
@@ -597,5 +638,58 @@ def peer_actor_json(actor_type: str = 'Person', name: str = 'alice',
     if fields:
         document.update(fields)
     for key in omit:
-        document.pop(key, None)
+        if key not in document:
+            raise KeyError(
+                f'peer_actor_json: cannot omit {key!r}, this {actor_type} document '
+                f'has no such key. It carries: {sorted(document)}')
+        del document[key]
     return document
+
+
+# The host every activity envelope below is published from, and the two URIs
+# derived from it. remote_object_to_json and verify_object_from_source both
+# key their host comparisons off these, and the sub-projects covering the
+# activity handlers will need the same pair, so they are named once here
+# rather than restated per file.
+PEER_OBJECT_HOST = 'remote.example'
+PEER_ACTOR_URI = f'https://{PEER_OBJECT_HOST}/u/alice'
+PEER_OBJECT_URI = f'https://{PEER_OBJECT_HOST}/objects/1'
+
+
+def announce_activity(object_uri: str = PEER_OBJECT_URI, actor: str = PEER_ACTOR_URI,
+                      host: str = PEER_OBJECT_HOST) -> dict:
+    """An Announce envelope naming `object_uri`, as the inbox receives it.
+
+    Every activity handler in this area starts by unwrapping an envelope of
+    this shape, so this is deliberately the smallest one that is still a
+    well-formed Announce rather than a fixture tuned to one function:
+    'actor' and 'object' are what verify_object_from_source reads, and 'id'
+    and 'type' are what makes it recognisable as an activity at all.
+
+    `actor` and `object_uri` are separate parameters because the guards this
+    feeds are precisely about them disagreeing -- an object hosted somewhere
+    other than the announcing actor's host is the case worth constructing.
+    """
+    return {'id': f'https://{host}/activities/1', 'type': 'Announce',
+            'actor': actor, 'object': object_uri}
+
+
+def note_document(attributed_to: str = PEER_ACTOR_URI, uri: str = PEER_OBJECT_URI) -> dict:
+    """The Note an announce_activity's 'object' URI dereferences to.
+
+    'attributedTo' is a parameter for the same reason 'actor' is on
+    announce_activity: the interesting inputs are the ones where the object's
+    stated author and the URI it was served from name different hosts.
+    """
+    return {'id': uri, 'type': 'Note', 'content': 'hello', 'attributedTo': attributed_to}
+
+
+def seed_signing_site() -> Site:
+    """A Site row (id 1) carrying a real RSA keypair, required before the
+    401 branch's signed_get_request call can run at all.
+    """
+    site = make_site()
+    private_key, _public_key = RsaKeys.generate_keypair()
+    site.private_key = private_key
+    db.session.commit()
+    return site

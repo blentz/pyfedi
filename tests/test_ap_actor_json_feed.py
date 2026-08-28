@@ -145,7 +145,7 @@ function takes its found-in-the-database path: without the row it would fetch
 the actor over HTTP, and without the timestamp schedule_actor_refresh would
 fire a profile refresh that fetches it anyway.
 
-Every test also builds the peer's Instance row first with make_instance, for
+Every test also builds the peer's Instance row first with peer_instance, for
 the same reason the Group file does: otherwise find_instance_id inserts a
 sparse Instance and calls new_instance_profile, which fetches the peer's
 nodeinfo.
@@ -176,7 +176,7 @@ from app import db
 from app.activitypub import util as activitypub_util
 from app.activitypub.util import actor_json_to_model
 from app.models import Community, Feed, FeedItem, FeedMember, File, User, utcnow
-from tests.factories import make_instance, make_user, peer_actor_json
+from tests.factories import make_user, peer_actor_json, peer_instance
 
 PEER = 'peer.example'
 FEED = 'news'
@@ -211,14 +211,6 @@ def _owned_feed(name=FEED, fields=None, omit=()):
     if fields:
         merged.update(fields)
     return _feed(name=name, fields=merged, omit=omit)
-
-
-def _peer_instance(domain=PEER):
-    """The Instance row find_instance_id looks up, created before the call so
-    that function takes its found-existing path instead of inserting a sparse
-    row and calling new_instance_profile (which fetches the peer's nodeinfo).
-    """
-    return make_instance(domain)
 
 
 def _owner(instance, name='feedowner'):
@@ -279,7 +271,7 @@ def _register_following(http_mock, urls=(), name=FEED, status=200):
 def _peer_with_one_owner(http_mock, name=FEED, following=()):
     """The setup all the ordinary creating tests share: an Instance, one owner
     User, and both collections registered. Returns the owner."""
-    instance = _peer_instance()
+    instance = peer_instance(PEER)
     owner = _owner(instance)
     _register_owners(http_mock, [owner.ap_profile_id], name=name)
     _register_following(http_mock, following, name=name)
@@ -308,7 +300,7 @@ class TestFeedDispatch:
     """
 
     def test_feed_document_creates_a_feed(self, app, db_session, http_mock):
-        instance = _peer_instance()
+        instance = peer_instance(PEER)
         owner = _owner(instance)
         _register_owners(http_mock, [owner.ap_profile_id])
         _register_following(http_mock)
@@ -342,7 +334,7 @@ class TestFeedDispatch:
 
         No http_mock: nothing is fetched, because nothing is built.
         """
-        _peer_instance()
+        peer_instance(PEER)
         document = peer_actor_json('Organization', name=FEED, server=PEER)
         assert actor_json_to_model(document, '~news', PEER) is None
         assert db.session.query(Feed).count() == 0
@@ -468,7 +460,7 @@ class TestOwnersUrl:
         arm is taken and owners_url is None, so the fetch raises. No http_mock
         route is registered because no HTTP request is ever made -- get_request
         rejects the uri before the transport sees it."""
-        _peer_instance()
+        peer_instance(PEER)
         document = _feed(fields={'attributedTo': [{'id': f'https://{PEER}/u/x'}]})
         with pytest.raises(httpx.HTTPError) as excinfo:
             actor_json_to_model(document, '~news', PEER)
@@ -476,7 +468,7 @@ class TestOwnersUrl:
         assert db.session.query(Feed).count() == 0
 
     def test_neither_attributed_to_nor_moderators_raises(self, app, db_session):
-        _peer_instance()
+        peer_instance(PEER)
         with pytest.raises(httpx.HTTPError) as excinfo:
             actor_json_to_model(_feed(), '~news', PEER)
         assert 'invalid uri' in str(excinfo.value)
@@ -505,7 +497,7 @@ class TestNsfwAndNsflGuards:
 
     def test_sensitive_document_is_rejected_when_nsfw_is_off(
             self, app, db_session, site):
-        _peer_instance()
+        peer_instance(PEER)
         assert site.enable_nsfw is not True
         document = _owned_feed(fields={'sensitive': True})
         assert actor_json_to_model(document, '~news', PEER) is None
@@ -531,7 +523,7 @@ class TestNsfwAndNsflGuards:
         assert feed.nsfw is False
 
     def test_nsfl_document_is_rejected_when_nsfl_is_off(self, app, db_session, site):
-        _peer_instance()
+        peer_instance(PEER)
         assert site.enable_nsfl is not True
         document = _owned_feed(fields={'nsfl': True})
         assert actor_json_to_model(document, '~news', PEER) is None
@@ -595,7 +587,7 @@ class TestOwnersCollection:
         assert members[0].is_owner is True
 
     def test_two_owners_become_two_feed_members(self, app, db_session, http_mock):
-        instance = _peer_instance()
+        instance = peer_instance(PEER)
         first = _owner(instance, 'firstowner')
         second = _owner(instance, 'secondowner')
         _register_owners(http_mock, [first.ap_profile_id, second.ap_profile_id])
@@ -610,7 +602,7 @@ class TestOwnersCollection:
 
     def test_a_non_200_owners_collection_raises_index_error(
             self, app, db_session, http_mock):
-        instance = _peer_instance()
+        instance = peer_instance(PEER)
         _owner(instance)
         _register_owners(http_mock, [], status=404)
         _register_following(http_mock)
@@ -621,7 +613,7 @@ class TestOwnersCollection:
 
     def test_an_empty_owners_collection_raises_index_error(
             self, app, db_session, http_mock):
-        instance = _peer_instance()
+        instance = peer_instance(PEER)
         _owner(instance)
         _register_owners(http_mock, [])
         _register_following(http_mock)
@@ -634,7 +626,7 @@ class TestOwnersCollection:
             self, app, db_session, http_mock):
         """find_actor_or_create returns None for the Public collection URI, and
         the loop appends it without checking, so the None reaches `.id`."""
-        instance = _peer_instance()
+        instance = peer_instance(PEER)
         _owner(instance)
         _register_owners(http_mock, ['https://www.w3.org/ns/activitystreams#Public'])
         _register_following(http_mock)
@@ -670,7 +662,7 @@ class TestFollowingCollection:
 
     def test_each_followed_community_becomes_a_feed_item(
             self, app, db_session, http_mock):
-        instance = _peer_instance()
+        instance = peer_instance(PEER)
         owner = _owner(instance)
         first = _remote_community(instance, 'memes')
         second = _remote_community(instance, 'news_comm')
@@ -692,7 +684,7 @@ class TestFollowingCollection:
 
     def test_a_non_200_following_collection_links_nothing(
             self, app, db_session, http_mock):
-        instance = _peer_instance()
+        instance = peer_instance(PEER)
         owner = _owner(instance)
         _remote_community(instance, 'memes')
         _register_owners(http_mock, [owner.ap_profile_id])
@@ -755,7 +747,7 @@ class TestRequiredFieldsMissing:
         """Only the owners route is registered. http_mock's assert_all_called
         would fail this test if a /following request were somehow made, and
         the KeyError proves the read is unconditional."""
-        instance = _peer_instance()
+        instance = peer_instance(PEER)
         owner = _owner(instance)
         _register_owners(http_mock, [owner.ap_profile_id])
         document = _owned_feed(omit=('following',))
@@ -1199,7 +1191,7 @@ class TestChildFeeds:
     """
 
     def test_a_child_feed_is_linked_to_its_parent(self, app, db_session, http_mock):
-        instance = _peer_instance()
+        instance = peer_instance(PEER)
         owner = _owner(instance)
         child = Feed(name='childfeed', title='Child', instance_id=instance.id,
                      ap_id=f'childfeed@{PEER}', ap_domain=PEER,
@@ -1254,7 +1246,7 @@ class TestFeedRefetchAfterCommit:
     """
 
     def test_the_returned_feed_is_the_committed_row(self, app, db_session, http_mock):
-        instance = _peer_instance()
+        instance = peer_instance(PEER)
         owner = _owner(instance)
         community = _remote_community(instance, 'memes')
         _register_owners(http_mock, [owner.ap_profile_id])
@@ -1296,7 +1288,7 @@ class TestConcurrentInsert:
 
     def test_a_rival_commit_during_the_call_returns_the_row_that_won(
             self, app, db_session, http_mock, monkeypatch):
-        instance = _peer_instance()
+        instance = peer_instance(PEER)
         owner = _owner(instance)
         _register_owners(http_mock, [owner.ap_profile_id])
         _register_following(http_mock)

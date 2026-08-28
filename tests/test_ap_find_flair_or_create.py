@@ -68,9 +68,9 @@ blur_images/blurImages. A test that supplies both spellings of one property
 in the same call never exercises the elif at all (the if already matched),
 so each half is tested with ONLY that spelling present.
 
-Every Community factory call here is preceded by make_instance(...) and
-make_user(None, ..., local=True), per tests/README.md and make_community's
-hardcoded instance_id=1 / user_id=1.
+Every Community factory call here is preceded by seed_community_owner(),
+which builds the Instance and then the local User, per tests/README.md and
+make_community's hardcoded instance_id=1 / user_id=1.
 
 Coverage can be re-derived at any time with `coverage.json`'s per-file
 `missing_lines` / `missing_branches`, restricted to find_flair_or_create's
@@ -89,15 +89,7 @@ import pytest
 from app import db
 from app.activitypub.util import find_flair_or_create
 from app.models import CommunityFlair
-from tests.factories import make_community, make_community_flair, make_instance, make_user
-
-
-def _seed_owner_and_instance(domain='peer.example'):
-    """Creates the Instance (id=1) and local User (id=1) that make_community's
-    hardcoded instance_id=1 / user_id=1 columns require to exist first.
-    """
-    make_instance(domain)
-    make_user(None, 'communityowner', local=True)
+from tests.factories import make_community, make_community_flair, seed_community_owner
 
 
 class TestApIdLookup:
@@ -107,7 +99,7 @@ class TestApIdLookup:
     created, so both directions of that guard are distinguishable."""
 
     def test_found_by_ap_id_returns_existing_row_without_creating_a_second(self, app, db_session):
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('apidlookup')
         existing = make_community_flair(community, name='spoiler', ap_id='https://peer.example/tag/1')
         result = find_flair_or_create({'id': existing.ap_id}, community.id)
@@ -126,7 +118,7 @@ class TestPreferredUsernameLookup:
         pre-set on the factory row so the ap_id-backfill block later in the
         function (which reads flair['id'] unconditionally) is skipped --
         see TestSuspectedMissingIdKeyCrash for what happens when it is not."""
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('usernamelookup')
         existing = make_community_flair(community, name='nsfw', ap_id='https://peer.example/tag/2')
         result = find_flair_or_create({'preferredUsername': 'nsfw'}, community.id)
@@ -135,7 +127,7 @@ class TestPreferredUsernameLookup:
 
 class TestDisplayNameLookup:
     def test_found_by_display_name_when_no_id_or_preferred_username_present(self, app, db_session):
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('displaynamelookup')
         existing = make_community_flair(community, name='meta', ap_id='https://peer.example/tag/3')
         result = find_flair_or_create({'display_name': 'meta'}, community.id)
@@ -148,7 +140,7 @@ class TestLookupPriority:
     preferredUsername)."""
 
     def test_ap_id_lookup_wins_over_preferred_username_when_both_would_match(self, app, db_session):
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('apidwins')
         by_id = make_community_flair(community, name='decoy', ap_id='https://peer.example/tag/byid')
         by_username = make_community_flair(community, name='usernamematch', ap_id='https://peer.example/tag/byusername')
@@ -162,7 +154,7 @@ class TestLookupPriority:
         choice. Both rows carry a pre-set ap_id so the later ap_id-backfill
         block (which reads flair['id']) is skipped for whichever row is
         found."""
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('usernamewins')
         by_username = make_community_flair(community, name='usernamematch2', ap_id='https://peer.example/tag/u2')
         by_displayname = make_community_flair(community, name='displaymatch2', ap_id='https://peer.example/tag/d2')
@@ -174,7 +166,7 @@ class TestLookupPriority:
 
 class TestNotFoundCreatesNewFlair:
     def test_no_match_creates_new_flair_from_display_name(self, app, db_session):
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('createfromdisplay')
         result = find_flair_or_create({'display_name': 'brand new'}, community.id)
         db.session.commit()
@@ -193,7 +185,7 @@ class TestNotFoundCreatesNewFlair:
         taking the display_name branch instead) or finds an existing row
         and lands on the update block, not this one. Mutation that fails
         this: deleting or negating this elif."""
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('createfromusername')
         result = find_flair_or_create({'preferredUsername': 'username only'}, community.id)
         db.session.commit()
@@ -207,7 +199,7 @@ class TestNotFoundCreatesNewFlair:
         check is its `elif`, so display_name names the new row over
         preferredUsername when both are present. Mutation that fails this:
         swapping which branch is the `if` and which is the `elif`."""
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('createpriority')
         result = find_flair_or_create(
             {'display_name': 'display wins', 'preferredUsername': 'username loses'}, community.id)
@@ -217,7 +209,7 @@ class TestNotFoundCreatesNewFlair:
         """flair_text stays '' (falsy), so the final `if flair_text:` guard
         is False and the function returns None without adding a row --
         pins the else branch of that guard."""
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('createnothing')
         result = find_flair_or_create({'text_color': 'red'}, community.id)
         assert result is None
@@ -229,7 +221,7 @@ class TestSessionParameter:
         """Mutation that fails this: breaking the `if session is None: session
         = db.session` assignment so an explicitly-passed session is ignored
         or replaced."""
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('explicitsession')
         result = find_flair_or_create({'display_name': 'viaexplicitsession'}, community.id, session=db.session)
         db.session.commit()
@@ -254,7 +246,7 @@ class TestSpellingPairsOnTheUpdateBlock:
     prior (unset) value instead of the dict's value."""
 
     def test_snake_case_spellings_update_the_existing_flair(self, app, db_session):
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('snakeupdate')
         existing = make_community_flair(community, name='snaketarget', ap_id='https://peer.example/tag/snake')
         result = find_flair_or_create({
@@ -268,7 +260,7 @@ class TestSpellingPairsOnTheUpdateBlock:
         assert result.blur_images is True
 
     def test_camel_case_spellings_update_the_existing_flair(self, app, db_session):
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('camelupdate')
         existing = make_community_flair(community, name='cameltarget', ap_id='https://peer.example/tag/camel')
         result = find_flair_or_create({
@@ -292,7 +284,7 @@ class TestSpellingPairsOnTheCreateBlock:
     update block would leave this block's elifs uncovered."""
 
     def test_snake_case_spellings_are_used_for_the_new_flair(self, app, db_session):
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('snakecreate')
         result = find_flair_or_create({
             'display_name': 'snakenew',
@@ -306,7 +298,7 @@ class TestSpellingPairsOnTheCreateBlock:
         assert result.blur_images is True
 
     def test_camel_case_spellings_are_used_for_the_new_flair(self, app, db_session):
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('camelcreate')
         result = find_flair_or_create({
             'display_name': 'camelnew',
@@ -327,7 +319,7 @@ class TestApIdBackfill:
     has one."""
 
     def test_ap_id_is_set_from_flairs_id_when_the_existing_flair_has_none(self, app, db_session):
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('apidbackfill')
         existing = make_community_flair(community, name='backfillme', ap_id=None)
         result = find_flair_or_create(
@@ -340,7 +332,7 @@ class TestApIdBackfill:
         half of the backfill is False and get_ap_id() runs instead --
         pinning both the presence AND the truthiness of that key mattering,
         not merely its presence."""
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('apidderived')
         existing = make_community_flair(community, name='deriveme', ap_id=None)
         result = find_flair_or_create({'id': '', 'preferredUsername': 'deriveme'}, community.id)
@@ -419,7 +411,7 @@ class TestSuspectedMissingIdKeyCrash:
     """
 
     def test_missing_id_key_with_no_existing_ap_id_raises_keyerror(self, app, db_session):
-        _seed_owner_and_instance()
+        seed_community_owner()
         community = make_community('missingidcrash')
         make_community_flair(community, name='crashme', ap_id=None)
         with pytest.raises(KeyError):

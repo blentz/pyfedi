@@ -74,10 +74,11 @@ and are both deliberate here.
 
 The 401 branch reads Site.query.get(1).private_key, so a test that reaches
 it must create the row -- and make_site()'s row carries private_key=None,
-which fails as a PEM key before any network call. Hence `_seed_signing_site`
-below, which calls make_site() AND assigns a real keypair; the same shape as
-tests/test_ap_remote_object_to_json.py, which covers the identical
-fetch-and-retry structure in a sibling function.
+which fails as a PEM key before any network call. Hence
+`seed_signing_site` (tests/factories.py), which calls make_site() AND
+assigns a real keypair. tests/test_ap_remote_object_to_json.py covers the
+identical fetch-and-retry structure in a sibling function and needs exactly
+the same row, which is why that helper is shared rather than restated here.
 
 test_a_404_returns_none goes the other way and calls neither, so no Site row
 exists in it at all. That is the point: a `status_code == 401` mutation
@@ -97,43 +98,19 @@ untested copy survive silently.
 import httpx
 import pytest
 
-from app import db
-from app.activitypub.signature import RsaKeys
 from app.activitypub.util import verify_object_from_source
-from tests.factories import make_site
+from tests.factories import (PEER_ACTOR_URI, PEER_OBJECT_HOST, PEER_OBJECT_URI,
+                             announce_activity, note_document, seed_signing_site)
 
-HOST = 'remote.example'
-ACTOR = f'https://{HOST}/u/alice'
-URI = f'https://{HOST}/objects/1'
+HOST = PEER_OBJECT_HOST
+ACTOR = PEER_ACTOR_URI
+URI = PEER_OBJECT_URI
 OTHER_HOST = 'attacker.example'
 
-
-def _announce(object_uri=URI, actor=ACTOR):
-    """The subset of an Announce activity this function reads: it consults
-    request_json['object'] and request_json['actor'] and nothing else."""
-    return {'id': f'https://{HOST}/activities/1', 'type': 'Announce', 'actor': actor, 'object': object_uri}
-
-
-def _document(attributed_to=ACTOR, uri=URI):
-    return {'id': uri, 'type': 'Note', 'content': 'hello', 'attributedTo': attributed_to}
-
-
-def _seed_signing_site():
-    """A Site row (id 1) carrying a real RSA keypair, required before the
-    401 branch's signed_get_request call can run at all."""
-    site = make_site()
-    private_key, _public_key = RsaKeys.generate_keypair()
-    site.private_key = private_key
-    db.session.commit()
-    return site
-
-
-@pytest.fixture(autouse=True)
-def _no_real_sleeping(monkeypatch):
-    """Patches both sleep call sites reachable from this function -- see the
-    module docstring's TIMING paragraph for why both are needed."""
-    monkeypatch.setattr('time.sleep', lambda *a, **k: None)
-    monkeypatch.setattr('app.utils.sleep', lambda *a, **k: None)
+# Both sleep call sites reachable from this function are neutralised by the
+# shared no_real_sleeping fixture -- see the module docstring's TIMING
+# paragraph for why both are needed.
+pytestmark = pytest.mark.usefixtures('no_real_sleeping')
 
 
 class TestSuccessfulVerification:
@@ -145,13 +122,13 @@ class TestSuccessfulVerification:
     def test_a_same_host_object_attributed_to_that_host_replaces_the_object(self, app, db_session, http_mock):
         """Production change that fails this: inverting either `!=` to `==`,
         or dropping the `request_json['object'] = object` assignment."""
-        http_mock.get(URI).respond(200, json=_document())
-        request_json = _announce()
+        http_mock.get(URI).respond(200, json=note_document())
+        request_json = announce_activity()
 
         result = verify_object_from_source(request_json)
 
         assert result is request_json
-        assert result['object'] == _document()
+        assert result['object'] == note_document()
         assert result['actor'] == ACTOR
 
 
@@ -167,7 +144,7 @@ class TestPreFetchDomainComparison:
         uri_domain` guard refuses outright. Production change that fails
         this: deleting that guard (the function would then fetch a
         schemeless URI) or inverting it to `if uri_domain`."""
-        request_json = _announce(object_uri='objects/1')
+        request_json = announce_activity(object_uri='objects/1')
 
         assert verify_object_from_source(request_json) is None
         assert request_json['object'] == 'objects/1'
@@ -178,7 +155,7 @@ class TestPreFetchDomainComparison:
         sides share. The presence half of this pair is
         TestSuccessfulVerification, which the inverted (`==`) mutation
         fails."""
-        request_json = _announce(actor=f'https://{OTHER_HOST}/u/mallory')
+        request_json = announce_activity(actor=f'https://{OTHER_HOST}/u/mallory')
 
         assert verify_object_from_source(request_json) is None
         assert request_json['object'] == URI
@@ -198,8 +175,8 @@ class TestPostFetchDomainComparison:
         fails this: deleting `if uri_domain != actor_domain: return None`.
         Its presence half is TestSuccessfulVerification, which the inverted
         (`==`) mutation fails."""
-        http_mock.get(URI).respond(200, json=_document(attributed_to=f'https://{OTHER_HOST}/u/mallory'))
-        request_json = _announce()
+        http_mock.get(URI).respond(200, json=note_document(attributed_to=f'https://{OTHER_HOST}/u/mallory'))
+        request_json = announce_activity()
 
         assert verify_object_from_source(request_json) is None
         assert request_json['object'] == URI
@@ -209,8 +186,8 @@ class TestPostFetchDomainComparison:
         uri_domain. Distinct from the case above because it exercises the
         comparison against the '' that `actor_domain` is initialised to,
         rather than against a rival host."""
-        http_mock.get(URI).respond(200, json=_document(attributed_to=''))
-        request_json = _announce()
+        http_mock.get(URI).respond(200, json=note_document(attributed_to=''))
+        request_json = announce_activity()
 
         assert verify_object_from_source(request_json) is None
 
@@ -222,27 +199,27 @@ class TestRequiredKeys:
     """
 
     def test_a_document_without_id_returns_none(self, app, db_session, http_mock):
-        document = _document()
+        document = note_document()
         del document['id']
         http_mock.get(URI).respond(200, json=document)
-        request_json = _announce()
+        request_json = announce_activity()
 
         assert verify_object_from_source(request_json) is None
         assert request_json['object'] == URI
 
     def test_a_document_without_type_returns_none(self, app, db_session, http_mock):
-        document = _document()
+        document = note_document()
         del document['type']
         http_mock.get(URI).respond(200, json=document)
 
-        assert verify_object_from_source(_announce()) is None
+        assert verify_object_from_source(announce_activity()) is None
 
     def test_a_document_without_attributed_to_returns_none(self, app, db_session, http_mock):
-        document = _document()
+        document = note_document()
         del document['attributedTo']
         http_mock.get(URI).respond(200, json=document)
 
-        assert verify_object_from_source(_announce()) is None
+        assert verify_object_from_source(announce_activity()) is None
 
 
 class TestAttributedToShapes:
@@ -256,26 +233,26 @@ class TestAttributedToShapes:
         """Production change that fails this: dropping the `isinstance(...,
         dict) and 'id' in ...` branch, which would send this input to the
         `else: return None`."""
-        http_mock.get(URI).respond(200, json=_document(attributed_to={'type': 'Person', 'id': ACTOR}))
+        http_mock.get(URI).respond(200, json=note_document(attributed_to={'type': 'Person', 'id': ACTOR}))
 
-        assert verify_object_from_source(_announce()) is not None
+        assert verify_object_from_source(announce_activity()) is not None
 
     def test_a_dict_with_an_id_on_another_host_returns_none(self, app, db_session, http_mock):
         """The dict branch's refusal half: the branch must read the host out
         of 'id', not merely accept any dict."""
         http_mock.get(URI).respond(
-            200, json=_document(attributed_to={'type': 'Person', 'id': f'https://{OTHER_HOST}/u/mallory'}))
+            200, json=note_document(attributed_to={'type': 'Person', 'id': f'https://{OTHER_HOST}/u/mallory'}))
 
-        assert verify_object_from_source(_announce()) is None
+        assert verify_object_from_source(announce_activity()) is None
 
     def test_a_dict_without_an_id_returns_none(self, app, db_session, http_mock):
         """No 'id' key means the dict branch's second operand is False, so
         the chain falls through the list branch to `else: return None`.
         Production change that fails this: dropping the `'id' in ...`
         operand, which would then raise KeyError rather than refuse."""
-        http_mock.get(URI).respond(200, json=_document(attributed_to={'type': 'Person', 'name': 'alice'}))
+        http_mock.get(URI).respond(200, json=note_document(attributed_to={'type': 'Person', 'name': 'alice'}))
 
-        assert verify_object_from_source(_announce()) is None
+        assert verify_object_from_source(announce_activity()) is None
 
     def test_a_list_matches_on_the_first_string(self, app, db_session, http_mock):
         """The loop breaks on the first string, so a later entry on a rival
@@ -283,50 +260,50 @@ class TestAttributedToShapes:
         removing the `break` after the string branch, which would let the
         last entry win instead of the first."""
         http_mock.get(URI).respond(
-            200, json=_document(attributed_to=[ACTOR, f'https://{OTHER_HOST}/u/mallory']))
+            200, json=note_document(attributed_to=[ACTOR, f'https://{OTHER_HOST}/u/mallory']))
 
-        assert verify_object_from_source(_announce()) is not None
+        assert verify_object_from_source(announce_activity()) is not None
 
     def test_a_list_whose_first_string_is_on_another_host_returns_none(self, app, db_session, http_mock):
         """The mirror of the test above, and the reason it is worth having
         both: first-wins is only proved by showing that a matching entry
         LATER in the list does not rescue a mismatching first one."""
         http_mock.get(URI).respond(
-            200, json=_document(attributed_to=[f'https://{OTHER_HOST}/u/mallory', ACTOR]))
+            200, json=note_document(attributed_to=[f'https://{OTHER_HOST}/u/mallory', ACTOR]))
 
-        assert verify_object_from_source(_announce()) is None
+        assert verify_object_from_source(announce_activity()) is None
 
     def test_a_list_matches_on_the_first_person_dicts_id(self, app, db_session, http_mock):
         """A non-Person dict matches neither loop branch, so iteration
         continues past it to the Person dict. Production change that fails
         this: dropping the `a.get('type') == 'Person'` test, which would
         take the Group's id (a rival host) instead."""
-        http_mock.get(URI).respond(200, json=_document(attributed_to=[
+        http_mock.get(URI).respond(200, json=note_document(attributed_to=[
             {'type': 'Group', 'id': f'https://{OTHER_HOST}/c/news'},
             {'type': 'Person', 'id': ACTOR},
         ]))
 
-        assert verify_object_from_source(_announce()) is not None
+        assert verify_object_from_source(announce_activity()) is not None
 
     def test_a_person_dict_whose_id_is_not_a_string_returns_none(self, app, db_session, http_mock):
         """The loop breaks on the first Person dict whether or not its 'id'
         is usable, leaving actor_domain at '' -- so a Person entry with a
         non-string id refuses, and does NOT fall through to the usable
         entry behind it."""
-        http_mock.get(URI).respond(200, json=_document(attributed_to=[
+        http_mock.get(URI).respond(200, json=note_document(attributed_to=[
             {'type': 'Person', 'id': 12345},
             ACTOR,
         ]))
 
-        assert verify_object_from_source(_announce()) is None
+        assert verify_object_from_source(announce_activity()) is None
 
     def test_an_empty_list_returns_none(self, app, db_session, http_mock):
         """The loop body never runs, so actor_domain stays '' and guard 2
         refuses. Production change that fails this: initialising
         actor_domain to uri_domain rather than ''."""
-        http_mock.get(URI).respond(200, json=_document(attributed_to=[]))
+        http_mock.get(URI).respond(200, json=note_document(attributed_to=[]))
 
-        assert verify_object_from_source(_announce()) is None
+        assert verify_object_from_source(announce_activity()) is None
 
     def test_an_integer_attributed_to_returns_none(self, app, db_session, http_mock):
         """The fourth shape -- anything that is not a str, an id-carrying
@@ -335,9 +312,9 @@ class TestAttributedToShapes:
         would let actor_domain stay '' and reach guard 2 instead (still
         None here, but by a different route -- which is why the shapes above
         that DO produce '' are tested separately)."""
-        http_mock.get(URI).respond(200, json=_document(attributed_to=12345))
+        http_mock.get(URI).respond(200, json=note_document(attributed_to=12345))
 
-        assert verify_object_from_source(_announce()) is None
+        assert verify_object_from_source(announce_activity()) is None
 
 
 class TestNetlocRatherThanHostname:
@@ -362,7 +339,7 @@ class TestNetlocRatherThanHostname:
         'remote.example:8443' -- the SAME host by `hostname`, refused by
         `netloc`. No route is registered, so this also shows the refusal
         happens before any fetch."""
-        request_json = _announce(object_uri=f'https://{HOST}:8443/objects/1')
+        request_json = announce_activity(object_uri=f'https://{HOST}:8443/objects/1')
 
         assert verify_object_from_source(request_json) is None
 
@@ -373,8 +350,8 @@ class TestNetlocRatherThanHostname:
         the same host without the port, so `hostname` would accept and
         `netloc` refuses."""
         uri = f'https://{HOST}:8443/objects/1'
-        http_mock.get(uri).respond(200, json=_document(attributed_to=ACTOR, uri=uri))
-        request_json = _announce(object_uri=uri, actor=f'https://{HOST}:8443/u/alice')
+        http_mock.get(uri).respond(200, json=note_document(attributed_to=ACTOR, uri=uri))
+        request_json = announce_activity(object_uri=uri, actor=f'https://{HOST}:8443/u/alice')
 
         assert verify_object_from_source(request_json) is None
 
@@ -384,7 +361,7 @@ class TestNetlocRatherThanHostname:
         Both a netloc comparison and a hostname comparison refuse it against
         actor netloc 'remote.example' -- recorded to show that the userinfo
         form, which LOOKS like an impersonation vector, is not one here."""
-        request_json = _announce(object_uri=f'https://{HOST}@{OTHER_HOST}/objects/1')
+        request_json = announce_activity(object_uri=f'https://{HOST}@{OTHER_HOST}/objects/1')
 
         assert verify_object_from_source(request_json) is None
 
@@ -400,7 +377,7 @@ class TestFetchOutcomes:
         change that fails this: removing that handler, which would raise
         instead of returning None. Reported, not narrowed."""
         http_mock.get(URI).respond(200, content=b'not json', headers={'content-type': 'application/json'})
-        request_json = _announce()
+        request_json = announce_activity()
 
         assert verify_object_from_source(request_json) is None
         assert request_json['object'] == URI
@@ -409,9 +386,9 @@ class TestFetchOutcomes:
         """No Site row exists in this test, so a `status_code == 401`
         mutation that routed this response into the signed branch would
         crash on Site.query.get(1) being None rather than pass quietly."""
-        http_mock.get(URI).respond(404, json=_document())
+        http_mock.get(URI).respond(404, json=note_document())
 
-        assert verify_object_from_source(_announce()) is None
+        assert verify_object_from_source(announce_activity()) is None
 
     def test_a_401_retries_with_a_signed_request_and_uses_its_body(self, app, db_session, http_mock):
         """respx matches by (method, url), so both fetches share one route
@@ -419,13 +396,13 @@ class TestFetchOutcomes:
         get_request, the second the signed retry. The signed body carries a
         marker absent from anything else, so the returned object proves the
         SIGNED response is what was used."""
-        _seed_signing_site()
-        signed_document = dict(_document(), content='signed only')
+        seed_signing_site()
+        signed_document = dict(note_document(), content='signed only')
         http_mock.get(URI).mock(side_effect=[
             httpx.Response(401),
             httpx.Response(200, json=signed_document),
         ])
-        request_json = _announce()
+        request_json = announce_activity()
 
         assert verify_object_from_source(request_json) is request_json
         assert request_json['object'] == signed_document
@@ -435,13 +412,13 @@ class TestFetchOutcomes:
         copy of the construct covered by
         test_an_unparseable_200_body_returns_none, tested separately so a
         mutation on either copy is caught."""
-        _seed_signing_site()
+        seed_signing_site()
         http_mock.get(URI).mock(side_effect=[
             httpx.Response(401),
             httpx.Response(200, content=b'not json', headers={'content-type': 'application/json'}),
         ])
 
-        assert verify_object_from_source(_announce()) is None
+        assert verify_object_from_source(announce_activity()) is None
 
     def test_a_signed_fetch_failure_then_a_successful_retry_returns_the_fetched_object(self, app, db_session,
                                                                                        http_mock):
@@ -449,29 +426,29 @@ class TestFetchOutcomes:
         from the plain path's. signed_get_request has no internal retry of
         its own, so one failure per attempt is enough here where the plain
         path needs two."""
-        _seed_signing_site()
+        seed_signing_site()
         http_mock.get(URI).mock(side_effect=[
             httpx.Response(401),
             httpx.ConnectError('boom'),
-            httpx.Response(200, json=_document()),
+            httpx.Response(200, json=note_document()),
         ])
-        request_json = _announce()
+        request_json = announce_activity()
 
         assert verify_object_from_source(request_json) is request_json
-        assert request_json['object'] == _document()
+        assert request_json['object'] == note_document()
 
     def test_both_signed_fetch_attempts_failing_returns_none(self, app, db_session, http_mock):
         """Production change that fails this: the 401 branch's inner `except
         httpx.HTTPError: return None` re-raising or returning non-None -- a
         second copy of the handler covered by
         test_four_transport_failures_returns_none, tested separately."""
-        _seed_signing_site()
+        seed_signing_site()
         http_mock.get(URI).mock(side_effect=[
             httpx.Response(401),
             httpx.ConnectError('boom'),
             httpx.ConnectError('boom'),
         ])
-        request_json = _announce()
+        request_json = announce_activity()
 
         assert verify_object_from_source(request_json) is None
         assert request_json['object'] == URI
@@ -485,18 +462,18 @@ class TestFetchOutcomes:
         http_mock.get(URI).mock(side_effect=[
             httpx.ConnectError('boom'),
             httpx.ConnectError('boom'),
-            httpx.Response(200, json=_document()),
+            httpx.Response(200, json=note_document()),
         ])
-        request_json = _announce()
+        request_json = announce_activity()
 
         assert verify_object_from_source(request_json) is request_json
-        assert request_json['object'] == _document()
+        assert request_json['object'] == note_document()
 
     def test_four_transport_failures_returns_none(self, app, db_session, http_mock):
         """Production change that fails this: the inner `except
         httpx.HTTPError: return None` re-raising or returning non-None."""
         http_mock.get(URI).mock(side_effect=[httpx.ConnectError('boom')] * 4)
-        request_json = _announce()
+        request_json = announce_activity()
 
         assert verify_object_from_source(request_json) is None
         assert request_json['object'] == URI
