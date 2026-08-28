@@ -4388,7 +4388,7 @@ def find_community(request_json):
                             return potential_community
                 if isinstance(potential_id, list):
                     for c in potential_id:
-                        if not c.startswith('https://www.w3.org') and not c.endswith('/followers'):
+                        if isinstance(c, str) and not c.startswith('https://www.w3.org') and not c.endswith('/followers'):
                             potential_community = db.session.query(Community).filter_by(ap_profile_id=c.lower()).first()
                             if potential_community:
                                 return potential_community
@@ -4406,7 +4406,7 @@ def find_community(request_json):
                 return comment_being_replied_to.community
 
     # Update / Video from PeerTube (possibly an edit, more likely an invite to query Likes / Replies endpoints)
-    if rj['type'] == 'Video':
+    if rj.get('type') == 'Video':
         if 'attributedTo' in rj and isinstance(rj['attributedTo'], list):
             for a in rj['attributedTo']:
                 if isinstance(a, str):
