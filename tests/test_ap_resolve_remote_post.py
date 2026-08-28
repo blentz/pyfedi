@@ -71,6 +71,47 @@ commits when it creates an actor. Every assertion below is therefore on the
 CONTENTS of the row -- its ap_id, which comes from the fetched document -- or
 on the identity of the object returned, never on a row's mere existence, and
 never on a mock.
+
+MUTATION. The gate is a conjunction of three operands in front of a bare
+`return None`, which is the shape where deleting the guard and broadening it
+collapse into one mutation: with the whole condition forced False the guard
+never fires, and that IS the deletion. So the genuinely distinct directions
+are two -- gate never fires, gate always fires -- plus one targeted deletion
+per operand, each of which shrinks the conjunction and so makes the guard
+refuse MORE, the same direction as "always fires" but aimed at one operand.
+All five were run against this file's 11 tests, each reverted before the
+next:
+
+| mutant | failed |
+|---|---|
+| the condition forced False -- gate never fires | 3 |
+| the condition forced True -- gate always fires | 4 (+8 teardown errors) |
+| `announce_actor_domain != 'ovo.st'` deleted | 1 -- TestOvoSt |
+| `not nodebb` deleted | 1 -- TestNodebbBypass |
+| `announce_actor_domain != uri_domain` deleted | 2 |
+
+No mutant survived. The two whole-gate directions fail disjoint sets: never
+firing fails TestGateRefusal and both TestRawNetlocComparison cases, always
+firing fails the four accept-path tests. The 8 errors under "always fires"
+are fixture teardown against rows the mutant prevented from being written,
+not additional findings.
+
+The three operand deletions are the evidence for the claim each class's own
+docstring makes: each fails exactly the class that names it as the operand
+doing the work -- except the host comparison, which fails two, because
+TestDelegation also announces same-host and so loses its post as well. That
+is not a weaker result; it is the one operand two tests depend on.
+
+COVERAGE, this function's own figures rather than the file's, from
+coverage.json over span 4155-4168:
+
+    statements  12 executed, 0 missing
+    branch arcs  4 executed, 0 missing
+
+Sub-project 2b measured this function at 1 executed statement and 11 missing,
+the single executed one being the `def` itself, which runs at import. So the
+11 that were missing are the whole body, and 12 is that body plus the def --
+the same statements counted with the def included, not a different total.
 """
 
 import pytest
