@@ -115,8 +115,8 @@ class TestPreferredUsernameLookup:
         runs when no 'id' key is present), so this exercises the
         preferredUsername branch in isolation. ap_id is
         pre-set on the factory row so the ap_id-backfill block later in the
-        function (which reads flair['id'] unconditionally) is skipped --
-        see TestSuspectedMissingIdKeyCrash for what happens when it is not."""
+        function is skipped -- see TestMissingIdKeyOnTheBackfill for what
+        happens when it is not."""
         seed_community_owner()
         community = make_community('usernamelookup')
         existing = make_community_flair(community, name='nsfw', ap_id='https://peer.example/tag/2')
