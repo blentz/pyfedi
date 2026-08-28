@@ -1227,9 +1227,10 @@ class TestNewStylePostFlair:
 class TestLegacyPostFlair:
     """`elif 'lemmy:tagsForPosts' in activity_json and isinstance(..., list)`,
     which rebuilds a smaller dict per tag before calling find_flair_or_create --
-    'display_name' for every entry that has one (an entry without one is skipped
-    and logged, see
-    test_a_tag_without_a_display_name_is_skipped_and_the_rest_ingest), and then
+    'display_name' for every entry that is an object carrying one (anything else
+    is skipped and logged, see
+    test_a_tag_without_a_display_name_is_skipped_and_the_rest_ingest and
+    test_a_tag_that_is_not_an_object_is_skipped_and_the_rest_ingest), and then
     'text_color', 'background_color', 'blur_images' and 'id' each conditionally.
 
     Those four `if`s are the reason this block exists rather than passing the
@@ -1334,8 +1335,15 @@ class TestLegacyPostFlair:
         KeyError out of actor_json_to_model. The community had already been
         committed by then, so the peer ended up with a community, no flair, and
         an exception at the caller -- a partially-applied ingest. The read now
-        sits behind `if 'display_name' not in flair: continue`, matching the
-        four optional guards below it, and the skip is logged.
+        sits behind `if not isinstance(flair, dict) or 'display_name' not in
+        flair: continue`, matching its two siblings in this file, and the skip
+        is logged.
+
+        The first fix guarded only with `'display_name' not in flair`, which
+        covers this test's shape -- a dict missing the key -- and RAISES on the
+        shape its non-object sibling covers, because membership on a non
+        container is itself a TypeError. The isinstance half completes it; see
+        test_a_tag_that_is_not_an_object_is_skipped_and_the_rest_ingest.
 
         The malformed entry is deliberately in the MIDDLE of the list. The
         assertions are what separate 'skipped the bad entry' from 'skipped the
@@ -1343,22 +1351,27 @@ class TestLegacyPostFlair:
         whole list, or that abandoned the loop at the first bad entry, fails
         here even though nothing raised.
 
-        Mutation, both directions, and they are distinct because this guard is
-        a `continue` rather than an early return:
+        Mutation. The guard is a `continue`, so deleting it and broadening it
+        are distinct, and it is a disjunction of two independent tests, which
+        this test and its non-object sibling take one each. All four directions
+        run, and each is killed:
 
-        - delete the guard: the KeyError comes back and this test fails on the
-          exception, not on a count.
-        - broaden it to `if True:` (or to a key every entry has, e.g.
-          `'display_name' in flair`): every entry is skipped, nothing raises,
-          and this test fails on the flair list and the row count instead.
+        - delete `'display_name' not in flair` (leaving the isinstance half):
+          the KeyError comes back and THIS test fails on the exception, not on
+          a count. The sibling still passes.
+        - delete `not isinstance(flair, dict)`: only the sibling fails.
+        - delete the whole guard: both fail.
+        - broaden it to `if True:`: every entry is skipped, nothing raises, and
+          both fail on the flair list and the row count.
 
         The log is asserted on as well as the rows, because "the skip is
         logged" is half of the argument for skipping at all -- dropping a
         peer's data silently is the failure this campaign started from. The
         assertion is on the message's content, not on a record count: it has
-        to name the key that was dropped and the document it came from, so
-        that a warning reading "error" would not satisfy it. Deleting the
-        logger.warning call fails this test and nothing else.
+        to name the entry that was dropped, the document it came from and the
+        reason, so that a warning reading "error" would not satisfy it.
+        Deleting the logger.warning call fails this test and its sibling, which
+        is the pair that reaches this one call site.
         """
         peer_instance(PEER)
         document = _group('memes', fields={'lemmy:tagsForPosts': [
@@ -1377,8 +1390,70 @@ class TestLegacyPostFlair:
         assert len(skips) == 1
         assert skips[0].levelname == 'WARNING'
         assert "'lemmy:tagsForPosts' entry" in skips[0].getMessage()
+        assert "'https://x/1'" in skips[0].getMessage()
         assert f'https://{PEER}/c/memes' in skips[0].getMessage()
-        assert "carries no 'display_name'" in skips[0].getMessage()
+        assert "not an object carrying a 'display_name'" in skips[0].getMessage()
+
+    def test_a_tag_that_is_not_an_object_is_skipped_and_the_rest_ingest(self, app, db_session, caplog):
+        """FIXED -- the other half of the same defect, and the half the first
+        fix missed. A 'lemmy:tagsForPosts' element that is not a dict at all
+        raised TypeError, again after the Community was committed, and it
+        raised INSIDE the guard meant to catch it: `'display_name' not in 5` is
+        `TypeError: argument of type 'int' is not iterable`. Confirmed against
+        the code as it stood -- a document carrying `lemmy:tagsForPosts: [5]`
+        produced that exception at the caller with the Community row already
+        persisted and no flair.
+
+        The two malformed entries are chosen so that each half of the guard is
+        load-bearing on its own, which the new-style sibling had to be
+        corrected for: `'display_name' not in flair` is a perfectly legal
+        SUBSTRING test on a string, so a string that does NOT contain the key
+        is turned away by the membership half alone and proves nothing about
+        the isinstance half. The entries used instead are a string that DOES
+        contain 'display_name' -- a peer that serialised its tag twice, for
+        which membership passes and only isinstance refuses it, and the read
+        that followed raised `TypeError: string indices must be integers` --
+        and an integer, for which the membership test is itself the TypeError.
+        Either one kills the mutant that drops the isinstance half.
+
+        Mutation:
+
+        - delete the isinstance half, or the whole guard: the TypeError comes
+          back and this test fails on the exception.
+        - delete `'display_name' not in flair`: this test still passes, and its
+          dict-missing-the-key sibling is the one that fails. That asymmetry is
+          the point -- neither half is redundant.
+        - broaden the guard to `if True:`: both good entries are dropped too
+          and this test fails on the flair list and the row count.
+
+        Two entries are dropped here and the warning fires once per entry, so
+        the count is 2 rather than 1 -- one aggregate warning for the pair
+        would leave an operator unable to tell how much of the peer's list was
+        lost. The message content is asserted too, for the reason its sibling
+        gives.
+        """
+        peer_instance(PEER)
+        document = _group('memes', fields={'lemmy:tagsForPosts': [
+            {'display_name': 'Discussion'},
+            '{"display_name": "Doubled"}',
+            5,
+            {'display_name': 'Meta'},
+        ]})
+        with caplog.at_level('WARNING'):
+            community = actor_json_to_model(document, '!memes', PEER)
+        assert community is not None
+        assert db.session.query(Community).count() == 1
+        assert sorted(f.flair for f in community.flair) == ['Discussion', 'Meta']
+        assert db.session.query(CommunityFlair).count() == 2
+
+        skips = [r for r in caplog.records if 'actor_json_to_model' in r.getMessage()]
+        assert len(skips) == 2
+        assert all(r.levelname == 'WARNING' for r in skips)
+        assert all("'lemmy:tagsForPosts' entry" in r.getMessage() for r in skips)
+        assert all(f'https://{PEER}/c/memes' in r.getMessage() for r in skips)
+        assert all("not an object carrying a 'display_name'" in r.getMessage() for r in skips)
+        assert '\'{"display_name": "Doubled"}\'' in skips[0].getMessage()
+        assert ' 5 of ' in skips[1].getMessage()
 
 
 class TestConcurrentInsert:

@@ -1391,13 +1391,21 @@ def actor_json_to_model(activity_json, address, server):
             # Legacy post flair
             community.flair = []
             for flair in activity_json['lemmy:tagsForPosts']:
-                if 'display_name' not in flair:
-                    # Nothing to name the flair by. Skip this entry the way the four
-                    # optional keys below it are skipped, rather than raising KeyError
-                    # after the Community above has already been committed.
+                if not isinstance(flair, dict) or 'display_name' not in flair:
+                    # An entry that is not an object, or an object with no
+                    # 'display_name', has nothing to name the flair by: reading
+                    # flair['display_name'] used to raise TypeError and KeyError
+                    # respectively, out of actor_json_to_model and after the Community
+                    # above had already been committed. Testing membership first is not
+                    # enough, because `'display_name' not in flair` is itself a
+                    # TypeError for a non-container and a plain substring test for a
+                    # string, so the isinstance test has to come first and has to be
+                    # here. Skip the entry the way the four optional keys below it are
+                    # skipped, and say so, rather than dropping it silently.
                     current_app.logger.warning(
-                        f"actor_json_to_model: skipping a 'lemmy:tagsForPosts' entry of "
-                        f"{activity_json['id']} -- it carries no 'display_name'")
+                        f"actor_json_to_model: skipping the 'lemmy:tagsForPosts' entry "
+                        f"{flair!r} of {activity_json['id']} -- it is not an object "
+                        f"carrying a 'display_name'")
                     continue
                 flair_dict = {'display_name': flair['display_name']}
                 if 'text_color' in flair:
