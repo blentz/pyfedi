@@ -263,6 +263,44 @@ def _remote_community(instance, name='memes'):
     return community
 
 
+def _child_feed(instance, name='childfeed'):
+    """A Feed the childFeeds loop can resolve without any HTTP.
+
+    populate_child_feed_worker hands `~<name>@<server>` to search_for_feed,
+    which short-cuts on `Feed.ap_id == '<name>@<server>'` before it reaches
+    webfinger. Returns the id rather than the object: the worker ends in
+    `db.session.remove()`, which detaches everything the caller still holds.
+    """
+    child = Feed(name=name, title='Child', instance_id=instance.id,
+                 ap_id=f'{name}@{PEER}', ap_domain=PEER,
+                 ap_profile_id=f'https://{PEER}/f/{name}',
+                 ap_public_url=f'https://{PEER}/f/{name}',
+                 ap_fetched_at=utcnow())
+    db.session.add(child)
+    db.session.commit()
+    return child.id
+
+
+def _single_character_feed(instance, character):
+    """A decoy Feed carrying the ap_id that iterating a childFeeds STRING
+    resolves one of its characters to.
+
+    extract_domain_and_actor('a') returns ('', 'a'), so the address
+    search_for_feed receives is '~a@' and the ap_id it short-cuts on is 'a@'.
+    The decoy is what makes the reparenting a bare string causes into a row
+    change a test can read back: without it the character falls through to
+    webfinger, whose failure path sleeps for three to ten seconds per attempt.
+    """
+    decoy = Feed(name='decoy', title='Decoy', instance_id=instance.id,
+                 ap_id=f'{character}@', ap_domain=PEER,
+                 ap_profile_id=f'https://{PEER}/f/decoy',
+                 ap_public_url=f'https://{PEER}/f/decoy',
+                 ap_fetched_at=utcnow())
+    db.session.add(decoy)
+    db.session.commit()
+    return decoy.id
+
+
 def _register_owners(http_mock, urls, name=FEED, status=200):
     """The owners/moderators collection.
 
@@ -1521,6 +1559,53 @@ class TestChildFeeds:
         feed = actor_json_to_model(_owned_feed(), '~news', PEER)
         assert feed is not None
         assert db.session.query(Feed).filter(Feed.parent_feed_id.isnot(None)).count() == 0
+
+    def test_null_child_feeds_leaves_the_feed_ingested(self, app, db_session, http_mock):
+        """CHARACTERISATION of the current defect."""
+        instance = peer_instance(PEER)
+        owner = _owner(instance)
+        community = _remote_community(instance, 'memes')
+        _register_owners(http_mock, [owner.ap_profile_id])
+        _register_following(http_mock, [community.ap_profile_id])
+        document = _owned_feed(fields={'childFeeds': None})
+
+        with pytest.raises(TypeError):
+            actor_json_to_model(document, '~news', PEER)
+
+        assert db.session.query(Feed).filter_by(ap_profile_id=_feed_id()).count() == 1
+        assert db.session.query(FeedMember).count() == 1
+        assert db.session.query(FeedItem).count() == 1
+
+    def test_a_string_of_child_feeds_links_nothing(self, app, db_session, http_mock):
+        """CHARACTERISATION of the current defect."""
+        instance = peer_instance(PEER)
+        owner = _owner(instance)
+        decoy_id = _single_character_feed(instance, 'a')
+        _register_owners(http_mock, [owner.ap_profile_id])
+        _register_following(http_mock)
+        document = _owned_feed(fields={'childFeeds': 'a'})
+
+        feed = actor_json_to_model(document, '~news', PEER)
+
+        assert feed is not None
+        parent = db.session.query(Feed).filter_by(ap_profile_id=_feed_id()).one()
+        assert db.session.get(Feed, decoy_id).parent_feed_id == parent.id
+
+    def test_a_mapping_of_child_feeds_links_nothing(self, app, db_session, http_mock):
+        """CHARACTERISATION of the current defect."""
+        instance = peer_instance(PEER)
+        owner = _owner(instance)
+        child_id = _child_feed(instance)
+        _register_owners(http_mock, [owner.ap_profile_id])
+        _register_following(http_mock)
+        document = _owned_feed(
+            fields={'childFeeds': {f'https://{PEER}/f/childfeed': 'whatever'}})
+
+        feed = actor_json_to_model(document, '~news', PEER)
+
+        assert feed is not None
+        parent = db.session.query(Feed).filter_by(ap_profile_id=_feed_id()).one()
+        assert db.session.get(Feed, child_id).parent_feed_id == parent.id
 
 
 class TestFeedRefetchAfterCommit:
