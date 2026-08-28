@@ -1617,18 +1617,25 @@ class TestChildFeeds:
         ingested anyway -- a fix that refused the document would leave the
         decoy untouched too.
 
-        Mutation, both directions, distinct because the guard wraps the loop
-        rather than replacing it:
+        Mutation. This guard WRAPS the loop rather than skipping an entry
+        inside it, so its two directions sit the opposite way round from a
+        `continue`-shaped guard like the Group branch's tag guard: broadening
+        it is what removes its effect, and narrowing it is what removes the
+        loop. Both were run, both were killed:
 
-        - delete the isinstance test (leaving the loop unconditional): the
-          string is iterated again and this test fails on the decoy's
-          parent_feed_id.
-        - broaden it to `isinstance(..., (list, str))`, or to `True`: same
-          failure, the string is iterated again. The direction that IS
-          distinct is narrowing it to something no list satisfies, e.g.
-          `isinstance(..., tuple)` -- every childFeeds list is then dropped,
-          which this test cannot see but
-          test_a_child_feed_is_linked_to_its_parent fails on.
+        - broaden to `if True:` -- the guard deleted, the loop unconditional
+          again. All three malformed values are iterated: the null test fails
+          on the TypeError, and this test and the mapping test fail on a
+          parent_feed_id that is set again.
+        - narrow to `if False:` -- nothing is ever iterated. This test cannot
+          see that, because it asserts on a link NOT being made;
+          test_a_child_feed_is_linked_to_its_parent is what fails.
+
+        A partial broadening, `isinstance(..., (list, str, dict))`, is the
+        interesting middle: it keeps the null case guarded, so only this test
+        and the mapping test fail. It was run too, and it is the direction the
+        two silent cases exist to catch -- neither of them would have been
+        caught by the null case alone.
         """
         instance = peer_instance(PEER)
         owner = _owner(instance)

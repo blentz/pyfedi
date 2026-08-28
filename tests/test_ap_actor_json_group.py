@@ -1125,18 +1125,21 @@ class TestNewStylePostFlair:
         whole list, or that abandoned the loop at the first bad entry, fails
         here even though nothing raised.
 
-        Mutation, both directions, and they are distinct because this guard is
-        a `continue` rather than an early return:
+        Mutation. The guard is a `continue`, so deleting it and broadening it
+        are distinct: deleting removes the skip's EFFECT and the crash comes
+        back, broadening removes its TRIGGER and everything is skipped. The
+        guard is also a disjunction of two independent tests, and this test
+        and its non-object sibling take one disjunct each, so there are three
+        directions, all three run and all three killed:
 
-        - delete the guard: the KeyError comes back and this test fails on the
-          exception, not on a count.
-        - broaden it to `if True:` (or drop the `"type" not in flair` half in
-          favour of a key every entry has): every entry is skipped, nothing
-          raises, and this test fails on the flair list and the row count.
-
-        Narrowing the guard to the isinstance half alone is not a distinct
-        third direction -- it is the delete direction for this test, which
-        supplies a dict.
+        - delete `"type" not in flair` (leaving the isinstance half): the
+          KeyError comes back and THIS test fails on the exception, not on a
+          count. The sibling still passes.
+        - delete `not isinstance(flair, dict)`: only the sibling fails.
+        - broaden the whole guard to `if True:`: every entry is skipped,
+          nothing raises, and this test fails on the flair list and the row
+          count -- along with three other tests in this class and the
+          new-style-wins test in TestLegacyPostFlair.
         """
         peer_instance(PEER)
         document = _group('memes', fields={'tag': [
@@ -1155,15 +1158,23 @@ class TestNewStylePostFlair:
     def test_a_tag_entry_that_is_not_an_object_is_skipped_and_the_rest_ingest(self, app, db_session):
         """FIXED -- the other half of the same defect. A `tag` element that is
         not a dict at all raised TypeError on the subscript, again after the
-        Community was committed. A bare string is the entry used here because
-        `"type" not in "CommunityPostTag"` is a perfectly legal SUBSTRING test
-        that answers False, so the isinstance half of the guard is the only
-        thing standing between this document and the old TypeError.
+        Community was committed.
+
+        The two malformed entries are chosen to make the ISINSTANCE half of
+        the guard load-bearing, and that took a correction: `"type" not in
+        flair` is a perfectly legal SUBSTRING test on a string, so a plain
+        string like 'CommunityPostTag' is turned away by the membership half
+        alone and proves nothing about the isinstance half. Verified by
+        running that mutation: with the isinstance test deleted and
+        'CommunityPostTag' as the entry, this file still passed. The entries
+        used instead are a string that DOES contain 'type' -- a peer that
+        serialised its tag twice -- and an integer, for which the membership
+        test is itself a TypeError. Either one kills that mutant.
 
         Mutation, both directions:
 
-        - delete the isinstance half: the TypeError comes back and this test
-          fails on the exception. (Deleting the whole guard does the same.)
+        - delete the isinstance half (or the whole guard): the TypeError comes
+          back and this test fails on the exception.
         - broaden the guard to `if True:`: both good entries are dropped too
           and this test fails on the flair list and the row count.
         """
@@ -1171,7 +1182,8 @@ class TestNewStylePostFlair:
         document = _group('memes', fields={'tag': [
             {'type': 'CommunityPostTag', 'id': f'https://{PEER}/c/memes/tag/1',
              'preferredUsername': 'Discussion'},
-            'CommunityPostTag',
+            '{"type": "CommunityPostTag"}',
+            5,
             {'type': 'CommunityPostTag', 'id': f'https://{PEER}/c/memes/tag/3',
              'preferredUsername': 'Meta'},
         ]})
