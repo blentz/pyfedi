@@ -1057,11 +1057,21 @@ carry `isinstance`; a fourth, `refresh_community_profile_task`'s outer
 `"tag" not in activity_json` test, is a membership test on the *document*. The
 remaining two — `actor_json_to_model`'s opening `'type' not in activity_json`
 and `process_report`'s `'summary' not in request_json` — are guards on a whole
-request document rather than on an element of a peer-supplied *list*, so the
-malformed value is one the caller supplies, not one a peer can vary inside an
-otherwise well-formed document. **Reported, not fixed**, per this task's scope:
-they are a weaker version of the same shape and would need their own
-authorisation.
+request document rather than on an element of a peer-supplied *list*.
+
+They are safe, but **not for the same reason, and one of them not for the reason
+first given here.** `process_report`'s is safe because its caller subscripts
+`core_activity['type']` and `['object']` before the call, so the value is a
+mapping by the time the guard runs. `actor_json_to_model`'s is *not* safe on
+that argument: `fetch_remote_actor_data` returns `response.json()` unvalidated,
+so a peer serving `5` at its actor URL reaches that guard with an integer and
+raises `TypeError` from inside it — the same defect D13 had. It is safe for a
+different reason: it is the function's **first statement, before any write**, so
+the failure is a plain exception rather than a partially-applied ingest.
+
+That distinction is the one worth carrying. A bare membership guard on
+peer-supplied data is always capable of raising; whether that matters depends
+entirely on whether anything has been committed by the time it runs.
 
 The Status column was derived from git rather than from the fixing sub-project's
 prose ledger, by listing every commit on `fix-ap-ingest-defects` that touched the
@@ -1848,3 +1858,35 @@ together with its callers, or this shape is invisible.**
 - `tests/test_activitypub_util.py` (3 tests) needs live network and a manually
   pre-seeded `rimuadmin` user. It predates this harness and is excluded from the
   documented commands. Suite totals that look 3 short are this.
+
+## A guard must be tested on the domain it claims to reject
+
+D13's guard raised on the very input it existed to catch, and that survived two
+reviews. It is the campaign's sharpest process finding, and the useful part is
+that catching it needed no insight — only two mechanical checks the campaign
+already had the discipline for:
+
+1. **Run the guard's own trigger through it.** D13's registered description was
+   "a malformed entry"; the test only ever supplied a dict missing a key, which
+   is the single instance the fix trivially handled. Any non-dict entry — the
+   rest of the domain the guard claimed to reject — reproduced the original
+   defect immediately.
+2. **Drop each half of a compound guard and require a distinct kill.** This is
+   impossible to satisfy with one shape of test data, so the check forces the
+   data to cover the domain. It had already caught a vacuous half in D30's first
+   attempt, where the entries were strings and `"type" not in <a string>` is a
+   legal substring test, so the `isinstance` half was load-bearing for nothing
+   and the mutant dropping it survived with the suite green.
+
+Both reviews accepted "the `KeyError` test passes" as proof the guard worked. It
+only ever proved the guard handled the example that motivated it.
+
+The rule, in one line: **`KEY not in entry` is a call into `entry`, so a
+membership test is never a type test.** That sentence explains D13's original
+miss, D30's surviving mutant, and the string-containing-`display_name` case
+found while completing D13 — a legal substring test that passes the membership
+check and then dies on `string indices must be integers`.
+
+The corollary for reviewers: a mutation that kills is evidence about the input
+you chose, not about the guard. Ask what else the guard claims to reject, and
+whether anything tests that.
