@@ -39,7 +39,10 @@ What Task 6's tests do NOT do is the thing Task 7 asks for specifically --
 start from the OPPOSITE state (a non-blank sentinel `ip_address`) and show the
 gate overwrites it to '' rather than merely observing a fresh row's blank
 default. test_ld_signature_fallback_blanks_a_populated_ip_address below does
-exactly that, reusing the `no_network_ld_signing` fixture Task 6 built (see
+exactly that, reusing the `no_network_ld_signing` fixture Task 6 built and a
+whole-branch review then moved into tests/conftest.py alongside the
+`unsigned_but_precheck_clean_headers` and `ld_signed_body` recipes this file
+used to keep its own copies of (see
 its docstring in tests/test_inbox_gate_signatures.py for why the fixture
 exists and how it is verified to touch no real network).
 
@@ -168,65 +171,42 @@ targets are covered by their own tests too, all asserting on the recorded
 call rather than on a return value (there is nothing to assert a return value
 against -- every path returns `None`).
 """
-import json
-
 import pytest
-from werkzeug.http import http_date
 
 from app import db
 from app.activitypub.routes import replay_inbox_request
-from app.activitypub.signature import HttpSignature, LDSignature, default_context
 from app.models import ActivityPubLog
 from app.utils import utcnow
+from tests.conftest import ld_signed_body, unsigned_but_precheck_clean_headers
 from tests.factories import inbox_activity, make_instance, make_site, make_user, signed_inbox_post
-from tests.test_inbox_gate_signatures import no_network_ld_signing  # noqa: F401 -- reused fixture, see Step 1/2 docstring
 
 pytestmark = pytest.mark.usefixtures('redis_double')
 
 
-def _unsigned_but_precheck_clean_headers(body_bytes: bytes) -> dict:
-    """Digest and Date headers for a hand-built, unsigned request that still
-    clears `precheck` -- the same technique tests/test_inbox_gate_signatures.py
-    factors out under this exact name, duplicated here (rather than imported)
-    because it is two lines and importing a leading-underscore name across
-    test modules reads as more coupling than it is worth.
-    """
-    return {'Digest': HttpSignature.calculate_digest(body_bytes), 'Date': http_date()}
-
-
-def _ld_signed_body(actor, **fields) -> bytes:
-    """A request body carrying a genuinely valid LD signature made with
-    `actor`'s own private key, JSON-encoded -- built the same way Task 6's
-    test_a_valid_ld_signature_is_accepted builds one.
-
-    This exists so DEBUG=False dispatch tests below can reach `shared_inbox`'s
-    bookkeeping/dispatch code at all: `signed_inbox_post` -> `HttpSignature.
-    signed_request` -> `is_invalid_get_request_uri` (app/utils.py:5460-5462)
-    returns False (i.e. "not invalid") ONLY when `current_app.debug` is
-    already True at signing time, and treats every `.local`-suffixed host --
-    which `TestConfig.SERVER_NAME` ('test.piefed.local') is -- as invalid
-    otherwise, raising `ValueError("URI is invalid")` before any request is
-    even built. There is no way to use `signed_inbox_post` to build a request
-    while `current_app.debug` is False, which is exactly the state a
-    DEBUG=False dispatch test needs the SERVER to be in while handling it --
-    confirmed experimentally: both DEBUG=False dispatch tests raised this
-    ValueError the first time they were written using `signed_inbox_post`.
-    LD-signing never calls `HttpSignature.signed_request` (`LDSignature.
-    create_signature` and `client.post()` are used directly instead, exactly
-    as `test_an_invalid_ld_signature_is_refused` and
-    `test_a_valid_ld_signature_is_accepted` in tests/test_inbox_gate_
-    signatures.py already do), so it never reaches `is_invalid_get_request_
-    uri` and sidesteps the trap entirely. The only behavioural cost is that
-    `bounced` is True on this route rather than False -- irrelevant to what
-    these tests assert (which attribute of `process_inbox_request`/
-    `process_delete_request` was invoked), since the DEBUG branch is read
-    after `bounced` is already settled.
-    """
-    activity = inbox_activity(actor, **fields)
-    activity['@context'] = default_context()
-    key_id = f'{actor.ap_profile_id}#main-key'
-    activity['signature'] = LDSignature.create_signature(activity, actor.private_key, key_id)
-    return json.dumps(activity).encode('utf8')
+# Why the DEBUG=False dispatch tests below build their bodies with
+# `ld_signed_body` (tests/conftest.py) rather than with `signed_inbox_post`
+# ---------------------------------------------------------------------------
+# `signed_inbox_post` -> `HttpSignature.signed_request` -> `is_invalid_get_
+# request_uri` (app/utils.py:5460-5462) returns False (i.e. "not invalid")
+# ONLY when `current_app.debug` is already True at signing time, and treats
+# every `.local`-suffixed host -- which `TestConfig.SERVER_NAME`
+# ('test.piefed.local') is -- as invalid otherwise, raising
+# `ValueError("URI is invalid")` before any request is even built. There is no
+# way to use `signed_inbox_post` to build a request while `current_app.debug`
+# is False, which is exactly the state a DEBUG=False dispatch test needs the
+# SERVER to be in while handling it -- confirmed experimentally: both
+# DEBUG=False dispatch tests raised this ValueError the first time they were
+# written using `signed_inbox_post`.
+#
+# LD-signing never calls `HttpSignature.signed_request` (`LDSignature.
+# create_signature` and `client.post()` are used directly instead, exactly as
+# `test_an_invalid_ld_signature_is_refused` and
+# `test_a_valid_ld_signature_is_accepted` in tests/test_inbox_gate_
+# signatures.py already do), so it never reaches `is_invalid_get_request_uri`
+# and sidesteps the trap entirely. The only behavioural cost is that `bounced`
+# is True on this route rather than False -- irrelevant to what these tests
+# assert (which attribute of `process_inbox_request`/`process_delete_request`
+# was invoked), since the DEBUG branch is read after `bounced` is settled.
 
 
 class Recorder:
@@ -336,11 +316,11 @@ def test_ld_signature_fallback_blanks_a_populated_ip_address(app, signing_peer, 
     signing_peer.instance.ip_address = 'stale-sentinel'
     db.session.commit()
 
-    body_bytes = _ld_signed_body(signing_peer)
+    body_bytes = ld_signed_body(signing_peer)
 
     with app.test_client() as client:
         response = client.post('/inbox', data=body_bytes,
-                               headers=_unsigned_but_precheck_clean_headers(body_bytes),
+                               headers=unsigned_but_precheck_clean_headers(body_bytes),
                                content_type='application/activity+json')
 
     assert response.status_code == 200
@@ -386,22 +366,24 @@ def test_a_non_delete_activity_dispatches_process_inbox_request_via_delay_when_d
     only which attribute is invoked differs, which is exactly what
     `Recorder` pins.
 
-    Sent via `_ld_signed_body` rather than `signed_inbox_post` -- see that
-    helper's docstring for why `signed_inbox_post` cannot be used to reach
-    `shared_inbox` while `current_app.debug` is False at all in this suite.
+    Sent via `ld_signed_body` rather than `signed_inbox_post` -- see the
+    comment above `Recorder` in this file for why `signed_inbox_post` cannot
+    be used to reach `shared_inbox` while `current_app.debug` is False at all
+    in this suite.
     """
     inbox_recorder, delete_recorder = _patch_dispatch_recorders(monkeypatch)
-    body_bytes = _ld_signed_body(signing_peer)
+    body_bytes = ld_signed_body(signing_peer)
 
     with app.test_client() as client:
         response = client.post('/inbox', data=body_bytes,
-                               headers=_unsigned_but_precheck_clean_headers(body_bytes),
+                               headers=unsigned_but_precheck_clean_headers(body_bytes),
                                content_type='application/activity+json')
 
     assert response.status_code == 200
     assert len(inbox_recorder.delayed) == 1
     assert inbox_recorder.inline == []
     assert delete_recorder.inline == [] and delete_recorder.delayed == []
+    assert set(no_network_ld_signing) == {'https://www.w3.org/ns/activitystreams', 'https://w3id.org/security/v1'}
 
 
 def test_a_self_delete_of_an_existing_actor_dispatches_process_delete_request_inline_under_debug(app, signing_peer, monkeypatch):
@@ -430,21 +412,22 @@ def test_a_self_delete_of_an_existing_actor_dispatches_process_delete_request_vi
     """routes.py:751-756, non-DEBUG branch: same self-delete shape as above,
     with DEBUG left at its default False, so `.delay()` is the call made.
 
-    Sent via `_ld_signed_body`, for the same reason the sibling test above
+    Sent via `ld_signed_body`, for the same reason the sibling test above
     uses it instead of `signed_inbox_post`.
     """
     inbox_recorder, delete_recorder = _patch_dispatch_recorders(monkeypatch)
-    body_bytes = _ld_signed_body(signing_peer, activity_type='Delete', object_uri=signing_peer.ap_profile_id)
+    body_bytes = ld_signed_body(signing_peer, activity_type='Delete', object_uri=signing_peer.ap_profile_id)
 
     with app.test_client() as client:
         response = client.post('/inbox', data=body_bytes,
-                               headers=_unsigned_but_precheck_clean_headers(body_bytes),
+                               headers=unsigned_but_precheck_clean_headers(body_bytes),
                                content_type='application/activity+json')
 
     assert response.status_code == 200
     assert len(delete_recorder.delayed) == 1
     assert delete_recorder.inline == []
     assert inbox_recorder.inline == [] and inbox_recorder.delayed == []
+    assert set(no_network_ld_signing) == {'https://www.w3.org/ns/activitystreams', 'https://w3id.org/security/v1'}
 
 
 # ---------------------------------------------------------------------------

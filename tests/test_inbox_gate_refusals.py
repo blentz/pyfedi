@@ -381,32 +381,69 @@ import json
 import uuid
 
 import pytest
-from werkzeug.http import http_date
 
 from app import db
-from app.activitypub.signature import HttpSignature
 from app.constants import ALLOWLIST_STRONG
 from app.models import ActivityPubLog, Site
+from tests.conftest import unsigned_but_precheck_clean_headers
 from tests.factories import inbox_activity, signed_inbox_post
 
 pytestmark = pytest.mark.usefixtures('redis_double')
 
 
-def test_an_unparseable_body_is_refused(app, site):
+def test_an_unparseable_body_is_refused(app, site, monkeypatch):
+    """routes.py:628-631: `request.get_json(force=True)` raises werkzeug's
+    `BadRequest` on a malformed body, and the `except werkzeug.exceptions.
+    BadRequest` arm catches it, logs 'Unable to parse json body: ...' and
+    returns ('', 400).
+
+    The 400 alone is NOT what this test rests on, and an earlier version of
+    it that asserted only the status was provably vacuous: deleting the
+    whole `except` arm changes the status not at all. `request.get_json`
+    raises `BadRequest`, Flask turns an uncaught `HTTPException` into its own
+    response, and `app/errors/handlers.py` registers handlers for 404, 500,
+    401 and 429 -- but NOT 400 -- so werkzeug's default 400 comes back
+    either way. Six other outcomes in this gate also return 400.
+
+    The one thing the arm does that Flask's default does not is call
+    `log_incoming_ap`, so that is what is asserted. `log_incoming_ap`
+    (app/activitypub/util.py:4471-4486) needs only `LOG_ACTIVITYPUB_TO_DB`
+    to write a row -- notably NOT `g.site`, which is not set until
+    routes.py:646, well past this arm. The message is suffixed with
+    `str(request.user_agent)`, which the test client supplies and this test
+    has no reason to pin, hence `startswith` rather than equality.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+
     with app.test_client() as client:
         response = client.post('/inbox', data='{not json',
                                content_type='application/json')
 
     assert response.status_code == 400
+    assert ActivityPubLog.query.one().exception_message.startswith('Unable to parse json body: ')
 
 
-def test_a_json_null_body_is_refused(app, site):
-    """`request.get_json` returns None rather than raising for a bare null."""
+def test_a_json_null_body_is_refused(app, site, monkeypatch):
+    """routes.py:636-638: `request.get_json` returns None rather than raising
+    for a bare `null`, so the explicit `if request_json is None:` guard --
+    not the `except` arm above -- is what refuses it, logging 'Empty JSON
+    body ...' and returning ('', 400).
+
+    Deleting that guard does break this test, but only by crashing: the next
+    statement to touch `request_json` raises `TypeError`. A status-only
+    assertion also cannot tell this 400 apart from the five other 400 sites
+    in this gate. Asserting the logged message pins WHICH refusal happened
+    and fails by assertion rather than by accident. `startswith` because the
+    message carries a `str(request.user_agent)` suffix.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+
     with app.test_client() as client:
         response = client.post('/inbox', data='null',
                                content_type='application/json')
 
     assert response.status_code == 400
+    assert ActivityPubLog.query.one().exception_message.startswith('Empty JSON body')
 
 
 def test_a_paused_instance_returns_429(app, site, redis_double):
@@ -495,7 +532,7 @@ def test_an_announce_of_local_content_is_dropped(app, signing_peer, monkeypatch)
     assert ActivityPubLog.query.one().exception_message == 'Activity about local content which is already present'
 
 
-def test_an_announce_of_an_ordered_collection_is_not_refused_by_the_field_check(app, signing_peer):
+def test_an_announce_of_an_ordered_collection_is_not_refused_by_the_field_check(app, signing_peer, monkeypatch):
     """FINDING, not a refusal test: object_has_missing_fields returns False
     for ANY OrderedCollection-typed object without checking id/actor/object
     (app/activitypub/util.py:4661-4662), so this Announce -- wrapping an
@@ -506,13 +543,32 @@ def test_an_announce_of_an_ordered_collection_is_not_refused_by_the_field_check(
     exception_message to assert here: log_incoming_ap is never reached on
     this path, and TESTING=True (no PROPAGATE_EXCEPTIONS override) lets that
     KeyError propagate out of the test client rather than becoming a 500.
-    Reported for the defect register (Task 8), not fixed here.
+    Reported for the defect register (Task 8, D42), not fixed here.
+
+    Two assertions beyond `pytest.raises`, both added by a whole-branch
+    review:
+
+    - The KeyError is qualified. D42's entire claim is that the crash is
+      `object['id']` at routes.py:671 -- a bare `pytest.raises(KeyError)`
+      would be satisfied by a KeyError raised anywhere in the request,
+      including from a future unrelated dict access, so `args[0] == 'id'`
+      is what actually ties the test to the reported defect.
+    - No ActivityPubLog row is written, WITH logging enabled. The point of
+      D42 is that this path crashes instead of producing one of the gate's
+      normal logged refusals; asserting the count without setting
+      `LOG_ACTIVITYPUB_TO_DB` would assert nothing at all, since the flag
+      defaults to False and every other refusal in this file would also
+      write zero rows under it.
     """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     activity = inbox_activity(signing_peer, activity_type='Announce', object={'type': 'OrderedCollection'})
 
     with app.test_client() as client:
-        with pytest.raises(KeyError):
+        with pytest.raises(KeyError) as excinfo:
             client.post('/inbox', json=activity)
+
+    assert excinfo.value.args[0] == 'id'
+    assert ActivityPubLog.query.count() == 0
 
 
 def test_a_disallowed_actor_is_refused_under_strong_allowlist(app, signing_peer, monkeypatch):
@@ -544,6 +600,68 @@ def test_a_disallowed_actor_is_refused_under_strong_allowlist(app, signing_peer,
         response = client.post('/inbox', json=activity)
 
     assert response.status_code == 403
+    assert ActivityPubLog.query.count() == 0
+
+
+def test_a_dict_shaped_actor_skips_the_strong_allowlist_check(app, signing_peer, monkeypatch):
+    """CHARACTERISATION of a live allowlist bypass -- D47 in the campaign's
+    defect register. This test pins TODAY'S behaviour so a fix is visible as
+    a test change; it does NOT endorse it.
+
+    Identical setup to test_a_disallowed_actor_is_refused_under_strong_
+    allowlist immediately above -- same peer, same non-allowlisted host
+    ('peer.example', with no AllowedInstances row, as every test in this
+    suite leaves it), same ALLOWLIST_STRONG -- with exactly one thing
+    changed: `actor` is sent as `{'id': <uri>}` instead of as the bare URI
+    string. That one shape change is enough to walk straight past
+    routes.py:673-675:
+
+      1. `furl({'id': ...}).host` is `None` -- `furl` only parses strings,
+         and returns a host of None for anything it cannot parse (equally
+         true of `furl('not-a-url').host`).
+      2. `instance_allowed(None)` returns `True` unconditionally
+         (app/utils.py:2302-2303), so `not instance_allowed(...)` is False
+         and the 403 never fires.
+      3. `find_actor_or_create_cached` then unwraps the dict --
+         `if isinstance(actor, dict): actor = actor['id']`
+         (app/activitypub/util.py:341-342) -- so the actor still resolves,
+         and its own GENUINE HTTP signature (made by production's signer,
+         verified by production's verifier, neither patched) verifies against
+         its own real key. The activity is dispatched.
+
+    The author knew `actor` may not be a string: `isinstance(request_json
+    ['actor'], str)` guards exist at routes.py:686 and :696. Lines 674 and
+    705 have no such guard.
+
+    A FIX would flip this test: the assertions below would become the same
+    `403` / `ActivityPubLog.query.count() == 0` / no-dispatch the sibling
+    test asserts, because the host would be read from the dict's 'id' (or a
+    non-string actor would be refused outright) rather than resolving to
+    None. Whoever makes that change should replace this test's body with the
+    sibling's and delete this docstring.
+
+    Verified end to end before being written, not inferred from the three
+    links: posted through the real `/inbox` route, and the string-actor
+    control in the sibling test above returns 403 with zero dispatches under
+    exactly the same fixtures.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    monkeypatch.setitem(app.config, 'DEBUG', True)
+    dispatched = []
+    monkeypatch.setattr('app.activitypub.routes.process_inbox_request',
+                        lambda *args, **kwargs: dispatched.append(args))
+    site = Site.query.get(1)
+    site.allowlist_mode = ALLOWLIST_STRONG
+    db.session.commit()
+    activity = inbox_activity(signing_peer)
+    activity['actor'] = {'id': signing_peer.ap_profile_id}
+
+    with app.test_client() as client:
+        response = signed_inbox_post(client, activity, signing_peer)
+
+    assert response.status_code != 403
+    assert response.status_code == 200
+    assert len(dispatched) == 1
     assert ActivityPubLog.query.count() == 0
 
 
@@ -662,7 +780,8 @@ def test_a_delete_of_an_unknown_account_needs_no_signature(app, site, monkeypatc
     proof worth having directly, rather than inferred from source reading.
     It is NOT before `HttpSignature.precheck` (687), though, which this
     request still has to clear: a correct `Digest` and a fresh `Date` are
-    supplied by hand, computed the same way `signed_inbox_post` computes them
+    supplied by `unsigned_but_precheck_clean_headers` (tests/conftest.py),
+    which computes them the same way `signed_inbox_post` computes them
     internally, so the request reaches the Delete shortcut rather than being
     refused earlier at precheck for an unrelated reason (see
     test_a_tampered_body_fails_precheck above for what THAT refusal looks
@@ -677,10 +796,10 @@ def test_a_delete_of_an_unknown_account_needs_no_signature(app, site, monkeypatc
     activity = {'id': f'{ghost}/activities/{uuid.uuid4().hex}', 'type': 'Delete',
                 'actor': ghost, 'object': ghost}
     body_bytes = json.dumps(activity).encode('utf8')
-    headers = {'Digest': HttpSignature.calculate_digest(body_bytes), 'Date': http_date()}
 
     with app.test_client() as client:
-        response = client.post('/inbox', data=body_bytes, headers=headers,
+        response = client.post('/inbox', data=body_bytes,
+                               headers=unsigned_but_precheck_clean_headers(body_bytes),
                                content_type='application/activity+json')
 
     assert response.status_code == 200

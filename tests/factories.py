@@ -822,7 +822,7 @@ def inbox_activity(actor, *, activity_type: str = 'Like', object_uri: str = None
 
 
 def signed_inbox_post(client, activity: dict, sender, *, path: str = '/inbox',
-                      body: bytes = None, host: str = None):
+                      body: bytes = None):
     """POST `activity` to `path` with a REAL HTTP signature made by `sender`.
 
     Uses production's own signing code. `signed_request(send_via_async=True)`
@@ -837,15 +837,23 @@ def signed_inbox_post(client, activity: dict, sender, *, path: str = '/inbox',
 
     `body` overrides the bytes actually sent while leaving the signature
     alone, which is how a test produces a request whose digest no longer
-    matches its body. `host` overrides the Host header for the same reason,
-    one field over.
+    matches its body.
+
+    There is deliberately NO `host` override. One existed until a
+    whole-branch review removed it: it was resolved as
+    `host = host or SERVER_NAME` before use, so it fed the SIGNED URI and the
+    sent `Host` header from the same value and could not produce the
+    mismatch its docstring advertised (`HttpSignature.signed_request` already
+    sets `headers["Host"]` from that same URI, app/activitypub/signature.py:449,
+    so the re-assignment was a no-op too, and the `if host is not None:` guard
+    around it was dead after the `or`). Nothing called it. A Host-mismatch
+    test written from that parameter would have proved nothing; write one by
+    hand instead, overriding `Host` in the headers AFTER signing.
     """
     from app.activitypub.signature import HttpSignature
-    host = host or current_app.config['SERVER_NAME']
+    host = current_app.config['SERVER_NAME']
     _uri, headers, body_bytes = HttpSignature.signed_request(
         f'https://{host}{path}', activity, sender.private_key,
         f'{sender.ap_profile_id}#main-key', send_via_async=True)
-    if host is not None:
-        headers['Host'] = host
     return client.post(path, data=body if body is not None else body_bytes,
                        headers=headers, content_type='application/activity+json')
