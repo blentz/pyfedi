@@ -8,7 +8,10 @@ has already recorded once in another repository's suite.
 
 The `signing_peer` fixture this file uses lives in tests/conftest.py -- a
 later sub-project task needs it from a different test module, so it is shared
-rather than local to this one.
+rather than local to this one. The `no_network_ld_signing` fixture described
+below, the two frozen `@context` documents behind it, and the
+`unsigned_but_precheck_clean_headers` / `ld_signed_body` recipes now live
+there for the same reason: all three inbox-gate modules use them.
 
 TASK 6 -- signature verification, the LD fallback, and the fediseer exemption
 ===============================================================================
@@ -84,7 +87,9 @@ guards against.
 The fix uses the SAME override point `app/main/routes.py:744`'s dead demo
 code already uses in this codebase, for the opposite purpose (pointing pyld
 AT the network on purpose): `jsonld.set_document_loader`. The
-`no_network_ld_signing` fixture below installs a loader backed by the two
+`no_network_ld_signing` fixture (tests/conftest.py, moved there from this
+file after a whole-branch review objected to the cross-file fixture import it
+had grown in tests/test_inbox_gate_dispatch.py) installs a loader backed by the two
 context documents' content, fetched once from the real URLs and frozen
 verbatim into `_ACTIVITYSTREAMS_CONTEXT`/`_SECURITY_V1_CONTEXT` (not
 synthesized -- URDNA2015 normalization has to see exactly what a real
@@ -193,105 +198,15 @@ site operator's exemption request landed and simply never got a body written.
 import json
 
 import pytest
-from pyld import jsonld
-from werkzeug.http import http_date
 
 from app import db
-from app.activitypub.signature import HttpSignature, LDSignature, RsaKeys, default_context
+from app.activitypub.signature import HttpSignature, RsaKeys
 from app.models import ActivityPubLog
 from app.utils import utcnow
+from tests.conftest import ld_signed_body, unsigned_but_precheck_clean_headers
 from tests.factories import inbox_activity, make_instance, make_site, make_user, signed_inbox_post
 
 pytestmark = pytest.mark.usefixtures('redis_double')
-
-
-# Frozen, verbatim copies of the two JSON-LD context documents `LDSignature.
-# normalized_hash` resolves via `pyld.jsonld.normalize` -- fetched once from
-# the real URLs (`requests.get('https://www.w3.org/ns/activitystreams', ...)`
-# / `.../security/v1`) and pasted in as-received, not hand-written, so
-# URDNA2015 normalization sees exactly what production would see over the
-# network. See the module docstring's "Producing a valid LD signature"
-# section for why these exist: pyld's default document loader reaches the
-# real internet through `requests`, which this suite's httpx-only network
-# block does not cover, and a unit test should not depend on w3.org/w3id.org
-# being reachable.
-_ACTIVITYSTREAMS_CONTEXT = json.loads(
-    '{"@context":{"@vocab":"_:","xsd":"http://www.w3.org/2001/XMLSchema#","as":"https://www.w3.org/ns/activitystreams#","ldp":"http://www.w3.org/ns/ldp#","vcard":"http://www.w3.org/2006/vcard/ns#","id":"@id","type":"@type","Accept":"as:Accept","Activity":"as:Activity","IntransitiveActivity":"as:IntransitiveActivity","Add":"as:Add","Announce":"as:Announce","Application":"as:Application","Arrive":"as:Arrive","Article":"as:Article","Audio":"as:Audio","Block":"as:Block","Collection":"as:Collection","CollectionPage":"as:CollectionPage","Relationship":"as:Relationship","Create":"as:Create","Delete":"as:Delete","Dislike":"as:Dislike","Document":"as:Document","Event":"as:Event","Follow":"as:Follow","Flag":"as:Flag","Group":"as:Group","Ignore":"as:Ignore","Image":"as:Image","Invite":"as:Invite","Join":"as:Join","Leave":"as:Leave","Like":"as:Like","Link":"as:Link","Mention":"as:Mention","Note":"as:Note","Object":"as:Object","Offer":"as:Offer","OrderedCollection":"as:OrderedCollection","OrderedCollectionPage":"as:OrderedCollectionPage","Organization":"as:Organization","Page":"as:Page","Person":"as:Person","Place":"as:Place","Profile":"as:Profile","Question":"as:Question","Reject":"as:Reject","Remove":"as:Remove","Service":"as:Service","TentativeAccept":"as:TentativeAccept","TentativeReject":"as:TentativeReject","Tombstone":"as:Tombstone","Undo":"as:Undo","Update":"as:Update","Video":"as:Video","View":"as:View","Listen":"as:Listen","Read":"as:Read","Move":"as:Move","Travel":"as:Travel","IsFollowing":"as:IsFollowing","IsFollowedBy":"as:IsFollowedBy","IsContact":"as:IsContact","IsMember":"as:IsMember","subject":{"@id":"as:subject","@type":"@id"},"relationship":{"@id":"as:relationship","@type":"@id"},"actor":{"@id":"as:actor","@type":"@id"},"attributedTo":{"@id":"as:attributedTo","@type":"@id"},"attachment":{"@id":"as:attachment","@type":"@id"},"bcc":{"@id":"as:bcc","@type":"@id"},"bto":{"@id":"as:bto","@type":"@id"},"cc":{"@id":"as:cc","@type":"@id"},"context":{"@id":"as:context","@type":"@id"},"current":{"@id":"as:current","@type":"@id"},"first":{"@id":"as:first","@type":"@id"},"generator":{"@id":"as:generator","@type":"@id"},"icon":{"@id":"as:icon","@type":"@id"},"image":{"@id":"as:image","@type":"@id"},"inReplyTo":{"@id":"as:inReplyTo","@type":"@id"},"items":{"@id":"as:items","@type":"@id"},"instrument":{"@id":"as:instrument","@type":"@id"},"orderedItems":{"@id":"as:items","@type":"@id","@container":"@list"},"last":{"@id":"as:last","@type":"@id"},"location":{"@id":"as:location","@type":"@id"},"next":{"@id":"as:next","@type":"@id"},"object":{"@id":"as:object","@type":"@id"},"oneOf":{"@id":"as:oneOf","@type":"@id"},"anyOf":{"@id":"as:anyOf","@type":"@id"},"closed":{"@id":"as:closed","@type":"xsd:dateTime"},"origin":{"@id":"as:origin","@type":"@id"},"accuracy":{"@id":"as:accuracy","@type":"xsd:float"},"prev":{"@id":"as:prev","@type":"@id"},"preview":{"@id":"as:preview","@type":"@id"},"replies":{"@id":"as:replies","@type":"@id"},"result":{"@id":"as:result","@type":"@id"},"audience":{"@id":"as:audience","@type":"@id"},"partOf":{"@id":"as:partOf","@type":"@id"},"tag":{"@id":"as:tag","@type":"@id"},"target":{"@id":"as:target","@type":"@id"},"to":{"@id":"as:to","@type":"@id"},"url":{"@id":"as:url","@type":"@id"},"altitude":{"@id":"as:altitude","@type":"xsd:float"},"content":"as:content","contentMap":{"@id":"as:content","@container":"@language"},"name":"as:name","nameMap":{"@id":"as:name","@container":"@language"},"duration":{"@id":"as:duration","@type":"xsd:duration"},"endTime":{"@id":"as:endTime","@type":"xsd:dateTime"},"height":{"@id":"as:height","@type":"xsd:nonNegativeInteger"},"href":{"@id":"as:href","@type":"@id"},"hreflang":"as:hreflang","latitude":{"@id":"as:latitude","@type":"xsd:float"},"longitude":{"@id":"as:longitude","@type":"xsd:float"},"mediaType":"as:mediaType","published":{"@id":"as:published","@type":"xsd:dateTime"},"radius":{"@id":"as:radius","@type":"xsd:float"},"rel":"as:rel","startIndex":{"@id":"as:startIndex","@type":"xsd:nonNegativeInteger"},"startTime":{"@id":"as:startTime","@type":"xsd:dateTime"},"summary":"as:summary","summaryMap":{"@id":"as:summary","@container":"@language"},"totalItems":{"@id":"as:totalItems","@type":"xsd:nonNegativeInteger"},"units":"as:units","updated":{"@id":"as:updated","@type":"xsd:dateTime"},"width":{"@id":"as:width","@type":"xsd:nonNegativeInteger"},"describes":{"@id":"as:describes","@type":"@id"},"formerType":{"@id":"as:formerType","@type":"@id"},"deleted":{"@id":"as:deleted","@type":"xsd:dateTime"},"inbox":{"@id":"ldp:inbox","@type":"@id"},"outbox":{"@id":"as:outbox","@type":"@id"},"following":{"@id":"as:following","@type":"@id"},"followers":{"@id":"as:followers","@type":"@id"},"streams":{"@id":"as:streams","@type":"@id"},"preferredUsername":"as:preferredUsername","endpoints":{"@id":"as:endpoints","@type":"@id"},"uploadMedia":{"@id":"as:uploadMedia","@type":"@id"},"proxyUrl":{"@id":"as:proxyUrl","@type":"@id"},"liked":{"@id":"as:liked","@type":"@id"},"oauthAuthorizationEndpoint":{"@id":"as:oauthAuthorizationEndpoint","@type":"@id"},"oauthTokenEndpoint":{"@id":"as:oauthTokenEndpoint","@type":"@id"},"provideClientKey":{"@id":"as:provideClientKey","@type":"@id"},"signClientKey":{"@id":"as:signClientKey","@type":"@id"},"sharedInbox":{"@id":"as:sharedInbox","@type":"@id"},"Public":{"@id":"as:Public","@type":"@id"},"source":"as:source","likes":{"@id":"as:likes","@type":"@id"},"shares":{"@id":"as:shares","@type":"@id"},"alsoKnownAs":{"@id":"as:alsoKnownAs","@type":"@id"}}}'
-)
-_SECURITY_V1_CONTEXT = json.loads(
-    '{"@context":{"id":"@id","type":"@type","dc":"http://purl.org/dc/terms/","sec":"https://w3id.org/security#","xsd":"http://www.w3.org/2001/XMLSchema#","EcdsaKoblitzSignature2016":"sec:EcdsaKoblitzSignature2016","Ed25519Signature2018":"sec:Ed25519Signature2018","EncryptedMessage":"sec:EncryptedMessage","GraphSignature2012":"sec:GraphSignature2012","LinkedDataSignature2015":"sec:LinkedDataSignature2015","LinkedDataSignature2016":"sec:LinkedDataSignature2016","CryptographicKey":"sec:Key","authenticationTag":"sec:authenticationTag","canonicalizationAlgorithm":"sec:canonicalizationAlgorithm","cipherAlgorithm":"sec:cipherAlgorithm","cipherData":"sec:cipherData","cipherKey":"sec:cipherKey","created":{"@id":"dc:created","@type":"xsd:dateTime"},"creator":{"@id":"dc:creator","@type":"@id"},"digestAlgorithm":"sec:digestAlgorithm","digestValue":"sec:digestValue","domain":"sec:domain","encryptionKey":"sec:encryptionKey","expiration":{"@id":"sec:expiration","@type":"xsd:dateTime"},"expires":{"@id":"sec:expiration","@type":"xsd:dateTime"},"initializationVector":"sec:initializationVector","iterationCount":"sec:iterationCount","nonce":"sec:nonce","normalizationAlgorithm":"sec:normalizationAlgorithm","owner":{"@id":"sec:owner","@type":"@id"},"password":"sec:password","privateKey":{"@id":"sec:privateKey","@type":"@id"},"privateKeyPem":"sec:privateKeyPem","publicKey":{"@id":"sec:publicKey","@type":"@id"},"publicKeyBase58":"sec:publicKeyBase58","publicKeyPem":"sec:publicKeyPem","publicKeyWif":"sec:publicKeyWif","publicKeyService":{"@id":"sec:publicKeyService","@type":"@id"},"revoked":{"@id":"sec:revoked","@type":"xsd:dateTime"},"salt":"sec:salt","signature":"sec:signature","signatureAlgorithm":"sec:signingAlgorithm","signatureValue":"sec:signatureValue"}}'
-)
-_STATIC_LD_CONTEXTS = {
-    'https://www.w3.org/ns/activitystreams': _ACTIVITYSTREAMS_CONTEXT,
-    'https://w3id.org/security/v1': _SECURITY_V1_CONTEXT,
-}
-
-
-def _static_ld_document_loader(url, options=None):
-    """A pyld document loader over the two frozen documents above -- never
-    the network. Raises the same `jsonld.JsonLdError` pyld's own loaders
-    raise for an unresolvable URL, so a test that accidentally needs a THIRD
-    context fails loudly (an unhelpful KeyError would do too, but this stays
-    in pyld's own error vocabulary, matching what `normalized_hash`'s callers
-    already expect to catch).
-    """
-    if url not in _STATIC_LD_CONTEXTS:
-        raise jsonld.JsonLdError(
-            f'no static content for {url!r} -- add it to _STATIC_LD_CONTEXTS '
-            f'rather than letting this fall through to the network',
-            'jsonld.LoadDocumentError')
-    return {'contentType': 'application/ld+json', 'contextUrl': None,
-            'documentUrl': url, 'document': _STATIC_LD_CONTEXTS[url]}
-
-
-@pytest.fixture
-def no_network_ld_signing(monkeypatch):
-    """Makes `LDSignature.create_signature`/`verify_signature` resolve their
-    two `@context` URLs from the frozen local copies above instead of the
-    real internet, for the duration of one test, restoring whatever loader
-    pyld had beforehand afterwards -- a `jsonld.set_document_loader` override,
-    the same configuration point `app/main/routes.py:744`'s dead demo code
-    already uses (there, to point pyld AT the network on purpose). This is
-    NOT a patch of `LDSignature.verify_signature` or `HttpSignature.
-    verify_request` -- neither forbidden name is touched, and the
-    normalization/signature math both still run as production wrote them;
-    only where the two context DOCUMENTS come from changes.
-
-    Yields the list of URLs actually resolved through the static loader, so a
-    test can assert it was genuinely exercised (`{activitystreams,
-    security-v1}`, per the module docstring's "Verified to add no false
-    confidence" section) rather than merely not having failed.
-
-    Also monkeypatches `requests.get` to raise `AssertionError` if called at
-    all -- `pyld.documentloader.requests.requests_document_loader`'s inner
-    loader (pyld's DEFAULT, unpatched here) is the only place in this
-    dependency chain that reaches the network, and it does so with exactly
-    that call (confirmed by reading its source). With the static loader
-    installed it should never run, so this is a hard failure if it somehow
-    does, rather than a silent real network request passing unnoticed.
-    """
-    resolved = []
-
-    def _recording_loader(url, options=None):
-        resolved.append(url)
-        return _static_ld_document_loader(url, options)
-
-    previous_loader = jsonld.get_document_loader()
-    jsonld.set_document_loader(_recording_loader)
-
-    def _network_forbidden(*args, **kwargs):
-        raise AssertionError(
-            f'requests.get was called during a test using no_network_ld_signing '
-            f'-- the static document loader should have intercepted every '
-            f'jsonld.normalize context resolution before this call site '
-            f'(pyld.documentloader.requests.requests_document_loader) could ever '
-            f'be reached; args={args!r} kwargs={kwargs!r}')
-
-    monkeypatch.setattr('requests.get', _network_forbidden)
-    try:
-        yield resolved
-    finally:
-        jsonld.set_document_loader(previous_loader)
 
 
 def test_a_genuinely_signed_activity_is_accepted(app, signing_peer, monkeypatch):
@@ -395,17 +310,6 @@ def test_a_body_substituted_after_signing_fails_precheck(app, signing_peer, monk
     assert ActivityPubLog.query.one().exception_message == 'Precheck failed: Digest is incorrect'
 
 
-def _unsigned_but_precheck_clean_headers(body_bytes: bytes) -> dict:
-    """Digest and Date headers computed the same way signed_inbox_post
-    computes them internally, for a request built by hand with NO Signature
-    header -- the shape every test below this needs, so it is factored out
-    rather than repeated three times (mirroring test_a_delete_of_an_unknown_
-    account_needs_no_signature and test_an_unresolvable_actor_is_refused,
-    tests/test_inbox_gate_refusals.py, which do the same by hand inline).
-    """
-    return {'Digest': HttpSignature.calculate_digest(body_bytes), 'Date': http_date()}
-
-
 def test_an_invalid_ld_signature_is_refused(app, signing_peer, monkeypatch, no_network_ld_signing):
     """routes.py:717-724: with no Signature header at all, `HttpSignature.
     verify_request` raises `VerificationFormatError` ("No signature header
@@ -434,16 +338,12 @@ def test_an_invalid_ld_signature_is_refused(app, signing_peer, monkeypatch, no_n
     own docstring.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
-    activity = inbox_activity(signing_peer)
-    activity['@context'] = default_context()
-    key_id = f'{signing_peer.ap_profile_id}#main-key'
     wrong_private_key, _wrong_public_key = RsaKeys.generate_keypair()
-    activity['signature'] = LDSignature.create_signature(activity, wrong_private_key, key_id)
-    body_bytes = json.dumps(activity).encode('utf8')
+    body_bytes = ld_signed_body(signing_peer, signing_key=wrong_private_key)
 
     with app.test_client() as client:
         response = client.post('/inbox', data=body_bytes,
-                               headers=_unsigned_but_precheck_clean_headers(body_bytes),
+                               headers=unsigned_but_precheck_clean_headers(body_bytes),
                                content_type='application/activity+json')
 
     assert response.status_code == 400
@@ -488,15 +388,11 @@ def test_a_valid_ld_signature_is_accepted(app, signing_peer, monkeypatch, no_net
     dispatched = []
     monkeypatch.setattr('app.activitypub.routes.process_inbox_request',
                         lambda *args, **kwargs: dispatched.append(args))
-    activity = inbox_activity(signing_peer)
-    activity['@context'] = default_context()
-    key_id = f'{signing_peer.ap_profile_id}#main-key'
-    activity['signature'] = LDSignature.create_signature(activity, signing_peer.private_key, key_id)
-    body_bytes = json.dumps(activity).encode('utf8')
+    body_bytes = ld_signed_body(signing_peer)
 
     with app.test_client() as client:
         response = client.post('/inbox', data=body_bytes,
-                               headers=_unsigned_but_precheck_clean_headers(body_bytes),
+                               headers=unsigned_but_precheck_clean_headers(body_bytes),
                                content_type='application/activity+json')
 
     assert response.status_code == 200
@@ -549,7 +445,7 @@ def test_an_unsigned_fediseer_chat_message_is_exempted(app, db_session, monkeypa
 
     with app.test_client() as client:
         response = client.post('/inbox', data=body_bytes,
-                               headers=_unsigned_but_precheck_clean_headers(body_bytes),
+                               headers=unsigned_but_precheck_clean_headers(body_bytes),
                                content_type='application/activity+json')
 
     assert response.status_code == 200
@@ -583,7 +479,7 @@ def test_an_unsigned_chat_message_from_a_non_fediseer_actor_is_refused(app, sign
 
     with app.test_client() as client:
         response = client.post('/inbox', data=body_bytes,
-                               headers=_unsigned_but_precheck_clean_headers(body_bytes),
+                               headers=unsigned_but_precheck_clean_headers(body_bytes),
                                content_type='application/activity+json')
 
     assert response.status_code == 400
