@@ -72,6 +72,53 @@ assert_all_called failed the tests. Without it, four "this guard does not fire"
 tests would have passed while exercising nothing at all. The declared id is
 kept distinct from the fetch URI throughout this file for that reason.
 
+THE THREE-WAY DRIFT REPORT (Task 5's deliverable).
+
+The register's D23 describes the duplication as a pair: this function and
+create_resolved_object. It is a triple. verify_object_from_source carries the
+same walk and the same gate, and sub-project 2b already fixed that copy -- so
+the family is three functions wide, one of them already correct, and the
+correct one is the fix template for the other two.
+
+Derived mechanically, not by eye:
+
+    podman-compose -f compose.test.yaml exec -T -w /app test-runner python -c "
+    import ast, difflib
+    src = open('app/activitypub/util.py').read()
+    def walk_src(name):
+        n = next(x for x in ast.walk(ast.parse(src))
+                 if isinstance(x, ast.FunctionDef) and x.name == name)
+        for node in ast.walk(n):
+            if isinstance(node, ast.If) and 'attributedTo' in ast.unparse(node.test):
+                return ast.unparse(node)
+    print(walk_src('create_resolved_object') == walk_src('resolve_remote_post_from_search'))
+    "
+
+    True
+
+**The two unfixed copies are byte-identical** once normalised through the AST.
+Not "near-duplicates" -- the same code twice. Every finding Task 2 recorded
+against create_resolved_object's walk therefore holds here verbatim, and the
+tests below are what would catch a fix that lands in one copy only.
+
+Against the FIXED copy, four differences, of which three carry behaviour:
+
+| difference | unfixed pair | verify_object_from_source | behaviour? |
+|---|---|---|---|
+| host comparison | `urlparse(...).netloc` | `host_of(...)` | **yes** -- D22/D24 |
+| a bare embedded object | no arm; falls through with actor_domain None | `elif isinstance(..., dict) and 'id' in ...` | **yes** -- refused here, accepted there |
+| an unusable attributedTo type | silent fall-through | `else: return None, '<reason>'` | **yes** -- diagnosis |
+| arm order | Person-dict arm first | string arm first | no -- one element can match only one arm |
+
+The arm-order row is listed because a deduplicating engineer will see it and
+must know it is safe to normalise; the other three are the fix.
+
+The `else` row is worth stating plainly: the fixed copy REFUSES an unusable
+attributedTo with a stated reason, while both unfixed copies fall out of the
+walk with `actor_domain` still None and are then refused by the domain gate for
+what looks like an impersonation attempt. Same outcome, different explanation,
+and only one of the three can tell an operator which happened.
+
 MUTATION. Thirteen mutants -- both existence checks, every conjunct of both
 guards individually, and the uri_domain reassignment -- each reverted before the
 next. All thirteen are killed:
@@ -110,6 +157,34 @@ The second existence check's mutant failing 15 tests is worth reading as a
 caveat rather than a triumph -- most guard tests here observe through that
 check, so they are not independent of it. What makes them still discriminating
 is the per-conjunct column above.
+
+MUTATION, TASK 5's REGION -- this copy's walk, its gate, and the fallback.
+Seven mutants, six killed:
+
+| mutant | failed |
+|---|---|
+| the `break` moved inside the `isinstance(actor, str)` guard | 1 |
+| the bare-string list arm deleted | 2 |
+| the string `attributedTo` arm deleted | 3 |
+| the gate never fires | 7 |
+| the gate always fires | 6 |
+| the find_community fallback deleted | 1 |
+| the fallback's `and nodebb` conjunct dropped | **0 -- SURVIVES** |
+
+**The `and nodebb` conjunct is redundant, and the mutant proves it rather than
+merely failing to kill it.** `topic_post_data` is assigned `post_data` at the
+top and diverges from it in exactly one place -- the OrderedCollection branch,
+which replaces `post_data` with the item and leaves `topic_post_data` holding
+the collection. That branch is also the only place `nodebb` becomes True. So
+whenever `nodebb` is False the two names hold the same dict, and the fallback
+`find_community(topic_post_data)` would repeat a lookup that has already
+returned None. Dropping the conjunct costs one redundant query and changes no
+outcome.
+
+Reported, not fixed, and not covered: a test that pinned it would have to
+assert on the query count, which is a promise about how the function works
+rather than what it does. Task 7 files it as a code-quality row, distinct from
+the defects around it -- nothing is wrong, one operand is just doing no work.
 """
 
 import pytest
@@ -449,3 +524,177 @@ class TestTheUriAndUriDomainReassignment:
         assert result.ap_id == other_uri
         assert result.author.ap_profile_id == other_author
         assert Post.query.filter_by(ap_id=other_uri).count() == 1
+
+
+# ---------------------------------------------------------------------------
+# Task 5: this function's own copy of the attributedTo walk, its domain gate,
+# and the find_community fallback. The drift report the walk produced is in the
+# module docstring above, under THE THREE-WAY DRIFT REPORT.
+# ---------------------------------------------------------------------------
+
+def resolvable(document, community, **extra):
+    """A served document that can reach creation: public, addressed to a
+    community find_community can resolve, and attributed to a seeded actor.
+
+    find_community reads 'audience', 'cc', 'to' and 'target', but only when the
+    value is a STRING -- public_note's `to` is a list and is therefore invisible
+    to it, so the audience is what actually locates the community here.
+    """
+    document = dict(document)
+    document['audience'] = community.ap_profile_id
+    document.update(extra)
+    return document
+
+
+class TestThisCopysAttributedToWalk:
+    """The same six list/string shapes Task 2 covered in create_resolved_object,
+    exercised through THIS function because the two copies are separate code.
+
+    Derived independently, and the derivation is the finding: the two walks are
+    byte-identical (see the drift report above). So these tests are not
+    redundant with Task 2's -- they are the evidence that the duplication is
+    exact, and they are what would catch a fix landing in one copy only.
+
+    Production change that fails these: any edit to this copy's walk that
+    Task 2's tests would catch in the other one.
+    """
+
+    def test_a_string_author_on_the_uris_host_is_used(self, app, peer_author, http_mock):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        serve_remote_object(http_mock, URI, resolvable(public_note(), community))
+
+        assert resolve_remote_post_from_search(URI).author.id == peer_author.id
+
+    def test_a_person_dict_in_a_list_is_used(self, app, peer_author, http_mock):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        document = resolvable(public_note(attributed_to=[{'type': 'Person', 'id': AUTHOR_URI}]), community)
+        serve_remote_object(http_mock, URI, document)
+
+        assert resolve_remote_post_from_search(URI).author.id == peer_author.id
+
+    def test_a_bare_string_in_a_list_is_used(self, app, peer_author, http_mock):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        serve_remote_object(http_mock, URI, resolvable(public_note(attributed_to=[AUTHOR_URI]), community))
+
+        assert resolve_remote_post_from_search(URI).author.id == peer_author.id
+
+    def test_a_non_person_dict_does_not_end_the_search(self, app, peer_author, http_mock):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        attributed_to = [{'type': 'Service', 'id': f'https://{OTHER_HOST}/users/svc'}, AUTHOR_URI]
+        serve_remote_object(http_mock, URI, resolvable(public_note(attributed_to=attributed_to), community))
+
+        assert resolve_remote_post_from_search(URI).author.id == peer_author.id
+
+    def test_a_person_dict_ends_the_search_even_when_it_yields_nothing(self, app, peer_author, http_mock):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        attributed_to = [{'type': 'Person', 'id': {'nested': 'not a string'}}, AUTHOR_URI]
+        serve_remote_object(http_mock, URI, resolvable(public_note(attributed_to=attributed_to), community))
+
+        assert resolve_remote_post_from_search(URI) is None
+        assert Post.query.filter_by(ap_id=URI).count() == 0
+
+    def test_a_person_dict_on_another_host_ends_the_search_too(self, app, peer_author, http_mock):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        attributed_to = [{'type': 'Person', 'id': f'https://{OTHER_HOST}/users/mallory'}, AUTHOR_URI]
+        serve_remote_object(http_mock, URI, resolvable(public_note(attributed_to=attributed_to), community))
+
+        assert resolve_remote_post_from_search(URI) is None
+        assert Post.query.filter_by(ap_id=URI).count() == 0
+
+    def test_a_bare_embedded_object_is_refused_here_but_accepted_by_the_fixed_copy(self, app, peer_author, http_mock):
+        """The drift row with the sharpest consequence. This copy has a string
+        arm and a list arm and nothing else, so a single embedded Person object
+        -- ordinary ActivityStreams -- matches neither and the author is never
+        found. verify_object_from_source, the copy 2b fixed, grew a dict arm
+        (`elif isinstance(..., dict) and 'id' in ...`) that handles exactly
+        this.
+
+        So the shape is already fixed once in this file. Two copies still
+        refuse it. Pinned as today's behaviour.
+        """
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        attributed_to = {'type': 'Person', 'id': AUTHOR_URI}
+        serve_remote_object(http_mock, URI, resolvable(public_note(attributed_to=attributed_to), community))
+
+        assert resolve_remote_post_from_search(URI) is None
+        assert Post.query.filter_by(ap_id=URI).count() == 0
+
+    def test_no_attributed_to_key_refuses(self, app, peer_author, http_mock):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        document = resolvable(public_note(), community)
+        del document['attributedTo']
+        serve_remote_object(http_mock, URI, document)
+
+        assert resolve_remote_post_from_search(URI) is None
+        assert Post.query.filter_by(ap_id=URI).count() == 0
+
+
+class TestThisCopysDomainGate:
+    """D24's surface: `uri_domain != actor_domain`, both sides raw
+    `urlparse(...).netloc`. Unlike create_resolved_object's, BOTH operands here
+    are derived inside this function from raw strings, which is why the
+    register rates this one inconsistency-dependent rather than systematic --
+    a peer whose authority is spelled the same way everywhere passes.
+
+    These pin what it does today. A fix to D24 flips the last two to a created
+    post.
+    """
+
+    def test_an_author_on_another_host_is_refused(self, app, peer_author, http_mock):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        other_author = f'https://{OTHER_HOST}/users/mallory'
+        serve_remote_object(http_mock, URI, resolvable(public_note(attributed_to=other_author), community))
+
+        assert resolve_remote_post_from_search(URI) is None
+        assert Post.query.filter_by(ap_id=URI).count() == 0
+
+    def test_a_case_difference_in_the_author_host_refuses(self, app, peer_author, http_mock):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        mixed = f'https://{PEER_OBJECT_HOST.capitalize()}/users/alice'
+        serve_remote_object(http_mock, URI, resolvable(public_note(attributed_to=mixed), community))
+
+        assert resolve_remote_post_from_search(URI) is None
+        assert Post.query.filter_by(ap_id=URI).count() == 0
+
+    def test_an_explicit_default_port_on_the_author_refuses(self, app, peer_author, http_mock):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        ported = f'https://{PEER_OBJECT_HOST}:443/users/alice'
+        serve_remote_object(http_mock, URI, resolvable(public_note(attributed_to=ported), community))
+
+        assert resolve_remote_post_from_search(URI) is None
+        assert Post.query.filter_by(ap_id=URI).count() == 0
+
+
+class TestTheFindCommunityFallback:
+    """`if not community and nodebb: community = find_community(topic_post_data)`
+    -- the "use 'audience' from the topic when the post itself does not say
+    where it went" path.
+
+    It can only matter on the NodeBB branch, because `topic_post_data` diverges
+    from `post_data` in exactly one place: the OrderedCollection branch replaces
+    post_data with the item and leaves topic_post_data holding the collection.
+    Everywhere else the two names hold the same dict, so the fallback would be
+    a second identical lookup. That is why the `and nodebb` conjunct is
+    reported below rather than covered -- see TestTheNodebbConjunctIsRedundant.
+
+    Production change that fails the first test: deleting the fallback.
+    """
+
+    def test_the_topics_audience_is_used_when_the_item_has_none(self, app, peer_author, http_mock):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        collection = ordered_collection() | {'audience': community.ap_profile_id}
+        serve_remote_object(http_mock, URI, collection)
+        serve_remote_object(http_mock, ITEM_URI, public_note(uri=ITEM_URI))
+
+        result = resolve_remote_post_from_search(URI)
+
+        assert result.ap_id == ITEM_URI
+        assert result.community_id == community.id
+
+    def test_no_audience_anywhere_returns_none(self, app, peer_author, http_mock):
+        make_community('news', host=PEER_OBJECT_HOST)
+        serve_remote_object(http_mock, URI, ordered_collection())
+        serve_remote_object(http_mock, ITEM_URI, public_note(uri=ITEM_URI))
+
+        assert resolve_remote_post_from_search(URI) is None
+        assert Post.query.filter_by(ap_id=ITEM_URI).count() == 0
