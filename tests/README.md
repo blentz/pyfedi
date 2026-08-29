@@ -1126,6 +1126,85 @@ comment claims to cover, and `find_community` given a bad addressing element
 followed by a good one -- the difference between "skips the bad entry" and "stops
 at the bad entry", which is what the D3 fix actually claims.
 
+### Sub-project 3: the resolve functions
+
+`docs/superpowers/plans/2026-08-28-coverage-resolve-functions.md`. The three
+functions sub-project 2b registered as D21-D24 and deliberately left untested:
+`resolve_remote_post`, `create_resolved_object` and
+`resolve_remote_post_from_search`. 92 tests across three files, and
+`app/activitypub/util.py`'s floor rises **35 -> 45**.
+
+Two of the three had never executed a line under test; the third had 25
+statements covered incidentally. They are now at 12/12, 55/60 and 73/73
+statements. Both remaining gaps are the same unreachable region and are
+explained below.
+
+**The fixture shape, and why every test here needs two halves.** These
+functions fetch a document and then write rows, so a test needs a mocked HTTP
+conversation *and* database state:
+
+- `serve_remote_object(http_mock, uri, document)` registers the one route the
+  fetch will hit. Nothing else is registered, so any *other* request the code
+  makes is an unmatched request, which `block_outbound_http` raises on. The
+  route set is therefore an assertion about how many fetches happen.
+- `resolvable_remote_author(instance, name)` stamps `ap_fetched_at`, which is
+  what makes `find_actor_or_create` a pure database read instead of an actor
+  fetch. Without it, eager Celery runs `refresh_user_profile` inline and the
+  actor fetch surfaces as an unmatched request.
+
+**`assert_all_called` is a coverage check on your fixture, and it earns its
+keep.** respx fails at teardown if a registered route is never fetched. Four
+NodeBB guard tests here stored their row under the request URI, so the
+function's *entry* existence check answered and no fetch ever happened -- four
+tests that asserted correctly about nothing. Nothing else would have caught
+that: not coverage, not mutation, not review. **If your test registers a route,
+make sure you know why the code would reach it.**
+
+**The near-duplicate hazard, and what the drift report concluded.**
+`create_resolved_object` and `resolve_remote_post_from_search` contain the same
+`attributedTo` walk and the same domain gate. Derived, not eyeballed: the two
+walks are **byte-identical** once normalised through the AST. A third copy
+lives in `verify_object_from_source` and sub-project 2b already fixed that one,
+so the family is three functions wide with one member already correct.
+
+That matters when you touch any of them:
+
+- The fixed copy is the **fix template** -- `host_of` instead of raw
+  `urlparse(...).netloc`, a dict arm that accepts a bare embedded Person
+  object, and an `else` that returns a stated reason.
+- The two unfixed copies **disagree with each other** about `inReplyTo`: one
+  tests truthiness, the other `is not None`. A present-but-empty-string
+  `inReplyTo` becomes a Post through one and a reply attempt through the other.
+  Both behaviours are pinned, one per file, and the mutant that makes them agree
+  fails a test. **Deduplicate deliberately or not at all.**
+
+**The DEBUG-mode split needs a recorder, and here is why that is not laziness.**
+`resolve_remote_post_from_search` calls the NodeBB reply task inline when
+`current_app.debug` and through `.delay()` otherwise. Under this suite's eager
+Celery, `.delay()` runs the task inline and propagates its exceptions exactly as
+the direct call does -- measured, both settings raising the identical
+`AllMockedAssertionError` from inside the task. The branch is behaviourally
+inert here, so recording *which* call was made is the only honest way to pin it.
+That is the single place in these three files where a test asserts on a stand-in
+rather than on state.
+
+**Why two coverage gaps are left, and when they close.** Five statements in
+`create_resolved_object` and one branch arc in `resolve_remote_post_from_search`
+are the reply-branch enrichment and the reply side of `if not in_reply_to`.
+Neither can execute: **no remote reply can be created by either resolver.** Both
+synthesise their activity without a `'type'` key, `PostReply.new` reads that key
+unguarded where `Post.new` guards it, and `create_post_reply` swallows the
+resulting `KeyError`. That is D35 in the register. Fix it and these paths become
+testable for the first time -- including the surprising contract that a resolved
+reply returns its *parent post*.
+
+**Assert on what the path wrote, not on a row's identity.** Three tests in this
+sub-project passed under mutants that broke the code they named, all with the
+same shape. `Post.new` returns the **existing row** on a duplicate `ap_id`, so a
+create is indistinguishable from an update by id and count; and a pre-stored row
+lets an early existence check answer before the code under test runs. If you
+pre-store a row here, ask which check answers first.
+
 ## Every user-influenced redirect target
 
 `is_safe_redirect_target` is the origin check. Three things reach it, and between
