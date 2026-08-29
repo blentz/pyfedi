@@ -100,16 +100,28 @@ routes. **Never add a route to it** — a catch-all would silently override ever
 
 ### `redis_double` covers `get_redis_connection`, not `redis_client`
 
+**Corrected 2026-08-29 (`coverage-inbox-gate`): stale.** This section
+originally advised a sub-project needing `redis_client` isolation to widen
+`redis_double` itself. `coverage-utils-feed` already did that widening, and
+`tests/conftest.py`'s `redis_double` docstring documents it (the
+"Also covered, as of the coverage-utils-feed sub-project: `app.redis_client`"
+paragraph). Left as follows for the history; the advice in the last paragraph
+no longer applies — do not re-widen the fixture.
+
 `from X import Y` binds a new name in the importing module at import time, so
 each binding must be patched separately. The fixture patches all four
 `get_redis_connection` bindings.
 
 `app.redis_client` — the global `create_app()` assigns — is read via
 `from app import redis_client` in roughly fourteen modules
-(`grep -rn 'from app import.*redis_client' app/` for the current set). A
+(`grep -rn 'from app import.*redis_client' app/` for the current set). ~~A
 sub-project needing Redis isolation across `app/` should widen `redis_double`
-rather than hand-roll its own. The rate limiter and Celery app are built from
-`Config` at import time and are outside any fixture's reach.
+rather than hand-roll its own.~~ `redis_double` now patches `app.redis_client`
+directly (a single attribute, safe because every `from app import
+redis_client` site does that import inside a function body, not at module
+level) as well as the four `get_redis_connection` bindings above. The rate
+limiter and Celery app are still built from `Config` at import time and are
+outside any fixture's reach.
 
 ## Production defects found, not fixed
 

@@ -1205,6 +1205,69 @@ create is indistinguishable from an update by id and count; and a pre-stored row
 lets an early existence check answer before the code under test runs. If you
 pre-store a row here, ask which check answers first.
 
+### Sub-project 4: the inbox gate
+
+`docs/superpowers/plans/2026-08-28-coverage-inbox-gate.md` and
+`docs/superpowers/specs/2026-08-28-coverage-inbox-gate-design.md`.
+`shared_inbox`, its three route aliases (`site_inbox`, `user_inbox`,
+`community_inbox`) and `replay_inbox_request` in
+`app/activitypub/routes.py` -- the one place in the codebase a remote
+instance's POST actually lands, and everything sub-projects 1 through 3
+tested sits behind it. 40 test functions (two parametrized) across
+`tests/test_inbox_gate_refusals.py`, `tests/test_inbox_gate_dispatch.py` and
+`tests/test_inbox_gate_signatures.py`. D41-D46 in the campaign's defect
+register.
+
+**Signatures are real, not mocked -- `signed_inbox_post` (`tests/factories.py`)
+is why.** Half this gate is signature verification, and
+`HttpSignature.verify_request` is never patched anywhere in this suite.
+`signed_inbox_post` builds its request with `HttpSignature.signed_request(...,
+send_via_async=True)`, which returns `(uri, headers, body_bytes)` instead of
+sending -- production's own signing code produces the headers, and the gate
+verifies them with its own production code, no mock in between. The same
+lever run backwards (a mismatched key, or `body=` tampering after signing)
+produces the failure cases. `sender` must be built with `make_user(...,
+with_keys=True)`: a keyless user fails at signing rather than at
+verification, with an opaque `'NoneType' object has no attribute 'encode'`.
+
+**A 200 alone asserts almost nothing here.** Six of this gate's twenty
+outcomes return a bare 200: a missing required field, an Announce with a
+malformed Mastodon-shaped object, an Announce of local content, a duplicate
+activity id, a `Delete` of an unknown actor, and an actor that cannot be
+found or created. Tests here assert the log line, the redis key, the absence
+of a dispatch, or the row that was or was not written -- never the status
+code alone.
+
+**Redis activity-id uniqueness is a fixture hazard, not just gate
+behaviour.** `shared_inbox` writes every activity's `id` into redis for 90
+seconds (`routes.py:680`, `ex=90`) to suppress duplicates. `inbox_activity`
+(`tests/factories.py`) therefore mints a fresh uuid into `id` on every call;
+a test that hardcodes an id collides with any other test reusing it under
+the same `redis_double` server and gets refused as a duplicate for a reason
+that has nothing to do with what it meant to assert.
+
+**Not covered: `process_inbox_request`'s body.** Same rule as sub-project 3
+-- the dispatch call is asserted (which function, with which arguments, on
+which `current_app.debug` branch), not what that function then does. That
+remains a successor sub-project's scope.
+
+**Test-harness gap found here: `block_outbound_http` did not know about
+pyld.** Its docstring (`tests/conftest.py`) already named three network
+escapes that bypass httpx entirely -- `urllib.request.urlopen`,
+botocore/urllib3, and smtplib. `pyld`'s default JSON-LD document loader is a
+fourth: `_default_document_loader = requests_document_loader()`
+(`pyld/jsonld.py:6547`) reaches the network through `requests`, which respx
+never touches. LD-signature verification calls `jsonld.normalize`, which
+resolves `@context` URLs through that loader, so a test exercising the
+LD-signature path without addressing this reaches the real internet in
+`block_outbound_http`'s presence, silently. This sub-project's answer is the
+`no_network_ld_signing` fixture (`tests/test_inbox_gate_signatures.py`),
+which installs a static `jsonld.set_document_loader` override serving frozen
+local copies of the two `@context` documents this gate ever needs
+(activitystreams, security-v1) and asserts `requests.get` is never called
+while it is active. `block_outbound_http`'s docstring now lists pyld/requests
+as a fourth known escape and points at this fixture as the worked example.
+
 ## Every user-influenced redirect target
 
 `is_safe_redirect_target` is the origin check. Three things reach it, and between
