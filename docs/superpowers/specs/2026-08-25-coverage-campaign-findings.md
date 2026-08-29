@@ -1129,8 +1129,8 @@ says which numbers are taken. So there is one now, and it is this file:
   side.
 - **The allocation ledger, kept current:** D1–D20 sub-project 2a, D21–D24
   sub-project 2b, D25–D29 sub-project 2c, D30–D33 sub-project 2c's whole-branch
-  review. D34–D40 sub-project 3. D41–D44 sub-project 4 (the inbox gate).
-  **Next free number: D45.** If you take it, say so here in the change that
+  review. D34–D40 sub-project 3. D41–D46 sub-project 4 (the inbox gate).
+  **Next free number: D47.** If you take it, say so here in the change that
   takes it.
 
 Two entries in the reports were deliberately **not** counted as defects, and are
@@ -2101,7 +2101,7 @@ Four gaps in total, and none is left unexplained:
    not a defect in the function — the branch's both arms are behaviourally
    sound as read; only the pass-through arm went untested.
 
-### 2. New defects — D41-D44
+### 2. New defects — D41-D46
 
 Each was found by an implementer and independently confirmed by a reviewer
 against source during Tasks 2-7; each is re-verified against source again
@@ -2112,13 +2112,16 @@ here, at the point the row is written, per this document's standing rule.
 | D41 | `shared_inbox` | the `except BlockingIOError:` arm (routes.py:632-634) is unreachable. `request.get_json(force=True)` reads through Werkzeug's `LimitedStream`; `LimitedStream.readinto()` catches `(OSError, ValueError)` — `BlockingIOError` is an `OSError` subclass — and calls `on_disconnect()`, whose default behaviour raises `ClientDisconnected`, which subclasses `BadRequest`. The sibling `except werkzeug.exceptions.BadRequest as e:` immediately above (line 629) therefore catches every case the `BlockingIOError` handler was written for, first. Confirmed against installed Werkzeug 3.1.8's actual source (`wsgi.py`'s `LimitedStream.readinto`, `exceptions.py`'s `ClientDisconnected(BadRequest)`) a third time while writing this row, after the implementer and the reviewer each verified it independently during Task 2. | informational — dead code, no behaviour to trigger | reading + source inspection, verified three times |
 | D42 | `object_has_missing_fields` (`app/activitypub/util.py:4659-4663`), reached from `shared_inbox` | returns `False` for any object typed `OrderedCollection` without checking `id`/`actor`/`object` at all. A peer-supplied Announce whose inner object is `{'type': 'OrderedCollection'}` — no `id`, no `actor`, no `object` — therefore passes the missing-fields check at `routes.py:657`, and the very next line that assumes it passed, `id = object['id']` at `routes.py:671`, raises an unhandled `KeyError` rather than producing one of the gate's normal logged 200-refusals. Confirmed against source again while writing this row: `object_has_missing_fields`'s `OrderedCollection` short-circuit is exactly as described, and `routes.py:671` sits inside the same `if request_json['type'] == 'Announce' and isinstance(...)` block that already ran `object_has_missing_fields`, with no exception handling between them. `replay_inbox_request` does not carry the equivalent `id = object['id']` reassignment, so this specific crash is `shared_inbox`-only, not shared by both entry points. | medium — peer-triggerable, unhandled exception instead of a graceful refusal | reading + source inspection |
 | D43 | `shared_inbox` | the PeerTube branch (`routes.py:685`, `return ''`) has no status code, where its immediate neighbours among the early-refusal returns (e.g. `routes.py:663`, `:669`, `:679`, all `return '', 200`) specify one. Flask defaults an unspecified return to 200, so the two are indistinguishable to any caller — this is a readability/consistency gap, not a behavioural one. | cosmetic | reading |
-| D44 | `replay_inbox_request` | diverges from `shared_inbox` in five ways, verified against `routes.py:781-835`: no signature checks of any kind (no precheck, no `verify_request`, no LD fallback); no redis duplicate suppression; an ACTIVE `is_local()` refusal at 824-826 where `shared_inbox`'s equivalent at 710-712 is commented out; no instance bookkeeping (`last_seen`/`dormant`/`gone_forever`/`failures`/`ip_address` are never touched); and both dispatches (`process_delete_request`, `process_inbox_request`) are direct and unconditional, with `store_ap_json` hardcoded `True` and no `current_app.debug` split. See section 3 below for why this is rated low rather than the "no auth at all" severity the list of divergences would suggest in isolation. | low — see section 3; not directly peer-reachable | reading (five divergences) + reading (all three call sites traced) |
+| D44 | `replay_inbox_request` | diverges structurally from `shared_inbox` in five ways, verified against `routes.py:781-835`: no signature checks of any kind (no precheck, no `verify_request`, no LD fallback); no redis duplicate suppression; an ACTIVE `is_local()` refusal at 824-826 where `shared_inbox`'s equivalent at 710-712 is commented out; no instance bookkeeping (`last_seen`/`dormant`/`gone_forever`/`failures`/`ip_address` are never touched); and both dispatches (`process_delete_request`, `process_inbox_request`) are direct and unconditional, with `store_ap_json` hardcoded `True` and no `current_app.debug` split. **This row is scoped to the structural fact of the divergence and to the claim "no unauthenticated peer can reach this function directly"** — both true and, on their own, low-consequence. **The consequence of the divergence when it IS reached is a separate, higher-severity finding: see D45.** | low, as a standalone reachability claim — see section 3 and D45 for the reachable, higher-severity half | reading (five divergences) + reading (all three call sites traced) |
+| D45 | `replay_inbox_request`, reached via `activity_replay` (`app/admin/routes.py:1270`) | **admin-mediated replay of peer-authored content bypasses every signature check `shared_inbox` performs.** `activity_replay` is gated by `@login_required` + `@permission_required('change instance settings')`, and it re-feeds a stored `ActivityPubLog.activity_json` row — content a peer sent, not content the admin authored — straight into `replay_inbox_request`, which (per D44) runs no precheck, no `HttpSignature.verify_request`, and no LD-signature fallback. An admin who replays a row that was originally logged as a signature FAILURE, or any row at all, gets it processed as if it had just arrived and passed verification. This is the brief's named case for why a flat "not peer-reachable" rating understates D44: the trigger requires a privileged action, but the content being trusted is entirely peer-controlled and the bypass, once triggered, is total rather than partial. Comparable in kind, not in trigger, to D21/D24/D42's "medium — peer-triggerable" rating for effects reached only through a traced indirect path; rated at the same tier here because the traced path is real and the effect (full signature bypass on peer content) is more severe than any of those three, offset by needing a deliberate privileged action rather than being reachable at will. | medium — admin-triggered, but a complete signature-verification bypass on peer-authored content once triggered | reading (permission decorators + call chain, re-traced against source while writing this row) |
+| D46 | `shared_inbox` | the fediseer exemption's body (`routes.py:730`) is a bare `...` (`Ellipsis`) expression statement — semantically inert, exactly like `pass` would be here. It does not return, log, or touch `bounced` (already `True` from line 718); its only effect is letting control fall out of the `try`/`except` into the shared bookkeeping (741) and dispatch (751+), which is precisely the same thing every other branch that reaches that point does by *not* returning. Named in this sub-project's own brief and confirmed still absent from the register until this row. **Not a functional defect**: `tests/test_inbox_gate_signatures.py::test_an_unsigned_chat_message_from_a_non_fediseer_actor_is_refused` (added in fix round 1, commit `3ca2eee1`) pins that dropping the actor-identity half of the `elif`'s condition is caught — re-confirmed while writing this row by reading the mutation record in the test file's own module docstring ("mutant 3 was re-run and killed too"), so the exemption is scoped correctly and is not silently over-broad. The finding is narrower than a first read of the mutation history suggests: **what remains is readability only** — a literal `...` with no comment explaining why the branch intentionally does nothing, in the body of a security-relevant exemption, is easy to misread as an unfinished stub on a future pass. | cosmetic — readability of a security-relevant branch, not a behavioural gap | reading + source inspection; the mutation-kill claim re-verified against the test file's own docstring, not re-run |
 
 ### 3. `replay_inbox_request`'s reachability, traced rather than assumed
 
-D44's severity turns entirely on who can reach `replay_inbox_request`, so this
-was established before rating it, per this sub-project's brief. There are
-exactly three callers in `app/`, found by `grep -rn replay_inbox_request app/`:
+D44 and D45's severities both turn entirely on who can reach
+`replay_inbox_request`, so this was established before rating either, per
+this sub-project's brief. There are exactly three callers in `app/`, found by
+`grep -rn replay_inbox_request app/`:
 
 | caller | route | gate | what `request_json` is |
 |---|---|---|---|
@@ -2141,13 +2144,20 @@ tool: `ActivityPubLog.activity_json` rows include content a peer sent, and an
 admin can choose any historical row and force it back through
 `replay_inbox_request`, bypassing every protection `shared_inbox` applied the
 first time that row was logged (including protections that may have caused
-the row to be logged as a *failure* in the first place). That is a real
-consequence of D44's divergences, but it requires a deliberate admin action
-against already-stored data, not a fresh peer-triggerable request. **D44 is
-rated low** on that basis — the divergences are genuine and worth closing,
-but nothing here is exploitable by an unauthenticated third party, and the
+the row to be logged as a *failure* in the first place). That consequence is
+significant enough that it is filed on its own, as D45, rather than folded
+into D44's "structural divergence" framing — an earlier draft of this section
+rated the whole finding low on the ground that no unauthenticated third party
+can reach it, which understates the risk the admin path actually carries: the
+*content* being trusted is still entirely peer-authored, and the bypass, once
+triggered, is total, not partial. **D44 stays low** as the narrower claim it
+now is — "these are the five structural differences, and no unauthenticated
+peer reaches this function directly" — and **D45 carries the higher rating**
+for the specific, reachable consequence: an admin action that processes
+peer-authored content with no signature verification at all. The
 `/replay_inbox` route's current hardcoded-empty payload means the one
-login-only path is inert rather than under-protected.
+login-only, non-admin path is inert rather than under-protected, so it
+contributes to neither row's severity.
 
 ### 4. Converting D21, D24 and D35's reachability claims — upgrade only what the tests support
 
