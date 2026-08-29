@@ -2316,8 +2316,16 @@ def user_ip_banned() -> bool:
 
 @cache.memoize(150)
 def instance_allowed(host: str) -> bool:
+    # An absent host is NOT on the allowlist. This returned True until
+    # 2026-08-29 -- "allowed by default" -- which made the function fail OPEN on
+    # the one input its callers cannot vouch for. Two producers hand it an empty
+    # host and both are fed by remote input: extract_domain_and_actor returns
+    # ('', '') when urlparse refuses an actor id the peer chose, and
+    # inbox_domain returns '' for the same reason on a peer-chosen inbox URL.
+    # See instance_banned below, which was inverted in the same change; read
+    # together the pair used to admit an empty host in both federation modes.
     if host is None or host == '':
-        return True
+        return False
     host = inbox_domain(host)
     instance = db.session.query(AllowedInstances).filter_by(domain=host.strip()).first()
     return instance is not None
@@ -2327,8 +2335,19 @@ def instance_allowed(host: str) -> bool:
 def instance_banned(domain: str) -> bool:
     session = get_task_session()  # noqa: F811
     try:
+        # An absent domain is refused rather than waved through. This returned
+        # False -- "not banned" -- until 2026-08-29; with instance_allowed's
+        # empty case returning True, the pair failed open in both federation
+        # modes, and a banned instance evaded its ban either by malforming its
+        # actor id or simply by being referenced as a webfinger handle.
+        #
+        # This direction has a cost and it is deliberate: many callers read
+        # `not instance_banned(instance.domain)` as an outbound delivery gate,
+        # and Instance.domain is nullable, so a row with no domain now stops
+        # receiving deliveries. Not federating with a row whose identity is
+        # unknown is the safe direction, and such a row is already broken.
         if domain is None or domain == '':
-            return False
+            return True
         domain = inbox_domain(domain.strip())
         banned = session.query(BannedInstances).filter_by(domain=domain).first()
         if banned is not None:

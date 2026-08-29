@@ -603,47 +603,36 @@ def test_a_disallowed_actor_is_refused_under_strong_allowlist(app, signing_peer,
     assert ActivityPubLog.query.count() == 0
 
 
-def test_a_dict_shaped_actor_skips_the_strong_allowlist_check(app, signing_peer, monkeypatch):
-    """CHARACTERISATION of a live allowlist bypass -- D47 in the campaign's
-    defect register. This test pins TODAY'S behaviour so a fix is visible as
-    a test change; it does NOT endorse it.
+def test_a_dict_shaped_actor_is_refused_under_strong_allowlist(app, signing_peer, monkeypatch):
+    """REGRESSION test for D47, a live allowlist bypass that is now closed.
 
-    Identical setup to test_a_disallowed_actor_is_refused_under_strong_
-    allowlist immediately above -- same peer, same non-allowlisted host
-    ('peer.example', with no AllowedInstances row, as every test in this
-    suite leaves it), same ALLOWLIST_STRONG -- with exactly one thing
-    changed: `actor` is sent as `{'id': <uri>}` instead of as the bare URI
-    string. That one shape change is enough to walk straight past
-    routes.py:673-675:
+    Until 2026-08-29 this test asserted the opposite, as characterisation of
+    the defect. Sending `actor` as `{'id': <uri>}` rather than as the bare URI
+    string walked straight past routes.py:673-675, because `furl` parses only
+    strings and returns `host = None` for a dict, and `instance_allowed(None)`
+    then returned True. `find_actor_or_create_cached` unwraps the dict
+    (`if isinstance(actor, dict): actor = actor['id']`), so the actor still
+    resolved and the activity was dispatched. Measured at the time: 403 with
+    zero dispatches for the string form, 200 with one dispatch for the dict.
 
-      1. `furl({'id': ...}).host` is `None` -- `furl` only parses strings,
-         and returns a host of None for anything it cannot parse (equally
-         true of `furl('not-a-url').host`).
-      2. `instance_allowed(None)` returns `True` unconditionally
-         (app/utils.py:2302-2303), so `not instance_allowed(...)` is False
-         and the 403 never fires.
-      3. `find_actor_or_create_cached` then unwraps the dict --
-         `if isinstance(actor, dict): actor = actor['id']`
-         (app/activitypub/util.py:341-342) -- so the actor still resolves,
-         and its own GENUINE HTTP signature (made by production's signer,
-         verified by production's verifier, neither patched) verifies against
-         its own real key. The activity is dispatched.
+    **What closed it was not a change at routes.py:673-675.** The fix went into
+    the deeper half D47's own row named: `instance_allowed` now returns False
+    for an absent host instead of True, so `not instance_allowed(None)` is True
+    and the 403 fires. That also closed the same shape everywhere else the pair
+    is consulted, which is why it was preferred to reading the host out of the
+    dict at this one call site.
 
-    The author knew `actor` may not be a string: `isinstance(request_json
-    ['actor'], str)` guards exist at routes.py:686 and :696. Lines 674 and
-    705 have no such guard.
+    A note on the comparison, corrected from the version this test replaces:
+    its docstring claimed the sibling test differed "in exactly one thing, the
+    actor's shape". That was imprecise and a reviewer caught it -- the sibling
+    posts unsigned via `client.post`, while this one posts a genuinely signed
+    request and installs a dispatch recorder. Two variables differ, not one.
+    The defect never rested on that comparison; it rested on the three source
+    links above, each verified independently, and on the end-to-end measurement.
 
-    A FIX would flip this test: the assertions below would become the same
-    `403` / `ActivityPubLog.query.count() == 0` / no-dispatch the sibling
-    test asserts, because the host would be read from the dict's 'id' (or a
-    non-string actor would be refused outright) rather than resolving to
-    None. Whoever makes that change should replace this test's body with the
-    sibling's and delete this docstring.
-
-    Verified end to end before being written, not inferred from the three
-    links: posted through the real `/inbox` route, and the string-actor
-    control in the sibling test above returns 403 with zero dispatches under
-    exactly the same fixtures.
+    Production change that fails this: reverting `instance_allowed`'s empty-host
+    answer to True, or otherwise letting a non-string actor reach the gate with
+    no host.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     monkeypatch.setitem(app.config, 'DEBUG', True)
@@ -659,9 +648,8 @@ def test_a_dict_shaped_actor_skips_the_strong_allowlist_check(app, signing_peer,
     with app.test_client() as client:
         response = signed_inbox_post(client, activity, signing_peer)
 
-    assert response.status_code != 403
-    assert response.status_code == 200
-    assert len(dispatched) == 1
+    assert response.status_code == 403
+    assert len(dispatched) == 0
     assert ActivityPubLog.query.count() == 0
 
 
