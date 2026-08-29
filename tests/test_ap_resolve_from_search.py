@@ -185,12 +185,52 @@ Reported, not fixed, and not covered: a test that pinned it would have to
 assert on the query count, which is a promise about how the function works
 rather than what it does. Task 7 files it as a code-quality row, distinct from
 the defects around it -- nothing is wrong, one operand is just doing no work.
+
+MUTATION, TASK 6's REGION -- creation, enrichment, dispatch, return shape.
+Ten mutants, nine killed:
+
+| mutant | failed |
+|---|---|
+| the `inReplyTo` test made truthiness -- the drift | 1 |
+| the `published` guard forced true | 14 |
+| `posted_at` set to now | 1 |
+| `last_active` set to now | 1 |
+| the creation-result guard removed | 2 |
+| the dispatch guard's `totalItems > 1` dropped | 3 |
+| the dispatch guard's `nodebb` operand dropped | 10 |
+| the DEBUG split inverted | 2 |
+| the dispatch passed the whole collection, not its tail | 1 |
+| `return object if not in_reply_to else object.post` → `return object` | **0 -- SURVIVES** |
+
+**The drift mutant dies**, which is the point of the pair of tests: rewriting
+this copy's `is not None` to the other copy's truthiness -- the obvious
+deduplication -- changes behaviour, and the suite now says so from both sides.
+
+**The return-shape mutant survives because its else arm is dead.** `object.post`
+runs only for a reply, and no reply can be created. It is left surviving rather
+than chased: the honest statement is that this function's most surprising
+contract is untestable until the reply defect is fixed, and TestTheReturnShape
+says so in place of pretending otherwise.
+
+COVERAGE, whole function, Tasks 4-6 together, span 4282-4373:
+**73 of 73 statements, 45 of 46 branch arcs.** The one missing arc is
+`if not in_reply_to:` taking its False path -- the reply side of the
+enrichment, unreachable for the same reason. Every other branch in this
+function is exercised.
+
+The exhaust arc of the author walk's `for` loop was missing until the
+measurement pointed at it: every list case written before then broke out
+early. `test_a_list_of_neither_shape_runs_off_the_end_and_refuses` closes it,
+and is a reminder that a walk's exit-by-exhaustion is a distinct path from
+each of its early exits.
 """
+
+from datetime import datetime
 
 import pytest
 
 from app.activitypub.util import resolve_remote_post_from_search
-from app.models import Post
+from app.models import ActivityPubLog, Post, PostReply
 from tests.factories import (AS_PUBLIC_URI, PEER_OBJECT_HOST, PEER_OBJECT_URI, make_community,
                              make_post, make_site, note_document, resolvable_remote_author,
                              seed_community_owner, serve_remote_object)
@@ -206,6 +246,8 @@ TOPIC_URI = f'https://{PEER_OBJECT_HOST}/topic/1'
 DOC_URI = f'https://{PEER_OBJECT_HOST}/objects/declared'
 ITEM_URI = f'https://{PEER_OBJECT_HOST}/objects/item'
 OTHER_HOST = 'other.example'
+PARENT_URI = f'https://{PEER_OBJECT_HOST}/objects/parent'
+REPLY_URI = f'https://{PEER_OBJECT_HOST}/objects/reply2'
 
 # remote_object_to_json sleeps 3 real seconds before each retry, and
 # app.utils.get_request sleeps inside its own; the failure cases below would
@@ -619,6 +661,21 @@ class TestThisCopysAttributedToWalk:
         assert resolve_remote_post_from_search(URI) is None
         assert Post.query.filter_by(ap_id=URI).count() == 0
 
+    def test_a_list_of_neither_shape_runs_off_the_end_and_refuses(self, app, peer_author, http_mock):
+        """The loop's exhaust arc: no element matches either arm, so it ends
+        without ever breaking and actor_domain is still None at the gate.
+
+        Added after the branch-arc measurement showed `for a in attributed_to:`
+        had no exit-by-exhaustion arc -- every list case written before it
+        broke out early.
+        """
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        attributed_to = [{'type': 'Service', 'id': f'https://{OTHER_HOST}/users/svc'}, 42, None]
+        serve_remote_object(http_mock, URI, resolvable(public_note(attributed_to=attributed_to), community))
+
+        assert resolve_remote_post_from_search(URI) is None
+        assert Post.query.filter_by(ap_id=URI).count() == 0
+
     def test_no_attributed_to_key_refuses(self, app, peer_author, http_mock):
         community = make_community('news', host=PEER_OBJECT_HOST)
         document = resolvable(public_note(), community)
@@ -698,3 +755,225 @@ class TestTheFindCommunityFallback:
 
         assert resolve_remote_post_from_search(URI) is None
         assert Post.query.filter_by(ap_id=ITEM_URI).count() == 0
+
+
+# ---------------------------------------------------------------------------
+# Task 6: creation, enrichment, the NodeBB background dispatch, return shape.
+# ---------------------------------------------------------------------------
+
+class TestThisCopysInReplyToSplit:
+    """`'inReplyTo' in post_data and post_data['inReplyTo'] is not None`.
+
+    **The confirmed divergence from create_resolved_object**, which tests the
+    same key for TRUTHINESS. A present-but-empty-string inReplyTo therefore
+    takes the REPLY branch here and the POST branch there: one peer document,
+    two outcomes, decided only by which resolver received it. Task 3 pinned the
+    other side; this is this side, and together they are the drift report's
+    strongest row because both behaviours are now nailed down.
+
+    Production change that fails the empty-string test: changing this copy to
+    truthiness -- which is the deduplication a reader would reach for, and it
+    silently changes behaviour.
+    """
+
+    def test_an_empty_string_in_reply_to_takes_the_reply_branch(self, app, peer_author, http_mock):
+        """`'' is not None` is True, so this document is treated as a reply --
+        and the reply path cannot create anything (see below), so the answer is
+        None. create_resolved_object, given the identical document, creates a
+        Post."""
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        serve_remote_object(http_mock, URI, resolvable(public_note(), community, inReplyTo=''))
+
+        assert resolve_remote_post_from_search(URI) is None
+        assert Post.query.filter_by(ap_id=URI).count() == 0
+
+    def test_a_null_in_reply_to_takes_the_post_branch(self, app, peer_author, http_mock):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        serve_remote_object(http_mock, URI, resolvable(public_note(), community, inReplyTo=None))
+
+        assert resolve_remote_post_from_search(URI).ap_id == URI
+
+    def test_no_in_reply_to_key_takes_the_post_branch(self, app, peer_author, http_mock):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        serve_remote_object(http_mock, URI, resolvable(public_note(), community))
+
+        assert resolve_remote_post_from_search(URI).ap_id == URI
+
+
+class TestTheReplyPathIsBrokenHereToo:
+    """The defect Task 3 found in create_resolved_object, present in this copy
+    for the same reason: the synthesised activity is
+    `{'id': ..., 'object': post_data}` with no 'type' key, PostReply.new reads
+    `request_json['type']` unguarded, create_post_reply swallows the KeyError.
+
+    Task 3 predicted this would hold here, from the source alone. It does --
+    verified, not assumed. So BOTH unfixed resolvers silently fail every remote
+    reply, and the register should say so about the pair rather than about one
+    of them.
+
+    Production change that fails these: adding 'type' to either synthesised
+    activity, or guarding PostReply.new's read.
+    """
+
+    def test_a_well_formed_public_reply_creates_nothing(self, app, peer_author, http_mock):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        make_post(community, peer_author, ap_id=PARENT_URI)
+        serve_remote_object(http_mock, URI, resolvable(public_note(), community, inReplyTo=PARENT_URI))
+
+        assert resolve_remote_post_from_search(URI) is None
+        assert PostReply.query.count() == 0
+
+    def test_the_swallowed_exception_is_the_missing_type_key(self, app, peer_author, http_mock, monkeypatch):
+        monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        make_post(community, peer_author, ap_id=PARENT_URI)
+        serve_remote_object(http_mock, URI, resolvable(public_note(), community, inReplyTo=PARENT_URI))
+
+        resolve_remote_post_from_search(URI)
+
+        assert ActivityPubLog.query.one().exception_message == "'type'"
+
+
+class TestTheEnrichment:
+    """`object.posted_at` is set whenever the document carries 'published', and
+    `object.last_active` only when the object is not a reply.
+
+    The `not in_reply_to` distinction cannot be exercised today: no reply is
+    ever created, so the reply side of it is unreachable for the same reason
+    Task 3's reply enrichment was. Pinned as far as it goes, which is the post
+    side.
+
+    Production change that fails these: deleting the `'published' in post_data`
+    guard, or setting either column to utcnow() instead of the peer's value.
+    """
+
+    def test_published_lands_on_posted_at_and_last_active(self, app, peer_author, http_mock):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        document = resolvable(public_note(), community, published='2024-01-01T00:00:00Z')
+        serve_remote_object(http_mock, URI, document)
+
+        result = resolve_remote_post_from_search(URI)
+
+        assert result.posted_at == datetime(2024, 1, 1, 0, 0)
+        assert result.last_active == datetime(2024, 1, 1, 0, 0)
+
+    def test_without_published_the_row_keeps_its_creation_time(self, app, peer_author, http_mock):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        serve_remote_object(http_mock, URI, resolvable(public_note(), community))
+
+        result = resolve_remote_post_from_search(URI)
+
+        assert result.posted_at is not None
+        assert result.posted_at != datetime(2024, 1, 1, 0, 0)
+
+
+class TestTheReturnShape:
+    """`return object if not in_reply_to else object.post` -- a reply is meant
+    to resolve to its PARENT post, not to the reply. That contract is genuinely
+    surprising and the plan asked for it to be pinned explicitly.
+
+    It cannot be: the else arm is unreachable while the reply path cannot
+    create a reply. What is pinned here is the reachable half plus the fact
+    that the other half is dead today, so that a fix to the reply defect is
+    known to also make this contract testable for the first time.
+    """
+
+    def test_a_post_resolves_to_itself(self, app, peer_author, http_mock):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        serve_remote_object(http_mock, URI, resolvable(public_note(), community))
+
+        result = resolve_remote_post_from_search(URI)
+
+        assert isinstance(result, Post)
+        assert result.ap_id == URI
+
+
+class Recorder:
+    """Stands in for get_nodebb_replies_in_background and records HOW it was
+    called -- inline, or through .delay.
+
+    A mock is used here deliberately and only here. The dispatch mode is not
+    observable any other way: under this suite's eager Celery, `.delay()` runs
+    the task INLINE and lets its exceptions propagate, exactly as the direct
+    call does. That was measured, not assumed -- with the reply URI's route
+    left unregistered, both DEBUG settings raised the identical
+    AllMockedAssertionError from inside the task.
+
+    So the `if current_app.debug` branch is behaviourally inert in the suite,
+    and a test that tried to tell the modes apart by their effects would be
+    pinning eager Celery rather than this function. Recording the call is the
+    honest alternative, and the docstring is the caveat that goes with it.
+    """
+
+    def __init__(self):
+        self.inline = []
+        self.delayed = []
+
+    def __call__(self, *args):
+        self.inline.append(args)
+
+    def delay(self, *args):
+        self.delayed.append(args)
+
+
+class TestTheNodebbBackgroundDispatch:
+    """Guarded by `nodebb and topic_post_data['totalItems'] > 1`, and split on
+    `current_app.debug`.
+
+    Production change that fails these: deleting either arm of the DEBUG split,
+    dropping the `totalItems > 1` test, or passing something other than the
+    tail of orderedItems.
+    """
+
+    def test_debug_true_calls_the_task_inline(self, app, peer_author, http_mock, monkeypatch):
+        recorder = Recorder()
+        monkeypatch.setattr('app.activitypub.util.get_nodebb_replies_in_background', recorder)
+        monkeypatch.setitem(app.config, 'DEBUG', True)
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        collection = ordered_collection(items=[ITEM_URI, REPLY_URI], total=2)
+        collection['audience'] = community.ap_profile_id
+        serve_remote_object(http_mock, URI, collection)
+        serve_remote_object(http_mock, ITEM_URI, public_note(uri=ITEM_URI))
+
+        resolve_remote_post_from_search(URI)
+
+        assert recorder.inline == [([REPLY_URI], community.id)]
+        assert recorder.delayed == []
+
+    def test_debug_false_calls_the_task_through_delay(self, app, peer_author, http_mock, monkeypatch):
+        recorder = Recorder()
+        monkeypatch.setattr('app.activitypub.util.get_nodebb_replies_in_background', recorder)
+        monkeypatch.setitem(app.config, 'DEBUG', False)
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        collection = ordered_collection(items=[ITEM_URI, REPLY_URI], total=2)
+        collection['audience'] = community.ap_profile_id
+        serve_remote_object(http_mock, URI, collection)
+        serve_remote_object(http_mock, ITEM_URI, public_note(uri=ITEM_URI))
+
+        resolve_remote_post_from_search(URI)
+
+        assert recorder.delayed == [([REPLY_URI], community.id)]
+        assert recorder.inline == []
+
+    def test_a_single_item_topic_dispatches_nothing(self, app, peer_author, http_mock, monkeypatch):
+        recorder = Recorder()
+        monkeypatch.setattr('app.activitypub.util.get_nodebb_replies_in_background', recorder)
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        collection = ordered_collection(total=1)
+        collection['audience'] = community.ap_profile_id
+        serve_remote_object(http_mock, URI, collection)
+        serve_remote_object(http_mock, ITEM_URI, public_note(uri=ITEM_URI))
+
+        resolve_remote_post_from_search(URI)
+
+        assert recorder.inline == [] and recorder.delayed == []
+
+    def test_a_document_that_is_not_a_topic_dispatches_nothing(self, app, peer_author, http_mock, monkeypatch):
+        recorder = Recorder()
+        monkeypatch.setattr('app.activitypub.util.get_nodebb_replies_in_background', recorder)
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        serve_remote_object(http_mock, URI, resolvable(public_note(), community))
+
+        resolve_remote_post_from_search(URI)
+
+        assert recorder.inline == [] and recorder.delayed == []
