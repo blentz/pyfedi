@@ -1123,8 +1123,8 @@ says which numbers are taken. So there is one now, and it is this file:
   side.
 - **The allocation ledger, kept current:** D1–D20 sub-project 2a, D21–D24
   sub-project 2b, D25–D29 sub-project 2c, D30–D33 sub-project 2c's whole-branch
-  review. **Next free number: D34.** If you take it, say so here in the change
-  that takes it.
+  review. D34–D40 sub-project 3. **Next free number: D41.** If you take it, say so here
+  in the change that takes it.
 
 Two entries in the reports were deliberately **not** counted as defects, and are
 recorded here so nobody re-files them: the Group and Feed branches both ignore
@@ -1835,6 +1835,201 @@ comes from `get_task_session()` and commits the refreshed profile first, and
 `autoflush=False` so the same-call collision never forms. The defect is in the
 composition, not in either function alone. **Read every ingestion function
 together with its callers, or this shape is invisible.**
+
+## Sub-project 3: the resolver functions, and what the tests say about D21-D24
+
+`docs/superpowers/plans/2026-08-28-coverage-resolve-functions.md`, on branch
+`coverage-resolve-functions`. Six test tasks over `resolve_remote_post`,
+`create_resolved_object` and `resolve_remote_post_from_search` — the three
+functions sub-project 2b registered and deliberately left untested. 92 tests,
+and the two large functions are now at 55/60 and 73/73 statements.
+
+Sub-project 2b's closing sentence was that anyone taking D21-D24 should expect
+to write characterisation tests first, because nothing pinned the current
+behaviour. That is what this is. **Nothing here is fixed**; the authorisation
+covered testing and reporting only.
+
+### 1. The five registered defects, verified against tests rather than reading
+
+| # | verdict | the test that demonstrates it |
+|---|---|---|
+| D21 | **confirmed** | `TestRawNetlocComparison` in `tests/test_ap_resolve_remote_post.py` — a community host differing from the object URI's only in case, and one carrying an explicit `:443`, are both refused with no post written |
+| D22 | **confirmed** | `TestRawNetlocComparison` in `tests/test_ap_create_resolved_object.py` — case, explicit port and userinfo all refuse |
+| D23 | **confirmed, and understated** — see section 2 | the AST equality check and the drift table in `tests/test_ap_resolve_from_search.py` |
+| D24 | **confirmed** | `TestThisCopysDomainGate` in `tests/test_ap_resolve_from_search.py` |
+| `posted_at` | **confirmed in full** — see section 3 | `TestAPublishedValueTheColumnCannotStore` in `tests/test_ap_create_resolved_object.py` |
+
+**One qualification on D21, because the register's wording is stronger than what
+a test can show.** The row says the refusal is *systematic* — that
+`community.ap_profile_id` is stored lowercased while the object URI's netloc is
+the peer's raw string, so internal consistency on the peer's part is no defence.
+The comparison's case-sensitivity is now pinned by test. The premise about how
+`ap_profile_id` comes to be lowercased is still **reading-only**: the test
+constructs the community row directly rather than ingesting an actor document,
+so it demonstrates the refusal without demonstrating that production always
+supplies a lowercased left operand. Anyone fixing D21 should keep that
+distinction in view — the fix is the same either way, but the severity rests on
+the unproven half.
+
+D22's systematic claim, by contrast, **is** pinned: `uri_domain` is a parameter,
+the alpha API passes it lowercased, and the test passes it the same way.
+
+### 2. D23 is a triple, not a pair, and the duplication is exact
+
+Two corrections to the row, both mechanical:
+
+- **The two unfixed copies are byte-identical**, not "textual near-duplicates".
+  Normalised through the AST, `create_resolved_object`'s walk and
+  `resolve_remote_post_from_search`'s walk compare equal. Every finding recorded
+  against one holds verbatim against the other.
+- **There is a third copy, and it is already fixed.** `verify_object_from_source`
+  carries the same walk and the same gate, and sub-project 2b fixed it to use
+  `host_of`. So the family is three functions wide, one member is correct, and
+  D23's "fixing one leaves the other" is not a forecast — it has already
+  happened, in this file, in this campaign.
+
+The fixed copy is therefore the **fix template** for the other two, and the
+differences are enumerated rather than left to be rediscovered:
+
+| difference | the two unfixed copies | `verify_object_from_source` | behaviour? |
+|---|---|---|---|
+| host comparison | `urlparse(...).netloc` | `host_of(...)` | yes — this is D22/D24 |
+| a bare embedded object as `attributedTo` | no arm matches; falls through with `actor_domain` None | `elif isinstance(..., dict) and 'id' in ...` | yes — see D38 |
+| an unusable `attributedTo` type | silent fall-through, then refused by the domain gate | `else: return None, '<reason>'` | yes — diagnosis |
+| arm order | `Person`-dict arm first | string arm first | no — one element matches at most one arm |
+
+The arm-order row is stated so that whoever deduplicates these knows it is safe
+to normalise; the other three are the work.
+
+**And a fifth difference, in a neighbouring expression rather than the walk:**
+the two copies disagree with each other about `inReplyTo`.
+`create_resolved_object` tests it for truthiness, `resolve_remote_post_from_search`
+tests `is not None`. A present-but-empty-string `inReplyTo` therefore becomes a
+Post through one and a reply attempt through the other. Both behaviours are now
+pinned, one in each file, and the mutant that makes them agree fails a test.
+
+### 3. The `posted_at` defect: confirmed, and the register was right about all of it
+
+Observed, not inferred: a `published` value the column cannot store raises
+`sqlalchemy.exc.DataError` (wrapping psycopg2's `InvalidDatetimeFormat`) out of
+`create_resolved_object`, and the Post row survives, because `create_post`
+committed it before the enrichment ran.
+
+**A correction to this sub-project's own reporting.** Task 3's commit message
+presented the surviving row as something the register had missed. It had not:
+the design document for this sub-project states the defect as "fails at flush
+with the post already committed". Both halves were on the record; this work
+observed them. The claim of novelty was wrong and is withdrawn here rather than
+left in the commit log unqualified — the campaign's rule about re-deriving
+claims applies to its own reports too.
+
+What is genuinely new is the sibling defect below (D37): a `published` value the
+column CAN store is silently wrong whenever it carries a non-zero offset.
+
+**And a note for the partially-applied-ingest count**, which an earlier section
+of this document makes derivable by grep. This defect is a seventh instance of
+that shape — the row is committed, the enrichment then fails, the exception
+escapes — but it is registered in this sub-project's design document rather than
+as a D-numbered row here, so:
+
+```bash
+grep -ciE '^\| \*{0,2}D[0-9]+.*partially-applied.ingest' \
+  docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md
+```
+
+still prints **6**, and that is correct for what it measures: D-rows carrying
+the phrase. The count of known instances of the shape is seven. The two numbers
+differ for a reason, and neither is wrong — but a future reader comparing the
+grep against prose elsewhere needs this sentence to reconcile them, which is the
+same hazard the "six, not five" section was written to fix.
+
+### 4. Severities, re-read now that the behaviour is pinned
+
+The severities stand as written. Nothing found here converts any of D21-D24
+into a trust-boundary bypass, and 2b's probe-backed reasoning — that a netloc
+comparison is strictly stricter than a host comparison, so it can only
+false-refuse — held up against every case written. All four remain availability
+defects.
+
+One adjustment of emphasis rather than severity: D23's low rating was justified
+by "it is the reason a fix can half-land". With the duplication now known to be
+exact and three-way, and one copy already diverged by a fix, that reason is
+stronger than the rating suggests. The row is left at low because nothing is
+wrong in either copy on its own.
+
+### 5. What a fix must preserve, per defect, now that tests exist
+
+- **D21.** The `ovo.st` carve-out and the `nodebb=True` bypass are separately
+  covered and are *not* part of this defect; a host-comparison fix must leave
+  both firing exactly as they do. `TestOvoSt` and `TestNodebbBypass` fail if
+  either is disturbed. The two `TestRawNetlocComparison` cases flip from refusal
+  to a created post when the fix lands — they are written to be flipped, and
+  the docstring says so.
+- **D22.** Same, plus: the gate must keep refusing when `actor_domain` is None,
+  which is a different path from a domain mismatch and has its own tests. A fix
+  that normalises hosts must not accidentally make `None` compare equal to
+  anything.
+- **D23.** Any deduplication must preserve the `inReplyTo` divergence
+  deliberately or change it deliberately — the two copies genuinely disagree,
+  and a merge that picks one silently changes behaviour on the other path. The
+  mutants for both spellings are recorded in the two test files.
+- **D24.** The `Move` handler is a real caller; the function's own comment
+  denies it. A fix should correct the comment, since the stale comment is what
+  made this look like a UI-only concern.
+- **`posted_at`.** A fix that parses `published` must keep the enrichment
+  skipped when the key is absent, and must decide explicitly what to do with an
+  offset — see D37, which the current code answers by silently discarding it.
+
+### 6. New defects found while testing — D34-D40
+
+None fixed, same rule as every sub-project before this one. **Next free number
+after these: D41.**
+
+| # | function | defect | severity | evidence |
+|---|---|---|---|---|
+| **D34** | `create_resolved_object` | the third operand of `if user and community and post_data` cannot be the deciding one. Every falsy `post_data` leaves `actor` None, and `find_actor_or_create(None)` raises `AttributeError` on `actor.strip()` before the conjunction is evaluated. Dead as a decision. | informational | test (`TestPostDataOperandIsDead`) + surviving mutant |
+| **D35** | `create_resolved_object` **and** `resolve_remote_post_from_search` | **no remote reply can be created by either resolver.** Both synthesise their activity as `{'id': ..., 'object': post_data}` with no `'type'` key; `Post.new` reads that key defensively, `PostReply.new` reads `request_json['type']` unguarded, so it raises `KeyError('type')`, `create_post_reply` swallows it, and the resolver returns None. Every reply arriving by Announce, by microblog boost, or by the alpha API is silently dropped. | **medium-high — silent, total for replies, three call paths** | test in both files, plus the APLOG message pinned as `'type'` |
+| **D36** | both resolvers | the reply branch's enrichment and, in `resolve_remote_post_from_search`, the `return object.post` contract are unreachable while D35 stands. Not defects themselves; recorded so that fixing D35 is known to also un-dead three code paths that no test can currently exercise. | informational | branch-arc measurement |
+| **D37** | both resolvers | `posted_at` is `timestamp without time zone` and the peer's raw string is assigned to it, so Postgres **discards a non-zero offset rather than converting it**. A peer publishing at `00:00+05:00` is recorded as `00:00` — five hours late — and `last_active` with it, which is what orders community listings. Stores cleanly; simply wrong. | low-medium — silent, affects ordering | test (`TestAPublishedOffsetIsDiscardedNotConverted`) |
+| **D38** | `create_resolved_object`, `resolve_remote_post_from_search` | an `attributedTo` that is a single embedded object — `{'type': 'Person', 'id': ...}`, ordinary ActivityStreams — matches neither the string arm nor the list arm, so the author is never found and the document is refused. The same object inside a one-element list is accepted. **`verify_object_from_source` already handles it**, so the fix exists in-file. | low-medium — peer-triggerable availability | test in both files; the fixed copy's dict arm |
+| **D39** | `resolve_remote_post_from_search` | `post_data['id']` in the second existence check is an unguarded read on a peer document, sitting between two guards that use the `'key' in ...` idiom correctly. A document without `'id'` raises `KeyError` out of the function; on the `Move` path a peer chooses that document. | low — availability | test (`test_a_document_with_no_id_raises_keyerror`) |
+| **D40** | `resolve_remote_post_from_search` | the `and nodebb` conjunct in the `find_community` fallback does no work. `topic_post_data` diverges from `post_data` only in the OrderedCollection branch, which is the only place `nodebb` becomes True; with `nodebb` False the fallback would repeat a lookup that has already returned None. | informational — code quality | surviving mutant, with the divergence argument |
+
+D35 is the one worth acting on soonest. It is not a parsing subtlety: it is an
+entire class of federated content that neither resolver can ingest, failing
+silently, with the traceback swallowed by a bare `except Exception` and no log
+line unless `LOG_ACTIVITYPUB_TO_DB` happens to be on.
+
+### 7. What the mutation runs cost, and what they caught that reading did not
+
+52 mutants across the six tasks. Five survive and are reported rather than
+chased — D34 and D40 above, the reply-branch fallback and the return shape that
+D36 covers, and `activity` forced to `'update'`, which the update path's
+fallback to create makes unobservable.
+
+**Four tests that pinned nothing were caught by mutants and rewritten**, and
+they had one shape between them: asserting a row's identity or a `None` rather
+than what the path wrote.
+
+1. `create_resolved_object`'s `user` operand — deleting it left all 16 tests
+   passing, because `create_post` swallows the resulting exception and returns
+   the same None. Now asserts the operand is never reached, via the APLOG entry
+   the swallowed exception would write.
+2. The post-update dispatch — asserted the returned id and the row count, and
+   passed with the dispatch forced to `'create'`, because `Post.new` returns the
+   **existing row** on a duplicate `ap_id`. Now asserts the body was rewritten.
+3. The `uri_domain` reassignment — asserted through the second existence check,
+   which answers before the domain gate reads `uri_domain`. Now creates the post
+   rather than finding one.
+4. Four NodeBB guard tests stored their row under the request URI, so the
+   **entry** check answered and no fetch happened at all. Caught by respx's
+   `assert_all_called` reporting four registered, never-called routes — not by
+   a mutant, and not by anything a reader would have noticed.
+
+That last one is the useful generalisation: `assert_all_called` is a coverage
+check on the *fixture*, and it caught a vacuity that neither coverage nor
+mutation would have. A test that never reaches the code under test still passes
+its own assertions.
 
 ## Ratchet gotchas
 
