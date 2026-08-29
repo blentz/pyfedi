@@ -14,6 +14,7 @@ here.
 import uuid
 from collections.abc import Iterable
 
+from flask import current_app
 from flask_login import login_user
 
 from app import db
@@ -798,3 +799,53 @@ def resolvable_remote_author(instance: Instance, name: str = 'alice') -> User:
     user.ap_fetched_at = utcnow()
     db.session.commit()
     return user
+
+
+def inbox_activity(actor, *, activity_type: str = 'Like', object_uri: str = None, **fields) -> dict:
+    """The minimum an activity needs to get past shared_inbox's field check.
+
+    That check is `not 'id' in request_json or not 'type' ... or not 'actor'
+    ... or not 'object'`, so all four are always present here and a test that
+    wants one missing deletes it explicitly -- which reads as the deviation it
+    is. `id` is unique per call because shared_inbox writes it to Redis for 90
+    seconds to suppress duplicates; a fixed id would make tests interfere
+    through Redis rather than through anything they assert about.
+    """
+    activity = {
+        'id': f'{actor.ap_profile_id}/activities/{uuid.uuid4().hex}',
+        'type': activity_type,
+        'actor': actor.ap_profile_id,
+        'object': object_uri or f'https://{actor.instance.domain}/objects/1',
+    }
+    activity.update(fields)
+    return activity
+
+
+def signed_inbox_post(client, activity: dict, sender, *, path: str = '/inbox',
+                      body: bytes = None, host: str = None):
+    """POST `activity` to `path` with a REAL HTTP signature made by `sender`.
+
+    Uses production's own signing code. `signed_request(send_via_async=True)`
+    returns (uri, headers, body_bytes) instead of sending, which is the whole
+    reason these tests can be honest: the signature the gate verifies is one
+    the application made, not one a test faked, and
+    HttpSignature.verify_request is never patched anywhere in this suite.
+
+    `sender` must have been built with `make_user(..., with_keys=True)` -- a
+    keyless user dies at signing with "'NoneType' object has no attribute
+    'encode'", because signed_request calls .encode() on the private key.
+
+    `body` overrides the bytes actually sent while leaving the signature
+    alone, which is how a test produces a request whose digest no longer
+    matches its body. `host` overrides the Host header for the same reason,
+    one field over.
+    """
+    from app.activitypub.signature import HttpSignature
+    host = host or current_app.config['SERVER_NAME']
+    _uri, headers, body_bytes = HttpSignature.signed_request(
+        f'https://{host}{path}', activity, sender.private_key,
+        f'{sender.ap_profile_id}#main-key', send_via_async=True)
+    if host is not None:
+        headers['Host'] = host
+    return client.post(path, data=body if body is not None else body_bytes,
+                       headers=headers, content_type='application/activity+json')

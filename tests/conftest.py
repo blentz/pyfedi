@@ -353,6 +353,28 @@ def federation_peer(http_mock):
 
 
 @pytest.fixture
+def signing_peer(db_session):
+    """A remote actor with a real keypair, resolvable without an actor fetch.
+
+    For any test that must send a REAL HTTP-signed request through the test
+    client (see tests/factories.py's signed_inbox_post): with_keys=True gives
+    it a private key to sign with, and ap_fetched_at is stamped for the same
+    reason resolvable_remote_author's docstring gives above --
+    find_actor_or_create_cached would otherwise call schedule_actor_refresh,
+    which fires a real actor fetch inline under eager Celery.
+    """
+    from app import db
+    from app.utils import utcnow
+    from tests.factories import make_instance, make_site, make_user
+    make_site()
+    instance = make_instance('peer.example')
+    sender = make_user(instance, 'alice', with_keys=True)
+    sender.ap_fetched_at = utcnow()
+    db.session.commit()
+    return sender
+
+
+@pytest.fixture
 def redis_double(monkeypatch):
     """Patch get_redis_connection so app code reaches a fakeredis instance.
 
