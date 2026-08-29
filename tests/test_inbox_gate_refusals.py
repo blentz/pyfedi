@@ -240,11 +240,70 @@ must give the Announce object all four fields (`id`, `type`, `actor`,
 `object`) or it will be refused at row 7/8 for the wrong reason before ever
 reaching the local-content branch -- the brief calls this out explicitly and
 it is easy to get backwards.
+
+TASK 4 -- strong-allowlist rejection, duplicate suppression, PeerTube drop
+=========================================================================
+Source order (routes.py:673-685), all three AFTER the field/Announce checks
+above and BEFORE `HttpSignature.precheck`:
+
+  673-675  g.site.allowlist_mode >= ALLOWLIST_STRONG and the actor's host is
+           not in AllowedInstances -> ('', 403), NO log_incoming_ap call at
+           all -- this is the one outcome in the whole gate that logs
+           nothing on refusal.
+  677-680  redis_client.exists(id) (an id this process already saw and wrote
+           to Redis with a 90s TTL, routes.py:680) -> ('', 200), logged
+           'Already aware of this activity'.
+  683-685  request_json['actor'] is a string ending 'accounts/peertube' ->
+           bare `return ''` -- no status code in the source, unlike every
+           sibling return in this gate. Flask defaults a bodyless response
+           to 200, so this is observationally identical to ('', 200) from
+           outside the process; logged 'PeerTube View or CacheFile
+           activity'. Recorded for the register (Task 8): the missing
+           status literal is either an oversight or deliberate reliance on
+           Flask's default, and nothing in the source says which.
+
+What makes a host "allowed" -- read before writing the allowlist test
+-----------------------------------------------------------------------
+`instance_allowed(host)` (app/utils.py:2302-2308): None or '' host -> True
+(allowed) unconditionally; otherwise it lower-cases/strips the host via
+`inbox_domain` and returns whether a matching row exists in the
+`AllowedInstances` table (`AllowedInstances.query.filter_by(domain=host)`).
+It is a real table lookup, not a config value or a comparison against
+`g.site` -- so a test does not need to construct a "not allowed" state at
+all: `signing_peer` lives on `peer.example`, no fixture anywhere in this
+suite inserts an `AllowedInstances` row for it, and `TestConfig.CACHE_TYPE
+= 'NullCache'` means `@cache.memoize(150)` on `instance_allowed` never
+serves a stale answer across tests. Setting `g.site.allowlist_mode =
+ALLOWLIST_STRONG` on the existing Site row (id 1, the one `signing_peer`'s
+`make_site()` already created) is therefore sufficient by itself -- no
+`AllowedInstances` row needs to be created OR absent-by-construction, it is
+already absent-by-construction. (An earlier draft of this test guessed the
+condition was about `g.site` state alone and would have passed for the
+wrong reason had `AllowedInstances` happened to carry a wildcard-style
+entry; it does not, so this note also serves as the check that the guess
+was right.)
+
+The duplicate test signs BOTH requests, deliberately, per the brief. The
+duplicate-id check (677-680) sits AFTER the field check but BEFORE
+`HttpSignature.precheck`/`verify_request` (688/716) -- so this check does not
+itself need a valid signature, and an UNSIGNED first POST would reach it,
+write the id to Redis, and return 200 just as readily as a signed one. That
+is exactly the trap: with unsigned posts, the SECOND request would also
+return 200, but for the wrong reason if signature verification were ever
+moved ahead of the duplicate check, or if some other early-exit branch
+intervened -- the test would keep passing while proving nothing about
+duplicate suppression specifically. Signing both requests, and asserting the
+`process_inbox_request` dispatch recorder fired exactly once AND the second
+row's `exception_message` is 'Already aware of this activity', pins the
+behaviour to the actual branch rather than to any 200-returning outcome that
+happens to come first.
 """
 import pytest
 
-from app.models import ActivityPubLog
-from tests.factories import inbox_activity
+from app import db
+from app.constants import ALLOWLIST_STRONG
+from app.models import ActivityPubLog, Site
+from tests.factories import inbox_activity, signed_inbox_post
 
 pytestmark = pytest.mark.usefixtures('redis_double')
 
@@ -370,3 +429,101 @@ def test_an_announce_of_an_ordered_collection_is_not_refused_by_the_field_check(
     with app.test_client() as client:
         with pytest.raises(KeyError):
             client.post('/inbox', json=activity)
+
+
+def test_a_disallowed_actor_is_refused_under_strong_allowlist(app, signing_peer, monkeypatch):
+    """routes.py:673-675: with a strong allowlist, an actor whose host has no
+    row in AllowedInstances is refused with 403 -- and, uniquely among every
+    outcome in this gate, NOTHING is logged. `status_code == 403` alone would
+    not distinguish this from a hypothetical future 403 that DID log
+    something; `ActivityPubLog.query.count() == 0` (with logging enabled) is
+    the assertion that would actually fail if a `log_incoming_ap` call were
+    added to this branch, which is exactly the kind of change this test
+    exists to catch.
+
+    `instance_allowed` (app/utils.py:2302-2308) is a real AllowedInstances
+    table lookup, not a `g.site` flag: `signing_peer` lives on
+    'peer.example', and nothing in this suite ever inserts an
+    AllowedInstances row for it, so the host is disallowed by construction
+    with no extra setup. Only `g.site.allowlist_mode` needs to be raised to
+    ALLOWLIST_STRONG (the Site row `signing_peer`'s own `make_site()` call
+    already created) to reach this branch. No signature is needed: 673-675
+    sits before `HttpSignature.precheck` (688), like every Task 3 outcome.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    site = Site.query.get(1)
+    site.allowlist_mode = ALLOWLIST_STRONG
+    db.session.commit()
+    activity = inbox_activity(signing_peer)
+
+    with app.test_client() as client:
+        response = client.post('/inbox', json=activity)
+
+    assert response.status_code == 403
+    assert ActivityPubLog.query.count() == 0
+
+
+def test_a_repeated_activity_is_suppressed(app, signing_peer, monkeypatch, redis_double):
+    """routes.py:677-680: an activity id already written to Redis (by an
+    earlier delivery of the SAME id) is refused with 200, logged 'Already
+    aware of this activity', and -- unlike the first delivery -- never
+    reaches `process_inbox_request`. Both posts are signed with
+    `signed_inbox_post`: the duplicate check sits after the field check but
+    before signature verification, so an unsigned first POST would reach it
+    and write the id to Redis just as well, and an unsigned second POST would
+    still return 200 -- proving nothing about THIS branch specifically,
+    since several other branches in this gate also return bare 200. Signing
+    both, and asserting the dispatch count and the exact log message, pins
+    the outcome to duplicate suppression rather than to any other
+    200-returning path a broken production change might reroute onto.
+
+    One dict, reused for both posts -- not `inbox_activity` called twice --
+    because the id must be IDENTICAL for the second post to collide with what
+    the first wrote to Redis; `inbox_activity` mints a fresh uuid per call
+    specifically so unrelated tests never collide with each other through
+    Redis, which is exactly the behaviour this test needs to defeat once, on
+    purpose.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    monkeypatch.setitem(app.config, 'DEBUG', True)
+    dispatched = []
+    monkeypatch.setattr('app.activitypub.routes.process_inbox_request',
+                        lambda *args: dispatched.append(args))
+    activity = inbox_activity(signing_peer)
+
+    with app.test_client() as client:
+        first = signed_inbox_post(client, activity, signing_peer)
+        second = signed_inbox_post(client, activity, signing_peer)
+
+    assert first.status_code == 200 and second.status_code == 200
+    assert len(dispatched) == 1
+    assert 'Already aware of this activity' in [
+        row.exception_message for row in ActivityPubLog.query.all()]
+
+
+def test_a_peertube_view_activity_is_dropped(app, signing_peer, monkeypatch):
+    """routes.py:683-685: an activity whose 'actor' string ends
+    'accounts/peertube' is dropped silently -- logged 'PeerTube View or
+    CacheFile activity' -- without ever reaching `HttpSignature.precheck`
+    (688), so no signature is needed here either.
+
+    FINDING for the register (Task 8), not fixed here: the source returns
+    bare `return ''` at line 685, with no status code literal, unlike every
+    other return site in this gate (all of which write `'', <code>`
+    explicitly). Flask defaults a bodyless response with no status to 200,
+    so `response.status_code == 200` below is observationally identical to
+    every other 200-outcome in this file -- but it is Flask's default doing
+    the work, not an explicit `200` in the source. A future refactor that
+    changed Flask's default handling, or wrapped this return in something
+    that no longer defaults to 200, would change this outcome silently; nothing
+    in routes.py itself pins the status code the way its neighbours do.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    activity = inbox_activity(signing_peer)
+    activity['actor'] = 'https://peer.example/accounts/peertube'
+
+    with app.test_client() as client:
+        response = client.post('/inbox', json=activity)
+
+    assert response.status_code == 200
+    assert ActivityPubLog.query.one().exception_message == 'PeerTube View or CacheFile activity'
