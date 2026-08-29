@@ -81,6 +81,12 @@ It does **not** block:
 - `urllib` — `app/nntp/server.py:767`
 - `boto3`/`botocore` — ten modules; `s3_bucket` is opt-in
 - `smtplib` — `app/email.py`
+- `requests` — `pyld`'s default JSON-LD document loader (`jsonld.py:6547`),
+  found by sub-project 4 (the inbox gate) when its LD-signature tests made
+  real outbound HTTPS calls fetching JSON-LD contexts. Not named in this
+  fixture's own docstring before that sub-project found it. See "A
+  test-harness gap, not a production defect" under "Sub-project 4" below for
+  the fix that sub-project applied, test-only, to its own two tests.
 
 Those still reach the real internet from the test suite. **`app/nntp` is
 entirely socket work and sits at 0% coverage** — that sub-project should expect
@@ -1123,8 +1129,9 @@ says which numbers are taken. So there is one now, and it is this file:
   side.
 - **The allocation ledger, kept current:** D1–D20 sub-project 2a, D21–D24
   sub-project 2b, D25–D29 sub-project 2c, D30–D33 sub-project 2c's whole-branch
-  review. D34–D40 sub-project 3. **Next free number: D41.** If you take it, say so here
-  in the change that takes it.
+  review. D34–D40 sub-project 3. D41–D44 sub-project 4 (the inbox gate).
+  **Next free number: D45.** If you take it, say so here in the change that
+  takes it.
 
 Two entries in the reports were deliberately **not** counted as defects, and are
 recorded here so nobody re-files them: the Group and Feed branches both ignore
@@ -2030,6 +2037,188 @@ That last one is the useful generalisation: `assert_all_called` is a coverage
 check on the *fixture*, and it caught a vacuity that neither coverage nor
 mutation would have. A test that never reaches the code under test still passes
 its own assertions.
+
+## Sub-project 4: the inbox gate — `shared_inbox`, its route aliases, and `replay_inbox_request`
+
+`docs/superpowers/plans/2026-08-28-coverage-inbox-gate.md`, on branch
+`coverage-inbox-gate`. Seven tasks covered `app/activitypub/routes.py`'s
+inbox gate: `shared_inbox` itself (bound to `POST /inbox`), the three bare
+`return shared_inbox()` route aliases that dispatch to it (`site_inbox` at
+`/site_inbox`, `user_inbox` at `/u/<actor>/inbox`, `community_inbox` at
+`/c/<actor>/inbox`), and the separate `replay_inbox_request` function that
+shares most of `shared_inbox`'s shape but neither its route decorator nor its
+protections. 45 tests across three files:
+`tests/test_inbox_gate_refusals.py` (19), `tests/test_inbox_gate_signatures.py`
+(7), `tests/test_inbox_gate_dispatch.py` (19).
+
+### 1. Whole-function coverage, and every gap explained
+
+Measured against this sub-project's own suite
+(`./run_tests.sh tests/test_inbox_gate_refusals.py tests/test_inbox_gate_signatures.py tests/test_inbox_gate_dispatch.py -q --cov=app.activitypub.routes --cov-report=json`,
+45 passed), by intersecting each function's AST span against `coverage.json`'s
+`executed_lines`/`missing_lines`/`executed_branches`/`missing_branches` — the
+same method sub-project 2a used:
+
+| function | span | statements | branches |
+|---|---|---|---|
+| `shared_inbox` | 625-763 | 91/94 executed | 40/42 arcs executed |
+| `replay_inbox_request` | 781-835 | 38/38 executed | 21/22 arcs executed |
+
+Four gaps in total, and none is left unexplained:
+
+1. **`shared_inbox` lines 632-634, the `except BlockingIOError:` arm.**
+   Dead code — see D41 below. This is the only missing-*statement* gap either
+   function has; every other gap is a missing branch arc on a line that does
+   execute.
+2. **`shared_inbox` branch 674→677, the False arm of
+   `if not instance_allowed(furl(request_json['actor']).host):`.** Under
+   `ALLOWLIST_STRONG`, this sub-project's one allowlist test
+   (`test_a_disallowed_actor_is_refused_under_strong_allowlist`,
+   `tests/test_inbox_gate_refusals.py`) relies on the `AllowedInstances` table
+   being empty by construction — every test truncates it — so only the
+   refusal (674→675, `return '', 403`) is exercised. The continuation arm,
+   where the peer's host genuinely appears in `AllowedInstances`, needs a row
+   inserted for it and nothing in this sub-project's tasks did that. Explained,
+   not fixed: closing it needs one more fixture, not a defect.
+3. **`shared_inbox` branch 741→747, the False arm of `if actor.instance_id:`.**
+   Every dispatch-path test in `tests/test_inbox_gate_dispatch.py` builds its
+   actor through `signing_peer` or an equivalent factory that attaches a real
+   `Instance` row, so `actor.instance_id` is always truthy by the time this
+   line runs. `User.instance_id` (`app/models.py:558`) is a nullable foreign
+   key, so a `User` row with no instance is possible in principle — but
+   nothing in this sub-project constructs one, and whether `find_actor_or_create_cached`
+   or `actor_json_to_model` can ever produce a remote actor with a null
+   `instance_id` was not investigated here. Left as an unexercised branch
+   rather than a defect, because no test reaches it, not because it is
+   provably dead.
+4. **`replay_inbox_request` branch 796→802, the False arm of the
+   already-present-local-content check.** The two Announce tests in
+   `tests/test_inbox_gate_dispatch.py` cover the missing-fields path (line 789
+   True) and the already-present-local-content path (line 796 True); no test
+   sends a well-formed Announce of a genuinely remote, non-local object, which
+   is the ordinary case this branch exists to let through to the PeerTube
+   check and beyond. A real gap in this sub-project's own scenario coverage,
+   not a defect in the function — the branch's both arms are behaviourally
+   sound as read; only the pass-through arm went untested.
+
+### 2. New defects — D41-D44
+
+Each was found by an implementer and independently confirmed by a reviewer
+against source during Tasks 2-7; each is re-verified against source again
+here, at the point the row is written, per this document's standing rule.
+
+| # | function | defect | severity | evidence |
+|---|---|---|---|---|
+| D41 | `shared_inbox` | the `except BlockingIOError:` arm (routes.py:632-634) is unreachable. `request.get_json(force=True)` reads through Werkzeug's `LimitedStream`; `LimitedStream.readinto()` catches `(OSError, ValueError)` — `BlockingIOError` is an `OSError` subclass — and calls `on_disconnect()`, whose default behaviour raises `ClientDisconnected`, which subclasses `BadRequest`. The sibling `except werkzeug.exceptions.BadRequest as e:` immediately above (line 629) therefore catches every case the `BlockingIOError` handler was written for, first. Confirmed against installed Werkzeug 3.1.8's actual source (`wsgi.py`'s `LimitedStream.readinto`, `exceptions.py`'s `ClientDisconnected(BadRequest)`) a third time while writing this row, after the implementer and the reviewer each verified it independently during Task 2. | informational — dead code, no behaviour to trigger | reading + source inspection, verified three times |
+| D42 | `object_has_missing_fields` (`app/activitypub/util.py:4659-4663`), reached from `shared_inbox` | returns `False` for any object typed `OrderedCollection` without checking `id`/`actor`/`object` at all. A peer-supplied Announce whose inner object is `{'type': 'OrderedCollection'}` — no `id`, no `actor`, no `object` — therefore passes the missing-fields check at `routes.py:657`, and the very next line that assumes it passed, `id = object['id']` at `routes.py:671`, raises an unhandled `KeyError` rather than producing one of the gate's normal logged 200-refusals. Confirmed against source again while writing this row: `object_has_missing_fields`'s `OrderedCollection` short-circuit is exactly as described, and `routes.py:671` sits inside the same `if request_json['type'] == 'Announce' and isinstance(...)` block that already ran `object_has_missing_fields`, with no exception handling between them. `replay_inbox_request` does not carry the equivalent `id = object['id']` reassignment, so this specific crash is `shared_inbox`-only, not shared by both entry points. | medium — peer-triggerable, unhandled exception instead of a graceful refusal | reading + source inspection |
+| D43 | `shared_inbox` | the PeerTube branch (`routes.py:685`, `return ''`) has no status code, where its immediate neighbours among the early-refusal returns (e.g. `routes.py:663`, `:669`, `:679`, all `return '', 200`) specify one. Flask defaults an unspecified return to 200, so the two are indistinguishable to any caller — this is a readability/consistency gap, not a behavioural one. | cosmetic | reading |
+| D44 | `replay_inbox_request` | diverges from `shared_inbox` in five ways, verified against `routes.py:781-835`: no signature checks of any kind (no precheck, no `verify_request`, no LD fallback); no redis duplicate suppression; an ACTIVE `is_local()` refusal at 824-826 where `shared_inbox`'s equivalent at 710-712 is commented out; no instance bookkeeping (`last_seen`/`dormant`/`gone_forever`/`failures`/`ip_address` are never touched); and both dispatches (`process_delete_request`, `process_inbox_request`) are direct and unconditional, with `store_ap_json` hardcoded `True` and no `current_app.debug` split. See section 3 below for why this is rated low rather than the "no auth at all" severity the list of divergences would suggest in isolation. | low — see section 3; not directly peer-reachable | reading (five divergences) + reading (all three call sites traced) |
+
+### 3. `replay_inbox_request`'s reachability, traced rather than assumed
+
+D44's severity turns entirely on who can reach `replay_inbox_request`, so this
+was established before rating it, per this sub-project's brief. There are
+exactly three callers in `app/`, found by `grep -rn replay_inbox_request app/`:
+
+| caller | route | gate | what `request_json` is |
+|---|---|---|---|
+| `app/admin/routes.py:1270`, `activity_replay` | `GET /activity_json/<int:activity_id>/replay` | `@login_required` + `@permission_required('change instance settings')` | a previously-logged `ActivityPubLog` row's own `activity_json`, chosen by the admin via `activity_id` |
+| `app/dev/routes.py:206`, `tools_activitypub` | `POST /dev/tools/activitypub` | `@login_required` + `@permission_required('change instance settings')`, **and** `if not current_app.debug: abort(404)` at the top of the view | free-text JSON pasted into a form field by the admin |
+| `app/main/routes.py:633`, `replay_inbox` | `GET /replay_inbox` | `@login_required` only — no permission check | **hardcoded to `{}`** in the current source (`app/main/routes.py:622`); the realistic example payload is left in a docstring-style triple-quoted string that is never assigned to anything |
+
+**No path lets an unauthenticated peer invoke `replay_inbox_request`
+directly.** Two of the three callers require the `change instance settings`
+admin permission; the third requires only login but currently supplies a
+fixed empty dict, which `replay_inbox_request`'s own first check (`routes.py:782`)
+refuses immediately as a missing-fields failure — verified by reading the
+function, not run as a test, since this sub-project's report-only remit
+covers `app/activitypub/routes.py` and `app/main/routes.py`'s route body was
+in scope only for this trace. As shipped, `/replay_inbox` is a no-op for any
+caller, admin or not.
+
+The one path that does carry real peer-authored content is the admin replay
+tool: `ActivityPubLog.activity_json` rows include content a peer sent, and an
+admin can choose any historical row and force it back through
+`replay_inbox_request`, bypassing every protection `shared_inbox` applied the
+first time that row was logged (including protections that may have caused
+the row to be logged as a *failure* in the first place). That is a real
+consequence of D44's divergences, but it requires a deliberate admin action
+against already-stored data, not a fresh peer-triggerable request. **D44 is
+rated low** on that basis — the divergences are genuine and worth closing,
+but nothing here is exploitable by an unauthenticated third party, and the
+`/replay_inbox` route's current hardcoded-empty payload means the one
+login-only path is inert rather than under-protected.
+
+### 4. Converting D21, D24 and D35's reachability claims — upgrade only what the tests support
+
+D21, D24 and D35 (registered in sub-project 2b and confirmed-by-test in
+sub-project 3) each carry a reachability claim that traces up through
+`process_inbox_request` to `shared_inbox`'s own inbox route. This sub-project
+has now executed that entry point for the first time in the campaign, which
+is exactly the condition under which those claims could, in principle, move
+from reading to probe.
+
+**They do not move, and the reason is mechanical rather than judgement-based.**
+Every dispatch test in `tests/test_inbox_gate_dispatch.py` that reaches the
+success path calls `_patch_dispatch_recorders`
+(`tests/test_inbox_gate_dispatch.py:356-361`), which replaces
+`app.activitypub.routes.process_inbox_request` and
+`app.activitypub.routes.process_delete_request` with a `Recorder` —
+`monkeypatch.setattr('app.activitypub.routes.process_inbox_request', inbox_recorder)`
+and the same for `process_delete_request`. Every assertion in this
+sub-project's success-path tests is against what the recorder captured
+(`inbox_recorder.inline`, `.delayed`), never against anything the real
+`process_inbox_request` body does. The real function is never called by this
+suite.
+
+So the honest statement is:
+
+- **What this sub-project newly proves, by execution:** `shared_inbox` and
+  `replay_inbox_request` really do hand off to `process_inbox_request` (or
+  `process_delete_request` for a self-delete), with the correct arguments
+  (`request_json`, `store_ap_json`), and really do choose between calling it
+  directly and calling `.delay()` based on `current_app.debug` (`shared_inbox`
+  only — `replay_inbox_request` always calls directly, per D44). That is a
+  genuine, newly probe-backed fact about the dispatch boundary itself, and it
+  did not exist as tested behaviour before this sub-project.
+- **What this sub-project does not touch at all:** `process_inbox_request`'s
+  own body, `process_announce_of_uri`, `resolve_remote_post`,
+  `create_resolved_object`, `resolve_remote_post_from_search` — everything
+  D21, D24 and D35 actually describe. None of it executes when the dispatch
+  recorder stands in for `process_inbox_request`.
+- **Therefore: D21, D24 and D35's reachability claims are unchanged by this
+  sub-project.** They remain exactly as reading- or probe-backed as
+  sub-projects 2b and 3 left them — sub-project 3's direct unit tests already
+  probe each function's *own* behaviour, and sub-project 2b's call-site
+  tracing (the `process_announce_of_uri` chain for D21, the `Move` handler for
+  D24, the three call paths for D35) remains reading-only for how a peer's
+  request actually arrives at each function through the live inbox. This
+  sub-project reaches the dispatch call, not the handlers behind it, and
+  claiming otherwise would repeat the exact error this campaign keeps
+  correcting.
+
+### 5. A test-harness gap, not a production defect
+
+`block_outbound_http` (`tests/conftest.py:212-268`) is session-scoped,
+autouse, and patches only `httpx` via respx. Its own docstring names three
+known escapes: `urllib.request.urlopen`, `botocore`/`urllib3`, and `smtplib`
+(see "`block_outbound_http` blocks httpx and nothing else" above). Task 6
+found a fourth, previously undocumented one: **`pyld`'s default JSON-LD
+document loader uses `requests`** (`jsonld.py:6547`), which respx's httpx
+interception does not touch. The two LD-signature tests in
+`tests/test_inbox_gate_signatures.py` that exercised `LDSignature.verify_signature`
+made real outbound HTTPS calls to fetch JSON-LD contexts before this was
+caught in review. The fix — a test-local static document loader installed via
+`jsonld.set_document_loader`, the same pattern `app/main/routes.py:744`
+already uses in production — is test-only; the verifier itself stays
+unpatched and the signatures stay real, confirmed in the fix's re-review by
+checking that the frozen contexts are complete JSON-LD bodies producing the
+same URDNA2015 normalisation as a live fetch would, and that a
+mismatched-keypair variant of the same fixture still fails signature
+verification. This is filed here, next to the three gaps
+`block_outbound_http`'s docstring already names, because it is the same kind
+of gap and future sub-projects touching JSON-LD signing should know about it
+before they hit real network calls the way this one did.
 
 ## Ratchet gotchas
 
