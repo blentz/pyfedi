@@ -896,3 +896,30 @@ class TestAMalformedActorUrlDoesNotSkipTheInstanceGate:
         """Baseline: an unbanned, well-formed actor still passes."""
         from app.activitypub.actor import validate_remote_actor
         assert validate_remote_actor('https://friendly.example/u/alice') is True
+
+    def test_a_webfinger_handle_from_a_banned_instance_is_refused(self, app, banned_peer):
+        """The second bypass, and the more serious of the two: no malformed
+        input is involved at all.
+
+        `extract_domain_and_actor('alice@banned.example')` returns
+        `('', 'alice@banned.example')` -- urlparse does not raise, it simply
+        finds no authority in a string with no scheme. So an ordinary
+        webfinger handle reached the instance gate with an empty host and
+        `instance_banned('')` waved it through. Measured before the fix:
+        this returned True, as did the '@'-prefixed spelling.
+
+        The fix derives the host from the handle via `normalise_actor_string`
+        before the gate, so the ban is checked against 'banned.example' as it
+        always should have been.
+
+        Production change that fails this: removing the `normalise_actor_string`
+        fallback from `validate_remote_actor`.
+        """
+        from app.activitypub.actor import validate_remote_actor
+        assert validate_remote_actor('alice@banned.example') is False
+
+    def test_the_at_prefixed_handle_spelling_is_refused_too(self, app, banned_peer):
+        """`normalise_actor_string` strips a leading '@', '!' or '~'; this pins
+        that the prefixed spelling does not slip past the same check."""
+        from app.activitypub.actor import validate_remote_actor
+        assert validate_remote_actor('@alice@banned.example') is False

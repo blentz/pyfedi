@@ -61,9 +61,25 @@ class TestInstanceAllowed:
         db.session.commit()
         assert instance_allowed('https://other.example/inbox') is False
 
-    def test_an_empty_value_is_allowed_by_default(self, app, db_session):
-        assert instance_allowed('') is True
-        assert instance_allowed(None) is True
+    def test_an_empty_value_is_refused(self, app, db_session):
+        """An absent host is NOT on the allowlist.
+
+        This assertion was inverted on 2026-08-29. It previously read
+        `instance_allowed('') is True` -- "allowed by default" -- which made
+        this function fail OPEN on exactly the input its callers cannot
+        vouch for. Two producers hand it an empty host, both fed by remote
+        input: `extract_domain_and_actor` returns `('', '')` when urlparse
+        refuses an actor id the peer chose, and `inbox_domain` returns `''`
+        for the same reason on an inbox URL the peer chose. Registered as
+        D48; the sibling `instance_banned` assertion below was inverted in
+        the same change.
+
+        The allowlist answers "is this host on the list". A host we could
+        not determine is not on any list, so False is the honest answer as
+        well as the safe one.
+        """
+        assert instance_allowed('') is False
+        assert instance_allowed(None) is False
 
 
 class TestInstanceBanned:
@@ -87,9 +103,28 @@ class TestInstanceBanned:
         db.session.commit()
         assert instance_banned('https://other.example/inbox') is False
 
-    def test_an_empty_value_is_not_banned(self, app, db_session):
-        assert instance_banned('') is False
-        assert instance_banned(None) is False
+    def test_an_empty_value_is_treated_as_banned(self, app, db_session):
+        """An absent host is refused rather than waved through.
+
+        Inverted on 2026-08-29 alongside `instance_allowed`'s empty case;
+        it previously read `instance_banned('') is False`. Read together the
+        pair used to fail open in BOTH federation modes: an empty host was
+        allowed by the allowlist and not banned by the blocklist, so neither
+        setting stopped it. Demonstrated before the change: with a
+        BannedInstances row for 'banned.example',
+        `validate_remote_actor('https://[banned.example/u/x')` returned True
+        and `validate_remote_actor('alice@banned.example')` returned True --
+        the second is an ordinary webfinger handle, not a malformed input.
+
+        This direction costs something and the cost is deliberate: roughly
+        forty-five callers read `not instance_banned(instance.domain)` as a
+        delivery gate, and `Instance.domain` is nullable, so a row with no
+        domain now stops receiving deliveries instead of receiving them.
+        Refusing to federate with a row whose identity is unknown is the
+        safe direction, and a row in that state is already broken.
+        """
+        assert instance_banned('') is True
+        assert instance_banned(None) is True
 
     def test_a_wildcard_ban_still_matches(self, app, db_session):
         """Mastodon-style '*' bans are matched by regex after the lookup misses;

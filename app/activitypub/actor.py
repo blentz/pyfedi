@@ -42,20 +42,22 @@ def validate_remote_actor(actor_url, actor=None, allow_banned=False):
     """Validate if a remote actor is allowed."""
     server, _ = extract_domain_and_actor(actor_url)
 
-    # A URL whose host we could not determine must not reach the instance gate
-    # below, because that gate fails OPEN on an empty host in both federation
-    # modes: instance_allowed('') returns True and instance_banned('') returns
-    # False (app/utils.py). extract_domain_and_actor returns ('', '') when
-    # urlparse REFUSED the string -- an unbalanced IPv6 bracket, a doubled '::',
-    # an NFKC-confusable host -- and the actor id is chosen by the remote peer,
-    # so without this a banned instance evades its own ban by adding one '['.
+    # extract_domain_and_actor yields an empty server for two unrelated inputs,
+    # and only one of them is a failure. A URL whose netloc urlparse REFUSED --
+    # an unbalanced IPv6 bracket, a doubled '::', an NFKC-confusable host -- has
+    # no host to check. A webfinger handle ('alice@example.com') has one, but it
+    # sits after the '@' rather than in an authority, because urlparse reads a
+    # string with no scheme as pure path. find_actor_or_create accepts handles by
+    # design, so the handle must be resolved rather than refused.
     #
-    # The '://' test is load-bearing, not defensive noise. extract_domain_and_actor
-    # also returns an empty server for a webfinger handle ('alice@example.com'),
-    # which urlparse parses happily as a path with no authority and which
-    # find_actor_or_create accepts by design. Refusing on `not server` alone
-    # would reject every handle lookup in the codebase.
-    if '://' in actor_url and not server:
+    # Both used to reach the instance gate below with server == '', and that gate
+    # admitted them: a banned instance evaded its ban by adding one '[' to its
+    # actor id, or simply by being referenced as a handle. The pair now fails
+    # closed (app/utils.py), so an empty host would be refused there -- but it
+    # would refuse the handle too, which is why the host is derived here first.
+    if not server and '://' not in actor_url:
+        _, server = normalise_actor_string(actor_url)
+    if not server:
         return False
 
     # Check if instance is allowed/banned
