@@ -297,10 +297,94 @@ duplicate suppression specifically. Signing both requests, and asserting the
 row's `exception_message` is 'Already aware of this activity', pins the
 behaviour to the actual branch rather than to any 200-returning outcome that
 happens to come first.
+
+TASK 5 -- precheck, the Delete shortcut, and actor resolution
+=========================================================================
+Source order (routes.py:687-708), all three AFTER Task 4's checks above and
+all three still BEFORE `HttpSignature.verify_request` (716) -- the actual
+cryptographic signature check this file's docstring at the top calls out as
+"never patched anywhere in this suite":
+
+  687-691  `HttpSignature.precheck(request)` (app/activitypub/signature.py:
+           380-395) raises `VerificationFormatError` -> ('', 400), logged
+           'Precheck failed: ' + str(e).
+  693-701  A `Delete` whose `object` is a string equal to `actor`, for an
+           actor with no matching `User` row -> ('', 200), logged 'Does not
+           exist here', account_deletion set True but never acted on.
+  703-708  Any other activity's actor, unresolvable by
+           `find_actor_or_create_cached` -> ('', 200), logged
+           f'Actor could not be found 1 - : {actor_name}, actor object: None'.
+
+What `HttpSignature.precheck` actually checks -- read before writing a test
+for it
+-----------------------------------------------------------------------
+`precheck` (app/activitypub/signature.py:380-395) does not read the
+`Signature` header at all. It checks exactly two things: a `Digest` header
+present and equal to `HttpSignature.calculate_digest(request.data)`, and a
+`Date` header present and within 3600 seconds of now. Each failure raises
+`VerificationFormatError` with its own message ("No digest header present" /
+"Digest is incorrect" / "No date header present" / "Date is too far away").
+This matters for which input trips it: a malformed `Signature` header does
+not touch precheck's code at all -- it is only ever read later, inside
+`HttpSignature.verify_request` (398-420), which this file never patches or
+exercises with a bad signature (test_inbox_gate_signatures.py covers that).
+
+The test below trips precheck through the Digest-mismatch arm, using
+`signed_inbox_post`'s own documented escape hatch rather than a hand-rolled
+header: its `body` parameter "overrides the bytes actually sent while
+leaving the signature alone... how a test produces a request whose digest no
+longer matches its body" (tests/factories.py). A real signed request is
+built normally, so its `Digest` header is a correctly-computed value for the
+ORIGINAL body; a differently-serialised body -- the same four required keys
+plus one extra, so the bytes differ -- is substituted on the wire.
+`request.data` is the substituted bytes, `request.headers['digest']` is
+still the original header, and `HttpSignature.calculate_digest` runs exactly
+as production always calls it, on real bytes -- the test only arranges for
+the two sides of that comparison to disagree, which is externally identical
+to a body corrupted in transit.
+
+The Delete-shortcut test is deliberately UNSIGNED -- no `Signature` header at
+all -- because 693-701 is reached before `HttpSignature.verify_request`
+(716), and the brief calls this out explicitly: an unsigned request reaching
+a 200 there is exactly the kind of thing worth proving directly. It is NOT
+reached before `precheck` (687), though, which sits earlier in source order
+than the Delete check -- so "unsigned" here means what it means throughout
+this gate (no cryptographic Signature header, since nothing before line 716
+ever reads one), not "no headers at all": the test still supplies a correct
+`Digest` and a fresh `Date`, computed the same way `signed_inbox_post` does
+internally (`HttpSignature.calculate_digest`, `werkzeug.http.http_date`), so
+the request clears precheck on the way to the shortcut. A request missing
+Digest/Date entirely would be refused at 400 by precheck before ever reaching
+the Delete check, proving nothing about the Delete shortcut specifically --
+confirmed by running exactly that request through precheck's own test above.
+
+The actor-not-found test registers a 404 for the actor's own URI on
+`http_mock`, matching how production actually resolves it:
+`find_actor_or_create_cached` (app/activitypub/util.py) first tries a
+CACHE_TYPE=NullCache-defeated memoized lookup with `create_if_not_found=
+False` (no fetch, always a miss here), then falls back to
+`find_actor_or_create(actor_url, create_if_not_found=True, ...)`, which -- for
+an actor URL no local User/Community/Feed row matches -- calls
+`create_actor_from_remote` -> `fetch_remote_actor_data` -> `get_request(url)`,
+a single GET to the actor's own URI (app/activitypub/actor.py:132-168). A 404
+falls through `fetch_remote_actor_data`'s "any other status code -> give up"
+branch and returns None immediately (no retry: only 429/502/503/504 are
+retried) -- exactly one fetch, matching `http_mock`'s
+`assert_all_called=True`. The activity is signed normally with `signing_peer`,
+whose identity is irrelevant here -- `verify_request`, which would check it,
+is never reached; only `precheck` runs before line 703, and precheck ignores
+the Signature header entirely, per the section above -- while
+`activity['actor']` names a wholly different, unresolvable actor. The two are
+independent by construction; nothing before line 708 ever compares them.
 """
+import json
+import uuid
+
 import pytest
+from werkzeug.http import http_date
 
 from app import db
+from app.activitypub.signature import HttpSignature
 from app.constants import ALLOWLIST_STRONG
 from app.models import ActivityPubLog, Site
 from tests.factories import inbox_activity, signed_inbox_post
@@ -527,3 +611,127 @@ def test_a_peertube_view_activity_is_dropped(app, signing_peer, monkeypatch):
 
     assert response.status_code == 200
     assert ActivityPubLog.query.one().exception_message == 'PeerTube View or CacheFile activity'
+
+
+def test_a_tampered_body_fails_precheck(app, signing_peer, monkeypatch):
+    """routes.py:687-691: `HttpSignature.precheck` (app/activitypub/
+    signature.py:380-395) never reads the Signature header -- only Digest and
+    Date -- so the input that trips it is a body whose bytes do not hash to
+    the Digest header a real signature already committed to, not a malformed
+    Signature header (see the module docstring's TASK 5 section for why that
+    first guess is wrong).
+
+    `signed_inbox_post` signs `activity` normally, producing a genuine,
+    correct Digest header for its real serialisation. `body=` then substitutes
+    a DIFFERENT serialisation on the wire -- the same four required fields
+    (so the field check at row 6 still passes first) plus one extra key, so
+    the bytes differ from what was actually hashed. Neither `precheck` nor
+    `calculate_digest` is patched: production runs both exactly as it always
+    does, and the digest genuinely does not match, exactly as it would not for
+    a body corrupted after signing.
+
+    `DEBUG=True` is required for `signed_inbox_post` itself to run:
+    `HttpSignature.signed_request` validates its OWN destination URI through
+    `is_invalid_get_request_uri`, which refuses any `.local` host (this
+    suite's `SERVER_NAME`) unless `current_app.debug` is set -- unrelated to
+    anything this test is about, but load-bearing for every signed POST to
+    `/inbox` in this file.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    monkeypatch.setitem(app.config, 'DEBUG', True)
+    activity = inbox_activity(signing_peer)
+    tampered_body = json.dumps({**activity, '@context': 'https://www.w3.org/ns/activitystreams',
+                                'tamper': 'not what was signed'}).encode('utf8')
+
+    with app.test_client() as client:
+        response = signed_inbox_post(client, activity, signing_peer, body=tampered_body)
+
+    assert response.status_code == 400
+    assert ActivityPubLog.query.one().exception_message == 'Precheck failed: Digest is incorrect'
+
+
+def test_a_delete_of_an_unknown_account_needs_no_signature(app, site, monkeypatch):
+    """routes.py:693-701: a `Delete` whose `object` is a string equal to its
+    `actor`, for an actor with no matching `User` row, is refused with 200,
+    logged 'Does not exist here', and never reaches the dispatch code at the
+    bottom of `shared_inbox` (751-756/758-761).
+
+    Deliberately UNSIGNED -- no `Signature` header at all -- because this
+    branch sits before `HttpSignature.verify_request` (716), and the brief
+    calls out that an unsigned request reaching a 200 here is exactly the
+    proof worth having directly, rather than inferred from source reading.
+    It is NOT before `HttpSignature.precheck` (687), though, which this
+    request still has to clear: a correct `Digest` and a fresh `Date` are
+    supplied by hand, computed the same way `signed_inbox_post` computes them
+    internally, so the request reaches the Delete shortcut rather than being
+    refused earlier at precheck for an unrelated reason (see
+    test_a_tampered_body_fails_precheck above for what THAT refusal looks
+    like, and the module docstring's TASK 5 section for why "unsigned" and
+    "clears precheck" are not in tension).
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    dispatched = []
+    monkeypatch.setattr('app.activitypub.routes.process_delete_request',
+                        lambda *args, **kwargs: dispatched.append(args))
+    ghost = 'https://ghost.example/u/nobody'
+    activity = {'id': f'{ghost}/activities/{uuid.uuid4().hex}', 'type': 'Delete',
+                'actor': ghost, 'object': ghost}
+    body_bytes = json.dumps(activity).encode('utf8')
+    headers = {'Digest': HttpSignature.calculate_digest(body_bytes), 'Date': http_date()}
+
+    with app.test_client() as client:
+        response = client.post('/inbox', data=body_bytes, headers=headers,
+                               content_type='application/activity+json')
+
+    assert response.status_code == 200
+    assert ActivityPubLog.query.one().exception_message == 'Does not exist here'
+    assert dispatched == []
+
+
+def test_an_unresolvable_actor_is_refused(app, signing_peer, monkeypatch, http_mock):
+    """routes.py:703-708: for any activity that is not the Delete-of-unknown-
+    account shortcut above, the actor is resolved through
+    `find_actor_or_create_cached`; when that returns None the activity is
+    refused with 200, logged f'Actor could not be found 1 - : {actor_name},
+    actor object: None', and dispatch never runs.
+
+    `http_mock.get(ghost).respond(404)` registers the ONE fetch production
+    actually makes for an unknown actor -- `find_actor_or_create_cached` falls
+    back (CACHE_TYPE=NullCache means its memoized lookup is always a miss) to
+    `find_actor_or_create(ghost, create_if_not_found=True)`, which calls
+    `create_actor_from_remote` -> `fetch_remote_actor_data` -> a single GET to
+    the actor's own URI (app/activitypub/actor.py:132-168). A 404 there falls
+    through that function's "any other status code -> give up" branch with no
+    retry, returning None all the way back up. Registering nothing (or the
+    wrong URI) would fail this test at teardown via `http_mock`'s
+    `assert_all_called=True`, or as an unmatched-request error instead of the
+    404 this test means to exercise -- exactly the distinction the brief
+    calls out.
+
+    Signed normally with `signing_peer`, whose identity is irrelevant: only
+    `precheck` runs before this branch (703), and precheck never reads the
+    Signature header (see the module docstring's TASK 5 section) -- so who
+    signed the request and which actor it names are independent here, and the
+    test would behave identically if they happened to coincide.
+
+    `DEBUG=True` is required for `signed_inbox_post` itself to run, for the
+    same `is_invalid_get_request_uri`/`.local`-host reason given in
+    test_a_tampered_body_fails_precheck's docstring above.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    monkeypatch.setitem(app.config, 'DEBUG', True)
+    dispatched = []
+    monkeypatch.setattr('app.activitypub.routes.process_inbox_request',
+                        lambda *args, **kwargs: dispatched.append(args))
+    ghost = 'https://ghost.example/u/nobody'
+    http_mock.get(ghost).respond(404)
+    activity = {'id': f'{ghost}/activities/{uuid.uuid4().hex}', 'type': 'Like',
+                'actor': ghost, 'object': f'{ghost}/objects/1'}
+
+    with app.test_client() as client:
+        response = signed_inbox_post(client, activity, signing_peer)
+
+    assert response.status_code == 200
+    assert ActivityPubLog.query.one().exception_message == (
+        f'Actor could not be found 1 - : {ghost}, actor object: None')
+    assert dispatched == []
