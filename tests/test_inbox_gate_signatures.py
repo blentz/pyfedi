@@ -64,23 +64,49 @@ inside the test-runner container before it was written into a test:
     doc['signature'] = ld
     LDSignature.verify_signature(doc, pub)   # -> returns cleanly
 
-One thing that probe surfaced and is worth recording rather than hiding:
+One thing that probe surfaced, and got this file's first review round wrong:
 `normalized_hash` calls `pyld.jsonld.normalize`, which resolves the two
 `@context` URLs (`https://www.w3.org/ns/activitystreams`,
 `https://w3id.org/security/v1`) through pyld's DEFAULT document loader --
+`pyld/jsonld.py`'s `_default_document_loader = requests_document_loader()`,
 which uses the `requests` library, NOT `httpx`. `block_outbound_http`
-(tests/conftest.py) blocks only httpx traffic; its own docstring already
-documents `requests`-based traffic (botocore/urllib3, smtplib) as a known,
-un-blocked gap elsewhere in this suite, and jsonld's document loader is a
-third instance of the same gap, not a new one. Nothing here patches
-`jsonld.set_document_loader` to route around it -- doing so would not touch
-either forbidden verifier, but the network path is real, working, and
-consistent with the existing documented gap, so this file leaves it alone.
-Both LD-signature tests below (3a and 3b) therefore make one real outbound
-HTTPS call each to those two URLs, which is why they are the only tests in
-this file that need real network egress from the test-runner container to
-pass -- confirmed by running them with the container's normal (unblocked)
-network.
+(tests/conftest.py) blocks only httpx traffic; its docstring names exactly
+three known unblocked gaps (urllib for app/nntp/, botocore/urllib3 for S3,
+smtplib) and does not mention `requests` at all -- so pyld's document loader
+is a FOURTH, previously undocumented instance, not another case of an
+already-known one. The first version of this file called that "documented"
+and left the two LD tests making real outbound HTTPS calls on every run,
+which review correctly rejected: a unit test that reaches the public
+internet is slow, fails offline, fails in CI without egress, and couples
+this suite to a third party's uptime -- exactly what this file otherwise
+guards against.
+
+The fix uses the SAME override point `app/main/routes.py:744`'s dead demo
+code already uses in this codebase, for the opposite purpose (pointing pyld
+AT the network on purpose): `jsonld.set_document_loader`. The
+`no_network_ld_signing` fixture below installs a loader backed by the two
+context documents' content, fetched once from the real URLs and frozen
+verbatim into `_ACTIVITYSTREAMS_CONTEXT`/`_SECURITY_V1_CONTEXT` (not
+synthesized -- URDNA2015 normalization has to see exactly what a real
+request would return, or the normalized hash a genuinely-invalid-signature
+test relies on being wrong would silently be computed over the wrong
+document instead), and restores whatever loader pyld had beforehand once the
+test ends. This is a pyld-level configuration override, not a patch of
+`LDSignature.verify_signature` or `HttpSignature.verify_request` -- the
+normalization math and the signature math are both still production's own;
+only where the two context DOCUMENTS come from changes.
+
+Verified to add no false confidence, two ways, both in the fixture itself:
+it records every URL the loader is asked to resolve (asserted, per test, to
+be exactly `{activitystreams, security-v1}` -- proving the static loader is
+what actually ran, not that normalization was skipped somehow), and it
+monkeypatches `requests.get` to raise `AssertionError` if called at all
+during the test -- proving no request reached the real
+`pyld.documentloader.requests.requests_document_loader`'s `requests.get(...)`
+call site (confirmed by reading that module's source), which is the only
+place in this dependency chain that would reach the network. Both LD tests
+passed with `no_network_ld_signing` active and zero calls to the guarded
+`requests.get`.
 
 Producing an invalid LD signature (Step 3a) uses the same `create_signature`
 call, but with a SECOND keypair's private half (`RsaKeys.generate_keypair()`)
@@ -119,6 +145,14 @@ gate would refuse two branches earlier, at routes.py:703-708, before this
 code is ever reached). The test below resolves a REAL row with that exact
 identity instead.
 
+A second test right after it sends the IDENTICAL activity shape (unsigned
+Create of a ChatMessage) from `signing_peer` instead of the fediseer row --
+this is the negative half review's second round asked for, added after
+Step 5's mutation run showed the positive test alone cannot tell "the
+exemption is scoped to one actor" apart from "the exemption is scoped to
+this activity shape, for anyone". Both tests together pin the `and` in the
+`elif`'s condition, not just the shape check on its own.
+
 Mutation (Step 5), applied one at a time to app/activitypub/routes.py, this
 file's tests run against each mutant, then `git checkout --
 app/activitypub/routes.py` before the next:
@@ -132,10 +166,12 @@ app/activitypub/routes.py` before the next:
      'https://fediseer.com/api/v1/user/fediseer' and` removed from the
      `elif`, leaving only the Create/ChatMessage shape test.
 
-Results, counts, and the one survivor are recorded in this sub-project's
-task-6-report.md rather than restated here, since this docstring is read
-before every test run and a stale count baked into it would be easy to miss
-updating.
+Results and counts are recorded in this sub-project's task-6-report.md
+rather than restated here, since this docstring is read before every test
+run and a stale count baked into it would be easy to miss updating. (First
+pass: mutants 1 and 2 killed, mutant 3 survived. After adding the negative
+fediseer test above, mutant 3 was re-run and killed too -- see the report's
+fix appendix for the re-run count.)
 
 The fediseer branch's `...` body -- what it actually does
 -------------------------------------------------------------------------
@@ -157,6 +193,7 @@ site operator's exemption request landed and simply never got a body written.
 import json
 
 import pytest
+from pyld import jsonld
 from werkzeug.http import http_date
 
 from app import db
@@ -166,6 +203,95 @@ from app.utils import utcnow
 from tests.factories import inbox_activity, make_instance, make_site, make_user, signed_inbox_post
 
 pytestmark = pytest.mark.usefixtures('redis_double')
+
+
+# Frozen, verbatim copies of the two JSON-LD context documents `LDSignature.
+# normalized_hash` resolves via `pyld.jsonld.normalize` -- fetched once from
+# the real URLs (`requests.get('https://www.w3.org/ns/activitystreams', ...)`
+# / `.../security/v1`) and pasted in as-received, not hand-written, so
+# URDNA2015 normalization sees exactly what production would see over the
+# network. See the module docstring's "Producing a valid LD signature"
+# section for why these exist: pyld's default document loader reaches the
+# real internet through `requests`, which this suite's httpx-only network
+# block does not cover, and a unit test should not depend on w3.org/w3id.org
+# being reachable.
+_ACTIVITYSTREAMS_CONTEXT = json.loads(
+    '{"@context":{"@vocab":"_:","xsd":"http://www.w3.org/2001/XMLSchema#","as":"https://www.w3.org/ns/activitystreams#","ldp":"http://www.w3.org/ns/ldp#","vcard":"http://www.w3.org/2006/vcard/ns#","id":"@id","type":"@type","Accept":"as:Accept","Activity":"as:Activity","IntransitiveActivity":"as:IntransitiveActivity","Add":"as:Add","Announce":"as:Announce","Application":"as:Application","Arrive":"as:Arrive","Article":"as:Article","Audio":"as:Audio","Block":"as:Block","Collection":"as:Collection","CollectionPage":"as:CollectionPage","Relationship":"as:Relationship","Create":"as:Create","Delete":"as:Delete","Dislike":"as:Dislike","Document":"as:Document","Event":"as:Event","Follow":"as:Follow","Flag":"as:Flag","Group":"as:Group","Ignore":"as:Ignore","Image":"as:Image","Invite":"as:Invite","Join":"as:Join","Leave":"as:Leave","Like":"as:Like","Link":"as:Link","Mention":"as:Mention","Note":"as:Note","Object":"as:Object","Offer":"as:Offer","OrderedCollection":"as:OrderedCollection","OrderedCollectionPage":"as:OrderedCollectionPage","Organization":"as:Organization","Page":"as:Page","Person":"as:Person","Place":"as:Place","Profile":"as:Profile","Question":"as:Question","Reject":"as:Reject","Remove":"as:Remove","Service":"as:Service","TentativeAccept":"as:TentativeAccept","TentativeReject":"as:TentativeReject","Tombstone":"as:Tombstone","Undo":"as:Undo","Update":"as:Update","Video":"as:Video","View":"as:View","Listen":"as:Listen","Read":"as:Read","Move":"as:Move","Travel":"as:Travel","IsFollowing":"as:IsFollowing","IsFollowedBy":"as:IsFollowedBy","IsContact":"as:IsContact","IsMember":"as:IsMember","subject":{"@id":"as:subject","@type":"@id"},"relationship":{"@id":"as:relationship","@type":"@id"},"actor":{"@id":"as:actor","@type":"@id"},"attributedTo":{"@id":"as:attributedTo","@type":"@id"},"attachment":{"@id":"as:attachment","@type":"@id"},"bcc":{"@id":"as:bcc","@type":"@id"},"bto":{"@id":"as:bto","@type":"@id"},"cc":{"@id":"as:cc","@type":"@id"},"context":{"@id":"as:context","@type":"@id"},"current":{"@id":"as:current","@type":"@id"},"first":{"@id":"as:first","@type":"@id"},"generator":{"@id":"as:generator","@type":"@id"},"icon":{"@id":"as:icon","@type":"@id"},"image":{"@id":"as:image","@type":"@id"},"inReplyTo":{"@id":"as:inReplyTo","@type":"@id"},"items":{"@id":"as:items","@type":"@id"},"instrument":{"@id":"as:instrument","@type":"@id"},"orderedItems":{"@id":"as:items","@type":"@id","@container":"@list"},"last":{"@id":"as:last","@type":"@id"},"location":{"@id":"as:location","@type":"@id"},"next":{"@id":"as:next","@type":"@id"},"object":{"@id":"as:object","@type":"@id"},"oneOf":{"@id":"as:oneOf","@type":"@id"},"anyOf":{"@id":"as:anyOf","@type":"@id"},"closed":{"@id":"as:closed","@type":"xsd:dateTime"},"origin":{"@id":"as:origin","@type":"@id"},"accuracy":{"@id":"as:accuracy","@type":"xsd:float"},"prev":{"@id":"as:prev","@type":"@id"},"preview":{"@id":"as:preview","@type":"@id"},"replies":{"@id":"as:replies","@type":"@id"},"result":{"@id":"as:result","@type":"@id"},"audience":{"@id":"as:audience","@type":"@id"},"partOf":{"@id":"as:partOf","@type":"@id"},"tag":{"@id":"as:tag","@type":"@id"},"target":{"@id":"as:target","@type":"@id"},"to":{"@id":"as:to","@type":"@id"},"url":{"@id":"as:url","@type":"@id"},"altitude":{"@id":"as:altitude","@type":"xsd:float"},"content":"as:content","contentMap":{"@id":"as:content","@container":"@language"},"name":"as:name","nameMap":{"@id":"as:name","@container":"@language"},"duration":{"@id":"as:duration","@type":"xsd:duration"},"endTime":{"@id":"as:endTime","@type":"xsd:dateTime"},"height":{"@id":"as:height","@type":"xsd:nonNegativeInteger"},"href":{"@id":"as:href","@type":"@id"},"hreflang":"as:hreflang","latitude":{"@id":"as:latitude","@type":"xsd:float"},"longitude":{"@id":"as:longitude","@type":"xsd:float"},"mediaType":"as:mediaType","published":{"@id":"as:published","@type":"xsd:dateTime"},"radius":{"@id":"as:radius","@type":"xsd:float"},"rel":"as:rel","startIndex":{"@id":"as:startIndex","@type":"xsd:nonNegativeInteger"},"startTime":{"@id":"as:startTime","@type":"xsd:dateTime"},"summary":"as:summary","summaryMap":{"@id":"as:summary","@container":"@language"},"totalItems":{"@id":"as:totalItems","@type":"xsd:nonNegativeInteger"},"units":"as:units","updated":{"@id":"as:updated","@type":"xsd:dateTime"},"width":{"@id":"as:width","@type":"xsd:nonNegativeInteger"},"describes":{"@id":"as:describes","@type":"@id"},"formerType":{"@id":"as:formerType","@type":"@id"},"deleted":{"@id":"as:deleted","@type":"xsd:dateTime"},"inbox":{"@id":"ldp:inbox","@type":"@id"},"outbox":{"@id":"as:outbox","@type":"@id"},"following":{"@id":"as:following","@type":"@id"},"followers":{"@id":"as:followers","@type":"@id"},"streams":{"@id":"as:streams","@type":"@id"},"preferredUsername":"as:preferredUsername","endpoints":{"@id":"as:endpoints","@type":"@id"},"uploadMedia":{"@id":"as:uploadMedia","@type":"@id"},"proxyUrl":{"@id":"as:proxyUrl","@type":"@id"},"liked":{"@id":"as:liked","@type":"@id"},"oauthAuthorizationEndpoint":{"@id":"as:oauthAuthorizationEndpoint","@type":"@id"},"oauthTokenEndpoint":{"@id":"as:oauthTokenEndpoint","@type":"@id"},"provideClientKey":{"@id":"as:provideClientKey","@type":"@id"},"signClientKey":{"@id":"as:signClientKey","@type":"@id"},"sharedInbox":{"@id":"as:sharedInbox","@type":"@id"},"Public":{"@id":"as:Public","@type":"@id"},"source":"as:source","likes":{"@id":"as:likes","@type":"@id"},"shares":{"@id":"as:shares","@type":"@id"},"alsoKnownAs":{"@id":"as:alsoKnownAs","@type":"@id"}}}'
+)
+_SECURITY_V1_CONTEXT = json.loads(
+    '{"@context":{"id":"@id","type":"@type","dc":"http://purl.org/dc/terms/","sec":"https://w3id.org/security#","xsd":"http://www.w3.org/2001/XMLSchema#","EcdsaKoblitzSignature2016":"sec:EcdsaKoblitzSignature2016","Ed25519Signature2018":"sec:Ed25519Signature2018","EncryptedMessage":"sec:EncryptedMessage","GraphSignature2012":"sec:GraphSignature2012","LinkedDataSignature2015":"sec:LinkedDataSignature2015","LinkedDataSignature2016":"sec:LinkedDataSignature2016","CryptographicKey":"sec:Key","authenticationTag":"sec:authenticationTag","canonicalizationAlgorithm":"sec:canonicalizationAlgorithm","cipherAlgorithm":"sec:cipherAlgorithm","cipherData":"sec:cipherData","cipherKey":"sec:cipherKey","created":{"@id":"dc:created","@type":"xsd:dateTime"},"creator":{"@id":"dc:creator","@type":"@id"},"digestAlgorithm":"sec:digestAlgorithm","digestValue":"sec:digestValue","domain":"sec:domain","encryptionKey":"sec:encryptionKey","expiration":{"@id":"sec:expiration","@type":"xsd:dateTime"},"expires":{"@id":"sec:expiration","@type":"xsd:dateTime"},"initializationVector":"sec:initializationVector","iterationCount":"sec:iterationCount","nonce":"sec:nonce","normalizationAlgorithm":"sec:normalizationAlgorithm","owner":{"@id":"sec:owner","@type":"@id"},"password":"sec:password","privateKey":{"@id":"sec:privateKey","@type":"@id"},"privateKeyPem":"sec:privateKeyPem","publicKey":{"@id":"sec:publicKey","@type":"@id"},"publicKeyBase58":"sec:publicKeyBase58","publicKeyPem":"sec:publicKeyPem","publicKeyWif":"sec:publicKeyWif","publicKeyService":{"@id":"sec:publicKeyService","@type":"@id"},"revoked":{"@id":"sec:revoked","@type":"xsd:dateTime"},"salt":"sec:salt","signature":"sec:signature","signatureAlgorithm":"sec:signingAlgorithm","signatureValue":"sec:signatureValue"}}'
+)
+_STATIC_LD_CONTEXTS = {
+    'https://www.w3.org/ns/activitystreams': _ACTIVITYSTREAMS_CONTEXT,
+    'https://w3id.org/security/v1': _SECURITY_V1_CONTEXT,
+}
+
+
+def _static_ld_document_loader(url, options=None):
+    """A pyld document loader over the two frozen documents above -- never
+    the network. Raises the same `jsonld.JsonLdError` pyld's own loaders
+    raise for an unresolvable URL, so a test that accidentally needs a THIRD
+    context fails loudly (an unhelpful KeyError would do too, but this stays
+    in pyld's own error vocabulary, matching what `normalized_hash`'s callers
+    already expect to catch).
+    """
+    if url not in _STATIC_LD_CONTEXTS:
+        raise jsonld.JsonLdError(
+            f'no static content for {url!r} -- add it to _STATIC_LD_CONTEXTS '
+            f'rather than letting this fall through to the network',
+            'jsonld.LoadDocumentError')
+    return {'contentType': 'application/ld+json', 'contextUrl': None,
+            'documentUrl': url, 'document': _STATIC_LD_CONTEXTS[url]}
+
+
+@pytest.fixture
+def no_network_ld_signing(monkeypatch):
+    """Makes `LDSignature.create_signature`/`verify_signature` resolve their
+    two `@context` URLs from the frozen local copies above instead of the
+    real internet, for the duration of one test, restoring whatever loader
+    pyld had beforehand afterwards -- a `jsonld.set_document_loader` override,
+    the same configuration point `app/main/routes.py:744`'s dead demo code
+    already uses (there, to point pyld AT the network on purpose). This is
+    NOT a patch of `LDSignature.verify_signature` or `HttpSignature.
+    verify_request` -- neither forbidden name is touched, and the
+    normalization/signature math both still run as production wrote them;
+    only where the two context DOCUMENTS come from changes.
+
+    Yields the list of URLs actually resolved through the static loader, so a
+    test can assert it was genuinely exercised (`{activitystreams,
+    security-v1}`, per the module docstring's "Verified to add no false
+    confidence" section) rather than merely not having failed.
+
+    Also monkeypatches `requests.get` to raise `AssertionError` if called at
+    all -- `pyld.documentloader.requests.requests_document_loader`'s inner
+    loader (pyld's DEFAULT, unpatched here) is the only place in this
+    dependency chain that reaches the network, and it does so with exactly
+    that call (confirmed by reading its source). With the static loader
+    installed it should never run, so this is a hard failure if it somehow
+    does, rather than a silent real network request passing unnoticed.
+    """
+    resolved = []
+
+    def _recording_loader(url, options=None):
+        resolved.append(url)
+        return _static_ld_document_loader(url, options)
+
+    previous_loader = jsonld.get_document_loader()
+    jsonld.set_document_loader(_recording_loader)
+
+    def _network_forbidden(*args, **kwargs):
+        raise AssertionError(
+            f'requests.get was called during a test using no_network_ld_signing '
+            f'-- the static document loader should have intercepted every '
+            f'jsonld.normalize context resolution before this call site '
+            f'(pyld.documentloader.requests.requests_document_loader) could ever '
+            f'be reached; args={args!r} kwargs={kwargs!r}')
+
+    monkeypatch.setattr('requests.get', _network_forbidden)
+    try:
+        yield resolved
+    finally:
+        jsonld.set_document_loader(previous_loader)
 
 
 def test_a_genuinely_signed_activity_is_accepted(app, signing_peer, monkeypatch):
@@ -280,7 +406,7 @@ def _unsigned_but_precheck_clean_headers(body_bytes: bytes) -> dict:
     return {'Digest': HttpSignature.calculate_digest(body_bytes), 'Date': http_date()}
 
 
-def test_an_invalid_ld_signature_is_refused(app, signing_peer, monkeypatch):
+def test_an_invalid_ld_signature_is_refused(app, signing_peer, monkeypatch, no_network_ld_signing):
     """routes.py:717-724: with no Signature header at all, `HttpSignature.
     verify_request` raises `VerificationFormatError` ("No signature header
     present") -- a `VerificationError` subclass, so it lands in the same
@@ -299,11 +425,13 @@ def test_an_invalid_ld_signature_is_refused(app, signing_peer, monkeypatch):
     before this test was written (see the module docstring's "Producing an
     invalid LD signature" section).
 
-    See the module docstring's "Producing a valid LD signature" section for
-    why this test makes a real outbound HTTPS call (through `pyld.jsonld.
-    normalize`'s default document loader, which uses `requests`, not `httpx`)
-    to resolve the two `@context` URLs -- a known, already-documented gap in
-    `block_outbound_http`'s coverage, not a new one introduced here.
+    `no_network_ld_signing` makes the normalization this needs resolve its
+    `@context` documents locally rather than over the real internet -- see
+    the module docstring's "Producing a valid LD signature" section for why
+    that fixture exists and how it is verified to have actually run rather
+    than merely not failed. The assertion on `resolved` below is that
+    verification specifically for THIS test, not a repeat of the fixture's
+    own docstring.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     activity = inbox_activity(signing_peer)
@@ -320,9 +448,10 @@ def test_an_invalid_ld_signature_is_refused(app, signing_peer, monkeypatch):
 
     assert response.status_code == 400
     assert ActivityPubLog.query.one().exception_message == 'Could not verify LD signature: Signature mismatch'
+    assert set(no_network_ld_signing) == {'https://www.w3.org/ns/activitystreams', 'https://w3id.org/security/v1'}
 
 
-def test_a_valid_ld_signature_is_accepted(app, signing_peer, monkeypatch):
+def test_a_valid_ld_signature_is_accepted(app, signing_peer, monkeypatch, no_network_ld_signing):
     """routes.py:717-731: the same no-Signature-header setup as the invalid
     case above, but the LD signature is made with `signing_peer`'s OWN
     private key -- the one whose public half is genuinely on the actor row --
@@ -346,6 +475,13 @@ def test_a_valid_ld_signature_is_accepted(app, signing_peer, monkeypatch):
       ultimately let the request through. A production change that reset
       `bounced` back to False anywhere on this path would flip this specific
       assertion without changing the response at all.
+
+    `no_network_ld_signing` (see its own docstring and the module docstring's
+    "Producing a valid LD signature" section) keeps this test off the real
+    internet; `resolved` is asserted to hold exactly the two context URLs so
+    the static loader is shown to have actually run the normalization this
+    test depends on, not merely to have gone unused while something else
+    made it pass.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     monkeypatch.setitem(app.config, 'DEBUG', True)
@@ -367,6 +503,7 @@ def test_a_valid_ld_signature_is_accepted(app, signing_peer, monkeypatch):
     assert len(dispatched) == 1
     assert ActivityPubLog.query.count() == 0
     assert signing_peer.instance.ip_address == ''
+    assert set(no_network_ld_signing) == {'https://www.w3.org/ns/activitystreams', 'https://w3id.org/security/v1'}
 
 
 def test_an_unsigned_fediseer_chat_message_is_exempted(app, db_session, monkeypatch):
@@ -419,3 +556,35 @@ def test_an_unsigned_fediseer_chat_message_is_exempted(app, db_session, monkeypa
     assert len(dispatched) == 1
     assert ActivityPubLog.query.count() == 0
     assert fediseer.instance.ip_address == ''
+
+
+def test_an_unsigned_chat_message_from_a_non_fediseer_actor_is_refused(app, signing_peer, monkeypatch):
+    """routes.py:726-731: the fediseer `elif` is an `and` of TWO conditions --
+    the resolved actor's `ap_profile_id` AND the Create/ChatMessage shape.
+    The test above only ever sends that shape from the one actor that
+    satisfies both, so on its own it cannot tell "this exemption is scoped to
+    the fediseer identity" apart from "this exemption is scoped to any sender
+    of this shape" -- a mutant that deletes the `actor.ap_profile_id == ... and`
+    clause (Step 5's mutant 3) still passes it, because the surviving
+    Create/ChatMessage check is still true for that one actor either way.
+
+    `signing_peer` sends the IDENTICAL activity shape (unsigned Create of a
+    dict object typed ChatMessage) the fediseer test above sends, so the only
+    variable between the two tests is which actor sent it. Under real
+    production code this still falls to the generic `else` (routes.py:737-739)
+    because `signing_peer.ap_profile_id` is 'https://peer.example/users/alice',
+    not the fediseer literal -- refused with the same message a plain
+    unsigned request from ANY non-exempt actor gets.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    activity = inbox_activity(signing_peer, activity_type='Create',
+                              object={'id': f'{signing_peer.ap_profile_id}/objects/1', 'type': 'ChatMessage'})
+    body_bytes = json.dumps(activity).encode('utf8')
+
+    with app.test_client() as client:
+        response = client.post('/inbox', data=body_bytes,
+                               headers=_unsigned_but_precheck_clean_headers(body_bytes),
+                               content_type='application/activity+json')
+
+    assert response.status_code == 400
+    assert ActivityPubLog.query.one().exception_message == 'Could not verify HTTP signature: No signature header present'
