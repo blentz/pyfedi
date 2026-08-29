@@ -1142,7 +1142,9 @@ says which numbers are taken. So there is one now, and it is this file:
 - **The allocation ledger, kept current:** D1–D20 sub-project 2a, D21–D24
   sub-project 2b, D25–D29 sub-project 2c, D30–D33 sub-project 2c's whole-branch
   review. D34–D40 sub-project 3. D41–D46 sub-project 4 (the inbox gate).
-  **Next free number: D47.** If you take it, say so here in the change that
+  D47 sub-project 4's whole-branch review (the dict-actor allowlist bypass;
+  taken here, in the change that files the row).
+  **Next free number: D48.** If you take it, say so here in the change that
   takes it.
 
 Two entries in the reports were deliberately **not** counted as defects, and are
@@ -2059,15 +2061,18 @@ inbox gate: `shared_inbox` itself (bound to `POST /inbox`), the three bare
 `/site_inbox`, `user_inbox` at `/u/<actor>/inbox`, `community_inbox` at
 `/c/<actor>/inbox`), and the separate `replay_inbox_request` function that
 shares most of `shared_inbox`'s shape but neither its route decorator nor its
-protections. 45 tests across three files:
-`tests/test_inbox_gate_refusals.py` (19), `tests/test_inbox_gate_signatures.py`
-(7), `tests/test_inbox_gate_dispatch.py` (19).
+protections. 46 tests across three files:
+`tests/test_inbox_gate_refusals.py` (20), `tests/test_inbox_gate_signatures.py`
+(7), `tests/test_inbox_gate_dispatch.py` (19) — 45 from the seven tasks, plus
+the D47 characterisation test the whole-branch review added.
 
 ### 1. Whole-function coverage, and every gap explained
 
 Measured against this sub-project's own suite
 (`./run_tests.sh tests/test_inbox_gate_refusals.py tests/test_inbox_gate_signatures.py tests/test_inbox_gate_dispatch.py -q --cov=app.activitypub.routes --cov-report=json`,
-45 passed), by intersecting each function's AST span against `coverage.json`'s
+45 passed at the time of measurement; 46 now, the extra test being the D47
+characterisation test, which exercises gap 2's arc below), by intersecting each
+function's AST span against `coverage.json`'s
 `executed_lines`/`missing_lines`/`executed_branches`/`missing_branches` — the
 same method sub-project 2a used:
 
@@ -2087,11 +2092,22 @@ Four gaps in total, and none is left unexplained:
    `ALLOWLIST_STRONG`, this sub-project's one allowlist test
    (`test_a_disallowed_actor_is_refused_under_strong_allowlist`,
    `tests/test_inbox_gate_refusals.py`) relies on the `AllowedInstances` table
-   being empty by construction — every test truncates it — so only the
-   refusal (674→675, `return '', 403`) is exercised. The continuation arm,
-   where the peer's host genuinely appears in `AllowedInstances`, needs a row
-   inserted for it and nothing in this sub-project's tasks did that. Explained,
-   not fixed: closing it needs one more fixture, not a defect.
+   being empty by construction — every test truncates it — so at the time this
+   section was first written only the refusal (674→675, `return '', 403`) was
+   exercised. **The original wording here — "Explained, not fixed: closing it
+   needs one more fixture, not a defect" — was wrong and has been removed.**
+   It assumed the only way to reach the continuation arm is a peer whose host
+   is genuinely in `AllowedInstances`. It is not. A peer on a
+   NON-allowlisted host reaches the same arm by sending `actor` as a JSON
+   object instead of a string, because `furl(<dict>).host` is `None` and
+   `instance_allowed(None)` returns `True` unconditionally — a live bypass of
+   the allowlist control, now filed as **D47** below and pinned as
+   characterisation by
+   `test_a_dict_shaped_actor_skips_the_strong_allowlist_check`
+   (`tests/test_inbox_gate_refusals.py`), which exercises this arc. The
+   remaining untested scenario is narrower than the original text claimed:
+   the ordinary allowlisted-peer path, which would indeed need one
+   `AllowedInstances` fixture, and which no test in this sub-project builds.
 3. **`shared_inbox` branch 741→747, the False arm of `if actor.instance_id:`.**
    Every dispatch-path test in `tests/test_inbox_gate_dispatch.py` builds its
    actor through `signing_peer` or an equivalent factory that attaches a real
@@ -2113,7 +2129,7 @@ Four gaps in total, and none is left unexplained:
    not a defect in the function — the branch's both arms are behaviourally
    sound as read; only the pass-through arm went untested.
 
-### 2. New defects — D41-D46
+### 2. New defects — D41-D47
 
 Each was found by an implementer and independently confirmed by a reviewer
 against source during Tasks 2-7; each is re-verified against source again
@@ -2127,6 +2143,7 @@ here, at the point the row is written, per this document's standing rule.
 | D44 | `replay_inbox_request` | diverges structurally from `shared_inbox` in five ways, verified against `routes.py:781-835`: no signature checks of any kind (no precheck, no `verify_request`, no LD fallback); no redis duplicate suppression; an ACTIVE `is_local()` refusal at 824-826 where `shared_inbox`'s equivalent at 710-712 is commented out; no instance bookkeeping (`last_seen`/`dormant`/`gone_forever`/`failures`/`ip_address` are never touched); and both dispatches (`process_delete_request`, `process_inbox_request`) are direct and unconditional, with `store_ap_json` hardcoded `True` and no `current_app.debug` split. **This row is scoped to the structural fact of the divergence and to the claim "no unauthenticated peer can reach this function directly"** — both true and, on their own, low-consequence. **The consequence of the divergence when it IS reached is a separate, higher-severity finding: see D45.** | low, as a standalone reachability claim — see section 3 and D45 for the reachable, higher-severity half | reading (five divergences) + reading (all three call sites traced) |
 | D45 | `replay_inbox_request`, reached via `activity_replay` (`app/admin/routes.py:1270`) | **admin-mediated replay of peer-authored content bypasses every signature check `shared_inbox` performs.** `activity_replay` is gated by `@login_required` + `@permission_required('change instance settings')`, and it re-feeds a stored `ActivityPubLog.activity_json` row — content a peer sent, not content the admin authored — straight into `replay_inbox_request`, which (per D44) runs no precheck, no `HttpSignature.verify_request`, and no LD-signature fallback. An admin who replays a row that was originally logged as a signature FAILURE, or any row at all, gets it processed as if it had just arrived and passed verification. This is the brief's named case for why a flat "not peer-reachable" rating understates D44: the trigger requires a privileged action, but the content being trusted is entirely peer-controlled and the bypass, once triggered, is total rather than partial. Comparable in kind, not in trigger, to D21/D24/D42's "medium — peer-triggerable" rating for effects reached only through a traced indirect path; rated at the same tier here because the traced path is real and the effect (full signature bypass on peer content) is more severe than any of those three, offset by needing a deliberate privileged action rather than being reachable at will. | medium — admin-triggered, but a complete signature-verification bypass on peer-authored content once triggered | reading (permission decorators + call chain, re-traced against source while writing this row) |
 | D46 | `shared_inbox` | the fediseer exemption's body (`routes.py:730`) is a bare `...` (`Ellipsis`) expression statement — semantically inert, exactly like `pass` would be here. It does not return, log, or touch `bounced` (already `True` from line 718); its only effect is letting control fall out of the `try`/`except` into the shared bookkeeping (741) and dispatch (751+), which is precisely the same thing every other branch that reaches that point does by *not* returning. Named in this sub-project's own brief and confirmed still absent from the register until this row. **Not a functional defect**: `tests/test_inbox_gate_signatures.py::test_an_unsigned_chat_message_from_a_non_fediseer_actor_is_refused` (added in fix round 1, commit `3ca2eee1`) pins that dropping the actor-identity half of the `elif`'s condition is caught — re-confirmed while writing this row by reading the mutation record in the test file's own module docstring ("mutant 3 was re-run and killed too"), so the exemption is scoped correctly and is not silently over-broad. The finding is narrower than a first read of the mutation history suggests: **what remains is readability only** — a literal `...` with no comment explaining why the branch intentionally does nothing, in the body of a security-relevant exemption, is easy to misread as an unfinished stub on a future pass. | cosmetic — readability of a security-relevant branch, not a behavioural gap | reading + source inspection; the mutation-kill claim re-verified against the test file's own docstring, not re-run |
+| D47 | `shared_inbox` | **under `ALLOWLIST_STRONG`, a peer on a non-allowlisted host skips the allowlist check entirely by sending `actor` as a JSON object instead of a string.** The check is `if g.site.allowlist_mode >= ALLOWLIST_STRONG and 'actor' in request_json: if not instance_allowed(furl(request_json['actor']).host): return '', 403` (`routes.py:673-675`). Three links, each verified against source: (1) `furl` parses strings only, so `furl({'id': 'https://blocked.example/u/x'}).host` is `None` — as is `furl('not-a-url').host`; (2) `instance_allowed(None)` returns `True` unconditionally (`app/utils.py:2302-2303`), so `not instance_allowed(...)` is `False` and the 403 never fires; (3) the actor still resolves, because `find_actor_or_create_cached` unwraps the dict — `if isinstance(actor, dict): actor = actor['id']` (`app/activitypub/util.py:341-342`) — after which the peer's own genuine HTTP signature verifies against its own real key and the activity is dispatched normally. A security control defeated by a shape change in peer-controlled JSON, at no cost to the peer: the dict form is legal ActivityPub. The author was aware `actor` may not be a string — `isinstance(request_json['actor'], str)` guards exist at `routes.py:686` and `:696` — but lines 674 and 705 carry no such guard. **Verified end to end, not inferred from the three links**: the same `signing_peer` on the same non-allowlisted host ('peer.example', no `AllowedInstances` row) posted to the real `/inbox` under `ALLOWLIST_STRONG` returns **403 with zero dispatches** when `actor` is the bare URI string, and **200 with `process_inbox_request` dispatched once** when `actor` is `{'id': <same URI>}`. Pinned as characterisation (today's behaviour, explicitly not endorsed) by `tests/test_inbox_gate_refusals.py::test_a_dict_shaped_actor_skips_the_strong_allowlist_check`, whose docstring states what a fix would flip. A fix would read the host from the dict's `id` before the allowlist lookup, or refuse a non-string `actor` outright; `instance_allowed(None)` returning `True` is the deeper half and is shared by every other caller of that function. | medium-to-high — peer-triggerable at will, a complete bypass of a security control rather than a partial one, but conditioned on the instance running in `ALLOWLIST_STRONG` mode, which most do not | reading + source inspection (all three links), then an end-to-end probe through the real route with a string-actor control |
 
 ### 3. `replay_inbox_request`'s reachability, traced rather than assumed
 
