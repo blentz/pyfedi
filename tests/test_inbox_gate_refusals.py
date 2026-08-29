@@ -177,8 +177,74 @@ Redis client configuration should not assume the same.
 after the JSON-None check and before the minimum-field check, so every test
 here that gets past JSON parsing touches Redis, not just the two that set a
 pause value.
+
+TASK 3 -- the field check and the three Announce refusals
+=========================================================================
+All of Task 3's outcomes (rows 6-9 of the design's table: the minimum-field
+check and the three Announce-object checks, routes.py:650-669) return
+before `HttpSignature.precheck` (line 687) and before `find_actor_or_create_
+cached`/`HttpSignature.verify_request` (lines 703/716), so none of these
+tests need a real signature -- a plain `client.post('/inbox', json=activity)`
+reaches every branch covered here, exactly like Task 1's four tests above.
+`signing_peer` is used anyway (rather than a signature-less actor) because it
+is the one fixture this file and test_inbox_gate_signatures.py share, and its
+`ap_profile_id` is a convenient, already-valid activity actor URI; its
+keypair goes unused by every test below.
+
+`signing_peer` calls `make_site()` itself (tests/conftest.py), so no test
+below also requests the `site` fixture -- doing both would create a second
+Site row for no benefit, since `g.site = Site.query.get(1)` only ever reads
+the first one.
+
+The exact `exception_message` string each outcome logs, verbatim:
+
+  Missing minimum expected fields in JSON                    (row 6)
+  Intended for Mastodon                                      (row 7, object
+                                                               type Page or
+                                                               Note)
+  Missing minimum expected fields in JSON Announce object    (row 8, any
+                                                               other object
+                                                               type)
+  Activity about local content which is already present      (row 9)
+
+Rows 7 and 8 are the pair Task 2's AST derivation flagged as sharing one
+`return '', 200` (line 663) -- distinguishable only by `exception_message`,
+which is exactly what the tests below assert on instead of the status code.
+
+OrderedCollection exemption -- a finding, not a test of correct behaviour
+-------------------------------------------------------------------------
+`object_has_missing_fields` (app/activitypub/util.py:4659-4663) returns
+False for ANY object typed `OrderedCollection`, unconditionally:
+
+    if 'type' in object and object['type'] == 'OrderedCollection':
+        return False
+
+No other key is checked. So an Announce whose object is `{'type':
+'OrderedCollection'}` -- no `id`, no `actor`, no `object` -- passes the
+field check at routes.py:657 and falls through. The very next line inside
+that same `if request_json['type'] == 'Announce'...` block that still
+executes is routes.py:671, `id = object['id']`, which raises `KeyError:
+'id'` because this object has no `id` key at all. Flask's test app runs with
+`TESTING = True` and no `PROPAGATE_EXCEPTIONS` override, so the exception
+propagates out of `client.post(...)` rather than being turned into a 500
+response -- confirmed by running the test below, not assumed. The test
+demonstrates reachability (a `pytest.raises(KeyError)` around the POST) and
+is deliberately NOT written as a refusal test: there is no `exception_
+message` to assert here, because `log_incoming_ap` is never reached on this
+path. This is an unhandled-exception defect for the register (Task 8), not
+something this sub-project fixes.
+
+Note for Tasks 4-5 (this same file): the local-content check (row 9,
+routes.py:665-669) sits AFTER `object_has_missing_fields`, so any test of it
+must give the Announce object all four fields (`id`, `type`, `actor`,
+`object`) or it will be refused at row 7/8 for the wrong reason before ever
+reaching the local-content branch -- the brief calls this out explicitly and
+it is easy to get backwards.
 """
 import pytest
+
+from app.models import ActivityPubLog
+from tests.factories import inbox_activity
 
 pytestmark = pytest.mark.usefixtures('redis_double')
 
@@ -218,3 +284,89 @@ def test_a_closed_instance_returns_410(app, site, redis_double):
                                content_type='application/json')
 
     assert response.status_code == 410
+
+
+@pytest.mark.parametrize('missing', ['id', 'type', 'actor', 'object'])
+def test_a_missing_minimum_field_is_refused(app, signing_peer, monkeypatch, missing):
+    """Deleting any one of the four required keys trips the same guard
+    (routes.py:650), all the way down to the same log message -- production
+    does not distinguish which key was missing, so neither does this test.
+
+    Asserts on `exception_message`, not just the 200: five other outcomes in
+    this gate share that status code, so the status code alone would pass
+    against a production change that silently swapped in one of them.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    activity = inbox_activity(signing_peer)
+    del activity[missing]
+
+    with app.test_client() as client:
+        response = client.post('/inbox', json=activity)
+
+    assert response.status_code == 200
+    assert ActivityPubLog.query.one().exception_message == 'Missing minimum expected fields in JSON'
+
+
+@pytest.mark.parametrize('object_type, expected_message', [
+    ('Page', 'Intended for Mastodon'),
+    ('Note', 'Intended for Mastodon'),
+    ('Like', 'Missing minimum expected fields in JSON Announce object'),
+])
+def test_an_announce_of_a_fieldless_object_is_refused(app, signing_peer, monkeypatch,
+                                                       object_type, expected_message):
+    """An Announce whose dict object carries only 'type' fails object_has_
+    missing_fields (it has no id/actor/object), and which log message fires
+    depends solely on that type -- Page and Note are read as Mastodon's
+    known-noisy shape and logged as 'Intended for Mastodon', anything else
+    (here, Like) gets the generic Announce-object failure message. Both
+    outcomes return the SAME '', 200 (routes.py:663, confirmed by Task 2's
+    AST derivation), so the message is the only thing that tells them apart.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    activity = inbox_activity(signing_peer, activity_type='Announce', object={'type': object_type})
+
+    with app.test_client() as client:
+        response = client.post('/inbox', json=activity)
+
+    assert response.status_code == 200
+    assert ActivityPubLog.query.one().exception_message == expected_message
+
+
+def test_an_announce_of_local_content_is_dropped(app, signing_peer, monkeypatch):
+    """The local-content check (routes.py:665-669) sits AFTER object_has_
+    missing_fields, so the Announce object here carries all four required
+    keys -- if it did not, this would be refused at the row 7/8 branch above
+    instead, for the wrong reason, and still return 200 with a DIFFERENT
+    message, silently passing a test that got the order backwards.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    local_actor = f"https://{app.config['SERVER_NAME']}/u/localuser"
+    local_object = {'id': 'https://remote.example/objects/1', 'type': 'Note',
+                    'actor': local_actor, 'object': 'https://remote.example/objects/1'}
+    activity = inbox_activity(signing_peer, activity_type='Announce', object=local_object)
+
+    with app.test_client() as client:
+        response = client.post('/inbox', json=activity)
+
+    assert response.status_code == 200
+    assert ActivityPubLog.query.one().exception_message == 'Activity about local content which is already present'
+
+
+def test_an_announce_of_an_ordered_collection_is_not_refused_by_the_field_check(app, signing_peer):
+    """FINDING, not a refusal test: object_has_missing_fields returns False
+    for ANY OrderedCollection-typed object without checking id/actor/object
+    (app/activitypub/util.py:4661-4662), so this Announce -- wrapping an
+    object with no id, no actor, no object, nothing but 'type' -- is not
+    caught at routes.py:657 and falls through. The very next statement still
+    inside that Announce branch, routes.py:671 (`id = object['id']`), then
+    raises KeyError, because this object has no 'id' either. There is no
+    exception_message to assert here: log_incoming_ap is never reached on
+    this path, and TESTING=True (no PROPAGATE_EXCEPTIONS override) lets that
+    KeyError propagate out of the test client rather than becoming a 500.
+    Reported for the defect register (Task 8), not fixed here.
+    """
+    activity = inbox_activity(signing_peer, activity_type='Announce', object={'type': 'OrderedCollection'})
+
+    with app.test_client() as client:
+        with pytest.raises(KeyError):
+            client.post('/inbox', json=activity)
