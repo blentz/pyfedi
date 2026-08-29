@@ -233,12 +233,25 @@ def block_outbound_http():
       `s3_bucket` calls real AWS.
     - smtplib -- app/email.py:164-166 opens smtplib.SMTP/SMTP_SSL directly.
       TestConfig's MAIL_SUPPRESS_SEND governs Flask-Mail, not this code path.
+    - pyld/requests -- found by coverage-inbox-gate. pyld's default JSON-LD
+      document loader (`_default_document_loader = requests_document_loader()`,
+      pyld/jsonld.py:6547) reaches the network through `requests`, which respx
+      never touches. LD-signature verification (`jsonld.normalize`) resolves
+      `@context` URLs through this loader, so a test exercising that path
+      reaches the real internet in this fixture's presence, silently, unless
+      it arranges its own isolation. See `no_network_ld_signing` in
+      tests/test_inbox_gate_signatures.py for the worked example: a static
+      `jsonld.set_document_loader` override serving frozen local copies of
+      the two `@context` documents that path needs, plus a `requests.get`
+      trip-wire that fails loudly if the static loader is ever bypassed.
 
-    So if you are writing the harness for app/nntp/, for an S3-using module, or
-    for app/email.py, you must arrange your own isolation (monkeypatch the
-    urlopen/smtplib name in the module under test; request `s3_bucket` for boto3
-    code). Do not assume this fixture has you covered. Closing the gap properly
-    means a socket-level block, which is a design change nobody has ruled on.
+    So if you are writing the harness for app/nntp/, for an S3-using module,
+    for app/email.py, or for anything that calls jsonld.normalize, you must
+    arrange your own isolation (monkeypatch the urlopen/smtplib name in the
+    module under test; request `s3_bucket` for boto3 code; install a static
+    document loader per no_network_ld_signing for pyld). Do not assume this
+    fixture has you covered. Closing the gap properly means a socket-level
+    block, which is a design change nobody has ruled on.
 
     This became load-bearing when Celery went eager. Before that, outbound
     federation went through .delay() and sat in a broker with no worker, so it
