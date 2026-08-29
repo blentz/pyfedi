@@ -26,15 +26,20 @@ there is the point):
     For: 1
     Try: 0
 
-This file covers the first three of those regions -- the `attributedTo` walk,
-the domain gate, and the three-part `if user and community and post_data`.
-The dispatch below them (create/update, the inReplyTo split, the `posted_at`
-enrichment) is Task 3's, in this same file.
+This file covers the whole function, in two passes. Task 2 took the
+`attributedTo` walk, the domain gate and the three-part `if user and community
+and post_data`; Task 3 took everything below them -- the create/update
+dispatch, the inReplyTo split and the `posted_at` enrichment. The dividing
+comment is still in the file, because the two passes' mutation runs and
+findings are reported separately below and the boundary is what makes them
+readable.
 
-THE `attributedTo` WALK has six outcomes, and the loop's control flow is not
+THE `attributedTo` WALK has seven outcomes, and the loop's control flow is not
 symmetric between them:
 
 - the key is absent -- `actor` and `actor_domain` both stay None;
+- the key is present but is neither a string nor a list -- a bare embedded
+  object, which is ordinary ActivityStreams and which both arms miss;
 - a bare string -- parsed directly;
 - a list whose first usable element is a `Person` dict with a string `id`;
 - a list whose first usable element is a bare string;
@@ -123,22 +128,66 @@ argument is in TestPostDataOperandIsDead below. A mutant that cannot be killed
 without changing production code is a finding about the code, and silently
 dropping it from the table would hide exactly the thing worth knowing.
 
-COVERAGE, from this file alone over span 4171-4236: 37 of 60 statements and
-23 of 44 branch arcs. That is deliberately a SLICE, not the function -- the
-dispatch below the guard is Task 3's, and Task 3 owns the whole-function
-confirmation that the two slices together leave no gap between them. The
-ledger's starting figure of 25/59 came from a full-suite run and counts the
+MUTATION, TASK 3's REGION -- the dispatch, the split and the enrichment. Nine
+mutants, plus three re-run after a test was strengthened:
+
+| mutant | failed |
+|---|---|
+| `activity` forced to 'create' | 2 -- after strengthening; 1 before |
+| `activity` forced to 'update' | **0 -- SURVIVES** |
+| the post branch's update fallback deleted | 1 |
+| the reply branch's update fallback deleted | **0 -- SURVIVES** |
+| the `inReplyTo` truthiness test made `is not None` | 1 |
+| the post branch's `published` guard forced true | 9 |
+| the post branch's `last_active` set to now | 1 |
+| the post branch's `posted_at` set to now | 2 |
+| the post branch's create-result guard removed | 1 |
+
+**`activity` forced to 'update' survives, and it should.** The update path
+falls back to create when the row is absent, so choosing 'update' for a
+document that carries no 'updated' key costs one extra lookup and then does
+exactly what 'create' would have done. The dispatch is observable in one
+direction only. Left surviving, because killing it would mean asserting on the
+lookup rather than on behaviour.
+
+**The reply branch's fallback deletion survives for a worse reason:** the
+create it falls back to is broken (TestTheReplyCreatePathIsBroken), so removing
+the fallback removes a path to a failure. Fixing that defect should make this
+mutant die; if it does not, the fallback is genuinely untested.
+
+**A second test that pinned nothing, found the same way as Task 2's.**
+`test_an_update_for_a_post_that_exists_updates_it_in_place` asserted the
+returned id and the row count, and passed with the dispatch forced to 'create'
+-- because Post.new catches the duplicate ap_id's IntegrityError and returns
+the existing row untouched (app/models.py). Same id, same count, document
+discarded. It now asserts the body was rewritten, and the mutant dies. That is
+twice in two tasks that identity-and-count assertions have proved hollow here;
+in this function, assert on what the path WROTE.
+
+COVERAGE. Task 2's slice alone was 37 of 60 statements and 23 of 44 arcs.
+Tasks 2 and 3 together, over the whole function: **55 of 60 statements, 41 of
+44 branch arcs.** The five missing statements and three missing arcs are one
+region -- the REPLY branch's copy of the enrichment -- and they are unreachable
+today for the reason TestTheReplyCreatePathIsBroken gives: no reply is ever
+created, so nothing ever enriches one. The gap is fully explained rather than
+merely reported, and it closes on its own when that defect is fixed.
+
+The ledger's starting figure of 25/59 came from a full-suite run and counts the
 body without the `def`; 60 is that body plus the def, the same reconciliation
 Task 1 recorded.
 """
 
-import pytest
+from datetime import datetime
 
+import pytest
+from sqlalchemy.exc import DataError
+
+from app import db
 from app.activitypub.util import create_resolved_object
-from app.models import ActivityPubLog, Post
+from app.models import ActivityPubLog, Post, PostReply
 from tests.factories import (AS_PUBLIC_URI, PEER_OBJECT_HOST, PEER_OBJECT_URI, make_community,
-                             make_site, note_document, resolvable_remote_author,
-                             seed_community_owner)
+                             make_post, make_post_reply, make_site, note_document,
+                             resolvable_remote_author, seed_community_owner)
 
 URI = PEER_OBJECT_URI
 AUTHOR_URI = f'https://{PEER_OBJECT_HOST}/users/alice'
@@ -294,6 +343,28 @@ class TestTheWalkYieldsNoAuthor:
         community = make_community('news', host=PEER_OBJECT_HOST)
 
         assert resolved(public_note([]), community) is None
+        assert Post.query.filter_by(ap_id=URI).count() == 0
+
+    def test_a_bare_person_object_refuses(self, app, peer_author):
+        """The seventh outcome, which the branch arcs found and the reading did
+        not: `attributedTo` present but neither a string nor a list.
+
+        A single embedded object -- `attributedTo: {'type': 'Person', 'id':
+        ...}` -- is ordinary ActivityStreams, and the very same object inside a
+        one-element LIST is accepted two tests up. Here both the `if` and the
+        `elif` miss, the walk never runs, and actor_domain stays None, so a
+        document whose author is stated unambiguously and correctly is refused
+        for its container type alone.
+
+        Filed for Task 7 as a peer-triggerable availability defect, and pinned
+        here as today's behaviour rather than fixed.
+
+        Production change that fails this: adding a dict arm to the walk, which
+        is the fix.
+        """
+        community = make_community('news', host=PEER_OBJECT_HOST)
+
+        assert resolved(public_note({'type': 'Person', 'id': AUTHOR_URI}), community) is None
         assert Post.query.filter_by(ap_id=URI).count() == 0
 
 
@@ -453,3 +524,334 @@ class TestPostDataOperandIsDead:
             resolved({}, community, uri_domain=None)
 
         assert Post.query.filter_by(ap_id=URI).count() == 0
+
+
+# ---------------------------------------------------------------------------
+# Task 3: the create/update dispatch, the inReplyTo split, and the posted_at
+# enrichment. Everything above this line reaches at most the three-part guard;
+# everything below it gets through and exercises what the function DOES.
+# ---------------------------------------------------------------------------
+
+PARENT_URI = f'https://{PEER_OBJECT_HOST}/objects/parent'
+PUBLISHED = '2024-01-01T00:00:00Z'
+PUBLISHED_AS_DATETIME = datetime(2024, 1, 1, 0, 0)
+
+
+def reply_note(in_reply_to=PARENT_URI, **fields):
+    """A document that takes the reply branch: public, with a usable inReplyTo."""
+    document = public_note()
+    document['inReplyTo'] = in_reply_to
+    document.update(fields)
+    return document
+
+
+def parent_post(community, author):
+    """The Post a reply document's inReplyTo resolves to, found by find_reply_parent
+    (app/activitypub/util.py) on ap_id alone -- its final lookup runs whether or
+    not the URI carries a 'post' or 'comment' hint."""
+    return make_post(community, author, ap_id=PARENT_URI)
+
+
+class TestTheCreateUpdateDispatch:
+    """`activity` is 'update' when the document carries 'updated' and 'create'
+    otherwise, and it selects between four paths. The two update paths FALL
+    BACK to create when the row they expect is not there, which is a fifth
+    path and the one a reader is most likely to miss.
+
+    Production change that fails these: inverting the `'updated' in post_data`
+    test, or deleting either `else: activity = 'create'` fallback.
+    """
+
+    def test_an_update_for_a_post_that_exists_updates_it_in_place(self, app, peer_author):
+        """**Identity and row count cannot tell this path from a create.** The
+        first version of this test asserted only those two and passed with the
+        dispatch forced to 'create', because Post.new catches the duplicate
+        ap_id's IntegrityError and returns the EXISTING row (app/models.py) --
+        same id, same count, and the document's content silently discarded.
+
+        So the assertion that separates them is the body: the update path
+        rewrites it from the document, and the create path leaves the row
+        exactly as it found it.
+        """
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        existing = make_post(community, peer_author, ap_id=URI, title='the old title',
+                             microblog=True)
+        document = public_note()
+        document['content'] = 'the new body'
+        document['updated'] = PUBLISHED
+
+        result = resolved(document, community)
+
+        assert result.id == existing.id
+        assert Post.query.filter_by(ap_id=URI).count() == 1
+        assert 'the new body' in result.body_html
+
+    def test_an_update_for_a_post_that_does_not_exist_falls_back_to_create(self, app, peer_author):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        document = public_note()
+        document['updated'] = PUBLISHED
+
+        result = resolved(document, community)
+
+        assert result.id == Post.query.filter_by(ap_id=URI).one().id
+        assert result.user_id == peer_author.id
+
+    def test_an_update_for_a_reply_that_exists_updates_it_in_place(self, app, peer_author):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        post = parent_post(community, peer_author)
+        existing = make_post_reply(post, peer_author)
+        existing.ap_id = URI
+        db.session.commit()
+        document = reply_note(updated=PUBLISHED)
+
+        result = resolved(document, community)
+
+        assert result.id == existing.id
+        assert PostReply.query.filter_by(ap_id=URI).count() == 1
+
+    def test_an_update_for_a_reply_that_does_not_exist_falls_back_to_create(self, app, peer_author):
+        """The fallback fires -- and then the create it falls back to cannot
+        succeed. See TestTheReplyCreatePathIsBroken below; what is pinned here
+        is the fallback itself, whose observable consequence today is that the
+        update path stops distinguishing itself from the create path."""
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        parent_post(community, peer_author)
+        document = reply_note(updated=PUBLISHED)
+
+        assert resolved(document, community) is None
+        assert PostReply.query.filter_by(ap_id=URI).count() == 0
+
+
+class TestTheInReplyToSplit:
+    """The branch turns on `'inReplyTo' in ... and ...['inReplyTo']`, so a
+    PRESENT BUT FALSY inReplyTo takes the POST branch, not the reply branch.
+
+    This is the divergence the plan flagged in advance: the near-duplicate
+    resolve_remote_post_from_search tests `is not None` here, so the very same
+    document becomes a Post through this function and a reply attempt through
+    that one. Task 6 pins the other side; this is the half that lives here.
+
+    Production change that fails these: changing the truthiness test to
+    `is not None`, which is precisely the drift.
+    """
+
+    def test_an_empty_string_in_reply_to_becomes_a_post(self, app, peer_author):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+
+        result = resolved(reply_note(in_reply_to=''), community)
+
+        assert isinstance(result, Post)
+        assert PostReply.query.filter_by(ap_id=URI).count() == 0
+
+    def test_a_null_in_reply_to_becomes_a_post(self, app, peer_author):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+
+        result = resolved(reply_note(in_reply_to=None), community)
+
+        assert isinstance(result, Post)
+        assert PostReply.query.filter_by(ap_id=URI).count() == 0
+
+
+class TestThePostedAtEnrichment:
+    """Guarded only by `'published' in post_data`, and it runs AFTER the row
+    has been created. Both branches set `posted_at` on the row they made; the
+    post branch sets `last_active` on the post itself, and the reply branch
+    sets it on the reply's PARENT post, not on the reply.
+
+    Production change that fails these: deleting the `'published' in post_data`
+    guard, or moving `last_active` off the parent in the reply branch.
+    """
+
+    def test_a_published_value_lands_on_the_post_and_its_last_active(self, app, peer_author):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+
+        result = resolved(public_note() | {'published': PUBLISHED}, community)
+
+        assert result.posted_at == PUBLISHED_AS_DATETIME
+        assert result.last_active == PUBLISHED_AS_DATETIME
+
+    def test_the_reply_branchs_enrichment_is_unreachable_today(self, app, peer_author):
+        """The reply branch's copy of the enrichment -- the one that sets
+        `post_reply.post.last_active` rather than the reply's own -- cannot be
+        reached through this function at all, because no reply is ever created.
+        Pinned as unreachable rather than left as an untested claim; the
+        enrichment becomes testable the moment TestTheReplyCreatePathIsBroken's
+        defect is fixed, and this test then fails and should be replaced by the
+        assertion it is standing in for."""
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        post = parent_post(community, peer_author)
+        last_active_before = post.last_active
+
+        assert resolved(reply_note(published=PUBLISHED), community) is None
+        assert post.last_active == last_active_before
+
+    def test_without_published_the_row_keeps_the_time_it_was_created(self, app, peer_author):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+
+        result = resolved(public_note(), community)
+
+        assert result.posted_at is not None
+        assert result.posted_at != PUBLISHED_AS_DATETIME
+
+
+class TestAPublishedOffsetIsDiscardedNotConverted:
+    """**A finding, observed not inferred.** `posted_at` is a timestamp WITHOUT
+    time zone, and the value assigned to it is the peer's raw string. Postgres
+    casts an offset-bearing ISO string to that column by DROPPING the offset,
+    not by converting to UTC.
+
+    So a peer publishing at 00:00+05:00 -- 19:00 the previous day in UTC --
+    gets a row reading 00:00. Every timestamp from a peer that states a
+    non-zero offset is wrong by that offset, silently, and `last_active` is
+    wrong with it, which is what orders the community's listings.
+
+    Nothing in the register covers this: D22's family is about the domain
+    comparison, and the registered posted_at defect is about values the column
+    cannot store at all. This one stores fine and is simply wrong. Task 7
+    should file it.
+
+    Production change that fails this: parsing `published` before assigning it
+    -- which is the fix, and this test then records what changed.
+    """
+
+    def test_a_five_hour_offset_is_dropped_rather_than_normalised(self, app, peer_author):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+
+        result = resolved(public_note() | {'published': '2024-01-01T00:00:00+05:00'}, community)
+
+        assert result.posted_at == datetime(2024, 1, 1, 0, 0)
+        assert result.posted_at != datetime(2023, 12, 31, 19, 0)
+
+
+class TestAPublishedValueTheColumnCannotStore:
+    """The registered `posted_at` defect, and the register's account of it was
+    INFERRED. Observed here: the assignment survives, and the `db.session.commit()`
+    two lines later raises sqlalchemy.exc.DataError, wrapping psycopg2's
+    InvalidDatetimeFormat. It is not caught anywhere in create_resolved_object,
+    so it leaves the function.
+
+    **And the Post row survives it.** create_post committed the row before the
+    enrichment ran, so after the caller rolls back, the post is in the database
+    with a posted_at of its creation time rather than the peer's -- while the
+    activity that produced it has failed with a traceback. That is
+    partially-applied ingest, the shape this campaign has now found six times
+    in this file, reached here through a type error rather than a missing key.
+    Task 7 should file it as a seventh.
+
+    Production change that fails this: parsing or validating `published` before
+    the assignment, or moving the enrichment in front of the commit that
+    creates the row.
+    """
+
+    def test_a_junk_published_raises_dataerror_out_of_the_function(self, app, peer_author):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+
+        with pytest.raises(DataError):
+            resolved(public_note() | {'published': 'not a timestamp'}, community)
+
+    def test_the_post_is_left_behind_by_the_crash(self, app, peer_author):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+
+        with pytest.raises(DataError):
+            resolved(public_note() | {'published': 'not a timestamp'}, community)
+        db.session.rollback()
+
+        survivor = Post.query.filter_by(ap_id=URI).one()
+        assert survivor.posted_at != PUBLISHED_AS_DATETIME
+
+
+class TestTheHelpersReturningFalsy:
+    """create_post and create_post_reply both refuse a non-public object --
+    activitypub_visibility reads a document with neither 'to' nor 'cc' as
+    'direct' -- and return None. The enrichment is inside `if post:` / `if
+    post_reply:`, so it is skipped, and the function falls through to its
+    final `return None`.
+
+    Production change that fails these: hoisting the enrichment out of the
+    truthiness guard, which would raise AttributeError on None rather than
+    returning it.
+    """
+
+    def test_a_refused_post_returns_none_and_writes_nothing(self, app, peer_author):
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        document = note_document(attributed_to=AUTHOR_URI, uri=URI)
+
+        assert resolved(document | {'published': PUBLISHED}, community) is None
+        assert Post.query.filter_by(ap_id=URI).count() == 0
+
+    def test_a_refused_reply_returns_none_and_writes_nothing(self, app, peer_author, monkeypatch):
+        """The reply half, and it needs the log to mean anything: the reply
+        path returns None for TWO unrelated reasons today -- this one, and the
+        KeyError in TestTheReplyCreatePathIsBroken. Asserting None alone would
+        pass under either. The APLOG message is what separates them.
+        """
+        monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        parent_post(community, peer_author)
+        document = note_document(attributed_to=AUTHOR_URI, uri=URI)
+        document['inReplyTo'] = PARENT_URI
+
+        assert resolved(document | {'published': PUBLISHED}, community) is None
+        assert PostReply.query.filter_by(ap_id=URI).count() == 0
+        assert ActivityPubLog.query.one().exception_message == 'Non-public reply refused: direct'
+
+
+class TestTheReplyCreatePathIsBroken:
+    """**A production defect, found by a test that was written to pass and did
+    not.** No reply can be created through this function.
+
+    create_resolved_object synthesises its activity as
+    `{'id': ..., 'object': post_data}` -- with no 'type' key. Post.new reads
+    that key defensively (`if 'type' in request_json and ...`, app/models.py);
+    PostReply.new reads it as `request_json['type']` with no guard at all. So
+    the reply path raises KeyError('type') inside PostReply.new,
+    create_post_reply's `except Exception` swallows it and returns None, and
+    create_resolved_object returns None.
+
+    The two spellings of the same read, one guarded and one not, are the whole
+    defect. Neither function is wrong on its own.
+
+    Reach: every caller. resolve_remote_post (an Announce naming a reply URI),
+    process_microblog_announce, and the alpha API's get_resolve_object all
+    resolve replies through here, and all of them silently get None. The
+    near-duplicate resolve_remote_post_from_search builds its activity the
+    same way, so Task 6 should expect the same result there rather than a
+    working path -- that is a drift-report row for Task 5 either way.
+
+    Severity is availability, not correctness: nothing wrong is written,
+    replies just never arrive, and the swallowed exception means no traceback
+    reaches the log unless LOG_ACTIVITYPUB_TO_DB is on. Task 7 files it.
+
+    Production change that fails these: adding `'type'` to the synthesised
+    activity, or guarding PostReply.new's read the way Post.new's is. Either
+    fixes it, and this test is then the record of the change.
+    """
+
+    def test_a_well_formed_public_reply_creates_nothing_and_returns_none(self, app, peer_author, monkeypatch):
+        monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        parent_post(community, peer_author)
+
+        assert resolved(reply_note(), community) is None
+        assert PostReply.query.filter_by(ap_id=URI).count() == 0
+
+    def test_the_swallowed_exception_is_the_missing_type_key(self, app, peer_author, monkeypatch):
+        """Names the cause, so a future reader is not left to rediscover it.
+        The message is str(KeyError('type')), which is the quoted key alone."""
+        monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        parent_post(community, peer_author)
+
+        resolved(reply_note(), community)
+
+        assert ActivityPubLog.query.one().exception_message == "'type'"
+
+    def test_the_post_path_survives_the_same_missing_key(self, app, peer_author):
+        """The other half of the asymmetry, and the reason this went unnoticed:
+        the SAME activity, missing the SAME key, creates a Post without
+        complaint, because Post.new guards the read."""
+        community = make_community('news', host=PEER_OBJECT_HOST)
+
+        result = resolved(public_note(), community)
+
+        assert result.id == Post.query.filter_by(ap_id=URI).one().id
