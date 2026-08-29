@@ -527,12 +527,19 @@ class TestExtractDomainAndActorSurvivesAMalformedNetloc:
 
     ('', '') is the safe value because it is what urlparse already yields for a
     string with no authority and no path -- `netloc` is '' and
-    `path.split('/')[-1]` is ''. Nothing is invented. Every caller degrades to
-    "not found": `validate_remote_actor` gets `instance_allowed('')`, which
-    returns True on its own empty-host guard, and the actor fetch that follows
-    fails; the callers that build `'!' + actor + '@' + server` produce '!@',
-    which `search_for_community` splits into two empty strings and finds
-    nothing.
+    `path.split('/')[-1]` is ''. Nothing is invented. The callers that build
+    `'!' + actor + '@' + server` produce '!@', which `search_for_community`
+    splits into two empty strings and finds nothing.
+
+    **CORRECTED 2026-08-29.** This docstring used to say every caller "degrades
+    to 'not found'", and that `validate_remote_actor` gets `instance_allowed('')`
+    "which returns True on its own empty-host guard, and the actor fetch that
+    follows fails". The second clause was doing all the work, and passing a gate
+    is not the same thing as being refused by it. The gate PASSED; a later fetch
+    failure was what stopped the actor. A banned instance could evade its ban by
+    adding one '[' to its actor id. Registered as D48 and now guarded in
+    `validate_remote_actor` -- see
+    `TestAMalformedActorUrlDoesNotSkipTheInstanceGate` at the end of this file.
     """
 
     @pytest.mark.parametrize('url', MALFORMED)
@@ -803,3 +810,89 @@ class TestYoutubeHelpersStillEmbedOrdinaryVideos:
 
     def test_a_non_youtube_url_is_still_not_embeddable(self, app, db_session):
         assert Post(url='https://example.com/article').youtube_can_embed() is False
+
+
+class TestAMalformedActorUrlDoesNotSkipTheInstanceGate:
+    """`validate_remote_actor` (`app/activitypub/actor.py`) must not let a
+    `urlparse`-refusing actor id past the allowed/banned check.
+
+    **This class exists because the reasoning in
+    `TestExtractDomainAndActorSurvivesAMalformedNetloc` above was wrong in one
+    load-bearing detail, and it was wrong for eight months.** That docstring
+    says every caller "degrades to 'not found'", and for
+    `validate_remote_actor` specifically that "`instance_allowed('')` returns
+    True on its own empty-host guard, and the actor fetch that follows fails."
+    The second half is what did the work, and it is not the same thing as the
+    gate refusing. The gate PASSED. Something later failed.
+
+    Demonstrated before this guard was added, with one variable changed:
+
+        BannedInstances row for 'banned.example'
+        instance_banned('banned.example')                -> True
+        instance_banned('')                              -> False
+        validate_remote_actor('https://banned.example/u/x')   -> False
+        validate_remote_actor('https://[banned.example/u/x')  -> True
+
+    One unbalanced bracket, and a banned instance's actor is accepted by the
+    check that exists to reject it. The pair fails open in both federation
+    modes: `instance_allowed('')` is True and `instance_banned('')` is False
+    (`app/utils.py`), so neither an allowlist nor a blocklist stops an empty
+    host. Registered as D48; D47 is the sibling shape reached through
+    `furl(dict).host`.
+
+    Why the guard is `'://' in actor_url and not server` rather than
+    `not server`: `extract_domain_and_actor` returns `('', '')` for two
+    unrelated inputs. One is a URL `urlparse` refused — the defect. The other
+    is a **webfinger handle**, which `find_actor_or_create` explicitly accepts
+    ("Find an actor by URL or webfinger") and which has no authority to find.
+    Refusing on `not server` alone would reject every handle lookup in the
+    codebase. `test_a_webfinger_handle_is_still_accepted` is that
+    over-correction guard and is the reason this fix is three tokens wider
+    than it looks like it should be.
+    """
+
+    @pytest.fixture
+    def banned_peer(self, db_session):
+        from app import db
+        from app.models import BannedInstances
+        from tests.factories import make_site
+        make_site()
+        db.session.add(BannedInstances(domain='banned.example'))
+        db.session.commit()
+
+    def test_a_malformed_actor_url_from_a_banned_instance_is_refused(self, app, banned_peer):
+        """The defect, as a regression test. Before the guard this returned
+        True — the ban was evaded by malforming the id it was keyed on.
+
+        Production change that fails this: removing the `not server` guard from
+        `validate_remote_actor`.
+        """
+        from app.activitypub.actor import validate_remote_actor
+        assert validate_remote_actor('https://[banned.example/u/x') is False
+
+    def test_a_well_formed_actor_url_from_a_banned_instance_is_still_refused(self, app, banned_peer):
+        """The control the demonstration was paired against: the ban itself
+        works, so the test above is about the malformed shape and not about a
+        ban that never functioned."""
+        from app.activitypub.actor import validate_remote_actor
+        assert validate_remote_actor('https://banned.example/u/x') is False
+
+    def test_a_webfinger_handle_is_still_accepted(self, app, banned_peer):
+        """The over-correction guard, and the reason the fix is not
+        `if not server`.
+
+        `urlparse('alice@friendly.example')` does not raise — it yields
+        `netloc=''` with the whole string as `path` — so this handle reaches
+        the same empty `server` the defect does, by an entirely legitimate
+        route. `find_actor_or_create` accepts handles by design.
+
+        Production change that fails this: broadening the guard to
+        `if not server: return False`.
+        """
+        from app.activitypub.actor import validate_remote_actor
+        assert validate_remote_actor('alice@friendly.example') is True
+
+    def test_an_ordinary_actor_url_is_still_accepted(self, app, banned_peer):
+        """Baseline: an unbanned, well-formed actor still passes."""
+        from app.activitypub.actor import validate_remote_actor
+        assert validate_remote_actor('https://friendly.example/u/alice') is True
