@@ -42,6 +42,22 @@ def validate_remote_actor(actor_url, actor=None, allow_banned=False):
     """Validate if a remote actor is allowed."""
     server, _ = extract_domain_and_actor(actor_url)
 
+    # A URL whose host we could not determine must not reach the instance gate
+    # below, because that gate fails OPEN on an empty host in both federation
+    # modes: instance_allowed('') returns True and instance_banned('') returns
+    # False (app/utils.py). extract_domain_and_actor returns ('', '') when
+    # urlparse REFUSED the string -- an unbalanced IPv6 bracket, a doubled '::',
+    # an NFKC-confusable host -- and the actor id is chosen by the remote peer,
+    # so without this a banned instance evades its own ban by adding one '['.
+    #
+    # The '://' test is load-bearing, not defensive noise. extract_domain_and_actor
+    # also returns an empty server for a webfinger handle ('alice@example.com'),
+    # which urlparse parses happily as a path with no authority and which
+    # find_actor_or_create accepts by design. Refusing on `not server` alone
+    # would reject every handle lookup in the codebase.
+    if '://' in actor_url and not server:
+        return False
+
     # Check if instance is allowed/banned
     if get_setting('use_allowlist', False):
         if not instance_allowed(server):
