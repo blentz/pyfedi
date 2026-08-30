@@ -65,9 +65,9 @@ Asymmetries worth carrying into the tests that cover them:
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.activitypub.signature import RsaKeys
-from app.models import ActivityPubLog, CommunityMember, utcnow
+from app.models import ActivityPubLog, CommunityMember, FeedMember, utcnow
 from tests.factories import ban_user_from_community, inbox_activity, make_community, \
-    make_community_member, make_instance, make_site, make_user
+    make_community_member, make_feed, make_instance, make_site, make_user
 from tests.test_inbox_dispatch_preamble import dispatch
 
 
@@ -285,5 +285,146 @@ def test_a_follow_from_an_existing_member_writes_nothing_and_stays_silent(
     db.session.expire_all()
     refreshed_community = db.session.get(type(community), community.id)
     assert refreshed_community.subscriptions_count == 0
+    assert ActivityPubLog.query.count() == 0
+    assert sends == []
+
+
+# --- Task 3: Follow, Feed target -- routes.py:983-1017 ---
+
+
+def _seed_follow_of_feed(name='peerfeed', public=False, local=False, with_keys=False):
+    """A target Feed and a remote follower User.
+
+    Unlike make_community(), which hardcodes owner user_id=1 and instance_id=1
+    (forcing Task 2's helper to create a throwaway owner first just to keep
+    the id space clear), make_feed() takes its instance as an explicit
+    argument -- so no artificial owner rows are needed here.
+
+    The follower's `ap_fetched_at` is stamped so schedule_actor_refresh
+    (app/activitypub/actor.py:134) does not fire a real actor fetch inline
+    under eager Celery, the same reason Task 2's helper stamps its follower.
+    make_feed() itself unconditionally stamps the feed's own `ap_fetched_at`
+    to utcnow(), so that same protection covers a remote (local=False) feed
+    too -- schedule_actor_refresh's staleness check never fires regardless of
+    the local flag, since the timestamp is always fresh.
+    """
+    make_site()
+    feed_instance = make_instance('feed.example')
+    feed = make_feed(feed_instance, name, public=public, local=local, with_keys=with_keys)
+
+    peer_instance = make_instance('peer.example')
+    follower = make_user(peer_instance, 'alice')
+    follower.ap_fetched_at = utcnow()
+
+    db.session.commit()
+    return follower, feed
+
+
+def test_a_follow_of_a_non_public_feed_is_rejected_without_any_log(app, db_session, monkeypatch):
+    """routes.py:989-999. `if not feed.public` sets reject_follow, and a
+    Reject is sent -- but unlike either Community reject reason (:946,
+    :952), NOTHING is logged: no `log_incoming_ap` call exists anywhere on
+    this path. `ActivityPubLog.query.count() == 0` is asserted WITH logging
+    enabled precisely so this assertion would fail the moment a log call
+    were ever added here -- the same technique the already-a-member test
+    above uses for the identical reason. Registered as an asymmetry by
+    Task 9 (the design spec, routes.py:989-999), not fixed here.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    sends = record_sends(monkeypatch)
+    follower, feed = _seed_follow_of_feed()
+
+    activity = inbox_activity(follower, activity_type='Follow', object_uri=feed.ap_profile_id)
+    follow_id = activity['id']
+
+    dispatch(activity)
+
+    assert len(sends) == 1
+    uri, body, key_id = sends[0]
+    assert uri == follower.ap_inbox_url
+    assert body['type'] == 'Reject'
+    assert body['object']['id'] == follow_id
+    assert body['actor'] == feed.public_url()
+    assert key_id == f'{feed.public_url()}#main-key'
+
+    assert ActivityPubLog.query.count() == 0
+
+
+def test_a_follow_of_a_public_feed_creates_membership_and_accepts(app, db_session, monkeypatch):
+    """routes.py:1001-1016. Not rejected (feed.public is True) and
+    `feed_membership` reports anything other than SUBSCRIPTION_MEMBER: a
+    FeedMember row is created, feed.subscriptions_count is incremented, an
+    Accept is sent, and the outcome is logged APLOG_FOLLOW/APLOG_SUCCESS.
+    Unlike the Community accept path, no `last_active`/`last_seen`-equivalent
+    column is stamped here -- Feed has no such field touched on this branch,
+    per this file's module docstring table.
+
+    The feed is seeded local=True, with_keys=True: :1014 signs the outbound
+    Accept with `feed.private_key`, which plain make_feed() leaves unset.
+
+    `db.session.expire_all()` after dispatch() is required for the same
+    reason as the Community accept test: the dispatcher commits through its
+    own independent session (get_task_session()), leaving this test's copies
+    of `feed`/`follower` stale until expired.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    sends = record_sends(monkeypatch)
+    follower, feed = _seed_follow_of_feed(public=True, local=True, with_keys=True)
+
+    activity = inbox_activity(follower, activity_type='Follow', object_uri=feed.ap_profile_id)
+    follow_id = activity['id']
+
+    dispatch(activity)
+
+    db.session.expire_all()
+
+    member = FeedMember.query.filter_by(user_id=follower.id, feed_id=feed.id).first()
+    assert member is not None
+
+    refreshed_feed = db.session.get(type(feed), feed.id)
+    assert refreshed_feed.subscriptions_count == 1
+
+    assert len(sends) == 1
+    uri, body, key_id = sends[0]
+    assert uri == follower.ap_inbox_url
+    assert body['type'] == 'Accept'
+    assert body['object']['id'] == follow_id
+    assert body['actor'] == feed.public_url()
+    assert key_id == f'{feed.public_url()}#main-key'
+
+    log = ActivityPubLog.query.one()
+    assert log.activity_type == 'Follow'
+    assert log.result == 'success'
+
+
+def test_a_follow_from_an_existing_feed_member_writes_nothing_and_stays_silent(
+        app, db_session, monkeypatch):
+    """routes.py:1001, `feed_membership(user, feed) == SUBSCRIPTION_MEMBER`:
+    nothing is written (subscriptions_count unchanged), nothing is sent, and
+    nothing is logged -- the Feed analogue of the Community
+    already-a-member silence covered above.
+
+    `feed_membership` (app/utils.py:1661) delegates to `feed.subscribed`,
+    which queries FeedMember/FeedJoinRequest directly; the test config's
+    `CACHE_TYPE='NullCache'` (tests/conftest.py:68) means the function's own
+    `@cache.memoize` decorator does not memoize a stale answer here, so
+    seeding the FeedMember row below is enough for the guard to see it.
+
+    The feed is public=True so this exercises the already-subscribed guard
+    specifically, not the non-public reject guard above it.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    sends = record_sends(monkeypatch)
+    follower, feed = _seed_follow_of_feed(public=True, local=True, with_keys=True)
+    db.session.add(FeedMember(user_id=follower.id, feed_id=feed.id))
+    db.session.commit()
+
+    activity = inbox_activity(follower, activity_type='Follow', object_uri=feed.ap_profile_id)
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    refreshed_feed = db.session.get(type(feed), feed.id)
+    assert refreshed_feed.subscriptions_count == 0
     assert ActivityPubLog.query.count() == 0
     assert sends == []
