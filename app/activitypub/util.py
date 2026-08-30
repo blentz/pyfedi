@@ -1302,6 +1302,16 @@ def actor_json_to_model(activity_json, address, server):
         if 'nsfl' in activity_json and activity_json['nsfl'] and not site.enable_nsfl:
             return None
 
+        # Read before the try, for two reasons. It is the only argument below
+        # that can raise and is NOT peer data, so catching it in a handler that
+        # logs 'while parsing <the peer's JSON>' names the wrong party and
+        # sends the reader to inspect a document that is fine. And config.py
+        # always sets this key (with an `or -1` fallback), so a deployment
+        # missing it is broken in a way its operator needs to see rather than
+        # have swallowed into a None the caller reads as 'malformed peer'.
+        # Registered as D33.
+        content_retention = current_app.config['DEFAULT_CONTENT_RETENTION']
+
         try:
             community = Community(name=activity_json['preferredUsername'].strip(),
                                   title=activity_json['name'].strip(),
@@ -1327,14 +1337,27 @@ def actor_json_to_model(activity_json, address, server):
                                   ap_domain=server.lower(),
                                   public_key=activity_json['publicKey']['publicKeyPem'],
                                   # language=community_json['language'][0]['identifier'] # todo: language
-                                  instance_id=find_instance_id(server),
-                                  content_retention=current_app.config['DEFAULT_CONTENT_RETENTION'],
+                                  content_retention=content_retention,
                                   first_federated_at=utcnow(),
                                   post_url_type=activity_json['postUrlType'] if 'postUrlType' in activity_json else None,
                                   )
         except KeyError:
             current_app.logger.error(f'KeyError for {address}@{server} while parsing ' + str(activity_json))
             return None
+
+        # Assigned after the construction rather than inside it. find_instance_id
+        # COMMITS a sparse Instance row and spawns a new_instance_profile fetch
+        # when the peer is new, and keyword arguments evaluate in source order,
+        # so while it sat mid-list any later argument that raised into the
+        # handler above left that row and that fetch behind for a peer no
+        # Community was ever created for. Moving it here makes the side effect
+        # unreachable until there IS a Community to attach it to, and keeps it
+        # that way no matter what is added to the argument list later -- which
+        # ordering alone would not. The Person and Feed branches carry the same
+        # call in the same position and are unaffected today only because every
+        # argument after theirs is a guarded read or a literal. Registered as
+        # D33.
+        community.instance_id = find_instance_id(server)
         if get_setting('meme_comms_low_quality', False):
             community.low_quality = 'memes' in activity_json['preferredUsername'] or 'shitpost' in activity_json['preferredUsername']
         description_html = ''
