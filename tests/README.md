@@ -1448,7 +1448,11 @@ from "the themed macro never ran".
   see "The feed cache key" above for the test that proves it
   (`test_redis_double_covers_app_redis_client`,
   `tests/test_factories_feed.py`). Still not covered: the rate limiter and
-  Celery app, built from `Config` at import time.
+  Celery app, built from `Config` at import time. **Also not usable as-is for
+  a `redis_client.lock(...)` call site**: see "The fakeredis lock limitation"
+  below (sub-project 5a) — the fixture's `fakeredis.FakeRedis` instance can
+  acquire a lock but raises on release, so a test that reaches a `.lock(...)`
+  context manager needs a narrower double, not this fixture directly.
 - Celery runs eagerly under test, with `eager_propagates` so a failing task
   raises rather than being swallowed. Configured in the `app` fixture, on
   `celery.conf` directly (**not** `TestConfig` attributes), in the OLD key
@@ -1544,6 +1548,94 @@ is the worked example.
 
 Prove a fixture by driving real application code through it. A test asserting that
 fakeredis stores what you put in it tests fakeredis, not PieFed.
+
+## The inbox-dispatch harness (sub-project 5a)
+
+`app/activitypub/routes.py`'s `process_inbox_request` and its dispatch arms
+were brought under test in `tests/test_inbox_dispatch_{preamble,announce,
+votes,misc}.py`. Five facts this sub-project established, so slices 5b-5d
+covering the rest of the module (and anything else that reaches
+`redis_client.lock(...)`) do not have to rediscover them:
+
+**1. The entry lever.** `dispatch(activity, store_ap_json=True)`, defined in
+`tests/test_inbox_dispatch_preamble.py`, calls `process_inbox_request`
+directly. This is not a testing contrivance — it is production's own DEBUG
+branch, `app/activitypub/routes.py:758-759`, which calls the same function
+directly instead of queuing it through Celery when `current_app.debug` is
+true. Later slices should import `dispatch` from that module rather than
+reimplement it.
+
+**2. Why seeded rows reach the dispatcher.** `process_inbox_request` does its
+work through `get_task_session()`, an independent `Session(bind=db.engine)`,
+not through `db.session`. Rows seeded by the factories in a test are still
+visible to it because the `db_session` fixture (`tests/conftest.py:117`)
+truncates tables rather than rolling back a transaction, and the factories
+`commit()`, so by the time the dispatcher's own session queries the database
+the rows are durably there for any session bound to the same engine to see —
+no transaction-visibility trick is involved.
+
+**3. The request-context asymmetry.** `patch_db_session`
+(`app/utils.py:3664`) only replaces `db.session` when `has_request_context()`
+is false. A direct call to `dispatch()` has no request context, so patching
+occurs and `db.session` becomes a proxy onto the dispatcher's task session; a
+real signed HTTP request (Task 8's seam tests) has a request context, so
+patching does **not** occur, and the dispatcher's `session` local stays a
+genuinely separate object from `db.session`. The two call paths therefore run
+the dispatcher under different session arrangements. This is registered as
+**D60** in `docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md`
+— cite it rather than re-deriving it; that finding also lists the four
+call sites inside `process_inbox_request`/`process_chat` that use the
+`session` local directly and were never exercised under a request context by
+this sub-project (`session.query(CommunityBan)` at routes.py:950,
+`session.query(ChatMessage)` at routes.py:1319, 1739 and 2558).
+
+**4. The fakeredis lock limitation.** `redis_double`'s `fakeredis.FakeRedis`
+instance cannot serve a redis-py lock in this environment. `fakeredis==2.37.1`
+is pinned in `requirements-test.txt` with no `lupa` installed, so it
+implements **no Lua scripting** — not `EVAL`, not `EVALSHA`. Verified
+directly against the pinned version:
+
+```python
+>>> fakeredis.FakeRedis(decode_responses=True).eval("return 1", 0)
+redis.exceptions.ResponseError: unknown command 'eval'
+```
+
+`redis.lock.Lock.acquire()` needs no Lua (plain `SET NX PX`), so it succeeds
+against the fixture, but `Lock.release()` calls a Lua script via `EVALSHA` to
+atomically check the lock's token before deleting the key, so it raises
+`redis.exceptions.ResponseError: unknown command 'evalsha'` on `__exit__`,
+every time, for every `with redis_client.lock(...):` block. Task 6 hit this
+on `process_question_answer` (routes.py:2475) as five real test failures
+before isolating the cause, then confirmed it in isolation with the probe
+above. The workaround is a narrow **local** double — not a change to
+`redis_double` itself, whose lock behaviour is correct for what it patches
+(`app.redis_client` in production code) and simply cannot be backed by this
+particular fakeredis version. See `_RedisLockOnlyDouble` and the
+`redis_lock_only_double` fixture in `tests/test_inbox_dispatch_votes.py`: it
+patches the same single `app.redis_client` attribute `redis_double` teaches,
+but with an object whose `.lock(...)` returns `contextlib.nullcontext()` — a
+genuine no-op context manager, sufficient because none of these tests depend
+on real mutual-exclusion semantics.
+
+This will recur. `grep -rn 'redis_client\.lock(' app/` finds 34 call sites in
+total, of which 2 are in `app/activitypub/routes.py` (routes.py:1872 and
+:2476, the latter covered by Task 6's workaround above) — leaving 32 further
+sites spread across `app/activitypub/util.py`, `app/models.py`, `app/cli.py`,
+`app/post/routes.py`, `app/shared/user.py`, `app/shared/post.py` and
+`app/user/utils.py`. Any coverage work that walks a call path through one of
+them will hit this identically — reach for a `_RedisLockOnlyDouble`-shaped
+local fixture, not a fix to `redis_double`.
+
+**5. The mutation-evidence rule this sub-project learned.** A mutant killed
+by `respx.models.AllMockedAssertionError` is an **infrastructure kill**, not
+a behavioural one: it fires inside a blocked network fetch, before any
+assertion in the test body ever runs, so it proves only that the mutation
+caused an attempted fetch that the mutant-run's mocks did not expect — not
+that the mutated guard has any semantic effect. Re-run such a mutant with the
+fetch served (`federation_peer`/`http_mock` registering the route) before
+claiming a guard is load-bearing. Task 2 recorded a case, earlier in this
+campaign, where a guard that appeared to "kill" a mutant this way turned out
+to have no semantic effect at all once the fetch was allowed to succeed.
 
 ## Known noise
 
