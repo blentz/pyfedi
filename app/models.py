@@ -3012,7 +3012,16 @@ class PostReply(db.Model):
                           ap_id=request_json['object']['id'] if request_json else None,
                           ap_create_id=request_json['id'] if request_json else None,
                           ap_announce_id=announce_id)
-        if request_json and request_json['type'] == 'Update':
+        # 'type' in request_json, not just request_json -- Post.new's equivalent
+        # read one class up has always been guarded this way, and this one was
+        # not. The resolvers in app/activitypub/util.py synthesise their
+        # activity as {'id': ..., 'object': post_data} with no 'type' key, so
+        # this raised KeyError('type') for every remote reply; create_post_reply
+        # swallowed it in its `except Exception` and the caller saw None. Three
+        # call paths silently created no reply at all: an Announce naming a
+        # reply URI, the microblog boost path, and the alpha API's resolve.
+        # Registered as D35.
+        if request_json and 'type' in request_json and request_json['type'] == 'Update':
             reply.edited_at = utcnow()
         if reply.body:
             for blocked_phrase in blocked_phrases():
