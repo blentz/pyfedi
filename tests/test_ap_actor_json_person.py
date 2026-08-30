@@ -270,6 +270,83 @@ class TestIdHostMatchesServerGuard:
         assert user.ap_public_url == 'https://peer.example:8443/u/alice'
 
 
+class TestTwoFailedParsesDoNotSatisfyTheGate:
+    """D32. `host_of` degrades an unparseable string to `''`, and `'' != ''` is
+    False, so an id urlparse refuses compares EQUAL to a server urlparse also
+    refuses and the gate accepts.
+
+    The class docstring above discharges this by call site: every caller was
+    said to derive `server` locally and non-empty. `create_actor_from_remote`
+    is the one that does not -- on its `https://` path it takes `server` from
+    `extract_domain_and_actor`, which returns `('', '')` on a `urlparse`
+    `ValueError`, then fetches with `actor_address`, a different variable, so
+    nothing exercises the empty `server` before it arrives here.
+
+    D32 filed that as UNPROVEN because it required httpx to accept and fetch a
+    URL urlparse refuses, and nobody had exhibited one. One exists, and it is
+    not exotic -- a bracket or an NFKC-confusable in the USERINFO, which
+    urlparse rejects as part of the netloc while httpx strips userinfo and
+    keeps the real host:
+
+        urlparse('https://[@banned.example/u/alice')  ValueError: Invalid IPv6 URL
+        httpx.URL('https://[@banned.example/u/alice').host  'banned.example'
+
+    So httpx fetches the peer's real server while every urlparse-derived value
+    in this codebase is ''. That closes D32's open question affirmatively.
+
+    Two independent things now stop it, and both are wanted. `validate_remote_actor`
+    refuses the URL before `create_actor_from_remote` is ever called (the D48
+    fix, 2026-08-29). This gate is the second, and it is the one that matters
+    if a future caller reaches `actor_json_to_model` without passing the first:
+    the gate is the last thing standing between a peer-chosen document and a
+    row.
+
+    Production change that fails these: restoring the bare
+    `if host_of(id) != host_of(f'//{server}')` without the empty-side refusal.
+    """
+
+    def test_an_unparseable_server_refuses_rather_than_matching_anything(self, app, db_session):
+        """The exact shape create_actor_from_remote would deliver: server ''
+        because extract_domain_and_actor hit the ValueError, and an id the peer
+        chose. The id here is WELL FORMED and on a host of the attacker's
+        choosing -- the failure does not need a matching malformed id, only an
+        empty server, because '' != 'attacker.net' is True and would refuse.
+        This test is therefore the control that pins WHY the pair below is the
+        dangerous one."""
+        peer_instance('good.example')
+        document = peer_actor_json(name='alice', server='good.example',
+                                   fields={'id': 'https://attacker.net/u/alice'})
+
+        assert actor_json_to_model(document, 'alice', '') is None
+        assert db.session.query(User).count() == 0
+
+    def test_an_unparseable_id_and_an_unparseable_server_do_not_match(self, app, db_session):
+        """Both sides degrade to '' and compared EQUAL, so the gate accepted
+        and a User was minted whose ap_profile_id pointed at a host nothing had
+        verified. The peer supplies the id; `server` arrives empty from the
+        ValueError. Neither string is a host, and 'neither is a host' is not a
+        reason to treat them as the same host."""
+        peer_instance('good.example')
+        document = peer_actor_json(name='alice', server='good.example',
+                                   fields={'id': 'https://[@attacker.net/u/alice'})
+
+        assert actor_json_to_model(document, 'alice', '') is None
+        assert db.session.query(User).count() == 0
+
+    def test_an_unparseable_id_is_refused_even_when_the_server_is_good(self, app, db_session):
+        """The other asymmetry, and it already held: a good server is a real
+        host, so an id that degrades to '' compares unequal and is refused.
+        Kept because the fix must not be mistaken for what creates this
+        behaviour, and because it is what a mutant that refuses only on an
+        empty SERVER would still pass."""
+        peer_instance('good.example')
+        document = peer_actor_json(name='alice', server='good.example',
+                                   fields={'id': 'https://[@good.example/u/alice'})
+
+        assert actor_json_to_model(document, 'alice', 'good.example') is None
+        assert db.session.query(User).count() == 0
+
+
 class TestPersonAndService:
     """`if activity_json['type'] == 'Person' or activity_json['type'] == 'Service'`,
     and the `bot=True if activity_json['type'] == 'Service' else False` inside it.

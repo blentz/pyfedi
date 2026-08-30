@@ -923,3 +923,75 @@ class TestAMalformedActorUrlDoesNotSkipTheInstanceGate:
         that the prefixed spelling does not slip past the same check."""
         from app.activitypub.actor import validate_remote_actor
         assert validate_remote_actor('@alice@banned.example') is False
+
+
+class TestHttpxFetchesHostsUrlparseRefuses:
+    """D32's open question, settled affirmatively.
+
+    D32 registered `actor_json_to_model`'s host gate as unsafe when both sides
+    fail to parse -- `host_of` degrades to `''` and `'' == ''` -- but filed the
+    reachability as UNPROVEN, because reaching it needs httpx to accept AND
+    SUCCESSFULLY FETCH a URL Python's `urlparse` refuses, and nobody had
+    exhibited one. This class exhibits one, and pins the divergence so the
+    claim cannot rot silently under a library upgrade.
+
+    The shape is USERINFO. urlparse validates the whole netloc, userinfo
+    included, and rejects the string; httpx splits userinfo off first and
+    validates only what remains, which is an ordinary registrable host. So the
+    two libraries disagree about which host -- if any -- the URL names, and
+    httpx's answer is the one the network sees.
+
+    A bracket is not the only trigger: an NFKC-confusable in the userinfo does
+    the same, which matters because it is not obviously malformed to a reader.
+
+    These tests parse rather than connect. What they establish is that httpx
+    resolves the URL to a REAL registrable host and would send the request
+    there -- 'https://[@banned.example/...' is a request to banned.example,
+    whatever urlparse says. Connecting is neither necessary to the finding nor
+    available under this suite's outbound block.
+
+    Which upgrade should fail these: any httpx or CPython release that changes
+    which of the two accepts these strings. That is a signal to re-check
+    `validate_remote_actor` and the `actor_json_to_model` gate, not a test to
+    relax.
+    """
+
+    UNPARSEABLE_BUT_FETCHABLE = [
+        ('https://[@banned.example/u/alice', 'banned.example'),
+        ('https://a[b@banned.example/u/alice', 'banned.example'),
+        ('https://℀@banned.example/u/alice', 'banned.example'),
+        ('https://user:pa[ss@banned.example/u/alice', 'banned.example'),
+    ]
+
+    @pytest.mark.parametrize('url,expected_host', UNPARSEABLE_BUT_FETCHABLE)
+    def test_urlparse_refuses_the_url(self, url, expected_host):
+        from urllib.parse import urlparse
+        with pytest.raises(ValueError):
+            urlparse(url).hostname
+
+    @pytest.mark.parametrize('url,expected_host', UNPARSEABLE_BUT_FETCHABLE)
+    def test_httpx_reads_a_real_host_out_of_the_same_url(self, url, expected_host):
+        assert httpx.URL(url).host == expected_host
+
+    @pytest.mark.parametrize('url,expected_host', UNPARSEABLE_BUT_FETCHABLE)
+    def test_the_codebases_own_helpers_see_no_host_at_all(self, url, expected_host):
+        """The consequence, in this codebase's terms rather than urlparse's:
+        both host helpers return the empty string for a URL httpx would fetch
+        from `expected_host`. Every gate downstream of them is comparing ''."""
+        from app.activitypub.util import host_of
+        assert host_of(url) == ''
+        assert extract_domain_and_actor(url) == ('', '')
+
+    @pytest.mark.parametrize('url,expected_host', UNPARSEABLE_BUT_FETCHABLE)
+    def test_validate_remote_actor_refuses_them(self, app, db_session, url, expected_host):
+        """The first of the two independent stops. `validate_remote_actor`
+        refuses any `://` URL whose host it cannot derive, so
+        `create_actor_from_remote` -- the one caller that would otherwise pass
+        an empty `server` to `actor_json_to_model` -- is never reached.
+
+        No BannedInstances row is seeded here, deliberately: the refusal is for
+        the missing host, not for `banned.example`. Taking the ban away is what
+        proves the stop is the guard rather than the fixture.
+        """
+        from app.activitypub.actor import validate_remote_actor
+        assert validate_remote_actor(url) is False
