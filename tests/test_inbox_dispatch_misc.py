@@ -51,6 +51,69 @@ test.
     its mover is an instance admin of origin_community's instance only (not
     the post's author, not a community moderator).
 
+ADDENDUM (fix round 1): the three tests above never exercised the third
+alternative's OWN conjunction (`origin_community.instance_id ==
+user.instance_id and origin_community.is_instance_admin(user)`)
+independently, because every mover in this file up to that point was seeded
+on origin_community's own instance -- the equality half was trivially True
+throughout, including in the dedicated "instance admin" test. A reviewer
+caught this: dropping just the equality conjunct (leaving bare
+`origin_community.is_instance_admin(user)`) SURVIVED against the original
+five Move tests.
+
+Investigating required first checking what `Community.is_instance_admin`
+(app/models.py:752-759) actually scopes on:
+
+    def is_instance_admin(self, user):
+        if self.instance_id:
+            instance_role = InstanceRole.query.filter(
+                InstanceRole.instance_id == self.instance_id,
+                InstanceRole.user_id == user.id,
+                InstanceRole.role == 'admin').first()
+            return instance_role is not None
+        else:
+            return False
+
+This IS instance-scoped -- but scoped to `self.instance_id`, the COMMUNITY's
+own instance, never to `user.instance_id` at all. That is a real, easy trap:
+a naive attempt to isolate the equality conjunct by seeding an admin on a
+"different instance" (a second Instance, with the InstanceRole scoped to
+THAT second instance -- the user's own home instance) does NOT make the
+second conjunct True while the first is False, because `is_instance_admin`
+would then check for a role on the COMMUNITY's instance and find none --
+both conjuncts come out False, and neither single-conjunct-drop mutation is
+discriminated by such a test (it degenerates into a second copy of the
+unrelated-user no-op, below). The construction that actually isolates the
+conjunct is the opposite: a user whose OWN account lives on a second,
+unrelated instance, holding an InstanceRole scoped to ORIGIN_COMMUNITY's
+instance specifically (not their own) -- an unusual database state, but one
+`is_instance_admin`'s own query does not rule out, since it never reads
+`user.instance_id`.
+
+test_a_move_by_an_admin_role_scoped_to_the_origin_instance_but_whose_own_account_is_elsewhere_does_nothing
+supplies exactly that actor. Re-running the mutations confirms the equality
+conjunct is now covered, and reveals the OTHER conjunct
+(`is_instance_admin(user)`) was already covered without a dedicated test of
+its own:
+
+  - Dropping `origin_community.instance_id == user.instance_id and`
+    (leaving bare `origin_community.is_instance_admin(user)`) is killed by
+    the new test above: `1 failed, 5 passed` -- a behavioural
+    `AssertionError` (`assert 2 == 1`, the post's `community_id` after
+    dispatch vs. `origin_community.id`), not
+    `respx.models.AllMockedAssertionError`.
+  - Dropping ` and origin_community.is_instance_admin(user)` (leaving bare
+    `origin_community.instance_id == user.instance_id`) is killed by the
+    PRE-EXISTING test_a_move_by_an_unrelated_user_does_nothing: `1 failed, 5
+    passed` -- also a behavioural `assert 2 == 1`. That test's stranger
+    already shares origin_community's own instance (see
+    `_seed_move_scenario`'s seeding) and holds no admin role at all, which
+    is exactly the shape needed to isolate this half; no new test was
+    required for it.
+
+Both mutations were restored immediately after, verified via `git diff
+--stat app/` producing no output.
+
 This arm has NO `else`: when every alternative is false, nothing is logged
 and nothing happens (routes.py:1579-1589's `if` has no matching `else`
 clause at all -- the whole block simply falls through to the next `if`).
@@ -347,6 +410,79 @@ def test_a_move_by_an_instance_admin_of_the_origin_instance_moves_the_post(app, 
     db.session.expire_all()
     assert Post.query.get(post.id).community_id == target_community.id
     assert ActivityPubLog.query.one().result == 'success'
+
+
+def test_a_move_by_an_admin_role_scoped_to_the_origin_instance_but_whose_own_account_is_elsewhere_does_nothing(
+        app, db_session, monkeypatch):
+    """routes.py:1579, third alternative's OWN conjunction --
+    `origin_community.instance_id == user.instance_id and
+    origin_community.is_instance_admin(user)` -- has two halves the tests
+    above never exercised independently: every actor _seed_move_scenario
+    builds is seeded on origin_community's OWN instance, so the equality
+    half was trivially True in every test above, including the
+    "instance admin" test directly above this one.
+
+    Community.is_instance_admin (app/models.py:752-759) IS instance-scoped
+    -- but scoped to the COMMUNITY's own `self.instance_id`, never to the
+    acting user's `instance_id` column:
+
+        InstanceRole.instance_id == self.instance_id
+        and InstanceRole.user_id == user.id
+        and InstanceRole.role == 'admin'
+
+    So a User row's own `instance_id` and an InstanceRole row naming that
+    same user can disagree about which instance they administer -- an
+    unusual but perfectly representable database state, and precisely the
+    state needed to make the second conjunct True while the first is False:
+    a user whose OWN account is on a SECOND, unrelated instance, who
+    nonetheless holds an InstanceRole scoped to ORIGIN_COMMUNITY's instance
+    (not their own instance -- deliberately, since a role scoped to their
+    OWN differing instance would leave is_instance_admin(user) False too,
+    proving nothing about the equality conjunct specifically; see the
+    module docstring's addendum).
+
+    Under the real (unmutated) guard this is still refused: the equality
+    conjunct is False (this user's account instance differs from
+    origin_community's), so the third alternative is False overall, and --
+    this user being neither the post's author nor a moderator of either
+    community -- every alternative is False. Same silent no-op shape as
+    test_a_move_by_an_unrelated_user_does_nothing: no log row, post
+    unmoved.
+
+    MUTATION killer: dropping `origin_community.instance_id ==
+    user.instance_id and` from the guard (leaving bare
+    `origin_community.is_instance_admin(user)`) makes the third alternative
+    True for this user on its own -- their InstanceRole row alone satisfies
+    it -- flipping the guard True and moving the post, caught by this
+    test's own assertions. See the module docstring's addendum for the
+    confirmed mutation run and for why the OTHER half
+    (`is_instance_admin(user)`) is already killed by
+    test_a_move_by_an_unrelated_user_does_nothing without needing a test of
+    its own here.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, origin_community, target_community, post, author = _seed_move_scenario()
+    other_instance = make_instance('elsewhere.example')
+    foreign_admin = make_user(other_instance, 'foreign_admin')
+    foreign_admin.ap_fetched_at = utcnow()
+    # Scoped to ORIGIN_COMMUNITY's instance, not foreign_admin's own -- see
+    # the docstring above for why that is what makes is_instance_admin
+    # return True despite this account living elsewhere.
+    db.session.add(InstanceRole(instance_id=origin_community.instance_id,
+                                user_id=foreign_admin.id, role='admin'))
+    db.session.commit()
+
+    assert foreign_admin.instance_id != origin_community.instance_id  # the guard's own precondition
+
+    activity = inbox_activity(foreign_admin, activity_type='Move', object=post.ap_id,
+                              origin=origin_community.ap_profile_id,
+                              target=target_community.ap_profile_id)
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    assert Post.query.get(post.id).community_id == origin_community.id
+    assert ActivityPubLog.query.count() == 0
 
 
 def test_a_move_by_an_unrelated_user_does_nothing(app, db_session, monkeypatch):
