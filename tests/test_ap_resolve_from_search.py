@@ -187,7 +187,7 @@ rather than what it does. Task 7 files it as a code-quality row, distinct from
 the defects around it -- nothing is wrong, one operand is just doing no work.
 
 MUTATION, TASK 6's REGION -- creation, enrichment, dispatch, return shape.
-Ten mutants, nine killed:
+Ten mutants, nine killed when the run was made and all ten today:
 
 | mutant | failed |
 |---|---|
@@ -200,23 +200,27 @@ Ten mutants, nine killed:
 | the dispatch guard's `nodebb` operand dropped | 10 |
 | the DEBUG split inverted | 2 |
 | the dispatch passed the whole collection, not its tail | 1 |
-| `return object if not in_reply_to else object.post` → `return object` | **0 -- SURVIVES** |
+| `return object if not in_reply_to else object.post` → `return object` | **0 then; 1 since D35 was fixed** |
 
 **The drift mutant dies**, which is the point of the pair of tests: rewriting
 this copy's `is not None` to the other copy's truthiness -- the obvious
 deduplication -- changes behaviour, and the suite now says so from both sides.
 
-**The return-shape mutant survives because its else arm is dead.** `object.post`
-runs only for a reply, and no reply can be created. It is left surviving rather
-than chased: the honest statement is that this function's most surprising
-contract is untestable until the reply defect is fixed, and TestTheReturnShape
-says so in place of pretending otherwise.
+**The return-shape mutant survived because its else arm was dead.**
+`object.post` runs only for a reply, and D35 meant no reply could be created.
+It was left surviving rather than chased, with TestTheReturnShape saying so in
+place of pretending otherwise, and the recorded prediction was that fixing D35
+would kill it. It does: with the guard added to `PostReply.new` on 2026-08-29,
+`return object` unconditionally fails
+`TestTheReturnShape::test_a_reply_resolves_to_its_parent_post`. Task 6's region is ten of
+ten today rather than nine of ten, with no test written to chase it.
 
-COVERAGE, whole function, Tasks 4-6 together, span 4282-4373:
-**73 of 73 statements, 45 of 46 branch arcs.** The one missing arc is
-`if not in_reply_to:` taking its False path -- the reply side of the
-enrichment, unreachable for the same reason. Every other branch in this
-function is exercised.
+COVERAGE, whole function, Tasks 4-6 together, span 4282-4373: **73 of 73
+statements, 45 of 46 branch arcs** at the time of writing. The one missing arc
+was `if not in_reply_to:` taking its False path -- the reply side of the
+enrichment, unreachable for the same reason. Fixing D35 made it reachable and
+`test_a_replys_published_reaches_posted_at_but_not_any_last_active` closes it:
+**73 of 73 statements, 46 of 46 branch arcs**, complete.
 
 The exhaust arc of the author walk's `for` loop was missing until the
 measurement pointed at it: every list case written before then broke out
@@ -800,51 +804,47 @@ class TestThisCopysInReplyToSplit:
         assert resolve_remote_post_from_search(URI).ap_id == URI
 
 
-class TestTheReplyPathIsBrokenHereToo:
-    """The defect Task 3 found in create_resolved_object, present in this copy
-    for the same reason: the synthesised activity is
-    `{'id': ..., 'object': post_data}` with no 'type' key, PostReply.new reads
-    `request_json['type']` unguarded, create_post_reply swallows the KeyError.
+class TestTheReplyPathWorksHereToo:
+    """D35's other half, fixed in the same one-line guard.
 
-    Task 3 predicted this would hold here, from the source alone. It does --
-    verified, not assumed. So BOTH unfixed resolvers silently fail every remote
-    reply, and the register should say so about the pair rather than about one
-    of them.
+    This resolver synthesises the same typeless activity as
+    `create_resolved_object`, so it failed identically: every remote reply
+    raised KeyError('type') inside `PostReply.new`, was swallowed by
+    `create_post_reply`, and came back as None. Task 3 predicted this from
+    source before it was measured here, and the prediction held.
 
-    Production change that fails these: adding 'type' to either synthesised
-    activity, or guarding PostReply.new's read.
+    Production change that fails these: removing the `'type' in request_json`
+    guard from `PostReply.new`.
     """
 
-    def test_a_well_formed_public_reply_creates_nothing(self, app, peer_author, http_mock):
+    def test_a_well_formed_public_reply_is_created(self, app, peer_author, http_mock):
         community = make_community('news', host=PEER_OBJECT_HOST)
-        make_post(community, peer_author, ap_id=PARENT_URI)
+        post = make_post(community, peer_author, ap_id=PARENT_URI)
         serve_remote_object(http_mock, URI, resolvable(public_note(), community, inReplyTo=PARENT_URI))
 
-        assert resolve_remote_post_from_search(URI) is None
-        assert PostReply.query.count() == 0
+        result = resolve_remote_post_from_search(URI)
 
-    def test_the_swallowed_exception_is_the_missing_type_key(self, app, peer_author, http_mock, monkeypatch):
-        monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
-        community = make_community('news', host=PEER_OBJECT_HOST)
-        make_post(community, peer_author, ap_id=PARENT_URI)
-        serve_remote_object(http_mock, URI, resolvable(public_note(), community, inReplyTo=PARENT_URI))
-
-        resolve_remote_post_from_search(URI)
-
-        assert ActivityPubLog.query.one().exception_message == "'type'"
+        assert PostReply.query.filter_by(ap_id=URI).count() == 1
+        assert result.id == post.id
 
 
 class TestTheEnrichment:
     """`object.posted_at` is set whenever the document carries 'published', and
     `object.last_active` only when the object is not a reply.
 
-    The `not in_reply_to` distinction cannot be exercised today: no reply is
-    ever created, so the reply side of it is unreachable for the same reason
-    Task 3's reply enrichment was. Pinned as far as it goes, which is the post
-    side.
+    The `not in_reply_to` distinction could not be exercised until D35 was
+    fixed on 2026-08-29 -- no reply was ever created, so the reply side was
+    unreachable for the same reason Task 3's reply enrichment was. It is the
+    last arc in this function, and the third test below closes it.
+
+    Note what the guard does NOT do: nothing here writes `last_active` to the
+    reply's PARENT, which is what `create_resolved_object`'s reply branch does.
+    The two resolvers differ on this, and the difference is asserted rather
+    than assumed.
 
     Production change that fails these: deleting the `'published' in post_data`
-    guard, or setting either column to utcnow() instead of the peer's value.
+    guard, setting either column to utcnow() instead of the peer's value, or
+    dropping the `not in_reply_to` guard so a reply writes `last_active` too.
     """
 
     def test_published_lands_on_posted_at_and_last_active(self, app, peer_author, http_mock):
@@ -866,16 +866,43 @@ class TestTheEnrichment:
         assert result.posted_at is not None
         assert result.posted_at != datetime(2024, 1, 1, 0, 0)
 
+    def test_a_replys_published_reaches_posted_at_but_not_any_last_active(self, app, peer_author, http_mock):
+        """The False side of `if not in_reply_to:`, and the only arc this file
+        was missing.
+
+        The guard stops the PEER's timestamp from reaching `last_active`; it
+        does not stop the column moving. `PostReply.new` bumps the parent's
+        `last_active` to local now as part of creating the reply, which is why
+        this asserts the peer's value is absent rather than that the column is
+        unchanged -- the first version of this test asserted the latter and
+        failed by 35ms, which is how the bump was found.
+        """
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        post = make_post(community, peer_author, ap_id=PARENT_URI)
+        document = resolvable(public_note(), community, inReplyTo=PARENT_URI,
+                              published='2024-01-01T00:00:00Z')
+        serve_remote_object(http_mock, URI, document)
+
+        resolve_remote_post_from_search(URI)
+
+        reply = PostReply.query.filter_by(ap_id=URI).one()
+        assert reply.posted_at == datetime(2024, 1, 1, 0, 0)
+        assert post.last_active != datetime(2024, 1, 1, 0, 0)
+        assert reply.post_id == post.id
+
 
 class TestTheReturnShape:
     """`return object if not in_reply_to else object.post` -- a reply is meant
     to resolve to its PARENT post, not to the reply. That contract is genuinely
     surprising and the plan asked for it to be pinned explicitly.
 
-    It cannot be: the else arm is unreachable while the reply path cannot
-    create a reply. What is pinned here is the reachable half plus the fact
-    that the other half is dead today, so that a fix to the reply defect is
-    known to also make this contract testable for the first time.
+    It could not be pinned until D35 was fixed on 2026-08-29: the else arm was
+    unreachable while no reply could be created, and this class pinned the
+    reachable half plus the fact that the other half was dead. Both halves are
+    live now, and the second test is the one the plan actually asked for.
+
+    Production change that fails these: `return object` unconditionally, which
+    is the mutant that survived Task 6's run for want of a reachable else arm.
     """
 
     def test_a_post_resolves_to_itself(self, app, peer_author, http_mock):
@@ -886,6 +913,19 @@ class TestTheReturnShape:
 
         assert isinstance(result, Post)
         assert result.ap_id == URI
+
+    def test_a_reply_resolves_to_its_parent_post(self, app, peer_author, http_mock):
+        """The surprising half: the caller asks about a REPLY uri and is handed
+        the POST. The reply is created -- it is just not what comes back."""
+        community = make_community('news', host=PEER_OBJECT_HOST)
+        post = make_post(community, peer_author, ap_id=PARENT_URI)
+        serve_remote_object(http_mock, URI, resolvable(public_note(), community, inReplyTo=PARENT_URI))
+
+        result = resolve_remote_post_from_search(URI)
+
+        assert isinstance(result, Post)
+        assert result.id == post.id
+        assert PostReply.query.filter_by(ap_id=URI).one().post_id == post.id
 
 
 class Recorder:
