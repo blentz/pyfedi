@@ -149,7 +149,7 @@ import pytest
 from app import db
 from app.activitypub import util as activitypub_util
 from app.activitypub.util import actor_json_to_model
-from app.models import Community, CommunityFlair, File, Language, User, utcnow
+from app.models import Community, CommunityFlair, File, Instance, Language, User, utcnow
 from app.utils import set_setting
 from tests.factories import peer_actor_json, peer_instance
 
@@ -327,6 +327,139 @@ class TestRequiredFieldsMissing:
         peer_instance(PEER)
         document = _group('memes', fields={'publicKey': {'id': 'x'}})
         assert actor_json_to_model(document, '!memes', PEER) is None
+        assert db.session.query(Community).count() == 0
+
+
+class TestASideEffectingArgumentIsNotEvaluatedBeforeTheOnesThatCanFail:
+    """D33. `find_instance_id(server)` COMMITS an Instance row and spawns a
+    `new_instance_profile` fetch when the peer is new. It sat in the middle of
+    the Community() argument list, and keyword arguments evaluate in source
+    order, so an argument AFTER it could raise into the `except KeyError` while
+    that commit had already landed.
+
+    Exactly one argument after it can raise, and it is not peer data:
+    `content_retention=current_app.config['DEFAULT_CONTENT_RETENTION']`. So the
+    two halves of the defect are:
+
+    - a misconfigured deployment was reported as a malformed peer document.
+      The handler logs 'KeyError for {address}@{server} while parsing ' plus
+      the peer's JSON, which names the wrong party and sends the reader to
+      inspect a document that is fine.
+    - a sparse Instance row and a background profile fetch were left behind for
+      a peer no Community was ever created for.
+
+    The Person and Feed branches carry the same `find_instance_id` call in the
+    same position and are NOT affected: every argument after theirs is a
+    guarded read or a literal. That is what makes this a Group-branch defect
+    rather than a shape shared by all three, and it is why the control below
+    asserts the happy path still creates the row -- the fix must move WHEN the
+    row is created, not whether.
+
+    Fixed 2026-08-30. The config read moves above the try, so a deployment
+    error propagates instead of being caught by a handler that blames the peer;
+    and `instance_id` is assigned after the construction succeeds, so no
+    Instance row exists until there is a Community to attach it to.
+
+    Production change that fails these: moving either the config read back
+    inside the try, or the `find_instance_id` call back into the argument list.
+    """
+
+    def test_a_new_peer_gets_its_instance_row_on_the_happy_path(self, app, db_session):
+        """The control. `find_instance_id` must still run and still create the
+        row -- the fix is about ordering, and a fix that simply stopped
+        creating instance rows would pass every other test in this class."""
+        assert db.session.query(Instance).filter_by(domain=PEER).count() == 0
+
+        community = actor_json_to_model(_group('memes'), '!memes', PEER)
+
+        assert community is not None
+        instance = db.session.query(Instance).filter_by(domain=PEER).one()
+        assert community.instance_id == instance.id
+
+    def test_a_missing_config_key_leaves_no_instance_row_behind(self, app, db_session, monkeypatch):
+        """The half that matters operationally. Before the fix this left a
+        sparse Instance row for a peer that had no Community, plus a spawned
+        new_instance_profile fetch against it."""
+        monkeypatch.delitem(app.config, 'DEFAULT_CONTENT_RETENTION')
+
+        with pytest.raises(KeyError):
+            actor_json_to_model(_group('memes'), '!memes', PEER)
+
+        assert db.session.query(Instance).filter_by(domain=PEER).count() == 0
+        assert db.session.query(Community).count() == 0
+
+    def test_a_missing_config_key_is_not_reported_as_a_peer_problem(self, app, db_session, monkeypatch):
+        """The half that matters diagnostically, and it is a deliberate
+        behaviour change: the function used to return None here, which the
+        caller reads as 'that peer sent something malformed'. A deployment
+        whose config lacks a key config.py always sets is broken in a way its
+        operator needs to see, so the KeyError now propagates rather than being
+        logged against the peer's document.
+
+        Asserting the key name is the point -- `pytest.raises(KeyError)` alone
+        would also pass if a peer key went missing, which is the confusion
+        being fixed.
+        """
+        monkeypatch.delitem(app.config, 'DEFAULT_CONTENT_RETENTION')
+
+        with pytest.raises(KeyError) as excinfo:
+            actor_json_to_model(_group('memes'), '!memes', PEER)
+
+        assert excinfo.value.args[0] == 'DEFAULT_CONTENT_RETENTION'
+
+    def test_no_argument_after_the_side_effect_can_orphan_a_row(self, app, db_session):
+        """The structural half, and it needs saying why it exists.
+
+        Hoisting the config read alone fixes today's defect: with it gone from
+        the argument list, nothing left in that list can raise, so where
+        `find_instance_id` sits stops mattering. That was measured, not
+        assumed -- with only the hoist applied, putting `find_instance_id` back
+        mid-list leaves every other test in this class passing. The two halves
+        of the fix are redundant with respect to each other TODAY.
+
+        They are not redundant against the next argument someone adds. This
+        test supplies the missing failure by making the LAST argument raise --
+        `post_url_type=activity_json['postUrlType'] if 'postUrlType' in
+        activity_json else None`, which is unambiguously downstream of the old
+        `find_instance_id` position -- and asserting no Instance row survives.
+
+        The raise comes from the document rather than from a patched helper,
+        deliberately. The first version of this test patched `utcnow` to raise
+        on its second call and did NOT discriminate: `find_instance_id` calls
+        `utcnow` itself when it builds the sparse Instance, so the counter
+        fired inside it, ahead of its own commit, and the mutant survived. A
+        document that raises on one key it is asked about cannot be short-
+        circuited that way.
+
+        Production change that fails this: moving `find_instance_id` back into
+        the argument list, wherever in it.
+        """
+        class RaisingOnLastKey(dict):
+            """Behaves as the peer document everywhere except one key."""
+
+            def __contains__(self, key):
+                if key == 'postUrlType':
+                    raise RuntimeError('the argument after the side effect')
+                return super().__contains__(key)
+
+        document = RaisingOnLastKey(_group('memes'))
+
+        with pytest.raises(RuntimeError, match='the argument after the side effect'):
+            actor_json_to_model(document, '!memes', PEER)
+
+        assert db.session.query(Instance).filter_by(domain=PEER).count() == 0
+        assert db.session.query(Community).count() == 0
+
+    def test_a_malformed_peer_document_still_leaves_no_instance_row(self, app, db_session):
+        """The peer-caused refusals are unaffected and must stay that way: they
+        raise before `find_instance_id` is reached in source order, so they
+        never created a row even before the fix. Pinned so that a later
+        reordering of the argument list cannot quietly move one of them after
+        the side effect.
+        """
+        assert actor_json_to_model(_group('memes', omit=('outbox',)), '!memes', PEER) is None
+
+        assert db.session.query(Instance).filter_by(domain=PEER).count() == 0
         assert db.session.query(Community).count() == 0
 
 
