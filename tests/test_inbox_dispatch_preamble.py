@@ -162,6 +162,53 @@ refusal.
 
 Both probes assert the observed behaviour (`pytest.raises`); neither changes
 `app/`.
+
+TASK 8 -- the seam: three signed requests, through the real /inbox route.
+
+Every test above calls the dispatcher directly. The three tests below are the
+only ones in this file that drive it through `tests.factories.signed_inbox_post`
+-- a real HTTP POST to /inbox, signed with production's own signing code,
+verified by production's own gate (HttpSignature.precheck, actor resolution,
+HttpSignature.verify_request), reaching process_inbox_request only because
+DEBUG=True selects routes.py:758-759's inline branch rather than `.delay(...)`.
+
+What these three tests LICENSE: that a real signed peer reaches the preamble
+(routes.py:839-931), the Announce unwrap (routes.py:899's
+process_announce_of_uri call), and the vote arms (routes.py:1329's
+process_upvote call), for exactly three shapes -- a Like from a known User, an
+Announce of a plain-string object from a known User, and (for the third test)
+the same Like shape again, used to pin that the actor object the gate verified
+the signature against and the actor object the arm receives are the same row.
+
+What these three tests do NOT license: anything about Follow, Accept, Reject,
+Create/Update, the moderation arms (Add/Remove/Block/etc.), or Undo. None of
+these three tests sends any of those activity types; sub-project 4's gate
+tests cover the gate itself, not these arms, and every OTHER test in this
+file (Tasks 1-7) reaches its arm via a direct dispatch() call, not a signed
+request. Slices 5b-5d cover those shapes; until they do, no test in this
+repository has driven them through the gate.
+
+Request-context session arrangement, confirmed rather than assumed (see the
+asymmetry paragraph above): under all three tests below, has_request_context()
+is True for the whole call -- shared_inbox() and process_inbox_request() both
+run inside the one Flask request signed_inbox_post's client.post() opens -- so
+patch_db_session does NOT patch db.session, exactly as reasoned above. This did
+NOT produce an observable divergence in these three tests, for a reason worth
+recording precisely: find_actor_or_create_cached (app/activitypub/util.py:324),
+the only actor-resolution function either the gate or the preamble calls here,
+never reads or writes through the `session` local process_inbox_request obtains
+from get_task_session() -- every branch of it ends in a bare `db.session.get(...)`
+or a query built the same way find_actor_or_create/find_actor_by_url always
+build it. So the gate's call (shared_inbox, routes.py:703) and the dispatcher's
+call (process_inbox_request, routes.py:871) both resolve through `db.session`
+regardless of whether patch_db_session patched anything -- the request-context
+divergence Task 1 identified is real for code that calls `session.query(...)`
+directly (e.g. the CommunityBan and ChatMessage lookups further down in
+process_inbox_request), but find_actor_or_create_cached is not such code, so
+these three tests cannot exhibit it. That is a fact about which lookup these
+three shapes happen to use, not a claim that the divergence never matters --
+Task 9 should not read "no divergence observed here" as "no divergence exists
+everywhere in this dispatcher".
 """
 import pytest
 
@@ -169,7 +216,8 @@ from app import db
 from app.activitypub import routes as activitypub_routes
 from app.activitypub.routes import process_inbox_request
 from app.models import ActivityPubLog, Feed, utcnow
-from tests.factories import inbox_activity, make_community, make_instance, make_site, make_user
+from tests.factories import inbox_activity, make_community, make_instance, make_site, make_user, \
+    signed_inbox_post
 
 
 def dispatch(activity, store_ap_json=True):
@@ -679,3 +727,154 @@ def test_a_dict_actor_without_an_id_key(app, db_session, monkeypatch):
 
     with pytest.raises(KeyError, match='id'):
         dispatch(activity)
+
+
+# --- Task 8: the seam -- three signed requests, through the real /inbox route ---
+#
+# See the module docstring's TASK 8 section for exactly what these three
+# tests license and what they do not. `redis_double` is required here (and
+# nowhere above) because these three are the only tests in this file that
+# reach shared_inbox() itself -- every test above calls process_inbox_request
+# directly, skipping shared_inbox()'s own redis_client.exists/set duplicate
+# check entirely.
+
+
+def test_a_signed_like_reaches_the_upvote_arm_through_the_gate(
+        app, db_session, signing_peer, redis_double, monkeypatch):
+    """The full path: a REAL signed POST to /inbox, through every gate check
+    sub-project 4 covered (HttpSignature.precheck, actor resolution via
+    find_actor_or_create_cached, HttpSignature.verify_request -- none of
+    which is patched here), into process_inbox_request, out at the Like arm
+    (routes.py:1327-1329).
+
+    DEBUG=True makes shared_inbox call process_inbox_request INLINE
+    (routes.py:758-759) rather than queueing it via `.delay(...)` -- the only
+    way a single HTTP request can produce an assertion about an arm within
+    the same test -- and is separately required for signed_inbox_post's own
+    signed URI to clear `is_invalid_get_request_uri`'s '.local'-host check
+    (see tests/test_inbox_gate_refusals.py's test_a_tampered_body_fails_precheck
+    docstring for that second reason).
+
+    process_upvote is monkeypatched so this test proves only that the seam
+    reaches it with the right `user` -- not process_upvote's own behaviour,
+    which is Task 4's contract and already covered by tests/test_inbox_dispatch_votes.py.
+
+    Request-context note (see module docstring TASK 8 section): this drives
+    the dispatcher through a real Flask request, so has_request_context() is
+    True and patch_db_session does NOT patch db.session here, unlike every
+    dispatch() call above in this file. That distinction turns out not to
+    matter for THIS test: find_actor_or_create_cached (the only actor lookup
+    either the gate or the preamble performs for this shape) always resolves
+    through db.session, never through process_inbox_request's independent
+    get_task_session() session, so the seeded signing_peer row is found the
+    same way regardless of which session arrangement is in effect.
+    """
+    monkeypatch.setitem(app.config, 'DEBUG', True)
+
+    calls = []
+    monkeypatch.setattr(activitypub_routes, 'process_upvote',
+                         lambda *args, **kwargs: calls.append(args))
+
+    activity = inbox_activity(signing_peer, activity_type='Like')
+
+    with app.test_client() as client:
+        response = signed_inbox_post(client, activity, signing_peer)
+
+    assert response.status_code == 200
+    assert len(calls) == 1
+    user_arg, store_ap_json_arg, request_json_arg, announced_arg = calls[0]
+    assert user_arg is not None and user_arg.id == signing_peer.id
+    assert announced_arg is False
+
+
+def test_a_signed_announce_reaches_the_unwrap_through_the_gate(
+        app, db_session, signing_peer, redis_double, monkeypatch):
+    """The same path as above, for the Announce unwrap -- the preamble's
+    other outcome that leads somewhere interesting (routes.py:895-899).
+
+    `signing_peer` is a plain User, and inbox_activity()'s default object is
+    a plain string, so this drives the identical miss/miss/hit lookup
+    sequence as test_the_dispatcher_finds_a_seeded_actor_through_its_own_session
+    (Task 1) -- community_only and feed_only both miss, the unnarrowed lookup
+    at routes.py:866 hits -- except reached through a real signed POST rather
+    than a direct dispatch() call, and therefore through find_actor_or_create_cached
+    TWICE for the same actor_id: once by the gate (routes.py:703, to resolve
+    the actor whose public_key verifies the signature) and once more by the
+    preamble (routes.py:866). process_announce_of_uri is monkeypatched, for
+    the same reason given in Task 1's sibling test: it logs its own outcome
+    on every path, so this test would have no ActivityPubLog row to assert on
+    otherwise, and its own behaviour is out of this task's scope.
+    """
+    monkeypatch.setitem(app.config, 'DEBUG', True)
+
+    calls = []
+    monkeypatch.setattr(activitypub_routes, 'process_announce_of_uri',
+                         lambda *args, **kwargs: calls.append(args))
+
+    activity = inbox_activity(signing_peer, activity_type='Announce')
+
+    with app.test_client() as client:
+        response = signed_inbox_post(client, activity, signing_peer)
+
+    assert response.status_code == 200
+    assert len(calls) == 1
+    assert calls[0][1] is None  # `community`: None either way once a non-community actor resolves
+
+
+def test_the_actor_the_gate_verified_is_the_actor_the_arm_receives(
+        app, db_session, signing_peer, redis_double, monkeypatch):
+    """The seam's real content. The gate verifies the HTTP signature against
+    one actor object -- find_actor_or_create_cached(request_json['actor'])
+    at routes.py:703, whose `.public_key` HttpSignature.verify_request checks
+    the signature against -- and the dispatcher re-resolves
+    request_json['actor'] a SECOND time, independently, at routes.py:871.
+    Every arm downstream (process_upvote here) trusts whatever that second
+    lookup returns as `user`, on the unstated assumption that it names the
+    same row the gate already verified. This test pins that assumption:
+    find_actor_or_create_cached is wrapped (not replaced -- the real
+    resolution still has to run for the request to succeed) so this test can
+    record what the GATE's call returns, and process_upvote is monkeypatched
+    so this test can record what the ARM receives, and the two are compared
+    by id.
+
+    Comparison is by `.id`, matching the standard this file establishes
+    above (Task 2's community test) for comparing ORM rows across sessions --
+    even though, per the module docstring TASK 8 section, both calls here
+    actually resolve through the SAME db.session object (the request-scoped
+    one), so in this particular case the two objects may well be identical
+    (`is`) too. That would be an artifact of find_actor_or_create_cached's
+    implementation (a bare `db.session.get(...)`, which returns the same
+    Python object for the same primary key within one session's identity
+    map) and of NullCache making the memoize wrapper recompute every call
+    (see tests/conftest.py's TestConfig.CACHE_TYPE) -- not a contract this
+    test relies on, so `.id` equality is what is asserted.
+    """
+    monkeypatch.setitem(app.config, 'DEBUG', True)
+
+    gate_actor = {}
+    real_find_actor_or_create_cached = activitypub_routes.find_actor_or_create_cached
+
+    def _recording_find_actor_or_create_cached(*args, **kwargs):
+        result = real_find_actor_or_create_cached(*args, **kwargs)
+        gate_actor.setdefault('actor', result)
+        return result
+
+    monkeypatch.setattr(activitypub_routes, 'find_actor_or_create_cached',
+                         _recording_find_actor_or_create_cached)
+
+    arm_calls = []
+    monkeypatch.setattr(activitypub_routes, 'process_upvote',
+                         lambda *args, **kwargs: arm_calls.append(args))
+
+    activity = inbox_activity(signing_peer, activity_type='Like')
+
+    with app.test_client() as client:
+        response = signed_inbox_post(client, activity, signing_peer)
+
+    assert response.status_code == 200
+    assert len(arm_calls) == 1
+    arm_user = arm_calls[0][0]
+
+    assert gate_actor['actor'] is not None
+    assert arm_user is not None
+    assert arm_user.id == gate_actor['actor'].id
