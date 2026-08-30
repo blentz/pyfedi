@@ -150,13 +150,19 @@ def make_community(name: str = 'microblogs', host: str = 'test.piefed.local') ->
     return community
 
 
-def make_feed(instance, name: str = 'peerfeed', public: bool = True,
+def make_feed(instance, name: str = 'peerfeed', public: bool = False,
               local: bool = False, with_keys: bool = False) -> Feed:
     """A Feed the preamble's feed_only lookup can resolve.
 
     `ap_profile_id` must contain '/f/': find_remote_actor (app/activitypub/
     actor.py:86-131) branches on that literal substring before falling
     through to its unconditional queries.
+
+    public defaults to False to match Feed.public's own column default
+    (app/models.py:4062, `db.Column(db.Boolean, default=False, ...)`). None
+    of the three 5a literals this factory replaced set `public=`, so they all
+    read back False; a factory default of True would have silently changed
+    what those rows are.
     """
     host = 'test.piefed.local' if local else instance.domain
     feed = Feed(name=name, title=name, instance_id=instance.id,
