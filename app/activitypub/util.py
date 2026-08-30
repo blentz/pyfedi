@@ -594,10 +594,15 @@ def host_of(url_string: str) -> str:
     - verify_object_from_source returns early when the object URI has no
       host, which leaves that operand provably non-empty at both later
       comparisons, so an empty other side can only compare unequal.
-    - actor_json_to_model's server gate relies on `server` being derived
-      locally and non-empty at every call site. Were that ever untrue, an
-      unparseable id would compare equal to an unparseable server and the
-      gate would accept.
+    - actor_json_to_model's server gate discharges it directly, since
+      2026-08-29: it refuses an id with no host rather than comparing it.
+      It used to rely instead on `server` being derived locally and
+      non-empty at every call site, and that reliance was misplaced --
+      create_actor_from_remote takes `server` from extract_domain_and_actor,
+      which returns ('', '') on exactly the ValueError this function
+      swallows, so an unparseable id compared equal to an unparseable server
+      and the gate accepted. Registered as D32 and fixed there; the caller
+      obligation is no longer load-bearing for that gate.
     - find_cross_host_actors, in app/cli.py, discharges it by DIRECTION
       rather than by a check: only one of its two operands comes from here,
       and the other is the row's own ap_domain, lowercased. An ap_profile_id
@@ -1164,7 +1169,31 @@ def actor_json_to_model(activity_json, address, server):
     # the same class of mistake as the substring test this replaces. The '//'
     # prefix is what makes urlparse read `server` as an authority -- without it
     # the whole string parses as a path and the host comes back ''.
-    if host_of(activity_json['id']) != host_of(f'//{server}'):
+    #
+    # `not id_host` refuses an id with no host rather than comparing it.
+    # host_of degrades a string urlparse rejects to '', and '' == '' is True,
+    # so before 2026-08-29 an id urlparse refused compared EQUAL to a server
+    # urlparse also refused and the gate accepted. 'Neither of these is a host'
+    # is not a reason to treat them as the same host.
+    #
+    # One operand, not two: `not server_host` was in the first version of this
+    # fix and was removed because it does no work. If exactly one side is
+    # empty, the inequality already refuses; both empty is the only case
+    # needing a guard, and either guard alone catches it. Measured, not
+    # reasoned -- with `not id_host` dropped the D32 test fails, and the
+    # two-operand form left both single-operand mutants surviving.
+    # Registered as D32, which filed the reachability as
+    # unproven because it needed httpx to fetch a URL urlparse rejects; such a
+    # URL exists -- a '[' or an NFKC-confusable in the USERINFO, which urlparse
+    # rejects as part of the netloc while httpx strips userinfo and keeps the
+    # real host, so httpx fetches 'banned.example' from
+    # 'https://[@banned.example/u/alice' while every urlparse-derived value
+    # here is ''. create_actor_from_remote is the caller that can deliver an
+    # empty `server`: it takes it from extract_domain_and_actor, which returns
+    # ('', '') on that ValueError, then fetches with a different variable.
+    id_host = host_of(activity_json['id'])
+    server_host = host_of(f'//{server}')
+    if not id_host or id_host != server_host:
         return None
     if activity_json['type'] == 'Person' or activity_json['type'] == 'Service':
         user = db.session.query(User).filter(User.ap_profile_id == activity_json['id'].lower()).first()
