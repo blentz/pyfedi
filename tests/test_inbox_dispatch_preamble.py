@@ -217,9 +217,9 @@ import pytest
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.activitypub.routes import process_inbox_request
-from app.models import ActivityPubLog, Feed, utcnow
-from tests.factories import inbox_activity, make_community, make_instance, make_site, make_user, \
-    signed_inbox_post
+from app.models import ActivityPubLog, utcnow
+from tests.factories import inbox_activity, make_community, make_feed, make_instance, make_site, \
+    make_user, signed_inbox_post
 
 
 def dispatch(activity, store_ap_json=True):
@@ -430,20 +430,12 @@ def test_an_announce_from_a_feed_falls_through_to_the_feed_lookup(
     itself lives in tests/test_inbox_dispatch_announce.py, whose dict-shaped
     inner object makes `if not feed:` at routes.py:914 observable.
 
-    There is no make_feed() factory (grep tests/factories.py), so the Feed
-    row is built directly, following the pattern tests/test_ap_actor_json_feed.py's
-    _child_feed helper uses. ap_fetched_at is stamped for the same
+    make_feed (tests/factories.py) stamps ap_fetched_at for the same
     schedule_actor_refresh reason as the community test above.
     """
     make_site()
     instance = make_instance('peer.example')
-    feed = Feed(name='peerfeed', title='peerfeed', instance_id=instance.id,
-               ap_id='peerfeed@peer.example', ap_domain='peer.example',
-               ap_profile_id='https://peer.example/f/peerfeed',
-               ap_public_url='https://peer.example/f/peerfeed',
-               ap_fetched_at=utcnow())
-    db.session.add(feed)
-    db.session.commit()
+    feed = make_feed(instance)
 
     calls = []
     monkeypatch.setattr(activitypub_routes, 'process_announce_of_uri',
@@ -699,13 +691,7 @@ def test_an_activity_from_an_actor_that_is_neither_is_refused(app, db_session, m
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     make_site()
     instance = make_instance('peer.example')
-    feed = Feed(name='peerfeed', title='peerfeed', instance_id=instance.id,
-               ap_id='peerfeed@peer.example', ap_domain='peer.example',
-               ap_profile_id='https://peer.example/f/peerfeed',
-               ap_public_url='https://peer.example/f/peerfeed',
-               ap_fetched_at=utcnow())
-    db.session.add(feed)
-    db.session.commit()
+    feed = make_feed(instance)
 
     activity = inbox_activity(feed, activity_type='Like')
 
