@@ -35,7 +35,9 @@ from psycopg2 import IntegrityError
 
 from app import db
 from app.activitypub import routes as activitypub_routes
-from app.models import ActivityPubLog, CommunityMember, FeedMember, UserFollower, utcnow
+from app.constants import APLOG_ACCEPT
+from app.models import ActivityPubLog, CommunityJoinRequest, CommunityMember, FeedJoinRequest, \
+    FeedMember, UserFollower, utcnow
 from tests.factories import inbox_activity, make_community, make_community_join_request, \
     make_community_member, make_feed, make_feed_join_request, make_follow, make_instance, \
     make_user, make_user_follow_request
@@ -693,3 +695,236 @@ def test_a_reject_for_a_missing_follow_request_is_handled(app, db_session, monke
     dispatch(activity)
 
     assert ActivityPubLog.query.count() == 0
+
+
+# --- Task 8: the rest of the Reject arm, routes.py:1150-1191 ---
+
+def test_a_reject_with_an_unresolvable_actor_is_refused(app, db_session, monkeypatch):
+    """routes.py:1152-1155. Mirrors the Accept arm's :1091-1093 (see
+    test_a_follow_object_with_an_unresolvable_actor_is_refused above): a
+    Follow object whose actor cannot be resolved hits `if not
+    requestor_user:` and logs FAILURE, this time carrying Reject's own
+    message text -- 'Could not find recipient of Reject', not '...Accept'.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    target = _stamp_remote_user(instance, 'target')
+
+    activity = inbox_activity(target, activity_type='Reject',
+                              object=_follow_object('not-a-resolvable-actor'))
+
+    dispatch(activity)
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Could not find recipient of Reject'
+
+
+# --- Step 2: the community branch, :1157-1168 ---
+#
+# Two tests, each exercising one of the two `if` guards in both directions
+# combined: the first has the join request present / membership absent, the
+# second has the reverse (join request absent / membership present), so
+# together both guards are hit on their True side and their False side.
+
+def test_the_reject_community_branch_deletes_a_join_request_with_no_membership(
+        app, db_session, monkeypatch):
+    """routes.py:1158-1163, join request PRESENT / membership ABSENT. The
+    `if join_request:` guard fires and deletes the row; the `if
+    existing_membership:` guard is exercised on its absent side (nothing to
+    delete, no crash). SUCCESS still logs.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    community, instance = _seed_agupe_community()
+    follower_instance = make_instance('follower.example')
+    joiner = _stamp_remote_user(follower_instance, 'joiner')
+    make_community_join_request(joiner, community)
+
+    activity = inbox_activity(community, activity_type='Reject',
+                              object=_follow_object(joiner.ap_profile_id))
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    assert db.session.query(CommunityJoinRequest).filter_by(
+        user_id=joiner.id, community_id=community.id).first() is None
+    assert ActivityPubLog.query.one().result == 'success'
+
+
+def test_the_reject_community_branch_deletes_a_membership_with_no_join_request(
+        app, db_session, monkeypatch):
+    """routes.py:1158-1163, join request ABSENT / membership PRESENT -- the
+    reverse combination from the test above. The `if join_request:` guard is
+    exercised on its absent side (no row to delete, no crash), and the `if
+    existing_membership:` guard fires, deleting the CommunityMember row.
+    SUCCESS still logs.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    community, instance = _seed_agupe_community()
+    follower_instance = make_instance('follower.example')
+    joiner = _stamp_remote_user(follower_instance, 'joiner')
+    make_community_member(joiner, community)
+
+    activity = inbox_activity(community, activity_type='Reject',
+                              object=_follow_object(joiner.ap_profile_id))
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    assert db.session.query(CommunityMember).filter_by(
+        user_id=joiner.id, community_id=community.id).first() is None
+    assert ActivityPubLog.query.one().result == 'success'
+
+
+# --- Step 3: the feed branch, :1169-1178 -- same shape as Step 2 ---
+
+def test_the_reject_feed_branch_deletes_a_join_request_with_no_membership(
+        app, db_session, monkeypatch):
+    """routes.py:1170-1174, join request PRESENT / membership ABSENT. Mirrors
+    the community branch's first combination above, over FeedJoinRequest and
+    FeedMember.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    feed, instance = _seed_remote_feed()
+    joiner = _stamp_remote_user(instance, 'joiner')
+    make_feed_join_request(joiner, feed)
+
+    activity = inbox_activity(feed, activity_type='Reject',
+                              object=_follow_object(joiner.ap_profile_id))
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    assert db.session.query(FeedJoinRequest).filter_by(
+        user_id=joiner.id, feed_id=feed.id).first() is None
+    assert ActivityPubLog.query.one().result == 'success'
+
+
+def test_the_reject_feed_branch_deletes_a_membership_with_no_join_request(
+        app, db_session, monkeypatch):
+    """routes.py:1170-1174, join request ABSENT / membership PRESENT -- the
+    reverse combination. No make_feed_member() factory exists (see the
+    Accept-arm feed tests above, which build FeedMember directly the same
+    way).
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    feed, instance = _seed_remote_feed()
+    joiner = _stamp_remote_user(instance, 'joiner')
+    existing_member = FeedMember(user_id=joiner.id, feed_id=feed.id)
+    db.session.add(existing_member)
+    db.session.commit()
+
+    activity = inbox_activity(feed, activity_type='Reject',
+                              object=_follow_object(joiner.ap_profile_id))
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    assert db.session.query(FeedMember).filter_by(
+        user_id=joiner.id, feed_id=feed.id).first() is None
+    assert ActivityPubLog.query.one().result == 'success'
+
+
+# --- Step 4: the user branch, :1179-1189 -- both sides of Task 7's guard ---
+#
+# The absent-join-request case is Task 7's own regression test above
+# (test_a_reject_for_a_missing_follow_request_is_handled); these two cover
+# the PRESENT case's two sub-outcomes.
+
+def test_the_reject_user_branch_flips_an_existing_follow_and_decrements(
+        app, db_session, monkeypatch):
+    """routes.py:1179-1189, join request PRESENT / existing_follow PRESENT.
+    Unlike Accept's equivalent lookup (:1136), this existing_follow query
+    does not filter on is_inward at all (the asymmetry noted in the Task 6
+    outcome-table comment above) -- make_follow's default is_inward=False
+    keeps this test inside the shape that filter would also match, so this
+    test does not itself exercise that asymmetry.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    target = _stamp_remote_user(instance, 'target')
+    joiner = _stamp_remote_user(instance, 'joiner')
+    make_user_follow_request(joiner, target)
+    make_follow(joiner, target, is_accepted=True, is_inward=False)
+
+    activity = inbox_activity(target, activity_type='Reject',
+                              object=_follow_object(joiner.ap_profile_id))
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    follow = db.session.query(UserFollower).filter_by(
+        local_user_id=joiner.id, remote_user_id=target.id).first()
+    assert follow.is_accepted is False
+    assert joiner.num_following == 0
+    assert ActivityPubLog.query.one().result == 'success'
+
+
+def test_a_reject_decrements_num_following_even_with_no_follower_row(app, db_session, monkeypatch):
+    """routes.py:1187 runs whenever a join request exists, regardless of
+    whether existing_follow was found, so num_following can drift below the
+    number of rows it counts -- and nothing floors it at zero. Task 7's fix
+    deliberately did not change this. Registered by Task 9, not fixed."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    target = _stamp_remote_user(instance, 'target')
+    joiner = _stamp_remote_user(instance, 'joiner')
+    make_user_follow_request(joiner, target)
+
+    activity = inbox_activity(target, activity_type='Reject',
+                              object=_follow_object(joiner.ap_profile_id))
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    assert db.session.query(UserFollower).filter_by(
+        local_user_id=joiner.id, remote_user_id=target.id).first() is None
+    assert joiner.num_following == -1
+    assert ActivityPubLog.query.one().result == 'success'
+
+
+# --- Step 5: the silently-ignored object types, :1151 ---
+
+def test_a_reject_of_a_non_follow_object_is_silently_ignored(app, db_session, monkeypatch):
+    """routes.py:1151 handles only `object['type'] == 'Follow'`; any other
+    object type falls straight out of the arm without logging anything.
+    Logging is enabled here specifically so a zero count proves nothing ran
+    -- with logging off the count would be zero for the wrong reason and this
+    test would be vacuous.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    target = _stamp_remote_user(instance, 'target')
+    joiner = _stamp_remote_user(instance, 'joiner')
+
+    activity = inbox_activity(target, activity_type='Reject',
+                              object={'type': 'Undo', 'actor': joiner.ap_profile_id})
+
+    dispatch(activity)
+
+    assert ActivityPubLog.query.count() == 0
+
+
+# --- Step 6: the APLOG_ACCEPT mislabelling, :1154, :1168, :1178, :1189 ---
+
+def test_a_reject_is_logged_as_an_accept(app, db_session, monkeypatch):
+    """routes.py:1154, :1168, :1178, :1189 all pass APLOG_ACCEPT, so every
+    Reject outcome is recorded in ActivityPubLog as an Accept. Assert the
+    stored activity_type is what APLOG_ACCEPT produces -- this test documents
+    the defect rather than the intent, and Task 9 registers it. Same class as
+    D63.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    community, instance = _seed_agupe_community()
+    follower_instance = make_instance('follower.example')
+    joiner = _stamp_remote_user(follower_instance, 'joiner')
+    make_community_join_request(joiner, community)
+
+    activity = inbox_activity(community, activity_type='Reject',
+                              object=_follow_object(joiner.ap_profile_id))
+
+    dispatch(activity)
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+    assert log.activity_type == APLOG_ACCEPT[1]
