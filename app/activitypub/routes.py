@@ -1082,7 +1082,7 @@ def process_inbox_request(request_json, store_ap_json):
                             session.rollback()
                             join_request = session.query(CommunityJoinRequest).get(join_request_parts[-1])
                         if join_request:
-                            user = session.query(User).get(join_request.user_id)
+                            requestor_user = session.query(User).get(join_request.user_id)
                     elif core_activity['object']['type'] == 'Follow':
                         requestor_user = find_actor_or_create_cached(core_activity['object']['actor'])
                         if requestor_user and requestor_user.banned:
