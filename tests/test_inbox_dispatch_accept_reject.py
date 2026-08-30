@@ -29,6 +29,8 @@ set and `feed`/`user` are None, meaning the fixed path in every test below
 reaches `if community:` at :1095, exactly as the task brief assumed. The
 probe file itself was deleted after use; it changed nothing under `app/`.
 """
+from datetime import timedelta
+
 from psycopg2 import IntegrityError
 
 from app import db
@@ -332,12 +334,24 @@ def test_the_community_branch_increments_subscriptions_for_a_non_bot_joiner(
     same :1087 resolution the rest of Step 2/5 rely on. joined_via_feed=True
     on the join request pins that :1103-1106 actually copies the flag onto
     the new CommunityMember rather than leaving its own default.
+
+    community.last_active is seeded to a fixed point well in the past
+    before dispatch, rather than merely asserted non-None afterwards --
+    Community.last_active is declared `default=utcnow` (app/models.py:561)
+    and make_community() never overrides it, so a plain `is not None` check
+    would already be true the moment the row is created, before :1110 ever
+    runs, and would stay true even if :1110 were deleted. Asserting the
+    post-dispatch value is strictly greater than the seeded stale value is
+    sensitive to :1110 actually executing.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     community, instance = _seed_agupe_community()
     follower_instance = make_instance('follower.example')
     joiner = _stamp_remote_user(follower_instance, 'joiner')
     make_community_join_request(joiner, community, joined_via_feed=True)
+    stale_last_active = utcnow() - timedelta(days=1)
+    community.last_active = stale_last_active
+    db.session.commit()
 
     activity = inbox_activity(community, activity_type='Accept',
                               object=_follow_object(joiner.ap_profile_id))
@@ -350,7 +364,7 @@ def test_the_community_branch_increments_subscriptions_for_a_non_bot_joiner(
     assert member is not None
     assert member.joined_via_feed is True
     assert community.subscriptions_count == 1
-    assert community.last_active is not None
+    assert community.last_active > stale_last_active
     log = ActivityPubLog.query.one()
     assert log.result == 'success'
     assert log.exception_message is None
