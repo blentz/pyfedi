@@ -163,6 +163,13 @@ def make_feed(instance, name: str = 'peerfeed', public: bool = False,
     of the three 5a literals this factory replaced set `public=`, so they all
     read back False; a factory default of True would have silently changed
     what those rows are.
+
+    `local=True` still sets `ap_id` (unlike `make_user(local=True)` and
+    `make_community`, both of which leave `ap_id` `None`), so a local feed is
+    local only via the second disjunct of `Feed.is_local()`
+    (`app/models.py:4201-4202`, `self.ap_id is None or
+    self.profile_id().startswith(current_app.config['SERVER_URL'])`), never
+    the first.
     """
     host = 'test.piefed.local' if local else instance.domain
     feed = Feed(name=name, title=name, instance_id=instance.id,

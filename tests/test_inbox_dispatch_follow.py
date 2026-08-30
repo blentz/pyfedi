@@ -597,7 +597,7 @@ def test_a_follow_blocked_by_a_banned_instance_is_refused_without_reply(app, db_
     `if instance_banned(server): return False` -- the SAME instance_banned()
     check, on the SAME domain. Seeding a bare BannedInstances row for
     remote_user's own instance therefore makes the preamble refuse the actor
-    OUTRIGHT ('Actor was not a user or a community', routes.py:889) before
+    OUTRIGHT ('Actor was not a user or a community', routes.py:891) before
     :1025 is ever evaluated -- confirmed by running exactly that seed and
     watching the log message change. Under the deny-list default, this
     alternative is unreachable by the very actor it is meant to check.
@@ -786,7 +786,7 @@ def test_a_follow_from_an_existing_inward_follower_writes_nothing_and_stays_sile
     assert sends == []
 
 
-def test_the_follower_row_and_its_notification_are_written_through_different_sessions(
+def test_the_follower_row_and_its_notification_both_land_under_a_direct_dispatch(
         app, db_session, monkeypatch):
     """routes.py:1036 adds the UserFollower through the task-local `session`;
     routes.py:1067-1069 adds the Notification through `db.session` and commits
