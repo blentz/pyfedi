@@ -1590,10 +1590,10 @@ this sub-project (`session.query(CommunityBan)` at routes.py:950,
 `session.query(ChatMessage)` at routes.py:1319, 1739 and 2558).
 
 **4. The fakeredis lock limitation.** `redis_double`'s `fakeredis.FakeRedis`
-instance cannot serve a redis-py lock in this environment. `fakeredis==2.37.1`
-is pinned in `requirements-test.txt` with no `lupa` installed, so it
-implements **no Lua scripting** — not `EVAL`, not `EVALSHA`. Verified
-directly against the pinned version:
+instance cannot serve a redis-py lock in this environment. fakeredis
+(requirements-test.txt, unpinned; observed as 2.37.1 in this environment),
+with no `lupa` installed, implements **no Lua scripting** — not `EVAL`, not
+`EVALSHA`. Verified directly against the observed version:
 
 ```python
 >>> fakeredis.FakeRedis(decode_responses=True).eval("return 1", 0)

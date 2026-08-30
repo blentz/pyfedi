@@ -28,7 +28,7 @@ import pytest
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.activitypub import util as activitypub_util
-from app.models import ActivityPubLog, Feed, utcnow
+from app.models import ActivityPubLog, Community, Feed, utcnow
 from tests.factories import inbox_activity, make_community, make_instance, make_site, make_user
 from tests.test_inbox_dispatch_preamble import dispatch
 
@@ -196,7 +196,7 @@ def test_an_announce_of_an_ordered_collection_processes_every_item(
 
 
 def test_an_ordered_collection_without_ordered_items(app, db_session, monkeypatch):
-    """routes.py:911 -- `request_json['object']['orderedItems']` is reached
+    """routes.py:909 -- `request_json['object']['orderedItems']` is reached
     on `type == 'OrderedCollection'` alone, with no membership check on
     'orderedItems' itself first.
 
@@ -331,7 +331,64 @@ def test_an_announce_whose_inner_actor_is_unfound_is_refused(
         'Blocked or unfound user for Announce object actor ' + ghost_url
 
 
-def test_an_announce_from_a_feed_skips_the_inner_actor_walk_and_clears_user(
+def test_an_announce_whose_inner_actor_is_a_community_is_refused(
+        app, db_session, monkeypatch):
+    """routes.py:916's compound guard has an untested, non-equivalent half.
+
+    `if user and isinstance(user, User):` -- unlike the preamble's
+    `actor and isinstance(actor, User)` / `actor and isinstance(actor,
+    Community)` at routes.py:872/874 (D61: genuine equivalent mutants,
+    because those two lookups are NARROWED with community_only=True /
+    feed_only=True before this point), the lookup that feeds line 916
+    (`user = find_actor_or_create_cached(request_json['object']['actor'])`,
+    routes.py:915) passes no such kwargs -- it is UNNARROWED, so an inner
+    Announce object whose 'actor' resolves to a Community (or a Feed) is a
+    live, reachable input to this guard, not dead code.
+
+    Seeding a second, non-banned Community as the inner actor exercises
+    exactly that: `find_actor_or_create_cached` returns the Community, the
+    `isinstance(user, User)` half of the guard is False, so control falls to
+    the `else` at 920-922 and the Announce is refused as 'Blocked or unfound
+    user for Announce object actor ...' -- even though `user` (bound to the
+    Community) was, in fact, found.
+
+    MUTATION: routes.py:916 was temporarily changed from
+    `if user and isinstance(user, User):` to `if user:`, with the rest of
+    the guard's body (917-922) left untouched, and the full file's tests
+    (including this one) re-run. Under the mutant, the truthy Community
+    takes the True branch instead of the False one: `user.banned` is False
+    (Community also has a `banned` column, so no AttributeError masks the
+    mutant on that line), so no refusal is logged at 920-922 and execution
+    falls through to `announced = True; core_activity = request_json['object']`
+    -- this test's inner object is `{'actor': ...}` with no `'type'` key
+    (there is no refusal left to stop it), so the dispatcher's next check,
+    `if core_activity['type'] == 'Follow':` (routes.py:935), raises
+    `KeyError: 'type'`, uncaught, and this test fails on that exception
+    rather than on its own assertion (OBSERVED: `1 failed, 9 passed`,
+    `KeyError: 'type'` at routes.py:935 -- not the `NoResultFound` on
+    `ActivityPubLog.query.one()` a graceful zero-rows outcome would have
+    produced). The mutant is still killed either way: this test fails under
+    it and passes against the real guard. Restored immediately after,
+    verified via `git diff --stat app/` producing no output.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community = _seed_announcing_community()
+    inner_community = make_community(name='innerclub', host='peer.example')
+    inner_community.ap_fetched_at = utcnow()
+    db.session.commit()
+
+    assert isinstance(inner_community, Community)
+
+    activity = inbox_activity(community, activity_type='Announce',
+                              object={'actor': inner_community.ap_profile_id})
+
+    dispatch(activity)
+
+    assert ActivityPubLog.query.one().exception_message == \
+        'Blocked or unfound user for Announce object actor ' + inner_community.ap_profile_id
+
+
+def test_an_announce_from_a_feed_skips_the_inner_actor_walk(
         app, db_session, monkeypatch):
     """routes.py:914 and :923-924 -- `if not feed:` guards the whole walk
     (915-922), and the feed path sets `user = None` instead of running it.
