@@ -1637,6 +1637,38 @@ claiming a guard is load-bearing. Task 2 recorded a case, earlier in this
 campaign, where a guard that appeared to "kill" a mutant this way turned out
 to have no semantic effect at all once the fetch was allowed to succeed.
 
+**6. The new fixtures (sub-project 5b).** `make_feed(instance, name='peerfeed',
+public=False, local=False, with_keys=False)` in `tests/factories.py` builds a
+`Feed` the preamble's feed-only lookup can resolve. `public` defaults to
+**False** to match `Feed.public`'s own column default
+(`app/models.py:4062`, `db.Column(db.Boolean, default=False, ...)`), so a
+test that needs a followable feed must pass `public=True` explicitly. Three
+more factories back the membership arms:
+`make_community_join_request(user, community, joined_via_feed=False)`,
+`make_feed_join_request(user, feed)`, and
+`make_user_follow_request(requestor, target)` — the last maps
+requestor -> `user_id` and target -> `follow_id`, which is easy to get
+backwards.
+
+**7. How the membership arms select their target branch.** In the `Follow`
+arm the target comes straight from `core_activity['object']`
+(`routes.py:938`). In the `Accept` and `Reject` arms there is no such object
+lookup — the branch is chosen entirely by what the **outer actor** resolves
+to in the preamble, which tries community, then feed, then user in that
+order (`routes.py:861-870`). A test therefore picks its Accept/Reject branch
+by choosing the activity's `actor`, not its object — the opposite of Follow.
+This is not obvious from reading either arm alone and cost time to
+establish.
+
+**8. Doubling the outbound sends.** All five `send_post_request` calls
+touched by these arms are in the `Follow` arm (`routes.py:962, 980, 999,
+1014, 1045`); `Accept` and `Reject` make none. `routes.py:12` imports
+`send_post_request` by name, so a double must patch
+`app.activitypub.routes.send_post_request` — patching
+`app.activitypub.signature` leaves routes' own copy pointing at the
+original. `record_sends` in `tests/test_inbox_dispatch_follow.py` is the
+working example.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
