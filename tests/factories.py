@@ -20,10 +20,11 @@ from flask_login import login_user
 from app import db
 from app.activitypub.signature import RsaKeys
 from app.models import (Community, CommunityBan, CommunityBlock, CommunityFlair, CommunityFlairBlock,
-                        CommunityMember, Domain, DomainBlock, Instance, InstanceBan, InstanceBlock,
-                        NotificationSubscription, Post, PostReply, PostReplyBookmark,
-                        PostReplyVote, PostVote, Role, RolePermission, Site, User, UserBlock, UserFollower,
-                        hidden_posts, read_posts, user_role, utcnow)
+                        CommunityJoinRequest, CommunityMember, Domain, DomainBlock, Feed, FeedJoinRequest,
+                        Instance, InstanceBan, InstanceBlock, NotificationSubscription, Post, PostReply,
+                        PostReplyBookmark, PostReplyVote, PostVote, Role, RolePermission, Site, User,
+                        UserBlock, UserFollower, UserFollowRequest, hidden_posts, read_posts, user_role,
+                        utcnow)
 from app.utils import get_deduped_post_ids
 
 
@@ -147,6 +148,57 @@ def make_community(name: str = 'microblogs', host: str = 'test.piefed.local') ->
     db.session.add(community)
     db.session.commit()
     return community
+
+
+def make_feed(instance, name: str = 'peerfeed', public: bool = True,
+              local: bool = False, with_keys: bool = False) -> Feed:
+    """A Feed the preamble's feed_only lookup can resolve.
+
+    `ap_profile_id` must contain '/f/': find_remote_actor (app/activitypub/
+    actor.py:86-131) branches on that literal substring before falling
+    through to its unconditional queries.
+    """
+    host = 'test.piefed.local' if local else instance.domain
+    feed = Feed(name=name, title=name, instance_id=instance.id,
+                public=public,
+                ap_id=f'{name}@{host}', ap_domain=host,
+                ap_profile_id=f'https://{host}/f/{name}',
+                ap_public_url=f'https://{host}/f/{name}',
+                ap_fetched_at=utcnow())
+    if with_keys:
+        private_key, public_key = RsaKeys.generate_keypair()
+        feed.private_key = private_key
+        feed.public_key = public_key
+    db.session.add(feed)
+    db.session.commit()
+    return feed
+
+
+def make_community_join_request(user: User, community: Community,
+                                joined_via_feed: bool = False) -> CommunityJoinRequest:
+    """The row Accept and Reject consume. `uuid` defaults to uuid4; the
+    a.gup.pe Accept path looks the row up by the LAST path segment of the
+    activity's string object, so tests build that string from this uuid."""
+    jr = CommunityJoinRequest(user_id=user.id, community_id=community.id,
+                              joined_via_feed=joined_via_feed)
+    db.session.add(jr)
+    db.session.commit()
+    return jr
+
+
+def make_feed_join_request(user: User, feed: Feed) -> FeedJoinRequest:
+    jr = FeedJoinRequest(user_id=user.id, feed_id=feed.id)
+    db.session.add(jr)
+    db.session.commit()
+    return jr
+
+
+def make_user_follow_request(requestor: User, target: User) -> UserFollowRequest:
+    """user_id is the requestor; follow_id is who they asked to follow."""
+    jr = UserFollowRequest(user_id=requestor.id, follow_id=target.id)
+    db.session.add(jr)
+    db.session.commit()
+    return jr
 
 
 def peer_instance(domain: str = 'peer.example') -> Instance:

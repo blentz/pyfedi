@@ -28,8 +28,9 @@ import pytest
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.activitypub import util as activitypub_util
-from app.models import ActivityPubLog, Community, Feed, utcnow
-from tests.factories import inbox_activity, make_community, make_instance, make_site, make_user
+from app.models import ActivityPubLog, Community, utcnow
+from tests.factories import inbox_activity, make_community, make_feed, make_instance, make_site, \
+    make_user
 from tests.test_inbox_dispatch_preamble import dispatch
 
 
@@ -57,18 +58,12 @@ def _seed_announcing_community(host='peer.example'):
 def _seed_announcing_feed(host='peer.example'):
     """A Feed resolvable as the OUTER Announce actor (routes.py:864), for the
     one test that needs `feed` truthy so the inner-actor walk (914-922) is
-    skipped. No make_feed() factory exists (tests/test_inbox_dispatch_preamble.py's
-    own Task 2 feed test builds one the same way).
+    skipped. Only ever called with its default host, so make_feed(instance)
+    (tests/factories.py) seeds the same row.
     """
     make_site()
     instance = make_instance(host)
-    feed = Feed(name='peerfeed', title='peerfeed', instance_id=instance.id,
-               ap_id='peerfeed@peer.example', ap_domain=host,
-               ap_profile_id=f'https://{host}/f/peerfeed',
-               ap_public_url=f'https://{host}/f/peerfeed',
-               ap_fetched_at=utcnow())
-    db.session.add(feed)
-    db.session.commit()
+    feed = make_feed(instance)
     return instance, feed
 
 
