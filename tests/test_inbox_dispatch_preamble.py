@@ -103,6 +103,65 @@ whoever registers or resolves the finding above.)
 Both mutation rounds were temporary: `app/activitypub/routes.py` was
 restored immediately after each, verified via `git diff --stat app/`
 producing no output for `app/` before this file's own change was committed.
+
+Task 3 -- the preamble's other branch (routes.py:871-892) and two probes of
+unguarded peer-supplied input.
+
+MUTATION, Task 3: routes.py:872 (`if actor and isinstance(actor, User):`) and
+:874 (`elif actor and isinstance(actor, Community):`) each have two halves.
+Dropping the `actor and` half from either line is an EQUIVALENT mutant --
+find_actor_or_create_cached's return type is always `User | Community | Feed |
+None` (a real ORM instance, which does not override __bool__/__len__, or
+exactly None), so `actor and X` and plain `X` evaluate identically for every
+value `actor` can actually take: when actor is None, `isinstance(None, ...)`
+is already False, matching `None and ...`'s short-circuit to a falsy value;
+when actor is a model instance, it is always truthy. Both drops (872 and 874)
+were run against this file's full suite and both left all 14 tests green --
+confirming equivalence empirically rather than by argument alone. Not fixed;
+registered here for Task 9, since an equivalent mutant is not a test gap.
+
+Dropping the `isinstance(actor, User)` half from 872 (leaving `if actor:`) IS
+behavioural: it was run and killed 7 of this file's tests, most directly
+test_add_from_a_group_actor_is_ignored_as_nodebb_topic_management (a
+Community actor now satisfies the User arm too, so `user = actor` runs and
+NodeBB Topic Management is never logged) -- a Community-domain kill.
+
+Dropping the `isinstance(actor, Community)` half from 874 (leaving `elif
+actor:`) was run separately (872 restored first) and killed exactly one test:
+test_an_activity_from_an_actor_that_is_neither_is_refused (a Feed actor is
+truthy, so it now satisfies the Community arm and falls to its own
+`else: log_incoming_ap(..., 'Unexpected activity from Group')` instead of
+890-892's refusal) -- a Feed-domain kill, distinct from the Community-domain
+kill above, matching the brief's requirement that actor-falsy and
+actor-is-a-different-class are different domains needing different killers.
+
+All four mutations were run one at a time and `app/activitypub/routes.py` was
+restored immediately after each, verified via `git diff --stat app/`
+producing no output for `app/` before this file's own change was committed.
+
+PROBE, routes.py:878 (`elif request_json['type'] == 'Update' and 'type' in
+request_json['object']:`): fed a Community (Group) actor an Update whose
+object is the string 'https://peer.example/some-type-of-thing' (contains the
+substring "type", so the membership test passes even though `object` is not
+a dict). OBSERVED: the very next line, `if request_json['object']['type'] ==
+'Group':`, indexes a str with a str and raises `TypeError: string indices
+must be integers, not 'str'`, uncaught inside process_inbox_request's own try
+block, propagating through routes.py:1885's `except Exception:
+session.rollback(); raise` and out of dispatch() -- a real, uncaught
+500-shaped failure for production's DEBUG branch, not a silent fall to any of
+the 882-892 refusals. No ActivityPubLog row is written. This is the campaign's
+most-cited defect class: a membership test is never a type test.
+
+PROBE, routes.py:856-857 (`if isinstance(actor_id, dict): actor_id =
+actor_id['id']`): fed a dict actor with no 'id' key at all
+(`{'type': 'Person'}`). OBSERVED: `KeyError: 'id'` raised immediately at 857,
+before find_actor_or_create_cached is ever called and before any
+log_incoming_ap call is reachable, propagating the same way as the string-
+object probe above -- another uncaught 500-shaped failure, not a logged
+refusal.
+
+Both probes assert the observed behaviour (`pytest.raises`); neither changes
+`app/`.
 """
 import pytest
 
@@ -380,3 +439,243 @@ def test_an_announce_from_a_user_falls_through_to_the_user_lookup(
 
     assert len(calls) == 1
     assert calls[0][1] is None
+
+
+# --- Task 3: the preamble's other branch, routes.py:871-892 ---
+#
+# Everything that is NOT Announce/Accept/Reject resolves exactly one actor
+# via the unnarrowed find_actor_or_create_cached(actor_id) at line 871 (no
+# community_only/feed_only kwarg -- it accepts whatever class comes back),
+# then dispatches on that actor's class:
+#
+#   isinstance(actor, User)      -> user = actor, falls through (872-873)
+#   isinstance(actor, Community) -> NodeBB/a.gup.pe special-casing (874-889)
+#   neither (including a falsy actor) -> refused outright (890-892)
+
+
+def _seed_remote_group_community(host='peer.example', name='microblogs'):
+    """A Community resolvable as a Group actor via routes.py:871's
+    unnarrowed lookup, with ap_id set so Community.is_local() (app/models.py:778,
+    `self.ap_id is None or self.profile_id().startswith(SERVER_URL)`) is
+    False. make_community() never sets ap_id, so a community built only with
+    make_community() is_local()==True regardless of host -- which would route
+    routes.py:1252's Update/Group handling through
+    `community.is_moderator(user)` with `user` still None from the preamble
+    (line 858), which falls to `is_moderator`'s no-user branch
+    (app/models.py:719-721) and reads `current_user.get_id()` outside any
+    request context. That is real behaviour worth registering on its own, but
+    it is not what this task's Update/Group test (878-881) exists to probe,
+    so this helper sidesteps it by giving the community a remote ap_id, the
+    same way every other actor in this file is made unambiguously remote.
+
+    ap_fetched_at is stamped so find_actor_or_create_cached's
+    schedule_actor_refresh does not fire a real actor fetch inline under
+    eager Celery. make_community() hardcodes owner user_id=1 and
+    instance_id=1, so an instance and a user are seeded first to occupy those
+    ids, following the pattern established above for the Announce/community
+    test.
+    """
+    make_site()
+    instance = make_instance(host)
+    make_user(instance, 'community_owner')
+    community = make_community(name, host=host)
+    community.ap_id = f'{name}@{host}'
+    community.ap_fetched_at = utcnow()
+    db.session.commit()
+    return community
+
+
+def test_an_ordinary_activity_from_a_known_user_sets_user(app, db_session, monkeypatch):
+    """routes.py:872-873 -- actor resolves as a User through the unnarrowed
+    lookup at line 871 (this is not an Announce/Accept/Reject), so
+    `user = actor` and control falls through the rest of the if/elif/else
+    (874-892) with no log and no return, reaching the core_activity dispatch
+    starting at line 930. A 'Like' activity is used so process_upvote
+    (routes.py:1329, a bare module-level name in routes.py -- not imported
+    from elsewhere) is the very next thing that runs; it is monkeypatched
+    here so this test proves only that `user` reached it as the seeded
+    actor and `announced` was False, not process_upvote's own behaviour
+    (out of this task's scope).
+    """
+    make_site()
+    instance = make_instance('peer.example')
+    actor = make_user(instance, 'alice')
+    actor.ap_fetched_at = utcnow()
+    db.session.commit()
+
+    calls = []
+    monkeypatch.setattr(activitypub_routes, 'process_upvote',
+                         lambda *args, **kwargs: calls.append(args))
+
+    activity = inbox_activity(actor, activity_type='Like')
+
+    dispatch(activity)
+
+    assert len(calls) == 1
+    user_arg, store_ap_json_arg, request_json_arg, announced_arg = calls[0]
+    assert user_arg is not None and user_arg.id == actor.id
+    assert announced_arg is False
+
+
+@pytest.mark.parametrize('activity_type', ['Add', 'Remove'])
+def test_add_from_a_group_actor_is_ignored_as_nodebb_topic_management(
+        app, db_session, monkeypatch, activity_type):
+    """routes.py:875-877 -- actor resolves as a Community (the Group case),
+    and an Add or Remove activity from it is NodeBB's own topic-management
+    traffic: logged and ignored without ever reaching the real Add/Remove
+    handling further down (routes.py:1396/1469), which is scoped to Task 4+.
+    'Remove' takes the identical arm as 'Add' (routes.py:875), hence the
+    parametrisation rather than two near-duplicate tests.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    community = _seed_remote_group_community()
+
+    activity = inbox_activity(community, activity_type=activity_type)
+
+    dispatch(activity)
+
+    assert ActivityPubLog.query.one().exception_message == 'NodeBB Topic Management'
+
+
+def test_update_group_from_a_group_actor_is_processed_as_a_community_update(
+        app, db_session, monkeypatch):
+    """routes.py:878-881 -- an Update from a Community actor whose object is
+    a dict with type=='Group' assigns `community = actor` with no log and no
+    return here, and control falls through to routes.py:1252's Update/Group
+    handling, which is the first thing downstream to actually use that
+    `community` local (community.is_local() is False per
+    _seed_remote_group_community, so the is_moderator/non-moderator branch at
+    1253 is skipped and 1256's refresh_community_profile call is reached
+    unconditionally). refresh_community_profile is monkeypatched so this
+    test proves only that 881's assignment reached that call with the right
+    community id, not what refreshing a profile does (out of this task's
+    scope, and also would otherwise be a real network-shaped call).
+    """
+    community = _seed_remote_group_community()
+
+    calls = []
+    monkeypatch.setattr(activitypub_routes, 'refresh_community_profile',
+                         lambda *args, **kwargs: calls.append(args))
+
+    activity = inbox_activity(community, activity_type='Update',
+                              object={'type': 'Group', 'id': community.ap_profile_id})
+
+    dispatch(activity)
+
+    assert len(calls) == 1
+    assert calls[0][0] == community.id
+
+
+def test_update_orderedcollection_from_a_group_actor_is_ignored(app, db_session, monkeypatch):
+    """routes.py:882-884 -- an Update from a Community actor whose object is
+    a dict with type=='OrderedCollection' is a.gup.pe's follower-count
+    update: logged and ignored.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    community = _seed_remote_group_community()
+
+    activity = inbox_activity(community, activity_type='Update',
+                              object={'type': 'OrderedCollection'})
+
+    dispatch(activity)
+
+    assert ActivityPubLog.query.one().exception_message == 'Follower count update from a.gup.pe'
+
+
+def test_any_other_update_from_a_group_actor_is_refused(app, db_session, monkeypatch):
+    """routes.py:885-887 -- an Update from a Community actor whose object's
+    dict type is neither 'Group' nor 'OrderedCollection' is refused outright.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    community = _seed_remote_group_community()
+
+    activity = inbox_activity(community, activity_type='Update',
+                              object={'type': 'SomeOtherType'})
+
+    dispatch(activity)
+
+    assert ActivityPubLog.query.one().exception_message == 'Unexpected Update activity from Group'
+
+
+def test_an_update_from_a_group_actor_whose_object_is_a_string_containing_type(
+        app, db_session, monkeypatch):
+    """routes.py:878 -- `'type' in request_json['object']` is a membership
+    test, and a membership test is never a type test. The findings doc
+    states this rule in one line; it explains D13's original miss and D30's
+    surviving mutant. This test establishes what the code ACTUALLY does with
+    object='https://peer.example/some-type-of-thing' -- it does not assert a
+    fix.
+
+    OBSERVED: with a Community actor (the Group case) and an Update activity
+    whose object is that string (which contains the substring "type", so
+    `'type' in request_json['object']` is True as a substring test), the very
+    next line -- `if request_json['object']['type'] == 'Group':` -- indexes a
+    str with a str. Python raises `TypeError: string indices must be
+    integers, not 'str'` (exact wording depends on Python version). This is
+    NOT caught anywhere inside process_inbox_request's own try block; it
+    propagates through routes.py:1885's `except Exception: session.rollback();
+    raise` and out of the direct dispatch() call used throughout this file --
+    i.e. a real, uncaught 500-shaped failure for production's DEBUG branch,
+    not a silent fall to any of the refusals at 882-892. No ActivityPubLog
+    row is written for this activity at all, because log_incoming_ap is never
+    reached on this path.
+    """
+    community = _seed_remote_group_community()
+
+    activity = inbox_activity(community, activity_type='Update',
+                              object='https://peer.example/some-type-of-thing')
+
+    with pytest.raises(TypeError, match='string indices must be integers'):
+        dispatch(activity)
+
+
+def test_an_activity_from_an_actor_that_is_neither_is_refused(app, db_session, monkeypatch):
+    """routes.py:890-892 -- actor resolves to something that is neither a
+    User nor a Community for a non-Announce/Accept/Reject activity (a Feed,
+    here -- find_remote_actor's fallback query at actor.py:129 finds it via
+    its '/f/' ap_profile_id), and is refused outright regardless of the
+    activity's own type.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    make_site()
+    instance = make_instance('peer.example')
+    feed = Feed(name='peerfeed', title='peerfeed', instance_id=instance.id,
+               ap_id='peerfeed@peer.example', ap_domain='peer.example',
+               ap_profile_id='https://peer.example/f/peerfeed',
+               ap_public_url='https://peer.example/f/peerfeed',
+               ap_fetched_at=utcnow())
+    db.session.add(feed)
+    db.session.commit()
+
+    activity = inbox_activity(feed, activity_type='Like')
+
+    dispatch(activity)
+
+    assert ActivityPubLog.query.one().exception_message == 'Actor was not a user or a community'
+
+
+def test_a_dict_actor_without_an_id_key(app, db_session, monkeypatch):
+    """routes.py:856-857 -- Discourse sends a dict actor
+    (`{'id': '...', 'type': 'Person', ...}`), unpacked unconditionally at
+    `actor_id = actor_id['id']`. Establish the observed behaviour with a dict
+    that has no 'id' key at all, rather than fix it.
+
+    OBSERVED: `{'type': 'Person'}['id']` raises `KeyError: 'id'` immediately
+    at line 857, before find_actor_or_create_cached is ever called and
+    before any log_incoming_ap call is reachable (id itself, used by every
+    log_incoming_ap call, is read one line earlier at 854 and is fine here --
+    it is the ACTOR dict, not the activity, that is missing 'id'). Like the
+    string-object probe above, this propagates uncaught through routes.py:1885's
+    `except Exception: session.rollback(); raise` and out of dispatch() --
+    a real, uncaught 500-shaped failure for production's DEBUG branch. No
+    ActivityPubLog row is written.
+    """
+    make_site()
+    instance = make_instance('peer.example')
+    actor = make_user(instance, 'alice')
+
+    activity = inbox_activity(actor, activity_type='Like')
+    activity['actor'] = {'type': 'Person'}
+
+    with pytest.raises(KeyError, match='id'):
+        dispatch(activity)
