@@ -32,8 +32,10 @@ Request-context asymmetry (Step 1, question 2): `patch_db_session`
 (app/utils.py:3664) only patches `db.session` when `has_request_context()` is
 false. Under a direct call like `dispatch()` below, the test has an app
 context (from the `app` fixture) but no request context, so patch_db_session
-DOES patch -- the dispatcher's local `session` (from `get_task_session()`)
-and `db.session` become the same object for the duration of the call. Under
+DOES patch -- `db.session` is reassigned to a `SessionWrapper(session)`
+(app/utils.py:3678-3690) whose `__getattr__` proxies attribute access
+(reads and method calls, not writes) through to the dispatcher's local
+`session` (from `get_task_session()`) for the duration of the call. Under
 Task 8's seam tests, which drive the dispatcher through a real Flask request,
 `has_request_context()` is true, so patch_db_session does NOT patch: the
 dispatcher's `session` local stays the independent task session while
@@ -68,7 +70,7 @@ MUTATION, round 2 (same drop, but letting the fetch SUCCEED): re-ran the
 identical mutation with a mocked 200 response for the unfound actor's own
 URL (a minimal Person document, following the recipe in
 tests/test_ap_resolve_remote_post.py's serve_remote_object / this file's
-conftest.py:299 http_mock, registering exactly one GET route rather than
+conftest.py:288 http_mock, registering exactly one GET route rather than
 federation_peer's webfinger+actor pair -- our fetch is a direct-URL fetch,
 which never calls webfinger, so federation_peer's unused webfinger route
 would fail http_mock's assert_all_called=True teardown check). Traced
@@ -174,7 +176,7 @@ DEBUG=True selects routes.py:758-759's inline branch rather than `.delay(...)`.
 
 What these three tests LICENSE: that a real signed peer reaches the preamble
 (routes.py:839-931), the Announce unwrap (routes.py:899's
-process_announce_of_uri call), and the vote arms (routes.py:1329's
+process_announce_of_uri call), and the upvote arm (routes.py:1329's
 process_upvote call), for exactly three shapes -- a Like from a known User, an
 Announce of a plain-string object from a known User, and (for the third test)
 the same Like shape again, used to pin that the actor object the gate verified
@@ -272,8 +274,9 @@ def test_the_dispatcher_finds_a_seeded_actor_through_its_own_session(
     filters out a User), miss the feed lookup (same, feed_only=True), and HIT
     the plain user lookup -- find_remote_actor's fallback query
     (app/activitypub/actor.py) runs `db.session.query(User)...`, and under a
-    direct call db.session IS the dispatcher's independent task session
-    (patch_db_session). That query can only find signing_peer's row if this
+    direct call `db.session` is a `SessionWrapper` (app/utils.py:3678-3690)
+    proxying attribute access through to the dispatcher's independent task
+    session (patch_db_session). That query can only find signing_peer's row if this
     test's committed row is visible on that other session/connection. A hit
     on all three lookups being a miss/miss/hit is what routes control to
     routes.py:895-899's `isinstance(request_json['object'], str)` branch,
@@ -412,11 +415,20 @@ def test_an_announce_from_a_feed_falls_through_to_the_feed_lookup(
     No Community row exists with this actor's ap_profile_id, so line 862
     misses by construction; the only row that CAN satisfy any of the three
     lookups is the Feed seeded below, so process_announce_of_uri being
-    reached at all (rather than the refusal at line 868) is evidence the
-    feed_only lookup at line 864 is what hit. Per the outcome-table comment
-    above, `community` itself is None either way once a non-community actor
-    resolves -- that argument cannot distinguish "feed hit" from "user hit",
-    only "some lookup hit" from "all three missed".
+    reached at all (rather than the refusal at line 868) is NOT evidence
+    that the feed_only lookup at line 864 is specifically what hit: dropping
+    line 864 leaves this test green, because the unnarrowed lookup at line
+    866 finds the same Feed row, `user` comes back truthy, and the :867
+    refusal (`if not community and not feed and not user:`) is skipped
+    either way. Per the outcome-table comment above, `community` itself is
+    None either way once a non-community actor resolves -- that argument
+    cannot distinguish "feed hit" from "user hit", only "some lookup hit"
+    from "all three missed". What this test DOES uniquely prove: it kills
+    the `not feed and` conjunct of the :867 refusal (with `community` also
+    None, only `user` being truthy could otherwise mask a false `not feed`),
+    which no other test in this file does. The genuine killer for line 864
+    itself lives in tests/test_inbox_dispatch_announce.py, whose dict-shaped
+    inner object makes `if not feed:` at routes.py:914 observable.
 
     There is no make_feed() factory (grep tests/factories.py), so the Feed
     row is built directly, following the pattern tests/test_ap_actor_json_feed.py's
@@ -757,7 +769,7 @@ def test_a_signed_like_reaches_the_upvote_arm_through_the_gate(
 
     process_upvote is monkeypatched so this test proves only that the seam
     reaches it with the right `user` -- not process_upvote's own behaviour,
-    which is Task 4's contract and already covered by tests/test_inbox_dispatch_votes.py.
+    which is Task 5's contract and already covered by tests/test_inbox_dispatch_votes.py.
 
     Request-context note (see module docstring TASK 8 section): this drives
     the dispatcher through a real Flask request, so has_request_context() is

@@ -67,8 +67,9 @@ itself (a real `fakeredis.FakeRedis` instance) cannot be used here, even
 though the ATTRIBUTE it patches (`app.redis_client`) is exactly right per
 the paragraph above. Confirmed by direct probe:
 `fakeredis.FakeRedis().eval('return 1', 0)` raises `ResponseError: unknown
-command 'eval'` -- this environment's pinned fakeredis (2.37.1, no `lupa`
-installed, per `requirements-test.txt`) implements no Lua scripting AT ALL.
+command 'eval'` -- this environment's fakeredis (requirements-test.txt,
+unpinned; observed as 2.37.1 in this environment), with no `lupa`
+installed, implements no Lua scripting AT ALL.
 redis-py's `Lock.release()` needs a Lua script (called via EVALSHA) to
 atomically check its token before deleting the key, so
 `with redis_client.lock(...):` against `redis_double`'s fakeredis instance
@@ -413,7 +414,16 @@ def test_an_upvote_blocked_by_the_vote_quota_logs_nothing(app, db_session, monke
 
 
 def test_a_downvote_blocked_by_the_vote_quota_logs_ignored(app, db_session, monkeypatch):
-    """routes.py:2431, the same input through the other delegate."""
+    """The same input through the other delegate, logged instead of silent.
+
+    Coverage data attributes the hit to the inner `else` at routes.py:2431,
+    but the assertion here cannot itself distinguish that from the outer
+    `else` at routes.py:2433: both log byte-identical
+    'Cannot downvote this' / APLOG_IGNORED text, so the routes.py:2431
+    attribution rests on coverage data, not on what this test's assertion
+    can tell apart. D57's own claim (the upvote/downvote logging asymmetry)
+    is unaffected either way.
+    """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     monkeypatch.setitem(app.config, 'VOTE_QUOTA', -1)
     voter, post = _seed_vote_scenario()

@@ -427,8 +427,9 @@ def redis_double(monkeypatch):
     import time.
 
     CAVEAT (sub-project 5a): this fixture's `fakeredis.FakeRedis` instance
-    cannot serve a redis-py lock in this environment. `fakeredis==2.37.1`
-    (requirements-test.txt), with no `lupa` installed, implements no Lua
+    cannot serve a redis-py lock in this environment. fakeredis
+    (requirements-test.txt, unpinned; observed as 2.37.1 in this
+    environment), with no `lupa` installed, implements no Lua
     scripting at all -- not EVAL, not EVALSHA. `redis.lock.Lock.acquire()`
     needs none (plain SET NX PX) and succeeds, but `Lock.release()` calls a
     Lua script via EVALSHA and raises

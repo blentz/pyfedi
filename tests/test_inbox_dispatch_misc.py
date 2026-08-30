@@ -1,5 +1,5 @@
 """Sub-project 5a, Task 7 -- the last arms in scope for the dispatcher: Flag
-(routes.py:1344-1354), Move (:1571-1588), QuoteRequest (:1880-1884), and the
+(routes.py:1344-1354), Move (:1571-1589), QuoteRequest (:1880-1884), and the
 `except`/`finally` every arm unwinds through (:1885-1889).
 
 Step 1 -- Flag, routes.py:1344-1354. `find_reported_object` and
@@ -7,7 +7,7 @@ Step 1 -- Flag, routes.py:1344-1354. `find_reported_object` and
 side effect -- it notifies every site admin) is doubled, following the same
 convention as `process_upvote`/`process_downvote` elsewhere in this campaign.
 
-Step 2 -- Move, routes.py:1571-1588. The permission guard,
+Step 2 -- Move, routes.py:1571-1589. The permission guard,
 
     user.id == post.user_id
     or origin_community.is_moderator(user)
@@ -158,8 +158,8 @@ target is `app.activitypub.routes.get_task_session`, NOT
 `app.utils.get_task_session`. routes.py:39 does `from app.utils import ...
 get_task_session, patch_db_session`, which binds those names into routes.py's
 OWN module namespace at import time -- the same mechanism documented at
-length in test_inbox_dispatch_votes.py's module docstring for
-`process_report`/`find_reported_object`/etc, and the same mistake this
+length in tests/conftest.py's `redis_double` docstring ("What matters is
+WHERE THE NAME IS BOUND, not when it is called"), and the same mistake this
 campaign's own commit 3b442dc7 corrected in four other tests. Patching
 `app.utils.get_task_session` leaves routes.py's own bound copy of the name
 untouched, so `process_inbox_request`'s `session = get_task_session()` call
@@ -298,7 +298,7 @@ def test_a_flag_of_missing_content_is_ignored(app, db_session, monkeypatch):
     assert row.exception_message == 'Report ignored due to missing content'
 
 
-# --- Step 2: Move, routes.py:1571-1588 ---
+# --- Step 2: Move, routes.py:1571-1589 ---
 
 
 def _seed_move_scenario(host='peer.example'):
