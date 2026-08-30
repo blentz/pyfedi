@@ -47,22 +47,62 @@ constitutes a finding.
 
 Task 2 -- Announce/Accept/Reject actor resolution (routes.py:861-870). See
 the outcome-table comment above the three tests below for the derived
-lookup order. Mutant killed: dropping `create_if_not_found=False` from the
+lookup order.
+
+MUTATION, round 1: dropping `create_if_not_found=False` from the
 community_only lookup at line 862 (leaving `find_actor_or_create_cached
 (actor_id, community_only=True)`, whose default is create_if_not_found=True)
 turned 4 of this file's 5 tests red -- every one whose actor is not a
-Community. Each failed not with a clean assertion failure but with
-`respx.models.AllMockedAssertionError: RESPX: <Request('GET',
-'https://peer.example/...')> not mocked!`, raised from deep inside
-find_actor_or_create -> create_actor_from_remote -> fetch_remote_actor_data
--> get_request: with the kwarg gone, a community_only miss no longer
-returns None but instead tries to CREATE the actor as a community, which
-fetches it over HTTP -- blocked by the `block_outbound_http` fixture,
-which errors on any unmocked request rather than letting it reach the
-network. An error taking down every non-community-actor test is still a
-kill of the mutant: it demonstrates the kwarg is load-bearing, and that no
-test in this file would still pass unmodified if it were silently dropped.
-Restored immediately after (`git diff --stat app/` confirmed empty).
+Community -- each with `respx.models.AllMockedAssertionError: RESPX:
+<Request('GET', 'https://peer.example/...')> not mocked!`, raised from deep
+inside find_actor_or_create -> create_actor_from_remote ->
+fetch_remote_actor_data -> get_request, before any assertion in this file
+runs. That is weaker evidence than a kill looks like: it shows only that
+removing the kwarg causes an attempted fetch, which `block_outbound_http`
+then turns into an error. It does not show that this file's assertions
+would catch the guard's semantic effect -- which actor object actually
+gets resolved -- because the exception fires before find_actor_or_create
+can return anything at all.
+
+MUTATION, round 2 (same drop, but letting the fetch SUCCEED): re-ran the
+identical mutation with a mocked 200 response for the unfound actor's own
+URL (a minimal Person document, following the recipe in
+tests/test_ap_resolve_remote_post.py's serve_remote_object / this file's
+conftest.py:299 http_mock, registering exactly one GET route rather than
+federation_peer's webfinger+actor pair -- our fetch is a direct-URL fetch,
+which never calls webfinger, so federation_peer's unused webfinger route
+would fail http_mock's assert_all_called=True teardown check). Traced
+through both the user-resolution and feed-resolution scenarios (temporary
+scratch tests, not kept): in both, actor_json_to_model's own dedup query
+(`User.ap_profile_id == activity_json['id'].lower()`, util.py:1199) finds
+the SAME row this file's fixture already committed, so create_actor_from_remote
+returns that existing row -- which then fails the `community_only and not
+isinstance(actor_model, Community)` check and is discarded, exactly as it
+would be found-then-discarded without the mutation. The narrowed feed_only
+lookup at line 864 subsequently finds the real Feed (or the wide lookup at
+866 finds the real User) exactly as it does today, because find_remote_actor's
+per-model queries are unaffected by a discarded row from a different query.
+Both scratch tests PASSED under the mutation.
+
+CONCLUSION: with the fetch allowed to succeed, no test in this file fails.
+This file's three Task 2 tests do NOT discriminate `create_if_not_found=False`'s
+semantic effect on lines 862-866's actor resolution -- they only failed in
+round 1 because the network was blocked, which is an infrastructure failure,
+not a behavioural one. The kwarg's semantic effect (as opposed to its
+network-avoidance effect) is UNTESTED by this file. Left for Task 9 to
+register as a finding; not fixed here. (Caveat: an actor JSON that
+DESERIALIZES to a *different* class than the row already on file -- e.g. a
+Group document served at a URL this file only ever seeded as a User/Feed --
+was not tried, and by the same code path (actor_json_to_model's dedup query
+is keyed per-model-type, so a Group document creates a NEW Community row
+sharing that URL string rather than finding the existing User/Feed) would
+make `community` non-None and could plausibly make one of these tests fail;
+that variant is real construction work, not test-running, and is left to
+whoever registers or resolves the finding above.)
+
+Both mutation rounds were temporary: `app/activitypub/routes.py` was
+restored immediately after each, verified via `git diff --stat app/`
+producing no output for `app/` before this file's own change was committed.
 """
 import pytest
 
