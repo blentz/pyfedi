@@ -1145,8 +1145,10 @@ says which numbers are taken. So there is one now, and it is this file:
   D47 sub-project 4's whole-branch review (the dict-actor allowlist bypass;
   taken here, in the change that files the row). D48 the follow-on audit of
   `instance_allowed`/`instance_banned`'s other call sites, which D47's row named
-  as its deeper half and left unexamined.
-  **Next free number: D49.** If you take it, say so here in the change that
+  as its deeper half and left unexamined. D49–D63 sub-project 5a (the inbox
+  dispatcher's preamble, Announce unwrap, vote arms, and Flag/Move/QuoteRequest
+  — see that section for the table).
+  **Next free number: D64.** If you take it, say so here in the change that
   takes it.
 
 Two entries in the reports were deliberately **not** counted as defects, and are
@@ -2298,6 +2300,300 @@ where the offending character sits in the USERINFO — so the fetch that "would
 have saved it" would in fact have succeeded, against the peer's real host. The
 audit was right to refuse to claim safety it had not measured: the assumption
 it declined to make was false.
+
+## Sub-project 5a: the inbox dispatcher's preamble, Announce unwrap, vote arms, and Flag/Move/QuoteRequest
+
+`docs/superpowers/specs/2026-08-30-coverage-inbox-dispatch-5a-design.md`, on
+branch `blentz`. Eight test-writing tasks covered
+`process_inbox_request`'s own body — the function sub-project 4's gate hands
+off to and then never executes — plus its four vote delegates
+(`process_upvote`, `process_downvote`, `process_poll_vote`,
+`process_question_answer`) and its Flag, Move and QuoteRequest arms. This is
+the first sub-project in the campaign to call `process_inbox_request`
+directly, and (via one task) the first to reach it through a real signed
+HTTP request without patching it away. 67 tests across four files:
+`tests/test_inbox_dispatch_preamble.py` (17), `tests/test_inbox_dispatch_announce.py`
+(9), `tests/test_inbox_dispatch_votes.py` (29), `tests/test_inbox_dispatch_misc.py`
+(12). This is report-only, per the sub-project's own remit: nothing in
+`app/` was touched by any of the eight tasks, and nothing is touched here.
+
+### 1. Whole-unit coverage, and every gap explained
+
+Measured against this sub-project's own suite:
+
+```bash
+./run_tests.sh tests/test_inbox_dispatch_preamble.py tests/test_inbox_dispatch_announce.py \
+  tests/test_inbox_dispatch_votes.py tests/test_inbox_dispatch_misc.py \
+  -q --cov=app.activitypub.routes --cov-report=json
+```
+
+67 passed. `app/activitypub/routes.py` as a whole (1813 statements, 890
+branches): 369/1813 statements, 127/890 branches, **18.35% blended
+`percent_covered`** — up from the 14.76% the branch carried before this
+sub-project (per the plan's own baseline reading), because this is the first
+sub-project to exercise `process_inbox_request`'s body at all rather than
+stopping at `shared_inbox`'s dispatch call to it.
+
+By intersecting each span's line range against `coverage.json`'s
+`executed_lines`/`missing_lines`/`executed_branches`/`missing_branches`, the
+same method sub-projects 2a and 4 used:
+
+| span | unit | statements | branches |
+|---|---|---|---|
+| 839-934 | preamble | 68/71 executed | 2 missing arcs |
+| 1328-1343 | the four vote arms | 8/12 executed | 2 missing arcs |
+| 2387-2410 | `process_upvote` | 20/20 executed | 0 missing arcs |
+| 2413-2433 | `process_downvote` | 10/18 executed | 6 missing arcs |
+| 2436-2460 | `process_poll_vote` | 21/21 executed | 0 missing arcs |
+| 2463-2496 | `process_question_answer` | 23/24 executed | 2 missing arcs |
+| 1344-1355 | Flag | 8/8 executed | 0 missing arcs |
+| 1571-1589 | Move | 14/14 executed | 2 missing arcs |
+| 1880-1884 | QuoteRequest | 5/5 executed | 0 missing arcs |
+| 1885-1889 | the except/finally | 4/4 executed | 0 missing arcs |
+
+Every gap, explained rather than left as a remainder:
+
+1. **Preamble, line 860 (`pass`) and its guarding branch (859→860).** The
+   `s.rimu.geek.nz` breakpoint hook (registered below as D53) is never
+   triggered. No test sends an actor id starting with that string, and it
+   would prove nothing if one did — the arm is a bare `pass`, so "covering"
+   it means confirming a no-op is a no-op. Legitimately left untested.
+2. **Preamble, lines 888-889 and their guarding branch (878→888).** The
+   final `else` of the Community-actor dispatch (`'Unexpected activity from
+   Group'`) is never reached. Tasks 1-8 drive a Community (Group) actor
+   through `Add`/`Remove` (877), `Update`/`Group` (879-880),
+   `Update`/`OrderedCollection` (881-882) and `Update`/anything-else
+   (884-886) — every arm of the `elif` at 878 — but no test sends a
+   Community actor an activity type that is neither `Add`, `Remove` nor
+   `Update` at all, which is the only way to fall past the `elif` itself to
+   888. A real, if narrow, scope gap in this sub-project's own test matrix,
+   not a defect: the code at 887-888 is unremarkable, it is simply never
+   exercised.
+3. **The four vote arms, lines 1337-1338 and 1341-1342 (branches 1336→1337,
+   1340→1341).** Only two of the four dispatch arms are driven through the
+   full `dispatch()` helper: Task 5's `test_like_and_emojireact_dispatch_to_process_upvote`
+   and `test_dislike_dispatches_to_process_downvote` send real `Like`/
+   `EmojiReact`/`Dislike` activities through `process_inbox_request` (with
+   the delegate itself monkeypatched to a recorder), which is why lines
+   1328-1334 read as executed. Task 6's `process_poll_vote` and
+   `process_question_answer` tests, by contrast, call those two functions
+   **directly** — `PollVote` and `ChooseAnswer` activities are never sent
+   through `dispatch()` at all, so the dispatch-level `if core_activity['type']
+   == 'PollVote':` / `'ChooseAnswer':` checks at 1336 and 1340 are reached
+   (every other dispatch check above them falls through to them) but their
+   bodies, the calls to the two delegates from the dispatcher itself, never
+   run. This means: `process_poll_vote` and `process_question_answer` are
+   fully covered as functions (see their own 100% rows below), but their
+   own **dispatch sites** are not. A real, explained scope gap — this
+   sub-project chose to test those two delegates as units rather than
+   through the dispatcher a second time, which is defensible (Task 5 already
+   proves the dispatch-and-delegate wiring pattern for the other two arms)
+   but is not the same claim as "the four vote arms are covered."
+4. **`process_downvote`, 8 of 18 statements and 6 arcs (lines 2418, 2421,
+   2422, 2426-2429, 2433).** `process_downvote` is exercised by exactly one
+   test that calls it as a function (`test_a_downvote_blocked_by_the_vote_quota_logs_ignored`,
+   written specifically to pin the logging asymmetry against `process_upvote`
+   — see D57 below) plus the dispatch-arm test above, which monkeypatches
+   `process_downvote` itself and therefore never runs its body at all. Task
+   5's own brief scoped the guard-drop mutation campaign to `process_upvote`
+   only, treating the structurally identical `process_downvote` guards as
+   out of scope for that step. The result, measured rather than assumed: the
+   dict-shaped-`ap_id` unwrap (2418), the "liked object not found" refusal
+   (2421-2422), the entire successful-downvote body (2426-2429: the vote
+   itself, its success log, and the conditional announce), and the
+   outer-guard refusal log (2433, `can_downvote`/`instance_banned` false) are
+   all untested. None of this is a defect in `process_downvote` — every line
+   it shares in shape with the fully-covered `process_upvote` (same
+   guard structure, same delegate calls) is read, by inspection, as
+   behaving identically — but it is a real, sizeable, and previously
+   unstated coverage gap in this sub-project's own scope, and is recorded
+   here rather than left implicit in a "18/18" that was never measured.
+5. **`process_question_answer`, line 2468 and its branch (2467→2468), and
+   branch 2493→(function exit).** Two independent, narrow gaps. First: no
+   `process_question_answer` test passes a dict-shaped `ap_id` (`{'id':
+   ...}`) the way `test_upvote_unwraps_a_dict_object_with_an_id_key` and
+   `test_poll_vote_unwraps_a_dict_object_with_an_id_key` do for their own
+   functions — Task 6 wrote that variant for `process_poll_vote` but not for
+   `process_question_answer`, an asymmetry in test-matrix coverage between
+   two sibling delegates, not in the delegates' own code (the unwrap is
+   identical in all three functions). Second: every `process_question_answer`
+   success test in this suite passes `announced=False`, so the `if not
+   announced:` guard at line 2493 always takes its True arm
+   (`announce_activity_to_followers` is called); the False arm — an
+   announced `ChooseAnswer`, which skips the re-announce — is never
+   exercised, unlike the equivalent guard in `process_upvote` (2407-2408,
+   covered by `test_upvote_announced_reads_the_nested_object_and_does_not_re_announce`)
+   and `process_poll_vote` (2455-2456, covered by
+   `test_poll_vote_announced_reads_the_nested_object_and_choice_text`). Both
+   gaps are narrow, explained, and symmetric with gap 3 above: this
+   sub-project's per-delegate test matrices are not uniform across the four
+   vote arms.
+6. **Move, branch 1578→1590 (the whole Move body skipped) and branch
+   1586→1588 (the announce-to-followers guard's False arm).** No test in
+   `tests/test_inbox_dispatch_misc.py` constructs a Move where `origin_community`,
+   `target_community` and `post` are not all three truthy by the time line
+   1578 is reached — every test either finds the post locally or resolves it
+   remotely via a doubled `resolve_remote_post_from_search` that always
+   succeeds, so the case where the resolution still fails (or either
+   community is unfound) and the entire Move body is silently skipped is
+   unexercised. Separately, `_seed_move_scenario`'s own docstring records
+   that `origin_community.is_local()` is `True` for every seeded scenario
+   (`make_community()` never sets a remote `ap_id`), so line 1586's `if
+   origin_community.is_local():` always takes its True arm — the case of a
+   Move *originating* from a remote community, which does not need to
+   announce to local followers, is never tested. Both are real, narrow scope
+   gaps in the test matrix, not defects in the Move handler.
+
+`process_upvote`, `process_poll_vote`, Flag, QuoteRequest and the
+except/finally are all 100% statement and branch on their declared spans —
+no gap to explain for those five.
+
+### 2. New defects — D49-D63
+
+None fixed, per this sub-project's report-only remit. Each was surfaced by
+an implementer during Tasks 1-7 and is re-verified against source here, at
+the point the row is written, per this document's standing rule. Severity is
+argued from what the tests actually executed, not from reading, wherever a
+test exists — several rows below say explicitly which half of the claim is
+measured and which is reasoned.
+
+| # | function | defect | severity | evidence |
+|---|---|---|---|---|
+| D49 | `process_inbox_request` preamble | `activity['actor']` may be a dict (`if isinstance(actor_id, dict): actor_id = actor_id['id']`, routes.py:856-857) — a dict with no `'id'` key raises `KeyError: 'id'` immediately, before `find_actor_or_create_cached` is ever called and before any `log_incoming_ap` call is reachable. An uncaught 500-shaped failure for production's DEBUG branch, not a logged refusal, and no `ActivityPubLog` row is written. | medium — peer-triggerable, unhandled exception instead of a graceful refusal | **measured**: `pytest.raises(KeyError, match='id')` in `tests/test_inbox_dispatch_preamble.py` (Task 3) |
+| D50 | `process_inbox_request` preamble | `'type' in request_json['object']` at routes.py:878 is a membership test on whatever `request_json['object']` is, not a type test — for a Community (Group) actor sending `Update` with a plain string object containing the substring `"type"`, the membership test passes and the very next line, `request_json['object']['type']` at routes.py:879, indexes a `str` with a `str` and raises `TypeError: string indices must be integers, not 'str'`, uncaught, no log row. The same shape this document's closing section ("A guard must be tested on the domain it claims to reject") already generalises from D13 and D30: **`KEY not in entry` is a call into `entry`, so a membership test is never a type test.** | medium — peer-triggerable, unhandled exception | **measured**: `pytest.raises(TypeError, match='string indices must be integers')` in `tests/test_inbox_dispatch_preamble.py` (Task 3) |
+| D51 | `process_inbox_request`, Announce/OrderedCollection unwrap | `request_json['object']['orderedItems']` (routes.py:909, not 911 — see the documentation correction in section 4) is read with no guard. An `OrderedCollection` object with no `orderedItems` key raises `KeyError: 'orderedItems'`, uncaught, inside `process_inbox_request`'s own try block, propagating through routes.py:1885's `except Exception: session.rollback(); raise` and out of the dispatcher. No `ActivityPubLog` row. | medium — peer-triggerable, unhandled exception | **measured**: `pytest.raises(KeyError, match='orderedItems')` in `tests/test_inbox_dispatch_announce.py` (Task 4) |
+| D52 | `process_inbox_request`, Announce inner-object walk | `request_json['object']['actor']` (routes.py:915) is read with no guard when the Announce's inner object is a dict. An inner object with no `'actor'` key raises `KeyError: 'actor'`, same uncaught propagation as D51, no log row. | medium — peer-triggerable, unhandled exception | **measured**: `pytest.raises(KeyError, match='actor')` in `tests/test_inbox_dispatch_announce.py` (Task 4) |
+| D53 | `process_inbox_request` preamble | routes.py:859-860 — `if actor_id and actor_id.startswith('https://s.rimu.geek.nz'): pass  # just here to set breakpoints on, during testing. remove before commit`. A shipped debugging hook, its own comment asking for its removal, left in production code. No behaviour to trigger (the arm is inert) and no test exercises it — see gap 1 in section 1 above for why that is the right call, not an oversight. | cosmetic | reading; this sub-project's own coverage measurement confirms the arm's True branch is never taken by any test, consistent with there being nothing to test |
+| D54 | `process_inbox_request`, Announce list/OrderedCollection unwrap | routes.py:901-912 recurses into `process_inbox_request` itself once per element of an Announced list or `orderedItems` array, with no bound on the array's length and no bound on recursion depth (each element re-enters the full preamble, including this same Announce-unwrap block, so a maliciously nested structure recurses rather than merely looping). Task 4 proved the recursion is genuine — not a doubled dispatcher — by mutating line 902 to `request_json['object'][:1]` and watching `test_an_announce_of_a_list_processes_every_element` fail (`assert 1 == 2`). No test sends more than two elements or any nesting, so the resource-exhaustion consequence (an oversized list driving unbounded work per inbox POST, or sufficiently nested `orderedItems` driving Python's own recursion limit) is not demonstrated end to end, only that the recursive mechanism itself is real and unbounded by inspection of the loop. | low-medium — availability; peer-triggerable in principle, but the size/depth needed to matter was not measured | **measured**: the recursion mechanism (mutation-kill, Task 4); **reasoned, not measured**: that an attacker-sized input actually exhausts a resource |
+| D55 | `process_poll_vote` | `request_json['choice_text']` (routes.py:2440, non-announced path) is read with no guard, before `Post.get_by_ap_id` is even called. A `PollVote` with no `choice_text` key raises `KeyError: 'choice_text'` regardless of whether the target post exists. Same unguarded-read shape as D49/D51/D52/D56. | medium — peer-triggerable, unhandled exception | **measured**: `pytest.raises(KeyError, match='choice_text')` in `tests/test_inbox_dispatch_votes.py` (Task 6) |
+| D56 | `process_inbox_request`, QuoteRequest arm | `core_activity['instrument']['id']` (routes.py:1882) is read with no guard. A `QuoteRequest` with no `'instrument'` key raises `KeyError: 'instrument'` before `process_quote_boost` is ever called and before the SUCCESS log at routes.py:1884 is reachable; no `ActivityPubLog` row. Same shape as D49/D50/D51/D52/D55 — this dispatcher's preamble and several of its arms read peer-supplied keys unguarded while others (e.g. the `'key' in dict'` idiom used correctly elsewhere in this codebase) do not. | medium — peer-triggerable, unhandled exception | **measured**: `pytest.raises(KeyError, match='instrument')` in `tests/test_inbox_dispatch_misc.py` (Task 7) |
+| D57 | `process_upvote` / `process_downvote` | The two functions' otherwise-identical guard shapes log asymmetrically on refusal. `process_upvote`'s inner `if` (routes.py:2403-2408) has no `else` at all — its only `else` (2409-2410) belongs to the *outer* `if`, so an upvote blocked by the *inner* conjunction (a non-`Post`/`PostReply` target, a block between voter and author, or an exceeded vote quota) logs nothing: `ActivityPubLog.query.count() == 0` even with logging enabled. `process_downvote`'s structurally identical inner `if` (2417-2429) has its own `else` (2430-2431) logging `'Cannot downvote this'` / `APLOG_IGNORED`. The same input (an over-quota voter) produces zero log rows through one delegate and one `ignored` row through the other. An operator monitoring `ActivityPubLog` for blocked votes would see every blocked downvote and miss every inner-guard-blocked upvote. | low — diagnostic/operational asymmetry, no security or data-integrity impact | **measured**: `test_an_upvote_blocked_by_the_vote_quota_logs_nothing` (asserts zero rows) and `test_a_downvote_blocked_by_the_vote_quota_logs_ignored` (asserts one `ignored` row) against the same quota-exceeded input, `tests/test_inbox_dispatch_votes.py` (Task 5) |
+| D58 | `process_inbox_request`, Move arm | The Move guard at routes.py:1579 (`user.id == post.user_id or origin_community.is_moderator(user) or (origin_community.instance_id == user.instance_id and origin_community.is_instance_admin(user))`) has no `else`; when every alternative is false, control falls straight through to the next activity-type check (`'Block'`, routes.py:1590) with nothing logged and the post left unmoved. The refused Move produces **zero** `ActivityPubLog` rows, unlike essentially every other refusal path in this function (compare D49-D56, D63, and the ordinary Flag/Update/Add/Remove refusals, all of which log something). The security outcome is correct — the post does not move — but a hostile peer repeatedly attempting an unauthorized Move leaves no operational trace at all. | low — silent refusal with no diagnostic trace; no security or data-integrity impact, since the post correctly does not move | **measured**: `test_a_move_by_an_unrelated_user_does_nothing` asserts `ActivityPubLog.query.count() == 0` with logging enabled, `tests/test_inbox_dispatch_misc.py` (Task 7) |
+| D59 | `find_actor_or_create_cached` / `_find_actor_id_cached` (`app/activitypub/util.py:313-360`), every call site | **The Redis ID-cache fast path bypasses the banned-actor filter for up to ten minutes, and this generalises beyond the inbox dispatcher.** `_find_actor_id_cached` is `@cache.memoize(timeout=600)` (util.py:313) and caches only `(id, class_name)` (util.py:320) — never the model, never a banned flag. On a cache hit, `find_actor_or_create_cached` re-fetches the row with a bare `db.session.get(User\|Community\|Feed, actor_id)` (util.py:356-360), which applies **no banned filter of any kind**. A user banned within the ten-minute window after being resolved while in good standing therefore resolves as valid to any caller that does not perform its own explicit re-check. Two call sites in this codebase already know this and guard against it explicitly — `process_inbox_request`'s own Announce inner-actor walk (`if user.banned:`, routes.py:917-919, the site this sub-project's Task 4 exercised by monkeypatching `_find_actor_id_cached` to simulate a stale hit under `NullCache`) and `process_announce_of_uri`'s own backstop (`if announcer.banned:`, util.py:3899, whose own comment already names this exact mechanism: "this branch only fires for a `_find_actor_id_cached()` entry cached before the actor was banned, which bypasses that upstream check"). **Every other caller does not.** `grep -rn 'find_actor_or_create_cached(' app/` finds 27 call sites; besides the two guarded ones above, this includes `process_inbox_request`'s own preamble lookups (routes.py:862, 864, 866, 871 — none re-check `.banned` on the resolved actor), the gate's own actor resolution in `shared_inbox`/`replay_inbox_request` (routes.py:703, 817), and at least eleven further sites across the moderation arms (Follow, Add/Remove Moderator, Move's origin/target, Block, private messages) that this sub-project did not audit individually. **Reach beyond the two confirmed sites is a reading-level claim, not a measured one** — no test in this sub-project demonstrated a stale-cache hit reaching any call site other than routes.py:915-919 (which Task 4 already had to simulate via monkeypatch, since this suite's `NullCache` config never actually caches). | medium-high — security-relevant, a caching side-channel that can admit a banned actor for up to ten minutes at any unguarded call site; **confirmed reachable and simulated at one site (routes.py:915-919), reasoned but not demonstrated at the other ~25** | **measured** at one call site: Task 4's `test_an_announce_whose_inner_actor_is_banned_is_refused` (monkeypatches `_find_actor_id_cached` to simulate a warm cache entry, then bans the user, and confirms the 917-919 backstop fires); **reading-only** for every other call site's exposure |
+| D60 | `process_inbox_request`, the dispatcher's own `session` local vs. `db.session` | **The inline (DEBUG) and queued (Celery) dispatch paths run under different session arrangements, and this is observable only for part of the function.** `patch_db_session` (`app/utils.py:3663-3673`) only replaces `db.session` when `has_request_context()` is false. Under a direct call (`dispatch()`, Task 1) there is no request context, so patching occurs and the dispatcher's `session` local and `db.session` are the same object for the call's duration. Under a real signed HTTP request (Task 8's three seam tests), `has_request_context()` is True, so patching does **not** occur: the dispatcher's `session` local (from `get_task_session()`) stays an independent `Session(bind=db.engine)` while `db.session` remains the request-scoped session. **Both halves matter, and neither should be read alone.** Task 8 established, empirically, that this divergence is **NOT observable in its three seam tests**, because `find_actor_or_create_cached` and everything beneath it (`find_actor_or_create`, `find_actor_by_url`, `find_remote_actor`) always resolve through `db.session` — never through the dispatcher's `session` local — so both the gate's actor resolution and the dispatcher's re-resolution land on the same session object regardless of which arrangement is in effect. But `process_inbox_request` itself contains lookups that DO use the `session` local directly: `session.query(CommunityBan)` (routes.py:950), and `session.query(ChatMessage)` (routes.py:1319, 1739; `process_chat_message`, util.py:2558). None of these three call sites is exercised by any test in this sub-project — Flag, Move, QuoteRequest and the vote arms never reach them, and Task 8's three seam tests are Like/Announce-shaped, not Block/ChatMessage-shaped. So the divergence Task 1 flagged is real and would be live for those lookups under the request-context path, but no test in this repository (as of this sub-project) exercises a request-context call that reaches any of them, so the claim that it actually diverges observably is **reasoned from source, not measured**. | informational — a genuine architectural asymmetry between two production paths, confirmed not to matter for the paths this sub-project tested and confirmed (by source, not by test) to remain live for three untested lookups | **measured** (does not diverge): Task 8's three seam tests, for `find_actor_or_create_cached` only. **Reasoned, not measured** (would diverge): the `CommunityBan`/`ChatMessage` lookups, none of which any test in this sub-project reaches under a request context |
+| D61 | `process_inbox_request` preamble | `actor and isinstance(actor, User)` (routes.py:872) and `actor and isinstance(actor, Community)` (routes.py:874) — the `actor and` half of both compound guards is an **equivalent mutant (dead code)**. `find_actor_or_create_cached`'s return type is `User \| Community \| Feed \| None`; none of the three model classes overrides `__bool__`/`__len__`, so every value `actor` can take is either `None` (already falsy, and `isinstance(None, ...)` is already `False`) or a real ORM instance (always truthy). `actor and X` and bare `X` therefore evaluate identically for every reachable input. Confirmed empirically, not by argument alone: dropping either `actor and` clause and re-running the full 14-test (at the time) `tests/test_inbox_dispatch_preamble.py` suite left it fully green. | informational — dead code, no behaviour to change or test | **measured**: both mutants run against the full suite, both survived (Task 3) |
+| D62 | `process_upvote` | `isinstance(liked, (Post, PostReply))` (routes.py:2403) is an **equivalent mutant (dead code)**. `find_liked_object` (`app/activitypub/util.py:2024`) is typed `Union[Post, PostReply, None]` with exactly two return statements, neither of which can produce any third type; `process_upvote`'s own early return two lines above (2399-2401) already handles the `None` case, so by the time this line runs `liked` can only ever be a `Post` or `PostReply` — the check can never observe `False`. Confirmed empirically: dropping it and re-running the full 14-test `tests/test_inbox_dispatch_votes.py` suite (as it stood at the time) left all 14 green. | informational — dead code, no behaviour to change or test | **measured**: the mutant run against the full suite, survived (Task 5) |
+| D63 | `process_inbox_request` preamble | The Announce/Accept/Reject actor-not-found refusal (routes.py:868) always logs `APLOG_ANNOUNCE` (`app/constants.py:132`), even when the activity that triggered it was an `Accept` or a `Reject`, not an `Announce`. An operator reading `ActivityPubLog` for a refused `Accept`/`Reject` sees it mislabelled as the wrong activity kind. | cosmetic | reading; surfaced while writing Task 2's outcome table, not independently re-run against a test, since no test in this sub-project distinguishes the three activity types at this specific log call |
+
+### 3. A test gap distinct from a defect: `create_if_not_found=False`'s untested semantic effect
+
+Not D-numbered, because nothing here is wrong with the code — this is a gap
+in what this sub-project's tests can claim, recorded per the same standard
+D21's qualification and sub-project 2's Step 3 already used. Task 2 dropped
+`create_if_not_found=False` from routes.py:862 (the community lookup in the
+Announce/Accept/Reject preamble) twice. The first run "killed" four tests,
+but every failure was `respx.models.AllMockedAssertionError` — an
+infrastructure fact (removing the guard causes an attempted fetch) established
+before any of this file's own assertions ran, per the Task 2 standing rule
+that such a kill is not evidence about the guard's effect on *which actor
+gets resolved*. Re-run with the fetch served successfully (a mocked GET
+returning the pre-existing row's own document), **all tests passed
+unchanged**: `actor_json_to_model`'s dedup query finds the same row that was
+already on file, `create_actor_from_remote` returns it, and the
+`community_only` discard applies identically with or without the guard. So
+**this sub-project's own tests do not discriminate `create_if_not_found=False`'s
+semantic effect**, only its infrastructure-visible side effect (an attempted
+fetch). Task 2's report names the one scenario that would discriminate it —
+a document that deserializes to a *different* model class than the row
+already on file at that URL (e.g. a `Group` document served at a URL this
+suite only ever seeded as a `User`/`Feed`) — and explicitly leaves
+constructing it to whoever next touches this guard.
+
+### 4. Documentation corrections, in this sub-project's own record
+
+Two errors the ledger flags in this sub-project's own planning and test
+documentation, corrected here rather than by editing the test files
+themselves (per the report-only constraint):
+
+- **The `orderedItems` read is at routes.py:909, not :911.** Both this
+  sub-project's plan/brief and (faithfully, since a test docstring is
+  supposed to describe the code it exercises) `tests/test_inbox_dispatch_announce.py`'s
+  own docstring cite line 911. Read against source (reproduced in section 1
+  of this entry), the read is `for obj in request_json['object']['orderedItems']:`
+  at line 909; line 911 is the loop body's `fake_activity['object'] = obj`
+  two lines further down. D51 above cites the corrected line number.
+- **Task 4's feed-path test overclaims what it proves about `user` being
+  "cleared."** The test's docstring says it proves `user` was explicitly set
+  to `None` at routes.py:924 (the Announce arm's `else: user = None`, taken
+  when the outer actor resolved as a Feed). It does prove the walk was
+  *skipped* — `process_upvote` is monkeypatched and receives `user_arg is
+  None` while a banned inner actor that would have tripped the 917-919
+  refusal had the walk run is present in the fixture, which only holds if
+  the walk never ran. But routes.py:858 already runs `feed = community =
+  user = None` on **every** call, before any branch — so `user` is `None`
+  going into the Feed arm regardless of whether line 924 executes at all.
+  Deleting routes.py:923-924 outright would leave this test green. The
+  walk-skip claim is proven; the claim that line 924 specifically is what
+  cleared `user` is not, and is withdrawn here.
+
+### 5. Converting D21, D24 and D35's reachability claims — upgrade only what the tests support
+
+Sub-project 4 established the standard paragraph for this ("upgrade only
+what the tests support... the campaign's most-repeated correction"), and
+this sub-project has to write it again for the same mechanical reason: it
+executes more of the dispatcher than sub-project 4 did, but still not the
+functions D21, D24 and D35 actually describe.
+
+`tests/test_inbox_dispatch_preamble.py`'s module docstring states, for
+Task 8's three seam tests, what they license — quoted here verbatim except
+for one correction the review caught (the source said "the vote arms",
+plural; only `process_upvote` was ever driven through the gate,
+`process_downvote` never was — rendered singular below):
+
+> What these three tests LICENSE: that a real signed peer reaches the
+> preamble (routes.py:839-931), the Announce unwrap (routes.py:899's
+> process_announce_of_uri call), and **the upvote arm** (routes.py:1329's
+> process_upvote call), for exactly three shapes -- a Like from a known
+> User, an Announce of a plain-string object from a known User, and (for the
+> third test) the same Like shape again, used to pin that the actor object
+> the gate verified the signature against and the actor object the arm
+> receives are the same row.
+
+Every other test in this sub-project's four files calls `process_inbox_request`
+directly, through the `dispatch()` helper — none of them goes through
+`shared_inbox` or any real HTTP request. So "through the gate" applies to
+exactly those three tests, and only those three.
+
+**Do any of the three touch D21, D24 or D35's own functions?** No, for the
+same mechanical reason sub-project 4 gave for its own tests, one layer
+deeper. `test_a_signed_like_reaches_the_upvote_arm_through_the_gate` and
+`test_the_actor_the_gate_verified_is_the_actor_the_arm_receives` both
+monkeypatch `process_upvote` — a function D21/D24/D35 do not describe at
+all. `test_a_signed_announce_reaches_the_unwrap_through_the_gate` monkeypatches
+`process_announce_of_uri` itself and asserts only that it was reached with
+`community is None`; it never runs `process_announce_of_uri`'s real body,
+which is where D21's `netloc` comparison and D35's reply-creation defect
+actually live. No test anywhere in this sub-project executes
+`resolve_remote_post`, `verify_object_from_source`, `create_resolved_object`
+or `resolve_remote_post_from_search` — the functions D21, D24 and D35
+respectively describe — for real; Task 4's Move test doubles
+`resolve_remote_post_from_search` outright (see the report's construction
+note), which is D24's own call site.
+
+**Therefore: D21, D24 and D35 are unchanged by this sub-project.** They
+remain exactly as reading- or probe-backed as sub-projects 2b, 3 and 4 left
+them. This sub-project's genuine, newly-measured contribution is one layer
+higher: that a real signed peer, through the real gate, reaches
+`process_inbox_request`'s own preamble and its Announce-unwrap and
+upvote-dispatch call sites — a fact that did not exist as tested behaviour
+before Task 8, and that sub-project 4's own tests (which monkeypatch
+`process_inbox_request` itself away) could not have shown. Claiming more
+than that — that this sub-project's tests say anything new about D21, D24
+or D35's own behaviour — would repeat the exact error this campaign keeps
+correcting.
+
+### 6. The allocation ledger, updated
+
+D1–D20 sub-project 2a, D21–D24 sub-project 2b, D25–D29 sub-project 2c,
+D30–D33 sub-project 2c's whole-branch review, D34–D40 sub-project 3, D41–D46
+sub-project 4, D47 sub-project 4's whole-branch review, D48 the follow-on
+audit of `instance_allowed`/`instance_banned`. **D49–D63 this sub-project**
+(section 2 above): D49-D52, D55-D56 the unguarded peer-supplied reads; D53
+the shipped breakpoint hook; D54 the unbounded Announce recursion; D57 the
+upvote/downvote logging asymmetry; D58 Move's silent no-op; D59 the
+Redis ID-cache banned-actor bypass, generalised beyond this call site; D60
+the inline/queued session-arrangement divergence; D61-D62 the two equivalent
+mutants; D63 the `APLOG_ANNOUNCE` mislabelling. **Next free number: D64.**
 
 ## Ratchet gotchas
 
