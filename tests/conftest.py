@@ -425,6 +425,23 @@ def redis_double(monkeypatch):
 
     Still NOT covered: the rate limiter and Celery app, built from Config at
     import time.
+
+    CAVEAT (sub-project 5a): this fixture's `fakeredis.FakeRedis` instance
+    cannot serve a redis-py lock in this environment. `fakeredis==2.37.1`
+    (requirements-test.txt), with no `lupa` installed, implements no Lua
+    scripting at all -- not EVAL, not EVALSHA. `redis.lock.Lock.acquire()`
+    needs none (plain SET NX PX) and succeeds, but `Lock.release()` calls a
+    Lua script via EVALSHA and raises
+    `redis.exceptions.ResponseError: unknown command 'evalsha'` on
+    `__exit__`, every time, for any `with redis_client.lock(...):` block
+    (there are 34 such call sites under app/, per
+    `grep -rn 'redis_client\.lock(' app/`). Do not chase this by changing
+    this fixture -- it patches the right attribute; the fakeredis version
+    just can't back a lock's release. Use a narrow local double instead,
+    e.g. one whose `.lock(...)` returns `contextlib.nullcontext()`; see
+    `_RedisLockOnlyDouble` / `redis_lock_only_double` in
+    tests/test_inbox_dispatch_votes.py and "The fakeredis lock limitation"
+    in tests/README.md.
     """
     server = fakeredis.FakeRedis(decode_responses=True)
     for module in ('app.utils', 'app.main.routes', 'app.cli', 'app.activitypub.routes'):
