@@ -1147,8 +1147,11 @@ says which numbers are taken. So there is one now, and it is this file:
   `instance_allowed`/`instance_banned`'s other call sites, which D47's row named
   as its deeper half and left unexamined. D49–D63 sub-project 5a (the inbox
   dispatcher's preamble, Announce unwrap, vote arms, and Flag/Move/QuoteRequest
-  — see that section for the table).
-  **Next free number: D64.** If you take it, say so here in the change that
+  — see that section for the table). D64–D77 sub-project 5b (the Follow,
+  Accept and Reject arms of the membership handshake — see that section for
+  the table; D76–D77 are fixed, not merely registered, under this
+  sub-project's own bounded authorisation).
+  **Next free number: D78.** If you take it, say so here in the change that
   takes it.
 
 Two entries in the reports were deliberately **not** counted as defects, and are
@@ -2598,7 +2601,204 @@ the shipped breakpoint hook; D54 the unbounded Announce recursion; D57 the
 upvote/downvote logging asymmetry; D58 Move's silent no-op; D59 the
 Redis ID-cache banned-actor bypass, generalised beyond this call site; D60
 the inline/queued session-arrangement divergence; D61-D62 the two equivalent
-mutants; D63 the `APLOG_ANNOUNCE` mislabelling. **Next free number: D64.**
+mutants; D63 the `APLOG_ANNOUNCE` mislabelling.
+
+## Sub-project 5b: the Follow, Accept and Reject arms of the membership handshake
+
+`docs/superpowers/specs/2026-08-30-coverage-inbox-membership-5b-design.md`, on
+branch `blentz`. Eight test-writing tasks plus this report-only task covered
+`process_inbox_request`'s three membership-handshake arms directly downstream
+of the preamble 5a covered: Follow (routes.py:935-1073, all three targets --
+Community, Feed, User), Accept (1075-1148) and Reject (1150-1191). 43 tests
+across two files: `tests/test_inbox_dispatch_follow.py` (18) and
+`tests/test_inbox_dispatch_accept_reject.py` (25, including Task 5's and
+Task 7's fix-verification tests). This sub-project carried an explicit,
+bounded exception to the campaign's report-don't-fix rule: **Tasks 5 and 7
+were separately authorised by the project owner to fix exactly two defects
+each found while writing its own tests** (recorded as D76 and D77 below),
+while every other defect this sub-project found -- in Tasks 1-4, 6, 8 and
+this task -- was registered, not fixed. `git diff --stat app/` is empty for
+every task except 5 and 7, each confined to the one function this row names.
+
+### 1. Whole-unit coverage, and every gap explained
+
+Measured against this sub-project's own two files, per this task's brief:
+
+```bash
+./run_tests.sh tests/test_inbox_dispatch_follow.py tests/test_inbox_dispatch_accept_reject.py \
+  -q --cov=app.activitypub.routes --cov-report=json
+```
+
+43 passed. This is deliberately narrower than 5a's own whole-branch command
+(which ran all four of that sub-project's files together) -- the brief for
+this task named exactly these two files, so the blended module-level
+`percent_covered` reported here (15.78%, 333/1814 statements by
+`percent_covered`'s own statement count, 94/892 branches) is **not**
+comparable to 5a's 18.35% figure without accounting for that difference; it
+reflects only what these two files exercise, not a regression. The number
+that matters for this task is the three spans' own figures, intersected from
+`coverage.json`'s `executed_lines`/`missing_lines`/`executed_branches`/
+`missing_branches` against `935-1073`, `1075-1148` and `1150-1191`, the same
+method 5a and earlier sub-projects used:
+
+| span | statements | branches |
+|---|---|---|
+| Follow (935-1073) | 80/80 executed | 32/34 executed, 2 missing arcs |
+| Accept (1075-1148) | 60/60 executed | 29/32 executed, 3 missing arcs |
+| Reject (1150-1191) | 36/36 executed | 22/24 executed, 2 missing arcs |
+
+**Every statement in all three spans is executed.** Zero missing lines --
+this sub-project's eight test-writing tasks between them drove every branch
+of the Community/Feed/User dispatch in Follow, every one of Accept's three
+target branches plus its a.gup.pe string-object and IntegrityError paths,
+and all three of Reject's target branches. The only gaps are the seven
+missing branch arcs below, each explained rather than left as a remainder.
+
+**Documentation correction, in the same spirit as this document's recurring
+"a hand-carried figure was wrong" theme:** the brief and this sub-project's
+own plan state Reject's span as 35 statements. Measured directly against
+`coverage.json`, it is **36** -- one more than declared. Re-counted by hand
+against source: the span (1150-1191) contains exactly 36 executable
+statement lines (blank line 1191 is not one of them). Not a defect, and it
+does not change the "every statement executed" claim above; recorded here so
+a future reader who re-derives the count is not surprised to find 175 was
+one short of what this task actually measured (176 = 80+60+36).
+
+**The seven missing branch arcs, in full:**
+
+1. **Follow, arc `[1018, 1072]` -- the User target's `elif isinstance(target,
+   User):` False-skip.** This is an **equivalent mutant / dead branch**, by
+   the same type-narrowing argument 5a's D61/D62 established for the
+   preamble's `actor and isinstance(...)` guards and `process_upvote`'s
+   `isinstance(liked, (Post, PostReply))` check. `target` comes from
+   `find_actor_or_create_cached(target_ap_id)` (routes.py:938), typed
+   `User | Community | Feed | None`; the `not target` case already returned
+   at :939-941, and both the Community branch (:942, returns at :981) and
+   the Feed branch (:983, returns at :1017) return from inside their own
+   bodies before control can ever reach line 1018. So by the time line 1018
+   is evaluated, `target` is neither `None`, `Community` nor `Feed` --
+   it must be `User`, and the `elif`'s False arm can never fire. No test
+   exercises it because no input can.
+2. **Follow, arc `[1034, 1036]` -- the `if not local_user.ap_followers_url:`
+   False-skip (routes.py:1034-1035).** A real, narrow test-matrix gap, not a
+   defect: every User-target test in this file's fixtures leaves
+   `ap_followers_url` unset on the local target, so the guard's True arm
+   (backfilling it) fires every time; no test seeds a local user who
+   already has `ap_followers_url` populated before a remote Follow arrives,
+   which is the only way to exercise the False arm.
+3. **Accept, arc `[1084, 1091]` -- the a.gup.pe string-object path's
+   `if join_request:` False-skip (routes.py:1084-1085).** A real, narrow
+   test-matrix gap. Task 5's two string-object tests
+   (`test_an_agupe_string_accept_admits_the_join_requests_user`,
+   `test_an_agupe_numeric_style_accept_retries_by_primary_key`) both embed a
+   real, existing `CommunityJoinRequest`'s own `uuid` or `id` in the
+   string, so `join_request` is always found by one of the two lookups.
+   Neither test tries a string whose trailing segment matches no join
+   request at all -- the case the code's own `if not requestor_user:`
+   check at :1091 exists to handle gracefully (log FAILURE, return) is
+   never driven for this specific (string-object) entry to that check.
+4. **Accept, arc `[1086, 1091]` -- the `elif core_activity['object']['type']
+   == 'Follow':` False-skip (routes.py:1086-1090), for a dict-shaped
+   object.** A real, narrow test-matrix gap, and the Accept-side mirror of
+   something this sub-project DID test on the Reject side. Every Accept
+   test in this suite sends `object` as either the a.gup.pe string form or
+   `_follow_object(...)`, whose `'type'` is always `'Follow'` --
+   Task 6's own outcome-table comment names the "object dict, type !=
+   'Follow'" case explicitly (`requestor_user` stays `None`, falls to
+   :1091's FAILURE) but no test constructs it. Contrast Task 8's Reject-side
+   `test_a_reject_of_a_non_follow_object_is_silently_ignored`, which does
+   send a `{'type': 'Undo', ...}` object -- the same shape exists as an
+   untested table row on the Accept side and a tested one on the Reject
+   side.
+5. **Reject, arc `[1150, 1193]` -- the top-level `if core_activity['type']
+   == 'Reject':` False-skip, falling through to the Create/Update check at
+   :1193.** Legitimately out of this sub-project's scope, not a gap in
+   Reject's own coverage. Within this two-file suite, the ONLY way to reach
+   line 1150 at all is a genuine `Reject`-type activity: every Follow test
+   returns at :1072 and every Accept test returns at :1147, both strictly
+   before line 1150 is ever reached, so no test in either file could ever
+   present a non-`Reject` type at that check. Driving the False arm needs a
+   `Create`/`Update`/other-type activity, which is a different sub-project's
+   scope entirely (this function's dispatch chain extends far past line
+   1191).
+6. **Accept, arc `[1130, 1147]` -- the `elif user:` False-skip
+   (routes.py:1130-1146).** An **equivalent mutant / dead branch**, the same
+   type-narrowing shape as gap 1 above, one level up: by the time Accept's
+   own dispatch reaches line 1130, both `if community:` (:1095) and
+   `elif feed:` (:1118) have already evaluated False. The preamble's own
+   actor-not-found refusal (routes.py:868, 5a's D63 row) already returns
+   before this code if the Accept's outer actor resolved to none of
+   community/feed/user at all -- so reaching line 1130 guarantees the actor
+   resolved to exactly one of the three, and having ruled out the first two,
+   `user` must be truthy. No input can make this arc's False direction fire.
+7. **Reject, arc `[1179, 1190]` -- the `elif user:` False-skip
+   (routes.py:1179-1189).** The same equivalent-mutant argument as gap 6,
+   applied to Reject's identically-shaped `if community: elif feed: elif
+   user:` dispatch.
+
+None of the four dead-branch gaps (1, 6, 7, and D61/D62's own two from 5a)
+were run as an explicit mutation-and-survive check the way 5a did for its
+two -- this sub-project's own test-writing tasks did not target these three
+arcs specifically, and this report-only task did not add mutation evidence
+beyond the type-narrowing argument from source, which is why they are
+presented as reading-level reasoning rather than a measured mutant survival,
+unlike 5a's D61/D62.
+
+### 2. New defects -- D64-D75
+
+None fixed by this task, per its report-only remit. D76 and D77 (section 3
+below) are the two exceptions this sub-project's own authorisation carved
+out, and both were fixed by the tasks that found them, not by this one.
+Severity is argued from what the tests actually executed wherever a test
+exists; several rows below say explicitly which half of the claim is
+measured and which is reasoned from source.
+
+| # | function | defect | severity | evidence |
+|---|---|---|---|---|
+| D64 | `process_inbox_request`, Follow/User auto-accept (routes.py:1030-1071) | The `UserFollower` row (`session.add`/`session.commit()`, :1036-1037) and its `Notification` (`db.session.add`/`db.session.commit()`, :1067-1069) are written through two different session objects inside one logical write -- the concrete instance, one line deeper, of 5a's D60 session-arrangement divergence. Under a direct `dispatch()` call (this sub-project's own harness), `patch_db_session` reassigns `db.session` to a wrapper proxying to the same task-local `session`, so both writes land on what is behaviourally the same object; under a real request-context dispatch (the gate's own path), `patch_db_session` does not fire, and the two are genuinely independent sessions. | informational -- confirmed equivalent under the harness this sub-project tests through; the request-context divergence is D60's own claim, not independently re-demonstrated here | **measured**: Task 4's `test_the_follower_row_and_its_notification_are_written_through_different_sessions` confirms both rows land under direct dispatch, and its own docstring states plainly it cannot exhibit D60's request-context divergence; **reading-level**: that the divergence is real under a request-context path (D60, 5a) |
+| D65 | `process_inbox_request`, Follow/Feed target (routes.py:989-999) | The Feed reject path sends a `Reject` over the wire but calls `log_incoming_ap` nowhere on this path, unlike Community's two reject reasons (:945-953), which both log `APLOG_FAILURE` before sending. A rejected Feed-follow attempt leaves no `ActivityPubLog` row at all. | low -- diagnostic/audit-trail asymmetry; the reject itself is correct, only its record is missing | **measured**: `test_a_follow_of_a_non_public_feed_is_rejected_without_any_log` asserts `ActivityPubLog.query.count() == 0` with `LOG_ACTIVITYPUB_TO_DB` enabled (Task 3) |
+| D66 | `process_inbox_request`, Follow, all three targets' already-related paths (Community :964-965, Feed :1001, User :1030) | Each writes nothing, sends nothing, and logs nothing when the relationship already exists (an existing `CommunityMember`, an already-`SUBSCRIPTION_MEMBER` `FeedMember`, an existing `UserFollower`). A peer that re-sends a Follow it already holds leaves zero trace on either the DB audit log or the wire, uniformly across all three targets. | low -- same shape as 5a's D58 (silent no-op, no security/data-integrity impact since the correct outcome, no duplicate relationship, already holds) | **measured**, three distinct tests: Task 2's `test_a_follow_from_an_existing_member_writes_nothing_and_stays_silent`, Task 3's `test_a_follow_from_an_existing_feed_member_writes_nothing_and_stays_silent`, Task 4's `test_a_follow_from_an_existing_inward_follower_writes_nothing_and_stays_silent` |
+| D67 | `process_inbox_request`, Follow/User target (routes.py:1033) | `is_accepted=auto_accept if auto_accept else None` can only ever write `True` or `None` on this path. `UserFollower.is_accepted`'s own column comment (`app/models.py:3533`) documents `False` ("Rejected") as a third, meaningful state that this specific write path can never produce -- a `UserFollower` can only ever reach `False` through Reject's own write at routes.py:1186, never through Follow's own acceptance logic. | informational -- a dead state on this one write path, not a bug (nothing on this path is meant to write `False`) | **measured**: `test_a_follow_never_records_is_accepted_false`, parametrised over `manually_approves in [False, True]`, asserts `is_accepted != False` in both (Task 4) |
+| D68 | `process_inbox_request`, Reject (routes.py:1154, 1168, 1178, 1189) | All four of Reject's `log_incoming_ap` calls -- the unresolvable-actor failure and all three target branches' success logs -- pass `APLOG_ACCEPT`. Every `ActivityPubLog` row a Reject produces reads as an Accept. Same defect class as 5a's D63 (the preamble's Announce/Accept/Reject refusal always logging `APLOG_ANNOUNCE`), here spanning the whole arm rather than one preamble line. | cosmetic -- operator-facing mislabeling only; the correct membership/follow-request deletion still happens on every branch | **measured** at one of the four sites: `test_a_reject_is_logged_as_an_accept` asserts `log.activity_type == APLOG_ACCEPT[1]` on the community branch's success path (:1168); **reading-level** for the other three sites (:1154, :1178, :1189), which reuse the identical `log_incoming_ap(id, APLOG_ACCEPT, ...)` call shape, confirmed by source inspection rather than one test per site (Task 8) |
+| D69 | `process_inbox_request`, Reject (routes.py:1151) | When the Reject's inner `object['type']` is not `'Follow'`, the `if core_activity['object']['type'] == 'Follow':` check has no `else` -- control falls straight to the outer `return` at :1190 having done nothing. No log row, no error, no indication a Reject was even received. | low -- silent no-op, same shape as 5a's D58 (Move's missing-`else` fallthrough); no security or data-integrity impact | **measured**: `test_a_reject_of_a_non_follow_object_is_silently_ignored` sends `object={'type': 'Undo', ...}` and asserts `ActivityPubLog.query.count() == 0` with logging enabled (Task 8) |
+| D70 | `process_inbox_request`, Accept (routes.py:1086) and Reject (routes.py:1151) | Both read `core_activity['object']['type']` with no guard that the key exists and no guard that `core_activity['object']` is even a dict. An object dict with no `'type'` key raises `KeyError`, uncaught, before any log row is written; an object that is neither a dict nor (for Accept only, via :1077) a string -- a bare list or int -- raises `TypeError` indexing it. The same unguarded-peer-supplied-key shape this document already generalises from D13/D30 and 5a's D49-D52/D55/D56. | medium -- peer-triggerable, unhandled exception instead of a graceful refusal, consistent with the severity this document has given this shape throughout | **reading-level only** -- no test in this sub-project sends an Accept or Reject whose object lacks a `'type'` key or is neither a string nor a dict; every object in this suite is a full URL string (Accept's a.gup.pe path only) or a dict that always carries `'type'` |
+| D71 | `process_inbox_request`, Accept/community branch (routes.py:1108) | `User.query.get(join_request.user_id).bot` reads through Flask-SQLAlchemy's legacy `Model.query`, bound to `db.session` -- not the function's own task-local `session` object every other query in this arm uses (`session.query(User).get(...)` at :1085, `session.query(CommunityJoinRequest)` at :1096, and five more in this arm alone). A second instance of 5a's D60 session-arrangement fact inside the very code path Task 4's D64 test already demonstrated it for. Also emits SQLAlchemy's `LegacyAPIWarning` on every call (`Query.get()` is deprecated in favour of `Session.get()` under SQLAlchemy 2.0). | informational/low -- a deprecation plus an architectural inconsistency; not demonstrated to produce an incorrect `bot` read, since the value is read-only here with no write race shown | **measured** that the warning fires, observed directly in this task's own coverage run output; **reading-level** that this constitutes a second, distinct session object under a request-context dispatch (extending D60/D64's reasoning, not independently re-demonstrated for this call site) |
+| D72 | `process_inbox_request`, Accept/community branch (routes.py:1114) | **The `IntegrityError` handler is bound to the wrong exception class.** `routes.py:6` is `from psycopg2 import IntegrityError`, so `except IntegrityError:` at :1114 is bound to psycopg2's driver-level class, not `sqlalchemy.exc.IntegrityError`. SQLAlchemy wraps every DBAPI exception it catches from the underlying driver in its own class hierarchy before re-raising, and the ORM code this handler guards (`session.add(member)`/`session.commit()` at :1107/:1111, both against a SQLAlchemy `Session`) raises through that hierarchy, not psycopg2's. Verified in the running container (SQLAlchemy 2.0.52): `sqlalchemy.exc.IntegrityError`'s MRO is `IntegrityError -> DatabaseError -> DBAPIError -> StatementError -> SQLAlchemyError -> Exception`; `psycopg2.IntegrityError`'s MRO is `IntegrityError -> DatabaseError -> Error -> Exception`. The two hierarchies share only `Exception`, and `issubclass(sqlalchemy.exc.IntegrityError, psycopg2.IntegrityError)` is `False`. So a genuine concurrent-membership race -- two Accepts for the same join request landing close enough that both pass `if not existing_membership:` (:1101) before either commits -- raises `sqlalchemy.exc.IntegrityError` on the losing `session.commit()`, which this `except` clause cannot catch: it propagates unhandled, through the outer `except Exception: session.rollback(); raise` at :1885-1889, and out of the dispatcher entirely, rather than being caught and logged as "Membership already exists" at :1117. `psycopg2.IntegrityError` is a genuine top-level re-export (`psycopg2/__init__.py:57`), so the import is not a typo -- it is simply the wrong class for code written against a SQLAlchemy `Session`. This is the highest-value finding in this sub-project: it is the ONLY exception handler in the entire Follow/Accept/Reject scope, it exists specifically to make a known race condition safe, and it cannot do that job for a real ORM-raised violation. | **high** -- a race-safety handler that cannot catch the real-world exception class the race it exists to handle actually raises; under genuine concurrent load (two peers, or a retried Accept, landing close together) the intended graceful, idempotent "already a member" outcome becomes an unhandled exception instead | **measured**: the class-hierarchy fact itself, by executing `issubclass()` and inspecting `__mro__` for both classes in the running container -- not inferred from reading either library's source; **reading-level**: the production consequence under a genuine race, since Task 6's own `test_a_membership_race_is_caught_as_an_integrity_error` drives the `except` clause by patching `session.add` to raise `psycopg2.IntegrityError` directly (necessarily catchable, being that exact class), which cannot discriminate this defect -- no test in this sub-project forces a real concurrent `session.commit()` |
+| D73 | `process_inbox_request`, Follow/User target block guard (routes.py:1025) | **The third alternative of the block guard is dead under the default deny-list configuration.** `instance_banned(remote_user.instance.domain)` is unreachable via the ordinary path: the same `instance_banned` call inside `validate_remote_actor` (`app/activitypub/actor.py:68-69`), reached unconditionally from `find_actor_or_create_cached` at `app/activitypub/util.py:345` during the preamble's own actor resolution (routes.py:869, before the Follow branch is ever entered), already refuses a banned actor's signature before line 1025 can run. Task 4 confirmed this the direct way, not by assumption: seeding a bare `BannedInstances` row and dispatching produced `'Actor was not a user or a community' != 'Attempt to follow denied due to block'` -- the preamble's own refusal message, not this guard's. The alternative is reachable only under allowlist mode (`use_allowlist=True`), a genuine admin-facing configuration (`app/admin/routes.py:404-414`; 5a's D48 audit already established `AllowedInstances` and `BannedInstances` are edited independently with no cross-check), which routes actor validation through `instance_allowed()` instead, never consulting `BannedInstances`. Scoped exactly as the test docstring scopes it: **dead by default, not dead in general.** | informational -- dead code under the default configuration, reachable and meaningful under a real, if less common, admin configuration | **measured**: reachability under allowlist mode, via a 1-for-1 mutation kill isolated from the guard's other two alternatives (Task 4); **reading-level**, cross-referenced against 5a's own D48: the unreachability claim under the default deny-list configuration |
+| D74 | `process_inbox_request`, Reject/user branch (routes.py:1183-1184) | **Reject's `existing_follow` query omits the `is_inward` filter that Accept's equivalent query (:1134-1136) applies.** Accept's analogous lookup is filtered to `is_inward=False`, guaranteeing it only ever touches the outward `UserFollower` row (the local user's own follow of the remote user). Reject's lookup applies no such filter. Reasoned consequence: a `UserFollower` row can exist for either direction between the same two users (`is_inward=True` from the Follow arm's own inward-follow write at :1032, `is_inward=False` from this same Accept/Reject arm's outward-follow bookkeeping); if both exist for the same `(local_user_id, remote_user_id)` pair, Reject's unfiltered `.first()` can match either one, potentially flipping the wrong direction's `is_accepted` to `False`. | medium (reasoned) -- a correctness risk conditioned on a real but narrower precondition (a mutual-follow pair existing between the same two users), not demonstrated to fire | **reading-level only**, self-disclosed in the test's own docstring: Task 8's `test_the_reject_user_branch_flips_an_existing_follow_and_decrements` docstring states plainly that it does not exercise this asymmetry |
+| D75 | `process_inbox_request`, Reject/user branch (routes.py:1187) | `requestor_user.num_following -= 1` runs unconditionally whenever a `UserFollowRequest` join request is found, regardless of whether an `existing_follow` `UserFollower` row exists to decrement. Compare Accept's mirror-image increment (:1144), equally unconditional but only ever moving the counter up from a state Accept's own arm just created or confirmed -- Reject has no analogous guarantee, since a join request being present says nothing about whether a follow was ever actually accepted. A bare Reject with no prior acceptance (or a duplicate Reject) drives `num_following` negative, with nothing flooring it at zero. | low-medium -- data-integrity drift on a user-visible counter, peer-triggerable by sending a Reject with no corresponding acceptance | **measured**: `test_a_reject_decrements_num_following_even_with_no_follower_row` drives `num_following` from its seeded `0` to `-1` (Task 8) |
+
+### 3. Two defects fixed under explicit authorisation -- D76-D77
+
+Per the project owner's explicit instruction, this sub-project's Tasks 5 and
+7 -- and only those two -- were authorised to fix the one defect each found
+while writing its own tests, as a deliberate and bounded departure from this
+campaign's report-don't-fix rule. Every other defect this sub-project found
+(D64-D75 above, plus 5a's own D1-D63) was registered, not fixed. Both fixes
+are single-identifier or single-guard changes, verified against the whole
+suite, and are recorded here as fixed rather than open.
+
+| # | function | defect | status | evidence |
+|---|---|---|---|---|
+| D76 | `process_inbox_request`, Accept (routes.py:1085) | **FIXED, commit `3e5d9a2f`.** The a.gup.pe string-Accept path (routes.py:1077-1085) could never succeed. The branch looked up the `CommunityJoinRequest` by the string's trailing segment and assigned its user to `user` instead of `requestor_user` -- backwards per the function's own comment two lines above (`requestor_user` is who made the Follow, `user` is who sent the Accept) -- so `requestor_user` stayed `None`, `if not requestor_user:` at :1091 was always true, and the path logged `'Could not find recipient of Accept'` and returned on every call, discarding the lookup's result. Pre-fix failure recorded directly: `AssertionError: assert member is not None` (no `CommunityMember` ever created). Fix: one identifier changed, `user =` to `requestor_user =`, at :1085. Full suite after the fix: 2845 passed, 3 skipped, 0 errors (an initial 1-error run was independently isolated and confirmed to be contamination from an unrelated deadlocked background run, not a regression -- `tests/test_activitypub_util.py` passed 5/5 both with and without the fix in isolation). | fixed and verified | **measured**: pre-fix failure captured directly; post-fix, Task 5's `test_an_agupe_string_accept_admits_the_join_requests_user` and `test_an_agupe_numeric_style_accept_retries_by_primary_key` (the latter also covering the :1081-1083 non-uuid retry path) both pass; full-suite run confirms no regression |
+| D77 | `process_inbox_request`, Reject/user branch (routes.py:1179-1189) | **FIXED, commit `33167f20`.** Reject's user branch dereferenced an absent join request. When no `UserFollowRequest` existed between the two users (a Reject for a request that is already gone), `join_request` was `None`, and the very next line unconditionally read `join_request.user_id` -- `AttributeError: 'NoneType' object has no attribute 'user_id'` at routes.py:1183, uncaught. Fix: the branch body (the `existing_follow` query, the `is_accepted` flip, the `num_following` decrement, the commit, and the log call) was wrapped in `if join_request:`, matching the structure the sibling community (:1157-1168) and feed (:1169-1178) branches already had. `APLOG_ACCEPT` was left untouched everywhere, as instructed -- that mislabelling (D68 above) is a separate, deliberately out-of-scope finding. Full suite after the fix: 2859 passed, 3 skipped, no other test changed outcome. | fixed and verified | **measured**: pre-fix `AttributeError` captured directly from a real pytest failure; post-fix, `test_a_reject_for_a_missing_follow_request_is_handled` asserts the silent no-op (`ActivityPubLog.query.count() == 0`); full-suite run confirms no regression |
+
+### 4. The allocation ledger, updated
+
+D1-D20 sub-project 2a, D21-D24 sub-project 2b, D25-D29 sub-project 2c,
+D30-D33 sub-project 2c's whole-branch review, D34-D40 sub-project 3, D41-D46
+sub-project 4, D47 sub-project 4's whole-branch review, D48 the follow-on
+audit of `instance_allowed`/`instance_banned`, D49-D63 sub-project 5a.
+**D64-D77 this sub-project** (sections 2-3 above): D64 the Follow/Notification
+session split; D65 Feed's silent reject; D66 the three silent already-related
+paths; D67 `is_accepted` never `False` on the Follow path; D68 Reject's
+`APLOG_ACCEPT` mislabelling; D69 Reject's silent non-Follow ignore; D70 the
+unguarded `object['type']` reads in Accept and Reject; D71 the `User.query.get`
+legacy/session read; D72 the `IntegrityError` handler bound to the wrong
+exception class (this sub-project's highest-value finding); D73 the Follow
+block guard's third alternative, dead by default; D74 Reject's missing
+`is_inward` filter; D75 `num_following` drifting negative on Reject; D76-D77
+Tasks 5 and 7's two authorised fixes. **Next free number: D78.**
 
 ## Ratchet gotchas
 
