@@ -40,16 +40,122 @@ Registered for Task 9; not fixed here.
 All mutations were run one at a time against `app/activitypub/routes.py` and
 restored immediately after, verified via `git diff --stat app/` producing no
 output before this file's own change was committed.
+
+Task 6 adds the other two vote delegates, process_poll_vote (:2436-2460) and
+process_question_answer (:2463-2496).
+
+process_question_answer does `from app import redis_client` INSIDE the
+function body (:2475), then `redis_client.lock(...)`. This is exactly
+tests/conftest.py:394's `redis_double` fixture's SECOND documented mechanism,
+not its first: the fixture's docstring distinguishes `get_redis_connection`
+(imported as `from app.utils import get_redis_connection` at four separate
+module-level binding sites, each bound once at import time, so each needs its
+own patch) from `app.redis_client` (imported as `from app import
+redis_client` INSIDE a function body at ~14 call sites, re-executed on every
+call, so patching the single `app.redis_client` attribute redirects all of
+them). `grep -n 'from app import.*redis_client'
+app/activitypub/routes.py` confirms process_question_answer's import at
+:2475 is one of those in-function sites, not a module-level one -- so
+`redis_double` alone (no additional patching) is confirmed sufficient here.
+Every process_question_answer test below that reaches the success path (and
+therefore the `with redis_client.lock(...)` block) needs `app.redis_client`
+patched by SOME double; the refusal-only tests never reach the lock and do
+not need one.
+
+CORRECTION discovered while running the success-path tests: `redis_double`
+itself (a real `fakeredis.FakeRedis` instance) cannot be used here, even
+though the ATTRIBUTE it patches (`app.redis_client`) is exactly right per
+the paragraph above. Confirmed by direct probe:
+`fakeredis.FakeRedis().eval('return 1', 0)` raises `ResponseError: unknown
+command 'eval'` -- this environment's pinned fakeredis (2.37.1, no `lupa`
+installed, per `requirements-test.txt`) implements no Lua scripting AT ALL.
+redis-py's `Lock.release()` needs a Lua script (called via EVALSHA) to
+atomically check its token before deleting the key, so
+`with redis_client.lock(...):` against `redis_double`'s fakeredis instance
+ACQUIRES cleanly (plain SET NX PX, no Lua needed) but raises
+`redis.exceptions.ResponseError: unknown command 'evalsha'` on `__exit__`,
+every single time -- five failures, reproduced first as an actual test run
+before this paragraph was written. That gap is in this environment's Redis
+stand-in, not in process_question_answer's own logic, and mutual-exclusion
+semantics are not what these tests are trying to prove -- only that the
+delegate's own branching, Notification, and logging are correct. So the
+success-path tests below use `redis_lock_only_double` (defined just below
+the imports), which patches that SAME single `app.redis_client` attribute
+to a narrower double whose `.lock(...)` is a genuine no-op context manager,
+instead of `redis_double`.
+
+Step 2's `test_a_poll_vote_without_choice_text` is an OBSERVATION probe per
+the task brief, not a design choice: routes.py:2440 reads
+`request_json['choice_text']` (for a non-announced activity) with no `.get`
+and no prior guard, immediately after the `ap_id` line and BEFORE
+`Post.get_by_ap_id` is ever called -- so a peer that sends a Vote/Note
+activity missing `choice_text` raises an unhandled KeyError out of
+process_poll_vote, regardless of whether the target post exists. Verified by
+running it: the probe test's `pytest.raises(KeyError, match='choice_text')`
+passes against the unmodified function. Registered as a finding for Task 9;
+not fixed here.
+
+Step 4 drops each piece of process_question_answer's permission guard,
+routes.py:2474:
+
+    (not instance_banned(user.instance.domain)) and (
+        post_reply.user_id == post_reply.post.user_id
+        or post_reply.community.is_moderator(user)
+        or post_reply.author.is_instance_admin()
+    )
+
+Four pieces, four distinct killers below: the `instance_banned` conjunct
+(banned instance + alternative 1 already true, so only the conjunct's own
+removal flips the outcome), and each of the three OR-alternatives in
+isolation (alternative 1 true alone, alternative 2 true alone, alternative 3
+true alone) -- deliberately three DIFFERENT subjects, per the task brief:
+alternative 1 compares the reply's author to the POST's author (identity
+between two other people, independent of who is acting); alternative 2 asks
+whether the ACTING user moderates the community; alternative 3 asks whether
+the REPLY's author (not the acting user) is an instance admin. All four
+mutations were run one at a time against `app/activitypub/routes.py` and
+restored immediately after, verified via `git diff --stat app/` producing no
+output before this file's own change was committed. All four were BEHAVIOURAL
+kills (a genuine `AssertionError` from this file's own assertions), not
+`respx.models.AllMockedAssertionError` infrastructure kills -- there is no
+network fetch anywhere on process_question_answer's call path in these
+tests (no dispatch/actor-resolution, the community is always local, and
+announce_activity_to_followers is monkeypatched to a no-op in every killer
+test). The process_poll_vote instance_banned guard (routes.py:2448) was
+also mutation-tested the same way (`if not instance_banned(...)` -> `if
+True`), killed behaviourally by `test_poll_vote_blocked_by_a_banned_instance`,
+restored the same way.
 """
+import contextlib
+
 import pytest
 
 from app import db
 from app.activitypub import routes as activitypub_routes
-from app.activitypub.routes import process_downvote, process_upvote
-from app.models import ActivityPubLog, BannedInstances, PostVote, utcnow
-from tests.factories import (inbox_activity, make_community, make_instance, make_post, make_site,
-                             make_user, make_user_block)
+from app.activitypub.routes import process_downvote, process_poll_vote, process_question_answer, process_upvote
+from app.constants import NOTIF_ANSWER
+from app.models import (ActivityPubLog, BannedInstances, InstanceRole, Notification, Poll, PollChoice,
+                        PollChoiceVote, PostReply, PostVote, utcnow)
+from tests.factories import (inbox_activity, make_community, make_community_member, make_instance,
+                             make_post, make_post_reply, make_site, make_user, make_user_block)
 from tests.test_inbox_dispatch_preamble import dispatch
+
+
+class _RedisLockOnlyDouble:
+    """A minimal `app.redis_client` double covering ONLY `.lock(...)` used as
+    a context manager. See the module docstring's CORRECTION paragraph for
+    why `redis_double` itself cannot be used for process_question_answer's
+    success path: this environment's fakeredis has no Lua scripting, which
+    redis-py's real `Lock.release()` requires.
+    """
+
+    def lock(self, *args, **kwargs):
+        return contextlib.nullcontext()
+
+
+@pytest.fixture
+def redis_lock_only_double(monkeypatch):
+    monkeypatch.setattr('app.redis_client', _RedisLockOnlyDouble())
 
 
 def _seed_vote_scenario(host='peer.example'):
@@ -412,3 +518,448 @@ def test_upvote_blocked_by_the_authors_block_of_the_voter(app, db_session, monke
     process_upvote(voter, True, request_json, False)
 
     assert PostVote.query.count() == 0
+
+
+# --- Task 6: process_poll_vote, routes.py:2436-2460 ---
+
+def _seed_poll_scenario(host='peer.example'):
+    """A local-owned community (same id=1 / instance_id=1 seeding trick as
+    _seed_vote_scenario above), an author, a voter, and one Post with a Poll
+    carrying a single PollChoice ('yes'). Returns (voter, post, choice).
+    """
+    make_site()
+    instance = make_instance(host)
+    make_user(instance, 'community_owner')
+    community = make_community(host=host)
+    community.ap_fetched_at = utcnow()
+    author = make_user(instance, 'author')
+    voter = make_user(instance, 'voter')
+    post = make_post(community, author, ap_id=f'https://{host}/objects/1')
+    poll = Poll(post_id=post.id, mode='single', local_only=False)
+    db.session.add(poll)
+    choice = PollChoice(post_id=post.id, choice_text='yes', sort_order=0)
+    db.session.add(choice)
+    db.session.commit()
+    return voter, post, choice
+
+
+def test_poll_vote_of_an_unfound_post_logs_failure(app, db_session, monkeypatch):
+    """routes.py:2445-2447 -- Post.get_by_ap_id misses, logged as
+    APLOG_RATE/APLOG_FAILURE with the ap_id folded into the message, and the
+    function returns before instance_banned or the choice lookup ever runs.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    _voter, _post, _choice = _seed_poll_scenario()
+
+    ap_id = 'https://peer.example/objects/does-not-exist'
+    request_json = {'id': 'https://peer.example/activities/1', 'object': ap_id, 'choice_text': 'yes'}
+
+    process_poll_vote(_voter, True, request_json, False)
+
+    row = ActivityPubLog.query.one()
+    assert row.result == 'failure'
+    assert row.exception_message == f'Unfound object {ap_id}'
+    assert PollChoiceVote.query.count() == 0
+
+
+def test_poll_vote_success_votes_logs_and_announces_only_when_not_announced(app, db_session, monkeypatch):
+    """routes.py:2453-2456 -- the happy path: poll.vote_for_choice() runs for
+    real (a genuine PollChoiceVote row and an incremented PollChoice.num_votes,
+    not a mocked call), APLOG_RATE/APLOG_SUCCESS is logged, and
+    announce_activity_to_followers is called -- monkeypatched here as a
+    recorder -- BECAUSE `announced` is False. Its args are `(post.community,
+    user, request_json)` with NO `can_batch` kwarg, unlike the vote
+    delegates' `can_batch=True` call above.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    voter, post, choice = _seed_poll_scenario()
+
+    calls = []
+    monkeypatch.setattr(activitypub_routes, 'announce_activity_to_followers',
+                         lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    request_json = {'id': 'https://peer.example/activities/1', 'object': post.ap_id, 'choice_text': 'yes'}
+
+    process_poll_vote(voter, True, request_json, False)
+
+    vote = PollChoiceVote.query.filter_by(user_id=voter.id, choice_id=choice.id).one()
+    assert vote.post_id == post.id
+    assert PollChoice.query.get(choice.id).num_votes == 1
+    assert ActivityPubLog.query.one().result == 'success'
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args[0].id == post.community_id
+    assert args[1].id == voter.id
+    assert args[2] is request_json
+    assert kwargs == {}
+
+
+def test_poll_vote_announced_reads_the_nested_object_and_choice_text(app, db_session, monkeypatch):
+    """routes.py:2439-2440 -- for an announced activity, BOTH `ap_id` and
+    `choice_text` come from inside `request_json['object']`, not the
+    top-level keys used when not announced. The vote still succeeds through
+    that nested pair, but announce_activity_to_followers is never called,
+    because `announced` is True and :2456's `if not announced:` guard is what
+    gates that call.
+    """
+    voter, post, choice = _seed_poll_scenario()
+
+    calls = []
+    monkeypatch.setattr(activitypub_routes, 'announce_activity_to_followers',
+                         lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    request_json = {
+        'id': 'https://peer.example/activities/1',
+        'object': {'object': post.ap_id, 'choice_text': 'yes'},
+    }
+
+    process_poll_vote(voter, True, request_json, True)
+
+    vote = PollChoiceVote.query.filter_by(user_id=voter.id, choice_id=choice.id).one()
+    assert vote.post_id == post.id
+    assert len(calls) == 0
+
+
+def test_poll_vote_unwraps_a_dict_object_with_an_id_key(app, db_session, monkeypatch):
+    """routes.py:2441-2442 -- when the resolved `ap_id` is itself a dict
+    carrying an 'id' key, it is unwrapped to that inner string before
+    Post.get_by_ap_id is called. Proven by the vote succeeding at all: an
+    un-unwrapped dict would never match a Post's string `ap_id` column and
+    would fall into the unfound-object refusal instead.
+    """
+    voter, post, choice = _seed_poll_scenario()
+    monkeypatch.setattr(activitypub_routes, 'announce_activity_to_followers', lambda *a, **k: None)
+
+    request_json = {'id': 'https://peer.example/activities/1', 'object': {'id': post.ap_id},
+                    'choice_text': 'yes'}
+
+    process_poll_vote(voter, True, request_json, False)
+
+    vote = PollChoiceVote.query.filter_by(user_id=voter.id, choice_id=choice.id).one()
+    assert vote.post_id == post.id
+
+
+def test_poll_vote_of_an_unfound_choice_logs_failure(app, db_session, monkeypatch):
+    """routes.py:2458 -- the post is found but no PollChoice matches
+    `choice_text`, logged as APLOG_RATE/APLOG_FAILURE with the choice text
+    folded into the message. No PollChoiceVote is created.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    voter, post, _choice = _seed_poll_scenario()
+
+    request_json = {'id': 'https://peer.example/activities/1', 'object': post.ap_id,
+                    'choice_text': 'does-not-exist'}
+
+    process_poll_vote(voter, True, request_json, False)
+
+    row = ActivityPubLog.query.one()
+    assert row.result == 'failure'
+    assert row.exception_message == 'Unfound poll choice does-not-exist'
+    assert PollChoiceVote.query.count() == 0
+
+
+def test_poll_vote_blocked_by_a_banned_instance(app, db_session, monkeypatch):
+    """routes.py:2460 -- `instance_banned(user.instance.domain)` is True once
+    the voter's instance has a BannedInstances row, so the vote is refused
+    with APLOG_RATE/APLOG_IGNORED / 'Cannot rate this', even though the post
+    and choice both exist.
+
+    MUTATION killer: dropping the `not instance_banned(...)` guard entirely
+    (always taking the `if` branch) would let this vote through, which this
+    test's `PollChoiceVote.query.count() == 0` assertion catches. Run against
+    a real `git diff --stat app/`-restored mutation: killed by this test's
+    own assertions (not an AllMockedAssertionError -- no network fetch is on
+    this path at all, since the community is local and voter/author/post are
+    all seeded rows).
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    voter, post, _choice = _seed_poll_scenario()
+    db.session.add(BannedInstances(domain=voter.instance.domain))
+    db.session.commit()
+
+    request_json = {'id': 'https://peer.example/activities/1', 'object': post.ap_id, 'choice_text': 'yes'}
+
+    process_poll_vote(voter, True, request_json, False)
+
+    assert PollChoiceVote.query.count() == 0
+    row = ActivityPubLog.query.one()
+    assert row.result == 'ignored'
+    assert row.exception_message == 'Cannot rate this'
+
+
+def test_a_poll_vote_without_choice_text(app, db_session, monkeypatch):
+    """routes.py:2440 -- `request_json['choice_text']` is read unguarded from
+    a peer-supplied activity. Establish and assert the observed behaviour.
+
+    OBSERVED: for a non-announced activity missing the `choice_text` key
+    entirely, this line raises an unhandled `KeyError` straight out of
+    process_poll_vote -- BEFORE `Post.get_by_ap_id` is even called, since the
+    `choice_text` read sits directly after the `ap_id` read and above the
+    post lookup. A real peer omitting this field (or a client library that
+    treats it as optional) crashes activity processing rather than being
+    refused gracefully. Registered as a finding for Task 9; not fixed here.
+    """
+    voter, post, _choice = _seed_poll_scenario()
+
+    request_json = {'id': 'https://peer.example/activities/1', 'object': post.ap_id}
+
+    with pytest.raises(KeyError, match='choice_text'):
+        process_poll_vote(voter, True, request_json, False)
+
+
+# --- Task 6: process_question_answer, routes.py:2463-2496 ---
+
+def _seed_qa_scenario(host='peer.example', same_author=False, local_reply_author=True):
+    """A local-owned community, a post, and a PostReply on it. Returns
+    (acting_user, reply).
+
+    By default (same_author=False, local_reply_author=True) the reply's
+    author and the post's author are two DIFFERENT people, the acting user is
+    a third person with no moderator/admin standing, and the reply's author
+    is local -- so all three alternatives of process_question_answer's
+    permission guard are False and the Notification/unread_notifications
+    side effect (:2478) is reachable whenever a test flips the guard True.
+
+    same_author=True makes post_reply.user_id == post_reply.post.user_id
+    (the guard's first alternative) by having one user author both the post
+    and the reply on it.
+
+    local_reply_author controls whether the reply's author is local
+    (ap_id=None) or remote, independently of the permission guard -- used by
+    the local-author-only Notification guard test.
+    """
+    make_site()
+    instance = make_instance(host)
+    make_user(instance, 'community_owner')
+    community = make_community(host=host)
+    community.ap_fetched_at = utcnow()
+    post_author = make_user(instance, 'post_author', local=(local_reply_author if same_author else False))
+    reply_author = post_author if same_author else make_user(instance, 'reply_author', local=local_reply_author)
+    acting_user = make_user(instance, 'acting_user')
+    post = make_post(community, post_author, ap_id=f'https://{host}/objects/1')
+    reply = make_post_reply(post, reply_author)
+    reply.ap_id = f'https://{host}/objects/1/comment/1'
+    db.session.commit()
+    return acting_user, reply
+
+
+def test_question_answer_of_an_unfound_reply_logs_failure(app, db_session, monkeypatch):
+    """routes.py:2470-2472 -- PostReply.get_by_ap_id misses, logged as
+    APLOG_QA/APLOG_FAILURE with the ap_id folded into the message, and the
+    function returns before the permission guard or the redis lock ever run.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    user, _reply = _seed_qa_scenario()
+
+    ap_id = 'https://peer.example/objects/does-not-exist'
+    request_json = {'id': 'https://peer.example/activities/1', 'object': ap_id}
+
+    process_question_answer(user, True, request_json, False)
+
+    row = ActivityPubLog.query.one()
+    assert row.result == 'failure'
+    assert row.exception_message == f'Unfound object {ap_id}'
+    assert PostReply.query.one().answer is False
+
+
+def test_question_answer_success_sets_answer_notifies_and_announces(app, db_session, monkeypatch, redis_lock_only_double):
+    """routes.py:2477-2492 -- the happy path, via the first permission
+    alternative (post_reply.user_id == post_reply.post.user_id, using
+    same_author=True). `post_reply.answer` is set True, a Notification row
+    is created (title 'Answer was chosen', addressed to the reply's author,
+    authored by the acting user, notif_type NOTIF_ANSWER), the reply
+    author's unread_notifications is incremented, APLOG_QA/APLOG_SUCCESS is
+    logged, and -- because `announced` is False -- announce_activity_to_followers
+    is called with `(post_reply.community, user, request_json)` and no
+    `can_batch` kwarg.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    user, reply = _seed_qa_scenario(same_author=True)
+
+    calls = []
+    monkeypatch.setattr(activitypub_routes, 'announce_activity_to_followers',
+                         lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    request_json = {'id': 'https://peer.example/activities/1', 'object': reply.ap_id}
+
+    process_question_answer(user, True, request_json, False)
+
+    assert PostReply.query.get(reply.id).answer is True
+    notif = Notification.query.one()
+    assert notif.title == 'Answer was chosen'
+    assert notif.user_id == reply.user_id
+    assert notif.author_id == user.id
+    assert notif.notif_type == NOTIF_ANSWER
+    assert notif.subtype == 'answer_chosen'
+    assert reply.author.unread_notifications == 1
+    assert ActivityPubLog.query.one().result == 'success'
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args[0].id == reply.community_id
+    assert args[1].id == user.id
+    assert args[2] is request_json
+    assert kwargs == {}
+
+
+def test_question_answer_skips_notification_for_a_remote_reply_author(app, db_session, monkeypatch, redis_lock_only_double):
+    """routes.py:2478 -- the Notification/unread_notifications side effect is
+    gated on `post_reply.author.is_local()`. With a remote reply author (and
+    the same first-alternative permission grant as the success test above),
+    `answer` is still set True and the success path still logs and announces,
+    but no Notification row is ever created and unread_notifications never
+    moves off its default.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    user, reply = _seed_qa_scenario(same_author=True, local_reply_author=False)
+    monkeypatch.setattr(activitypub_routes, 'announce_activity_to_followers', lambda *a, **k: None)
+
+    request_json = {'id': 'https://peer.example/activities/1', 'object': reply.ap_id}
+
+    process_question_answer(user, True, request_json, False)
+
+    assert PostReply.query.get(reply.id).answer is True
+    assert Notification.query.count() == 0
+    assert reply.author.unread_notifications == 0
+    assert ActivityPubLog.query.one().result == 'success'
+
+
+def test_question_answer_refused_by_default_logs_cannot_set_answer(app, db_session, monkeypatch):
+    """routes.py:2496 -- with none of the three permission alternatives
+    satisfied (default _seed_qa_scenario: different post/reply authors, a
+    non-moderator/non-admin acting user), the guard is False and the refusal
+    logs APLOG_QA/APLOG_IGNORED / 'Cannot set answer'. `answer` is never set.
+    No redis_double needed: the guard's False branch never reaches the lock.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    user, reply = _seed_qa_scenario()
+
+    request_json = {'id': 'https://peer.example/activities/1', 'object': reply.ap_id}
+
+    process_question_answer(user, True, request_json, False)
+
+    assert PostReply.query.get(reply.id).answer is False
+    row = ActivityPubLog.query.one()
+    assert row.result == 'ignored'
+    assert row.exception_message == 'Cannot set answer'
+
+
+# --- Step 4: dropping each piece of process_question_answer's permission guard ---
+#
+#   (not instance_banned(user.instance.domain)) and (
+#       post_reply.user_id == post_reply.post.user_id
+#       or post_reply.community.is_moderator(user)
+#       or post_reply.author.is_instance_admin()
+#   )
+#
+# Four pieces, four distinct killers: the instance_banned conjunct, and each
+# of the three OR-alternatives in isolation. Each test below seeds ONLY the
+# single condition it targets true, leaving the other two alternatives (and,
+# for the three alternative tests, the banned check) false -- so a single
+# test satisfying two conditions at once, which would leave one alternative
+# permanently untested, is deliberately avoided.
+
+def test_question_answer_granted_by_alternative_one_same_author(app, db_session, monkeypatch, redis_lock_only_double):
+    """Alternative 1 -- `post_reply.user_id == post_reply.post.user_id` --
+    granted alone (acting user is neither a moderator nor is the reply
+    author an admin). This is `test_question_answer_success_sets_answer_notifies_and_announces`
+    above in miniature, kept separate because THAT test also exercises the
+    Notification side effect; this one is the dedicated Step 4 killer.
+
+    MUTATION killer: dropping `post_reply.user_id == post_reply.post.user_id
+    or` from the guard leaves only the two other (false) alternatives, so the
+    guard flips to False and the refusal fires instead -- caught by this
+    test's `PostReply.query.get(reply.id).answer is True` assertion (it
+    would be False under the mutation).
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    user, reply = _seed_qa_scenario(same_author=True)
+    monkeypatch.setattr(activitypub_routes, 'announce_activity_to_followers', lambda *a, **k: None)
+
+    request_json = {'id': 'https://peer.example/activities/1', 'object': reply.ap_id}
+
+    process_question_answer(user, True, request_json, False)
+
+    assert PostReply.query.get(reply.id).answer is True
+    assert ActivityPubLog.query.one().result == 'success'
+
+
+def test_question_answer_granted_by_alternative_two_moderator(app, db_session, monkeypatch, redis_lock_only_double):
+    """Alternative 2 -- `post_reply.community.is_moderator(user)` -- granted
+    alone: the ACTING user (not the reply's author, not the post's author)
+    is a moderator of the reply's community. Default scenario keeps
+    alternative 1 false (different post/reply authors) and alternative 3
+    false (reply author is not an admin).
+
+    MUTATION killer: dropping `post_reply.community.is_moderator(user) or`
+    from the guard leaves only the two other (false) alternatives, flipping
+    the guard False and the refusal fires instead of the grant -- caught by
+    the same `answer is True` assertion.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    user, reply = _seed_qa_scenario()
+    make_community_member(user, reply.community, is_moderator=True)
+    monkeypatch.setattr(activitypub_routes, 'announce_activity_to_followers', lambda *a, **k: None)
+
+    request_json = {'id': 'https://peer.example/activities/1', 'object': reply.ap_id}
+
+    process_question_answer(user, True, request_json, False)
+
+    assert PostReply.query.get(reply.id).answer is True
+    assert ActivityPubLog.query.one().result == 'success'
+
+
+def test_question_answer_granted_by_alternative_three_reply_author_is_admin(app, db_session, monkeypatch,
+                                                                            redis_lock_only_double):
+    """Alternative 3 -- `post_reply.author.is_instance_admin()` -- granted
+    alone: the REPLY'S author (not the acting user) holds an admin
+    InstanceRole on their own instance. Default scenario keeps alternative 1
+    false (different post/reply authors) and alternative 2 false (acting
+    user is not a moderator).
+
+    MUTATION killer: dropping `post_reply.author.is_instance_admin()` from
+    the guard (the trailing alternative, no `or` after it) leaves only the
+    two other (false) alternatives, flipping the guard False and the refusal
+    fires instead of the grant -- caught by the same `answer is True`
+    assertion.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    user, reply = _seed_qa_scenario()
+    db.session.add(InstanceRole(instance_id=reply.author.instance_id, user_id=reply.author.id, role='admin'))
+    db.session.commit()
+    monkeypatch.setattr(activitypub_routes, 'announce_activity_to_followers', lambda *a, **k: None)
+
+    request_json = {'id': 'https://peer.example/activities/1', 'object': reply.ap_id}
+
+    process_question_answer(user, True, request_json, False)
+
+    assert PostReply.query.get(reply.id).answer is True
+    assert ActivityPubLog.query.one().result == 'success'
+
+
+def test_question_answer_refused_for_a_banned_instance_despite_alternative_one(app, db_session, monkeypatch):
+    """The `instance_banned` conjunct -- seeded with alternative 1 ALSO true
+    (same_author=True) so that only the conjunct's own presence explains the
+    refusal: with instance_banned False this exact row would be granted (see
+    the alternative-one test above), so a banned instance overriding it to a
+    refusal proves the conjunct is doing real work.
+
+    MUTATION killer: dropping the `(not instance_banned(...)) and` conjunct
+    (leaving only the OR of the three alternatives) would let this row
+    through as a grant, since alternative 1 is true -- caught by this test's
+    `answer is False` / 'ignored' assertions, which would fail under that
+    mutation. No redis_double needed: the guard is False, so the lock is
+    never reached.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    user, reply = _seed_qa_scenario(same_author=True)
+    db.session.add(BannedInstances(domain=user.instance.domain))
+    db.session.commit()
+
+    request_json = {'id': 'https://peer.example/activities/1', 'object': reply.ap_id}
+
+    process_question_answer(user, True, request_json, False)
+
+    assert PostReply.query.get(reply.id).answer is False
+    row = ActivityPubLog.query.one()
+    assert row.result == 'ignored'
+    assert row.exception_message == 'Cannot set answer'
