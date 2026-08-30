@@ -663,3 +663,33 @@ def test_the_user_branch_is_silent_with_no_join_request(app, db_session, monkeyp
     dispatch(activity)
 
     assert ActivityPubLog.query.count() == 0
+
+
+# --- Task 7: FIX 2 -- Reject's user branch dereferences an absent join
+# request, routes.py:1180-1187 ---
+
+def test_a_reject_for_a_missing_follow_request_is_handled(app, db_session, monkeypatch):
+    """routes.py:1180-1187. The community branch (:1157) and the feed branch
+    (:1169) both guard their bodies with `if join_request:`. The user branch
+    does not, so a Reject naming a follow request that is already gone --
+    withdrawn, or already rejected -- raises AttributeError: 'NoneType' object
+    has no attribute 'user_id' instead of logging.
+
+    Peer-triggerable: nothing stops a remote instance sending a Reject for a
+    request this instance has no record of.
+
+    No UserFollowRequest row is seeded for (joiner, target) -- the request is
+    simply absent, matching the docstring's "already gone" scenario without
+    needing to model withdrawal or a prior rejection explicitly.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    target = _stamp_remote_user(instance, 'target')
+    joiner = _stamp_remote_user(instance, 'joiner')
+
+    activity = inbox_activity(target, activity_type='Reject',
+                              object=_follow_object(joiner.ap_profile_id))
+
+    dispatch(activity)
+
+    assert ActivityPubLog.query.count() == 0

@@ -1179,14 +1179,14 @@ def process_inbox_request(request_json, store_ap_json):
                         elif user:
                             join_request = session.query(UserFollowRequest).filter_by(user_id=requestor_user.id,
                                                                                       follow_id=user.id).first()
-
-                            existing_follow = session.query(UserFollower).filter_by(local_user_id=join_request.user_id,
-                                                                                    remote_user_id=join_request.follow_id).first()
-                            if existing_follow:
-                                existing_follow.is_accepted = False
-                            requestor_user.num_following -= 1
-                            session.commit()
-                            log_incoming_ap(id, APLOG_ACCEPT, APLOG_SUCCESS, saved_json)
+                            if join_request:
+                                existing_follow = session.query(UserFollower).filter_by(local_user_id=join_request.user_id,
+                                                                                        remote_user_id=join_request.follow_id).first()
+                                if existing_follow:
+                                    existing_follow.is_accepted = False
+                                requestor_user.num_following -= 1
+                                session.commit()
+                                log_incoming_ap(id, APLOG_ACCEPT, APLOG_SUCCESS, saved_json)
                     return
 
                 # Create is new content. Update is often an edit, but Updates from Lemmy can also be new content
