@@ -1652,7 +1652,8 @@ backwards.
 
 **7. How the membership arms select their target branch.** In the `Follow`
 arm the target comes straight from `core_activity['object']`
-(`routes.py:938`). In the `Accept` and `Reject` arms there is no such object
+(`routes.py:936`; `:938` is the `find_actor_or_create_cached` call two lines
+later, not the assignment). In the `Accept` and `Reject` arms there is no such object
 lookup — the branch is chosen entirely by what the **outer actor** resolves
 to in the preamble, which tries community, then feed, then user in that
 order (`routes.py:861-870`). A test therefore picks its Accept/Reject branch

@@ -37,7 +37,7 @@ from app import db
 from app.activitypub import routes as activitypub_routes
 from app.constants import APLOG_ACCEPT
 from app.models import ActivityPubLog, CommunityJoinRequest, CommunityMember, FeedJoinRequest, \
-    FeedMember, UserFollower, utcnow
+    FeedMember, UserFollower, UserFollowRequest, utcnow
 from tests.factories import inbox_activity, make_community, make_community_join_request, \
     make_community_member, make_feed, make_feed_join_request, make_follow, make_instance, \
     make_user, make_user_follow_request
@@ -839,6 +839,11 @@ def test_the_reject_user_branch_flips_an_existing_follow_and_decrements(
     outcome-table comment above) -- make_follow's default is_inward=False
     keeps this test inside the shape that filter would also match, so this
     test does not itself exercise that asymmetry.
+
+    D79: unlike the sibling community (:1161) and feed (:1172) branches,
+    this branch never calls `session.delete(join_request)`. The assertion
+    below documents that defect -- the surviving UserFollowRequest row --
+    rather than endorsing it as correct behaviour.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance = make_instance('peer.example')
@@ -858,6 +863,11 @@ def test_the_reject_user_branch_flips_an_existing_follow_and_decrements(
     assert follow.is_accepted is False
     assert joiner.num_following == 0
     assert ActivityPubLog.query.one().result == 'success'
+    # D79: the UserFollowRequest is never deleted on this branch, unlike the
+    # community and feed branches -- this pins the defect, it does not
+    # endorse it.
+    assert db.session.query(UserFollowRequest).filter_by(
+        user_id=joiner.id, follow_id=target.id).first() is not None
 
 
 def test_a_reject_decrements_num_following_even_with_no_follower_row(app, db_session, monkeypatch):
