@@ -1670,6 +1670,52 @@ touched by these arms are in the `Follow` arm (`routes.py:962, 980, 999,
 original. `record_sends` in `tests/test_inbox_dispatch_follow.py` is the
 working example.
 
+**9. The new fixtures (sub-project 5c).** `make_feed_item(feed, community)`
+(`tests/factories.py:190-195`) and `make_feed_member(user, feed,
+is_owner=False)` (`tests/factories.py:198-208`). `FeedMember.is_owner` and
+`.is_banned` both default to **False** on the model (`app/models.py:4034-
+4035`), which is what `Feed.subscribed()` (`app/models.py:4176-4183`) reads
+to return `SUBSCRIPTION_MEMBER` rather than `OWNER` or `BANNED`.
+
+**10. `record_moderation(monkeypatch, *names)`**, defined in
+`tests/test_inbox_dispatch_lock_delete.py:115-137` and imported by the other
+two 5c files. It doubles moderation delegates at their **routes-module
+binding site** and returns `{name: [(args, kwargs), ...]}`. It cannot reach
+one delegate this way: `do_subscribe` is imported *inline inside the feed-
+member loop* in the `Add` arm (`routes.py:1421`, inside the `for fm in
+feed_members:` loop starting at `:1417`), so it is not an attribute of the
+routes module at all and must be patched at `app.community.routes.do_subscribe`
+instead.
+
+**11. How each arm selects its branch.** `Delete` (`routes.py:1264`) and
+`Lock` (`routes.py:1360`) resolve their own targets from
+`core_activity['object']` — `find_liked_object(ap_id)` at `routes.py:1310`
+for Delete, `Post.get_by_ap_id`/`PostReply.get_by_ap_id` against
+`core_activity['object']` for Lock. `Add` (`routes.py:1400`), `Remove`
+(`routes.py:1473`) and `Block` (`routes.py:1595`) instead take
+`community`/`feed`/`user` from the **preamble** (`routes.py:861-870`), which
+resolves the activity's *actor* as community, then feed, then user, in that
+order. So a test picks the branch by choosing the activity's actor, not its
+object — this is not obvious from reading any single arm and cost time to
+establish.
+
+**12. Wrap resolvers rather than replacing them.** When a test needs
+`find_actor_or_create_cached` to fail for one specific call, wrap the real
+function and intercept only that call signature — replacing it outright
+makes seeded rows non-load-bearing, because the double answers every lookup
+regardless of what is in the database.
+`tests/test_inbox_dispatch_add_remove.py:202-211` has the working example; a
+5c review caught the wholesale-replacement version and it had to be
+narrowed.
+
+**13. If a suite run hangs, do not kill it.** A killed run leaves Postgres
+backends idle-in-transaction holding relation locks, and every later run
+then blocks on the `db_session` fixture's teardown `TRUNCATE`
+(`tests/conftest.py:143`) — producing hangs and, once connections are
+cleared, failures from half-truncated tables that look exactly like real
+regressions. Recovery is `./run_tests.sh --down` plus a rebuild, which
+replays ~269 migrations. This cost 5c a long detour.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
