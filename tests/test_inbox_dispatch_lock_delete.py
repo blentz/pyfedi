@@ -512,6 +512,78 @@ def test_lock_fallback_second_half_resolves_a_reply_when_no_post_matches(app, db
     assert log.result == 'success'
 
 
+def test_a_delete_naming_an_unknown_feed_is_refused(app, db_session, monkeypatch):
+    """routes.py:1268-1279 (pre-fix numbering). The feed lookup returns None
+    -- no Feed row on this instance has this `ap_public_url` -- and
+    (pre-fix) :1273 reads `feed.user_id` before the `if feed:` guard at
+    :1278 is ever reached, so the `else` branch written to log exactly this
+    case is unreachable and an AttributeError escapes instead.
+
+    Asserts the corrected behaviour: the not-found failure is logged.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+
+    instance = make_instance('peer.example')
+    user = make_user(instance, 'alice')
+    user.ap_fetched_at = utcnow()
+    db.session.commit()
+
+    missing_feed_id = 'https://peer.example/f/does-not-exist'
+    activity = inbox_activity(user, activity_type='Delete',
+                              object={'type': 'Feed', 'id': missing_feed_id})
+
+    dispatch(activity)
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == f'Delete: cannot find {missing_feed_id}'
+
+
+def test_a_delete_from_an_unresolvable_actor_is_refused(app, db_session, monkeypatch):
+    """routes.py:1268 and :1273 (pre-fix numbering). find_actor_or_create_cached
+    can return None -- validate_remote_actor refuses banned and malformed
+    actors -- and (pre-fix) :1273 then reads `user.id` unguarded.
+
+    The preamble (routes.py:871) and this arm's own re-lookup (:1268) call
+    find_actor_or_create_cached with the identical `actor_id`, so getting a
+    real actor from the first call and None from the second -- the exact
+    shape this defect needs -- is simulated with a stateful stub rather than
+    two different real actors: production has no state that changes between
+    the two calls within one request, so this is the only way to exercise
+    :1273 with `user` None while still reaching the Delete/Feed arm at all
+    (an unresolvable actor at the PREAMBLE's own lookup is refused earlier,
+    at routes.py:890-892, before the Delete arm is ever reached).
+
+    Asserts the corrected behaviour: a logged failure rather than a crash.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+
+    instance = make_instance('peer.example')
+    user = make_user(instance, 'alice')
+    user.ap_fetched_at = utcnow()
+    feed = make_feed(instance)
+    feed.user_id = user.id
+    db.session.commit()
+
+    call_count = [0]
+
+    def _resolves_once_then_vanishes(*args, **kwargs):
+        call_count[0] += 1
+        return user if call_count[0] == 1 else None
+
+    monkeypatch.setattr(activitypub_routes, 'find_actor_or_create_cached',
+                        _resolves_once_then_vanishes)
+
+    activity = inbox_activity(user, activity_type='Delete',
+                              object={'type': 'Feed', 'id': feed.ap_public_url})
+
+    dispatch(activity)
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Delete rejected, could not find the sender.'
+
+
 def test_an_instance_admin_can_lock_a_comment(app, db_session, monkeypatch):
     """routes.py:1380's second disjunct, `post_reply.community.
     is_instance_admin(mod)` -- the corrected comment-branch counterpart to
