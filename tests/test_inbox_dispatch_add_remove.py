@@ -143,9 +143,10 @@ from app import db
 from app.activitypub import routes as activitypub_routes
 from app.models import ActivityPubLog, CommunityMember, FeedItem, InstanceRole, utcnow
 from tests.factories import (inbox_activity, make_community, make_community_member, make_feed,
-                             make_feed_member, make_instance, make_post, make_user)
+                             make_feed_item, make_feed_member, make_instance, make_post, make_user)
 from sqlalchemy import inspect as sa_inspect
 
+from tests.test_inbox_dispatch_follow import record_sends
 from tests.test_inbox_dispatch_lock_delete import record_moderation
 from tests.test_inbox_dispatch_preamble import dispatch
 
@@ -686,3 +687,165 @@ def test_add_with_neither_community_nor_feed_resolvable_is_refused(app, db_sessi
 
     log = ActivityPubLog.query.one()
     assert log.exception_message == 'Add: cannot find community or feed'
+
+
+# --- Task 8: FIX 5 and FIX 6 -- Remove's unguarded feed item and membership ---
+#
+# The Remove arm's feed branch (routes.py, current numbering) is reached the
+# same way as Add's: the activity's actor resolves to a Feed (the Announce
+# actor-resolution preamble), and the inner activity's `object` carries an
+# `id`. Two live defects sat in that branch's auto-unsubscribe machinery,
+# both unguarded lookups that can legitimately return None:
+#
+#   FIX 5 (current :1482-1486): `feed_item = session.query(FeedItem).
+#   filter_by(feed_id=feed.id, community_id=community_to_remove.id).first()`
+#   is None when the community named by the Remove was never actually in the
+#   feed. `session.delete(feed_item)` then raises, and the following
+#   `feed.num_communities -= 1` would have decremented for a removal that
+#   never happened, had it been reached. Fixed by wrapping the delete, the
+#   decrement and their commit in `if feed_item:` -- the auto-unsubscribe
+#   loop directly below stays OUTSIDE that new guard, at its original
+#   indentation under the `if community_to_remove and isinstance(...)` guard,
+#   since it has its own reason to run (auto-leaving members) independent of
+#   whether a FeedItem existed to delete.
+#
+#   FIX 6 (current :1498): inside that loop, `cm = session.query(
+#   CommunityMember).filter_by(user_id=fm_user.id, community_id=
+#   community_to_remove.id).first()` is None for a feed member who never
+#   actually joined the community being removed (no CommunityMember row for
+#   that pair). The next line unconditionally read `cm.joined_via_feed`,
+#   raising AttributeError. Fixed by short-circuiting on `cm and
+#   cm.joined_via_feed`.
+#
+# Both brief citations (routes.py:1478-1481 and :1494) were STALE -- earlier
+# tasks' fixes shifted the arm; the current lines are :1482-1486 and :1498,
+# re-derived from source rather than trusted from the brief.
+
+
+def test_a_remove_for_a_community_not_in_the_feed_is_a_no_op(app, db_session, monkeypatch):
+    """routes.py's current :1482-1486. The FeedItem lookup returns None when
+    the community was never in the feed, and (pre-fix) session.delete(None)
+    raises -- and num_communities would be decremented for a removal that
+    never happened, had the delete not raised first.
+
+    `feed.num_communities` is seeded to a nonzero baseline (3) rather than
+    left at its column default (0) before asserting it stays unchanged --
+    per this campaign's 'beware default-backed assertions' rule, a bare
+    `== 0` here would be indistinguishable from the column's own default.
+
+    No FeedItem row is ever created for this feed/community pair -- that
+    omission is the whole point of the test. LOG_ACTIVITYPUB_TO_DB is turned
+    on so the ActivityPubLog assertion is load-bearing (the feed branch
+    calls log_incoming_ap on no path at all, same finding Task 6/7 already
+    pinned for Add's feed branch).
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+
+    instance = make_instance('peer.example')
+    make_user(instance, 'community_owner')  # occupies user id=1 for make_community's hardcoded owner
+    community = make_community(name='neverinfeed', host='peer.example')
+    community.ap_fetched_at = utcnow()
+    db.session.commit()
+
+    feed = make_feed(instance)
+    feed.num_communities = 3
+    db.session.commit()
+
+    assert FeedItem.query.filter_by(feed_id=feed.id, community_id=community.id).count() == 0
+
+    inner_remove = {
+        'id': f'{feed.ap_profile_id}/activities/remove-noop',
+        'type': 'Remove',
+        'actor': feed.ap_profile_id,
+        'object': {'id': community.ap_profile_id},
+        'target': feed.ap_profile_id,
+    }
+    activity = inbox_activity(feed, activity_type='Announce', object=inner_remove)
+
+    dispatch(activity)
+
+    # dispatch() runs the arm on an independent session (get_task_session());
+    # this session's expire_on_commit does not fire from ANOTHER session's
+    # commit, so `feed` would otherwise still read back its pre-dispatch,
+    # in-memory value. Established convention (tests/test_inbox_dispatch_
+    # lock_delete.py) is an explicit expire_all() before re-reading a
+    # pre-existing row's attributes.
+    db.session.expire_all()
+
+    assert FeedItem.query.filter_by(feed_id=feed.id, community_id=community.id).count() == 0
+    assert feed.num_communities == 3
+    assert ActivityPubLog.query.count() == 0
+
+
+def test_a_remove_skips_a_feed_member_with_no_community_membership(
+        app, db_session, monkeypatch):
+    """routes.py's current :1498. `cm` is None when the feed member never
+    actually joined the community being removed (no CommunityMember row for
+    that user/community pair), and (pre-fix) the next line's
+    `cm.joined_via_feed` raises AttributeError.
+
+    The feed's OWNER is identified by `feed.user_id` (Feed.user_id), skipped
+    by the loop's `fm_user.id == feed.user_id` check before it ever reaches
+    `cm` -- so the owner is given a real CommunityMember-less setup too,
+    proving the stray member's skip is due to FIX 6 specifically, not
+    because it never got past the owner check.
+
+    The community is made explicitly non-local (`community.ap_id` is set to
+    a peer address -- plain make_community() never sets this column, so it
+    would otherwise read back local regardless of host) so that, had the
+    guard not short-circuited, the arm would have gone on to attempt a
+    federated Undo/Follow send; asserting `sends == []` proves the guard
+    stopped the loop before that, not merely before the AttributeError.
+
+    A FeedItem for this feed/community pair DOES exist here (unlike the
+    no-op test above), so FIX 5's guard passes normally and the delete/
+    decrement runs -- isolating this test to FIX 6 alone.
+    """
+    instance = make_instance('peer.example')
+    make_user(instance, 'community_owner')  # occupies user id=1 for make_community's hardcoded owner
+    community = make_community(name='straymembercomm', host='peer.example')
+    community.ap_fetched_at = utcnow()
+    community.ap_id = 'straymembercomm@peer.example'  # make this community non-local
+    db.session.commit()
+    assert community.is_local() is False
+
+    feed = make_feed(instance)
+    make_feed_item(feed, community)
+    feed.num_communities = 1
+    db.session.commit()
+
+    owner = make_user(instance, 'feedowner', local=True)
+    feed.user_id = owner.id
+    db.session.commit()
+    make_feed_member(owner, feed)
+
+    stray = make_user(instance, 'strayfeedmember', local=True)
+    make_feed_member(stray, feed)
+    assert stray.is_local() and stray.feed_auto_leave
+    assert CommunityMember.query.filter_by(user_id=stray.id, community_id=community.id).count() == 0
+
+    sends = record_sends(monkeypatch)
+
+    inner_remove = {
+        'id': f'{feed.ap_profile_id}/activities/remove-straymember',
+        'type': 'Remove',
+        'actor': feed.ap_profile_id,
+        'object': {'id': community.ap_profile_id},
+        'target': feed.ap_profile_id,
+    }
+    activity = inbox_activity(feed, activity_type='Announce', object=inner_remove)
+
+    dispatch(activity)
+
+    db.session.expire_all()
+
+    # FIX 6 skipped the stray member without touching its (nonexistent)
+    # CommunityMember row or sending anything on its behalf.
+    assert CommunityMember.query.filter_by(user_id=stray.id, community_id=community.id).count() == 0
+    assert sends == []
+    assert community.subscriptions_count == 0
+
+    # FIX 5's guard still ran normally for this feed/community pair, since a
+    # FeedItem genuinely existed here.
+    assert FeedItem.query.filter_by(feed_id=feed.id, community_id=community.id).count() == 0
+    assert feed.num_communities == 0
