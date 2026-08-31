@@ -20,11 +20,11 @@ from flask_login import login_user
 from app import db
 from app.activitypub.signature import RsaKeys
 from app.models import (Community, CommunityBan, CommunityBlock, CommunityFlair, CommunityFlairBlock,
-                        CommunityJoinRequest, CommunityMember, Domain, DomainBlock, Feed, FeedJoinRequest,
-                        Instance, InstanceBan, InstanceBlock, NotificationSubscription, Post, PostReply,
-                        PostReplyBookmark, PostReplyVote, PostVote, Role, RolePermission, Site, User,
-                        UserBlock, UserFollower, UserFollowRequest, hidden_posts, read_posts, user_role,
-                        utcnow)
+                        CommunityJoinRequest, CommunityMember, Domain, DomainBlock, Feed, FeedItem,
+                        FeedJoinRequest, FeedMember, Instance, InstanceBan, InstanceBlock,
+                        NotificationSubscription, Post, PostReply, PostReplyBookmark, PostReplyVote,
+                        PostVote, Role, RolePermission, Site, User, UserBlock, UserFollower,
+                        UserFollowRequest, hidden_posts, read_posts, user_role, utcnow)
 from app.utils import get_deduped_post_ids
 
 
@@ -185,6 +185,27 @@ def make_feed(instance, name: str = 'peerfeed', public: bool = False,
     db.session.add(feed)
     db.session.commit()
     return feed
+
+
+def make_feed_item(feed: Feed, community: Community) -> FeedItem:
+    """One community's membership of a feed. Add creates these; Remove deletes them."""
+    item = FeedItem(feed_id=feed.id, community_id=community.id)
+    db.session.add(item)
+    db.session.commit()
+    return item
+
+
+def make_feed_member(user: User, feed: Feed, is_owner: bool = False) -> FeedMember:
+    """A user's subscription to a feed.
+
+    `is_owner` and `is_banned` both default to False on the model
+    (app/models.py:4034-4035), which is what Feed.subscribed() reads to
+    return SUBSCRIPTION_MEMBER rather than OWNER or BANNED.
+    """
+    member = FeedMember(feed_id=feed.id, user_id=user.id, is_owner=is_owner)
+    db.session.add(member)
+    db.session.commit()
+    return member
 
 
 def make_community_join_request(user: User, community: Community,
