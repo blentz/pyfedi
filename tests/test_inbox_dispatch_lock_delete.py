@@ -99,14 +99,16 @@ to fix, not this task's.
     attribute would miss the subtree ever being touched.
 """
 
+import pytest
 from sqlalchemy import inspect as sa_inspect
 
 from app import db
 from app.activitypub import routes as activitypub_routes
-from app.models import ActivityPubLog, FeedItem, FeedMember, InstanceRole, utcnow
+from app.models import ActivityPubLog, ChatMessage, Conversation, Feed, FeedItem, FeedJoinRequest, \
+    FeedMember, InstanceRole, utcnow
 from tests.factories import inbox_activity, make_community, make_community_member, make_feed, \
-    make_feed_item, make_feed_member, make_instance, make_post, make_post_reply, make_user, \
-    seed_community_owner
+    make_feed_item, make_feed_join_request, make_feed_member, make_instance, make_post, \
+    make_post_reply, make_site, make_user, seed_community_owner
 from tests.test_inbox_dispatch_preamble import dispatch
 
 
@@ -616,3 +618,375 @@ def test_an_instance_admin_can_lock_a_comment(app, db_session, monkeypatch):
 
     log = ActivityPubLog.query.one()
     assert log.result == 'success'
+
+
+# --- Task 5: the rest of the Delete arm ---
+#
+# The brief for this task (task-5-brief.md) cites routes.py:1264-1327 and a
+# set of line numbers within that range for each sub-step. Every one of
+# those line citations is STALE: Task 4's fix (removing an unreachable
+# `else:` and de-indenting the feed-deletion body) shifted everything from
+# roughly :1270 onward by 13-17 lines. Re-read against current source, the
+# arm now runs :1264-1330. Corrected citations, used throughout this
+# section instead of the brief's:
+#   - non-owner refusal message:            :1283          (brief said :1273-1275)
+#   - the three per-row delete loops:        :1287-1300     (brief didn't cite these directly)
+#   - feed-row delete + SUCCESS log:         :1301-1304
+#   - bare-string (Lemmy) shape:             :1306-1307     (brief said :1302)
+#   - dict-with-id (kbin) shape:             :1308-1309     (brief said :1304)
+#   - find_liked_object call:                :1310
+#   - already-deleted / IGNORED branch:      :1312-1315     (brief said :1306-1317)
+#   - success delete + conditional announce: :1316-1320
+#   - PM found branch:                       :1322-1329     (brief said :1319-1326)
+#   - PM not found (fully silent):           falls through to the bare `return` at :1330
+
+
+def _seed_feed_with_owner(host='peer.example'):
+    """A Feed whose `user_id` names a real, resolvable local-to-the-test
+    sender, for the Feed-delete arm's owner check (routes.py:1282-1284).
+    `seed_community_owner` is used (not a bare `make_instance`) so callers
+    that also need Communities for FeedItems can add them afterward without
+    a second instance-id-1 collision.
+    """
+    instance = seed_community_owner(host)
+    sender = make_user(instance, 'feedowner')
+    sender.ap_fetched_at = utcnow()
+    feed = make_feed(instance)
+    feed.user_id = sender.id
+    db.session.commit()
+    return instance, sender, feed
+
+
+def test_a_delete_of_a_feed_removes_items_members_and_join_requests(app, db_session, monkeypatch):
+    """routes.py:1286-1304 (post Task-4 fix numbering). The owner-matched
+    success path runs three separate per-row delete loops -- FeedItem,
+    FeedMember, FeedJoinRequest, each committing after every row -- then
+    deletes the Feed row itself and logs SUCCESS naming the feed's
+    `ap_public_url`. Two FeedItems, two FeedMembers and one
+    FeedJoinRequest are seeded so each loop is proven to walk ALL of its
+    rows, not just stop after one.
+
+    Also confirms the Feed shape's early return (routes.py:1305, the
+    `return` ending this branch): find_liked_object is monkeypatched to
+    record calls, and none arrive, proving this shape never falls into the
+    shared post/PM continuation the other two object shapes share.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, feed = _seed_feed_with_owner()
+
+    community_a = make_community(name='community-a', host='peer.example')
+    community_b = make_community(name='community-b', host='peer.example')
+    make_feed_item(feed, community_a)
+    make_feed_item(feed, community_b)
+
+    member_1 = make_user(instance, 'member1')
+    member_2 = make_user(instance, 'member2')
+    make_feed_member(member_1, feed)
+    make_feed_member(member_2, feed)
+
+    joiner = make_user(instance, 'joiner')
+    make_feed_join_request(joiner, feed)
+
+    feed_id = feed.id
+    feed_url = feed.ap_public_url
+
+    find_liked_calls = []
+    monkeypatch.setattr(activitypub_routes, 'find_liked_object',
+                        lambda *a, **k: find_liked_calls.append((a, k)))
+
+    activity = inbox_activity(sender, activity_type='Delete',
+                              object={'type': 'Feed', 'id': feed_url})
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    assert FeedItem.query.filter_by(feed_id=feed_id).count() == 0
+    assert FeedMember.query.filter_by(feed_id=feed_id).count() == 0
+    assert FeedJoinRequest.query.filter_by(feed_id=feed_id).count() == 0
+    assert Feed.query.filter_by(id=feed_id).first() is None
+    assert find_liked_calls == []
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+    assert log.exception_message == f'Delete: Feed {feed_url} deleted'
+
+
+def test_a_delete_of_a_feed_by_a_non_owner_is_refused(app, db_session, monkeypatch):
+    """routes.py:1282-1284 (post Task-4 fix numbering; brief's stale
+    citation was :1273-1275). Both actor and feed resolve, but
+    `user.id != feed.user_id` -- a feed that genuinely belongs to someone
+    else. Asserts the failure log and that nothing about the feed changed.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    owner = make_user(instance, 'owner')
+    sender = make_user(instance, 'notowner')
+    sender.ap_fetched_at = utcnow()
+    feed = make_feed(instance)
+    feed.user_id = owner.id
+    db.session.commit()
+
+    activity = inbox_activity(sender, activity_type='Delete',
+                              object={'type': 'Feed', 'id': feed.ap_public_url})
+
+    dispatch(activity)
+
+    assert db.session.get(Feed, feed.id) is not None
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Delete rejected, request came from non-owner.'
+
+
+def _seed_deletable_post(host='peer.example', ap_id_suffix='1'):
+    """A community with one deletable Post, for the shared post/PM
+    continuation (routes.py:1306-1330). `sender` is a distinct user from
+    `author` -- the arm never checks that the Delete's sender authored the
+    content (that check lives inside the mocked `delete_post_or_comment`
+    delegate, out of scope here), so using two different users proves the
+    arm passes `user` through as-is rather than silently substituting the
+    author.
+    """
+    instance = seed_community_owner(host)
+    community = make_community(host=host)
+    author = make_user(instance, 'author')
+    sender = make_user(instance, 'sender')
+    sender.ap_fetched_at = utcnow()
+    db.session.commit()
+    post = make_post(community, author, ap_id=f'https://{host}/post/{ap_id_suffix}')
+    return instance, community, sender, author, post
+
+
+def test_delete_of_a_bare_string_object_extracts_ap_id_and_deletes_the_content(
+        app, db_session, monkeypatch):
+    """routes.py:1306-1307 (brief's stale citation was :1302): `object` is a
+    bare string (Lemmy shape) -- `ap_id = object` directly, no `['id']`
+    indexing. Also covers :1316-1320's not-yet-deleted success path: the
+    ap_id that reaches find_liked_object resolves to the real seeded Post,
+    proven by asserting `delete_post_or_comment`'s SECOND argument's
+    identity, not merely that the call happened.
+
+    delete_post_or_comment is called with the reason taken from
+    `summary` (:1317), and -- because this activity is NOT wrapped in an
+    Announce, so `announced` is False -- announce_activity_to_followers IS
+    called (:1319-1320's `if not announced:` guard), with
+    `(to_delete.community, user, request_json)`.
+
+    Also asserts ActivityPubLog.query.count() == 0: per this arm's own
+    module docstring (Task 1's table), the successful-delete path logs
+    NOTHING -- no `log_incoming_ap` call exists anywhere on it.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, sender, author, post = _seed_deletable_post()
+
+    calls = record_moderation(monkeypatch, 'delete_post_or_comment', 'announce_activity_to_followers')
+
+    activity = inbox_activity(sender, activity_type='Delete',
+                              object_uri=post.ap_id, summary='rule violation')
+
+    dispatch(activity)
+
+    assert len(calls['delete_post_or_comment']) == 1
+    args, kwargs = calls['delete_post_or_comment'][0]
+    assert kwargs == {}
+    user_arg, to_delete_arg, store_ap_json_arg, request_json_arg, reason_arg = args
+    assert sa_inspect(user_arg).identity[0] == sender.id
+    assert sa_inspect(to_delete_arg).identity[0] == post.id
+    assert store_ap_json_arg is True
+    assert request_json_arg is activity
+    assert reason_arg == 'rule violation'
+
+    assert len(calls['announce_activity_to_followers']) == 1
+    a_args, a_kwargs = calls['announce_activity_to_followers'][0]
+    assert a_kwargs == {}
+    community_arg, announce_user_arg, announce_request_arg = a_args
+    assert sa_inspect(community_arg).identity[0] == community.id
+    assert sa_inspect(announce_user_arg).identity[0] == sender.id
+    assert announce_request_arg is activity
+
+    assert ActivityPubLog.query.count() == 0
+
+
+def test_delete_of_a_dict_object_with_id_is_ignored_when_already_deleted(app, db_session, monkeypatch):
+    """routes.py:1308-1309 (brief's stale citation was :1304): `object` is a
+    dict without `type == 'Feed'` (kbin shape) -- `ap_id = object['id']`.
+    Also covers :1312-1315's already-deleted branch: `to_delete.deleted` is
+    True (set directly here, since Post.deleted defaults False on the model
+    (app/models.py:1682) -- this write is what proves the branch, not a
+    default already sitting there), so IGNORED is logged and neither
+    delegate runs.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, sender, author, post = _seed_deletable_post(ap_id_suffix='99')
+    post.deleted = True
+    db.session.commit()
+
+    calls = record_moderation(monkeypatch, 'delete_post_or_comment', 'announce_activity_to_followers')
+
+    activity = inbox_activity(sender, activity_type='Delete',
+                              object={'id': post.ap_id, 'type': 'Note'})
+
+    dispatch(activity)
+
+    assert calls['delete_post_or_comment'] == []
+    assert calls['announce_activity_to_followers'] == []
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'ignored'
+    assert log.exception_message == 'Activity about local content which is already deleted'
+
+
+def _seed_announcing_community(host='announcer.example'):
+    """A Community resolvable as the OUTER Announce actor (routes.py:862),
+    mirroring test_inbox_dispatch_announce.py's own private helper of the
+    same name -- duplicated rather than imported, since that module's
+    helpers are underscore-private to their own file.
+    """
+    make_site()
+    instance = make_instance(host)
+    make_user(instance, 'community_owner')
+    community = make_community(host=host)
+    community.ap_fetched_at = utcnow()
+    db.session.commit()
+    return instance, community
+
+
+def test_delete_announced_does_not_reannounce(app, db_session, monkeypatch):
+    """routes.py:1319-1320's `if not announced:` guard, the other half of
+    the pair proven above: this Delete arrives wrapped in a real Announce
+    (the only way `announced` becomes True for this arm -- there is no
+    separate `process_delete` function taking `announced` as a parameter
+    the way process_upvote does), so `announce_activity_to_followers` must
+    NOT be called even though the content deletion itself still goes
+    through -- delete_post_or_comment is unconditional on this path,
+    :1318.
+
+    `request_json` passed to delete_post_or_comment is the OUTER Announce
+    activity (`activity`), not the inner Delete object -- routes.py always
+    threads the ORIGINAL request_json through, exactly as
+    test_inbox_dispatch_announce.py's own
+    test_an_announce_sets_core_activity_to_the_inner_object establishes for
+    the Like arm.
+    """
+    instance, community = _seed_announcing_community()
+    author = make_user(instance, 'author')
+    inner_sender = make_user(instance, 'inner_sender')
+    inner_sender.ap_fetched_at = utcnow()
+    db.session.commit()
+    post = make_post(community, author, ap_id=f'https://{community.ap_domain}/post/1')
+
+    calls = record_moderation(monkeypatch, 'delete_post_or_comment', 'announce_activity_to_followers')
+
+    inner_delete = {
+        'id': f'https://{community.ap_domain}/activities/delete-1',
+        'type': 'Delete',
+        'actor': inner_sender.ap_profile_id,
+        'object': post.ap_id,
+        'summary': 'rule violation',
+    }
+    activity = inbox_activity(community, activity_type='Announce', object=inner_delete)
+
+    dispatch(activity)
+
+    assert len(calls['delete_post_or_comment']) == 1
+    args, kwargs = calls['delete_post_or_comment'][0]
+    user_arg, to_delete_arg, store_ap_json_arg, request_json_arg, reason_arg = args
+    assert sa_inspect(user_arg).identity[0] == inner_sender.id
+    assert sa_inspect(to_delete_arg).identity[0] == post.id
+    assert request_json_arg is activity
+    assert reason_arg == 'rule violation'
+
+    assert len(calls['announce_activity_to_followers']) == 0
+
+
+def test_delete_of_a_chat_message_marks_it_read_and_deleted(app, db_session, monkeypatch):
+    """routes.py:1322-1329 (brief's stale citation was :1319-1326): neither
+    find_liked_object nor a Post/PostReply matches this ap_id, but a
+    ChatMessage does (matched on `ap_id` AND `sender_id == user.id`) -- the
+    PM path. `read` and `deleted` both default False on the model
+    (app/models.py:291/295), so both flipping True proves the write.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    sender = make_user(instance, 'sender')
+    sender.ap_fetched_at = utcnow()
+    recipient = make_user(None, 'recipient', local=True)
+    conversation = Conversation(user_id=sender.id)
+    db.session.add(conversation)
+    db.session.commit()
+
+    ap_id = 'https://peer.example/private-message/1'
+    message = ChatMessage(sender_id=sender.id, recipient_id=recipient.id,
+                          conversation_id=conversation.id, body='hi', ap_id=ap_id,
+                          read=False, deleted=False)
+    db.session.add(message)
+    db.session.commit()
+
+    activity = inbox_activity(sender, activity_type='Delete', object_uri=ap_id)
+
+    dispatch(activity)
+
+    updated = ChatMessage.query.filter_by(ap_id=ap_id).one()
+    assert updated.read is True
+    assert updated.deleted is True
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+    assert log.exception_message == f'Delete: PM {ap_id} deleted'
+
+
+def test_delete_of_an_unmatched_ap_id_logs_nothing(app, db_session, monkeypatch):
+    """routes.py: falls through to the bare `return` at :1330 -- neither
+    find_liked_object nor the ChatMessage lookup matches anything at all.
+    REGISTERED, not fixed: this is the arm's only fully-silent no-op, per
+    Task 1's module docstring table ('shared: nothing found at all').
+
+    LOG_ACTIVITYPUB_TO_DB is explicitly enabled here (unlike this suite's
+    usual default of leaving it off) specifically so that
+    ActivityPubLog.query.count() == 0 proves the silence, rather than
+    merely reflecting logging being disabled for an unrelated reason --
+    with logging off, the count would be 0 regardless of what this arm
+    does, making the assertion vacuous.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    sender = make_user(instance, 'sender')
+    sender.ap_fetched_at = utcnow()
+    db.session.commit()
+
+    activity = inbox_activity(sender, activity_type='Delete',
+                              object_uri='https://peer.example/objects/does-not-exist')
+
+    dispatch(activity)
+
+    assert ActivityPubLog.query.count() == 0
+
+
+def test_delete_of_a_dict_object_with_no_type_key_raises_keyerror(app, db_session, monkeypatch):
+    """routes.py:1266's `isinstance(core_activity['object'], dict) and
+    core_activity['object']['type'] == 'Feed'` reads `['type']`
+    unconditionally once `object` is confirmed a dict -- the `isinstance`
+    check only short-circuits the case where `object` is NOT a dict at all.
+    A dict `object` with no `'type'` key raises `KeyError` right there,
+    before either registered defect's guard and before any `ap_id`
+    extraction. Not registered by this task's brief; flagged in Task 1's
+    module docstring ('Observations beyond the two registered defects') and
+    pinned here as a probe, not fixed.
+
+    OBSERVED: the KeyError propagates all the way out of dispatch() --
+    caught only by the arm's own outer `except Exception: session.
+    rollback(); raise` (routes.py:1889-1891), which re-raises rather than
+    logging or swallowing it. No ActivityPubLog row is written.
+    """
+    instance = make_instance('peer.example')
+    sender = make_user(instance, 'sender')
+    sender.ap_fetched_at = utcnow()
+    db.session.commit()
+
+    activity = inbox_activity(sender, activity_type='Delete',
+                              object={'id': 'https://peer.example/objects/1'})
+
+    with pytest.raises(KeyError, match=r"^'type'$"):
+        dispatch(activity)
+
+    assert ActivityPubLog.query.count() == 0
