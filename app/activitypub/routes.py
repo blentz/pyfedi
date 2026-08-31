@@ -1410,17 +1410,17 @@ def process_inbox_request(request_json, store_ap_json):
                             session.add(feed_item)
                             feed.num_communities += 1
                             session.commit()
-                        # also autosubscribe any feedmembers to the new community
-                        feed_members = session.query(FeedMember).filter_by(feed_id=feed.id).all()
-                        for fm in feed_members:
-                            fm_user = session.query(User).get(fm.user_id)
-                            if fm_user.id == feed.user_id:
-                                continue
-                            if fm_user.is_local() and fm_user.feed_auto_follow:
-                                # user is local so lets auto-subscribe them to the community
-                                from app.community.routes import do_subscribe
-                                actor = community_to_add.ap_id if community_to_add.ap_id else community_to_add.name
-                                do_subscribe(actor, fm_user.id, joined_via_feed=True)
+                            # also autosubscribe any feedmembers to the new community
+                            feed_members = session.query(FeedMember).filter_by(feed_id=feed.id).all()
+                            for fm in feed_members:
+                                fm_user = session.query(User).get(fm.user_id)
+                                if fm_user.id == feed.user_id:
+                                    continue
+                                if fm_user.is_local() and fm_user.feed_auto_follow:
+                                    # user is local so lets auto-subscribe them to the community
+                                    from app.community.routes import do_subscribe
+                                    actor = community_to_add.ap_id if community_to_add.ap_id else community_to_add.name
+                                    do_subscribe(actor, fm_user.id, joined_via_feed=True)
                     elif community:
                         if not community.is_moderator(mod) and not community.is_instance_admin(mod):
                             log_incoming_ap(id, APLOG_ADD, APLOG_FAILURE, saved_json, 'Does not have permission')
