@@ -1269,36 +1269,40 @@ def process_inbox_request(request_json, store_ap_json):
                         # find the feed
                         feed = session.query(Feed).filter_by(ap_public_url=core_activity['object']['id']).first()
 
+                        if not user:
+                            log_incoming_ap(id, APLOG_DELETE, APLOG_FAILURE, saved_json,
+                                            'Delete rejected, could not find the sender.')
+                            return
+                        if not feed:
+                            log_incoming_ap(id, APLOG_DELETE, APLOG_FAILURE, saved_json,
+                                            f"Delete: cannot find {core_activity['object']['id']}")
+                            return
+
                         # make sure the user sending the delete owns the feed
                         if not user.id == feed.user_id:
                             log_incoming_ap(id, APLOG_DELETE, APLOG_FAILURE, saved_json, 'Delete rejected, request came from non-owner.')
                             return
 
-                        # if found, remove all the feeditems and feedmembers
-                        if feed:
-                            # find the feeditems and remove them
-                            feed_items = session.query(FeedItem).filter_by(feed_id=feed.id).all()
-                            for fi in feed_items:
-                                session.delete(fi)
-                                session.commit()
-                            # find the feedmembers and remove them
-                            feed_members = session.query(FeedMember).filter_by(feed_id=feed.id).all()
-                            for fm in feed_members:
-                                session.delete(fm)
-                                session.commit()
-                            # find any feedjoinrequests and remove them
-                            feed_join_requests = session.query(FeedJoinRequest).filter_by(feed_id=feed.id).all()
-                            for fjr in feed_join_requests:
-                                session.delete(fjr)
-                                session.commit()
-                            # finally remove the feed itself
-                            session.delete(feed)
+                        # find the feeditems and remove them
+                        feed_items = session.query(FeedItem).filter_by(feed_id=feed.id).all()
+                        for fi in feed_items:
+                            session.delete(fi)
                             session.commit()
-                            log_incoming_ap(id, APLOG_DELETE, APLOG_SUCCESS, saved_json, f"Delete: Feed {core_activity['object']['id']} deleted")
-                            return
-                        else:
-                            log_incoming_ap(id, APLOG_DELETE, APLOG_FAILURE, saved_json, f"Delete: cannot find {core_activity['object']['id']}")
-                            return
+                        # find the feedmembers and remove them
+                        feed_members = session.query(FeedMember).filter_by(feed_id=feed.id).all()
+                        for fm in feed_members:
+                            session.delete(fm)
+                            session.commit()
+                        # find any feedjoinrequests and remove them
+                        feed_join_requests = session.query(FeedJoinRequest).filter_by(feed_id=feed.id).all()
+                        for fjr in feed_join_requests:
+                            session.delete(fjr)
+                            session.commit()
+                        # finally remove the feed itself
+                        session.delete(feed)
+                        session.commit()
+                        log_incoming_ap(id, APLOG_DELETE, APLOG_SUCCESS, saved_json, f"Delete: Feed {core_activity['object']['id']} deleted")
+                        return
                     elif isinstance(core_activity['object'], str):
                         ap_id = core_activity['object']  # lemmy
                     else:
