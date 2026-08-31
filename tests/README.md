@@ -27,11 +27,51 @@ the second stack could not bind the port. To inspect a running test database:
     podman-compose -f compose.test.yaml exec test-db psql -U pyfedi pyfedi_test
     podman-compose -f compose.test.yaml exec test-redis redis-cli
 
-## Two things that will otherwise waste your time
+## Things that will otherwise waste your time
 
-**`--down` makes the next run slow.** It destroys the tmpfs volume, so the next
-run replays all ~269 migrations against an empty database instead of the usual
-no-op. Use it when you are finished, not between runs.
+**`--down` is for a wedged stack, not for speed.** It destroys the tmpfs volume
+AND the containers, so the next run replays all ~269 migrations (about 8s) and
+rebuilds the image. Measured 2026-08-31: a stack left up for eight hours ran the
+full suite in 186s, while the run immediately after `--down` plus a rebuild took
+260s. Tearing down to "get the speed back" is the wrong instinct -- see the next
+note for what actually goes slow and how the suite handles it.
+
+**The suite resets the database itself when it goes slow.** You should not need
+`--down` for speed; reach for it only to recover a genuinely wedged stack.
+
+The mechanism, measured 2026-08-31. `db_session` truncates all ~90 tables after
+EVERY test, so one full run issues about a quarter of a million table
+truncations, and Postgres degrades badly under that: a single such TRUNCATE
+costs about **0.05ms against a fresh database and about 124ms after two or three
+full runs** -- roughly 2500x. At 2964 tests that is the difference between a
+~190s suite and one that cannot finish inside ten minutes. It is invisible in
+`--durations`: the cost lands on every test's teardown evenly, so the slowest
+twenty tests still total under a minute while the run as a whole crawls.
+
+Two things that are NOT the cause, both checked: user-table bloat (zero dead
+tuples across all 90 tables) and coverage instrumentation (`--cov=app
+--cov-branch` costs only about 1.4x). `VACUUM` does not recover it either --
+`VACUUM FULL` on `pg_class` and the other catalogs left TRUNCATE at ~124ms.
+Only a fresh database helps.
+
+So `run_tests.sh` probes `pg_total_relation_size('pg_class')` before each run --
+about 300kB fresh, tens of MB once TRUNCATE has gone slow -- and restarts
+`test-db` when it exceeds 4 MB (override with `PYFEDI_TEST_STALE_KB`). That
+discards the tmpfs volume, and `flask db upgrade` rebuilds the schema in about 8
+seconds, which is far cheaper than the run it saves. pg_class's size is an
+odometer for relfilenode churn, not the cause; vacuuming it away does not make
+TRUNCATE fast again, which is exactly why the fix is a reset rather than a
+vacuum.
+
+Proof it is self-maintaining: two full runs back to back took 254.66s and
+245.27s, the second having reset itself after detecting 45 MB.
+
+**A run over ten minutes is a broken environment, not a slow suite.**
+`pytest.ini` sets `session_timeout = 600` alongside the per-test `timeout = 60`.
+The per-test limit only ever catches ONE hung test; the degradation above makes
+every test slow and would otherwise be waited out in silence. If you hit the
+session budget with a freshly reset database, suspect the environment -- host
+CPU governor and power profile, and `podman stats` -- not the tests.
 
 **podman-compose names the project after the directory.** A second checkout gets a
 separate stack, and `./run_tests.sh --down` only stops the stack belonging to the
