@@ -87,17 +87,32 @@ propagates out of `dispatch()` uncaught by anything inside
 re-raises).
 
 **3. `blocked.ban_until = core_activity['expires']` (or `['endTime']`),
-:1645/:1647 -- established, not assumed.** The brief poses this as an open
-question about whether SQLAlchemy coerces a raw peer-supplied string into a
-`DateTime` column. Reading `app/models.py`'s `User` class in full (the
-entire class body, :964-1656) surfaces a stronger answer than "no parsing
-happens": **`User` has NO `ban_until` column or attribute at all.** The
-real, mapped `DateTime` column on `User` is `banned_until` (:975, "null ==
-permanent ban") -- one word different from what routes.py:1645/1647
-actually write to. `ban_until` is a real, mapped column on a DIFFERENT
-model, `CommunityBan` (:3545) -- close enough in name and shape that the
-two are easy to conflate while reading the Block arm, which is presumably
-how this happened.
+:1645/:1647 -- established, not assumed. In plain words: a remote
+TEMPORARY ban silently becomes a PERMANENT one, every time, because the
+column that would record its expiry is never written.** The brief poses
+this as an open question about whether SQLAlchemy coerces a raw peer-
+supplied string into a `DateTime` column. Reading `app/models.py`'s `User`
+class in full (the entire class body, :964-1656) surfaces a stronger answer
+than "no parsing happens": **`User` has NO `ban_until` column or attribute
+at all.** The real, mapped `DateTime` column on `User` is `banned_until`
+(:975, "null == permanent ban" -- the comment that makes the consequence
+literal: nothing ever moves this column off its NULL default for a
+federated ban, so every such ban reads, everywhere else in this codebase
+that consults `banned_until`, as permanent) -- one word different from what
+routes.py:1645/1647 actually write to. `ban_until` is a real, mapped column
+on a DIFFERENT model, `CommunityBan` (:3545) -- close enough in name and
+shape that the two are easy to conflate while reading the Block arm, which
+is presumably how this happened.
+
+Decisive corroborating evidence that this is a typo and not some
+alternate, deliberate convention: the Undo/Block path a few hundred lines
+below, handling the REVERSAL of a site ban, writes the CORRECTLY-NAMED
+column -- `unblocked.banned_until = None` (routes.py:1853). Whoever wrote
+the undo path used the real column name; whoever wrote :1645/:1647 did
+not. There is no dialect where `ban_until` on the ban side and
+`banned_until` on the unban side are two names for the same intentional
+thing -- one of the two call sites is simply wrong, and it is the one this
+file's tests exercise.
 
 `test_ordinary_site_ban_the_ban_until_probe` below establishes what this
 means operationally:
@@ -121,15 +136,17 @@ means operationally:
     dispatch, is untouched -- still `None`, exactly as seeded, because
     nothing on this code path ever writes to it.
 
-Net effect: a federated site ban's expiry is silently discarded, every
-time, regardless of what a peer sends for `expires`/`endTime` -- not merely
-unparsed, but never written to any column that exists. `blocked.banned`
-(the real, correctly-named boolean column) IS set True correctly; only the
-expiry half of a temporary ban is lost. Registered here; not fixed, per
-this task's contract -- the fix belongs to whoever triages this defect
-next, and is a one-word rename (`ban_until` -> `banned_until`) plus real
-parsing of the peer string, which :1645/:1647 currently make no attempt at
-either.
+Net effect, stated plainly: a federated site ban's expiry is silently
+discarded, every time, regardless of what a peer sends for
+`expires`/`endTime` -- not merely unparsed, but never written to any
+column that exists -- so **a remote temporary ban silently becomes a
+permanent one.** `blocked.banned` (the real, correctly-named boolean
+column) IS set True correctly; only the expiry half of a temporary ban is
+lost, and `banned_until` stays at its NULL/"permanent" default forever.
+Registered here; not fixed, per this task's contract -- the fix belongs to
+whoever triages this defect next, and is a one-word rename (`ban_until` ->
+`banned_until`, matching the Undo/Block path's own :1853) plus real parsing
+of the peer string, which :1645/:1647 currently make no attempt at either.
 
 **4. Anything else found while deriving the table above.**
   - The site-ban "blocked is local" branch (:1632-1636) calls `ban_user`
@@ -734,6 +751,53 @@ def test_community_ban_by_an_instance_admin_who_is_not_a_moderator_succeeds(app,
     assert blocker_id_arg == blocker.id
     assert community_id_arg == community.id
     assert sa_inspect(blocked_arg).identity[0] == victim.id
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_community_ban_skips_remove_data_when_removeData_is_absent(app, db_session, monkeypatch):
+    """routes.py:1664-1665's `if remove_data:` guard, on its OTHER side: the
+    two success tests above both pass `removeData=True` (or don't assert on
+    the delegate at all), so neither one distinguishes an unconditional
+    `community_ban_remove_data` call from the real guarded one -- a mutant
+    collapsing `if remove_data:` to always-true would survive both. This is
+    the community-ban path's mirror of
+    test_ordinary_site_ban_skips_remove_data_when_removeData_is_absent,
+    which already covers the equivalent site-ban half.
+
+    `removeData` is absent from the activity entirely (not merely False),
+    matching :1625's `remove_data = core_activity['removeData'] if
+    'removeData' in core_activity else False` -- the same membership-test
+    default every other `removeData`-absent test in this file relies on.
+    The ban itself still happens (`ban_user` called, `already_banned` False)
+    and SUCCESS is still logged; only `community_ban_remove_data` must be
+    silent.
+
+    MUTATION: `if remove_data:` (routes.py:1664) changed to `if True:`,
+    reverted immediately after. Confirmed this test alone catches it --
+    `community_ban_remove_data` fires unconditionally under the mutant, so
+    `calls['community_ban_remove_data'] == []` fails. `app/activitypub/routes.py`
+    was restored exactly afterward; `git diff --stat app/` was empty before
+    this test file's own change was committed.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    community = _seed_bannable_community()
+    blocker = _seed_community_ban_blocker()
+    victim = _seed_community_ban_victim()
+    make_community_member(blocker, community, is_moderator=True)
+
+    calls = record_moderation(monkeypatch, 'ban_user', 'community_ban_remove_data')
+
+    activity = inbox_activity(blocker, activity_type='Block',
+                              object_uri=victim.ap_profile_id,
+                              target=community.ap_profile_id)
+    assert 'removeData' not in activity
+
+    dispatch(activity)
+
+    assert calls['community_ban_remove_data'] == []
+    assert len(calls['ban_user']) == 1
 
     log = ActivityPubLog.query.one()
     assert log.result == 'success'
