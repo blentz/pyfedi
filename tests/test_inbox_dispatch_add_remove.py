@@ -803,12 +803,19 @@ def test_a_remove_skips_a_feed_member_with_no_community_membership(
     A FeedItem for this feed/community pair DOES exist here (unlike the
     no-op test above), so FIX 5's guard passes normally and the delete/
     decrement runs -- isolating this test to FIX 6 alone.
+
+    `community.subscriptions_count` is seeded to a nonzero baseline (2)
+    rather than left at its column default (0) before asserting it is
+    unchanged -- per this campaign's 'beware default-backed assertions'
+    rule, a bare `== 0` here would be indistinguishable from the column's
+    own default sitting unexamined.
     """
     instance = make_instance('peer.example')
     make_user(instance, 'community_owner')  # occupies user id=1 for make_community's hardcoded owner
     community = make_community(name='straymembercomm', host='peer.example')
     community.ap_fetched_at = utcnow()
     community.ap_id = 'straymembercomm@peer.example'  # make this community non-local
+    community.subscriptions_count = 2
     db.session.commit()
     assert community.is_local() is False
 
@@ -846,7 +853,7 @@ def test_a_remove_skips_a_feed_member_with_no_community_membership(
     # CommunityMember row or sending anything on its behalf.
     assert CommunityMember.query.filter_by(user_id=stray.id, community_id=community.id).count() == 0
     assert sends == []
-    assert community.subscriptions_count == 0
+    assert community.subscriptions_count == 2
 
     # FIX 5's guard still ran normally for this feed/community pair, since a
     # FeedItem genuinely existed here.
@@ -916,12 +923,20 @@ def _make_would_proceed_feed_member(name, instance, feed, community, local=True,
     feed_auto_leave is True (the column's own default, app/models.py) unless
     `feed_auto_leave` overrides it, and its CommunityMember row has
     joined_via_feed explicitly set True (make_community_member's factory
-    default is False on this column -- FIX 6's `cm and cm.joined_via_feed`
-    check needs this true for the loop to ever reach 'proceed' for a
-    non-skip-condition test) and is_owner False (make_community_member's own
-    default, which is what makes User.subscribed() read SUBSCRIPTION_MEMBER
-    rather than SUBSCRIPTION_OWNER -- the OTHER thing routes.py's current
-    :1499 checks alongside `cm and cm.joined_via_feed`).
+    default is False on this column). routes.py's current :1499 guard is
+    `subscription != SUBSCRIPTION_OWNER and cm and cm.joined_via_feed` --
+    THREE separate conjuncts, not two: `cm` truthy (a CommunityMember row
+    exists at all) and `cm.joined_via_feed` truthy (that row was joined via
+    a feed) are TWO DISTINCT conjuncts with two distinct killers, each
+    needing its own dedicated test (see
+    test_remove_loop_skips_a_feed_member_with_no_community_membership for
+    `cm is None`, and
+    test_remove_loop_skips_a_feed_member_whose_membership_was_not_joined_via_feed
+    for `cm.joined_via_feed is False`) -- setting joined_via_feed True here
+    satisfies both of them so this helper's callers reach 'proceed'. is_owner
+    stays False (make_community_member's own default), which is what makes
+    User.subscribed() read SUBSCRIPTION_MEMBER rather than SUBSCRIPTION_OWNER
+    -- the guard's third, independent conjunct.
     """
     member = make_user(instance, name, local=local)
     if feed_auto_leave is not None:
@@ -1146,7 +1161,6 @@ def test_remove_sends_an_undo_wrapping_a_follow_for_a_remote_community(app, db_s
     which would show full line coverage while leaving the shape of the
     payload untested.
     """
-    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, feed = _seed_remote_removable_feed_community()
     community.subscriptions_count = 1
     db.session.commit()
@@ -1303,7 +1317,7 @@ def test_remove_ovo_st_keeps_the_generated_follow_id_when_no_join_request_exists
 # arm in full (see the block starting at the current :1473), the branch
 # actually spans :1531-1574, with the permission guard at :1532-1534, the
 # sticky target at :1540-1549, the moderators-url target at :1550-1570, the
-# four mislabelled log_incoming_ap calls at :1533, :1568, :1569 and :1571,
+# four mislabelled log_incoming_ap calls at :1533, :1568, :1571 and :1573,
 # and the modlog-outside-`if existing_membership:` defect at :1565-1566.
 # Every citation below is the CURRENT line, re-derived from source.
 #
@@ -1674,7 +1688,14 @@ def test_remove_loop_skips_a_community_owner_via_the_subscription_owner_term(
     """routes.py's current :1499 (`if subscription != SUBSCRIPTION_OWNER and
     cm and cm.joined_via_feed:`) has a FIFTH skip condition beyond the four
     Task 9 covered (feed-owner via `fm_user.id == feed.user_id`; non-local;
-    feed_auto_leave False; no CommunityMember row / joined_via_feed False):
+    feed_auto_leave False; and TWO SEPARATE conjuncts of the `cm and
+    cm.joined_via_feed` compound -- `cm is None` (no CommunityMember row at
+    all) and `cm.joined_via_feed is False` (a real row that just was not
+    joined via a feed); see
+    test_remove_loop_skips_a_feed_member_with_no_community_membership above
+    for the first of those two, and
+    test_remove_loop_skips_a_feed_member_whose_membership_was_not_joined_via_feed
+    below for the second, each with its own distinct killer):
     a member who OWNS the COMMUNITY being removed is skipped by the
     `subscription != SUBSCRIPTION_OWNER` term, independent of every other
     check.
@@ -1737,3 +1758,74 @@ def test_remove_loop_skips_a_community_owner_via_the_subscription_owner_term(
     # num_communities is decremented from its seeded baseline.
     assert FeedItem.query.filter_by(feed_id=feed.id, community_id=community.id).count() == 0
     assert feed.num_communities == 0
+
+
+def test_remove_loop_skips_a_feed_member_whose_membership_was_not_joined_via_feed(
+        app, db_session, monkeypatch):
+    """routes.py's current :1499 -- `if subscription != SUBSCRIPTION_OWNER
+    and cm and cm.joined_via_feed:` has THREE conjuncts, not two. Two
+    already have dedicated killers elsewhere in this module: the
+    `subscription != SUBSCRIPTION_OWNER` term (the test above) and `cm`
+    truthy (`test_a_remove_skips_a_feed_member_with_no_community_membership`,
+    Task 8). `cm.joined_via_feed` had NONE: every other test in this module
+    that reaches this guard with a truthy `cm` does so through
+    `_make_would_proceed_feed_member`, which sets `joined_via_feed = True`
+    unconditionally -- so dropping `and cm.joined_via_feed` from the guard
+    made no test in the suite fail. Branch coverage cannot see this gap
+    either: the compound condition emits a single arc, and the `cm is None`
+    test already takes the guard's False arc.
+
+    This test does NOT use `_make_would_proceed_feed_member` -- it builds
+    the member and CommunityMember row directly, leaving `joined_via_feed`
+    at `make_community_member`'s own factory default, which is False
+    (`app/models.py:3470`'s column default; the factory never sets this
+    column -- see `tests/factories.py`'s `make_community_member`). A real
+    row for a member who joined this community some other way than through
+    the feed. Every OTHER skip condition is deliberately satisfied -- not
+    the feed's owner, local, `feed_auto_leave` True, not the community's
+    owner -- so this conjunct is demonstrably the SOLE cause of the skip.
+
+    MUTATION: routes.py:1499 changed from `if subscription !=
+    SUBSCRIPTION_OWNER and cm and cm.joined_via_feed:` to `if subscription
+    != SUBSCRIPTION_OWNER and cm:` (dropping only `and cm.joined_via_feed`),
+    run, and confirmed this test alone catches it: under the mutant the
+    member proceeds -- its CommunityMember row is deleted and
+    `community.subscriptions_count` is decremented -- so both assertions
+    below fail. `app/activitypub/routes.py` was restored to its exact
+    pre-mutation text immediately afterward; `git diff --stat app/` was
+    empty before this test file's own change was committed.
+    """
+    instance, community, feed = _seed_removable_feed_community(name='notviafeedcomm')
+    community.subscriptions_count = 2
+    db.session.commit()
+
+    feed_owner = make_user(instance, 'feedownerfornotviafeed', local=True)
+    feed.user_id = feed_owner.id
+    db.session.commit()
+    make_feed_member(feed_owner, feed)
+
+    member = make_user(instance, 'notviafeedmember', local=True)
+    make_feed_member(member, feed)
+    cm = make_community_member(member, community, is_moderator=False)
+
+    assert member.id != feed.user_id
+    assert member.is_local() is True
+    assert member.feed_auto_leave is True
+    assert cm.joined_via_feed is False
+    assert community_membership(member, community) != SUBSCRIPTION_OWNER
+
+    sends = record_sends(monkeypatch)
+
+    activity = _remove_activity_for(feed, community)
+    dispatch(activity)
+
+    db.session.expire_all()
+
+    # The `cm.joined_via_feed` conjunct stopped the loop before anything
+    # below it ran: the member's own CommunityMember row is untouched,
+    # nothing was sent, and subscriptions_count (seeded to a nonzero
+    # baseline) is unchanged.
+    assert CommunityMember.query.filter_by(
+        user_id=member.id, community_id=community.id).count() == 1
+    assert sends == []
+    assert community.subscriptions_count == 2

@@ -553,15 +553,29 @@ def test_ordinary_site_ban_skips_remove_data_when_removeData_is_absent(app, db_s
 
 def test_site_ban_already_banned_skips_rebanning_but_still_succeeds(app, db_session, monkeypatch):
     """routes.py:1642. `already_banned` is True (`victim.banned` seeded
-    True), so the `blocked.banned = True` / `ban_until` write at
-    :1643-1647 is skipped entirely -- proven by seeding a real
-    `banned_until` baseline (a REAL column) and showing it survives
-    UNCHANGED, which the arm's own docstring explains is deliberate: "we
-    don't want remote temp bans to over-ride our permanent bans" (:1601).
-    `remove_data` still runs (it is a separate, unconditional `if`,
-    :1650-1651) -- proven here with `removeData=True` in the same test,
-    since that half of the branch does not depend on `already_banned`.
-    SUCCESS is still logged either way (:1652 is unconditional).
+    True). This test establishes what the arm actually does on that path:
+    it completes without error and logs SUCCESS, `remove_data` still runs
+    (a separate, unconditional `if`, :1650-1651, proven here with
+    `removeData=True`, since that half of the branch does not depend on
+    `already_banned`), and the REAL `banned_until` column, seeded to a
+    baseline beforehand, survives unchanged.
+
+    It does NOT prove `if not already_banned:` (:1642) is doing that work,
+    despite the arm's own docstring framing the guard as deliberate ("we
+    don't want remote temp bans to over-ride our permanent bans", :1601).
+    Per D91 (this campaign's findings register), `blocked.banned = True` /
+    `blocked.ban_until = ...` (:1643-1647) writes to `ban_until`, which is
+    not a mapped column on `User` at all -- the write is invisible to
+    SQLAlchemy's flush machinery whether or not this guard runs, so
+    `banned_until` (the REAL, differently-named column) was always going to
+    survive unchanged, guard or no guard. Per D103, `if not already_banned:`
+    is consequently an EQUIVALENT MUTANT in current source: its only
+    observable effects are skipping that already-dead write and a
+    `session.commit()` with nothing new to flush -- `blocked.banned` is
+    already `True` on this path regardless, and both the SUCCESS log and
+    `site_ban_remove_data` sit outside the guard entirely. Deleting the
+    guard and de-indenting its body would change nothing this test (or any
+    other in this file) observes.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, blocker, victim = _seed_ordinary_site_ban(banned_baseline=True)
@@ -903,8 +917,7 @@ def test_mastodon_no_target_creates_a_block_and_logs_nothing(app, db_session, mo
 
     dispatch(activity)
 
-    row = UserBlock.query.filter_by(blocker_id=blocker.id, blocked_id=victim.id).one()
-    assert row is not None
+    UserBlock.query.filter_by(blocker_id=blocker.id, blocked_id=victim.id).one()
 
     assert ActivityPubLog.query.count() == 0
 
