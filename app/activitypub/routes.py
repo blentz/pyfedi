@@ -1377,14 +1377,14 @@ def process_inbox_request(request_json, store_ap_json):
                         else:
                             log_incoming_ap(id, APLOG_LOCK, APLOG_FAILURE, saved_json, 'Lock: Does not have permission')
                     elif post_reply:
-                        if post_reply.community.is_moderator(mod) or post.community.is_instance_admin(mod):
+                        if post_reply.community.is_moderator(mod) or post_reply.community.is_instance_admin(mod):
                             post_reply.replies_enabled = False
                             session.execute(text(
                                 'update post_reply set replies_enabled = :replies_enabled where path @> ARRAY[:parent_id]'),
                                                {'parent_id': post_reply.id, 'replies_enabled': False})
                             session.commit()
-                            add_to_modlog('lock_post_reply', actor=mod, target_user=post.author, reason=reason,
-                                          community=post.community, reply=post_reply,
+                            add_to_modlog('lock_post_reply', actor=mod, target_user=post_reply.author, reason=reason,
+                                          community=post_reply.community, reply=post_reply,
                                           link_text=shorten_string(post_reply.body), link=f'post/{post_reply.post_id}#comment_{post_reply.id}')
                             log_incoming_ap(id, APLOG_LOCK, APLOG_SUCCESS, saved_json)
                         else:

@@ -99,10 +99,15 @@ to fix, not this task's.
     attribute would miss the subtree ever being touched.
 """
 
+from sqlalchemy import inspect as sa_inspect
+
+from app import db
 from app.activitypub import routes as activitypub_routes
-from app.models import FeedItem, FeedMember
-from tests.factories import make_community, make_feed, make_feed_item, make_feed_member, \
-    make_instance, make_user, seed_community_owner
+from app.models import ActivityPubLog, FeedItem, FeedMember, utcnow
+from tests.factories import inbox_activity, make_community, make_community_member, make_feed, \
+    make_feed_item, make_feed_member, make_instance, make_post, make_post_reply, make_user, \
+    seed_community_owner
+from tests.test_inbox_dispatch_preamble import dispatch
 
 
 def record_moderation(monkeypatch, *names):
@@ -174,3 +179,115 @@ def test_make_feed_item_and_make_feed_member_build_expected_rows(app, db_session
     assert member.is_owner is False
 
     assert owner_member.is_owner is True
+
+
+def _seed_lockable_comment(instance_domain='peer.example'):
+    """A community with one moderatable comment thread: `parent_reply` (the
+    Lock target, `ap_id` containing '/comment/' so routes.py:1362 selects it
+    via PostReply.get_by_ap_id) and `child_reply`, whose `path` contains
+    `parent_reply.id` so the raw-SQL subtree UPDATE at routes.py:1382-1384
+    (`where path @> ARRAY[:parent_id]`) reaches it too. `path` values follow
+    PostReply.new()'s own convention (app/models.py:3016-3023): a root
+    reply's path is `[0, self.id]`; a child's is its parent's path with its
+    own id appended.
+
+    Returns (mod, community, post, parent_reply, child_reply, author). `mod`
+    is a plain remote User with `ap_fetched_at` stamped (so
+    find_actor_or_create_cached does not schedule a real actor refresh) and
+    is NOT yet a community moderator -- callers that need a moderator call
+    `make_community_member(mod, community, is_moderator=True)` themselves.
+    """
+    instance = seed_community_owner(instance_domain)  # instance id 1 + local owner user id 1
+    community = make_community(host=instance_domain)
+    author = make_user(instance, 'commenter')
+    post = make_post(community, author, ap_id=f'https://{instance_domain}/post/1')
+
+    parent_reply = make_post_reply(post, author)
+    parent_reply.ap_id = f'https://{instance_domain}/comment/{parent_reply.id}'
+    parent_reply.path = [0, parent_reply.id]
+    db.session.commit()
+
+    child_reply = make_post_reply(post, author)
+    child_reply.path = [0, parent_reply.id, child_reply.id]
+    db.session.commit()
+
+    mod = make_user(instance, 'moduser')
+    mod.ap_fetched_at = utcnow()
+    db.session.commit()
+
+    return mod, community, post, parent_reply, child_reply, author
+
+
+def test_a_moderator_can_lock_a_comment(app, db_session, monkeypatch):
+    """routes.py:1379-1388. Pre-fix this raises AttributeError at :1386
+    (`target_user=post.author`, with post None) on the SUCCESS path.
+
+    Asserts the corrected behaviour: replies_enabled goes False on the reply
+    AND on its subtree via the raw UPDATE at :1382-1385, add_to_modlog is
+    called with the reply's own author and community, and SUCCESS is logged.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    calls = record_moderation(monkeypatch, 'add_to_modlog')
+
+    mod, community, post, parent_reply, child_reply, author = _seed_lockable_comment()
+    make_community_member(mod, community, is_moderator=True)
+
+    activity = inbox_activity(mod, activity_type='Lock',
+                              object_uri=parent_reply.ap_id, summary='breaking the rules')
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    assert parent_reply.replies_enabled is False
+    assert child_reply.replies_enabled is False
+
+    assert len(calls['add_to_modlog']) == 1
+    args, kwargs = calls['add_to_modlog'][0]
+    assert args == ('lock_post_reply',)
+    # The routes-module call ran on the dispatcher's own independent
+    # session (get_task_session()), which is closed (`finally: session.close()`,
+    # routes.py:1888-1889) before dispatch() returns here, and its objects
+    # were already expired by an intervening session.commit() before the
+    # (mocked) call captured them -- so `.id` on the captured objects raises
+    # DetachedInstanceError. `inspect(obj).identity` reads the primary-key
+    # tuple SQLAlchemy stores on the instance's state at load time, which
+    # survives both expiration and detachment.
+    assert sa_inspect(kwargs['actor']).identity[0] == mod.id
+    assert sa_inspect(kwargs['target_user']).identity[0] == author.id
+    assert kwargs['reason'] == 'breaking the rules'
+    assert sa_inspect(kwargs['community']).identity[0] == community.id
+    assert sa_inspect(kwargs['reply']).identity[0] == parent_reply.id
+    assert kwargs['link'] == f'post/{post.id}#comment_{parent_reply.id}'
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+    assert log.exception_message is None
+
+
+def test_a_non_moderator_locking_a_comment_is_refused(app, db_session, monkeypatch):
+    """routes.py:1380. `post_reply.community.is_moderator(mod)` is False, so
+    the `or` does NOT short-circuit and `post.community` is evaluated with
+    post None -- turning the permission refusal into an AttributeError.
+
+    Asserts the corrected behaviour: 'Lock: Does not have permission' logged,
+    replies_enabled unchanged.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    calls = record_moderation(monkeypatch, 'add_to_modlog')
+
+    mod, community, post, parent_reply, child_reply, author = _seed_lockable_comment()
+    # mod is deliberately NOT made a community moderator here.
+
+    activity = inbox_activity(mod, activity_type='Lock',
+                              object_uri=parent_reply.ap_id, summary='breaking the rules')
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    assert parent_reply.replies_enabled is True
+    assert child_reply.replies_enabled is True
+    assert len(calls['add_to_modlog']) == 0
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Lock: Does not have permission'
