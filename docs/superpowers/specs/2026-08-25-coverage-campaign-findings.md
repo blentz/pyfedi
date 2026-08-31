@@ -1153,8 +1153,12 @@ says which numbers are taken. So there is one now, and it is this file:
   sub-project's own bounded authorisation). D78–D79 the fix-wave review that
   closed 5b out, correcting D77's and D68's rows and registering the two
   defects those corrections exposed — see that section for the table.
-  **Next free number: D80.** If you take it, say so here in the change that
-  takes it.
+  D80–D96 sub-project 5c (the Delete, Lock, Add, Remove and Block arms of
+  moderation — see that section for the table; D97–D102 are fixed, not
+  merely registered, under this sub-project's own bounded authorisation,
+  larger than 5b's — six defects across four commits rather than two).
+  **Next free number: D103.** If you take it, say so here in the change
+  that takes it.
 
 Two entries in the reports were deliberately **not** counted as defects, and are
 recorded here so nobody re-files them: the Group and Feed branches both ignore
@@ -2817,6 +2821,243 @@ Tasks 5 and 7's two authorised fixes. **D78-D79 the fix-wave review's two
 corrections** (section 4 above): D78 the audit-trail asymmetry D77's fix
 introduced; D79 the missing `UserFollowRequest` delete D68's correction
 exposed. **Next free number: D80.**
+
+## Sub-project 5c: the Delete, Lock, Add, Remove and Block arms of moderation
+
+`docs/superpowers/specs/2026-08-30-coverage-inbox-moderation-5c-design.md`, on
+branch `blentz`. Eleven test-writing tasks plus this report-only task covered
+`process_inbox_request`'s five moderation arms directly downstream of 5a's
+preamble and 5b's membership handshake: Delete (routes.py:1264-1330), Lock
+(1360-1398), Add (1400-1471), Remove (1473-1574) and Block (1595-1675). 73
+tests across three files: `tests/test_inbox_dispatch_lock_delete.py` (21,
+Lock and Delete), `tests/test_inbox_dispatch_add_remove.py` (32, Add and
+Remove) and `tests/test_inbox_dispatch_block.py` (20, Block). This
+sub-project carried an **explicit, bounded exception** to the campaign's
+report-don't-fix rule, larger than 5b's two: **the project owner separately
+authorised six specific defect-fixes**, spread across four commits (Lock's
+three identifiers in one commit; Delete's feed guard and actor guard in a
+second; Add's loop guard in a third; Remove's feed-item guard and
+membership guard in a fourth), while every other defect this sub-project
+found was registered, not fixed. `git diff --stat app/` is empty for every
+task except Tasks 2, 4, 6 and 8, each confined to the one arm its commit
+names.
+
+### 1. Whole-unit coverage, and every gap explained
+
+Measured against this sub-project's own three files, per this task's brief:
+
+```bash
+./run_tests.sh tests/test_inbox_dispatch_lock_delete.py tests/test_inbox_dispatch_add_remove.py tests/test_inbox_dispatch_block.py \
+  -q --cov=app.activitypub.routes --cov-report=json
+```
+
+73 passed, single foreground run, no hang. Module-level `percent_covered`
+(23.07%, 446/1818 statements, 180/896 branches) is not comparable to 5a's or
+5b's own blended figures for the same reason 5b already gave: it reflects
+only what these three files exercise. The figures that matter are the five
+spans' own numbers, intersected from `coverage.json`'s
+`executed_lines`/`missing_lines`/`executed_branches`/`missing_branches`.
+
+**The spec's span boundaries were stale, as the brief warned, and were
+re-derived from source rather than trusted.** Every task in this
+sub-project reported the same drift (Task 4's fix deleted Delete's dead
+`else:` clause and de-indented its body, shifting every line after
+:1300 for the rest of the sub-project). Corrected boundaries, each spanning
+from the arm's own `if core_activity['type'] == '...':` line through its
+final `return`:
+
+| arm | spec said | corrected |
+|---|---|---|
+| Delete | 1264-1327 | **1264-1330** |
+| Lock | 1356-1395 | **1360-1398** |
+| Add | 1396-1468 | **1400-1471** |
+| Remove | 1469-1570 | **1473-1574** |
+| Block | 1590-1671 | **1595-1675** |
+
+| span | statements | branches |
+|---|---|---|
+| Delete (1264-1330) | 47/47 executed | 26/26 executed, 0 missing arcs |
+| Lock (1360-1398) | 29/29 executed | 16/16 executed, 0 missing arcs |
+| Add (1400-1471) | 60/60 executed | 31/32 executed, 1 missing arc |
+| Remove (1473-1574) | 77/77 executed | 43/46 executed, 3 missing arcs |
+| Block (1595-1675) | 54/54 executed | 36/38 executed, 2 missing arcs |
+
+**Every statement in all five spans is executed.** Zero missing lines --
+between them the eleven test-writing tasks drove Delete's Feed/content/PM
+trichotomy and every content-shape within it, both of Lock's post/comment
+branches on both outcomes, Add's feed/sticky/moderator trichotomy, Remove's
+mirror of the same trichotomy plus its five-condition auto-unsubscribe
+loop, and Block's site-ban/community-ban/Mastodon trichotomy including both
+permission guards' mutants. The only gaps are the six missing branch arcs
+below, each explained rather than left as a remainder.
+
+**The six missing branch arcs, in full:**
+
+1. **Add, arc `[1419, 1415]` -- the per-member `if fm_user.is_local() and
+   fm_user.feed_auto_follow:` False-skip, inside the feed branch's
+   auto-subscribe loop (routes.py:1414-1423).** A real, narrow
+   test-matrix gap, not a defect. Every feed member that reaches line 1419
+   at all in this suite (the feed's owner is diverted by the `continue` at
+   :1418 one line earlier, before ever reaching :1419) is local with
+   `feed_auto_follow` True -- Task 7's
+   `test_the_feed_branchs_success_path_subscribes_non_owners_and_logs_nothing`
+   and Task 6's single-member fixture both build members that pass this
+   check. No test in this suite seeds a non-owner feed member who is
+   non-local, or local with `feed_auto_follow` False, so the guard's False
+   arm (skip this member, loop to the next) is never taken. The code's own
+   behaviour on that arm is unremarkable -- a silent skip, matching the
+   already-registered "Add's silent feed branch" finding (D81 below) -- so
+   this is scope the eleven test-writing tasks simply didn't spend on, not
+   a defect this task is failing to explain.
+2. **Remove, arc `[1481, 1574]` -- the feed branch's `if community_to_remove
+   and isinstance(community_to_remove, Community):` False-skip
+   (routes.py:1481).** A real, narrow test-matrix gap, and the direct
+   mirror of a case Add's own Task 6 DID cover
+   (`test_an_add_whose_community_cannot_be_resolved_does_not_touch_feed_members`).
+   No Remove test sends a feed Remove naming a community that fails to
+   resolve (or resolves to something that isn't a `Community`); every
+   Remove test that reaches the feed branch's guard resolves a real,
+   seeded Community (Task 8's `test_a_remove_for_a_community_not_in_the_feed_is_a_no_op`
+   resolves a real Community that merely isn't in the feed, which is a
+   different case -- `community_to_remove` itself is truthy there). The
+   behaviour on the untaken arm is the same silent early-`return` shape
+   Add's equivalent guard has, not a new defect.
+3. **Remove, arc `[1522, 1491]` -- the `if proceed:` False-skip inside the
+   auto-unsubscribe loop's Undo-sending block (routes.py:1522), looping
+   back to the next feed member (:1491).** An **equivalent mutant / dead
+   branch**, the same type-narrowing shape this document has used
+   throughout (5a's D61/D62, 5b's Follow arc `[1018, 1072]`). Reading the
+   arm: `proceed = True` (:1500) is set unconditionally, immediately on
+   entry to the `if subscription != SUBSCRIPTION_OWNER and cm and
+   cm.joined_via_feed:` block (:1499) that is the ONLY path to line 1522 --
+   `if proceed:` sits at the same indentation level as :1500 and :1502,
+   i.e. as a sibling inside that same block, and nothing between :1500 and
+   :1522 (the `is_local()`/`gone_forever`/`ovo.st` nesting at :1502-1520)
+   ever reassigns `proceed`. So by construction, every time line 1522 runs,
+   `proceed` was just set `True` a few lines above on that same pass --
+   the False arm cannot fire on any input. **New finding from this task's
+   own branch analysis, registered as D95 below** (informational -- dead
+   code, not a bug, since the variable exists purely as a vestige, plausibly
+   from an earlier version of this loop that computed `proceed` in more
+   than one place).
+4. **Remove, arc `[1536, 1538]` -- the community branch's `if not
+   community.ap_featured_url:` False-skip (routes.py:1536-1537), the
+   backfill guard on the sticky-target path.** A real, narrow test-matrix
+   gap, and the mirror of a case Add's own Task 7 DID cover
+   (`test_sticky_with_a_pre_set_featured_url_is_not_backfilled`). No Remove
+   test seeds a community whose `ap_featured_url` is already set before
+   dispatch -- Task 10's
+   `test_remove_unsticky_backfills_ap_featured_url_and_compares_case_insensitively`
+   starts from `None` and exercises only the True arm (the backfill). The
+   untested arm's behaviour (skip the backfill, use the pre-set value) is
+   identical in shape to Add's own already-covered case.
+5. **Block, arc `[1595, 1677]` -- the top-level `if core_activity['type']
+   == 'Block':` False-skip, falling through to the `Undo` check at
+   :1677.** Legitimately out of this sub-project's scope, the same
+   reasoning 5b gave for Reject's arc `[1150, 1193]`: within this
+   three-file suite, the only way to reach line 1595 at all is a genuine
+   `Block`-type activity (every Delete/Lock/Add/Remove test returns from
+   its own arm strictly before :1595 is reached). Driving the False arm
+   needs a non-`Block` activity that survives every earlier arm's own
+   `return`, which is exactly what 5a's, 5b's and this sub-project's own
+   *other* test files already do for their own types -- a different
+   sub-project's territory, not a gap in Block's own coverage.
+6. **Block, arc `[1670, 1675]` -- the Mastodon path's `if 'object' in
+   core_activity and isinstance(core_activity['object'], str):` False-skip
+   (routes.py:1670).** An **equivalent mutant / dead branch**, established
+   by Task 11's own dict-object probe. `core_activity['object']` is read
+   unconditionally via `.lower()` at :1617, long before :1670 -- if
+   `'object'` were absent from `core_activity`, or if it were anything
+   other than a string (a dict, as Task 11's
+   `test_a_dict_shaped_object_crashes_before_any_isinstance_check` pins;
+   equally a list or any other non-string type, by the same `.lower()`
+   crash), the arm would already have raised `KeyError` or `AttributeError`
+   at :1617 and never reached :1670 at all. Nothing between :1617 and
+   :1670 reassigns `core_activity['object']`. So by the time line 1670
+   runs, `'object' in core_activity` and `isinstance(core_activity['object'],
+   str)` are BOTH already guaranteed True -- the guard cannot fail on any
+   input that survives to it. **New finding from this task's own branch
+   analysis, registered as D96 below.**
+
+### 2. New defects -- D80-D96
+
+None fixed by this task, per its report-only remit -- including D95 and
+D96, the two dead-code findings this task's own coverage analysis
+surfaced. D97-D102 (section 3 below) are the six exceptions this
+sub-project's own authorisation carved out, and none of those six was found
+or fixed by this task; each was found and fixed by the task named in its
+row. Severity is argued from what the tests actually executed wherever a
+test exists; several rows below state explicitly which half of the claim is
+measured and which is reasoned from source.
+
+| # | function | defect | severity | evidence |
+|---|---|---|---|---|
+| D80 | `process_inbox_request`, Remove/community branch (routes.py:1533, 1568, 1571, 1573) | **Four of Remove's `log_incoming_ap` calls pass `APLOG_ADD` instead of `APLOG_REMOVE`**: the permission-denied refusal (:1533), the moderators-url unresolvable-actor failure (:1568), the unknown-target failure (:1571), and the cannot-find-community-or-feed failure (:1573). Only three of the community branch's calls are correctly labelled `APLOG_REMOVE` (:1545 sticky success, :1547 sticky post-not-found, :1564 mod-removal success) -- a fourth `APLOG_REMOVE` call at :1529 belongs to the sibling feed branch's auto-unsubscribe loop, not this branch, and is not counted here (an earlier draft of this correction double-counted it; the ledger's corrected figures are used throughout this row). Same defect class as 5b's D68 (Reject's `APLOG_ACCEPT` mislabelling), here on the failure paths of Remove rather than every path of Reject. | cosmetic -- operator-facing mislabelling only; the refusal/failure behaviour itself is correct in every case | **measured**, four distinct tests, each asserting `log.activity_type == APLOG_ADD[1]` on a genuine Remove dispatch: Task 10's `test_remove_permission_denied_pins_the_aplog_add_mislabelling` (:1533), `test_remove_mod_unresolvable_actor_reports_cannot_find` (:1568), `test_remove_unknown_target` (:1571), `test_remove_with_neither_community_nor_feed_resolvable_is_refused` (:1573) |
+| D81 | `process_inbox_request`, Add/feed branch (routes.py:1405-1423) | The entire feed branch -- creating a `FeedItem`, incrementing `feed.num_communities`, and auto-subscribing eligible feed members -- calls `log_incoming_ap` on no path at all: neither its success shape nor its unresolvable-community shape writes an `ActivityPubLog` row. A federated feed/Add leaves zero audit trail, in contrast to the community branch a few lines below, which logs every outcome. | low -- diagnostic/audit-trail gap, same shape as 5b's D65 (Follow/Feed's silent reject); no security or data-integrity impact | **measured**: Task 6's `test_an_add_whose_community_cannot_be_resolved_does_not_touch_feed_members` and Task 7's `test_the_feed_branchs_success_path_subscribes_non_owners_and_logs_nothing` both enable `LOG_ACTIVITYPUB_TO_DB` and assert `ActivityPubLog.query.count() == 0`, covering both reachable outcomes |
+| D82 | `process_inbox_request`, Remove/feed branch (routes.py:1478-1530) | The mirror of D81 on the Remove side: the feed branch (FeedItem removal, per-member auto-unsubscribe loop, the Undo-sending block) calls `log_incoming_ap` on no path except the auto-unsubscribe loop's own internal success log (:1529, a distinct, already-correctly-labelled call scoped to Task 9's territory). The branch's own top-level outcomes -- a no-op when the community isn't in the feed, an unresolvable community -- log nothing. | low -- same shape as D81 | **measured**: Task 8's `test_a_remove_for_a_community_not_in_the_feed_is_a_no_op` enables logging and asserts `ActivityPubLog.query.count() == 0` for the no-op case |
+| D83 | `process_inbox_request`, Block/Mastodon branch (routes.py:1669-1673) | The Mastodon no-target path (create a `UserBlock`, or silently skip a duplicate) calls `log_incoming_ap` on neither outcome -- confirmed by reading the branch in full, not merely "not observed to fire". Because `core_activity['object']` is read unconditionally three lines into the arm (:1617, see D87/the arc-6 dead-branch finding above), this silence also covers the dict-object crash outcome: EVERY no-target Block whose object isn't a string logs nothing, crash included. | low -- audit-trail gap, same shape as D81/D82; the crash half compounds with D87's severity rather than adding a new one | **measured**: Task 11's `test_mastodon_no_target_creates_a_block_and_logs_nothing` and `test_mastodon_no_target_skips_a_duplicate_and_logs_nothing` both assert `ActivityPubLog.query.count() == 0` with logging enabled |
+| D84 | `process_inbox_request`, Remove/community branch (routes.py:1565-1566) | `add_to_modlog('remove_mod', actor=mod, target_user=old_mod, community=community, ...)` sits OUTSIDE the `if existing_membership:` guard (:1555-1564) that wraps the actual `is_moderator = False` write and its SUCCESS log -- so a Remove naming a moderator target that has no `CommunityMember` row at all still writes a modlog entry claiming a demotion happened, while the `ActivityPubLog` and the `CommunityMember` table both stay silent/unchanged. The modlog and the actual moderation state can disagree. | medium -- a moderation-audit record (modlog) that does not correspond to any actual moderation action or `ActivityPubLog` entry; peer-triggerable by naming a non-member in a Remove's moderators-url target | **measured**: Task 10's `test_remove_mod_without_existing_membership_writes_modlog_but_logs_nothing` asserts the modlog call fires (via `record_moderation`) while `ActivityPubLog.query.count() == 0` (logging enabled) |
+| D85 | `process_inbox_request`, Delete/feed branch (routes.py:1286-1303) | The three feed-teardown loops (`FeedItem`, `FeedMember`, `FeedJoinRequest`) each call `session.commit()` inside the loop body, once per row, rather than once after the loop (or once for the whole deletion). A feed with N items, M members and K join requests issues N+M+K+1 commits (plus the final `session.delete(feed)`'s own commit) where one would do. | low -- inefficiency/N+1-commit pattern, not a correctness defect; no test demonstrates a partial-failure scenario where the per-item commits would matter (e.g. a crash mid-loop leaving some rows deleted and others not) | **measured** that the loop bodies genuinely execute more than once per test and every row is gone afterward (Task 5's `test_a_delete_of_a_feed_removes_items_members_and_join_requests` seeds 2 `FeedItem`s, 2 `FeedMember`s and 1 `FeedJoinRequest`, asserting all three tables are emptied); **reading-level** that the commits themselves are per-item rather than batched -- the test does not count `session.commit()` invocations, only the end state, which a single final commit would produce identically |
+| D86 | `process_inbox_request`, Delete (routes.py:1321-1330) | When neither `find_liked_object` nor the `ChatMessage` lookup matches the deleted item's `ap_id`, the arm falls to its final `return` with zero writes, zero delegate calls, and zero logging -- a Delete for content this instance never had leaves no trace at all. | low -- silent no-op, same shape as this document's recurring "silent already-satisfied/unmatched" class (5b's D66, D81/D82/D83 above) | **measured**: Task 5's `test_delete_of_an_unmatched_ap_id_logs_nothing` enables `LOG_ACTIVITYPUB_TO_DB` and asserts `ActivityPubLog.query.count() == 0` |
+| D87 | `process_inbox_request`, Block (routes.py:1617) | `blocked_ap_id = core_activity['object'].lower()` runs unconditionally, before `'target'` is even inspected, with no `isinstance` guard. A dict-shaped (or otherwise non-string) `object` raises `AttributeError` uncaught, three lines into the arm, before any of the three sub-paths' own type-checks (including the Mastodon path's own `isinstance` guard at :1670, see arc-6 above) ever run. | medium -- peer-triggerable, unhandled exception instead of a graceful refusal, same class this document gives throughout (5a's D49-D52/D55/D56, 5b's D70) | **measured**: Task 11's `test_a_dict_shaped_object_crashes_before_any_isinstance_check` asserts the exact `AttributeError` and that zero `ActivityPubLog` rows are written |
+| D88 | `process_inbox_request`, Add (routes.py:1428) and Remove (routes.py:1535) | Both arms' community branch reads `target = core_activity['target']` with no `.get()`/`in` guard, immediately after the permission check passes. An Add or Remove whose activity omits `target` entirely raises `KeyError: 'target'`, uncaught, in both arms alike -- the same unguarded-peer-supplied-key shape this document generalises from D13/D30, 5a's D49-D52/D55/D56, and 5b's D70. | medium -- peer-triggerable, unhandled exception instead of a graceful refusal | **measured**, one test per arm: Task 7's `test_a_target_omitted_entirely_raises_keyerror` (Add, `pytest.raises(KeyError, match='target')`) and Task 10's `test_remove_target_omitted_entirely_raises_keyerror` (Remove, same assertion shape) |
+| D89 | `process_inbox_request`, Remove/feed branch (routes.py:1505) | `if community_to_remove.instance.domain == 'ovo.st':` hardcodes one specific peer instance's domain to special-case how `follow_id` is generated (reusing a `CommunityJoinRequest`'s own `uuid` rather than a freshly generated one) when auto-unfollowing during a feed removal. Any other instance with the same underlying need (a peer that validates a Follow/Undo pair's `id` against the original join request) gets the generic, uncorrelated `follow_id` instead -- the special-casing does not generalise to "peers that need this," only to one hardcoded hostname. | informational -- a maintainability/generality concern, not demonstrated to break federation with `ovo.st` itself (the branch it drives IS correctly exercised) | **measured** that the branch fires exactly as coded for that hostname and reads the join request's `uuid` when present: Task 9's `test_remove_ovo_st_uses_the_join_requests_uuid_as_the_follow_id` and `test_remove_ovo_st_keeps_the_generated_follow_id_when_no_join_request_exists`; **reading-level** that the hardcoding itself is a defect worth generalising |
+| D90 | `process_inbox_request`, Add/feed branch (routes.py:1421) | `from app.community.routes import do_subscribe` is an inline import placed inside the per-member `for fm in feed_members:` loop body, so it re-executes on every iteration rather than once at module load. Confirmed by Task 6: the import's binding site is not `app.activitypub.routes` at all (`grep` shows no such module-level attribute), which is why the test patches `app.community.routes.do_subscribe` directly rather than the routes module's own namespace. | informational -- negligible runtime cost (Python caches the imported module in `sys.modules`, so this is a repeated dict lookup, not a repeated disk read), but the loop-local placement is unusual style for this codebase and easy to overlook when auditing what `do_subscribe` resolves to at call time | **measured**: Task 6 confirmed the binding-site fact directly (patching the routes-module attribute has no effect; patching `app.community.routes.do_subscribe` does); **reading-level**: the "why is this inline at all, and why inside the loop rather than at the top of the branch" question itself |
+| **D91** | `process_inbox_request`, Block, site-ban ordinary case (routes.py:1645, 1647) | **The most severe finding this sub-project made.** `blocked.ban_until = core_activity['expires']` (or `['endTime']`) writes to an attribute name `User` does not have. The real, mapped `DateTime` column is `banned_until` (`app/models.py:975`, commented "null == permanent ban"); `ban_until` is a real column, but on a completely different model, `CommunityBan` (`app/models.py:3545`). The write is therefore ordinary Python instance-attribute assignment, invisible to SQLAlchemy's flush machinery: it neither raises nor persists, and vanishes when the dispatcher's own independent task session closes. In Task 11's own words, quoted verbatim: **"In plain words: a remote TEMPORARY ban silently becomes a PERMANENT one, every time, because the column that would record its expiry is never written."** `blocked.banned` (the real, correctly-named boolean column) IS set `True` correctly on this path -- only the expiry half is lost, and `banned_until` stays at its NULL/"permanent" default forever as a result. Decisive evidence this is a typo, not an alternate convention: the Undo/Block (site-unban) path a few hundred lines below, reversing the identical kind of ban, correctly writes `unblocked.banned_until = None` (routes.py:1853) -- the person who wrote the reversal used the real column name; the person who wrote the ban did not. | **high** -- every federated temporary site ban this instance ever receives is silently converted to a permanent one, with no error, no log distinction, and no way for an admin reading `ActivityPubLog`'s unconditional SUCCESS row to know the expiry was discarded | **measured**, by direct observation rather than assumption: Task 11's `test_ordinary_site_ban_the_ban_until_probe` confirms via `sa_inspect(User).columns.keys()` that `'ban_until'` is not a mapped column at all; that `session.commit()` succeeds with a deliberately unparseable `expires` string, proving nothing downstream validates it; and that the real `banned_until` column, re-read fresh from the database after dispatch, is untouched at its seeded `None` |
+| D92 | `process_inbox_request`, Delete (routes.py:1266) | `core_activity['object']['type'] == 'Feed'` reads the `'type'` key unconditionally once `isinstance(core_activity['object'], dict)` is True -- `isinstance` only short-circuits the case where `object` isn't a dict at all, not a dict missing that specific key. A dict-shaped object with no `'type'` key raises `KeyError`, uncaught, before either of the two already-fixed guards (D98/D99 below) or the arm's own success paths are ever reached -- a third, previously-unregistered crash path in Delete, distinct from both fixed defects. | medium -- peer-triggerable, unhandled exception instead of a graceful refusal, same class as D87/D88 | **measured**: Task 5's `test_delete_of_a_dict_object_with_no_type_key_raises_keyerror` asserts `pytest.raises(KeyError, match=r"^'type'$")` and that zero `ActivityPubLog` rows are written; first surfaced by Task 1 reading the arm, independently confirmed by Task 1's own reviewer |
+| D93 | `find_community` (`app/activitypub/util.py:4568-4581`), reached from Add | `rj = request_json['object'] if 'object' in request_json else request_json` (:4568) is followed, a few lines later, by `rj.get('type') == 'Video'` (:4581) with no guard that `rj` is actually a dict -- a third crash site in this function, distinct from the two (`KeyError` on a missing `'type'`, `AttributeError` on `.startswith` against a non-string list element) already fixed as D2/D3, and from the third (`KeyError`/`TypeError` in the Video `attributedTo` walk) already registered as D28. A plain-string `object` -- the common shape for a real Lemmy sticky/add-mod Add -- drives this line into `AttributeError: 'str' object has no attribute 'get'`, shared by every arm that calls `find_community` including Lock's own call. | medium -- peer-triggerable, unhandled exception, same class as D2/D3/D28; not this sub-project's function to fix (out of scope: this defect lives in `util.py`, not the `routes.py` arms this sub-project's tasks were dispatched against) | **reading-level, with a directly observed crash**: Task 7's report records hitting exactly this `AttributeError` while building `test_add_with_neither_community_nor_feed_resolvable_is_refused`, and rewrote that test to send a dict `object` instead so it would exercise the Add arm's own final `else` rather than this separate bug -- the crash was real and observed, but no committed test pins it with `pytest.raises` (the committed test deliberately avoids triggering it) |
+| D94 | `process_inbox_request`, Block, site-ban "blocked is local" branch (routes.py:1632-1636) | Unlike the "ordinary" (blocked-on-a-different-instance) site-ban branch a few lines below, which explicitly skips the `banned`/`ban_until` write `if not already_banned`, the "blocked is local" branch calls `ban_user(blocker, blocked, None, core_activity)` UNCONDITIONALLY -- `already_banned` (computed at :1622-1623 specifically, per the arm's own docstring, "we don't want remote temp bans to over-ride our permanent bans") is never consulted on this branch at all. A remote admin re-sending an already-actioned ban of a local user always re-invokes the local `ban_user` delegate. | low-medium -- redundant delegate invocation on every re-send, inconsistent with the sibling branch's explicit intent to avoid exactly this, though `ban_user`'s own idempotency (not audited by this sub-project) may or may not make the redundant call harmless | **measured**: Task 11's `test_site_ban_of_a_local_user_reinvokes_ban_user_even_if_already_banned` seeds `blocked.banned = True` beforehand and asserts `ban_user` is still called |
+| D95 | `process_inbox_request`, Remove/feed branch (routes.py:1522) | **New finding, from this task's own branch analysis (arc `[1522, 1491]`, section 1 above).** `if proceed:` is an equivalent mutant / dead branch: `proceed = True` is set unconditionally at :1500, on the only code path (the `if subscription != SUBSCRIPTION_OWNER and cm and cm.joined_via_feed:` block at :1499) that ever reaches :1522, and nothing between the two lines reassigns it. The False arm cannot fire on any input. | informational -- dead code, not a bug; harmless as written, but a maintenance trap if a future edit adds a path to :1522 that does NOT pass through :1499-1500 without noticing `proceed`'s only assignment is upstream | **reading-level**: derived directly from this task's own coverage.json missing-branches output plus source inspection of the guard structure; no test in this sub-project specifically targets this arc, consistent with it being unreachable |
+| D96 | `process_inbox_request`, Block/Mastodon branch (routes.py:1670) | **New finding, from this task's own branch analysis (arc `[1670, 1675]`, section 1 above).** `if 'object' in core_activity and isinstance(core_activity['object'], str):` is an equivalent mutant / dead branch, given D87 above: `core_activity['object']` is already read unconditionally via `.lower()` at :1617, so any activity that survives to :1670 already has a string `'object'` -- the guard cannot fail on any input that reaches it. | informational -- dead code, not a bug; the guard reads as defensive but the crash it appears to guard against (D87) already happens 53 lines earlier | **measured, obliquely**: Task 11's own dict-object probe (`test_a_dict_shaped_object_crashes_before_any_isinstance_check`) demonstrates the mechanism that makes this arc dead (the earlier `.lower()` crash), though no test targets :1670's guard directly |
+
+### 3. Six defects fixed under explicit authorisation -- D97-D102
+
+Per the project owner's explicit instruction, this sub-project was
+authorised to fix exactly six specific defects, found while Tasks 2, 4, 6
+and 8 wrote their own tests -- a deliberate, bounded departure from this
+campaign's report-don't-fix rule, **larger than 5b's two-defect
+authorisation**, reflecting this sub-project's wider scope (five arms
+against 5b's three). Every other defect this sub-project found (D80-D96
+above, plus 5a's D1-D63 and 5b's D64-D79) was registered, not fixed. All
+six fixes are single-identifier or single-guard changes, each verified
+against the whole suite by the controller after its task committed, and
+are recorded here as fixed rather than open.
+
+| # | function | defect | status | evidence |
+|---|---|---|---|---|
+| D97 | `process_inbox_request`, Lock/comment branch (routes.py:1380, 1386, 1387 pre-fix) | **FIXED, commit `b79f43f9`.** In `elif post_reply:`, the branch referenced `post` -- guaranteed `None` here, since this branch only runs when the `if post:` branch above did not -- at all three of its textual mentions: the permission check's second `or` operand (:1380), `target_user=post.author` (:1386), and `community=post.community` (:1387). Python's short-circuit evaluation meant only one of the three ever executed per call: if the actor genuinely was a moderator/admin, the `replies_enabled` write and the raw-SQL subtree `UPDATE` DID happen and committed, then :1386 crashed with `AttributeError: 'NoneType' object has no attribute 'author'` before `add_to_modlog` or the SUCCESS log ran, leaving the write stranded with no record; if not, :1380 crashed immediately with `AttributeError: 'NoneType' object has no attribute 'community'`, before any write. A federated comment-Lock could complete neither successfully nor with a clean refusal. Fix: all three `post` references changed to `post_reply`. Full suite after the fix: 2872 passed, 3 skipped, no other test broken. | fixed and verified | **measured**: both pre-fix `AttributeError`s captured directly from real pytest failures; post-fix, Task 2's `test_a_moderator_can_lock_a_comment` (success) asserts BOTH `parent_reply.replies_enabled is False` AND `child_reply.replies_enabled is False` via a genuinely path-matching seeded reply, proving the raw-SQL subtree `UPDATE` -- which had never executed against a working branch before this fix -- now runs correctly; `test_a_non_moderator_locking_a_comment_is_refused` (refusal) asserts both stay `True` |
+| D98 | `process_inbox_request`, Delete/feed branch (routes.py:1273 pre-fix, now guarded at :1272-1275) | **FIXED, commit `c1bae61c`.** `if not user.id == feed.user_id:` dereferenced `feed.user_id` with no guard that the named Feed resolved at all -- an unknown `ap_public_url` left `feed` as `None`, crashing with `AttributeError: 'NoneType' object has no attribute 'user_id'`. Fix: an `if not feed:` guard, logging `APLOG_FAILURE` with the same message the removed dead `else:` clause used to emit, inserted before the ownership check. | fixed and verified | **measured**: pre-fix `AttributeError` captured directly (`routes.py:1273`); post-fix, Task 4's `test_a_delete_naming_an_unknown_feed_is_refused` asserts the FAILURE log and that the feed table is untouched |
+| D99 | `process_inbox_request`, Delete/feed branch (routes.py:1273 pre-fix, now guarded at :1272-1275) | **FIXED, commit `c1bae61c`** (same commit as D98, a distinct guard). The same `if not user.id == feed.user_id:` line also dereferenced `user.id` with no guard that the sending actor resolved -- an unresolvable `actor_id` on the arm's own re-lookup left `user` as `None`, crashing with `AttributeError: 'NoneType' object has no attribute 'id'`. Fix: an `if not user:` guard, logging `APLOG_FAILURE` with a new message ('Delete rejected, could not find the sender.'), inserted immediately before the `if not feed:` guard. | fixed and verified | **measured**: pre-fix `AttributeError` captured directly (`routes.py:1273`, same line as D98, distinguished by which operand was `None`); post-fix, Task 4's `test_a_delete_from_an_unresolvable_actor_is_refused` asserts the new FAILURE message, reached via a stateful `find_actor_or_create_cached` stub that resolves the preamble's own lookup but not the arm's re-lookup |
+| D100 | `process_inbox_request`, Add/feed branch (routes.py:1422 pre-fix) | **FIXED, commit `307d50a8`.** The feed-member auto-subscribe loop (querying `FeedMember`s and calling `do_subscribe` for each eligible one) sat OUTSIDE the `if community_to_add and isinstance(community_to_add, Community):` guard, so it ran even when the named community never resolved, crashing on `community_to_add.ap_id` with `AttributeError: 'NoneType' object has no attribute 'ap_id'`. Fix: the loop (comment, query and body, byte-identical apart from one added indentation level) moved inside the guard. | fixed and verified | **measured**: pre-fix `AttributeError` captured directly (`routes.py:1422`); post-fix, Task 6's `test_an_add_whose_community_cannot_be_resolved_does_not_touch_feed_members` asserts no `FeedItem` was created and `do_subscribe` was never called; re-mutated and re-run in Task 6's fix round to confirm the identical failure reproduces when de-indented, then restored |
+| D101 | `process_inbox_request`, Remove/feed branch (routes.py:1484 pre-fix) | **FIXED, commit `5edb87b6`.** `session.delete(feed_item)` ran unconditionally after the `FeedItem` lookup, with no guard that a matching row existed -- a community not actually in the feed left `feed_item` as `None`, crashing with `sqlalchemy.orm.exc.UnmappedInstanceError: Class 'builtins.NoneType' is not mapped`. Fix: an `if feed_item:` guard wraps the delete, the `num_communities` decrement, and the commit (byte-identical apart from one added indentation level). | fixed and verified | **measured**: pre-fix `UnmappedInstanceError` captured directly; post-fix, Task 8's `test_a_remove_for_a_community_not_in_the_feed_is_a_no_op` asserts no crash, no `FeedItem` created, and `feed.num_communities` unchanged from its seeded nonzero baseline |
+| D102 | `process_inbox_request`, Remove/feed branch (routes.py:1498 pre-fix) | **FIXED, commit `5edb87b6`** (same commit as D101, a distinct guard). `if subscription != SUBSCRIPTION_OWNER and cm.joined_via_feed:` dereferenced `cm.joined_via_feed` with no guard that a matching `CommunityMember` row existed -- a feed member with no membership in the community being removed left `cm` as `None`, crashing with `AttributeError: 'NoneType' object has no attribute 'joined_via_feed'`. Fix: the condition's middle conjunct became `cm and cm.joined_via_feed` -- a single inserted `cm and`, nothing else on the line changed. | fixed and verified | **measured**: pre-fix `AttributeError` captured directly (`routes.py:1498`); post-fix, Task 8's `test_a_remove_skips_a_feed_member_with_no_community_membership` asserts no crash and, via `record_sends`, that the loop stopped before any Undo/Follow send could fire -- proving the guard stopped the loop, not merely the crash |
+
+### 4. The allocation ledger, updated
+
+D1-D20 sub-project 2a, D21-D24 sub-project 2b, D25-D29 sub-project 2c,
+D30-D33 sub-project 2c's whole-branch review, D34-D40 sub-project 3, D41-D46
+sub-project 4, D47 sub-project 4's whole-branch review, D48 the follow-on
+audit of `instance_allowed`/`instance_banned`, D49-D63 sub-project 5a,
+D64-D77 sub-project 5b, D78-D79 5b's fix-wave review corrections.
+**D80-D96 this sub-project** (section 2 above): D80 Remove's `APLOG_ADD`
+mislabelling (four sites); D81 Add's silent feed branch; D82 Remove's
+silent feed branch; D83 Block's silent Mastodon path; D84 the `remove_mod`
+modlog entry written without a membership; D85 Delete's per-item commits in
+three loops; D86 Delete's silent unmatched-`ap_id` path; D87 Block's
+unconditional `.lower()` on a possibly-non-string object; D88 the unguarded
+`target` reads in Add and Remove; D89 Remove's hardcoded `ovo.st` special
+case; D90 Add's per-iteration inline `do_subscribe` import; **D91 the
+`ban_until`/`banned_until` defect, this sub-project's most severe
+finding**; D92 Delete's third crash path (`['type']` on a dict with no
+such key); D93 `find_community`'s third crash site, reached from Add; D94
+the site-ban local-user branch ignoring `already_banned`; D95 Remove's
+dead `if proceed:` branch; D96 Block's dead Mastodon-path `isinstance`
+guard. **D97-D102 the six explicitly-authorised fixes** (section 3 above):
+D97 Lock's comment branch (`b79f43f9`); D98-D99 Delete's feed and actor
+guards (`c1bae61c`); D100 Add's loop guard (`307d50a8`); D101-D102
+Remove's feed-item and membership guards (`5edb87b6`). **Next free number:
+D103.**
+
 
 ## Ratchet gotchas
 
