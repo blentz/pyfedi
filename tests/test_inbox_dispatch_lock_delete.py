@@ -103,7 +103,7 @@ from sqlalchemy import inspect as sa_inspect
 
 from app import db
 from app.activitypub import routes as activitypub_routes
-from app.models import ActivityPubLog, FeedItem, FeedMember, utcnow
+from app.models import ActivityPubLog, FeedItem, FeedMember, InstanceRole, utcnow
 from tests.factories import inbox_activity, make_community, make_community_member, make_feed, \
     make_feed_item, make_feed_member, make_instance, make_post, make_post_reply, make_user, \
     seed_community_owner
@@ -291,3 +291,256 @@ def test_a_non_moderator_locking_a_comment_is_refused(app, db_session, monkeypat
     log = ActivityPubLog.query.one()
     assert log.result == 'failure'
     assert log.exception_message == 'Lock: Does not have permission'
+
+
+def _seed_lockable_post(instance_domain='peer.example', ap_id=None):
+    """A community with one moderatable post, for the Lock arm's post branch
+    (routes.py:1369-1378). `ap_id` defaults to containing '/post/' so
+    routes.py:1360-1361 selects it via Post.get_by_ap_id; callers covering
+    the neither-substring fallback (:1364-1367) pass an `ap_id` with neither
+    substring.
+
+    Returns (mod, community, post, author). `mod` is a plain remote User
+    with `ap_fetched_at` stamped and is NEITHER a community moderator NOR an
+    instance admin -- callers that need one grant it themselves:
+    make_community_member(mod, community, is_moderator=True) for the
+    former; an InstanceRole row naming community.instance_id and mod.id for
+    the latter, since Community.is_instance_admin is scoped to the
+    COMMUNITY's home instance (app/models.py:752-759), not the user's --
+    make_community hardcodes community.instance_id to 1, the same instance
+    id seed_community_owner's Instance row gets.
+    """
+    instance = seed_community_owner(instance_domain)  # instance id 1 + local owner user id 1
+    community = make_community(host=instance_domain)
+    author = make_user(instance, 'postauthor')
+    post = make_post(community, author, ap_id=ap_id or f'https://{instance_domain}/post/1')
+
+    mod = make_user(instance, 'moduser')
+    mod.ap_fetched_at = utcnow()
+    db.session.commit()
+
+    return mod, community, post, author
+
+
+def test_a_moderator_can_lock_a_post(app, db_session, monkeypatch):
+    """routes.py:1360-1361 ('/post/' substring selects Post.get_by_ap_id)
+    and :1369-1376 (the moderator alternative of the post permission guard).
+
+    This mod is a community MODERATOR and deliberately NOT an instance
+    admin (no InstanceRole row exists at all): is_moderator is True,
+    is_instance_admin is False. That makes this test -- not
+    test_an_instance_admin_can_lock_a_post below -- the one that kills the
+    mutant dropping the FIRST disjunct of `post.community.is_moderator(mod)
+    or post.community.is_instance_admin(mod)` (:1370): with only
+    is_instance_admin left, this mod's permission check goes False and the
+    SUCCESS assertions below fail. Asserts the modlog call's target_user,
+    community and post arguments, not merely that it was called.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    calls = record_moderation(monkeypatch, 'add_to_modlog')
+
+    mod, community, post, author = _seed_lockable_post()
+    make_community_member(mod, community, is_moderator=True)
+
+    activity = inbox_activity(mod, activity_type='Lock',
+                              object_uri=post.ap_id, summary='breaking the rules')
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    assert post.comments_enabled is False
+
+    assert len(calls['add_to_modlog']) == 1
+    args, kwargs = calls['add_to_modlog'][0]
+    assert args == ('lock_post',)
+    assert sa_inspect(kwargs['actor']).identity[0] == mod.id
+    assert sa_inspect(kwargs['target_user']).identity[0] == author.id
+    assert kwargs['reason'] == 'breaking the rules'
+    assert sa_inspect(kwargs['community']).identity[0] == community.id
+    assert sa_inspect(kwargs['post']).identity[0] == post.id
+    assert kwargs['link'] == f'post/{post.id}'
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+    assert log.exception_message is None
+
+
+def test_an_instance_admin_can_lock_a_post(app, db_session, monkeypatch):
+    """routes.py:1370's second disjunct, `post.community.is_instance_admin
+    (mod)`. This mod is an INSTANCE ADMIN of the community's home instance
+    and deliberately NOT a community moderator (no CommunityMember row at
+    all): is_instance_admin is True, is_moderator is False. That makes this
+    test the one that kills the mutant dropping the SECOND disjunct: with
+    only is_moderator left, this mod's permission check goes False and the
+    SUCCESS assertions below fail.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    calls = record_moderation(monkeypatch, 'add_to_modlog')
+
+    mod, community, post, author = _seed_lockable_post()
+    db.session.add(InstanceRole(instance_id=community.instance_id, user_id=mod.id, role='admin'))
+    db.session.commit()
+
+    activity = inbox_activity(mod, activity_type='Lock',
+                              object_uri=post.ap_id, summary='breaking the rules')
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    assert post.comments_enabled is False
+    assert len(calls['add_to_modlog']) == 1
+    args, kwargs = calls['add_to_modlog'][0]
+    assert args == ('lock_post',)
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_a_non_moderator_locking_a_post_is_refused(app, db_session, monkeypatch):
+    """routes.py:1377-1378. mod is neither a community moderator nor an
+    instance admin here, so both disjuncts of :1370 are False.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    calls = record_moderation(monkeypatch, 'add_to_modlog')
+
+    mod, community, post, author = _seed_lockable_post()
+    # mod is deliberately neither a moderator nor an instance admin here.
+
+    activity = inbox_activity(mod, activity_type='Lock',
+                              object_uri=post.ap_id, summary='breaking the rules')
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    assert post.comments_enabled is True
+    assert len(calls['add_to_modlog']) == 0
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Lock: Does not have permission'
+
+
+def test_lock_of_unknown_object_is_reported_not_found(app, db_session, monkeypatch):
+    """routes.py:1392-1393. The object URL has neither '/post/' nor
+    '/comment/', and both of the fallback's lookups (:1365-1367) miss: no
+    Post and no PostReply has this ap_id.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    calls = record_moderation(monkeypatch, 'add_to_modlog')
+
+    mod, community, post, author = _seed_lockable_post()
+
+    activity = inbox_activity(mod, activity_type='Lock',
+                              object_uri='https://peer.example/things/does-not-exist',
+                              summary='breaking the rules')
+
+    dispatch(activity)
+
+    assert len(calls['add_to_modlog']) == 0
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Lock: post not found'
+
+
+def test_lock_fallback_tries_post_before_post_reply(app, db_session, monkeypatch):
+    """routes.py:1364-1366. An object URL with neither '/post/' nor
+    '/comment/' resolves via the fallback's FIRST attempt, Post.get_by_ap_id
+    (:1365) -- proved here by giving a PostReply the IDENTICAL ap_id: Post
+    and PostReply are separate tables with independent ap_id uniqueness, so
+    nothing stops both matching the same string. If the fallback tried
+    PostReply first, or unconditionally, the reply would be the one locked
+    instead of the post.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    calls = record_moderation(monkeypatch, 'add_to_modlog')
+
+    ambiguous_ap_id = 'https://peer.example/things/1'
+    mod, community, post, author = _seed_lockable_post(ap_id=ambiguous_ap_id)
+    make_community_member(mod, community, is_moderator=True)
+
+    reply = make_post_reply(post, author)
+    reply.ap_id = ambiguous_ap_id
+    db.session.commit()
+
+    activity = inbox_activity(mod, activity_type='Lock',
+                              object_uri=ambiguous_ap_id, summary='breaking the rules')
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    assert post.comments_enabled is False
+    assert reply.replies_enabled is True
+
+    assert len(calls['add_to_modlog']) == 1
+    args, kwargs = calls['add_to_modlog'][0]
+    assert args == ('lock_post',)
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_lock_fallback_second_half_resolves_a_reply_when_no_post_matches(app, db_session, monkeypatch):
+    """routes.py:1366-1367. An object URL with neither substring, where
+    Post.get_by_ap_id (:1365) returns None, falls through to
+    PostReply.get_by_ap_id (:1367) -- the fallback's second half, which the
+    brief calls out as needing its own test distinct from the '/post/' and
+    '/comment/' substring paths and the fallback's first half above.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    calls = record_moderation(monkeypatch, 'add_to_modlog')
+
+    mod, community, post, parent_reply, child_reply, author = _seed_lockable_comment()
+    fallback_ap_id = 'https://peer.example/things/2'
+    parent_reply.ap_id = fallback_ap_id
+    db.session.commit()
+    make_community_member(mod, community, is_moderator=True)
+
+    activity = inbox_activity(mod, activity_type='Lock',
+                              object_uri=fallback_ap_id, summary='breaking the rules')
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    assert parent_reply.replies_enabled is False
+    assert child_reply.replies_enabled is False
+
+    assert len(calls['add_to_modlog']) == 1
+    args, kwargs = calls['add_to_modlog'][0]
+    assert args == ('lock_post_reply',)
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_an_instance_admin_can_lock_a_comment(app, db_session, monkeypatch):
+    """routes.py:1380's second disjunct, `post_reply.community.
+    is_instance_admin(mod)` -- the corrected comment-branch counterpart to
+    test_an_instance_admin_can_lock_a_post. This mod is an INSTANCE ADMIN of
+    the community's home instance and deliberately NOT a community
+    moderator (no CommunityMember row at all): is_instance_admin is True,
+    is_moderator is False. That makes this test -- not
+    test_a_moderator_can_lock_a_comment above -- the one that kills the
+    mutant dropping this disjunct: with only is_moderator left, this mod's
+    permission check goes False and the SUCCESS assertions below fail.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    calls = record_moderation(monkeypatch, 'add_to_modlog')
+
+    mod, community, post, parent_reply, child_reply, author = _seed_lockable_comment()
+    db.session.add(InstanceRole(instance_id=community.instance_id, user_id=mod.id, role='admin'))
+    db.session.commit()
+
+    activity = inbox_activity(mod, activity_type='Lock',
+                              object_uri=parent_reply.ap_id, summary='breaking the rules')
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    assert parent_reply.replies_enabled is False
+    assert child_reply.replies_enabled is False
+    assert len(calls['add_to_modlog']) == 1
+    args, kwargs = calls['add_to_modlog'][0]
+    assert args == ('lock_post_reply',)
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
