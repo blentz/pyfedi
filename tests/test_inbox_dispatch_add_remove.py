@@ -141,7 +141,9 @@ import pytest
 
 from app import db
 from app.activitypub import routes as activitypub_routes
+from app.constants import APLOG_ADD, SUBSCRIPTION_OWNER
 from app.models import ActivityPubLog, CommunityJoinRequest, CommunityMember, FeedItem, InstanceRole, utcnow
+from app.utils import community_membership
 from tests.factories import (inbox_activity, make_community, make_community_join_request,
                              make_community_member, make_feed, make_feed_item, make_feed_member,
                              make_instance, make_post, make_user)
@@ -1289,3 +1291,449 @@ def test_remove_ovo_st_keeps_the_generated_follow_id_when_no_join_request_exists
     assert len(sends) == 1
     _uri, body, _key_id = sends[0]
     assert body['object']['id'] == expected_follow_id
+
+
+# --- Task 10: Remove's community branch -- the mirror of Add's ---
+#
+# The brief cited routes.py:1523-1570 for the whole `elif community:` branch,
+# and sub-citations :1527-1529 (permission guard), :1537-1545 (sticky
+# target), :1545-1565 (moderators-url target), :1528/:1563/:1566/:1568
+# (the four APLOG_ADD mislabellings) and :1560-1561 (the modlog-outside-the-
+# guard defect). EVERY one of those is STALE relative to source: reading the
+# arm in full (see the block starting at the current :1473), the branch
+# actually spans :1531-1574, with the permission guard at :1532-1534, the
+# sticky target at :1540-1549, the moderators-url target at :1550-1570, the
+# four mislabelled log_incoming_ap calls at :1533, :1568, :1569 and :1571,
+# and the modlog-outside-`if existing_membership:` defect at :1565-1566.
+# Every citation below is the CURRENT line, re-derived from source.
+#
+# Outcome table for the `elif community:` branch (mirrors Add's, current
+# :1531-1571):
+#   - permission guard (:1532-1534): `not community.is_moderator(mod) and
+#     not community.is_instance_admin(mod)` -- denies and logs FAILURE
+#     'Does not have permission', returns, if BOTH halves are true. Unlike
+#     Add's identical guard, this one's log_incoming_ap call passes
+#     APLOG_ADD, not APLOG_REMOVE -- mislabelling finding #1.
+#   - `target = core_activity['target']` (:1535) is read with no guard,
+#     same unguarded-KeyError shape as Add's :1428.
+#   - featured/sticky target (:1536-1549): backfill and case-insensitive
+#     compare identical to Add's; on match, `post.sticky = False` (the
+#     opposite of Add's `= True`) is committed and SUCCESS is logged
+#     correctly as APLOG_REMOVE (:1545); not-found logs FAILURE 'Cannot
+#     find: <object>', also correctly APLOG_REMOVE (:1547).
+#   - moderators-url target (:1550-1570): the object is resolved as an
+#     actor; if found and an existing CommunityMember row exists, it is
+#     flipped to is_moderator=False, several memoized caches invalidated,
+#     and SUCCESS logged correctly as APLOG_REMOVE (:1564).
+#     `add_to_modlog('remove_mod', ...)` (:1565-1566) sits OUTSIDE the
+#     `if existing_membership:` block, at the same indentation as the
+#     `if old_mod:` body -- so it fires whenever the actor resolves, even
+#     when there was no membership row to flip and hence no log call at
+#     all on that path. Mislabelling finding #2 (unresolvable actor,
+#     :1568) sits in the `else:` here, passing APLOG_ADD.
+#   - neither URL matches (:1571): FAILURE 'Unknown target for Remove',
+#     mislabelling finding #3, APLOG_ADD.
+#   - final `else` (:1573): neither `community` nor `feed` resolved --
+#     FAILURE 'Remove: cannot find community or feed', mislabelling
+#     finding #4, APLOG_ADD.
+#
+# All four mislabelled calls store `activity_type='Add'` (APLOG_ADD[1]) for
+# what is, in every case, actually a Remove -- same class as this campaign's
+# D63/D68 findings elsewhere. Registered here, NOT fixed (app/ stays closed
+# for this task).
+
+
+def _remove_from_community(community, mod, object_value, target=None, include_target=True):
+    """`_add_from_community`'s mirror for the Remove arm's `elif community:`
+    branch (current :1531-1571): an Announce whose actor is `community`,
+    wrapping a real Remove activity whose OWN `actor` is `mod` -- the
+    construction that reaches this branch with `community` pre-resolved by
+    the preamble's community_only lookup AND `mod` set to a real user via
+    routes.py's current :915 reassignment.
+
+    `include_target=False` omits the `target` key entirely, for the
+    unguarded-read probe.
+    """
+    inner_remove = {
+        'id': f'{community.ap_profile_id}/activities/remove-{object_value[-6:] if isinstance(object_value, str) else "x"}',
+        'type': 'Remove',
+        'actor': mod.ap_profile_id,
+        'object': object_value,
+    }
+    if include_target:
+        inner_remove['target'] = target
+    return inbox_activity(community, activity_type='Announce', object=inner_remove)
+
+
+def test_remove_permission_denied_pins_the_aplog_add_mislabelling(
+        app, db_session, monkeypatch):
+    """routes.py's current :1532-1534 -- the guard's base case: an actor
+    with NEITHER privilege is refused before `target` is ever read, mirroring
+    Add's identical guard test.
+
+    ALSO pins mislabelling finding #1: the refusal's log_incoming_ap call
+    passes APLOG_ADD, not APLOG_REMOVE, so a Remove refusal is stored with
+    `activity_type='Add'`. Asserting `log.activity_type == APLOG_ADD[1]`
+    documents this defect -- it does NOT endorse it; the correct value would
+    be 'Remove'. Same class of finding as D63 and D68.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    make_user(instance, 'community_owner')
+    community = make_community(name='removedenycomm', host='peer.example')
+    community.ap_fetched_at = utcnow()
+    db.session.commit()
+
+    outsider = make_user(instance, 'removeoutsider')
+    outsider.ap_fetched_at = utcnow()
+    db.session.commit()
+    assert community.is_moderator(outsider) is False
+    assert community.is_instance_admin(outsider) is False
+
+    activity = _remove_from_community(
+        community, outsider, 'https://peer.example/post/does-not-matter',
+        target=community.ap_profile_id + '/featured')
+
+    dispatch(activity)
+
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Does not have permission'
+    # The defect: this is a Remove, but the stored activity_type is what
+    # APLOG_ADD produces.
+    assert log.activity_type == APLOG_ADD[1]
+
+
+def test_remove_unsticky_backfills_ap_featured_url_and_compares_case_insensitively(
+        app, db_session, monkeypatch):
+    """routes.py's current :1532-1544. `community.ap_featured_url` starts
+    empty (make_community() never sets it), so the backfill at :1536-1537
+    must run before the comparison can match. The activity's own `target` is
+    given in a DIFFERENT case than the backfilled value, so a match proves
+    the comparison at :1540 genuinely lowercases both sides.
+
+    `post.sticky` is seeded True (not left at its column default False)
+    before asserting it becomes False -- per this campaign's 'beware
+    default-backed assertions' rule, a bare `is False` afterward would be
+    indistinguishable from the column's own default plus a bug that never
+    touched it.
+
+    Uses the moderator-not-instance-admin fixture: under the MUTATION that
+    drops the guard's `not community.is_moderator(mod)` half (leaving only
+    `not community.is_instance_admin(mod)`), this fixture's mod (a
+    moderator, NOT an admin) would be newly refused -- `post.sticky` would
+    stay True and no SUCCESS would be logged, a BEHAVIOURAL kill (an
+    assertion on stored state, not a mocked-network probe; no send is on
+    this code path at all). This is the distinct killer for that guard half.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, moderator, admin = _seed_community_with_mod_and_admin(name='removestickycomm1')
+    assert community.ap_featured_url is None
+
+    author = make_user(instance, 'removepostauthor')
+    post = make_post(community, author, ap_id='https://peer.example/post/200')
+    post.sticky = True
+    db.session.commit()
+
+    expected_featured_url = community.ap_profile_id + '/featured'
+    mismatched_case_target = expected_featured_url.upper()
+
+    activity = _remove_from_community(community, moderator, post.ap_id, target=mismatched_case_target)
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    assert community.ap_featured_url == expected_featured_url
+    assert post.sticky is False
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+    # Correctly labelled on this path -- REMOVE, not one of the four
+    # mislabelled calls.
+    assert log.activity_type == 'Remove'
+
+
+def test_remove_unsticky_post_not_found_reports_cannot_find(app, db_session, monkeypatch):
+    """routes.py's current :1541-1548 -- the target matches the featured
+    URL, but `Post.get_by_ap_id` finds nothing. Correctly logged as
+    APLOG_REMOVE (:1547), unlike the four mislabelled calls elsewhere in
+    this arm.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, moderator, admin = _seed_community_with_mod_and_admin(name='removestickycomm2')
+
+    missing_object = 'https://peer.example/post/does-not-exist-remove'
+    activity = _remove_from_community(
+        community, moderator, missing_object, target=community.ap_profile_id + '/featured')
+
+    dispatch(activity)
+
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Cannot find: ' + missing_object
+    assert log.activity_type == 'Remove'
+
+
+def test_remove_mod_flips_an_existing_membership_to_false(app, db_session, monkeypatch):
+    """routes.py's current :1550-1564, the existing-membership half.
+    `add_to_modlog('remove_mod', ...)`'s exact keyword arguments are
+    asserted via `record_moderation`. `CommunityMember.is_moderator` is
+    seeded True (not left at its column default False) so the assertion that
+    it becomes False cannot be confused with the default.
+
+    Uses the instance-admin-not-moderator fixture: under the MUTATION that
+    drops the guard's `not community.is_instance_admin(mod)` half (leaving
+    only `not community.is_moderator(mod)`), this fixture's mod (an admin,
+    NOT a moderator) would be newly refused -- the membership would stay
+    is_moderator=True and neither add_to_modlog nor SUCCESS would fire, a
+    BEHAVIOURAL kill (assertions on stored state / a recorded call list, not
+    a mocked-network probe). This is the distinct killer for that guard
+    half, complementing the moderator-not-admin killer above.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, moderator, admin = _seed_community_with_mod_and_admin(name='removemodcomm1')
+    community.ap_moderators_url = community.ap_profile_id + '/moderators'
+    db.session.commit()
+
+    calls = record_moderation(monkeypatch, 'add_to_modlog')
+
+    old_mod = make_user(instance, 'oldmodcandidate')
+    old_mod.ap_fetched_at = utcnow()
+    membership = make_community_member(old_mod, community, is_moderator=True)
+    db.session.commit()
+    assert membership.is_moderator is True
+
+    activity = _remove_from_community(
+        community, admin, old_mod.ap_profile_id, target=community.ap_moderators_url)
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    refreshed = CommunityMember.query.filter_by(community_id=community.id, user_id=old_mod.id).one()
+    assert refreshed.is_moderator is False
+
+    assert len(calls['add_to_modlog']) == 1
+    args, kwargs = calls['add_to_modlog'][0]
+    assert args[0] == 'remove_mod'
+    assert sa_inspect(kwargs['actor']).identity[0] == admin.id
+    assert sa_inspect(kwargs['target_user']).identity[0] == old_mod.id
+    assert sa_inspect(kwargs['community']).identity[0] == community.id
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+    assert log.activity_type == 'Remove'
+
+
+def test_remove_mod_unresolvable_actor_reports_cannot_find(app, db_session, monkeypatch):
+    """routes.py's current :1551-1552/1567-1569 -- the target matches the
+    moderators URL, but the named object can't be resolved to an actor.
+    Pins mislabelling finding #2: this FAILURE is logged with APLOG_ADD
+    (:1568), not APLOG_REMOVE.
+
+    `find_actor_or_create_cached` is wrapped, not replaced, so only the
+    deliberately-unresolvable ghost URL is intercepted.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, moderator, admin = _seed_community_with_mod_and_admin(name='removemodcomm2')
+    community.ap_moderators_url = community.ap_profile_id + '/moderators'
+    db.session.commit()
+
+    ghost_url = 'https://unresolvable.example/u/removeghost'
+    real_find_actor_or_create_cached = activitypub_routes.find_actor_or_create_cached
+
+    def _find(actor, create_if_not_found=True, community_only=False, feed_only=False):
+        if actor == ghost_url:
+            return None
+        return real_find_actor_or_create_cached(
+            actor, create_if_not_found=create_if_not_found,
+            community_only=community_only, feed_only=feed_only)
+
+    monkeypatch.setattr(activitypub_routes, 'find_actor_or_create_cached', _find)
+
+    activity = _remove_from_community(
+        community, moderator, ghost_url, target=community.ap_moderators_url)
+
+    dispatch(activity)
+
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Cannot find: ' + ghost_url
+    assert log.activity_type == APLOG_ADD[1]
+
+
+def test_remove_mod_without_existing_membership_writes_modlog_but_logs_nothing(
+        app, db_session, monkeypatch):
+    """routes.py's current :1550-1566 -- `add_to_modlog('remove_mod', ...)`
+    sits OUTSIDE the `if existing_membership:` block (:1550-1564), at the
+    same indentation as the `if old_mod:` body it shares with it
+    (:1550/:1565-1566). When the named actor resolves but has NO
+    CommunityMember row for this community, `if existing_membership:` is
+    False, so NEITHER `log_incoming_ap` branch inside it runs -- but
+    `add_to_modlog` still fires unconditionally once `old_mod` resolves.
+    Registered here as a defect, NOT fixed.
+
+    Asserts both halves: the modlog call happened (with `old_mod`'s own
+    identity, since no membership row exists to read from), and
+    `ActivityPubLog.query.count() == 0` with LOG_ACTIVITYPUB_TO_DB turned
+    ON, so the zero-count assertion is load-bearing rather than vacuous
+    (this campaign's rule).
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, moderator, admin = _seed_community_with_mod_and_admin(name='removemodcomm3')
+    community.ap_moderators_url = community.ap_profile_id + '/moderators'
+    db.session.commit()
+
+    calls = record_moderation(monkeypatch, 'add_to_modlog')
+
+    old_mod = make_user(instance, 'membershiplessoldmod')
+    old_mod.ap_fetched_at = utcnow()
+    db.session.commit()
+    assert CommunityMember.query.filter_by(community_id=community.id, user_id=old_mod.id).count() == 0
+
+    activity = _remove_from_community(
+        community, moderator, old_mod.ap_profile_id, target=community.ap_moderators_url)
+
+    dispatch(activity)
+
+    assert CommunityMember.query.filter_by(community_id=community.id, user_id=old_mod.id).count() == 0
+
+    assert len(calls['add_to_modlog']) == 1
+    args, kwargs = calls['add_to_modlog'][0]
+    assert args[0] == 'remove_mod'
+    assert sa_inspect(kwargs['actor']).identity[0] == moderator.id
+    assert sa_inspect(kwargs['target_user']).identity[0] == old_mod.id
+    assert sa_inspect(kwargs['community']).identity[0] == community.id
+
+    assert ActivityPubLog.query.count() == 0
+
+
+def test_remove_unknown_target(app, db_session, monkeypatch):
+    """routes.py's current :1571 -- a target matching neither the featured
+    URL nor the moderators URL. Pins mislabelling finding #3: logged with
+    APLOG_ADD, not APLOG_REMOVE.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, moderator, admin = _seed_community_with_mod_and_admin(name='removeunknowntargetcomm')
+    community.ap_moderators_url = community.ap_profile_id + '/moderators'
+    db.session.commit()
+
+    activity = _remove_from_community(
+        community, moderator, 'https://peer.example/whatever-remove',
+        target='https://peer.example/c/removeunknowntargetcomm/something-else')
+
+    dispatch(activity)
+
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Unknown target for Remove'
+    assert log.activity_type == APLOG_ADD[1]
+
+
+def test_remove_target_omitted_entirely_raises_keyerror(app, db_session, monkeypatch):
+    """routes.py's current :1535 -- `target = core_activity['target']` is
+    read with no `.get()`, no `in` check, nothing, same unguarded shape as
+    Add's :1428. Probes the observed behaviour; does not fix it.
+    """
+    instance, community, moderator, admin = _seed_community_with_mod_and_admin(name='removenotargetcomm')
+
+    activity = _remove_from_community(
+        community, moderator, 'https://peer.example/whatever-remove', include_target=False)
+
+    with pytest.raises(KeyError, match='target'):
+        dispatch(activity)
+
+
+def test_remove_with_neither_community_nor_feed_resolvable_is_refused(
+        app, db_session, monkeypatch):
+    """routes.py's current :1573 -- the final `else`. A DIRECT (not
+    Announced) Remove from a plain User actor whose activity carries no
+    audience/cc/to/target that `find_community` can resolve against any
+    Community row, and which is not itself a Feed or Community actor.
+    Neither `community` nor `feed` is ever set. Pins mislabelling finding
+    #4: logged with APLOG_ADD, not APLOG_REMOVE.
+
+    `object` is a dict here, not a plain string -- same
+    find_community-shape sidestep Add's equivalent test uses (see that
+    test's docstring for why a bare string would exercise a different,
+    unrelated defect in find_community itself).
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    sender = make_user(instance, 'removealoneuser')
+    sender.ap_fetched_at = utcnow()
+    db.session.commit()
+
+    activity = inbox_activity(sender, activity_type='Remove',
+                              object={'id': 'https://peer.example/objects/whatever-remove'})
+
+    dispatch(activity)
+
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Remove: cannot find community or feed'
+    assert log.activity_type == APLOG_ADD[1]
+
+
+def test_remove_loop_skips_a_community_owner_via_the_subscription_owner_term(
+        app, db_session, monkeypatch):
+    """routes.py's current :1499 (`if subscription != SUBSCRIPTION_OWNER and
+    cm and cm.joined_via_feed:`) has a FIFTH skip condition beyond the four
+    Task 9 covered (feed-owner via `fm_user.id == feed.user_id`; non-local;
+    feed_auto_leave False; no CommunityMember row / joined_via_feed False):
+    a member who OWNS the COMMUNITY being removed is skipped by the
+    `subscription != SUBSCRIPTION_OWNER` term, independent of every other
+    check.
+
+    `community_membership(user, community)` (app/utils.py) delegates to
+    `User.subscribed(community_id)`, which reads `CommunityMember.is_owner`
+    and returns SUBSCRIPTION_OWNER when it is True -- verified directly
+    below, before relying on it, per this task's instructions.
+    `make_community_member` always creates rows with `is_owner=False`
+    (tests/factories.py), so this fixture flips it True on the row after
+    creation.
+
+    Every OTHER skip condition is deliberately satisfied so this term is
+    demonstrably the SOLE cause of the skip: this member is NOT the feed's
+    owner (a distinct user occupies `feed.user_id`, following Task 9's
+    convention), IS local, has `feed_auto_leave` True (the column default),
+    and has a real CommunityMember row with `joined_via_feed` True -- built
+    with `_make_would_proceed_feed_member`, which sets every one of those to
+    the value that would let the loop proceed, differing here only in
+    `is_owner`, flipped True immediately after.
+    """
+    instance, community, feed = _seed_removable_feed_community(name='communityownerskipcomm')
+    community.subscriptions_count = 1
+    db.session.commit()
+
+    feed_owner = make_user(instance, 'feedownerforownerskip', local=True)
+    feed.user_id = feed_owner.id
+    db.session.commit()
+    make_feed_member(feed_owner, feed)
+
+    community_owner, cm = _make_would_proceed_feed_member(
+        'communityownermember', instance, feed, community)
+    cm.is_owner = True
+    db.session.commit()
+
+    assert community_owner.id != feed.user_id
+    assert community_owner.is_local() is True
+    assert community_owner.feed_auto_leave is True
+    assert cm.joined_via_feed is True
+    assert community_membership(community_owner, community) == SUBSCRIPTION_OWNER
+
+    sends = record_sends(monkeypatch)
+
+    activity = _remove_activity_for(feed, community)
+    dispatch(activity)
+
+    db.session.expire_all()
+
+    # The `subscription != SUBSCRIPTION_OWNER` term stopped the loop before
+    # anything below it ran: the community-owner's own CommunityMember row is
+    # untouched, nothing was sent, and subscriptions_count (seeded to a
+    # nonzero baseline) is unchanged.
+    assert CommunityMember.query.filter_by(
+        user_id=community_owner.id, community_id=community.id).count() == 1
+    assert sends == []
+    assert community.subscriptions_count == 1
+
+    # FIX 5's guard (routes.py's current :1482-1487) is independent of the
+    # loop and still ran normally: the FeedItem existed, so it is gone and
+    # num_communities is decremented from its seeded baseline.
+    assert FeedItem.query.filter_by(feed_id=feed.id, community_id=community.id).count() == 0
+    assert feed.num_communities == 0
