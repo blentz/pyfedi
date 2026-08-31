@@ -1641,10 +1641,9 @@ def process_inbox_request(request_json, store_ap_json):
 
                             if not already_banned:
                                 blocked.banned = True
-                                if 'expires' in core_activity:
-                                    blocked.ban_until = core_activity['expires']
-                                elif 'endTime' in core_activity:
-                                    blocked.ban_until = core_activity['endTime']
+                                # ban_user records the expiry on an InstanceBan row.
+                                # It does not set User.banned, so that stays here.
+                                ban_user(blocker, blocked, None, core_activity)
                                 session.commit()
 
                             if remove_data:

@@ -3,6 +3,15 @@ last coverage task in this sub-project, and the one arm with no authorised
 fix: everything registered below is pinned as observed behaviour, not
 corrected.
 
+**Superseded in part, 2026-08-31.** Finding 3 below (the `ban_until` /
+`banned_until` defect, D91) HAS since been fixed, under a separate user
+authorisation after this sub-project closed. Finding 3 is kept as written,
+because it is the derivation that established the defect and its reasoning
+about the mapper still holds -- but the code it describes is gone. See the
+"AS OF THE FIX" note at the end of finding 3, the register's D91 and its
+section 6, and this file's own ordinary-site-ban tests, which now assert the
+corrected behaviour. Findings 1, 2 and 4 are unchanged and still unfixed.
+
 **Stale citations.** The task brief cites `routes.py:1590-1671`, with
 sub-citations throughout that range. Re-read against current source, the arm
 now runs `:1595-1675` -- every one of the brief's line numbers is stale by a
@@ -40,7 +49,7 @@ before the code has even looked at 'target'.
 | site-ban, non-admin (1629-1631)                      | `target.count('/') < 4`; `not blocker.is_instance_admin()`                  | nothing                                                                      | nothing                                                          | APLOG_USERBAN/APLOG_FAILURE 'Does not have permission' |
 | site-ban, blocked is local (1632-1636)               | site ban; blocker is admin; `blocked.is_local()`                            | whatever `ban_user` itself does (delegate, mocked in this file)             | `ban_user(blocker, blocked, None, core_activity)` -- unconditionally, regardless of `already_banned` | APLOG_USERBAN/APLOG_MONITOR 'Remote Admin in banning one of our users from their site' |
 | site-ban, blocked on a third instance (1637-1640)    | site ban; blocker is admin; blocked not local; `blocked.instance_id != blocker.instance_id` | nothing                                                                      | nothing                                                          | APLOG_USERBAN/APLOG_MONITOR 'Remote Admin is banning a user of a different instance from their site' |
-| site-ban, ordinary case (1642-1652)                  | site ban; blocker is admin; blocked not local; same instance as blocker     | `blocked.banned = True` and `blocked.ban_until = <peer string>` -- ONLY when `not already_banned` (see ban_until PROBE below for what that write actually does); `site_ban_remove_data` runs regardless of `already_banned` | `site_ban_remove_data(blocker.id, blocked)` only when `removeData` | APLOG_USERBAN/APLOG_SUCCESS (unconditional) |
+| site-ban, ordinary case (1642-1652)                  | site ban; blocker is admin; blocked not local; same instance as blocker     | `blocked.banned = True`, ONLY when `not already_banned`; the expiry is recorded by `ban_user` on an `InstanceBan` row (2026-08-31 fix; this cell previously read `blocked.ban_until = <peer string>`, see finding 3). `site_ban_remove_data` runs regardless of `already_banned` | `ban_user(blocker, blocked, None, core_activity)` when `not already_banned`; `site_ban_remove_data(blocker.id, blocked)` only when `removeData` | APLOG_USERBAN/APLOG_SUCCESS (unconditional) |
 | community-ban, unfound community (1656-1659)         | not site ban; `community` (from Announce, or resolved from `target`) is falsy | nothing                                                                    | nothing                                                          | APLOG_USERBAN/APLOG_IGNORED 'Blocked or unfound community' |
 | community-ban, no permission (1660-1662)             | community found; `not community.is_moderator(blocker) and not community.is_instance_admin(blocker)` | nothing                                                       | nothing                                                          | APLOG_USERBAN/APLOG_FAILURE 'Does not have permission' |
 | community-ban, success (1664-1668)                   | community found; moderator OR instance admin                                | none directly -- delegates do the writing                                   | `community_ban_remove_data(blocker.id, community.id, blocked)` only when `removeData`; `ban_user(blocker, blocked, community, core_activity)` only when `not already_banned` | APLOG_USERBAN/APLOG_SUCCESS (unconditional) |
@@ -143,16 +152,34 @@ column that exists -- so **a remote temporary ban silently becomes a
 permanent one.** `blocked.banned` (the real, correctly-named boolean
 column) IS set True correctly; only the expiry half of a temporary ban is
 lost, and `banned_until` stays at its NULL/"permanent" default forever.
-Registered here; not fixed, per this task's contract -- the fix belongs to
-whoever triages this defect next, and is a one-word rename (`ban_until` ->
-`banned_until`, matching the Undo/Block path's own :1853) plus real parsing
-of the peer string, which :1645/:1647 currently make no attempt at either.
+Registered here; not fixed under this task's contract -- the fix belonged to
+whoever triaged this defect next.
+
+**AS OF THE FIX (2026-08-31), this finding is resolved, and the shape of the
+fix is not the one this paragraph originally predicted.** A one-word rename
+plus parsing was the obvious reading, and it would have worked, but the
+branch instead delegates to `ban_user(blocker, blocked, None,
+core_activity)` -- the same call the local-user branch nine lines above
+already made -- which records the expiry on an `InstanceBan` row rather than
+on `User.banned_until` at all. `blocked.banned = True` stays on the branch,
+because `ban_user`'s instance-wide branch never sets it. Parsing is shared
+with `ban_user`'s other two call sites via `parse_ban_expiry`
+(app/activitypub/util.py), covered by tests/test_activitypub_ban_expiry.py.
+
+One consequence worth carrying forward: finding 4 below, and D103, both
+reasoned from the write being dead. It no longer is. D103 is closed --
+`if not already_banned:` now guards a real delegate call -- while finding 4
+(the LOCAL-user branch not consulting `already_banned` at all) still
+stands, and is now a visible inconsistency between two branches that call
+the same delegate, only one of which guards it.
 
 **4. Anything else found while deriving the table above.**
   - The site-ban "blocked is local" branch (:1632-1636) calls `ban_user`
     UNCONDITIONALLY -- it does not consult `already_banned` at all, unlike
-    the "ordinary" remote-blocked branch a few lines below, which skips the
-    banned/ban_until write specifically `if not already_banned`. A remote
+    the "ordinary" remote-blocked branch a few lines below, which skips its
+    own work specifically `if not already_banned`. Since the 2026-08-31 fix
+    (see finding 3) that work is a `ban_user` call too, so the two branches
+    now make the SAME call with different guarding. A remote
     admin re-sending an already-actioned local-user ban therefore always
     re-invokes the local `ban_user` delegate, even though the arm computed
     `already_banned` specifically to avoid exactly that kind of redundant
@@ -186,12 +213,13 @@ of the peer string, which :1645/:1647 currently make no attempt at either.
 """
 
 import json
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import inspect as sa_inspect
 
 from app import db
-from app.models import ActivityPubLog, InstanceRole, User, UserBlock, utcnow
+from app.models import ActivityPubLog, InstanceBan, InstanceRole, User, UserBlock, utcnow
 from tests.factories import inbox_activity, make_community, make_community_member, make_instance, \
     make_user, make_user_block, seed_community_owner
 from tests.test_inbox_dispatch_lock_delete import record_moderation
@@ -434,35 +462,140 @@ def _seed_ordinary_site_ban(instance_domain='peer.example', banned_baseline=Fals
     return instance, blocker, victim
 
 
-def test_ordinary_site_ban_the_ban_until_probe(app, db_session, monkeypatch):
-    """routes.py:1642-1652 -- the "ordinary" site-ban write, and finding 3
-    from this file's module docstring: what a peer-supplied `expires`
-    string actually does to `blocked.ban_until`.
+def test_ordinary_site_ban_delegates_to_ban_user_like_the_local_branch_above(
+        app, db_session, monkeypatch):
+    """routes.py:1642-1647. The ordinary site-ban write, after the D91 fix.
+
+    This branch used to set `blocked.ban_until` -- a name `User` does not
+    have -- and so discarded the expiry of every remote temporary site ban,
+    silently turning it permanent. It now calls the same delegate the
+    local-user branch nine lines above already used,
+    `ban_user(blocker, blocked, None, core_activity)`, which records the
+    expiry on an `InstanceBan` row (app/activitypub/util.py).
+
+    `blocked.banned = True` stays on this branch: `ban_user`'s instance-wide
+    branch never touches `User.banned`, so removing it here would drop the
+    global ban this path exists to apply. Both halves are asserted below.
 
     `victim.banned` starts False (an explicit baseline, not the bare model
     default -- see this task's global constraints on default-backed
     assertions) so `victim.banned is True` after dispatch is real evidence
-    of the write at :1643, not a default sitting there unexamined.
-
-    `expires` is a deliberately UNPARSEABLE string ('not-a-real-date'), to
-    prove nothing downstream ever attempts to parse or validate it -- if
-    anything did, this string would be exactly the input to make it fail.
-
-    OBSERVED: `session.commit()` (:1648) succeeds regardless. `User` has NO
-    `ban_until` column at all (confirmed via the mapper itself, not any one
-    instance's state) -- the arm's own `blocked.ban_until = ...` write sets
-    a plain, un-mapped Python attribute that SQLAlchemy's flush machinery
-    never inspects. It exists only on the dispatcher's own object, in its
-    own independent task session, which is closed before dispatch()
-    returns. The REAL DateTime column on User, `banned_until`, is read back
-    fresh from the database after dispatch and is untouched -- still None,
-    exactly as seeded.
+    of the write at :1643.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, blocker, victim = _seed_ordinary_site_ban()
     victim_id = victim.id
 
-    assert 'ban_until' not in sa_inspect(User).columns.keys()
+    assert 'ban_until' not in sa_inspect(User).columns.keys()  # still true; see D91
+
+    calls = record_moderation(monkeypatch, 'ban_user')
+
+    activity = inbox_activity(blocker, activity_type='Block',
+                              object_uri=victim.ap_profile_id,
+                              target=f'https://{instance.domain}',
+                              expires='2099-03-04T05:06:07Z')
+
+    dispatch(activity)
+
+    assert len(calls['ban_user']) == 1
+    args, kwargs = calls['ban_user'][0]
+    assert kwargs == {}
+    blocker_arg, blocked_arg, community_arg, core_activity_arg = args
+    assert sa_inspect(blocker_arg).identity[0] == blocker.id
+    assert sa_inspect(blocked_arg).identity[0] == victim_id
+    assert community_arg is None
+    assert core_activity_arg is activity
+
+    db.session.expire_all()
+    fresh = db.session.get(User, victim_id)
+    assert fresh.banned is True
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_ordinary_site_ban_records_the_expiry_end_to_end(app, db_session, monkeypatch):
+    """The D91 fix's whole point, proven through the REAL `ban_user` rather
+    than a double: a peer-supplied `expires` reaches a real, mapped column.
+
+    Nothing is monkeypatched here, so the assertion covers the full path --
+    the Block arm's delegation, `ban_user`'s instance-wide branch, and
+    `parse_ban_expiry`'s handling of the trailing 'Z'. The seeded baseline
+    is the absence of any `InstanceBan` row at all, so a row carrying the
+    peer's date cannot be mistaken for a default sitting there unexamined.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, blocker, victim = _seed_ordinary_site_ban()
+    victim_id = victim.id
+    assert db.session.query(InstanceBan).count() == 0
+
+    activity = inbox_activity(blocker, activity_type='Block',
+                              object_uri=victim.ap_profile_id,
+                              target=f'https://{instance.domain}',
+                              expires='2099-03-04T05:06:07Z')
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    ban = db.session.query(InstanceBan).filter_by(user_id=victim_id).one()
+    recorded = ban.banned_until
+    assert recorded is not None
+    if recorded.tzinfo is not None:
+        recorded = recorded.astimezone(timezone.utc).replace(tzinfo=None)
+    assert recorded == datetime(2099, 3, 4, 5, 6, 7)
+
+    assert db.session.get(User, victim_id).banned is True
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_ordinary_site_ban_records_endTime_when_expires_is_absent(app, db_session, monkeypatch):
+    """`parse_ban_expiry` falls back to 'endTime' when 'expires' is absent,
+    preserving the `expires`/`elif endTime` precedence the Block arm used to
+    implement inline. A DIFFERENT date from the sibling test above, so this
+    assertion cannot pass on a value the other test's field supplied.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, blocker, victim = _seed_ordinary_site_ban()
+    victim_id = victim.id
+
+    activity = inbox_activity(blocker, activity_type='Block',
+                              object_uri=victim.ap_profile_id,
+                              target=f'https://{instance.domain}',
+                              endTime='2088-11-12T13:14:15Z')
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    ban = db.session.query(InstanceBan).filter_by(user_id=victim_id).one()
+    recorded = ban.banned_until
+    assert recorded is not None
+    if recorded.tzinfo is not None:
+        recorded = recorded.astimezone(timezone.utc).replace(tzinfo=None)
+    assert recorded == datetime(2088, 11, 12, 13, 14, 15)
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_ordinary_site_ban_survives_an_unparseable_expiry_as_a_permanent_ban(
+        app, db_session, monkeypatch):
+    """The half of the D91 fix a bare column rename would have got wrong.
+
+    `expires` here is deliberately unparseable. `datetime.fromisoformat`
+    raises on it, and process_inbox_request's outer handler is
+    `except Exception: session.rollback(); raise` -- so pushing the peer
+    string straight at a DateTime column would have traded a silently
+    discarded expiry for a ban that is rolled back entirely.
+
+    `parse_ban_expiry` treats an unparseable expiry as no expiry, which is
+    a permanent ban. The ban therefore still lands: `User.banned` is True,
+    an `InstanceBan` row exists, its `banned_until` is NULL, and the arm
+    logs SUCCESS rather than raising.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, blocker, victim = _seed_ordinary_site_ban()
+    victim_id = victim.id
 
     activity = inbox_activity(blocker, activity_type='Block',
                               object_uri=victim.ap_profile_id,
@@ -472,34 +605,10 @@ def test_ordinary_site_ban_the_ban_until_probe(app, db_session, monkeypatch):
     dispatch(activity)
 
     db.session.expire_all()
-    fresh = db.session.get(User, victim_id)
-    assert fresh.banned is True
-    assert fresh.banned_until is None  # the REAL column: untouched
-    assert getattr(fresh, 'ban_until', '<no such attribute>') == '<no such attribute>'
+    assert db.session.get(User, victim_id).banned is True
+    ban = db.session.query(InstanceBan).filter_by(user_id=victim_id).one()
+    assert ban.banned_until is None  # permanent, and recorded as such
 
-    log = ActivityPubLog.query.one()
-    assert log.result == 'success'
-
-
-def test_ordinary_site_ban_reads_endTime_when_expires_is_absent(app, db_session, monkeypatch):
-    """routes.py:1646-1647 -- the `elif 'endTime' in core_activity:` half of
-    the same assignment, reached only when 'expires' is absent. Same
-    conclusion as the probe above (no real column exists to write to);
-    this test exists only to prove the elif branch itself is reachable and
-    does not crash, not to re-derive the ban_until finding a second time.
-    """
-    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
-    instance, blocker, victim = _seed_ordinary_site_ban()
-
-    activity = inbox_activity(blocker, activity_type='Block',
-                              object_uri=victim.ap_profile_id,
-                              target=f'https://{instance.domain}',
-                              endTime='also-not-a-real-date')
-
-    dispatch(activity)
-
-    db.session.expire_all()
-    assert victim.banned is True
     log = ActivityPubLog.query.one()
     assert log.result == 'success'
 
@@ -512,7 +621,7 @@ def test_ordinary_site_ban_calls_remove_data_when_removeData_is_set(app, db_sess
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, blocker, victim = _seed_ordinary_site_ban()
 
-    calls = record_moderation(monkeypatch, 'site_ban_remove_data')
+    calls = record_moderation(monkeypatch, 'ban_user', 'site_ban_remove_data')
 
     activity = inbox_activity(blocker, activity_type='Block',
                               object_uri=victim.ap_profile_id,
@@ -538,7 +647,7 @@ def test_ordinary_site_ban_skips_remove_data_when_removeData_is_absent(app, db_s
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, blocker, victim = _seed_ordinary_site_ban()
 
-    calls = record_moderation(monkeypatch, 'site_ban_remove_data')
+    calls = record_moderation(monkeypatch, 'ban_user', 'site_ban_remove_data')
 
     activity = inbox_activity(blocker, activity_type='Block',
                               object_uri=victim.ap_profile_id,
@@ -553,29 +662,24 @@ def test_ordinary_site_ban_skips_remove_data_when_removeData_is_absent(app, db_s
 
 def test_site_ban_already_banned_skips_rebanning_but_still_succeeds(app, db_session, monkeypatch):
     """routes.py:1642. `already_banned` is True (`victim.banned` seeded
-    True). This test establishes what the arm actually does on that path:
-    it completes without error and logs SUCCESS, `remove_data` still runs
-    (a separate, unconditional `if`, :1650-1651, proven here with
-    `removeData=True`, since that half of the branch does not depend on
-    `already_banned`), and the REAL `banned_until` column, seeded to a
-    baseline beforehand, survives unchanged.
+    True), so the guard skips the ban entirely -- `ban_user` is never
+    called and `banned_until` keeps its seeded baseline -- while
+    `site_ban_remove_data` still runs and the arm still logs SUCCESS,
+    because both sit OUTSIDE the guard (:1650-1653).
 
-    It does NOT prove `if not already_banned:` (:1642) is doing that work,
-    despite the arm's own docstring framing the guard as deliberate ("we
-    don't want remote temp bans to over-ride our permanent bans", :1601).
-    Per D91 (this campaign's findings register), `blocked.banned = True` /
-    `blocked.ban_until = ...` (:1643-1647) writes to `ban_until`, which is
-    not a mapped column on `User` at all -- the write is invisible to
-    SQLAlchemy's flush machinery whether or not this guard runs, so
-    `banned_until` (the REAL, differently-named column) was always going to
-    survive unchanged, guard or no guard. Per D103, `if not already_banned:`
-    is consequently an EQUIVALENT MUTANT in current source: its only
-    observable effects are skipping that already-dead write and a
-    `session.commit()` with nothing new to flush -- `blocked.banned` is
-    already `True` on this path regardless, and both the SUCCESS log and
-    `site_ban_remove_data` sit outside the guard entirely. Deleting the
-    guard and de-indenting its body would change nothing this test (or any
-    other in this file) observes.
+    **This test changed meaning with the D91 fix.** It previously could not
+    prove the guard was doing anything: `blocked.ban_until = ...` wrote to
+    a name `User` does not have, so nothing persisted whether the guard ran
+    or not, which is what made D103 file `if not already_banned:` as an
+    equivalent mutant. Now that the branch delegates to `ban_user`, the
+    guard has a real, observable effect: the `InstanceBan` count assertion
+    below is 0 only because `ban_user` never ran, and goes to 1 if the
+    guard is removed. D103 is closed accordingly.
+
+    That effect is exactly what the arm's own docstring asks for at :1601:
+    "we don't want remote temp bans to over-ride our permanent bans." The
+    activity carries a far-future `expires` that would otherwise become an
+    `InstanceBan` expiry; the seeded permanent ban survives it.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, blocker, victim = _seed_ordinary_site_ban(banned_baseline=True)
@@ -597,6 +701,7 @@ def test_site_ban_already_banned_skips_rebanning_but_still_succeeds(app, db_sess
     fresh = db.session.get(User, victim_id)
     assert fresh.banned is True
     assert fresh.banned_until == baseline_until  # untouched -- the already_banned skip
+    assert db.session.query(InstanceBan).count() == 0  # no ban_user call happened
 
     assert len(calls['site_ban_remove_data']) == 1
 

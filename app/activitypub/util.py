@@ -2378,6 +2378,37 @@ def community_ban_remove_data(blocker_id, community_id, blocked):
     db.session.commit()
 
 
+def parse_ban_expiry(core_activity):
+    """Turn a peer-supplied ban expiry into a timezone-aware datetime.
+
+    Returns None when the activity carries no expiry, when the value cannot
+    be parsed, or when it has already passed. None is the right answer in
+    all three cases: a NULL expiry means a permanent ban everywhere in this
+    codebase (see User.banned_until's own comment in app/models.py).
+
+    Malformed input is treated as "no expiry" rather than allowed to raise.
+    process_inbox_request wraps every arm in `except Exception: rollback;
+    raise` (app/activitypub/routes.py), so letting a bad date propagate
+    would discard the entire ban, not just its expiry.
+    """
+    raw = core_activity.get('expires') or core_activity.get('endTime')
+    if not raw:
+        return None
+    try:
+        expires = datetime.fromisoformat(raw)
+    except (TypeError, ValueError):
+        # pendulum accepts shapes fromisoformat rejects, e.g. the ISO
+        # ordinal date '2099-001'. It raises ParserError (a ValueError) on
+        # garbage, and TypeError on a non-string.
+        try:
+            expires = pendulum.parse(raw)
+        except Exception:
+            return None
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    return expires if expires > datetime.now(timezone.utc) else None
+
+
 def ban_user(blocker, blocked, community, core_activity):
     if community is None:   # instance-wide ban
         target = core_activity['target']
@@ -2392,10 +2423,7 @@ def ban_user(blocker, blocked, community, core_activity):
                                                             InstanceBan.instance_id == instance_id).first()
         if not existing_ban:
             instance_ban = InstanceBan(user_id=blocked.id, instance_id=instance_id)
-            if 'expires' in core_activity:
-                instance_ban.banned_until = datetime.fromisoformat(core_activity['expires'])
-            elif 'endTime' in core_activity:
-                instance_ban.banned_until = datetime.fromisoformat(core_activity['endTime'])
+            instance_ban.banned_until = parse_ban_expiry(core_activity)
             db.session.add(instance_ban)
             db.session.commit()
 
@@ -2439,24 +2467,7 @@ def ban_user(blocker, blocked, community, core_activity):
                 reason = ''
             new_ban.reason = shorten_string(reason, 255)
 
-            ban_until = None
-            if 'expires' in core_activity:
-                try:
-                    ban_until = datetime.fromisoformat(core_activity['expires'])
-                except ValueError:
-                    ban_until = pendulum.parse(core_activity['expires'])
-            elif 'endTime' in core_activity:
-                try:
-                    ban_until = datetime.fromisoformat(core_activity['endTime'])
-                except ValueError:
-                    ban_until = pendulum.parse(core_activity['endTime'])
-
-            if ban_until:
-                # Ensure ban_until is timezone-aware for comparison
-                if ban_until.tzinfo is None:
-                    ban_until = ban_until.replace(tzinfo=timezone.utc)
-                if ban_until > datetime.now(timezone.utc):
-                    new_ban.ban_until = ban_until
+            new_ban.ban_until = parse_ban_expiry(core_activity)
 
             db.session.add(new_ban)
 
