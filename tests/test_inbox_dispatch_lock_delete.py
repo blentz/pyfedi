@@ -1,0 +1,176 @@
+"""Sub-project 5c, Task 1 -- shared fixtures for the moderation arms
+(`record_moderation`), and the Delete and Lock arms' outcome tables.
+
+`record_moderation` generalises 5b's `record_sends` over however many
+delegate functions a moderation arm calls (`add_to_modlog`,
+`delete_post_or_comment`, `announce_activity_to_followers`, ...), since
+these arms do not send federated replies the way Follow/Accept/Reject do.
+It is consumed by Tasks 3, 5, 7, 9, 10 and 11 (the Lock, Delete, Add, Remove
+and Block coverage tasks), imported from this file the same way
+`test_inbox_dispatch_follow.py:record_sends` was imported cross-file in 5b.
+
+Both tables below are derived directly from source, read line by line for
+this task -- not copied from the plan or the design spec:
+
+  - Delete: routes.py:1264-1327
+  - Lock:   routes.py:1356-1395
+
+They were cross-checked against the plan's Task 2, 4 and 5 briefs afterward
+and agree with those briefs' account of the two registered defects (Lock's
+`post`-instead-of-`post_reply` references, and Delete's `feed.user_id`/
+`user.id` reads ahead of their None-guards). No disagreement turned up
+there. Re-deriving independently did surface three things not spelled out
+in either the plan or this task's own brief, noted after the tables.
+
+### Delete (routes.py:1264-1327)
+
+`core_activity['object']` is inspected THREE different ways before anything
+is deleted: a dict with `type == 'Feed'` is a feed deletion, handled
+entirely inside this arm; a bare string (Lemmy) or a dict without that type
+(kbin) both reduce to an `ap_id` and fall into a shared continuation that
+looks the target up as content, then as a private message.
+
+| branch (lines)                                                | selects it                                                                                                                    | writes                                                                                                                                                    | delegates to                                                                                          | logs |
+|-----------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------|------|
+| Feed-delete, unresolved actor or feed (1268-1273)               | `object` is a dict with `type == 'Feed'`                                                                                       | nothing                                                                                                                                                        | `find_actor_or_create_cached(actor_id)` for `user`; a raw `session.query(Feed)` (not a delegate function) for `feed` | **CRASHES before any log call.** `:1273`'s `user.id == feed.user_id` dereferences `user.id` (None if the actor did not resolve) or `feed.user_id` (None if no feed row matched) with no guard on either -- an unhandled `AttributeError` escapes `process_inbox_request` instead of reaching a log call. Registered; Task 4's to fix, not this task's. |
+| Feed-delete, owner mismatch (1273-1275)                         | both resolved, and `user.id != feed.user_id`                                                                                    | nothing                                                                                                                                                        | nothing                                                                                                    | APLOG_DELETE/APLOG_FAILURE 'Delete rejected, request came from non-owner.' |
+| Feed-delete, success (1277-1298)                                | owner matches; reaches `if feed:`, which is unconditionally True here (see note below)                                        | deletes every `FeedItem` row for `feed.id` (commit per row), every `FeedMember` row (commit per row), every `FeedJoinRequest` row (commit per row), then the `Feed` row itself (commit) | nothing -- every delete goes through the task-local `session` directly, no helper function is called      | APLOG_DELETE/APLOG_SUCCESS naming the feed's `object['id']` |
+| Feed-delete, `else: feed not found` (1299-1301)                 | would fire when `feed` is falsy at `:1278`                                                                                     | nothing                                                                                                                                                        | nothing                                                                                                    | **DEAD CODE.** The only way to reach `:1278` with `feed` falsy is `feed is None`, and that already raised at `:1273` before this line is ever reached -- a `Feed` row the ORM returns has no `__bool__`/`__len__` override, so it is never falsy on its own. This log line can never fire while `:1273` reads `feed.user_id` unguarded. |
+| bare string object -- Lemmy shape (1302-1303)                   | `object` is a `str`                                                                                                             | none yet -- sets `ap_id = object`, falls into the shared continuation below                                                                                    | --                                                                                                          | -- |
+| dict object, not a Feed -- kbin shape (1304-1305)                | `object` is a dict whose `type != 'Feed'`                                                                                       | none yet -- sets `ap_id = object['id']`, falls into the shared continuation below                                                                              | --                                                                                                          | -- |
+| shared: content found, already deleted (1308-1311)              | `find_liked_object(ap_id)` truthy and `to_delete.deleted` is True                                                               | nothing                                                                                                                                                        | nothing                                                                                                    | APLOG_DELETE/APLOG_IGNORED 'Activity about local content which is already deleted' |
+| shared: content found, deletes it (1312-1316)                   | `find_liked_object(ap_id)` truthy and not yet deleted                                                                           | none directly in this arm -- the mutation happens inside the delegate                                                                                          | `delete_post_or_comment(user, to_delete, store_ap_json, request_json, reason)` unconditionally; `announce_activity_to_followers(to_delete.community, user, request_json)` only when `not announced` | **NOTHING.** No `log_incoming_ap` call anywhere on this path -- the one path in this arm that does real, successful work and logs none of it. |
+| shared: nothing found, PM found (1319-1325)                     | `find_liked_object` falsy; `ChatMessage` row matches `ap_id` and `sender_id == user.id`                                         | `updated_message.read = True`, `.deleted = True`, commit                                                                                                       | nothing                                                                                                    | APLOG_DELETE/APLOG_SUCCESS 'Delete: PM {ap_id} deleted' |
+| shared: nothing found at all (1317-1326)                        | neither `find_liked_object` nor the `ChatMessage` lookup found anything                                                         | nothing                                                                                                                                                        | nothing                                                                                                    | **NOTHING.** Falls straight through to the bare `return` at `:1326` -- the arm's only fully-silent no-op. |
+
+### Lock (routes.py:1356-1395)
+
+Target resolution (`:1360-1367`) happens once, before either outcome
+branch: `/post/` in the object picks `Post.get_by_ap_id`; `/comment/` picks
+`PostReply.get_by_ap_id`; neither substring tries `Post.get_by_ap_id`
+first and only tries `PostReply.get_by_ap_id` on that returning `None`.
+`reason` (`:1368`) is computed once regardless of which target resolved.
+
+| branch (lines)                                                   | selects it                                                                                                     | writes                                                                                                          | delegates to                                                                                                                          | logs |
+|---------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|------|
+| post, moderator or instance admin (1369-1376)                       | `post` truthy and (`post.community.is_moderator(mod)` or `post.community.is_instance_admin(mod)`)                | `post.comments_enabled = False`, commit                                                                          | `add_to_modlog('lock_post', actor=mod, target_user=post.author, reason=reason, community=post.community, post=post, link_text=..., link=...)` | APLOG_LOCK/APLOG_SUCCESS |
+| post, no permission (1369-1370, 1377-1378)                          | `post` truthy, both disjuncts False                                                                               | nothing                                                                                                          | nothing                                                                                                                                    | APLOG_LOCK/APLOG_FAILURE 'Lock: Does not have permission' |
+| post None, post_reply, moderator branch of the `or` is True (1379-1389) | `post` falsy, `post_reply` truthy, `post_reply.community.is_moderator(mod)` True -- the `or`'s second operand (`post.community.is_instance_admin(mod)`) is short-circuited and never evaluated here | `post_reply.replies_enabled = False`; a raw-SQL subtree UPDATE sets `replies_enabled = False` for every reply whose `path` contains `post_reply.id`; commit. **These writes DO happen.** | **CRASHES immediately after the writes, before any delegate runs.** `add_to_modlog(..., target_user=post.author, ...)` at `:1386` dereferences `post`, which is guaranteed `None` in this branch (reaching `elif post_reply:` requires the earlier `if post:` to have been falsy) -- `AttributeError: 'NoneType' object has no attribute 'author'` aborts the call before `add_to_modlog` runs and before either the modlog entry or the `:1387` `community=post.community` keyword is ever evaluated. | **NOTHING.** The intended APLOG_LOCK/APLOG_SUCCESS at `:1389` is never reached, and the writes above are never rolled back either -- they were already committed at `:1385`, one statement before the crash. `session.rollback()` in the arm's outer `except Exception:` (`:1885`) has nothing pending left to undo. |
+| post None, post_reply, moderator branch of the `or` is False (1379-1380) | `post` falsy, `post_reply` truthy, `post_reply.community.is_moderator(mod)` False                                | **NONE.** Unlike the row above, this path crashes before any write.                                              | **CRASHES while evaluating the `if` condition itself.** Because the first disjunct is False, Python evaluates the second, `post.community.is_instance_admin(mod)`, with `post` `None` -- `AttributeError: 'NoneType' object has no attribute 'community'` fires before the loop body or either arm of the intended if/else runs. | **NOTHING.** The intended APLOG_LOCK/APLOG_FAILURE 'Lock: Does not have permission' at `:1391` is never reached. |
+| neither post nor post_reply resolved (1392-1393)                    | both `post` and `post_reply` falsy after target resolution                                                        | nothing                                                                                                          | nothing                                                                                                                                    | APLOG_LOCK/APLOG_FAILURE 'Lock: post not found' |
+
+Net effect of the two crash rows: given current source, a federated Lock of
+a COMMENT can never complete successfully or be cleanly refused -- both of
+its outcomes raise an unhandled `AttributeError` that escapes
+`process_inbox_request` (caught only by the bare `except Exception: ...;
+raise` at `:1885`, which rolls back and re-raises). Locking a POST is
+unaffected; only the `post_reply` half is broken. This is the "three
+dereferences of `post`" the task brief names -- concretely, of the three
+textual references (`:1380`'s second disjunct, `:1386`, `:1387`), only ONE
+ever executes per call: the moderator branch reaches `:1386` and dies
+there before `:1387` is evaluated (Python evaluates keyword arguments left
+to right and aborts on the first exception); the non-moderator branch dies
+at `:1380` and never reaches `:1386`/`:1387` at all. Registered; Task 2's
+to fix, not this task's.
+
+### Observations beyond the two registered defects
+
+  - Delete's own selector for the Feed-vs-other split, `:1266`
+    (`core_activity['object']['type'] == 'Feed'`), reads `['type']`
+    unconditionally once `object` is confirmed a dict. A dict `object` with
+    no `'type'` key at all raises `KeyError` right there, before either
+    registered defect is reached and before ANY `ap_id` extraction --
+    a third crash path in this arm, distinct from the two named in the
+    plan. Not registered by this task's brief; noted here for whoever
+    triages defects next, not treated as this task's to fix.
+  - Delete's Feed-branch reassigns the arm's `user` local from
+    `find_actor_or_create_cached(actor_id)` (`:1268`), which is a SEPARATE
+    lookup from whatever `user` the preamble resolved before dispatch
+    reached this arm. Since the branch always returns before falling
+    through to the shared post/PM continuation, this shadowing never
+    leaks into the other two object shapes in practice -- but a reader
+    tracing `user` through the whole arm has to notice the reassignment is
+    branch-local.
+  - Lock's raw-SQL subtree UPDATE (`:1382-1384`) is a second write
+    independent of the `post_reply.replies_enabled = False` line right
+    above it -- the ORM attribute write touches only the one row; the raw
+    UPDATE is what actually cascades to descendant replies via the
+    `path @> ARRAY[:parent_id]` predicate. A test asserting only the ORM
+    attribute would miss the subtree ever being touched.
+"""
+
+from app.activitypub import routes as activitypub_routes
+from app.models import FeedItem, FeedMember
+from tests.factories import make_community, make_feed, make_feed_item, make_feed_member, \
+    make_instance, make_user, seed_community_owner
+
+
+def record_moderation(monkeypatch, *names):
+    """Double each of `names` at its binding site on the routes module, and
+    return a dict of name -> list of (args, kwargs) tuples recorded for it.
+
+    Generalises 5b's `record_sends` over however many delegates a
+    moderation arm calls (`add_to_modlog`, `delete_post_or_comment`,
+    `announce_activity_to_followers`, ...). routes.py imports each of these
+    by name (or, for `announce_activity_to_followers`, defines it itself),
+    so patching the DEFINING module under a different name would leave
+    routes' own copy pointing at the original -- the same binding-site trap
+    tests/conftest.py:394 documents.
+
+    The lambda binds `_n=name` as a keyword default so each closure closes
+    over its OWN name, rather than every closure sharing whichever value
+    `name` holds when the loop finishes -- the classic late-binding bug a
+    bare `name` reference here would produce.
+    """
+    calls = {name: [] for name in names}
+    for name in names:
+        monkeypatch.setattr(
+            activitypub_routes, name,
+            lambda *args, _n=name, **kwargs: calls[_n].append((args, kwargs)))
+    return calls
+
+
+def test_record_moderation_gives_each_patched_name_its_own_call_list(monkeypatch):
+    """Proves the closure-per-name claim in `record_moderation`'s docstring:
+    patching two names and calling both through the routes module records
+    each call under its own key, not merged or overwritten by the other.
+    """
+    calls = record_moderation(monkeypatch, 'add_to_modlog', 'delete_post_or_comment')
+
+    activitypub_routes.add_to_modlog('lock_post', actor=1, target_user=2)
+    activitypub_routes.delete_post_or_comment(3, 4)
+
+    assert calls == {
+        'add_to_modlog': [(('lock_post',), {'actor': 1, 'target_user': 2})],
+        'delete_post_or_comment': [((3, 4), {})],
+    }
+
+
+def test_make_feed_item_and_make_feed_member_build_expected_rows(app, db_session):
+    """Smoke-tests the two factories Task 1 adds: each produces a row with
+    the foreign keys the moderation arms read (`FeedItem.feed_id`/
+    `community_id`; `FeedMember.feed_id`/`user_id`/`is_owner`), and
+    `is_owner` defaults False to match the model's own default
+    (app/models.py:4034).
+    """
+    seed_community_owner('owner.example')  # instance id 1 + local owner user
+    # id 1, which make_community() below hardcodes as its instance_id/user_id.
+    instance = make_instance('peer.example')
+    feed = make_feed(instance, local=True)
+    community = make_community()
+    user = make_user(instance, 'alice')
+
+    item = make_feed_item(feed, community)
+    member = make_feed_member(user, feed)
+    owner_member = make_feed_member(user, feed, is_owner=True)
+
+    assert isinstance(item, FeedItem)
+    assert item.feed_id == feed.id
+    assert item.community_id == community.id
+
+    assert isinstance(member, FeedMember)
+    assert member.feed_id == feed.id
+    assert member.user_id == user.id
+    assert member.is_owner is False
+
+    assert owner_member.is_owner is True
