@@ -141,9 +141,10 @@ import pytest
 
 from app import db
 from app.activitypub import routes as activitypub_routes
-from app.models import ActivityPubLog, CommunityMember, FeedItem, InstanceRole, utcnow
-from tests.factories import (inbox_activity, make_community, make_community_member, make_feed,
-                             make_feed_item, make_feed_member, make_instance, make_post, make_user)
+from app.models import ActivityPubLog, CommunityJoinRequest, CommunityMember, FeedItem, InstanceRole, utcnow
+from tests.factories import (inbox_activity, make_community, make_community_join_request,
+                             make_community_member, make_feed, make_feed_item, make_feed_member,
+                             make_instance, make_post, make_user)
 from sqlalchemy import inspect as sa_inspect
 
 from tests.test_inbox_dispatch_follow import record_sends
@@ -849,3 +850,442 @@ def test_a_remove_skips_a_feed_member_with_no_community_membership(
     # FeedItem genuinely existed here.
     assert FeedItem.query.filter_by(feed_id=feed.id, community_id=community.id).count() == 0
     assert feed.num_communities == 0
+
+
+# --- Task 9: Remove's feed branch and its auto-unsubscribe loop ---
+#
+# routes.py's current numbering for this block: the guard at :1481, FIX 5's
+# feed_item delete/decrement at :1482-1487, the feed_members loop opening at
+# :1490-1491, the owner skip at :1493-1494, the is_local()/feed_auto_leave
+# gate at :1495-1496, FIX 6's cm lookup at :1497-1499, the proceed body at
+# :1500-1530 (Undo-sending at :1502-1520, the ovo.st special case inside that
+# at :1505-1509, and the membership deletion/decrement/SUCCESS log at
+# :1522-1530). The brief cited :1474-1522 for the whole block and :1488-1494
+# / :1497-1513 / :1500-1505 / :1517-1521 for its sub-pieces; EVERY one of
+# those was STALE by one line relative to source (the block now starts at
+# :1473, not :1474, and everything below it is shifted the same one line) --
+# 6 of 6 citations stale. Every test below cites the CURRENT line, re-derived
+# by reading the arm in full rather than trusted from the brief.
+#
+# do_subscribe's ap_id-vs-name fallback established in Task 7's success-path
+# test is NOT this arm's concern -- Remove's loop never reads
+# community_to_remove.ap_id at all; the actor string it builds is
+# fm_user.public_url(), read directly off the User row.
+
+
+def _seed_removable_feed_community(host='peer.example', name='removecomm', instance_domain=None):
+    """A Community already IN a Feed (a real FeedItem row), reachable through
+    the Announce/Feed-actor preamble the same way Add's tests are. Both
+    make_community()'s hardcoded instance_id=1/user_id=1 owner slots are
+    occupied first, following every other test in this module.
+
+    `instance_domain` lets a caller put the FIRST Instance row (id=1, which
+    make_community() hardcodes its Community.instance_id to) on a domain
+    different from the one the community's own AP identity is published on --
+    needed by the ovo.st tests below, where `community_to_remove.instance.domain`
+    (routes.py's current :1505) must read 'ovo.st' regardless of what host the
+    community's ap_profile_id names.
+
+    `feed.num_communities` is seeded to 1 (not left at its column default 0)
+    so a test asserting it becomes 0 after the FeedItem is removed can tell
+    that apart from the default plus an unrelated bug that never incremented
+    it at all -- this campaign's 'beware default-backed assertions' rule.
+    """
+    instance = make_instance(instance_domain or host)
+    make_user(instance, 'community_owner')  # occupies user id=1 for make_community's hardcoded owner
+    community = make_community(name=name, host=host)
+    community.ap_fetched_at = utcnow()
+    db.session.commit()
+
+    feed = make_feed(instance)
+    make_feed_item(feed, community)
+    feed.num_communities = 1
+    db.session.commit()
+
+    return instance, community, feed
+
+
+def _make_would_proceed_feed_member(name, instance, feed, community, local=True, feed_auto_leave=None):
+    """A FeedMember, paired with a real CommunityMember row for `community`,
+    built so the auto-unsubscribe loop would proceed for it UNLESS the
+    caller deliberately flips one thing off: it is never the feed's owner
+    (callers that want the owner case set `feed.user_id` to this member's id
+    themselves, afterward), it is local unless `local=False`, its
+    feed_auto_leave is True (the column's own default, app/models.py) unless
+    `feed_auto_leave` overrides it, and its CommunityMember row has
+    joined_via_feed explicitly set True (make_community_member's factory
+    default is False on this column -- FIX 6's `cm and cm.joined_via_feed`
+    check needs this true for the loop to ever reach 'proceed' for a
+    non-skip-condition test) and is_owner False (make_community_member's own
+    default, which is what makes User.subscribed() read SUBSCRIPTION_MEMBER
+    rather than SUBSCRIPTION_OWNER -- the OTHER thing routes.py's current
+    :1499 checks alongside `cm and cm.joined_via_feed`).
+    """
+    member = make_user(instance, name, local=local)
+    if feed_auto_leave is not None:
+        member.feed_auto_leave = feed_auto_leave
+    db.session.commit()
+    make_feed_member(member, feed)
+    cm = make_community_member(member, community, is_moderator=False)
+    cm.joined_via_feed = True
+    db.session.commit()
+    return member, cm
+
+
+def _remove_activity_for(feed, community):
+    inner_remove = {
+        'id': f'{feed.ap_profile_id}/activities/remove-{community.name}',
+        'type': 'Remove',
+        'actor': feed.ap_profile_id,
+        'object': {'id': community.ap_profile_id},
+        'target': feed.ap_profile_id,
+    }
+    return inbox_activity(feed, activity_type='Announce', object=inner_remove)
+
+
+def test_remove_loop_skips_the_feed_owner_who_would_otherwise_proceed(app, db_session, monkeypatch):
+    """routes.py's current :1493-1494: `if fm_user.id == feed.user_id:
+    continue`. The owner here is built with EVERY other condition set to
+    the value that would let the loop proceed -- local, feed_auto_leave
+    True, and a real CommunityMember row with joined_via_feed True and
+    is_owner False -- so the skip proven here is demonstrably due to the
+    owner check alone, not because it also fails is_local(), feed_auto_leave,
+    or the CommunityMember lookup (each covered as ITS OWN isolated test
+    below / in Task 8).
+
+    `community.ap_id` is left unset (make_community()'s own default), so
+    `community.is_local()` is True here -- deliberately irrelevant to this
+    test, since a skip via `continue` happens before the is_local() check is
+    even reached; using the local shape just keeps this test decoupled from
+    the remote/Undo machinery Steps 4-5 cover separately.
+    """
+    instance, community, feed = _seed_removable_feed_community(name='ownerskipcomm')
+    community.subscriptions_count = 1
+    db.session.commit()
+
+    owner, cm = _make_would_proceed_feed_member('feedowner', instance, feed, community)
+    feed.user_id = owner.id
+    db.session.commit()
+    assert owner.id == feed.user_id
+    assert owner.is_local() and owner.feed_auto_leave
+    assert cm.joined_via_feed is True and cm.is_owner is False
+
+    sends = record_sends(monkeypatch)
+
+    activity = _remove_activity_for(feed, community)
+    dispatch(activity)
+
+    db.session.expire_all()
+
+    # `continue` fired before anything below it ran: the owner's own
+    # CommunityMember row is untouched, nothing was sent, and the community's
+    # subscriptions_count (seeded to a nonzero baseline, not left at its
+    # default 0) is unchanged.
+    assert CommunityMember.query.filter_by(user_id=owner.id, community_id=community.id).count() == 1
+    assert sends == []
+    assert community.subscriptions_count == 1
+
+    # FIX 5's guard (routes.py's current :1482-1487) is independent of the
+    # loop and still ran normally: the FeedItem existed, so it is gone and
+    # num_communities is decremented from its seeded baseline.
+    assert FeedItem.query.filter_by(feed_id=feed.id, community_id=community.id).count() == 0
+    assert feed.num_communities == 0
+
+
+def test_remove_loop_skips_a_nonlocal_feed_member_who_would_otherwise_proceed(
+        app, db_session, monkeypatch):
+    """routes.py's current :1495: `if fm_user.is_local() and
+    fm_user.feed_auto_leave:`. This member is NOT the feed's owner, has
+    feed_auto_leave True (irrelevant here since is_local() alone already
+    short-circuits the `and`) and a real CommunityMember row with
+    joined_via_feed True -- every OTHER skip condition is false, isolating
+    this test to the is_local() half specifically.
+    """
+    instance, community, feed = _seed_removable_feed_community(name='remoteskipcomm')
+
+    owner = make_user(instance, 'feedowner', local=True)
+    feed.user_id = owner.id
+    db.session.commit()
+    make_feed_member(owner, feed)
+
+    remote_member, cm = _make_would_proceed_feed_member(
+        'remotefeedmember', instance, feed, community, local=False)
+    assert remote_member.id != feed.user_id
+    assert remote_member.is_local() is False
+    assert remote_member.feed_auto_leave is True
+    assert cm.joined_via_feed is True
+
+    sends = record_sends(monkeypatch)
+
+    activity = _remove_activity_for(feed, community)
+    dispatch(activity)
+
+    db.session.expire_all()
+
+    assert CommunityMember.query.filter_by(
+        user_id=remote_member.id, community_id=community.id).count() == 1
+    assert sends == []
+
+
+def test_remove_loop_skips_a_member_with_feed_auto_leave_false(app, db_session, monkeypatch):
+    """routes.py's current :1495: the `and fm_user.feed_auto_leave` half.
+    This member is NOT the feed's owner, IS local, and has a real
+    CommunityMember row with joined_via_feed True -- every OTHER skip
+    condition is false, isolating this test to feed_auto_leave specifically.
+    `feed_auto_leave` is set False explicitly, since the column's own default
+    (app/models.py:1033) is True -- the value every OTHER test in this
+    module relies on for its "would otherwise proceed" members.
+    """
+    instance, community, feed = _seed_removable_feed_community(name='autoleaveskipcomm')
+
+    owner = make_user(instance, 'feedowner', local=True)
+    feed.user_id = owner.id
+    db.session.commit()
+    make_feed_member(owner, feed)
+
+    stayer, cm = _make_would_proceed_feed_member(
+        'stayingfeedmember', instance, feed, community, feed_auto_leave=False)
+    assert stayer.id != feed.user_id
+    assert stayer.is_local() is True
+    assert stayer.feed_auto_leave is False
+    assert cm.joined_via_feed is True
+
+    sends = record_sends(monkeypatch)
+
+    activity = _remove_activity_for(feed, community)
+    dispatch(activity)
+
+    db.session.expire_all()
+
+    assert CommunityMember.query.filter_by(
+        user_id=stayer.id, community_id=community.id).count() == 1
+    assert sends == []
+
+
+def test_remove_proceeds_for_a_local_community_and_sends_nothing(app, db_session, monkeypatch):
+    """Steps 1, 3 and 6. `community.ap_id` is left unset (make_community()'s
+    own default), so `community_to_remove.is_local()` (routes.py's current
+    :1502) is True and the whole Undo-sending block is skipped, falling
+    straight to `if proceed:` -- asserted here by an empty `sends` list, not
+    merely a full one elsewhere.
+
+    Covers the removal itself (Step 1: the FeedItem is gone, num_communities
+    decremented from its seeded baseline) and the deletion/log (Step 6): both
+    the CommunityMember and the CommunityJoinRequest row for this member/
+    community pair are gone, subscriptions_count is decremented from a
+    seeded nonzero baseline (this campaign's 'beware default-backed
+    assertions' rule -- Community.subscriptions_count defaults to 0, so a
+    bare `== 0` afterward would be indistinguishable from that default), and
+    SUCCESS is logged with the member's user_name and the community's
+    ap_public_url. LOG_ACTIVITYPUB_TO_DB is turned on so that last assertion
+    is load-bearing.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, feed = _seed_removable_feed_community(name='localproceedcomm')
+    community.subscriptions_count = 1
+    db.session.commit()
+    assert community.is_local() is True
+
+    owner = make_user(instance, 'feedowner', local=True)
+    feed.user_id = owner.id
+    db.session.commit()
+    make_feed_member(owner, feed)
+
+    member, cm = _make_would_proceed_feed_member('localproceedmember', instance, feed, community)
+    make_community_join_request(member, community, joined_via_feed=True)
+
+    sends = record_sends(monkeypatch)
+
+    activity = _remove_activity_for(feed, community)
+    dispatch(activity)
+
+    db.session.expire_all()
+
+    assert sends == []
+
+    # Step 1: the removal itself.
+    assert FeedItem.query.filter_by(feed_id=feed.id, community_id=community.id).count() == 0
+    assert feed.num_communities == 0
+
+    # Step 6: the deletion and its log.
+    assert CommunityMember.query.filter_by(
+        user_id=member.id, community_id=community.id).count() == 0
+    assert CommunityJoinRequest.query.filter_by(
+        user_id=member.id, community_id=community.id).count() == 0
+    assert community.subscriptions_count == 0
+
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == (
+        f'{member.user_name} auto-unfollowed {community.ap_public_url} during a feed/remove')
+
+
+def _seed_remote_removable_feed_community(host='peer.example', name='remoteproceedcomm',
+                                          instance_domain=None):
+    """`_seed_removable_feed_community`, with the community's `ap_id` moved
+    off-instance so `is_local()` reads False -- plain make_community() never
+    sets `ap_id`, so it would otherwise read back local regardless of host.
+    `ap_inbox_url` is also set, matching the value production's
+    `send_post_request(community_to_remove.ap_inbox_url, ...)` call
+    (routes.py's current :1518) would actually target.
+    """
+    instance, community, feed = _seed_removable_feed_community(
+        host=host, name=name, instance_domain=instance_domain)
+    community.ap_id = f'{name}@{host}'
+    community.ap_inbox_url = f'https://{host}/c/{name}/inbox'
+    db.session.commit()
+    assert community.is_local() is False
+    return instance, community, feed
+
+
+def test_remove_sends_an_undo_wrapping_a_follow_for_a_remote_community(app, db_session, monkeypatch):
+    """routes.py's current :1502-1520: for a remote community whose
+    instance is not gone_forever, an Undo wrapping a Follow is sent. Asserts
+    the federation contract on the recorded body -- not merely a send count,
+    which would show full line coverage while leaving the shape of the
+    payload untested.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, feed = _seed_remote_removable_feed_community()
+    community.subscriptions_count = 1
+    db.session.commit()
+    assert instance.gone_forever is False
+
+    owner = make_user(instance, 'feedowner', local=True)
+    feed.user_id = owner.id
+    db.session.commit()
+    make_feed_member(owner, feed)
+
+    member, cm = _make_would_proceed_feed_member('undomember', instance, feed, community)
+
+    sends = record_sends(monkeypatch)
+
+    activity = _remove_activity_for(feed, community)
+    dispatch(activity)
+
+    db.session.expire_all()
+
+    assert len(sends) == 1
+    uri, body, key_id = sends[0]
+    assert uri == community.ap_inbox_url
+    assert body['type'] == 'Undo'
+    assert body['object']['type'] == 'Follow'
+    assert body['actor'] == member.public_url()
+    assert body['object']['object'] == community.public_url()
+    assert key_id == member.public_url() + '#main-key'
+
+    # The membership is still deleted after the Undo is sent.
+    assert CommunityMember.query.filter_by(
+        user_id=member.id, community_id=community.id).count() == 0
+    assert community.subscriptions_count == 0
+
+
+def test_remove_sends_nothing_when_the_remote_instance_is_gone_forever(app, db_session, monkeypatch):
+    """routes.py's current :1503: `if not community_to_remove.instance.
+    gone_forever:` guards the Undo send. `gone_forever` True means no send,
+    but `proceed` (set unconditionally at the current :1500, before the
+    `is_local()`/`gone_forever` checks) is still True, so the membership is
+    deleted regardless.
+    """
+    instance, community, feed = _seed_remote_removable_feed_community(name='goneforevercomm')
+    instance.gone_forever = True
+    community.subscriptions_count = 1
+    db.session.commit()
+
+    owner = make_user(instance, 'feedowner', local=True)
+    feed.user_id = owner.id
+    db.session.commit()
+    make_feed_member(owner, feed)
+
+    member, cm = _make_would_proceed_feed_member('goneforevermember', instance, feed, community)
+
+    sends = record_sends(monkeypatch)
+
+    activity = _remove_activity_for(feed, community)
+    dispatch(activity)
+
+    db.session.expire_all()
+
+    assert sends == []
+    assert CommunityMember.query.filter_by(
+        user_id=member.id, community_id=community.id).count() == 0
+    assert community.subscriptions_count == 0
+
+
+def test_remove_ovo_st_uses_the_join_requests_uuid_as_the_follow_id(app, db_session, monkeypatch):
+    """routes.py's current :1505-1509: when `community_to_remove.instance.
+    domain == 'ovo.st'`, the generated `follow_id` is replaced with one built
+    from the member's CommunityJoinRequest.uuid, if such a row exists.
+
+    'ovo.st' is a hardcoded literal naming one specific peer instance --
+    registered here as a finding, per this task's instructions, NOT fixed.
+
+    The Instance row for 'ovo.st' is created FIRST (occupying id=1, which
+    make_community() hardcodes Community.instance_id to), independently of
+    the host the community's own AP identity is published on
+    (`_seed_remote_removable_feed_community`'s `instance_domain` parameter) --
+    otherwise `community_to_remove.instance.domain` would read back
+    whatever `host` was, not 'ovo.st'.
+    """
+    instance, community, feed = _seed_remote_removable_feed_community(
+        host='peer.example', name='ovostjoincomm', instance_domain='ovo.st')
+    assert community.instance.domain == 'ovo.st'
+
+    owner = make_user(instance, 'feedowner', local=True)
+    feed.user_id = owner.id
+    db.session.commit()
+    make_feed_member(owner, feed)
+
+    member, cm = _make_would_proceed_feed_member('ovostjoinmember', instance, feed, community)
+    join_request = make_community_join_request(member, community, joined_via_feed=True)
+    # Captured now, before dispatch(): dispatch() deletes this row on its own
+    # session and commits, which expires every attribute on OUR session's
+    # copy of `join_request` (Flask-SQLAlchemy's default expire_on_commit) --
+    # reading `.uuid` off it afterward would try to reload a row that no
+    # longer exists and raise ObjectDeletedError.
+    expected_join_request_uuid = join_request.uuid
+
+    sends = record_sends(monkeypatch)
+
+    activity = _remove_activity_for(feed, community)
+    dispatch(activity)
+
+    expected_follow_id = f"{app.config['SERVER_URL']}/activities/follow/{expected_join_request_uuid}"
+    assert len(sends) == 1
+    _uri, body, _key_id = sends[0]
+    assert body['object']['id'] == expected_follow_id
+
+
+def test_remove_ovo_st_keeps_the_generated_follow_id_when_no_join_request_exists(
+        app, db_session, monkeypatch):
+    """routes.py's current :1505-1509, the other half: 'ovo.st' with NO
+    CommunityJoinRequest row for this user/community pair -- the generated
+    `follow_id` (routes.py's current :1504, `gibberish(15)`) is kept.
+    `gibberish` is patched at its `activitypub_routes` binding site (the
+    module imports it by name, `from app.utils import gibberish, ...`) to a
+    fixed value so the generated id is a known, assertable string rather
+    than an unpredictable random one.
+    """
+    instance, community, feed = _seed_remote_removable_feed_community(
+        host='peer.example', name='ovostnojoincomm', instance_domain='ovo.st')
+    assert community.instance.domain == 'ovo.st'
+
+    owner = make_user(instance, 'feedowner', local=True)
+    feed.user_id = owner.id
+    db.session.commit()
+    make_feed_member(owner, feed)
+
+    member, cm = _make_would_proceed_feed_member('ovostnojoinmember', instance, feed, community)
+    assert CommunityJoinRequest.query.filter_by(
+        user_id=member.id, community_id=community.id).count() == 0
+
+    monkeypatch.setattr(activitypub_routes, 'gibberish', lambda length=10: 'fixedgibberish')
+
+    sends = record_sends(monkeypatch)
+
+    activity = _remove_activity_for(feed, community)
+    dispatch(activity)
+
+    expected_follow_id = f"{app.config['SERVER_URL']}/activities/follow/fixedgibberish"
+    assert len(sends) == 1
+    _uri, body, _key_id = sends[0]
+    assert body['object']['id'] == expected_follow_id
