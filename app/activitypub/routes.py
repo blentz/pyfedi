@@ -1481,9 +1481,10 @@ def process_inbox_request(request_json, store_ap_json):
                         if community_to_remove and isinstance(community_to_remove, Community):
                             feed_item = session.query(FeedItem).filter_by(feed_id=feed.id,
                                                                  community_id=community_to_remove.id).first()
-                            session.delete(feed_item)
-                            feed.num_communities -= 1
-                            session.commit()
+                            if feed_item:
+                                session.delete(feed_item)
+                                feed.num_communities -= 1
+                                session.commit()
                             # also auto-unsubscribe any feedmembers from the community
                             # who have feed_auto_leave enabled
                             feed_members = session.query(FeedMember).filter_by(feed_id=feed.id).all()
@@ -1495,7 +1496,7 @@ def process_inbox_request(request_json, store_ap_json):
                                     subscription = community_membership(fm_user, community_to_remove)
                                     cm = session.query(CommunityMember).filter_by(user_id=fm_user.id,
                                                                          community_id=community_to_remove.id).first()
-                                    if subscription != SUBSCRIPTION_OWNER and cm.joined_via_feed:
+                                    if subscription != SUBSCRIPTION_OWNER and cm and cm.joined_via_feed:
                                         proceed = True
                                         # Undo the Follow
                                         if not community_to_remove.is_local():  # this is a remote community, so activitypub is needed
