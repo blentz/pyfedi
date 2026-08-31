@@ -67,23 +67,36 @@ def test_an_add_whose_community_cannot_be_resolved_does_not_touch_feed_members(
     AttributeError once the feed has at least one local, auto-follow member.
 
     Asserts the corrected behaviour: no FeedItem is created, do_subscribe is
-    never called, and no exception escapes.
+    never called, and no exception escapes. LOG_ACTIVITYPUB_TO_DB is turned
+    on so the ActivityPubLog assertion is load-bearing (it defaults False,
+    under which log_incoming_ap writes nothing regardless of the fix,
+    making the same assertion vacuous) -- this branch of the Add arm calls
+    no log_incoming_ap on any path, a registered finding this pins.
     """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, feed, member = _seed_feed_with_local_auto_follow_member()
     assert member.is_local() and member.feed_auto_follow
 
-    def _resolver(actor, create_if_not_found=True, community_only=False, feed_only=False):
-        # The preamble's own community_only/feed_only probes (routes.py:862,
-        # :864) must find THIS feed via the feed_only lookup so `feed` is set
-        # and the Add/feed branch is reached at all. The Add arm's later
-        # re-lookup for community_to_add (also community_only=True, but
-        # feed_only=False) must come back empty -- the "cannot be resolved"
-        # case this test is about.
-        if feed_only:
-            return feed
-        return None
+    # Wrap, don't replace: only the Add arm's own re-lookup of the community
+    # named in the Add (community_only=True, create_if_not_found defaulting
+    # True) needs interception -- that is the one call that would otherwise
+    # risk a real outbound fetch for an id this test deliberately makes
+    # unresolvable. Both of the preamble's own probes (routes.py:862's
+    # community_only=True/create_if_not_found=False miss, and :864's
+    # feed_only=True/create_if_not_found=False hit) fall through to the real
+    # find_actor_or_create_cached, so the preamble's feed lookup genuinely
+    # resolves the seeded Feed row from the database rather than being
+    # handed it by the double.
+    real_find_actor_or_create_cached = activitypub_routes.find_actor_or_create_cached
 
-    monkeypatch.setattr(activitypub_routes, 'find_actor_or_create_cached', _resolver)
+    def _find(actor, create_if_not_found=True, community_only=False, feed_only=False):
+        if create_if_not_found:  # the Add arm's re-lookup of an unresolvable id
+            return None
+        return real_find_actor_or_create_cached(
+            actor, create_if_not_found=create_if_not_found,
+            community_only=community_only, feed_only=feed_only)
+
+    monkeypatch.setattr(activitypub_routes, 'find_actor_or_create_cached', _find)
 
     do_subscribe_calls = []
     monkeypatch.setattr(
