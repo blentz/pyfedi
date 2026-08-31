@@ -1674,7 +1674,7 @@ working example.
 (`tests/factories.py:190-195`) and `make_feed_member(user, feed,
 is_owner=False)` (`tests/factories.py:198-208`). `FeedMember.is_owner` and
 `.is_banned` both default to **False** on the model (`app/models.py:4034-
-4035`), which is what `Feed.subscribed()` (`app/models.py:4176-4183`) reads
+4035`), which is what `Feed.subscribed()` (`app/models.py:4176-4185`) reads
 to return `SUBSCRIPTION_MEMBER` rather than `OWNER` or `BANNED`.
 
 **10. `record_moderation(monkeypatch, *names)`**, defined in
@@ -1683,7 +1683,7 @@ two 5c files. It doubles moderation delegates at their **routes-module
 binding site** and returns `{name: [(args, kwargs), ...]}`. It cannot reach
 one delegate this way: `do_subscribe` is imported *inline inside the feed-
 member loop* in the `Add` arm (`routes.py:1421`, inside the `for fm in
-feed_members:` loop starting at `:1417`), so it is not an attribute of the
+feed_members:` loop starting at `:1415`), so it is not an attribute of the
 routes module at all and must be patched at `app.community.routes.do_subscribe`
 instead.
 
@@ -1692,12 +1692,33 @@ instead.
 `core_activity['object']` — `find_liked_object(ap_id)` at `routes.py:1310`
 for Delete, `Post.get_by_ap_id`/`PostReply.get_by_ap_id` against
 `core_activity['object']` for Lock. `Add` (`routes.py:1400`), `Remove`
-(`routes.py:1473`) and `Block` (`routes.py:1595`) instead take
-`community`/`feed`/`user` from the **preamble** (`routes.py:861-870`), which
-resolves the activity's *actor* as community, then feed, then user, in that
-order. So a test picks the branch by choosing the activity's actor, not its
-object — this is not obvious from reading any single arm and cost time to
-establish.
+(`routes.py:1473`) and `Block` (`routes.py:1595`) are split across two
+paths, and which one runs depends on whether the activity arrived
+Announced:
+
+- **Announced path.** When the outer activity is `Announce`/`Accept`/
+  `Reject`-typed, the **preamble** (`routes.py:861-870`) resolves the
+  activity's *actor* as community, then feed, then user, in that order,
+  before the inner `core_activity` is dispatched. `Add`/`Remove`/`Block`
+  then read those already-resolved `community`/`feed`/`user` locals, so a
+  test picks the branch by choosing the activity's actor.
+- **Direct (non-Announced) path.** `Add` and `Remove` each fall back to
+  `if not announced and not feed: community = find_community(core_activity)`
+  (`routes.py:1403-1404` for Add, `:1476-1477` for Remove) — `find_community`
+  (`app/activitypub/util.py:4544`) scans the activity's own
+  `audience`/`cc`/`to`/`target`/`inReplyTo` fields, not anything the
+  preamble resolved. `Block`'s community-ban branch falls back the same way:
+  `community = community if community else find_actor_or_create_cached(
+  target, create_if_not_found=False, community_only=True)`
+  (`routes.py:1654`), resolved from `core_activity['target']`. So a
+  direct-delivery test instead picks its branch by what the activity itself
+  carries — `tests/test_inbox_dispatch_add_remove.py`'s
+  `test_add_with_neither_community_nor_feed_resolvable_is_refused` and
+  `test_remove_with_neither_community_nor_feed_resolvable_is_refused` are
+  built this way, with no `Announce` wrapper, and their docstrings say so.
+
+Neither path is obvious from reading a single arm in isolation, and getting
+the two conflated cost time to untangle.
 
 **12. Wrap resolvers rather than replacing them.** When a test needs
 `find_actor_or_create_cached` to fail for one specific call, wrap the real
