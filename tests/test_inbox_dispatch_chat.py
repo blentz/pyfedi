@@ -155,6 +155,76 @@ def seed_chat_pair(host='peer.example', accept=3, trusted=False):
     return instance, sender, recipient
 
 
+@pytest.mark.parametrize('accept', [None, 0])
+def test_a_recipient_with_pms_off_refuses(app, db_session, monkeypatch, accept):
+    """`accept_private_messages is None or == 0`. Both values are seeded
+    explicitly; neither is the column default of 3, so nothing here rests on a
+    default. Parametrised because the guard is one condition with two accepted
+    spellings of "off".
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair(accept=accept)
+    sender.created = utcnow() - timedelta(days=2)
+    db.session.commit()
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id,
+                           content='hello', id='https://peer.example/pm/1'))
+
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Recipient has turned off PMs'
+    assert db_session.query(ChatMessage).count() == 0
+
+
+def test_a_recipient_accepting_only_local_pms_refuses_a_remote_sender(app, db_session, monkeypatch):
+    """`accept_private_messages == 1`. The sender is remote, which is the only
+    case that reaches process_chat at all from a federated activity.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair(accept=1)
+    sender.created = utcnow() - timedelta(days=2)
+    db.session.commit()
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id,
+                           content='hello', id='https://peer.example/pm/1'))
+
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Recipient only accepts local PMs'
+
+
+def test_a_trusted_instances_recipient_refuses_an_untrusted_sender(app, db_session, monkeypatch):
+    """`accept_private_messages == 2 and not sender.instance.trusted` — the
+    second conjunct is False here, so the refusal fires.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair(accept=2, trusted=False)
+    sender.created = utcnow() - timedelta(days=2)
+    db.session.commit()
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id,
+                           content='hello', id='https://peer.example/pm/1'))
+
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Sender from untrusted instance'
+
+
+def test_a_trusted_instances_recipient_accepts_a_trusted_sender(app, db_session, monkeypatch):
+    """The other side of that conjunct: `Instance.trusted` seeded True (its
+    column default is False, so the True is this test's own choice). Paired with
+    the test above so the conjunct dies in both directions.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair(accept=2, trusted=True)
+    sender.created = utcnow() - timedelta(days=2)
+    db.session.commit()
+    record_moderation(monkeypatch, 'publish_sse_event')
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id,
+                           content='hello', id='https://peer.example/pm/1'))
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
 def test_a_string_recipient_is_accepted_as_a_sole_jsonld_element(app, db_session, monkeypatch):
     """`object['to']` as a bare string. JSON-LD lets a single-element array be
     written as the value alone, which is why the function accepts both shapes.
