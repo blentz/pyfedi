@@ -2,9 +2,12 @@
 from datetime import timedelta
 
 from app import db
-from app.models import ActivityPubLog, CommunityJoinRequest, CommunityMember, utcnow
+from app.models import (ActivityPubLog, CommunityJoinRequest, CommunityMember,
+                        FeedJoinRequest, FeedMember, UserFollower, utcnow)
+from app.activitypub import routes as activitypub_routes
 from tests.factories import (inbox_activity, make_community, make_community_join_request,
-                             make_community_member, make_instance, make_user,
+                             make_community_member, make_feed, make_feed_join_request,
+                             make_feed_member, make_follow, make_instance, make_user,
                              seed_community_owner)
 from tests.test_inbox_dispatch_preamble import dispatch
 
@@ -106,3 +109,114 @@ def test_undo_follow_of_a_community_with_no_join_request_still_removes_membershi
 
     log = ActivityPubLog.query.one()
     assert log.result == 'success'
+
+
+def test_undo_follow_of_a_feed_removes_membership_and_join_request(app, db_session, monkeypatch):
+    """The feed branch mirrors the community branch but stamps NO timestamps --
+    asserted explicitly below, because the omission is the interesting
+    difference between the two branches.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    follower = make_user(instance, 'follower')
+    feed = make_feed(instance, 'news')
+    make_feed_member(follower, feed)
+    make_feed_join_request(follower, feed)
+    feed.subscriptions_count = 5
+    stale = utcnow() - timedelta(days=3)
+    follower.last_seen = stale
+    db.session.commit()
+    feed_id, follower_id = feed.id, follower.id
+
+    dispatch(undo_follow_activity(follower, feed.ap_profile_id))
+
+    db.session.expire_all()
+    assert db.session.query(FeedMember).filter_by(user_id=follower_id, feed_id=feed_id).first() is None
+    assert db.session.query(FeedJoinRequest).filter_by(user_id=follower_id, feed_id=feed_id).first() is None
+    assert db.session.get(type(feed), feed_id).subscriptions_count == 4
+    assert db.session.get(type(follower), follower_id).last_seen == stale  # NOT stamped
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_undo_follow_of_a_local_user_deletes_an_accepted_follower(app, db_session, monkeypatch):
+    """The user branch. `make_follow(local_user, remote_user, is_accepted=True)`
+    matches the filter the branch applies.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    remote = make_user(instance, 'remote')
+    local = make_user(None, 'local', local=True)
+    local.ap_profile_id = f"{app.config['SERVER_URL']}/u/local".lower()
+    db.session.commit()
+    make_follow(local, remote, is_accepted=True)
+    local_id, remote_id = local.id, remote.id
+
+    dispatch(undo_follow_activity(remote, local.ap_profile_id))
+
+    db.session.expire_all()
+    assert db.session.query(UserFollower).filter_by(
+        local_user_id=local_id, remote_user_id=remote_id).first() is None
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_undo_follow_of_a_user_with_a_pending_follow_logs_nothing(app, db_session, monkeypatch):
+    """`is_accepted=True` is part of the filter, so a PENDING follow does not
+    match and the branch returns having logged NOTHING -- there is no
+    log_incoming_ap call outside the `if follower:` block. Asserted with
+    LOG_ACTIVITYPUB_TO_DB explicitly True, so the zero is a real silence and
+    not an artifact of logging being off.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    remote = make_user(instance, 'remote')
+    local = make_user(None, 'local', local=True)
+    local.ap_profile_id = f"{app.config['SERVER_URL']}/u/local".lower()
+    db.session.commit()
+    make_follow(local, remote, is_accepted=False)
+    local_id, remote_id = local.id, remote.id
+
+    dispatch(undo_follow_activity(remote, local.ap_profile_id))
+
+    db.session.expire_all()
+    assert db.session.query(UserFollower).filter_by(
+        local_user_id=local_id, remote_user_id=remote_id).first() is not None  # survives
+    assert ActivityPubLog.query.count() == 0
+
+
+def test_undo_follow_of_an_unresolvable_target_logs_failure(app, db_session, monkeypatch):
+    """`find_actor_or_create_cached` is doubled to return None so the arm
+    reaches `if not target:`. Doubling is necessary rather than convenient: an
+    undoubled lookup of an unknown URL attempts a real fetch, which
+    block_outbound_http turns into a respx error -- an INFRASTRUCTURE failure
+    that would look like a behavioural one.
+
+    The double is scoped to the unresolvable target URL only, and delegates to
+    the real function for every other call. process_inbox_request's own actor
+    resolution (routes.py:871, resolving the OUTER activity's signed actor --
+    `follower` here) calls this same module-level function before the Undo/
+    Follow arm is ever reached; a blanket `lambda *a, **k: None` double breaks
+    that earlier call too, so it never reaches the branch under test and
+    instead logs 'Actor was not a user or a community' from routes.py:891.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    follower = make_user(instance, 'follower')
+    target_ap_id = 'https://peer.example/c/gone'
+    real_find_actor = activitypub_routes.find_actor_or_create_cached
+
+    def fake_find_actor(actor, *args, **kwargs):
+        if actor == target_ap_id:
+            return None
+        return real_find_actor(actor, *args, **kwargs)
+
+    monkeypatch.setattr(activitypub_routes, 'find_actor_or_create_cached', fake_find_actor)
+
+    dispatch(undo_follow_activity(follower, target_ap_id))
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Unfound target'
