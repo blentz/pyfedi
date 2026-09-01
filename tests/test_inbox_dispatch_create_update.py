@@ -1,9 +1,11 @@
 """tests/test_inbox_dispatch_create_update.py"""
+from datetime import timedelta
+
 import pytest
 
 from app import db
 from app.activitypub import routes as activitypub_routes
-from app.models import ActivityPubLog
+from app.models import ActivityPubLog, utcnow
 from tests.factories import (inbox_activity, make_community, make_instance, make_poll,
                              make_poll_choice, make_post, make_user, seed_community_owner)
 from tests.test_inbox_dispatch_lock_delete import record_moderation
@@ -177,3 +179,103 @@ def test_breaking_any_one_conjunct_leaves_the_poll_path(app, db_session, monkeyp
     from app.models import PollChoiceVote
     assert db_session.query(PollChoiceVote).count() == 0, description
     assert len(calls['process_new_content']) == 1, description
+
+
+def test_a_poll_vote_for_an_unknown_post_is_dropped_silently(app, db_session, monkeypatch):
+    """`post_being_replied_to` is None, so the block falls to its unconditional
+    `return` having logged NOTHING -- asserted with LOG_ACTIVITYPUB_TO_DB
+    explicitly True so the zero is real silence, not logging switched off.
+
+    It also does NOT fall through to content handling: `process_new_content` is
+    doubled and must not be called. That combination -- consumed, unlogged,
+    unprocessed -- is the finding this test exists to pin.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, voter, post, poll, choice = seed_poll_post()
+    calls = record_moderation(monkeypatch, 'process_new_content')
+
+    dispatch(create_activity(voter, poll_note('https://peer.example/post/404', 'yes')))
+
+    assert ActivityPubLog.query.count() == 0
+    assert calls['process_new_content'] == []
+
+
+def test_a_poll_vote_on_a_post_with_no_poll_is_dropped_silently(app, db_session, monkeypatch):
+    """`poll_data` is None: the post exists but carries no Poll row. Same
+    silence as above, reached by a different conjunct of `if poll_data and
+    choice:` -- which is why this test and the next are separate.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = seed_community_owner('peer.example')
+    community = make_community(host='peer.example')
+    author = make_user(instance, 'author')
+    voter = make_user(instance, 'voter')
+    post = make_post(community, author, 'https://peer.example/post/1')
+    db.session.commit()
+
+    dispatch(create_activity(voter, poll_note(post.ap_id, 'yes')))
+
+    assert ActivityPubLog.query.count() == 0
+
+
+def test_a_poll_vote_for_an_unknown_choice_is_dropped_silently(app, db_session, monkeypatch):
+    """`choice` is None: the poll exists but has no option with this `name`.
+    The other conjunct of `if poll_data and choice:`.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, voter, post, poll, choice = seed_poll_post(choice_text='yes')
+
+    dispatch(create_activity(voter, poll_note(post.ap_id, 'maybe')))
+
+    from app.models import PollChoiceVote
+    assert db_session.query(PollChoiceVote).count() == 0
+    assert ActivityPubLog.query.count() == 0
+
+
+def test_a_poll_vote_on_a_local_authors_post_stamps_it_and_schedules_an_edit(app, db_session, monkeypatch):
+    """`post_being_replied_to.author.is_local()` -- the LOCAL branch. `edited_at`
+    is seeded to a stale value first, so the stamp is evidence of the write
+    rather than a default sitting there. `task_selector` is doubled and its
+    kwargs asserted, because the task key and post id are a contract with the
+    background worker.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, voter, post, poll, choice = seed_poll_post(local_author=True)
+    stale = utcnow() - timedelta(days=3)
+    post.edited_at = stale
+    db.session.commit()
+    post_id = post.id
+
+    calls = record_moderation(monkeypatch, 'task_selector')
+
+    dispatch(create_activity(voter, poll_note(post.ap_id, 'yes')))
+
+    db.session.expire_all()
+    assert db.session.get(type(post), post_id).edited_at > stale
+    assert len(calls['task_selector']) == 1
+    args, kwargs = calls['task_selector'][0]
+    assert args[0] == 'edit_post'
+    assert kwargs['post_id'] == post_id
+
+
+def test_a_poll_vote_on_a_remote_authors_post_neither_stamps_nor_schedules(app, db_session, monkeypatch):
+    """The other side of `is_local()`. Paired with the test above so the guard
+    cannot be dropped in either direction. `edited_at` is seeded stale and must
+    stay exactly stale.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, voter, post, poll, choice = seed_poll_post(local_author=False)
+    stale = utcnow() - timedelta(days=3)
+    post.edited_at = stale
+    db.session.commit()
+    post_id = post.id
+
+    calls = record_moderation(monkeypatch, 'task_selector')
+
+    dispatch(create_activity(voter, poll_note(post.ap_id, 'yes')))
+
+    db.session.expire_all()
+    assert db.session.get(type(post), post_id).edited_at == stale
+    assert calls['task_selector'] == []
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
