@@ -1,9 +1,11 @@
 """tests/test_inbox_dispatch_create_update.py"""
+import pytest
+
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.models import ActivityPubLog
-from tests.factories import (inbox_activity, make_community, make_instance, make_post,
-                             make_user, seed_community_owner)
+from tests.factories import (inbox_activity, make_community, make_instance, make_poll,
+                             make_poll_choice, make_post, make_user, seed_community_owner)
 from tests.test_inbox_dispatch_lock_delete import record_moderation
 from tests.test_inbox_dispatch_preamble import dispatch
 
@@ -81,3 +83,97 @@ def test_a_chat_message_object_delegates_to_process_chat_and_returns(app, db_ses
     assert sa_inspect(args[0]).identity[0] == author.id
     assert args[2] is activity
     assert calls['process_new_content'] == []
+
+
+def seed_poll_post(host='peer.example', choice_text='yes', local_author=False):
+    """A post carrying a poll with one choice, plus the voter.
+
+    Returns (instance, voter, post, poll, choice). `local_author` controls
+    whether the POST's author is local, which is what the arm's
+    `post_being_replied_to.author.is_local()` branch keys off -- not the voter.
+    """
+    instance = seed_community_owner(host)
+    community = make_community(host=host)
+    if local_author:
+        author = make_user(None, 'localauthor', local=True)
+    else:
+        author = make_user(instance, 'author')
+    voter = make_user(instance, 'voter')
+    post = make_post(community, author, f'https://{host}/post/1')
+    poll = make_poll(post)
+    choice = make_poll_choice(post, choice_text)
+    db.session.commit()
+    return instance, voter, post, poll, choice
+
+
+def poll_note(post_ap_id, choice_text, **extra):
+    """The exact object shape the poll-vote guard selects: a Note carrying a
+    `name`, an `inReplyTo` and an `attributedTo`, and NO `published`.
+
+    `**extra` lets a test add or override one field to break exactly one
+    conjunct, which is how the five mutation kills below stay independent.
+    """
+    obj = {'type': 'Note', 'name': choice_text, 'inReplyTo': post_ap_id,
+           'attributedTo': 'https://peer.example/u/voter'}
+    obj.update(extra)
+    return obj
+
+
+def test_a_poll_shaped_note_is_selected_and_records_the_vote(app, db_session, monkeypatch):
+    """All five conjuncts true. The vote is asserted through PollChoiceVote
+    rather than through the delegate, because the arm calls
+    `poll_data.vote_for_choice(...)` directly rather than a doubled function.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, voter, post, poll, choice = seed_poll_post()
+    calls = record_moderation(monkeypatch, 'process_new_content')
+
+    dispatch(create_activity(voter, poll_note(post.ap_id, 'yes')))
+
+    from app.models import PollChoiceVote
+    db.session.expire_all()
+    vote = db_session.query(PollChoiceVote).filter_by(user_id=voter.id).one()
+    assert vote.choice_id == choice.id
+    assert calls['process_new_content'] == []   # selected the poll path, not content
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+@pytest.mark.parametrize('breaker,description', [
+    ({'type': 'Article'}, 'type is not Note'),
+    ({'name': None}, 'name absent'),
+    ({'inReplyTo': None}, 'inReplyTo absent'),
+    ({'attributedTo': None}, 'attributedTo absent'),
+    ({'published': '2026-01-01T00:00:00Z'}, 'published present'),
+])
+def test_breaking_any_one_conjunct_leaves_the_poll_path(app, db_session, monkeypatch, breaker, description):
+    """Each parametrisation breaks exactly ONE of the guard's five conjuncts and
+    asserts the activity no longer takes the poll path -- it reaches
+    `process_new_content` instead (a Note is in new_content_types).
+
+    A `None` value in `breaker` means "delete this key", since four of the five
+    conjuncts are membership tests rather than value tests.
+
+    This is what makes each conjunct independently load-bearing: five separate
+    parametrisations, five separate failures if any conjunct is dropped.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, voter, post, poll, choice = seed_poll_post()
+    obj = poll_note(post.ap_id, 'yes')
+    for key, value in breaker.items():
+        if value is None:
+            obj.pop(key)
+        else:
+            obj[key] = value
+
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: None)
+    monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
+    monkeypatch.setattr(activitypub_routes, 'process_chat', lambda *a, **k: False)
+    calls = record_moderation(monkeypatch, 'process_new_content')
+
+    dispatch(create_activity(voter, obj))
+
+    from app.models import PollChoiceVote
+    assert db_session.query(PollChoiceVote).count() == 0, description
+    assert len(calls['process_new_content']) == 1, description
