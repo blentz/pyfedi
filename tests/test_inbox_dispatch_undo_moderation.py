@@ -5,8 +5,8 @@ from app import db
 from app.activitypub import routes as activitypub_routes
 from app.models import ActivityPubLog, InstanceRole, User, utcnow
 from tests.factories import (inbox_activity, make_community, make_community_member,
-                             make_instance, make_post, make_post_reply, make_user,
-                             seed_community_owner)
+                             make_instance, make_post, make_post_reply, make_site,
+                             make_user, seed_community_owner)
 from tests.test_inbox_dispatch_lock_delete import record_moderation
 from tests.test_inbox_dispatch_preamble import dispatch
 
@@ -183,6 +183,80 @@ def test_unlocking_without_permission_logs_failure(app, db_session, monkeypatch)
     logs = ActivityPubLog.query.order_by(ActivityPubLog.id).all()
     assert logs[0].result == 'failure'
     assert logs[0].exception_message == 'Unlock: Does not have permission'
+
+
+def test_unlocking_a_comment_without_permission_logs_failure(app, db_session, monkeypatch):
+    """The `post_reply` branch's OWN permission-denied log (routes.py:1814),
+    a distinct statement from the post branch's identical string at :1801.
+    `test_unlocking_without_permission_logs_failure` above only ever drives a
+    POST through this guard -- this is its untested twin on the reply side.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, mod, community, author, post = _seed_lockable_post()
+    reply = make_post_reply(post, author)
+    reply.ap_id = 'https://peer.example/comment/1'
+    reply.replies_enabled = False
+    db.session.commit()
+    reply_id = reply.id
+    outsider = make_user(instance, 'outsider')
+
+    dispatch(undo_lock_activity(outsider, reply.ap_id))
+
+    db.session.expire_all()
+    assert db.session.get(type(reply), reply_id).replies_enabled is False  # untouched
+    logs = ActivityPubLog.query.order_by(ActivityPubLog.id).all()
+    assert logs[0].result == 'failure'
+    assert logs[0].exception_message == 'Unlock: Does not have permission'
+
+
+def test_undo_lock_of_a_url_shaped_like_neither_post_nor_comment_falls_back_to_a_post(
+        app, db_session, monkeypatch):
+    """The `else:` fallback (routes.py:1787-1790), taken when `target_ap_id`
+    contains neither '/post/' nor '/comment/' -- a Mastodon-style status URL
+    is the real-world shape that lands here. This only became reachable when
+    Task 9 made the '/post/' and '/comment/' branches test the target string
+    itself rather than the surrounding dict; before that fix every id fell
+    into this same `else`, but the two sibling branches this test
+    distinguishes from didn't exist as live alternatives yet. This half of
+    the fallback (`Post.get_by_ap_id` hits) is the one the '/post/' branch's
+    own NodeBB regression test does NOT exercise, since that test's whole
+    point is a `Post` lookup that MISSES.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, mod, community, author, post = _seed_lockable_post()
+    post.ap_id = 'https://peer.example/statuses/1'  # neither '/post/' nor '/comment/'
+    db.session.commit()
+    post_id = post.id
+
+    dispatch(undo_lock_activity(mod, post.ap_id))
+
+    db.session.expire_all()
+    assert db.session.get(type(post), post_id).comments_enabled is True
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_undo_lock_of_a_url_shaped_like_neither_post_nor_comment_falls_back_to_a_reply(
+        app, db_session, monkeypatch):
+    """The `else:` fallback's other half: when `Post.get_by_ap_id` misses,
+    `PostReply.get_by_ap_id` is tried next -- the same two-step shape the
+    '/post/' branch's own NodeBB fallback uses (see the regression test
+    above), here on a target that matches neither hint string at all.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, mod, community, author, post = _seed_lockable_post()
+    reply = make_post_reply(post, author)
+    reply.ap_id = 'https://peer.example/statuses/2'  # neither '/post/' nor '/comment/'
+    reply.replies_enabled = False
+    db.session.commit()
+    reply_id = reply.id
+
+    dispatch(undo_lock_activity(mod, reply.ap_id))
+
+    db.session.expire_all()
+    assert db.session.get(type(reply), reply_id).replies_enabled is True
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
 
 
 # --- Task 10: the Undo/Block arm (routes.py:1819-1869) -- both unban paths ---
@@ -423,3 +497,49 @@ def test_community_unban_of_an_unfound_community_is_ignored(app, db_session, mon
     log = ActivityPubLog.query.one()
     assert log.result == 'ignored'
     assert log.exception_message == 'Blocked or unfound community'
+
+
+def test_undo_block_when_announced_empties_both_cc_lists(app, db_session, monkeypatch):
+    """The two statements under `if announced and store_ap_json:`
+    (routes.py:1820-1822), which blank `core_activity['cc']` (the outer
+    Undo's own cc) and `core_activity['object']['cc']` (the inner Block's
+    cc). `announced` is only ever True when the activity arrived wrapped in
+    an Announce (routes.py:928/931), so this needs an Undo/Block built that
+    way. Per test_inbox_dispatch_announce.py's `_seed_announcing_community`
+    and test_inbox_dispatch_block.py's
+    `test_community_ban_when_announced_short_circuits_target_resolution`,
+    the OUTER Announce actor must resolve as a Community, not a User --
+    make_community's hardcoded owner (instance_id=1/user_id=1) requires
+    seed_community_owner() and make_site() to run first.
+
+    `core_activity` is `request_json['object']`, the SAME dict this test
+    built as `inner_undo` -- dispatch() mutates it in place, so reading the
+    two `cc` lists back off `inner_undo` afterward, rather than re-fetching
+    anything, is what proves the write happened.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    make_site()
+    instance = seed_community_owner('announcer.example')
+    community = make_community(host='announcer.example')
+    community.ap_fetched_at = utcnow()
+    unblocker = make_user(instance, 'admin')
+    unblocker.ap_fetched_at = utcnow()
+    db.session.add(InstanceRole(instance_id=instance.id, user_id=unblocker.id, role='admin'))
+    victim = make_user(instance, 'victim')
+    victim.banned = True
+    victim.banned_until = utcnow()
+    db.session.commit()
+
+    inner_undo = undo_block_activity(unblocker, victim.ap_profile_id,
+                                     f'https://{instance.domain}')
+    inner_undo['cc'] = ['https://peer.example/a/very/long/list/of/instances']
+    inner_undo['object']['cc'] = ['https://peer.example/another/long/list']
+
+    activity = inbox_activity(community, activity_type='Announce', object=inner_undo)
+
+    dispatch(activity)
+
+    assert inner_undo['cc'] == []
+    assert inner_undo['object']['cc'] == []
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
