@@ -20,9 +20,9 @@ the real lookup rather than a stand-in for it.
 """
 from app import db
 from app.activitypub import routes as activitypub_routes
-from app.models import ActivityPubLog, utcnow
-from tests.factories import (inbox_activity, make_community, make_post, make_user,
-                             seed_community_owner)
+from app.models import ActivityPubLog, ChatMessage, utcnow
+from tests.factories import (inbox_activity, make_chat_message, make_community,
+                             make_instance, make_post, make_user, seed_community_owner)
 from tests.test_inbox_dispatch_lock_delete import record_moderation
 from tests.test_inbox_dispatch_preamble import dispatch
 
@@ -183,3 +183,70 @@ def test_undo_delete_without_a_summary_passes_an_empty_reason(app, db_session, m
 
     args, kwargs = calls['restore_post_or_comment'][0]
     assert args[4] == ''
+
+
+def test_undo_delete_restores_a_deleted_private_message(app, db_session, monkeypatch):
+    """The `else:` branch reached when `find_liked_object` finds no post or
+    comment for the ap_id at all -- it falls through to check ChatMessage.
+    `deleted` is seeded True so flipping it to False is a real observation,
+    not proof of the column's declared default.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    sender = make_user(instance, 'sender')
+    recipient = make_user(None, 'recipient', local=True)
+    message = make_chat_message(sender, recipient, 'https://peer.example/pm/1', deleted=True)
+    message_id = message.id
+
+    dispatch(undo_activity(sender, 'Delete', 'https://peer.example/pm/1'))
+
+    db.session.expire_all()
+    assert db.session.get(ChatMessage, message_id).deleted is False
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+    assert 'https://peer.example/pm/1' in log.exception_message
+
+
+def test_undo_delete_does_not_restore_a_private_message_sent_by_someone_else(app, db_session, monkeypatch):
+    """`session.query(ChatMessage).filter_by(ap_id=ap_id, sender_id=restorer.id)`
+    -- `sender_id` is the half that matters here. An interloper undoing a
+    Delete for the same ap_id must not find (and so must not restore) a
+    message somebody else sent: the message stays deleted, and because
+    `updated_message` is falsy the code never reaches its `log_incoming_ap`
+    call at all, so nothing is logged on this path -- not even a failure.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    sender = make_user(instance, 'sender')
+    interloper = make_user(instance, 'interloper')
+    recipient = make_user(None, 'recipient', local=True)
+    message = make_chat_message(sender, recipient, 'https://peer.example/pm/1', deleted=True)
+    message_id = message.id
+
+    dispatch(undo_activity(interloper, 'Delete', 'https://peer.example/pm/1'))
+
+    db.session.expire_all()
+    assert db.session.get(ChatMessage, message_id).deleted is True  # untouched
+    assert ActivityPubLog.query.count() == 0
+
+
+def test_undo_delete_reads_the_kbin_dict_object_shape(app, db_session, monkeypatch):
+    """`ap_id` comes from either a bare string (lemmy) or a dict's 'id' key
+    (kbin) -- `isinstance(core_activity['object']['object'], str)` picks
+    which. Every other test in this file uses the lemmy string shape via
+    `post.ap_id`; this one sends a kbin-shaped dict instead, so the `else`
+    branch (`ap_id = core_activity['object']['object']['id']`) is exercised
+    too.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    sender = make_user(instance, 'sender')
+    recipient = make_user(None, 'recipient', local=True)
+    message = make_chat_message(sender, recipient, 'https://peer.example/pm/1', deleted=True)
+    message_id = message.id
+
+    dispatch(undo_activity(sender, 'Delete', {'id': 'https://peer.example/pm/1',
+                                              'type': 'Note'}))
+
+    db.session.expire_all()
+    assert db.session.get(ChatMessage, message_id).deleted is False
