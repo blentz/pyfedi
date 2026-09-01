@@ -1777,6 +1777,54 @@ cleared, failures from half-truncated tables that look exactly like real
 regressions. Recovery is `./run_tests.sh --down` plus a rebuild, which
 replays ~269 migrations. This cost 5c a long detour.
 
+**14. `inbox_activity`'s `**fields` is applied last.** `inbox_activity`
+(`tests/factories.py:912-929`) builds its default dict — `id`, `type`,
+`actor`, `object` (a bare string URI) — and then calls
+`activity.update(fields)`, so any keyword a caller passes, `object=` very
+much included, overwrites that default rather than being ignored or
+colliding with it. A test that needs a dict-shaped or otherwise non-default
+`object` passes `object=...` and relies on this ordering (sub-project 5d,
+throughout).
+
+**15. `Undo` dispatches on `core_activity['object']['type']`.** Every
+`Undo` sub-type (`Follow`, `Delete`, `Like`/`Dislike`, `Announce`,
+`ChooseAnswer`, `Lock`, `Block`) is selected by reading
+`core_activity['object']['type']` (`app/activitypub/routes.py:1676`
+onward), so a **string** inner `object` raises `TypeError` (subscripting a
+string by `'type'`) before any sub-type is ever chosen — the arm cannot
+reach a sub-type's own body with a string `object` at all. This is why
+`Undo`/`ChooseAnswer`'s own `isinstance(core_activity['object'], str)`
+branch was unreachable and removed as Fix 4 (sub-project 5d, D109 in
+`docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md`).
+
+**16. Compare doubled delegates' captured objects by identity, not `.id`.**
+When `record_moderation` (or an equivalent double) captures the arguments a
+dispatcher-internal call was made with, those arguments are real ORM
+objects loaded inside `process_inbox_request`'s own `get_task_session()`
+session — closed (`finally: session.close()`) before `dispatch()` returns
+to the test, and already expired by an intervening `session.commit()`
+before the double captured them. A plain `.id` access on one of them
+re-triggers a load against a closed session and raises
+`sqlalchemy.orm.exc.DetachedInstanceError`. Use
+`sqlalchemy.inspect(obj).identity[0]` instead — it reads the primary-key
+tuple SQLAlchemy already stored on the instance's state at load time,
+which survives both expiration and detachment. Established in sub-project
+5c (`tests/test_inbox_dispatch_lock_delete.py:266-274`) and hit again
+independently by two different tasks in sub-project 5d.
+
+**17. Scope a `find_actor_or_create_cached` double to one URL.** The
+preamble resolves the activity's own signed outer actor through
+`find_actor_or_create_cached` (`app/activitypub/routes.py:871`, or `:862`
+for `Announce`/`Accept`/`Reject`) before any arm — including `Undo`'s own
+sub-type dispatch — ever runs. An unconditional double that makes this
+function return `None` (or anything else) for every call therefore breaks
+that preamble lookup too, so the activity never reaches the arm under test
+at all; it short-circuits earlier with `'Actor was not a user or a
+community'`. Capture the real function first and delegate to it for every
+URL except the one the test wants unresolvable — sub-project 5d hit this
+independently in Tasks 3 and 10 (`tests/test_inbox_dispatch_undo_follow.py`,
+`tests/test_inbox_dispatch_undo_moderation.py`).
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
