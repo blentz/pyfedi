@@ -378,3 +378,66 @@ def test_a_remote_create_into_a_non_local_only_community_proceeds_to_content(app
 
     assert len(calls['process_new_content']) == 1
     assert ActivityPubLog.query.filter_by(exception_message='Remote Create in local_only community').count() == 0
+
+
+@pytest.mark.parametrize('object_type', ['Page', 'Article', 'Link', 'Question', 'Event'])
+def test_each_new_content_type_reaches_process_new_content(app, db_session, monkeypatch, object_type):
+    """Every member of `new_content_types` except 'Note', which is covered
+    separately because a bare Note without the poll fields also reaches here
+    (see the poll-guard tests) and parametrising it twice would obscure that.
+
+    `announced` is passed through to the delegate, so it is asserted: this
+    activity is not announced, so the fifth positional argument must be False.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = seed_community_owner('peer.example')
+    community = make_community(host='peer.example')
+    author = make_user(instance, 'author')
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: community)
+    monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
+    calls = record_moderation(monkeypatch, 'process_new_content')
+
+    dispatch(create_activity(author, {'type': object_type, 'id': 'https://peer.example/post/1'}))
+
+    assert len(calls['process_new_content']) == 1
+    args, kwargs = calls['process_new_content'][0]
+    assert args[4] is False        # announced
+
+
+def test_an_unacceptable_object_type_names_itself_in_the_failure(app, db_session, monkeypatch):
+    """The fallthrough. The type is concatenated into the message, so the
+    assertion pins the whole string rather than just the failure.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = seed_community_owner('peer.example')
+    community = make_community(host='peer.example')
+    author = make_user(instance, 'author')
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: community)
+    monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
+
+    dispatch(create_activity(author, {'type': 'Tombstone', 'id': 'https://peer.example/x/1'}))
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Unacceptable type (create): Tombstone'
+
+
+def test_a_create_of_a_group_is_unacceptable_because_the_group_branch_requires_update(app, db_session, monkeypatch):
+    """`elif object_type == 'Group' and core_activity['type'] == 'Update'` --
+    the second conjunct. A CREATE of a Group therefore falls through to the
+    unacceptable-type log rather than refreshing a community profile. This is
+    the test that kills that conjunct.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = seed_community_owner('peer.example')
+    community = make_community(host='peer.example')
+    author = make_user(instance, 'author')
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: community)
+    monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
+    calls = record_moderation(monkeypatch, 'refresh_community_profile')
+
+    dispatch(create_activity(author, {'type': 'Group', 'id': community.ap_profile_id}))
+
+    assert calls['refresh_community_profile'] == []
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Unacceptable type (create): Group'
