@@ -279,3 +279,79 @@ def test_a_poll_vote_on_a_remote_authors_post_neither_stamps_nor_schedules(app, 
     assert calls['task_selector'] == []
     log = ActivityPubLog.query.one()
     assert log.result == 'success'
+
+
+def test_an_unresolvable_community_falls_back_to_process_chat_and_returns(app, db_session, monkeypatch):
+    """`find_community` returns None, so `process_chat` is tried; a truthy
+    return means it handled the activity and the arm returns immediately --
+    proved here by `ensure_domains_match` never being reached.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    author = make_user(instance, 'author')
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: None)
+    monkeypatch.setattr(activitypub_routes, 'process_chat', lambda *a, **k: True)
+    calls = record_moderation(monkeypatch, 'ensure_domains_match')
+
+    dispatch(create_activity(author, {'type': 'Page', 'id': 'https://peer.example/post/1'}))
+
+    assert calls['ensure_domains_match'] == []
+
+
+def test_a_falsy_process_chat_continues_into_the_domain_check(app, db_session, monkeypatch):
+    """The other side: `process_chat` returns falsy, so the arm does NOT return
+    and reaches `ensure_domains_match`. Paired with the test above so the
+    `if process_chat(...)` guard cannot be dropped in either direction.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    author = make_user(instance, 'author')
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: None)
+    monkeypatch.setattr(activitypub_routes, 'process_chat', lambda *a, **k: False)
+    monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: False)
+
+    dispatch(create_activity(author, {'type': 'Page', 'id': 'https://peer.example/post/1'}))
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Domains do not match'
+
+
+def test_a_mismatched_domain_is_refused(app, db_session, monkeypatch):
+    """`ensure_domains_match` False -> FAILURE, and `process_new_content` is
+    never reached.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = seed_community_owner('peer.example')
+    community = make_community(host='peer.example')
+    author = make_user(instance, 'author')
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: community)
+    monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: False)
+    calls = record_moderation(monkeypatch, 'process_new_content')
+
+    dispatch(create_activity(author, {'type': 'Page', 'id': 'https://peer.example/post/1'}))
+
+    assert calls['process_new_content'] == []
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Domains do not match'
+
+
+def test_a_remote_create_into_a_local_only_community_is_refused(app, db_session, monkeypatch):
+    """`community.local_only` -- seeded explicitly True, since the column's
+    default is False and an assertion resting on that would prove nothing.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = seed_community_owner('peer.example')
+    community = make_community(host='peer.example')
+    community.local_only = True
+    db.session.commit()
+    author = make_user(instance, 'author')
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: community)
+    monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
+    calls = record_moderation(monkeypatch, 'process_new_content')
+
+    dispatch(create_activity(author, {'type': 'Page', 'id': 'https://peer.example/post/1'}))
+
+    assert calls['process_new_content'] == []
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Remote Create in local_only community'
