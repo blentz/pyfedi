@@ -18,13 +18,40 @@ Three outcomes on the content-found side:
 Post from the database by `ap_id`, which is what makes these tests exercise
 the real lookup rather than a stand-in for it.
 """
+import contextlib
+
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.models import ActivityPubLog, ChatMessage, utcnow
 from tests.factories import (inbox_activity, make_chat_message, make_community,
-                             make_instance, make_post, make_user, seed_community_owner)
+                             make_instance, make_post, make_post_reply, make_user,
+                             seed_community_owner)
 from tests.test_inbox_dispatch_lock_delete import record_moderation
 from tests.test_inbox_dispatch_preamble import dispatch
+
+
+def install_lock_only_redis(monkeypatch):
+    """Replace `app.redis_client` with a double whose only capability is
+    `.lock(...)` as a no-op context manager.
+
+    Undo/ChooseAnswer (routes.py:1876) wraps its write in `with
+    redis_client.lock(...)`, resolved via `from app import redis_client`
+    INSIDE process_inbox_request's body (routes.py:846) -- so patching the
+    single `app.redis_client` attribute is what takes effect, per
+    tests/conftest.py's redis_double docstring (~394-450). fakeredis in this
+    environment has no Lua scripting, which redis-py's real `Lock.release()`
+    needs (EVALSHA on `__exit__`), so `redis_double` itself cannot serve a
+    lock -- confirmed by tests/test_inbox_dispatch_votes.py's
+    `_RedisLockOnlyDouble` / `redis_lock_only_double`, whose shape this
+    copies. Do NOT change the redis_double fixture; the limitation is in
+    fakeredis, not in what it patches.
+    """
+
+    class LockOnlyRedis:
+        def lock(self, *args, **kwargs):
+            return contextlib.nullcontext()
+
+    monkeypatch.setattr('app.redis_client', LockOnlyRedis())
 
 
 def undo_activity(actor, inner_type, inner_object, **inner):
@@ -378,3 +405,72 @@ def test_undo_announce_of_an_unfound_post_is_ignored(app, db_session, monkeypatc
     log = ActivityPubLog.query.one()
     assert log.result == 'ignored'
     assert 'https://peer.example/post/404' in log.exception_message
+
+
+def test_undo_choose_answer_clears_the_answer_flag(app, db_session, monkeypatch):
+    """`answer` is seeded True so clearing it to False is a real write, not
+    proof of the column's declared default.
+
+    The arm wraps the write in `with redis_client.lock(...)`. This suite's
+    fakeredis instance cannot serve a redis-py lock (tests/conftest.py's
+    redis_double docstring, ~394-450), so `app.redis_client` is replaced with
+    `install_lock_only_redis`'s narrower double -- shaped after
+    tests/test_inbox_dispatch_votes.py's `_RedisLockOnlyDouble`, whose
+    `.lock(...)` is a genuine no-op context manager. Do NOT change the
+    redis_double fixture -- it patches the right attribute; the limitation is
+    in fakeredis.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    install_lock_only_redis(monkeypatch)
+    instance = seed_community_owner('peer.example')
+    author = make_user(instance, 'author')
+    community = make_community(host='peer.example')
+    post = make_post(community, author, 'https://peer.example/post/1')
+    reply = make_post_reply(post, author)
+    reply.ap_id = 'https://peer.example/comment/1'
+    reply.answer = True
+    db.session.commit()
+    reply_id = reply.id
+
+    dispatch(undo_activity(author, 'ChooseAnswer', 'https://peer.example/comment/1'))
+
+    db.session.expire_all()
+    assert db.session.get(type(reply), reply_id).answer is False
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_undo_choose_answer_for_an_unknown_reply_logs_nothing(app, db_session, monkeypatch):
+    """`if post_reply:` is false, so the arm returns having logged nothing --
+    asserted with LOG_ACTIVITYPUB_TO_DB explicitly True so the zero count is
+    a real observation about the guard, not an artifact of logging being off.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    install_lock_only_redis(monkeypatch)
+    instance = make_instance('peer.example')
+    author = make_user(instance, 'author')
+
+    dispatch(undo_activity(author, 'ChooseAnswer', 'https://peer.example/comment/404'))
+
+    assert ActivityPubLog.query.count() == 0
+
+
+def test_an_undo_of_an_unrecognised_type_falls_through_to_monitor(app, db_session, monkeypatch):
+    """The eighth path: an inner type matching none of the arm's sub-types
+    reaches its final `log_incoming_ap(..., APLOG_MONITOR, APLOG_PROCESSING,
+    ..., 'Unmatched activity')`. 'Move' is chosen deliberately -- it is a
+    real activity type this dispatcher handles at the TOP level (as a sibling
+    of 'Undo' in process_inbox_request's own if/elif chain), so this test
+    proves the Undo arm does not accidentally fall into the outer
+    dispatcher's handling for it; instead it logs its own generic
+    'Unmatched activity' message with a PROCESSING result.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    actor = make_user(instance, 'actor')
+
+    dispatch(undo_activity(actor, 'Move', 'https://peer.example/u/someone'))
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'processing'
+    assert log.exception_message == 'Unmatched activity'
