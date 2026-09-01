@@ -54,31 +54,52 @@ def test_a_successful_post_unlock_also_logs_a_contradictory_failure(app, db_sess
 
 
 def test_the_post_and_comment_url_branches_are_dead(app, db_session, monkeypatch):
-    """PINS FIX 2's defect. `'/post/' in core_activity['object']` tests the
-    DICT's keys, not the target string, so it can never match however the
-    object id is spelled. Proved by giving the inner object an id containing
-    '/comment/' while ALSO giving the dict a '/post/' key: if the test were
-    against the string the '/comment/' branch would run; if against the dict,
-    the '/post/' key would match. Neither happens -- the else fallback runs and
-    resolves the reply -- which is only explicable if the operand is the dict
-    and neither literal is among its keys.
+    """PINS FIX 2's defect. `'/post/' in core_activity['object']` and `elif
+    '/comment/' in core_activity['object']` test the DICT's keys, not the
+    target string, so neither branch can ever match however the target's id
+    is spelled -- every Undo/Lock falls to the `else` fallback, which tries
+    `Post.get_by_ap_id` first and only tries `PostReply.get_by_ap_id` if
+    that misses.
+
+    A decoy distinguishes this from a fix, since for a comment-shaped target
+    the fallback's failed Post lookup would otherwise be unobservable (it
+    would just miss and fall through to the same PostReply resolution a
+    correct `elif '/comment/' in target_ap_id` would reach directly). Here a
+    Post and a PostReply are seeded with the SAME comment-shaped ap_id: if
+    '/comment/' were tested against the STRING (the fix), the reply would be
+    selected directly and the decoy Post would never be looked at. Buggy as
+    observed here: the `else` fallback's `Post.get_by_ap_id` call runs
+    regardless of the target's shape, finds the decoy Post first, and locks
+    IT -- leaving the reply, the intended target, untouched. That is only
+    explicable if the membership test's operand is the dict (always False
+    for both branches, so the fallback always runs first), never the target
+    string.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, mod, community, author, post = _seed_lockable_post()
+    decoy_ap_id = 'https://peer.example/comment/1'
+    decoy = make_post(community, author, decoy_ap_id)
+    decoy.comments_enabled = False
     reply = make_post_reply(post, author)
-    reply.ap_id = 'https://peer.example/comment/1'
+    reply.ap_id = decoy_ap_id
     reply.replies_enabled = False
     db.session.commit()
 
     activity = inbox_activity(mod, activity_type='Undo',
-                              object={'type': 'Lock', 'object': reply.ap_id})
+                              object={'type': 'Lock', 'object': decoy_ap_id})
     assert '/post/' not in activity['object']   # the dict has no such KEY
     assert '/comment/' not in activity['object']
 
     record_moderation(monkeypatch, 'add_to_modlog')
 
-    with pytest.raises(AttributeError):
-        dispatch(activity)
+    decoy_id = decoy.id
+    reply_id = reply.id
+
+    dispatch(activity)
+
+    db.session.expire_all()
+    assert db.session.get(type(decoy), decoy_id).comments_enabled is True   # the decoy, wrongly unlocked
+    assert db.session.get(type(reply), reply_id).replies_enabled is False   # the real target, untouched
 
 
 def test_unlocking_a_comment_crashes_on_a_none_post(app, db_session, monkeypatch):
@@ -87,10 +108,13 @@ def test_unlocking_a_comment_crashes_on_a_none_post(app, db_session, monkeypatch
     then `add_to_modlog(..., target_user=post.author, community=post.community)`
     dereferences `post`, which is None on this branch.
 
-    add_to_modlog is deliberately NOT doubled here: doubling it would swallow
-    the very dereference this test exists to observe, because the arguments are
-    evaluated at the call site, before any double is entered. That is the
-    subtlety this docstring exists to record.
+    add_to_modlog is deliberately NOT doubled here, though doubling would be
+    harmless either way: `target_user=post.author` is evaluated while
+    building the call's keyword-argument frame, before either the real
+    function or a double ever runs, so the `AttributeError` fires
+    identically whether or not `add_to_modlog` is doubled -- doubling
+    cannot swallow it. Left undoubled since doubling would change nothing
+    about what this test observes.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, mod, community, author, post = _seed_lockable_post()
