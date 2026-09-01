@@ -36,7 +36,7 @@ def install_lock_only_redis(monkeypatch):
     """Replace `app.redis_client` with a double whose only capability is
     `.lock(...)` as a no-op context manager.
 
-    Undo/ChooseAnswer (routes.py:1876) wraps its write in `with
+    Undo/ChooseAnswer (routes.py:1875) wraps its write in `with
     redis_client.lock(...)`, resolved via `from app import redis_client`
     INSIDE process_inbox_request's body (routes.py:846) -- so patching the
     single `app.redis_client` attribute is what takes effect, per
@@ -295,11 +295,17 @@ def test_undo_like_calls_undo_vote_with_both_objects_none_and_announces_batchabl
     post = make_post(community, voter, 'https://peer.example/post/1')
 
     calls = record_moderation(monkeypatch, 'announce_activity_to_followers')
-    monkeypatch.setattr(activitypub_routes, 'undo_vote',
-                        lambda comment, post_, target_ap_id, user: post)
+    seen_undo_vote_args = []
+
+    def fake_undo_vote(comment, post_, target_ap_id, user):
+        seen_undo_vote_args.append((comment, post_))
+        return post
+
+    monkeypatch.setattr(activitypub_routes, 'undo_vote', fake_undo_vote)
 
     dispatch(undo_activity(voter, 'Like', 'https://peer.example/post/1'))
 
+    assert seen_undo_vote_args == [(None, None)]
     assert len(calls['announce_activity_to_followers']) == 1
     args, kwargs = calls['announce_activity_to_followers'][0]
     assert kwargs.get('can_batch') is True

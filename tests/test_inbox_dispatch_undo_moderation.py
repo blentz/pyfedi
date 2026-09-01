@@ -132,6 +132,16 @@ def test_unlocking_a_comment_records_the_reply_author_and_community(app, db_sess
     is doubled so the arguments can be inspected -- which is only safe now that
     evaluating them no longer raises.
 
+    The reply is authored by a DISTINCT `replier`, not `_seed_lockable_post`'s
+    post `author` -- if the reply shared its post's author, asserting
+    `target_user` identity would pass under both `post.author` and
+    `post_reply.author`, and only the absence of an `AttributeError` would
+    actually prove the fix. `community` can never discriminate the same way,
+    however the reply is authored: a reply always shares its post's
+    community, so `post.community` and `post_reply.community` are the same
+    object on every path through this arm -- that half of the assertion is
+    included for completeness, not as evidence of the fix.
+
     The captured kwargs are the real objects the dispatcher's own independent
     session (get_task_session()) loaded and, per routes.py's `finally:
     session.close()`, that session is closed before dispatch() returns here.
@@ -146,7 +156,8 @@ def test_unlocking_a_comment_records_the_reply_author_and_community(app, db_sess
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, mod, community, author, post = _seed_lockable_post()
-    reply = make_post_reply(post, author)
+    replier = make_user(instance, 'replier')  # distinct from `post.author`
+    reply = make_post_reply(post, replier)
     reply.ap_id = 'https://peer.example/comment/1'
     reply.replies_enabled = False
     db.session.commit()
@@ -162,7 +173,7 @@ def test_unlocking_a_comment_records_the_reply_author_and_community(app, db_sess
     assert len(calls['add_to_modlog']) == 1
     args, kwargs = calls['add_to_modlog'][0]
     assert args[0] == 'unlock_post_reply'
-    assert sa_inspect(kwargs['target_user']).identity[0] == author.id
+    assert sa_inspect(kwargs['target_user']).identity[0] == replier.id
     assert sa_inspect(kwargs['community']).identity[0] == community.id
     assert sa_inspect(kwargs['reply']).identity[0] == reply_id
 
@@ -252,14 +263,16 @@ def test_undo_lock_of_a_url_shaped_like_neither_post_nor_comment_falls_back_to_a
         app, db_session, monkeypatch):
     """The `else:` fallback (routes.py:1787-1790), taken when `target_ap_id`
     contains neither '/post/' nor '/comment/' -- a Mastodon-style status URL
-    is the real-world shape that lands here. This only became reachable when
-    Task 9 made the '/post/' and '/comment/' branches test the target string
-    itself rather than the surrounding dict; before that fix every id fell
-    into this same `else`, but the two sibling branches this test
-    distinguishes from didn't exist as live alternatives yet. This half of
-    the fallback (`Post.get_by_ap_id` hits) is the one the '/post/' branch's
-    own NodeBB regression test does NOT exercise, since that test's whole
-    point is a `Post` lookup that MISSES.
+    is the real-world shape that lands here. This branch was always
+    reachable; what Task 9 (D105) changed is that it stopped being the
+    ONLY reachable branch. Pre-fix, the '/post/' and '/comment/' membership
+    tests ran against the surrounding dict, which never matched, so every
+    id -- including genuinely '/post/'- and '/comment/'-shaped ones -- fell
+    through to this same `else`. Post-fix, this branch is reached only by an
+    id shaped like neither hint string. This half of the fallback
+    (`Post.get_by_ap_id` hits) is the one the '/post/' branch's own NodeBB
+    regression test does NOT exercise, since that test's whole point is a
+    `Post` lookup that MISSES.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, mod, community, author, post = _seed_lockable_post()
@@ -468,9 +481,10 @@ def test_community_unban_by_an_instance_admin_who_is_not_a_moderator_succeeds(ap
     `is_instance_admin` True (an InstanceRole naming the COMMUNITY's home
     instance, per Community.is_instance_admin's own instance_id,
     app/models.py:752-757 -- not the unblocker's own instance_id) and
-    `is_moderator` False (no CommunityMember row at all). The two sibling
-    tests above and below only ever seed a moderator, so neither can
-    distinguish dropping this second conjunct from dropping the whole guard --
+    `is_moderator` False (no CommunityMember row at all). The sibling test
+    immediately above, `test_community_unban_without_permission_is_refused`,
+    seeds an outsider -- neither moderator nor admin -- so it cannot
+    distinguish dropping this second conjunct from dropping the whole guard;
     this is the one that can.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
