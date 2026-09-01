@@ -746,18 +746,19 @@ def test_a_feed_announced_poll_vote_is_refused_instead_of_crashing_on_a_none_use
 def test_a_feed_announced_page_is_refused_instead_of_reaching_process_new_content(
         app, db_session, monkeypatch):
     """Was `test_a_feed_announced_page_hands_process_new_content_two_nones`,
-    which pinned the third consequence: it did not crash, but silently handed
-    `process_new_content` two `None`s (`user` and `community`) rather than
-    refusing outright.
+    which pinned the third consequence as a NON-crash: at the time, `process_new_content`
+    was doubled, so the test only observed that it received two `None`s
+    (`user` and `community`), not what it would have done with them.
 
-    Fix A's guard applies uniformly to every branch downstream of it --
-    including this one, even though this branch alone would not have
-    crashed -- because passing an unresolved `user`/`community` pair into
-    content processing is exactly the same "nothing was actually resolved"
-    situation the Group and poll consequences hit, just one that happened not
-    to dereference anything. `process_new_content` is doubled and asserted
-    never called, so the finding is recorded as "no longer reached" rather
-    than merely "did not crash."
+    That was an artefact of doubling, not of the real code: `process_new_content`'s
+    first executable line is `if user.user_name == 'rimu':`, so
+    `process_new_content(None, ...)` crashes on `user.user_name` immediately.
+    All three of Task 8's consequences were crashes; this one only looked
+    survivable because the delegate was replaced. `process_new_content` is
+    doubled here too (to keep the assertion cheap and avoid depending on its
+    internals), but the finding is recorded correctly as "no longer reached"
+    -- because the pre-fix code would have crashed here, not merely produced
+    a bad call.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, feed = _seed_feed_announcer()
@@ -766,6 +767,37 @@ def test_a_feed_announced_page_is_refused_instead_of_reaching_process_new_conten
     dispatch(announced_create(feed, {'type': 'Page', 'id': 'https://peer.example/post/1'}))
 
     assert calls['process_new_content'] == []
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Cannot process Create/Update: no user or community resolved'
+
+
+def test_a_feed_announced_chat_message_is_refused_instead_of_crashing_on_a_none_user(
+        app, db_session, monkeypatch):
+    """A fourth consequence Task 8 did not enumerate: the ChatMessage branch
+    sits ABOVE the poll-vote/object_type dispatch, so a guard placed only
+    below it (as this campaign's first pass at Fix A did) leaves this branch
+    unprotected. `process_chat`'s second statement is
+    `sender = session.query(User).get(user.id)`, so `process_chat(None, ...)`
+    crashes on `user.id` immediately -- and the inner object's `type` is
+    entirely peer-controlled, so any peer announcing through a feed could
+    reach this by wrapping a ChatMessage instead of a Page or a Group.
+
+    The guard now sits before the ChatMessage check as well as everything
+    else in the arm, so this is refused the same way and `process_chat` is
+    never reached. `process_chat` is doubled and asserted never called, since
+    the crash would otherwise be immediate and uninformative about what was
+    prevented.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, feed = _seed_feed_announcer()
+    calls = record_moderation(monkeypatch, 'process_chat')
+
+    activity = announced_create(feed, {'type': 'ChatMessage', 'id': 'https://peer.example/pm/1'})
+
+    dispatch(activity)
+
+    assert calls['process_chat'] == []
     log = ActivityPubLog.query.one()
     assert log.result == 'failure'
     assert log.exception_message == 'Cannot process Create/Update: no user or community resolved'
