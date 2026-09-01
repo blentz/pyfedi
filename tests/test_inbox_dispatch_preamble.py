@@ -649,6 +649,46 @@ def test_any_other_update_from_a_group_actor_is_refused(app, db_session, monkeyp
     assert ActivityPubLog.query.one().exception_message == 'Unexpected Update activity from Group'
 
 
+def test_an_unexpected_activity_type_from_a_group_actor_is_refused(app, db_session, monkeypatch):
+    """The final `else` of the Community-actor chain in the preamble
+    (routes.py:887-889): an actor that resolves to a Community sending an
+    activity whose type is neither 'Add', 'Remove' nor 'Update'.
+
+    'Like' is chosen because it is a type this dispatcher handles perfectly
+    well from a USER actor (see test_an_ordinary_activity_from_a_known_user_sets_user
+    above), so the refusal here is demonstrably about the actor being a
+    Community rather than about the type being unknown. Verified against
+    routes.py:874-889 that 'Like' genuinely reaches this `else`: the only
+    types intercepted earlier in the chain are 'Add'/'Remove' (877, NodeBB
+    topic management) and 'Update' (878, its own three-way split covered by
+    the three tests above) -- every other type, 'Like' included, falls
+    straight through to this `else`.
+
+    This is NOT the sibling `'Unexpected Update activity from Group'` message
+    (routes.py:885, asserted by test_any_other_update_from_a_group_actor_is_refused
+    above), which is an Update whose object type is neither 'Group' nor
+    'OrderedCollection'. The two messages differ by one word; only this one
+    is covered here.
+
+    make_community() hardcodes owner user_id=1 and instance_id=1 (see
+    _seed_remote_group_community's docstring above), so an instance and a
+    user occupy those ids first -- the same seeding this file's other
+    Community-actor tests use, without which make_community()'s own commit
+    fails a real foreign-key constraint on Community.user_id.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    community = _seed_remote_group_community()
+
+    activity = inbox_activity(community, activity_type='Like',
+                              object_uri='https://peer.example/post/1')
+
+    dispatch(activity)
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Unexpected activity from Group'
+
+
 def test_an_update_from_a_group_actor_whose_object_is_a_string_containing_type(
         app, db_session, monkeypatch):
     """routes.py:878 -- `'type' in request_json['object']` is a membership
