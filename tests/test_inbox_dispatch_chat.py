@@ -119,6 +119,12 @@ def test_an_unresolvable_recipient_is_refused_and_reports_not_handled(
     process_chat's two `return False` exits, is the one observable trace
     of "not handled" available from this call site: the failure log and the
     absence of any written ChatMessage row.
+
+    The return value itself IS pinned, in both directions, by
+    `test_a_handled_chat_stops_the_arm_from_treating_it_as_content` and
+    `test_an_unhandled_chat_lets_the_arm_continue_to_the_domain_check` below --
+    those build a `Page`-typed object so the arm reaches the 1247 call site
+    instead of this one.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, sender, recipient = seed_chat_pair()
@@ -148,3 +154,47 @@ def test_a_remote_recipient_is_refused_as_not_local(app, db_session, monkeypatch
     assert log.result == 'failure'
     assert log.exception_message == 'ChatMessage target is not local'
     assert db_session.query(ChatMessage).count() == 0
+
+
+def test_a_handled_chat_stops_the_arm_from_treating_it_as_content(app, db_session, monkeypatch):
+    """The arm's fallback path: `find_community` finds nothing, so `process_chat`
+    is tried, and a TRUE return means it handled the activity and the arm must
+    stop. Proven by `ensure_domains_match` never being reached.
+
+    The object type here is NOT ChatMessage -- it is a Page, so the arm reaches
+    the fallback rather than the dedicated ChatMessage branch. That is the only
+    call site where the return value is read.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair()
+    record_moderation(monkeypatch, 'publish_sse_event')
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: None)
+    calls = record_moderation(monkeypatch, 'ensure_domains_match')
+
+    activity = inbox_activity(sender, activity_type='Create',
+                              object={'type': 'Page', 'to': recipient.ap_profile_id,
+                                      'content': 'hello', 'id': 'https://peer.example/pm/1'})
+    dispatch(activity)
+
+    assert calls['ensure_domains_match'] == []
+    assert db_session.query(ChatMessage).filter_by(ap_id='https://peer.example/pm/1').one()
+
+
+def test_an_unhandled_chat_lets_the_arm_continue_to_the_domain_check(app, db_session, monkeypatch):
+    """The mirror: `process_chat` returns FALSE (no resolvable recipient), so the
+    arm does NOT stop and goes on to `ensure_domains_match`. Together with the
+    test above this pins the return value in both directions -- which no
+    assertion inside process_chat's own tests can do.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair()
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: None)
+    monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: False)
+
+    activity = inbox_activity(sender, activity_type='Create',
+                              object={'type': 'Page', 'content': 'hello',
+                                      'id': 'https://peer.example/pm/1'})
+    dispatch(activity)
+
+    messages = [l.exception_message for l in ActivityPubLog.query.all()]
+    assert 'Domains do not match' in messages
