@@ -1177,7 +1177,13 @@ says which numbers are taken. So there is one now, and it is this file:
   own whole-branch fix wave (2026-09-01): D110 fixed (the descendant-subtree
   `UPDATE`'s `db.session.execute` vs `session.execute` mismatch), D111 and
   D112 registered but not fixed.
-  **Next free number: D113.** If you take it, say so here in the change
+  D113–D118 sub-project 5e (the Create/Update arm, plus the six statements
+  left elsewhere in `process_inbox_request` — see that section for the
+  table). D113–D114 are fixed, not merely registered — the feed-Announce
+  crash surface and the poll-vote silence, two defects across three commits
+  (one fix hoisted to a safer location after review). D115–D118 are
+  registered but not fixed.
+  **Next free number: D119.** If you take it, say so here in the change
   that takes it.
 
 Two entries in the reports were deliberately **not** counted as defects, and are
@@ -3359,6 +3365,52 @@ wave.
 | D112 | `process_inbox_request`, `Undo` arm (routes.py:1676 onward) | **Not fixed, registered only -- out of scope for this wave.** An `Undo` whose `object` is a bare URI string, rather than a nested activity dict, raises an unhandled `TypeError` out of `process_inbox_request` (subscripting a string by `'type'` at `core_activity['object']['type']`). This is a legal ActivityPub shape and it is peer-triggerable -- nothing in the preamble or this arm validates `object`'s shape before dispatching on it. | not fixed, out of scope | **measured**: already pinned by `tests/test_inbox_dispatch_undo_content.py`'s `test_a_string_inner_object_cannot_reach_choose_answer_at_all`, which sends a string inner `object` and asserts `dispatch()` raises `TypeError` -- this is the entire factual basis for D109 (the `ChooseAnswer` branch's unreachable `isinstance(..., str)` check), but the underlying defect -- an unhandled crash on a legal, peer-triggerable shape -- was itself never registered, only its downstream consequence (D109) was |
 
 **Next free number: D113.**
+
+
+
+## Sub-project 5e: the `Create`/`Update` arm, and the six statements left elsewhere in `process_inbox_request`
+
+`docs/superpowers/specs/2026-09-01-coverage-inbox-create-update-5e-design.md`,
+on branch `blentz`. Ten tasks brought `process_inbox_request`'s `Create`/`Update`
+arm and six neighbouring statements elsewhere in the function toward full
+statement coverage. `app/activitypub/routes.py` measures **62.5873% blended**
+(1158/1823 statements, 545/898 branches) after this sub-project, up from
+59.4465% before it (full suite: 3049 passed, 3 skipped). Tests live mainly in
+`tests/test_inbox_dispatch_create_update.py` (28 test functions, several
+parametrized, added across Tasks 2-9), plus one test each added to
+`tests/test_inbox_dispatch_votes.py` and `tests/test_inbox_dispatch_preamble.py`
+(Task 10, the six neighbouring statements: the `PollVote`/`ChooseAnswer`
+delegate dispatch and the Community-actor Group-fallthrough). `process_inbox_request`
+now has **exactly one uncovered statement** in the whole function --
+`routes.py:860`, a debug `pass` (D117 below).
+
+Like 5b, 5c and 5d before it, this sub-project carried a **narrow, explicitly
+authorised exception** to the campaign's report-don't-fix rule: Task 9 was
+separately authorised to fix the two defects Task 8 pinned as crash and
+silence surfaces, both confined to the Create/Update arm. `git diff --stat app/`
+is non-empty for exactly Task 9 and its post-review correction round -- four
+commits in total: `15b00579` and `426dc4d3` (the two original fixes), then
+`a350674d` (hoisting the first fix's guard to close a fourth crash path the
+reviewer found) and `cf97f307` (a test-docstring-only correction, carrying no
+production diff). Every other task's `git diff --stat app/` is empty.
+
+### 1. Two defects fixed, under explicit authorisation -- D113-D114
+
+| # | function | defect | status | evidence |
+|---|---|---|---|---|
+| D113 | `process_inbox_request`, `Create`/`Update` arm (routes.py:1193-1243, as reached via a feed-Announce) | **FIXED, commit `15b00579`, guard hoisted by `a350674d`.** When an `Announce`'s outer actor resolves to a *feed* (not a community or user), the preamble (routes.py:840-932, sub-project 5a's territory) sets `announced = True` while leaving both `user` and `community` `None` -- `community` is never reassigned past its routes.py:862 `None`, and `user` is explicitly set `None` at routes.py:924 because the `if not feed:` branch that would otherwise resolve it never runs. The arm's own resolution chain, `if not announced and not community:` (routes.py:1244), is then skipped entirely because `announced` is `True`. Four downstream consequences, all genuine crashes established by reading rather than assumed (Task 9's post-review addendum corrected an earlier claim that one of the four was merely a silent pass-through): `process_chat`'s `sender = session.query(User).get(user.id)` (routes.py:2530), `Group`'s `community.is_local()` (routes.py:1274 branch), the poll vote's `poll_data.vote_for_choice(choice.id, user.id)` (routes.py:1228), and `process_new_content`'s first executable line, `if user.user_name == 'rimu':` (routes.py:2297). Fix: a guard, `if user is None and community is None:` (routes.py:1202-1214), now refuses with `log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, 'Cannot process Create/Update: no user or community resolved')` before any of the four is reached. The guard's first landing (`15b00579`) placed it after the `ChatMessage` check, leaving `process_chat`'s crash live; post-review, `a350674d` moved it above that check, closing the fourth path. Scope note: PieFed's own feed Announces only ever wrap `Add`/`Remove` of a `Group` (`app/shared/feed.py`), never a `Create`/`Update`, so this guard refuses nothing this codebase itself emits -- the exposure is to other federating software that announces differently. | fixed and verified | **measured**: Task 8's three tests (`tests/test_inbox_dispatch_create_update.py`) pinned the pre-fix crashes directly (`pytest.raises(AttributeError)` for the Group and poll-vote paths; a doubled `process_new_content` call receiving two `None`s for the Page path); Task 9 inverted all three and added a fourth, `test_a_feed_announced_chat_message_is_refused_instead_of_crashing_on_a_none_user`, which failed with a genuine `AssertionError` (`process_chat` called with `user=None`) against the guard's first, too-late placement and passed only once `a350674d` moved it -- a real mutation kill, not a doubled-call artefact |
+| D114 | `process_inbox_request`, `Create`/`Update` arm, poll-vote block (routes.py:1219-1243) | **FIXED, commit `426dc4d3`.** Three of the poll-vote block's four outcomes -- post not found, poll not found, choice not found -- fell to the block's unconditional `return` (routes.py:1243) having called `log_incoming_ap` zero times; only the full-success path logged anything, so a poll vote a peer sent that silently failed to land left no trace in `ActivityPubLog` to explain why. Fix: each of the three now logs a distinct `APLOG_IGNORED` message before the same `return` -- `'Poll vote for an unknown post'` (routes.py:1240-1242), `'Poll vote for a post with no poll'` (routes.py:1234-1236), `'Poll vote for an unknown choice'` (routes.py:1237-1239). The `return` itself is unchanged (see D116 below). | fixed and verified | **measured**: Task 4's three tests pinned the pre-fix silence directly (`ActivityPubLog.query.count() == 0` after dispatch, for all three outcomes); Task 9 inverted them to assert one `APLOG_IGNORED` row each with the matching reason string, and mutation-killed each log independently (removing the "unknown post" log failed only its matching test: `1 failed, 34 passed`) |
+
+### 2. Four defects registered, not fixed -- D115-D118
+
+| # | function | defect | status | evidence |
+|---|---|---|---|---|
+| D115 | `process_inbox_request` preamble (routes.py:840-932, sub-project 5a's territory) | **Not fixed, registered only -- out of scope for this sub-project.** D113's guard only mitigates the root cause locally: the preamble leaves `user` and `community` both `None` for *any* Announce whose outer actor resolves to a feed, not just when the inner object is a Create/Update. Every other arm reached after the preamble (Like, Dislike, Delete, Follow-adjacent activities, etc.) is potentially exposed to the same unguarded assumption and has not been audited here -- this sub-project was confined to the Create/Update arm, per its brief. | not fixed, out of scope | **reading-level**: Task 9's report traces the preamble's assignment of `user = None` (routes.py:924, gated on `if not feed:` being False) and `community` staying at its routes.py:862 `None`, and states the out-of-scope reasoning directly; no test in this sub-project dispatches a feed-Announce through any arm other than Create/Update, so whether another arm actually crashes on the same `None`s is inferred by the same reasoning that proved Create/Update's four crashes, not observed |
+| D116 | `process_inbox_request`, `Create`/`Update` arm, poll-vote block (routes.py:1243) | **Not fixed, deliberately -- a product decision, not a defect this sub-project was positioned to resolve.** The poll-vote block's trailing `return` is unconditional: once an activity matches the poll-vote shape (routes.py:1219-1221), it never falls through to `process_new_content` or `process_chat`, even when nothing about it actually resolved (D114's three now-logged outcomes). Whether a poll-shaped activity that fails to resolve as a poll vote should instead be tried as ordinary content is a behavioural choice outside this sub-project's authorisation, so the `return` is left exactly where it was -- D114 only made its three silent branches audible. | not fixed, product decision | **reading-level**: confirmed directly from routes.py:1219-1243 -- the `return` sits at the same indentation as the `if post_being_replied_to:` it follows, so it is reached regardless of which of the four outcomes (success, unknown post, no poll, unknown choice) occurred; Task 9's report names this explicitly as an unaddressed, separate product decision |
+| D117 | `process_inbox_request` preamble (routes.py:859-860) | **Not fixed, deliberately -- and now the single remaining uncovered statement in the whole function.** `if actor_id and actor_id.startswith('https://s.rimu.geek.nz'):` / `pass`, with the inline comment *"just here to set breakpoints on, during testing. remove before commit"*. Debug scaffolding reachable only from one named personal domain -- not fixed and not covered, on the reasoning that writing a test to cover a `pass` its own author marked for deletion would entrench code that should not exist rather than document real behaviour. Recommend deletion: doing so removes both the statement and its branch cleanly, and would take `process_inbox_request` to full statement coverage. | not fixed, recommend deletion | **measured**: the controller's own coverage measurement after this sub-project shows `process_inbox_request` at exactly one uncovered statement, `routes.py:860`; the line and its comment were re-read directly against current HEAD for this register entry (routes.py:859-860), confirming both the line numbers and the comment text quoted above |
+| D118 | `process_new_content` (routes.py:2296-2298), the delegate the Create/Update arm calls for ordinary new content | **Not fixed, registered only -- same class of artefact as D117, one function away.** `if user.user_name == 'rimu':` / `pass`, no comment. The same debug-scaffolding pattern as D117 (a no-op `pass` gated on identifying one specific person), in the delegate this sub-project's arm calls for `Page`/`Article`/etc. content. Recommend deletion. | not fixed, recommend deletion | **reading-level**: read directly from routes.py:2296-2298 (`def process_new_content(user, community, store_ap_json, request_json, announced):` / `if user.user_name == 'rimu':` / `pass`); no test in this sub-project exercises the `True` arm of this branch (doing so would require a `User` literally named `rimu`), so this is derived from reading the delegate's source, not from a dispatched activity |
+
+**Next free number: D119.**
 
 
 
