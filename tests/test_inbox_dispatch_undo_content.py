@@ -20,6 +20,8 @@ the real lookup rather than a stand-in for it.
 """
 import contextlib
 
+import pytest
+
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.models import ActivityPubLog, ChatMessage, utcnow
@@ -474,3 +476,21 @@ def test_an_undo_of_an_unrecognised_type_falls_through_to_monitor(app, db_sessio
     log = ActivityPubLog.query.one()
     assert log.result == 'processing'
     assert log.exception_message == 'Unmatched activity'
+
+
+def test_a_string_inner_object_cannot_reach_choose_answer_at_all(app, db_session, monkeypatch):
+    """FIX 4's justification. The arm selects ChooseAnswer by reading
+    `core_activity['object']['type']`, so a STRING inner object raises
+    TypeError before any sub-type is chosen -- which is why the
+    `isinstance(core_activity['object'], str)` branch inside ChooseAnswer was
+    unreachable. Same equivalent-mutant class as D95 and D96.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    author = make_user(instance, 'author')
+
+    activity = inbox_activity(author, activity_type='Undo',
+                              object='https://peer.example/comment/1')
+
+    with pytest.raises(TypeError):
+        dispatch(activity)

@@ -1869,10 +1869,7 @@ def process_inbox_request(request_json, store_ap_json):
                         return
 
                     if core_activity['object']['type'] == 'ChooseAnswer':
-                        if isinstance(core_activity['object'], str):
-                            target_ap_id = core_activity['object']
-                        else:
-                            target_ap_id = core_activity['object']['object']
+                        target_ap_id = core_activity['object']['object']
                         post_reply = PostReply.get_by_ap_id(target_ap_id)
                         if post_reply:
                             with redis_client.lock(f"lock:post_reply:{post_reply.id}", timeout=10, blocking_timeout=6):
