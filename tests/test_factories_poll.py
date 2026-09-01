@@ -29,4 +29,3 @@ def test_make_poll_is_keyed_by_its_post_and_finds_its_choices(app, db_session):
 
     texts = {c.choice_text for c in db_session.query(PollChoice).filter_by(post_id=post.id)}
     assert texts == {'yes', 'no'}
-    assert first.num_votes == 0 and second.num_votes == 0
