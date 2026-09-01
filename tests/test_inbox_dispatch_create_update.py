@@ -208,10 +208,13 @@ def test_a_poll_vote_for_an_unknown_post_is_now_logged(app, db_session, monkeypa
 
 def test_a_poll_vote_on_a_post_with_no_poll_is_now_logged(app, db_session, monkeypatch):
     """Was `test_a_poll_vote_on_a_post_with_no_poll_is_dropped_silently`.
-    `poll_data` is None: the post exists but carries no Poll row. Reached by a
-    different conjunct of `if poll_data and choice:` than the unknown-post and
-    unknown-choice cases -- which is why this test and those are separate, and
-    why the message must differ from both.
+    `poll_data` is None: the post exists but carries no Poll row -- the FIRST
+    conjunct of `if poll_data and choice:`. This is distinct from the
+    unknown-choice case (the OTHER conjunct of the same `if`) and from the
+    unknown-post case (which never reaches `if poll_data and choice:` at all;
+    it fails the separate, outer `if post_being_replied_to:`) -- which is why
+    all three tests are separate, and why the message must differ across all
+    three.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance = seed_community_owner('peer.example')
