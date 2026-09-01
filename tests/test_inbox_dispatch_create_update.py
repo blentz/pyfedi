@@ -659,31 +659,44 @@ def announced_create(feed, inner_object, *, inner_type='Create'):
                                   'object': inner_object})
 
 
-def test_a_feed_announced_group_update_crashes_on_a_none_community(app, db_session, monkeypatch):
-    """PINS the Group half of the crash. `announced` is True, so the arm skips
-    its `if not announced and not community:` resolution chain entirely and
-    `community` is still None at `community.is_local()`.
+def test_a_feed_announced_group_update_is_refused_instead_of_crashing_on_a_none_community(
+        app, db_session, monkeypatch):
+    """Was `test_a_feed_announced_group_update_crashes_on_a_none_community`,
+    which pinned the Group half of the crash: `announced` is True, so the arm
+    skipped its `if not announced and not community:` resolution chain
+    entirely and `community` was still None at `community.is_local()`.
 
-    `refresh_community_profile` is NOT doubled: the AttributeError fires while
-    Python evaluates the guard, before any delegate is reached, so doubling
-    would change nothing and would only obscure what is being observed.
+    Now the arm refuses before it ever reaches the object_type dispatch --
+    `user is None and community is None` is caught immediately after the
+    ChatMessage branch, well before the Group branch's `community.is_local()`
+    would be evaluated. `refresh_community_profile` is doubled here (unlike
+    the crash-pinning version) precisely to prove it is never reached.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, feed = _seed_feed_announcer()
+    calls = record_moderation(monkeypatch, 'refresh_community_profile')
 
     activity = announced_create(feed,
                                 {'type': 'Group', 'id': 'https://peer.example/c/books'},
                                 inner_type='Update')
 
-    with pytest.raises(AttributeError):
-        dispatch(activity)
+    dispatch(activity)
+
+    assert calls['refresh_community_profile'] == []
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Cannot process Create/Update: no user or community resolved'
 
 
-def test_a_feed_announced_poll_vote_crashes_on_a_none_user(app, db_session, monkeypatch):
-    """PINS the poll half. The crash is at `vote_for_choice(choice.id, user.id)`,
-    which is reached only once a post, its poll and a matching choice all
-    resolve -- so all three are seeded here. A test that seeded less would pass
-    for the wrong reason, by returning early before ever touching `user`.
+def test_a_feed_announced_poll_vote_is_refused_instead_of_crashing_on_a_none_user(
+        app, db_session, monkeypatch):
+    """Was `test_a_feed_announced_poll_vote_crashes_on_a_none_user`, which
+    pinned the poll half of the crash: `vote_for_choice(choice.id, user.id)`
+    used to raise once a post, its poll and a matching choice all resolved --
+    so all three are still seeded here, to prove the new guard fires even
+    though every downstream conjunct would otherwise be satisfied. A test
+    that seeded less would pass for the wrong reason, by returning early
+    before ever reaching the poll block at all.
 
     `author` is created BEFORE `make_community`: make_community hardcodes
     `user_id=1` (tests/factories.py:140), and `_seed_feed_announcer` creates no
@@ -693,6 +706,9 @@ def test_a_feed_announced_poll_vote_crashes_on_a_none_user(app, db_session, monk
     that constraint; the instance from `_seed_feed_announcer` is likewise the
     first Instance row, landing on id 1 to satisfy make_community's hardcoded
     `instance_id=1`.
+
+    No vote is recorded, since the guard now fires before the poll block is
+    ever reached.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, feed = _seed_feed_announcer()
@@ -700,21 +716,35 @@ def test_a_feed_announced_poll_vote_crashes_on_a_none_user(app, db_session, monk
     community = make_community(host='peer.example')
     post = make_post(community, author, 'https://peer.example/post/1')
     make_poll(post)
-    make_poll_choice(post, 'yes')
+    choice = make_poll_choice(post, 'yes')
     db.session.commit()
 
     activity = announced_create(feed, poll_note(post.ap_id, 'yes'))
 
-    with pytest.raises(AttributeError):
-        dispatch(activity)
+    dispatch(activity)
+
+    from app.models import PollChoiceVote
+    assert db_session.query(PollChoiceVote).count() == 0
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Cannot process Create/Update: no user or community resolved'
 
 
-def test_a_feed_announced_page_hands_process_new_content_two_nones(app, db_session, monkeypatch):
-    """PINS the third consequence, which does NOT crash here: the content path
-    is simply handed `user=None` and `community=None` and left to cope. The
-    delegate is doubled and its first two positional arguments asserted, so the
-    finding is recorded as what is actually passed rather than as speculation
-    about what the delegate does with it.
+def test_a_feed_announced_page_is_refused_instead_of_reaching_process_new_content(
+        app, db_session, monkeypatch):
+    """Was `test_a_feed_announced_page_hands_process_new_content_two_nones`,
+    which pinned the third consequence: it did not crash, but silently handed
+    `process_new_content` two `None`s (`user` and `community`) rather than
+    refusing outright.
+
+    Fix A's guard applies uniformly to every branch downstream of it --
+    including this one, even though this branch alone would not have
+    crashed -- because passing an unresolved `user`/`community` pair into
+    content processing is exactly the same "nothing was actually resolved"
+    situation the Group and poll consequences hit, just one that happened not
+    to dereference anything. `process_new_content` is doubled and asserted
+    never called, so the finding is recorded as "no longer reached" rather
+    than merely "did not crash."
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, feed = _seed_feed_announcer()
@@ -722,8 +752,7 @@ def test_a_feed_announced_page_hands_process_new_content_two_nones(app, db_sessi
 
     dispatch(announced_create(feed, {'type': 'Page', 'id': 'https://peer.example/post/1'}))
 
-    assert len(calls['process_new_content']) == 1
-    args, kwargs = calls['process_new_content'][0]
-    assert args[0] is None        # user
-    assert args[1] is None        # community
-    assert args[4] is True        # announced
+    assert calls['process_new_content'] == []
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Cannot process Create/Update: no user or community resolved'

@@ -1203,6 +1203,17 @@ def process_inbox_request(request_json, store_ap_json):
                         process_chat(user, store_ap_json, core_activity, session)
                         return
                     else:
+                        if user is None and community is None:
+                            # An Announce whose outer actor resolved to a Feed leaves both
+                            # `user` and `community` unset (see the preamble: routes.py:862-924)
+                            # while `announced` is True, so none of the branches below can be
+                            # trusted to have anything to dereference. Refuse before any of
+                            # them run, rather than let a `None.attribute` crash (Group's
+                            # `community.is_local()`, the poll vote's `user.id`) or silently
+                            # hand two `None`s into `process_new_content`.
+                            log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json,
+                                            'Cannot process Create/Update: no user or community resolved')
+                            return
                         if (core_activity['object']['type'] == 'Note' and 'name' in core_activity['object'] and  # Poll Votes
                                 'inReplyTo' in core_activity['object'] and 'attributedTo' in core_activity['object'] and
                                 not 'published' in core_activity['object']):
