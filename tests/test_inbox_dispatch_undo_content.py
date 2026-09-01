@@ -250,3 +250,131 @@ def test_undo_delete_reads_the_kbin_dict_object_shape(app, db_session, monkeypat
 
     db.session.expire_all()
     assert db.session.get(ChatMessage, message_id).deleted is False
+
+
+def test_undo_like_calls_undo_vote_with_both_objects_none_and_announces_batchable(app, db_session, monkeypatch):
+    """`post = comment = None` immediately before the call, so the delegate
+    receives two Nones and resolves the target itself from the ap_id. The
+    announce is made with can_batch=True, which is asserted rather than merely
+    counted because it is a federation-behaviour choice, not an implementation
+    detail.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = seed_community_owner('peer.example')
+    voter = make_user(instance, 'voter')
+    community = make_community(host='peer.example')
+    post = make_post(community, voter, 'https://peer.example/post/1')
+
+    calls = record_moderation(monkeypatch, 'announce_activity_to_followers')
+    monkeypatch.setattr(activitypub_routes, 'undo_vote',
+                        lambda comment, post_, target_ap_id, user: post)
+
+    dispatch(undo_activity(voter, 'Like', 'https://peer.example/post/1'))
+
+    assert len(calls['announce_activity_to_followers']) == 1
+    args, kwargs = calls['announce_activity_to_followers'][0]
+    assert kwargs.get('can_batch') is True
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_undo_dislike_takes_the_same_branch_as_undo_like(app, db_session, monkeypatch):
+    """The guard is `== 'Like' or == 'Dislike'`. This test covers the second
+    disjunct; the test above covers the first, so dropping either fails one.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = seed_community_owner('peer.example')
+    voter = make_user(instance, 'voter')
+    community = make_community(host='peer.example')
+    post = make_post(community, voter, 'https://peer.example/post/1')
+
+    record_moderation(monkeypatch, 'announce_activity_to_followers')
+    monkeypatch.setattr(activitypub_routes, 'undo_vote',
+                        lambda comment, post_, target_ap_id, user: post)
+
+    dispatch(undo_activity(voter, 'Dislike', 'https://peer.example/post/1'))
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_undo_like_of_an_unfound_object_logs_failure_with_the_uri(app, db_session, monkeypatch):
+    """`undo_vote` returning None takes the else. The target uri is
+    concatenated into the message, so the assertion pins it.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    voter = make_user(instance, 'voter')
+
+    calls = record_moderation(monkeypatch, 'announce_activity_to_followers')
+    monkeypatch.setattr(activitypub_routes, 'undo_vote',
+                        lambda comment, post_, target_ap_id, user: None)
+
+    dispatch(undo_activity(voter, 'Like', 'https://peer.example/post/404'))
+
+    assert calls['announce_activity_to_followers'] == []
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Unfound object https://peer.example/post/404'
+
+
+def test_undo_announce_undoes_a_boost_via_the_outer_actor(app, db_session, monkeypatch):
+    """The arm's own comment insists the actor comes from the SIGNED outer
+    activity, never the inner object. The inner object here carries a
+    DIFFERENT actor, and the assertion is that `undo_boost` receives the outer
+    one -- which is the whole point of that comment.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = seed_community_owner('peer.example')
+    booster = make_user(instance, 'booster')
+    impostor = make_user(instance, 'impostor')
+    community = make_community(host='peer.example')
+    post = make_post(community, booster, 'https://peer.example/post/1')
+
+    seen = {}
+
+    def fake_undo_boost(target_ap_id, user):
+        seen['target'] = target_ap_id
+        seen['user_id'] = user.id
+        return post
+
+    monkeypatch.setattr(activitypub_routes, 'undo_boost', fake_undo_boost)
+    monkeypatch.setattr(activitypub_routes, 'announce_target_uri',
+                        lambda activity: 'https://peer.example/post/1')
+
+    # `undo_activity`'s first positional parameter is itself named `actor`
+    # (the OUTER actor), so passing `actor=impostor.ap_profile_id` as an
+    # extra keyword collides with it (TypeError: multiple values for
+    # 'actor') rather than landing in **inner as intended. Build the outer
+    # activity normally, then stamp the inner object's 'actor' directly --
+    # same resulting JSON shape, without the collision.
+    activity = undo_activity(booster, 'Announce', 'https://peer.example/post/1')
+    activity['object']['actor'] = impostor.ap_profile_id
+
+    dispatch(activity)
+
+    assert seen['user_id'] == booster.id      # outer actor, not the impostor
+    assert seen['target'] == 'https://peer.example/post/1'
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_undo_announce_of_an_unfound_post_is_ignored(app, db_session, monkeypatch):
+    """`undo_boost` returning None takes the else, which logs IGNORED (not
+    FAILURE, unlike the vote path a few lines above -- the two thin arms differ
+    here and the pair of tests pins the difference).
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    booster = make_user(instance, 'booster')
+
+    monkeypatch.setattr(activitypub_routes, 'undo_boost', lambda target_ap_id, user: None)
+    monkeypatch.setattr(activitypub_routes, 'announce_target_uri',
+                        lambda activity: 'https://peer.example/post/404')
+
+    dispatch(undo_activity(booster, 'Announce', 'https://peer.example/post/404'))
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'ignored'
+    assert 'https://peer.example/post/404' in log.exception_message
