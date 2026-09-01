@@ -13,6 +13,7 @@ here.
 
 import uuid
 from collections.abc import Iterable
+from datetime import datetime
 
 from flask import current_app
 from flask_login import login_user
@@ -22,7 +23,7 @@ from app.activitypub.signature import RsaKeys
 from app.models import (ChatMessage, Community, CommunityBan, CommunityBlock, CommunityFlair, CommunityFlairBlock,
                         CommunityJoinRequest, CommunityMember, Domain, DomainBlock, Feed, FeedItem,
                         FeedJoinRequest, FeedMember, Instance, InstanceBan, InstanceBlock,
-                        NotificationSubscription, Post, PostReply, PostReplyBookmark, PostReplyVote,
+                        NotificationSubscription, Poll, PollChoice, Post, PostReply, PostReplyBookmark, PostReplyVote,
                         PostVote, Role, RolePermission, Site, User, UserBlock, UserFollower,
                         UserFollowRequest, hidden_posts, read_posts, user_role, utcnow)
 from app.utils import get_deduped_post_ids
@@ -661,6 +662,38 @@ def make_post_vote(user: User, post: Post, effect: float) -> PostVote:
     db.session.add(vote)
     db.session.commit()
     return vote
+
+
+def make_poll(post: Post, *, mode: str = 'single', local_only: bool = False,
+              end_poll: datetime = None) -> Poll:
+    """The Poll row the Create/Update arm resolves with
+    `session.query(Poll).get(post.id)`.
+
+    `post_id` is Poll's PRIMARY KEY (app/models.py:3745), so a post has at most
+    one poll and the identity map returns the same object for the same post --
+    which is what makes the `.get()` lookup in the arm work at all.
+
+    `end_poll` defaults to None rather than a future date: nothing on the
+    dispatcher's vote path consults it, and inventing a deadline here would put
+    a value in the fixture that no test asserts on.
+    """
+    poll = Poll(post_id=post.id, mode=mode, local_only=local_only, end_poll=end_poll)
+    db.session.add(poll)
+    db.session.commit()
+    return poll
+
+
+def make_poll_choice(post: Post, choice_text: str, *, sort_order: int = 0) -> PollChoice:
+    """One option on `post`'s poll.
+
+    The Create/Update arm matches an incoming vote by `choice_text` against the
+    `name` field of the inbound Note, so callers should pass the exact text the
+    activity will carry.
+    """
+    choice = PollChoice(post_id=post.id, choice_text=choice_text, sort_order=sort_order)
+    db.session.add(choice)
+    db.session.commit()
+    return choice
 
 
 # The public key every peer actor document below carries. actor_json_to_model
