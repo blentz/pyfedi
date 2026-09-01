@@ -1856,6 +1856,49 @@ To diagnose it, ask Postgres directly rather than guessing:
 `Lock`/`relation` is the signature. `podman restart pyfedi_test-db_1` clears
 it; `run_tests.sh` then replays the migrations in about eight seconds.
 
+**19. `Poll` is keyed by `post_id`, not a synthetic `id`.** `Poll.post_id`
+(`app/models.py:3745`) is declared `primary_key=True` — a `Poll` row's
+primary key IS the `post.id` it belongs to, with no separate `id` column at
+all. This is why the Create/Update arm's poll-vote block resolves it with
+`session.query(Poll).get(post_being_replied_to.id)` (`routes.py:1224`)
+rather than a lookup by some other key — `.get()` on a single-column primary
+key takes exactly the value that column holds.
+
+**20. `Community.is_local()` returns `True` for every community
+`make_community` builds, regardless of `host`.** `Community.is_local()`
+(`app/models.py:778-779`) is `self.ap_id is None or
+self.profile_id().startswith(SERVER_URL)`. `make_community`
+(`tests/factories.py:122-151`) sets `name`, `title`, `instance_id`,
+`user_id`, `ap_profile_id`, `ap_public_url`, `ap_followers_url`,
+`ap_domain`, `subscriptions_count`, `local_only`, `nsfw` — **never
+`ap_id`**. The column has no default, so it stays `None` on every
+factory-built community no matter what `host` is passed, the `or`
+short-circuits on its first disjunct, and `is_local()` returns `True`
+unconditionally — the `host`-sensitive second disjunct is never even
+evaluated. A test that needs a genuinely remote community must set
+`community.ap_id` explicitly to a value that does not start with
+`app.config['SERVER_URL']`, then commit, before dispatching. This cost a
+fix round in sub-project 5e (Task 7): the brief's own plan to build a
+"remote" community by passing `host='peer.example'` to `make_community`
+produced a community indistinguishable from a local one, and a mutation
+test on the Group-update permission guard's `community.is_local()` conjunct
+would have silently escaped every test in the file had the `ap_id` fix not
+been applied.
+
+**21. `make_community` hardcodes `user_id=1` and `instance_id=1` against
+real foreign keys.** `make_community` (`tests/factories.py:122-151`) never
+takes a `user_id` or `instance_id` argument — it always writes `1` for
+both, and `Community.user_id` carries a real `db.ForeignKey('user.id')`
+(`app/models.py:543`) enforced by this suite's real Postgres test database.
+Since `db_session`'s `TRUNCATE ... RESTART IDENTITY` leaves both tables
+empty at the start of every test, calling `make_community(...)` before any
+`User` row exists raises an `IntegrityError` on the factory's own internal
+commit — before the code under test ever runs. A test must seed a `User`
+(or an `Instance`, for the `instance_id` side) first, so it lands on id 1.
+Sub-project 5e's Tasks 8 and 10 each hit this independently, in unrelated
+files (`tests/test_inbox_dispatch_create_update.py` and
+`tests/test_inbox_dispatch_preamble.py`).
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
