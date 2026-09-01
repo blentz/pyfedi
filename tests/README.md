@@ -1833,6 +1833,29 @@ URL except the one the test wants unresolvable — sub-project 5d hit this
 independently in Tasks 3 and 10 (`tests/test_inbox_dispatch_undo_follow.py`,
 `tests/test_inbox_dispatch_undo_moderation.py`).
 
+**18. Never run two pytest sessions against one test stack.** `db_session`
+resets state by `TRUNCATE`-ing every table after every test, which assumes
+exclusive access to the database. Two concurrent sessions — a full-suite run
+and a single-file run, say — corrupt each other in two ways at once: one
+session's `TRUNCATE ... CASCADE` deletes rows the other just committed, and
+their identical seed values collide (`duplicate key value violates unique
+constraint "ix_instance_domain"`, `Key (domain)=(peer.example) already
+exists`). Worse, they can deadlock outright: one backend sits `idle in
+transaction` while the other's `TRUNCATE` blocks on `Lock: relation`, and
+neither progresses. Observed twice on 2026-09-01, once costing about fifteen
+minutes before it was recognised, and both times the failures looked like
+real test regressions rather than contention.
+
+To diagnose it, ask Postgres directly rather than guessing:
+
+    podman-compose -f compose.test.yaml exec test-db psql -U pyfedi -d pyfedi_test \
+      -c "select pid, state, wait_event_type, wait_event, now()-state_change as age
+          from pg_stat_activity where datname='pyfedi_test' order by age desc;"
+
+`state = 'idle in transaction'` next to another backend waiting on
+`Lock`/`relation` is the signature. `podman restart pyfedi_test-db_1` clears
+it; `run_tests.sh` then replays the migrations in about eight seconds.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
