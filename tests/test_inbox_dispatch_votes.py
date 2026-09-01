@@ -249,6 +249,44 @@ def test_dislike_dispatches_to_process_downvote(app, db_session, monkeypatch):
     assert announced_arg is False
 
 
+@pytest.mark.parametrize('activity_type,delegate', [
+    ('PollVote', 'process_poll_vote'),
+    ('ChooseAnswer', 'process_question_answer'),
+])
+def test_poll_vote_and_choose_answer_dispatch_to_their_own_delegates(
+        app, db_session, monkeypatch, activity_type, delegate):
+    """The two arms Task 6 imported delegates for but never exercised through
+    the dispatcher itself (routes.py:1362-1367). Each passes the same four
+    arguments as the Like/Dislike arms above --
+    (user, store_ap_json, request_json, announced) -- so this asserts all four
+    rather than only that the delegate ran.
+
+    Parametrised across both because the two arms are structurally identical;
+    the `delegate` parameter is what keeps each one's own binding site under
+    test rather than sharing a double.
+    """
+    make_site()
+    instance = make_instance('peer.example')
+    actor = make_user(instance, 'alice')
+    actor.ap_fetched_at = utcnow()
+    db.session.commit()
+
+    calls = []
+    monkeypatch.setattr(activitypub_routes, delegate,
+                        lambda *args, **kwargs: calls.append(args))
+
+    activity = inbox_activity(actor, activity_type=activity_type)
+
+    dispatch(activity)
+
+    assert len(calls) == 1
+    user_arg, store_ap_json_arg, request_json_arg, announced_arg = calls[0]
+    assert user_arg is not None and user_arg.id == actor.id
+    assert store_ap_json_arg is True
+    assert request_json_arg == activity
+    assert announced_arg is False
+
+
 # --- Step 2: process_upvote end to end, routes.py:2387-2410 ---
 
 def test_upvote_of_an_unfound_object_logs_failure(app, db_session, monkeypatch):
