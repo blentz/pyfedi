@@ -7,8 +7,8 @@ from app import db
 from app.activitypub import routes as activitypub_routes
 from app.models import ActivityPubLog, utcnow
 from tests.factories import (inbox_activity, make_community, make_community_member,
-                             make_instance, make_poll, make_poll_choice, make_post,
-                             make_user, seed_community_owner)
+                             make_feed, make_instance, make_poll, make_poll_choice,
+                             make_post, make_site, make_user, seed_community_owner)
 from tests.test_inbox_dispatch_lock_delete import record_moderation
 from tests.test_inbox_dispatch_preamble import dispatch
 
@@ -609,3 +609,121 @@ def test_a_group_update_from_a_LOCAL_communitys_moderator_refreshes_and_announce
     assert len(calls['announce_activity_to_followers']) == 1
     log = ActivityPubLog.query.one()
     assert log.result == 'success'
+
+
+# --- Feed-Announce crash surface (routes.py:914-924 into the Create/Update arm) ---
+#
+# Reachability was verified by reading the preamble before any test here was written.
+# For an Announce whose OUTER actor resolves to a Feed: routes.py:862 resolves
+# `community` to None (the actor isn't a Community); routes.py:864 then resolves
+# `feed` to the Feed row; routes.py:865's `if not feed:` is False so `user` is never
+# looked up there. routes.py:867's `if not community and not feed and not user:`
+# guard does not fire, since `feed` is truthy. At routes.py:914, `if not feed:` is
+# again False, so the else at 923-924 runs: `user = None` explicitly. `community`
+# is never reassigned anywhere in this path, so it is still the None from 862.
+# routes.py:928 sets `announced = True`. So the Create/Update arm is entered
+# (routes.py:1193) with `user is None`, `community is None`, `announced is True` --
+# exactly the brief's claim. 5a's test_an_announce_from_a_feed_skips_the_inner_actor_walk
+# (tests/test_inbox_dispatch_announce.py:386-417) independently confirms `user is
+# None` is reached this way; this file adds the observation of what the Create/Update
+# arm specifically does with that state, since 5a's test never reaches core_activity's
+# 'Create'/'Update' branch (line 1193) at all -- it uses a 'Like' inner activity.
+
+
+def _seed_feed_announcer(host='peer.example'):
+    """A Feed resolvable as the OUTER Announce actor.
+
+    This is the whole crash surface in one fixture. When the preamble resolves
+    an Announce's actor to a FEED, its `if not feed:` takes the else, so `user`
+    is left None -- and `community` was never set either -- while `announced`
+    becomes True. 5a proved this shape reachable in
+    tests/test_inbox_dispatch_announce.py::_seed_announcing_feed.
+    """
+    make_site()
+    instance = make_instance(host)
+    feed = make_feed(instance)
+    return instance, feed
+
+
+def announced_create(feed, inner_object, *, inner_type='Create'):
+    """An Announce sent BY a feed, wrapping a Create/Update.
+
+    The preamble sets `core_activity = request_json['object']`, so the inner
+    dict IS the Create activity the arm then dispatches on. The inner `actor`
+    is deliberately absent: it is read only under `if not feed:`, which a feed
+    Announce skips, and including one would imply it mattered.
+    """
+    return inbox_activity(feed, activity_type='Announce',
+                          object={'id': f'{feed.ap_profile_id}/activities/inner',
+                                  'type': inner_type,
+                                  'object': inner_object})
+
+
+def test_a_feed_announced_group_update_crashes_on_a_none_community(app, db_session, monkeypatch):
+    """PINS the Group half of the crash. `announced` is True, so the arm skips
+    its `if not announced and not community:` resolution chain entirely and
+    `community` is still None at `community.is_local()`.
+
+    `refresh_community_profile` is NOT doubled: the AttributeError fires while
+    Python evaluates the guard, before any delegate is reached, so doubling
+    would change nothing and would only obscure what is being observed.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, feed = _seed_feed_announcer()
+
+    activity = announced_create(feed,
+                                {'type': 'Group', 'id': 'https://peer.example/c/books'},
+                                inner_type='Update')
+
+    with pytest.raises(AttributeError):
+        dispatch(activity)
+
+
+def test_a_feed_announced_poll_vote_crashes_on_a_none_user(app, db_session, monkeypatch):
+    """PINS the poll half. The crash is at `vote_for_choice(choice.id, user.id)`,
+    which is reached only once a post, its poll and a matching choice all
+    resolve -- so all three are seeded here. A test that seeded less would pass
+    for the wrong reason, by returning early before ever touching `user`.
+
+    `author` is created BEFORE `make_community`: make_community hardcodes
+    `user_id=1` (tests/factories.py:140), and `_seed_feed_announcer` creates no
+    User at all (only a Site, an Instance and a Feed) -- so a User has to exist
+    first or the community insert violates the user.id foreign key. Creating
+    `author` here first also makes it the row that lands on id 1, satisfying
+    that constraint; the instance from `_seed_feed_announcer` is likewise the
+    first Instance row, landing on id 1 to satisfy make_community's hardcoded
+    `instance_id=1`.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, feed = _seed_feed_announcer()
+    author = make_user(instance, 'author')
+    community = make_community(host='peer.example')
+    post = make_post(community, author, 'https://peer.example/post/1')
+    make_poll(post)
+    make_poll_choice(post, 'yes')
+    db.session.commit()
+
+    activity = announced_create(feed, poll_note(post.ap_id, 'yes'))
+
+    with pytest.raises(AttributeError):
+        dispatch(activity)
+
+
+def test_a_feed_announced_page_hands_process_new_content_two_nones(app, db_session, monkeypatch):
+    """PINS the third consequence, which does NOT crash here: the content path
+    is simply handed `user=None` and `community=None` and left to cope. The
+    delegate is doubled and its first two positional arguments asserted, so the
+    finding is recorded as what is actually passed rather than as speculation
+    about what the delegate does with it.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, feed = _seed_feed_announcer()
+    calls = record_moderation(monkeypatch, 'process_new_content')
+
+    dispatch(announced_create(feed, {'type': 'Page', 'id': 'https://peer.example/post/1'}))
+
+    assert len(calls['process_new_content']) == 1
+    args, kwargs = calls['process_new_content'][0]
+    assert args[0] is None        # user
+    assert args[1] is None        # community
+    assert args[4] is True        # announced
