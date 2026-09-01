@@ -1778,9 +1778,9 @@ def process_inbox_request(request_json, store_ap_json):
                         post = None
                         post_reply = None
                         target_ap_id = core_activity['object']['object']
-                        if '/post/' in core_activity['object']:
+                        if '/post/' in target_ap_id:
                             post = Post.get_by_ap_id(target_ap_id)
-                        elif '/comment/' in core_activity['object']:
+                        elif '/comment/' in target_ap_id:
                             post_reply = PostReply.get_by_ap_id(target_ap_id)
                         else:
                             post = Post.get_by_ap_id(target_ap_id)
@@ -1804,8 +1804,8 @@ def process_inbox_request(request_json, store_ap_json):
                                     'update post_reply set replies_enabled = :replies_enabled where path @> ARRAY[:parent_id]'),
                                                    {'parent_id': post_reply.id, 'replies_enabled': True})
                                 session.commit()
-                                add_to_modlog('unlock_post_reply', actor=mod, target_user=post.author, reason=reason,
-                                              community=post.community, reply=post_reply,
+                                add_to_modlog('unlock_post_reply', actor=mod, target_user=post_reply.author, reason=reason,
+                                              community=post_reply.community, reply=post_reply,
                                               link_text=shorten_string(post_reply.body), link=f'post/{post_reply.post_id}#comment_{post_reply.id}')
                                 log_incoming_ap(id, APLOG_LOCK, APLOG_SUCCESS, saved_json)
                             else:
