@@ -732,7 +732,7 @@ def test_a_feed_announced_poll_vote_is_refused_instead_of_crashing_on_a_none_use
     community = make_community(host='peer.example')
     post = make_post(community, author, 'https://peer.example/post/1')
     make_poll(post)
-    choice = make_poll_choice(post, 'yes')
+    make_poll_choice(post, 'yes')
     db.session.commit()
 
     activity = announced_create(feed, poll_note(post.ap_id, 'yes'))
@@ -780,7 +780,7 @@ def test_a_feed_announced_chat_message_is_refused_instead_of_crashing_on_a_none_
     """A fourth consequence Task 8 did not enumerate: the ChatMessage branch
     sits ABOVE the poll-vote/object_type dispatch, so a guard placed only
     below it (as this campaign's first pass at Fix A did) leaves this branch
-    unprotected. `process_chat`'s second statement is
+    unprotected. `process_chat`'s third statement is
     `sender = session.query(User).get(user.id)`, so `process_chat(None, ...)`
     crashes on `user.id` immediately -- and the inner object's `type` is
     entirely peer-controlled, so any peer announcing through a feed could

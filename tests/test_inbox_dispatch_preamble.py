@@ -659,7 +659,7 @@ def test_an_unexpected_activity_type_from_a_group_actor_is_refused(app, db_sessi
     above), so the refusal here is demonstrably about the actor being a
     Community rather than about the type being unknown. Verified against
     routes.py:874-889 that 'Like' genuinely reaches this `else`: the only
-    types intercepted earlier in the chain are 'Add'/'Remove' (877, NodeBB
+    types intercepted earlier in the chain are 'Add'/'Remove' (875, NodeBB
     topic management) and 'Update' (878, its own three-way split covered by
     the three tests above) -- every other type, 'Like' included, falls
     straight through to this `else`.
