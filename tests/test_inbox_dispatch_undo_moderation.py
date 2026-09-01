@@ -98,14 +98,17 @@ def test_unlocking_a_comment_records_the_reply_author_and_community(app, db_sess
     is doubled so the arguments can be inspected -- which is only safe now that
     evaluating them no longer raises.
 
-    The captured kwargs belong to the dispatcher's own task session, which is
-    closed by the time dispatch() returns (test_inbox_dispatch_preamble.py's
-    module docstring: a row this test commits is not visible to that session,
-    and the inverse holds too -- its objects don't outlive it here). Reading
-    a plain attribute like `.id` off them re-triggers a load against a closed
-    session and raises DetachedInstanceError, so identity is read via
-    `sa_inspect(obj).identity[0]` instead, the same pattern
-    test_inbox_dispatch_lock_delete.py already uses for this exact reason.
+    The captured kwargs are the real objects the dispatcher's own independent
+    session (get_task_session()) loaded and, per routes.py's `finally:
+    session.close()`, that session is closed before dispatch() returns here.
+    Its objects were already expired by an intervening session.commit()
+    before the (mocked) call captured them, so reading a plain attribute
+    like `.id` off them re-triggers a load against a closed session and
+    raises DetachedInstanceError. `sa_inspect(obj).identity[0]` reads the
+    primary-key tuple SQLAlchemy stores on the instance's state at load
+    time, which survives both expiration and detachment -- the same
+    reasoning and pattern test_inbox_dispatch_lock_delete.py:266-274 already
+    uses for this exact reason.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, mod, community, author, post = _seed_lockable_post()
