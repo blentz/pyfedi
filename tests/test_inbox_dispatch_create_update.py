@@ -355,3 +355,26 @@ def test_a_remote_create_into_a_local_only_community_is_refused(app, db_session,
     assert calls['process_new_content'] == []
     log = ActivityPubLog.query.one()
     assert log.exception_message == 'Remote Create in local_only community'
+
+
+def test_a_remote_create_into_a_non_local_only_community_proceeds_to_content(app, db_session, monkeypatch):
+    """The other side of `community.local_only`: seeded explicitly False
+    (the column's default, but stated explicitly here since resting an
+    assertion on a default is forbidden), the arm does NOT refuse and
+    reaches `process_new_content` -- proving `local_only` is actually
+    consulted rather than the mere truthiness of `community`.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = seed_community_owner('peer.example')
+    community = make_community(host='peer.example')
+    community.local_only = False
+    db.session.commit()
+    author = make_user(instance, 'author')
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: community)
+    monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
+    calls = record_moderation(monkeypatch, 'process_new_content')
+
+    dispatch(create_activity(author, {'type': 'Page', 'id': 'https://peer.example/post/1'}))
+
+    assert len(calls['process_new_content']) == 1
+    assert ActivityPubLog.query.filter_by(exception_message='Remote Create in local_only community').count() == 0
