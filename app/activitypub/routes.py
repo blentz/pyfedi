@@ -1802,7 +1802,7 @@ def process_inbox_request(request_json, store_ap_json):
                         if post_reply:
                             if post_reply.community.is_moderator(mod) or post_reply.community.is_instance_admin(mod):
                                 post_reply.replies_enabled = True
-                                db.session.execute(text(
+                                session.execute(text(
                                     'update post_reply set replies_enabled = :replies_enabled where path @> ARRAY[:parent_id]'),
                                                    {'parent_id': post_reply.id, 'replies_enabled': True})
                                 session.commit()
