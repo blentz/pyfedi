@@ -1,5 +1,6 @@
 """tests/test_inbox_dispatch_undo_moderation.py"""
 import pytest
+from sqlalchemy import inspect as sa_inspect
 
 from app import db
 from app.activitypub import routes as activitypub_routes
@@ -53,68 +54,46 @@ def test_a_successful_post_unlock_also_logs_a_contradictory_failure(app, db_sess
     assert logs[1].exception_message == 'Unlock: post not found'
 
 
-def test_the_post_and_comment_url_branches_are_dead(app, db_session, monkeypatch):
-    """PINS FIX 2's defect. `'/post/' in core_activity['object']` and `elif
-    '/comment/' in core_activity['object']` test the DICT's keys, not the
-    target string, so neither branch can ever match however the target's id
-    is spelled -- every Undo/Lock falls to the `else` fallback, which tries
-    `Post.get_by_ap_id` first and only tries `PostReply.get_by_ap_id` if
-    that misses.
-
-    A decoy distinguishes this from a fix, since for a comment-shaped target
-    the fallback's failed Post lookup would otherwise be unobservable (it
-    would just miss and fall through to the same PostReply resolution a
-    correct `elif '/comment/' in target_ap_id` would reach directly). Here a
-    Post and a PostReply are seeded with the SAME comment-shaped ap_id: if
-    '/comment/' were tested against the STRING (the fix), the reply would be
-    selected directly and the decoy Post would never be looked at. Buggy as
-    observed here: the `else` fallback's `Post.get_by_ap_id` call runs
-    regardless of the target's shape, finds the decoy Post first, and locks
-    IT -- leaving the reply, the intended target, untouched. That is only
-    explicable if the membership test's operand is the dict (always False
-    for both branches, so the fallback always runs first), never the target
-    string.
+def test_the_comment_url_branch_selects_a_reply_directly(app, db_session, monkeypatch):
+    """FIX 2. The membership test now runs against `target_ap_id`, the string,
+    so an id containing '/comment/' selects PostReply WITHOUT first trying
+    Post.get_by_ap_id. Proved by seeding a Post whose ap_id is identical to the
+    reply's: if the else fallback were still running it would find that post
+    first and unlock IT instead.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, mod, community, author, post = _seed_lockable_post()
-    decoy_ap_id = 'https://peer.example/comment/1'
-    decoy = make_post(community, author, decoy_ap_id)
+    decoy = make_post(community, author, 'https://peer.example/comment/1')
     decoy.comments_enabled = False
     reply = make_post_reply(post, author)
-    reply.ap_id = decoy_ap_id
+    reply.ap_id = 'https://peer.example/comment/1'
     reply.replies_enabled = False
     db.session.commit()
-
-    activity = inbox_activity(mod, activity_type='Undo',
-                              object={'type': 'Lock', 'object': decoy_ap_id})
-    assert '/post/' not in activity['object']   # the dict has no such KEY
-    assert '/comment/' not in activity['object']
+    decoy_id, reply_id = decoy.id, reply.id
 
     record_moderation(monkeypatch, 'add_to_modlog')
 
-    decoy_id = decoy.id
-    reply_id = reply.id
-
-    dispatch(activity)
+    dispatch(undo_lock_activity(mod, 'https://peer.example/comment/1'))
 
     db.session.expire_all()
-    assert db.session.get(type(decoy), decoy_id).comments_enabled is True   # the decoy, wrongly unlocked
-    assert db.session.get(type(reply), reply_id).replies_enabled is False   # the real target, untouched
+    assert db.session.get(type(reply), reply_id).replies_enabled is True
+    assert db.session.get(type(decoy), decoy_id).comments_enabled is False  # decoy untouched
 
 
-def test_unlocking_a_comment_crashes_on_a_none_post(app, db_session, monkeypatch):
-    """PINS FIX 1's defect, the exact twin of D97 (fixed in b79f43f9 in the
-    Lock arm's own comment branch). The reply IS unlocked and committed first,
-    then `add_to_modlog(..., target_user=post.author, community=post.community)`
-    dereferences `post`, which is None on this branch.
+def test_unlocking_a_comment_records_the_reply_author_and_community(app, db_session, monkeypatch):
+    """FIX 1, the twin of D97. The modlog entry now reads its author and
+    community off `post_reply`, not off the always-None `post`. add_to_modlog
+    is doubled so the arguments can be inspected -- which is only safe now that
+    evaluating them no longer raises.
 
-    add_to_modlog is deliberately NOT doubled here, though doubling would be
-    harmless either way: `target_user=post.author` is evaluated while
-    building the call's keyword-argument frame, before either the real
-    function or a double ever runs, so the `AttributeError` fires
-    identically whether or not `add_to_modlog` is doubled -- doubling
-    cannot swallow it. Left undoubled since doubling would change nothing
-    about what this test observes.
+    The captured kwargs belong to the dispatcher's own task session, which is
+    closed by the time dispatch() returns (test_inbox_dispatch_preamble.py's
+    module docstring: a row this test commits is not visible to that session,
+    and the inverse holds too -- its objects don't outlive it here). Reading
+    a plain attribute like `.id` off them re-triggers a load against a closed
+    session and raises DetachedInstanceError, so identity is read via
+    `sa_inspect(obj).identity[0]` instead, the same pattern
+    test_inbox_dispatch_lock_delete.py already uses for this exact reason.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, mod, community, author, post = _seed_lockable_post()
@@ -122,9 +101,21 @@ def test_unlocking_a_comment_crashes_on_a_none_post(app, db_session, monkeypatch
     reply.ap_id = 'https://peer.example/comment/1'
     reply.replies_enabled = False
     db.session.commit()
+    reply_id = reply.id
 
-    with pytest.raises(AttributeError):
-        dispatch(undo_lock_activity(mod, reply.ap_id))
+    calls = record_moderation(monkeypatch, 'add_to_modlog')
+
+    dispatch(undo_lock_activity(mod, 'https://peer.example/comment/1'))
+
+    db.session.expire_all()
+    assert db.session.get(type(reply), reply_id).replies_enabled is True
+
+    assert len(calls['add_to_modlog']) == 1
+    args, kwargs = calls['add_to_modlog'][0]
+    assert args[0] == 'unlock_post_reply'
+    assert sa_inspect(kwargs['target_user']).identity[0] == author.id
+    assert sa_inspect(kwargs['community']).identity[0] == community.id
+    assert sa_inspect(kwargs['reply']).identity[0] == reply_id
 
 
 def test_unlocking_without_permission_logs_failure(app, db_session, monkeypatch):
