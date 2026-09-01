@@ -6,8 +6,9 @@ import pytest
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.models import ActivityPubLog, utcnow
-from tests.factories import (inbox_activity, make_community, make_instance, make_poll,
-                             make_poll_choice, make_post, make_user, seed_community_owner)
+from tests.factories import (inbox_activity, make_community, make_community_member,
+                             make_instance, make_poll, make_poll_choice, make_post,
+                             make_user, seed_community_owner)
 from tests.test_inbox_dispatch_lock_delete import record_moderation
 from tests.test_inbox_dispatch_preamble import dispatch
 
@@ -537,11 +538,17 @@ def test_a_group_update_of_a_REMOTE_community_refreshes_without_announcing(app, 
     never sets `ap_id`, and `Community.is_local()` returns True whenever
     `ap_id is None` regardless of `host` -- so a community built only with
     `host='peer.example'` is still `is_local() == True` and this test would
-    exercise the wrong branch (and silently pass for the wrong reason, since a
-    local community also reaches `refresh_community_profile` when its editor
-    IS a moderator). `ap_id` is set explicitly here to a URL that does not
-    start with `SERVER_URL`, which is the only thing `is_local()` actually
-    checks once `ap_id` is not None.
+    exercise the wrong branch. `editor` here is never made a moderator, so
+    without the `ap_id` fix below this test would not silently pass -- it
+    would fail loudly, with the guard denying as 'Comm edit by
+    non-moderator' instead of succeeding. `ap_id` is set explicitly here to
+    a URL that does not start with `SERVER_URL`, which is the only thing
+    `is_local()` actually checks once `ap_id` is not None. The local
+    community's moderator-edit combination (`refresh_community_profile`
+    AND `announce_activity_to_followers` both firing) is exercised
+    separately by
+    `test_a_group_update_from_a_LOCAL_communitys_moderator_refreshes_and_announces`
+    below.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance = seed_community_owner('peer.example')
@@ -559,5 +566,46 @@ def test_a_group_update_of_a_REMOTE_community_refreshes_without_announcing(app, 
 
     assert len(calls['refresh_community_profile']) == 1
     assert calls['announce_activity_to_followers'] == []
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_a_group_update_from_a_LOCAL_communitys_moderator_refreshes_and_announces(app, db_session, monkeypatch):
+    """The success path the REMOTE test cannot reach: a LOCAL community
+    (`ap_id` left `None` by the bare `make_community` factory, so
+    `is_local()` is True via its first disjunct) whose editor IS a
+    moderator. The permission guard's `not community.is_moderator(user)`
+    conjunct is then False, so the guard as a whole is False and the refresh
+    runs; `community.is_local()` is checked a SECOND time afterward and is
+    True, so `announce_activity_to_followers` also fires here -- the one
+    statement in the arm no other test in this file reaches.
+
+    `make_community_member(editor, community, is_moderator=True)` creates a
+    `CommunityMember` row with `is_moderator=True`, `is_owner=False`,
+    `is_banned=False` (all set explicitly by the factory, not left to
+    column defaults). `Community.is_moderator(user)` (`app/models.py:719`)
+    delegates to `moderators()` (`app/models.py:699`), which selects
+    `CommunityMember` rows for this community where `is_owner OR
+    is_moderator` is true AND `is_banned == False`, then checks whether any
+    such row's `user_id` matches. This row satisfies that: `is_moderator`
+    is True and `is_banned` is False, so `editor` is picked up by
+    `moderators()` and `is_moderator(editor)` is True -- confirmed by
+    reading both methods, not assumed.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = seed_community_owner('peer.example')
+    local_community = make_community(host=app.config['SERVER_NAME'])
+    editor = make_user(instance, 'editor')
+    make_community_member(editor, local_community, is_moderator=True)
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: local_community)
+    monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
+    calls = record_moderation(monkeypatch, 'refresh_community_profile',
+                              'announce_activity_to_followers')
+
+    dispatch(create_activity(editor, {'type': 'Group', 'id': local_community.ap_profile_id},
+                             activity_type='Update'))
+
+    assert len(calls['refresh_community_profile']) == 1
+    assert len(calls['announce_activity_to_followers']) == 1
     log = ActivityPubLog.query.one()
     assert log.result == 'success'
