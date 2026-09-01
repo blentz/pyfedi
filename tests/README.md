@@ -1802,10 +1802,18 @@ When `record_moderation` (or an equivalent double) captures the arguments a
 dispatcher-internal call was made with, those arguments are real ORM
 objects loaded inside `process_inbox_request`'s own `get_task_session()`
 session — closed (`finally: session.close()`) before `dispatch()` returns
-to the test, and already expired by an intervening `session.commit()`
-before the double captured them. A plain `.id` access on one of them
-re-triggers a load against a closed session and raises
-`sqlalchemy.orm.exc.DetachedInstanceError`. Use
+to the test. **When an intervening `session.commit()` has expired them**
+before the double captured them, a plain `.id` access on one of them
+re-triggers a load against the now-closed session and raises
+`sqlalchemy.orm.exc.DetachedInstanceError` — this is not automatic on every
+captured argument, only ones a commit expired first: several assertions in
+sub-project 5d's own tests read `.id` off captured arguments and pass
+cleanly, because nothing committed between the object's load and the
+double's capture of it (e.g.
+`tests/test_inbox_dispatch_undo_content.py`'s
+`test_undo_delete_restores_a_deleted_post_and_announces_it`, which reads
+`restorer_arg.id` and `to_restore_arg.id` off `restore_post_or_comment`'s
+captured arguments). Where a commit does intervene, use
 `sqlalchemy.inspect(obj).identity[0]` instead — it reads the primary-key
 tuple SQLAlchemy already stored on the instance's state at load time,
 which survives both expiration and detachment. Established in sub-project
