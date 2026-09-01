@@ -441,3 +441,123 @@ def test_a_create_of_a_group_is_unacceptable_because_the_group_branch_requires_u
     assert calls['refresh_community_profile'] == []
     log = ActivityPubLog.query.one()
     assert log.exception_message == 'Unacceptable type (create): Group'
+
+
+def _seed_video_post(host='peer.example'):
+    instance = seed_community_owner(host)
+    community = make_community(host=host)
+    owner = make_user(instance, 'owner')
+    post = make_post(community, owner, f'https://{host}/videos/watch/1')
+    db.session.commit()
+    return instance, community, owner, post
+
+
+def test_a_peertube_video_edit_by_its_owner_updates_the_post(app, db_session, monkeypatch):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, owner, post = _seed_video_post()
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: community)
+    monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
+    calls = record_moderation(monkeypatch, 'update_post_from_activity')
+
+    dispatch(create_activity(owner, {'type': 'Video', 'id': post.ap_id}, activity_type='Update'))
+
+    assert len(calls['update_post_from_activity']) == 1
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_a_peertube_video_edit_by_another_user_is_denied(app, db_session, monkeypatch):
+    """`user.id == post.user_id` is the ownership test; a different actor is
+    refused. Paired with the test above so the guard dies in both directions.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, owner, post = _seed_video_post()
+    interloper = make_user(instance, 'interloper')
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: community)
+    monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
+    calls = record_moderation(monkeypatch, 'update_post_from_activity')
+
+    dispatch(create_activity(interloper, {'type': 'Video', 'id': post.ap_id}, activity_type='Update'))
+
+    assert calls['update_post_from_activity'] == []
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Edit attempt denied'
+
+
+def test_a_peertube_video_edit_for_an_unknown_post_is_refused(app, db_session, monkeypatch):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, owner, post = _seed_video_post()
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: community)
+    monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
+
+    dispatch(create_activity(owner, {'type': 'Video', 'id': 'https://peer.example/videos/watch/404'},
+                             activity_type='Update'))
+
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'PeerTube post not found'
+
+
+def test_a_group_update_from_a_non_moderator_of_a_LOCAL_community_is_refused(app, db_session, monkeypatch):
+    """`community.is_local() and not community.is_moderator(user)`. Both
+    conjuncts matter: this test supplies the local half, and the remote-community
+    test below supplies the other.
+
+    `make_community` never sets `ap_id` (see `tests/factories.py`'s
+    `make_community`), so `Community.is_local()`
+    (`self.ap_id is None or self.profile_id().startswith(SERVER_URL)`,
+    `app/models.py:778`) is True through its FIRST disjunct -- `ap_id is
+    None` -- for every community this factory builds, regardless of which
+    `host` is passed. This community is local because of that, not because
+    `host` was given as `app.config['SERVER_NAME']`; passing that host is
+    harmless but not what makes it local.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = seed_community_owner('peer.example')
+    local_community = make_community(host=app.config['SERVER_NAME'])
+    outsider = make_user(instance, 'outsider')
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: local_community)
+    monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
+    calls = record_moderation(monkeypatch, 'refresh_community_profile')
+
+    dispatch(create_activity(outsider, {'type': 'Group', 'id': local_community.ap_profile_id},
+                             activity_type='Update'))
+
+    assert calls['refresh_community_profile'] == []
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Comm edit by non-moderator'
+
+
+def test_a_group_update_of_a_REMOTE_community_refreshes_without_announcing(app, db_session, monkeypatch):
+    """A remote community: `is_local()` is False, so the permission guard's
+    first conjunct short-circuits and the refresh runs. `announce_activity_to_followers`
+    is gated on `community.is_local()` a second time, so it must NOT fire here --
+    which is what distinguishes this test from a local-community success.
+
+    The bare factory is NOT enough to make this community remote: `make_community`
+    never sets `ap_id`, and `Community.is_local()` returns True whenever
+    `ap_id is None` regardless of `host` -- so a community built only with
+    `host='peer.example'` is still `is_local() == True` and this test would
+    exercise the wrong branch (and silently pass for the wrong reason, since a
+    local community also reaches `refresh_community_profile` when its editor
+    IS a moderator). `ap_id` is set explicitly here to a URL that does not
+    start with `SERVER_URL`, which is the only thing `is_local()` actually
+    checks once `ap_id` is not None.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = seed_community_owner('peer.example')
+    remote_community = make_community(host='peer.example')
+    remote_community.ap_id = 'https://peer.example/c/microblogs'
+    db.session.commit()
+    editor = make_user(instance, 'editor')
+    monkeypatch.setattr(activitypub_routes, 'find_community', lambda request_json: remote_community)
+    monkeypatch.setattr(activitypub_routes, 'ensure_domains_match', lambda activity: True)
+    calls = record_moderation(monkeypatch, 'refresh_community_profile',
+                              'announce_activity_to_followers')
+
+    dispatch(create_activity(editor, {'type': 'Group', 'id': remote_community.ap_profile_id},
+                             activity_type='Update'))
+
+    assert len(calls['refresh_community_profile']) == 1
+    assert calls['announce_activity_to_followers'] == []
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
