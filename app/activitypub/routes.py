@@ -1780,6 +1780,8 @@ def process_inbox_request(request_json, store_ap_json):
                         target_ap_id = core_activity['object']['object']
                         if '/post/' in target_ap_id:
                             post = Post.get_by_ap_id(target_ap_id)
+                            if post is None:
+                                post_reply = PostReply.get_by_ap_id(target_ap_id)
                         elif '/comment/' in target_ap_id:
                             post_reply = PostReply.get_by_ap_id(target_ap_id)
                         else:

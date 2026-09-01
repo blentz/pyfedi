@@ -92,6 +92,41 @@ def test_the_comment_url_branch_selects_a_reply_directly(app, db_session, monkey
     assert db.session.get(type(decoy), decoy_id).comments_enabled is False  # decoy untouched
 
 
+def test_a_nodebb_reply_whose_url_contains_post_still_falls_back_to_the_reply(
+        app, db_session, monkeypatch):
+    """FIX 2 REGRESSION. NodeBB replies carry '/post/' in their ap_id --
+    app/activitypub/util.py:1984 calls this out by name as a misleading hint
+    -- so routing every '/post/' id to Post.get_by_ap_id alone loses replies
+    that live at such an id. Both canonical resolvers in this codebase keep
+    a PostReply fallback for exactly this case: find_reply_parent
+    (util.py:1970-1994) and _find_liked_object_id (util.py:2007-2022). Fix 2
+    dropped that fallback from the Undo/Lock '/post/' branch; this restores
+    it there, scoped to Undo/Lock only -- the sibling Lock arm has the same
+    gap and is deliberately left untouched (registered as a separate
+    finding, not this task's to fix).
+
+    No Post carries this ap_id, only the PostReply does, so a correct
+    fallback must reach the reply and log success; the pre-fix code finds
+    neither object and logs 'Unlock: post not found' instead.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, mod, community, author, post = _seed_lockable_post()
+    reply = make_post_reply(post, author)
+    reply.ap_id = 'https://peer.example/post/999'  # NodeBB-style: '/post/' but not a Post row
+    reply.replies_enabled = False
+    db.session.commit()
+    reply_id = reply.id
+
+    dispatch(undo_lock_activity(mod, reply.ap_id))
+
+    db.session.expire_all()
+    assert db.session.get(type(reply), reply_id).replies_enabled is True
+
+    logs = ActivityPubLog.query.all()
+    assert len(logs) == 1
+    assert logs[0].result == 'success'
+
+
 def test_unlocking_a_comment_records_the_reply_author_and_community(app, db_session, monkeypatch):
     """FIX 1, the twin of D97. The modlog entry now reads its author and
     community off `post_reply`, not off the always-None `post`. add_to_modlog
