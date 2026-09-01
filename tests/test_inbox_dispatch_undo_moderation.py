@@ -1,5 +1,4 @@
 """tests/test_inbox_dispatch_undo_moderation.py"""
-import pytest
 from sqlalchemy import inspect as sa_inspect
 
 from app import db
@@ -184,3 +183,243 @@ def test_unlocking_without_permission_logs_failure(app, db_session, monkeypatch)
     logs = ActivityPubLog.query.order_by(ActivityPubLog.id).all()
     assert logs[0].result == 'failure'
     assert logs[0].exception_message == 'Unlock: Does not have permission'
+
+
+# --- Task 10: the Undo/Block arm (routes.py:1819-1869) -- both unban paths ---
+
+
+def undo_block_activity(actor, blocked_ap_id, target, **outer):
+    """An Undo wrapping a Block. `target` lives on the INNER object here,
+    unlike the Block arm (test_inbox_dispatch_block.py) where it sits on the
+    outer activity.
+    """
+    return inbox_activity(actor, activity_type='Undo',
+                          object={'type': 'Block', 'object': blocked_ap_id,
+                                  'target': target}, **outer)
+
+
+def _seed_site_unban(host='peer.example', grant_admin=True):
+    """Unblocker and unblocked share ONE instance, and unblocked is remote --
+    the only combination that reaches the ordinary site-unban write, since the
+    is_local() and cross-instance checks both return before it.
+    """
+    instance = make_instance(host)
+    unblocker = make_user(instance, 'admin')
+    unblocker.ap_fetched_at = utcnow()
+    if grant_admin:
+        db.session.add(InstanceRole(instance_id=instance.id, user_id=unblocker.id, role='admin'))
+    victim = make_user(instance, 'victim')
+    victim.banned = True
+    victim.banned_until = utcnow()
+    db.session.commit()
+    return instance, unblocker, victim
+
+
+def test_site_unban_clears_banned_and_the_expiry(app, db_session, monkeypatch):
+    """The ordinary site-unban write. Both columns are seeded to non-default
+    values first, so clearing them is real evidence. This is the path whose
+    correct use of `banned_until` was the decisive evidence in D91 that the
+    Block arm's `ban_until` was a typo.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, unblocker, victim = _seed_site_unban()
+    victim_id = victim.id
+
+    dispatch(undo_block_activity(unblocker, victim.ap_profile_id, f'https://{instance.domain}'))
+
+    db.session.expire_all()
+    fresh = db.session.get(User, victim_id)
+    assert fresh.banned is False
+    assert fresh.banned_until is None
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_site_unban_by_a_non_admin_is_refused(app, db_session, monkeypatch):
+    """`is_instance_admin()` guard, checked before locality."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, unblocker, victim = _seed_site_unban(grant_admin=False)
+    victim_id = victim.id
+
+    dispatch(undo_block_activity(unblocker, victim.ap_profile_id, f'https://{instance.domain}'))
+
+    db.session.expire_all()
+    assert db.session.get(User, victim_id).banned is True  # untouched
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Does not have permission'
+
+
+def test_site_unban_of_an_unknown_user_is_ignored(app, db_session, monkeypatch):
+    """No User row matches the lowercased ap_profile_id."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, unblocker, victim = _seed_site_unban()
+
+    dispatch(undo_block_activity(unblocker, 'https://peer.example/u/ghost',
+                                 f'https://{instance.domain}'))
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'ignored'
+    assert log.exception_message == 'Does not exist here'
+
+
+def test_site_unban_of_a_local_user_delegates_to_unban_user(app, db_session, monkeypatch):
+    """`unblocked.is_local()` -- delegates and returns before the direct write."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, unblocker, _ = _seed_site_unban()
+    victim = make_user(None, 'victim2', local=True)
+    victim.ap_profile_id = f"{app.config['SERVER_URL']}/u/victim2".lower()
+    victim.banned = True
+    db.session.commit()
+    victim_id = victim.id
+
+    calls = record_moderation(monkeypatch, 'unban_user')
+
+    dispatch(undo_block_activity(unblocker, victim.ap_profile_id, f'https://{instance.domain}'))
+
+    assert len(calls['unban_user']) == 1
+    db.session.expire_all()
+    assert db.session.get(User, victim_id).banned is True  # delegate was doubled
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Remote Admin in unbanning one of our users from their site'
+
+
+def test_site_unban_of_a_user_on_a_third_instance_is_only_monitored(app, db_session, monkeypatch):
+    """`unblocked.instance_id != unblocker.instance_id` -- no unban at all."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, unblocker, _ = _seed_site_unban()
+    other = make_instance('third.example')
+    victim = make_user(other, 'victim3')
+    victim.banned = True
+    db.session.commit()
+    victim_id = victim.id
+
+    calls = record_moderation(monkeypatch, 'unban_user')
+
+    dispatch(undo_block_activity(unblocker, victim.ap_profile_id, f'https://{instance.domain}'))
+
+    assert calls['unban_user'] == []
+    db.session.expire_all()
+    assert db.session.get(User, victim_id).banned is True
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Remote Admin is unbanning a user of a different instance from their site'
+
+
+def test_community_unban_delegates_to_unban_user(app, db_session, monkeypatch):
+    """target.count('/') >= 4 selects the community branch. The unblocker is
+    seeded as a moderator so the permission guard passes.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = seed_community_owner('peer.example')
+    mod = make_user(instance, 'mod')
+    community = make_community(host='peer.example')
+    make_community_member(mod, community, is_moderator=True)
+    victim = make_user(instance, 'victim')
+    victim.banned = True
+    db.session.commit()
+
+    calls = record_moderation(monkeypatch, 'unban_user')
+
+    dispatch(undo_block_activity(mod, victim.ap_profile_id, community.ap_profile_id))
+
+    assert len(calls['unban_user']) == 1
+    args, kwargs = calls['unban_user'][0]
+    assert sa_inspect(args[2]).identity[0] == community.id
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_community_unban_without_permission_is_refused(app, db_session, monkeypatch):
+    """Neither moderator nor instance admin."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = seed_community_owner('peer.example')
+    outsider = make_user(instance, 'outsider')
+    community = make_community(host='peer.example')
+    victim = make_user(instance, 'victim')
+    victim.banned = True
+    db.session.commit()
+
+    calls = record_moderation(monkeypatch, 'unban_user')
+
+    dispatch(undo_block_activity(outsider, victim.ap_profile_id, community.ap_profile_id))
+
+    assert calls['unban_user'] == []
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Does not have permission'
+
+
+def test_community_unban_by_an_instance_admin_who_is_not_a_moderator_succeeds(app, db_session, monkeypatch):
+    """The guard's OTHER half: `not community.is_moderator(unblocker) and not
+    community.is_instance_admin(unblocker)`. This fixture makes
+    `is_instance_admin` True (an InstanceRole naming the COMMUNITY's home
+    instance, per Community.is_instance_admin's own instance_id,
+    app/models.py:752-757 -- not the unblocker's own instance_id) and
+    `is_moderator` False (no CommunityMember row at all). The two sibling
+    tests above and below only ever seed a moderator, so neither can
+    distinguish dropping this second conjunct from dropping the whole guard --
+    this is the one that can.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = seed_community_owner('peer.example')
+    admin = make_user(instance, 'admin')
+    community = make_community(host='peer.example')
+    db.session.add(InstanceRole(instance_id=community.instance_id, user_id=admin.id, role='admin'))
+    victim = make_user(instance, 'victim')
+    victim.banned = True
+    db.session.commit()
+    assert community.is_instance_admin(admin) is True
+    assert community.is_moderator(admin) is False
+
+    calls = record_moderation(monkeypatch, 'unban_user')
+
+    dispatch(undo_block_activity(admin, victim.ap_profile_id, community.ap_profile_id))
+
+    assert len(calls['unban_user']) == 1
+    args, kwargs = calls['unban_user'][0]
+    assert sa_inspect(args[2]).identity[0] == community.id
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_community_unban_of_an_unfound_community_is_ignored(app, db_session, monkeypatch):
+    """`find_actor_or_create_cached` doubled, but scoped to ONLY the one URL
+    this test wants unresolvable -- an unconditional double also intercepts
+    the outer activity's own signed actor, resolved by
+    process_inbox_request's preamble (routes.py:871) before ANY Undo arm
+    runs. A blanket double fails that resolution first, with 'Actor was not
+    a user or a community', and this branch is never reached at all. The
+    real function is captured before patching and delegated to for every
+    other URL -- including the preamble's own lookup of `mod` -- so only the
+    unfound community's target is actually unresolvable.
+
+    An undoubled lookup of the unfound target would attempt a real fetch,
+    which block_outbound_http turns into a respx error -- an INFRASTRUCTURE
+    failure that would masquerade as a behavioural one -- so doubling is
+    necessary here, not merely convenient.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = make_instance('peer.example')
+    mod = make_user(instance, 'mod')
+    mod.ap_fetched_at = utcnow()
+    victim = make_user(instance, 'victim')
+    victim.banned = True
+    db.session.commit()
+
+    unfound_target = 'https://peer.example/c/gone/moderators'
+    real_find_actor_or_create_cached = activitypub_routes.find_actor_or_create_cached
+
+    def scoped_find_actor_or_create_cached(actor, *args, **kwargs):
+        actor_id = actor['id'] if isinstance(actor, dict) else actor
+        if actor_id == unfound_target:
+            return None
+        return real_find_actor_or_create_cached(actor, *args, **kwargs)
+
+    monkeypatch.setattr(activitypub_routes, 'find_actor_or_create_cached',
+                        scoped_find_actor_or_create_cached)
+
+    dispatch(undo_block_activity(mod, victim.ap_profile_id, unfound_target))
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'ignored'
+    assert log.exception_message == 'Blocked or unfound community'
