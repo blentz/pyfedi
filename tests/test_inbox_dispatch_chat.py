@@ -356,3 +356,84 @@ def test_an_unhandled_chat_lets_the_arm_continue_to_the_domain_check(app, db_ses
 
     messages = [l.exception_message for l in ActivityPubLog.query.all()]
     assert 'Domains do not match' in messages
+
+
+def test_a_message_containing_a_blocked_phrase_is_refused(app, db_session, monkeypatch):
+    """`blocked_phrases()` reads newline-separated `Site.blocked_phrases`, and
+    `make_site()` sets it to '' — so this test writes the column itself. The
+    refusal message embeds the matched phrase, so the assertion pins the whole
+    string rather than just the failure.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair()
+    sender.created = utcnow() - timedelta(days=2)
+    db_session.query(Site).get(1).blocked_phrases = 'buymynft\nspamword'
+    db.session.commit()
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id,
+                           content='hello buymynft friend', id='https://peer.example/pm/1'))
+
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Blocked because phrase buymynft'
+    assert db_session.query(ChatMessage).count() == 0
+
+
+def test_a_message_containing_no_blocked_phrase_is_delivered(app, db_session, monkeypatch):
+    """The other side: the site HAS blocked phrases configured, but this message
+    matches none of them. Paired with the test above so the filter cannot be
+    removed without a failure — a test with no phrases configured would pass
+    either way.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair()
+    sender.created = utcnow() - timedelta(days=2)
+    db_session.query(Site).get(1).blocked_phrases = 'buymynft\nspamword'
+    db.session.commit()
+    record_moderation(monkeypatch, 'publish_sse_event')
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id,
+                           content='an ordinary message', id='https://peer.example/pm/1'))
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_an_existing_conversation_is_reused_rather_than_duplicated(app, db_session, monkeypatch):
+    """`find_existing_conversation` joins `conversation_member` twice, so a
+    conversation is only found when BOTH parties are members — which is exactly
+    what `make_conversation` builds. Reuse is asserted by the total conversation
+    count staying at 1, not merely by the message landing.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair()
+    sender.created = utcnow() - timedelta(days=2)
+    existing = make_conversation(sender, recipient)
+    existing_id = existing.id
+    record_moderation(monkeypatch, 'publish_sse_event')
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id,
+                           content='hello', id='https://peer.example/pm/1'))
+
+    db.session.expire_all()
+    assert db_session.query(Conversation).count() == 1
+    message = db_session.query(ChatMessage).one()
+    assert message.conversation_id == existing_id
+
+
+def test_a_first_message_creates_the_conversation(app, db_session, monkeypatch):
+    """No conversation exists, so one is created with both parties as members —
+    asserted through `find_existing_conversation` so the association rows are
+    proven written, not just the Conversation row.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair()
+    sender.created = utcnow() - timedelta(days=2)
+    db.session.commit()
+    record_moderation(monkeypatch, 'publish_sse_event')
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id,
+                           content='hello', id='https://peer.example/pm/1'))
+
+    db.session.expire_all()
+    assert db_session.query(Conversation).count() == 1
+    assert Conversation.find_existing_conversation(recipient=recipient, sender=sender) is not None
