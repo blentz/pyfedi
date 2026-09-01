@@ -182,14 +182,17 @@ def test_breaking_any_one_conjunct_leaves_the_poll_path(app, db_session, monkeyp
     assert len(calls['process_new_content']) == 1, description
 
 
-def test_a_poll_vote_for_an_unknown_post_is_dropped_silently(app, db_session, monkeypatch):
-    """`post_being_replied_to` is None, so the block falls to its unconditional
-    `return` having logged NOTHING -- asserted with LOG_ACTIVITYPUB_TO_DB
-    explicitly True so the zero is real silence, not logging switched off.
+def test_a_poll_vote_for_an_unknown_post_is_now_logged(app, db_session, monkeypatch):
+    """Was `test_a_poll_vote_for_an_unknown_post_is_dropped_silently`.
+    `post_being_replied_to` is None, so the block falls to its unconditional
+    `return` -- but now with a log naming this specific outcome, distinct from
+    the other two silent branches. `LOG_ACTIVITYPUB_TO_DB` is explicit True so
+    the log is real evidence, not logging switched off producing a false zero.
 
-    It also does NOT fall through to content handling: `process_new_content` is
-    doubled and must not be called. That combination -- consumed, unlogged,
-    unprocessed -- is the finding this test exists to pin.
+    It still does NOT fall through to content handling: `process_new_content`
+    is doubled and must not be called. The unconditional `return` at the end
+    of the poll block is unchanged and is not this test's concern -- only that
+    the outcome is now logged.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, voter, post, poll, choice = seed_poll_post()
@@ -197,14 +200,18 @@ def test_a_poll_vote_for_an_unknown_post_is_dropped_silently(app, db_session, mo
 
     dispatch(create_activity(voter, poll_note('https://peer.example/post/404', 'yes')))
 
-    assert ActivityPubLog.query.count() == 0
     assert calls['process_new_content'] == []
+    log = ActivityPubLog.query.one()
+    assert log.result == 'ignored'
+    assert log.exception_message == 'Poll vote for an unknown post'
 
 
-def test_a_poll_vote_on_a_post_with_no_poll_is_dropped_silently(app, db_session, monkeypatch):
-    """`poll_data` is None: the post exists but carries no Poll row. Same
-    silence as above, reached by a different conjunct of `if poll_data and
-    choice:` -- which is why this test and the next are separate.
+def test_a_poll_vote_on_a_post_with_no_poll_is_now_logged(app, db_session, monkeypatch):
+    """Was `test_a_poll_vote_on_a_post_with_no_poll_is_dropped_silently`.
+    `poll_data` is None: the post exists but carries no Poll row. Reached by a
+    different conjunct of `if poll_data and choice:` than the unknown-post and
+    unknown-choice cases -- which is why this test and those are separate, and
+    why the message must differ from both.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance = seed_community_owner('peer.example')
@@ -216,12 +223,16 @@ def test_a_poll_vote_on_a_post_with_no_poll_is_dropped_silently(app, db_session,
 
     dispatch(create_activity(voter, poll_note(post.ap_id, 'yes')))
 
-    assert ActivityPubLog.query.count() == 0
+    log = ActivityPubLog.query.one()
+    assert log.result == 'ignored'
+    assert log.exception_message == 'Poll vote for a post with no poll'
 
 
-def test_a_poll_vote_for_an_unknown_choice_is_dropped_silently(app, db_session, monkeypatch):
-    """`choice` is None: the poll exists but has no option with this `name`.
-    The other conjunct of `if poll_data and choice:`.
+def test_a_poll_vote_for_an_unknown_choice_is_now_logged(app, db_session, monkeypatch):
+    """Was `test_a_poll_vote_for_an_unknown_choice_is_dropped_silently`.
+    `choice` is None: the poll exists but has no option with this `name`. The
+    other conjunct of `if poll_data and choice:`, distinct from the no-poll
+    case above -- so its message must be distinct too.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, voter, post, poll, choice = seed_poll_post(choice_text='yes')
@@ -230,7 +241,9 @@ def test_a_poll_vote_for_an_unknown_choice_is_dropped_silently(app, db_session, 
 
     from app.models import PollChoiceVote
     assert db_session.query(PollChoiceVote).count() == 0
-    assert ActivityPubLog.query.count() == 0
+    log = ActivityPubLog.query.one()
+    assert log.result == 'ignored'
+    assert log.exception_message == 'Poll vote for an unknown choice'
 
 
 def test_a_poll_vote_on_a_local_authors_post_stamps_it_and_schedules_an_edit(app, db_session, monkeypatch):

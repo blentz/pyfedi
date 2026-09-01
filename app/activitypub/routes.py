@@ -1229,6 +1229,15 @@ def process_inbox_request(request_json, store_ap_json):
                                         post_being_replied_to.edited_at = utcnow()
                                         session.commit()
                                         task_selector('edit_post', post_id=post_being_replied_to.id)
+                                elif not poll_data:
+                                    log_incoming_ap(id, APLOG_CREATE, APLOG_IGNORED, saved_json,
+                                                    'Poll vote for a post with no poll')
+                                else:
+                                    log_incoming_ap(id, APLOG_CREATE, APLOG_IGNORED, saved_json,
+                                                    'Poll vote for an unknown choice')
+                            else:
+                                log_incoming_ap(id, APLOG_CREATE, APLOG_IGNORED, saved_json,
+                                                'Poll vote for an unknown post')
                             return
                         if not announced and not community:
                             community = find_community(request_json)
