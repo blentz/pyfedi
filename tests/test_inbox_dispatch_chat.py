@@ -13,6 +13,94 @@ from tests.test_inbox_dispatch_lock_delete import record_moderation
 from tests.test_inbox_dispatch_preamble import dispatch
 
 
+def test_a_brand_new_sender_is_refused(app, db_session, monkeypatch):
+    """`created_very_recently()` is `created > utcnow() - timedelta(days=1)`,
+    so `created` is seeded to NOW explicitly rather than left at whatever the
+    factory set — the assertion must rest on a value this test chose.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair()
+    sender.created = utcnow()
+    db.session.commit()
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id,
+                           content='hello', id='https://peer.example/pm/1'))
+
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Sender is too new'
+    assert db_session.query(ChatMessage).count() == 0
+
+
+def test_an_old_sender_is_not_refused_for_newness(app, db_session, monkeypatch):
+    """The other side of the first conjunct: `created` two days ago. Paired with
+    the test above so the conjunct dies in both directions.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair()
+    sender.created = utcnow() - timedelta(days=2)
+    db.session.commit()
+    record_moderation(monkeypatch, 'publish_sse_event')
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id,
+                           content='hello', id='https://peer.example/pm/1'))
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_a_brand_new_sender_from_fediseer_is_exempt(app, db_session, monkeypatch):
+    """The second conjunct: `user.ap_domain != 'fediseer.com'`. A brand-new
+    sender is normally refused; this one is not, solely because of its domain.
+    This is the ONLY test that distinguishes that conjunct.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair(host='fediseer.com')
+    sender.created = utcnow()
+    sender.ap_domain = 'fediseer.com'
+    db.session.commit()
+    record_moderation(monkeypatch, 'publish_sse_event')
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id,
+                           content='hello', id='https://peer.example/pm/1'))
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_a_sender_blocked_by_the_recipient_is_refused(app, db_session, monkeypatch):
+    """First disjunct of the block check: a UserBlock row."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair()
+    sender.created = utcnow() - timedelta(days=2)
+    make_user_block(recipient, sender)
+    db.session.commit()
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id,
+                           content='hello', id='https://peer.example/pm/1'))
+
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Sender blocked by recipient'
+    assert db_session.query(ChatMessage).count() == 0
+
+
+def test_a_sender_on_a_blocked_instance_is_refused(app, db_session, monkeypatch):
+    """Second disjunct: an InstanceBlock row and NO UserBlock, so this test and
+    the one above kill the two halves separately.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair()
+    sender.created = utcnow() - timedelta(days=2)
+    make_instance_block(recipient, instance)
+    db.session.commit()
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id,
+                           content='hello', id='https://peer.example/pm/1'))
+
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Sender blocked by recipient'
+    assert db_session.query(ChatMessage).count() == 0
+
+
 def chat_activity(sender, **objfields):
     """A Create whose inner object is a ChatMessage.
 
