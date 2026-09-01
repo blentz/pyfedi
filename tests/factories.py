@@ -19,7 +19,7 @@ from flask_login import login_user
 
 from app import db
 from app.activitypub.signature import RsaKeys
-from app.models import (Community, CommunityBan, CommunityBlock, CommunityFlair, CommunityFlairBlock,
+from app.models import (ChatMessage, Community, CommunityBan, CommunityBlock, CommunityFlair, CommunityFlairBlock,
                         CommunityJoinRequest, CommunityMember, Domain, DomainBlock, Feed, FeedItem,
                         FeedJoinRequest, FeedMember, Instance, InstanceBan, InstanceBlock,
                         NotificationSubscription, Post, PostReply, PostReplyBookmark, PostReplyVote,
@@ -545,6 +545,28 @@ def make_community_block(user: User, community: Community) -> CommunityBlock:
     db.session.add(block)
     db.session.commit()
     return block
+
+
+def make_chat_message(sender: User, recipient: User, ap_id: str, *,
+                      body: str = 'a message', deleted: bool = False) -> ChatMessage:
+    """A ChatMessage for Undo/Delete's PM-restore branch, which queries
+    `ChatMessage` by `ap_id` and `sender_id` together (the branch reached when
+    `find_liked_object` finds no post or comment for the id).
+
+    conversation_id is left NULL deliberately: the column is nullable
+    (app/models.py:287) and nothing on the restore path reads it, so building a
+    Conversation would be scaffolding no test asserts on.
+    """
+    message = ChatMessage(
+        sender_id=sender.id,
+        recipient_id=recipient.id,
+        body=body,
+        ap_id=ap_id,
+        deleted=deleted,
+    )
+    db.session.add(message)
+    db.session.commit()
+    return message
 
 
 def mark_post_read(user: User, post: Post) -> None:
