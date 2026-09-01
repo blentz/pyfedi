@@ -1182,8 +1182,11 @@ says which numbers are taken. So there is one now, and it is this file:
   table). D113–D114 are fixed, not merely registered — the feed-Announce
   crash surface and the poll-vote silence, two defects across three commits
   (one fix hoisted to a safer location after review). D115–D118 are
-  registered but not fixed.
-  **Next free number: D119.** If you take it, say so here in the change
+  registered but not fixed. D119–D120 5e's whole-branch review fix wave
+  (2026-09-01, see that section's part 3): the Note-shaped poll-vote path's
+  missing banned-instance check and neither federated poll-vote path
+  enforcing `Poll.mode`, both registered but not fixed.
+  **Next free number: D121.** If you take it, say so here in the change
   that takes it.
 
 Two entries in the reports were deliberately **not** counted as defects, and are
@@ -3410,7 +3413,64 @@ production diff). Every other task's `git diff --stat app/` is empty.
 | D117 | `process_inbox_request` preamble (routes.py:859-860) | **Not fixed, deliberately -- and now the single remaining uncovered statement in the whole function.** `if actor_id and actor_id.startswith('https://s.rimu.geek.nz'):` / `pass`, with the inline comment *"just here to set breakpoints on, during testing. remove before commit"*. Debug scaffolding reachable only from one named personal domain -- not fixed and not covered, on the reasoning that writing a test to cover a `pass` its own author marked for deletion would entrench code that should not exist rather than document real behaviour. Recommend deletion: doing so removes both the statement and its branch cleanly, and would take `process_inbox_request` to full statement coverage. | not fixed, recommend deletion | **measured**: the controller's own coverage measurement after this sub-project shows `process_inbox_request` at exactly one uncovered statement, `routes.py:860`; the line and its comment were re-read directly against current HEAD for this register entry (routes.py:859-860), confirming both the line numbers and the comment text quoted above |
 | D118 | `process_new_content` (routes.py:2296-2298), the delegate the Create/Update arm calls for ordinary new content | **Not fixed, registered only -- same class of artefact as D117, one function away.** `if user.user_name == 'rimu':` / `pass`, no comment. The same debug-scaffolding pattern as D117 (a no-op `pass` gated on identifying one specific person), in the delegate this sub-project's arm calls for `Page`/`Article`/etc. content. Recommend deletion. | not fixed, recommend deletion | **reading-level**: read directly from routes.py:2296-2298 (`def process_new_content(user, community, store_ap_json, request_json, announced):` / `if user.user_name == 'rimu':` / `pass`); no test in this sub-project exercises the `True` arm of this branch (doing so would require a `User` literally named `rimu`), so this is derived from reading the delegate's source, not from a dispatched activity |
 
-**Next free number: D119.**
+### 3. Two more defects found by this fix wave's whole-branch review -- D119-D120
+
+Both live in the exact block D114 documents (the Note-shaped poll-vote path,
+routes.py:1219-1243) and were found by re-reading that block against its
+sibling, `process_poll_vote` (routes.py:2461-2485), and against local voting
+(`vote_for_poll`, `app/shared/post.py:1146-1174`). Registered here, **not
+fixed** -- out of this sub-project's authorised scope, which was the two
+fixes already made under D113/D114.
+
+| # | function | defect | status | evidence |
+|---|---|---|---|---|
+| D119 | `process_inbox_request`, `Create`/`Update` arm, poll-vote block (routes.py:1219-1243) | **Not fixed, registered only -- out of scope.** The Note-shaped poll-vote path performs no banned-instance check anywhere in its block. Its sibling federated path, `process_poll_vote` (routes.py:2461-2485), guards the vote with `if not instance_banned(user.instance.domain):` (routes.py:2473) before calling `vote_for_choice`; the Note-shaped path calls `poll_data.vote_for_choice(choice.id, user.id)` (routes.py:1228) with no equivalent check anywhere in the block. Consequence: a user on a banned instance can land a poll vote by sending a `Create` of a Lemmy-shaped `Note`, but not by sending a `PollVote` -- two federated routes to the same effect, one enforcing the ban and one not. | not fixed, out of scope | **reading-level**: confirmed by reading both blocks side by side -- routes.py:1219-1243 has no `instance_banned` call anywhere in its body, while routes.py:2473 (`process_poll_vote`) does; no test in this sub-project sends a banned-instance user through the Note-shaped path to observe the vote land, so this is derived from reading, not from a dispatched activity |
+| D120 | `process_inbox_request`, `Create`/`Update` arm, poll-vote block (routes.py:1228-1229), its sibling `process_poll_vote` (routes.py:2478-2479), and `Poll.vote_for_choice` (`app/models.py:3758-3767`) | **Not fixed, registered only -- out of scope.** Neither federated poll-vote path enforces `Poll.mode`. Local voting does: `vote_for_poll` (`app/shared/post.py:1158-1164`) gates a `mode='single'` poll on `poll.has_voted(user.id)` before calling `vote_for_choice`, so a local single-mode voter can hold at most one vote across the whole poll. `Poll.vote_for_choice` itself (`app/models.py:3758-3767`) dedupes only on the `(user_id, choice_id)` pair -- its `existing_vote` query filters on `choice_id`, not on the poll as a whole -- with no poll-mode awareness at all, so a remote user can accumulate one vote on *every* choice of a `mode='single'` poll by sending several Notes (or several `PollVote`s), each landing because each targets a different `choice_id`. Folded into this row: both federated paths also log their SUCCESS row unconditionally -- the Note-shaped block's `log_incoming_ap(id, APLOG_CREATE, APLOG_SUCCESS, saved_json)` (routes.py:1229) and `process_poll_vote`'s equivalent (routes.py:2479) both fire immediately after calling `vote_for_choice`, with no check on whether that call actually inserted a new `PollChoiceVote` row or silently no-oped against an existing `(user_id, choice_id)` pair (`app/models.py:3761`'s `if not existing_vote:` guard) -- so a duplicate vote from the same peer is logged as a success that recorded nothing. | not fixed, out of scope | **reading-level**: confirmed by reading `app/shared/post.py:1158-1164` (the local single-mode gate) against routes.py:2473-2479 and routes.py:1219-1243 (both federated paths, neither reads `poll.mode`), and `app/models.py:3758-3767` (`vote_for_choice`'s dedupe key is `(user_id, choice_id)`, not poll-scoped); no test in this sub-project seeds a `mode='single'` poll and sends votes for two different choices from the same remote user, so the accumulation itself is derived from reading, not observed |
+
+### 4. A coverage-tool artefact worth recording, not a defect: the arm's commonest federated path is untested by this file alone -- and by more than that file
+
+Run in isolation, `tests/test_inbox_dispatch_create_update.py` leaves the
+branch at routes.py:1244 (`if not announced and not community:`) with its
+False arm -- the skip of the community-resolution block -- uncovered
+(`missing_branches: [[1244, 1256]]`, measured directly against this file
+alone). That much matches the whole-branch review's observation. But the
+attribution does not: the False arm is **not** closed by
+`tests/test_inbox_dispatch_announce.py` -- measured directly, running the
+two files together still reports `[[1244, 1256]]` missing. It is closed
+only once the full `tests/test_inbox_dispatch_*.py` family runs together,
+and by a single test in a third file:
+`test_update_group_from_a_group_actor_is_processed_as_a_community_update`
+(`tests/test_inbox_dispatch_preamble.py`), which dispatches a direct
+(non-`Announce`) `Update`/`Group` from a Community actor -- `community`
+arrives pre-resolved via routes.py:881's `community = actor`, `announced`
+is `False`, and the same False arm at 1244 is taken because `community` is
+truthy, not because `announced` is `True`.
+
+That means the scenario the review actually had in mind -- an ordinary
+`Announce` of a `Create`/`Update`, wrapped by a real community, with
+`announced` `True` and `community` pre-resolved by the preamble's own
+Announce handling (routes.py:861) -- is not exercised by any file in this
+suite. Branch coverage reports the arc closed because a different,
+unrelated scenario happens to leave the same condition False; the
+literal "commonest federated path" this review named remains untested.
+No test anywhere in `tests/test_inbox_dispatch_*.py` dispatches an
+`Announce` from a community actor whose inner object is `Create`/`Update`
+-- confirmed by grep across the whole family for a literal `'Create'`
+(found only in this sub-project's own file) or `'Update'` paired with
+`activity_type='Announce'` (found in neither).
+
+Not filed as a defect: this is a test-suite gap, not a behaviour of
+`app/`. Not written as a docstring correction either, since no existing
+docstring makes the wrong claim -- the misattribution originated in this
+fix wave's own brief, not in shipped test text. Recorded here instead,
+as the honest register entry for what the coverage tool's "arm is fully
+covered" framing (section header above, "process_inbox_request now has
+exactly one uncovered statement") does not surface: statement and branch
+coverage both say nothing about *which* scenario satisfied a given arc,
+and here the scenario that did is not the one anyone should rely on as
+having verified the ordinary case.
+
+**Next free number: D121.**
 
 
 
