@@ -31,11 +31,9 @@ def _seed_lockable_post(host='peer.example'):
     return instance, mod, community, author, post
 
 
-def test_a_successful_post_unlock_also_logs_a_contradictory_failure(app, db_session, monkeypatch):
-    """PINS FIX 3's defect. The `else` binds to `if post_reply:`, not to the
-    pair, so a post unlock that SUCCEEDED logs APLOG_SUCCESS and then, because
-    post_reply is None, immediately logs FAILURE 'Unlock: post not found' for
-    the same activity. Two rows, contradicting each other.
+def test_a_successful_post_unlock_logs_success_and_nothing_else(app, db_session, monkeypatch):
+    """FIX 3. The failure log now fires only when NEITHER a post nor a reply
+    was found, so a successful post unlock records exactly one row.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, mod, community, author, post = _seed_lockable_post()
@@ -47,11 +45,25 @@ def test_a_successful_post_unlock_also_logs_a_contradictory_failure(app, db_sess
     db.session.expire_all()
     assert db.session.get(type(post), post_id).comments_enabled is True
 
-    logs = ActivityPubLog.query.order_by(ActivityPubLog.id).all()
-    assert len(logs) == 2                       # the defect
+    logs = ActivityPubLog.query.all()
+    assert len(logs) == 1
     assert logs[0].result == 'success'
-    assert logs[1].result == 'failure'
-    assert logs[1].exception_message == 'Unlock: post not found'
+
+
+def test_an_unlock_of_something_that_exists_nowhere_logs_not_found(app, db_session, monkeypatch):
+    """The failure log's remaining reason to exist: neither a post nor a reply
+    matched. Paired with the test above so the guard cannot be dropped in
+    either direction.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, mod, community, author, post = _seed_lockable_post()
+
+    dispatch(undo_lock_activity(mod, 'https://peer.example/post/404'))
+
+    logs = ActivityPubLog.query.all()
+    assert len(logs) == 1
+    assert logs[0].result == 'failure'
+    assert logs[0].exception_message == 'Unlock: post not found'
 
 
 def test_the_comment_url_branch_selects_a_reply_directly(app, db_session, monkeypatch):

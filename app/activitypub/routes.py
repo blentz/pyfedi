@@ -1810,7 +1810,7 @@ def process_inbox_request(request_json, store_ap_json):
                                 log_incoming_ap(id, APLOG_LOCK, APLOG_SUCCESS, saved_json)
                             else:
                                 log_incoming_ap(id, APLOG_LOCK, APLOG_FAILURE, saved_json, 'Unlock: Does not have permission')
-                        else:
+                        if not post and not post_reply:
                             log_incoming_ap(id, APLOG_LOCK, APLOG_FAILURE, saved_json, 'Unlock: post not found')
                         return
 
