@@ -21,7 +21,7 @@ from flask_login import login_user
 from app import db
 from app.activitypub.signature import RsaKeys
 from app.models import (ChatMessage, Community, CommunityBan, CommunityBlock, CommunityFlair, CommunityFlairBlock,
-                        CommunityJoinRequest, CommunityMember, Domain, DomainBlock, Feed, FeedItem,
+                        CommunityJoinRequest, CommunityMember, Conversation, Domain, DomainBlock, Feed, FeedItem,
                         FeedJoinRequest, FeedMember, Instance, InstanceBan, InstanceBlock,
                         NotificationSubscription, Poll, PollChoice, Post, PostReply, PostReplyBookmark, PostReplyVote,
                         PostVote, Role, RolePermission, Site, User, UserBlock, UserFollower,
@@ -568,6 +568,24 @@ def make_chat_message(sender: User, recipient: User, ap_id: str, *,
     db.session.add(message)
     db.session.commit()
     return message
+
+
+def make_conversation(sender: User, recipient: User) -> Conversation:
+    """A two-party conversation, built the way process_chat builds one.
+
+    `user_id` records the initiator; membership is what makes it findable.
+    `members` is a backref from User.conversations (app/models.py:1053-1054,
+    `secondary=conversation_member`), so appending here writes the association
+    rows that `Conversation.find_existing_conversation`'s raw SQL joins on. A
+    conversation missing either row is invisible to that lookup, which is why
+    both are appended rather than relying on `user_id` alone.
+    """
+    conversation = Conversation(user_id=sender.id)
+    conversation.members.append(sender)
+    conversation.members.append(recipient)
+    db.session.add(conversation)
+    db.session.commit()
+    return conversation
 
 
 def mark_post_read(user: User, post: Post) -> None:
