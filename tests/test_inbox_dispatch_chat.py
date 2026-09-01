@@ -437,3 +437,88 @@ def test_a_first_message_creates_the_conversation(app, db_session, monkeypatch):
     db.session.expire_all()
     assert db_session.query(Conversation).count() == 1
     assert Conversation.find_existing_conversation(recipient=recipient, sender=sender) is not None
+
+
+def test_a_new_message_is_stored_with_both_body_forms_and_notifies(app, db_session, monkeypatch):
+    """The create path. `body_html` keeps the sent markup and `body` is its
+    text rendering via `html_to_text`, so both are asserted — storing only one
+    would lose either formatting or searchability.
+
+    `publish_sse_event` is doubled because it reaches an external event stream;
+    its call is asserted rather than merely allowed, since a silent failure to
+    publish would leave a live client showing nothing.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair()
+    sender.created = utcnow() - timedelta(days=2)
+    recipient.unread_notifications = 0
+    db.session.commit()
+    recipient_id = recipient.id
+    calls = record_moderation(monkeypatch, 'publish_sse_event')
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id,
+                           content='<p>hello there</p>', id='https://peer.example/pm/1'))
+
+    db.session.expire_all()
+    message = db_session.query(ChatMessage).one()
+    assert message.body_html == '<p>hello there</p>'
+    assert 'hello there' in message.body
+    assert message.sender_id == sender.id and message.recipient_id == recipient_id
+
+    assert len(calls['publish_sse_event']) == 1
+    notification = db_session.query(Notification).one()
+    assert notification.user_id == recipient_id
+    assert notification.title.startswith('New message from')
+    assert db_session.query(User).get(recipient_id).unread_notifications == 1
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_a_repeat_ap_id_updates_the_existing_message_and_says_so(app, db_session, monkeypatch):
+    """The update path, selected by an `ap_id` that already exists. The
+    notification title distinguishes it ('Updated message from'), and the
+    message count staying at 1 proves an update rather than a second row.
+
+    `read` is seeded True beforehand so its reset to False is evidence of the
+    write rather than a default sitting there.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair()
+    sender.created = utcnow() - timedelta(days=2)
+    conversation = make_conversation(sender, recipient)
+    existing = ChatMessage(sender_id=sender.id, recipient_id=recipient.id,
+                           conversation_id=conversation.id, body='old', body_html='<p>old</p>',
+                           ap_id='https://peer.example/pm/1', read=True)
+    db.session.add(existing)
+    db.session.commit()
+    record_moderation(monkeypatch, 'publish_sse_event')
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id,
+                           content='<p>new text</p>', id='https://peer.example/pm/1'))
+
+    db.session.expire_all()
+    assert db_session.query(ChatMessage).count() == 1
+    message = db_session.query(ChatMessage).one()
+    assert message.body_html == '<p>new text</p>'
+    assert message.read is False
+
+    notification = db_session.query(Notification).one()
+    assert notification.title.startswith('Updated message from')
+
+
+def test_an_encrypted_flag_is_carried_through_and_defaults_to_none(app, db_session, monkeypatch):
+    """`encrypted` is read with a membership check — unlike `content` and `id`
+    a few lines away, which are not (see Task 8). Both halves are covered here:
+    supplied, and absent.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair()
+    sender.created = utcnow() - timedelta(days=2)
+    db.session.commit()
+    record_moderation(monkeypatch, 'publish_sse_event')
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id, content='hello',
+                           id='https://peer.example/pm/1', encrypted='pgp'))
+
+    assert db_session.query(ChatMessage).one().encrypted == 'pgp'
