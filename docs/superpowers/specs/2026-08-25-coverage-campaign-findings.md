@@ -1164,7 +1164,14 @@ says which numbers are taken. So there is one now, and it is this file:
   authorisation after 5c had already closed, taking no new numbers — see
   5c's section 6, which also corrects the one claim D91's row got wrong
   about its own recommended fix.
-  **Next free number: D104.** If you take it, say so here in the change
+  D104 sub-project 5d (the `Undo` arm's Follow, Delete, Like/Dislike,
+  Announce, ChooseAnswer, Lock and Block sub-types — see that section for
+  the table; one defect, registered but not fixed — the sibling `Lock`
+  arm's identical missing `/post/`-to-`PostReply` fallback, 5c's
+  territory). D105–D109 are fixed, not merely registered, under this
+  sub-project's own bounded authorisation — four defect-fixes across four
+  commits, one commit fixing two at once.
+  **Next free number: D110.** If you take it, say so here in the change
   that takes it.
 
 Two entries in the reports were deliberately **not** counted as defects, and are
@@ -3174,6 +3181,135 @@ separate defect on a different branch, and was not part of this
 authorisation. Note that the two branches are now inconsistent in a newly
 visible way: both call the same delegate, but only the ordinary one guards
 the call.
+
+
+
+## Sub-project 5d: the `Undo` arm -- Follow, Delete, Like/Dislike/Announce,
+ChooseAnswer, Lock and Block
+
+`docs/superpowers/specs/2026-08-31-coverage-inbox-undo-5d-design.md`, on
+branch `blentz`. Eleven tasks brought `process_inbox_request`'s `Undo` arm
+(`app/activitypub/routes.py:1676-1882`) from 1 executed statement of 160 to
+complete statement coverage, across its Follow, Delete, Like, Dislike,
+Announce, ChooseAnswer, Lock and Block sub-types, plus the unmatched-type
+fall-through -- nine paths in all, in three files:
+`tests/test_inbox_dispatch_undo_follow.py`
+(7 tests, Tasks 2-3), `tests/test_inbox_dispatch_undo_content.py` (17 tests,
+Tasks 4-7 plus this task's Fix 4 test), and `tests/test_inbox_dispatch_undo_moderation.py`
+(19 tests, Tasks 8-10 plus this task's four gap-closing tests) -- 43 tests
+total. Like 5b and 5c before it, this sub-project carried an **explicit,
+bounded exception** to the campaign's report-don't-fix rule: **the project
+owner separately authorised four specific defect-fixes**, across four
+commits, while every other defect found was registered, not fixed.
+`git diff --stat app/` is empty for every task except Task 9 (three commits,
+the Undo/Lock fixes and their own regression) and this task (one commit,
+Fix 4).
+
+### 1. Coverage after this task
+
+Measured against this sub-project's own three files:
+
+```bash
+./run_tests.sh tests/test_inbox_dispatch_undo_follow.py tests/test_inbox_dispatch_undo_content.py tests/test_inbox_dispatch_undo_moderation.py \
+  -q --cov=app.activitypub.routes --cov-report=json
+```
+
+43 passed. Intersecting `coverage.json`'s `executed_lines`/`missing_lines`
+against the arm's span (`app/activitypub/routes.py:1676-1882`, from `if
+core_activity['type'] == 'Undo':` through the final `return` of its
+unmatched-type fall-through): **161 of 161 statements executed, zero
+missing.** Before this task, the controller's own measurement (after Task
+10, against the pre-Fix-4 source) was 161 of 168 statements. This task
+closed that gap two ways: Fix 4 (D109, section 3 below) deletes the one
+permanently-dead statement inside `ChooseAnswer`'s `isinstance(..., str)`
+branch, and shortens the surrounding block by two further statements in the
+same edit (a net statement-count change, not a like-for-like removal, which
+is why 168 does not simply become 167); the four new tests this task adds to
+`tests/test_inbox_dispatch_undo_moderation.py` close the other six -- two
+outcomes of the `Undo`/`Lock` `else:` fallback, the `post_reply` branch's
+own permission-denied log, and the two `cc`-emptying
+statements in `Undo`/`Block`.
+
+Five branch arcs remain unexercised within the span, none of them this
+task's assignment: this task's own scope was the three named statement
+gaps closed above (the `Undo`/`Lock` `else:` fallback, its `post_reply`
+permission-denied log, and `Undo`/`Block`'s `cc`-emptying), not a
+branch-coverage sweep of the whole arm. Listed here, consistent with 5c's
+own "coverage gaps explained" convention, rather than left as a silent
+remainder:
+
+1. **`[1676, 1883]` -- the arm's own top-level `if core_activity['type'] ==
+   'Undo':` False-skip**, falling through to the next top-level type check
+   (`QuoteRequest`). Same reasoning 5b gave for Reject's arc `[1150, 1193]`
+   and 5c gave for Block's arc `[1595, 1677]`: within these three
+   Undo-only files, every test that reaches line 1676 at all sends a
+   genuine `Undo` activity. Driving the False arm is a different
+   sub-project's territory.
+2. **`[1700, 1703]` and `[1703, 1705]` -- the Undo/Follow Feed branch's
+   `if member:` and `if join_request:` False-skips** (routes.py:1700,
+   1703). A narrow test-matrix gap: Task 3's
+   `test_undo_follow_of_a_feed_removes_membership_and_join_request` is the
+   only test that reaches this branch, and it seeds both a `FeedMember` and
+   a `FeedJoinRequest`, so both `if`s take their True arm every time. The
+   direct mirror of the Community branch's own two independent guards
+   (`[1685]`/`[1690]`), which Task 2 drove on both sides with two separate
+   tests -- no test here does the same for the Feed branch's pair.
+3. **`[1719, 1721]` -- the Undo/Follow branch's trailing `if not target:`
+   False-skip**, falling straight to `return` with no log call. Reachable
+   only when `target` is truthy but matched none of the three preceding
+   `isinstance` checks (`Community`, `Feed`, `User`) -- `find_actor_or_create_cached`
+   is not documented to return anything else, so this is likely
+   an equivalent mutant / dead branch rather than a live gap, but this task
+   did not run the analysis 5c ran for D95/D96 to confirm it, so it is
+   flagged rather than claimed.
+4. **`[1757, 1762]` -- the Undo/Like-or-Dislike branch's `if not announced:`
+   False-skip** (routes.py:1757), suppressing the `announce_activity_to_followers`
+   call when the Undo arrived wrapped in an Announce. The direct sibling of
+   the Undo/Delete announce-suppression guard Task 4 covered on both sides
+   (`test_undo_delete_inside_an_announce_does_not_announce_again`); no
+   equivalent Announce-wrapped test exists for Undo/Like or Undo/Dislike in
+   this suite.
+
+### 2. New defect -- D104
+
+| # | function | defect | severity | evidence |
+|---|---|---|---|---|
+| D104 | `process_inbox_request`, `Lock` arm (routes.py:1360-1398, sub-project 5c's territory) | **Not fixed, registered only.** The sibling `Lock` arm (a federated *lock*, as opposed to the `Undo`/`Lock` arm this sub-project covers, which *unlocks*) has the identical missing `/post/`-to-`PostReply` fallback that D108 below fixes on the `Undo` side. A NodeBB-style reply whose `ap_id` contains `/post/` (`app/activitypub/util.py:1984` names this by hostname as a known, misleading hint) cannot be locked via a federated `Lock` activity, for the same reason it could not be unlocked before D108's fix: the `/post/` branch tries only `Post.get_by_ap_id` and never falls back to `PostReply.get_by_ap_id` on a miss. Deliberately left alone here -- it belongs to sub-project 5c, and 5d's own fix (D108) did not introduce it; both canonical resolvers this document has referenced before (`find_reply_parent`, `_find_liked_object_id`, both `app/activitypub/util.py`) keep the fallback that both `Lock` arms lack. | medium -- peer-triggerable functional gap (a real class of remote reply, misrouted, cannot be locked at all), same severity class as the fixed D108 below, whose commit message and Task 9's report both name this exact sibling gap explicitly as out of scope | **reading-level**: Task 9's report (`.superpowers/sdd/2026-08-31-coverage-inbox-undo-5d/task-9-report.md`) states the gap and its deliberate exclusion directly, cross-referenced from `tests/test_inbox_dispatch_undo_moderation.py`'s own `test_a_nodebb_reply_whose_url_contains_post_still_falls_back_to_the_reply` docstring; no test in this suite (5d's own scope is `Undo`/`Lock`, not `Lock`) exercises the sibling arm to confirm the crash/miss directly, so this is derived from reading `Lock`'s source (routes.py:1360-1398) alongside `Undo`/`Lock`'s pre-fix shape, not from a dispatched `Lock` activity |
+
+### 3. Four defects fixed under explicit authorisation -- D105-D109
+
+Per the project owner's explicit instruction, this sub-project was
+authorised to fix four specific defects (five distinct identifiers across
+four commits, one commit fixing two at once -- the same shape 5c's
+D98/D99 and D101/D102 used), found while Tasks 8 and 9 pinned and then
+inverted the `Undo`/`Lock` arm's own tests, and while this task removed
+`Undo`/`ChooseAnswer`'s dead branch. Every other defect this sub-project
+found (D104 above) was registered, not fixed.
+
+| # | function | defect | status | evidence |
+|---|---|---|---|---|
+| D105 | `process_inbox_request`, `Undo`/`Lock` (routes.py:1781, 1783 pre-fix) | **FIXED, commit `3afc7abd`** (with D106, same commit). `if '/post/' in core_activity['object']:` and `elif '/comment/' in core_activity['object']:` tested membership against `core_activity['object']` -- the inner `{'type': 'Lock', 'object': target_ap_id}` DICT, not `target_ap_id` itself. `in` against a dict tests key membership, not substring containment, and neither string is ever a key, so both branches were unreachable and every `Undo`/`Lock` fell to the `else`. Fix: both operands changed to `target_ap_id`. | fixed and verified | **measured**: pre-fix, Task 8 confirmed directly (its report quotes `'/post/' not in activity['object']` and `'/comment/' not in activity['object']` both holding true against the dict) that neither branch's own membership test could ever succeed; post-fix, Task 9's `test_the_comment_url_branch_selects_a_reply_directly` (`tests/test_inbox_dispatch_undo_moderation.py`) asserts a `/comment/`-shaped target resolves the reply directly, with a decoy `Post` seeded at the identical `ap_id` left untouched -- proving the membership test now runs against the string, not the dict |
+| D106 | `process_inbox_request`, `Undo`/`Lock`, `post_reply` branch (routes.py:1809-1810 pre-fix) | **FIXED, commit `3afc7abd`** (with D105, same commit). **The exact twin of D97** (5c's Lock-arm fix, `b79f43f9`), here on the `Undo`/`Lock` side: `add_to_modlog('unlock_post_reply', ..., target_user=post.author, ..., community=post.community, ...)` sat inside `if post_reply:`, reachable only when `post` is `None` (the mutually exclusive branch pair at routes.py:1781-1790) -- so `post.author` always raised `AttributeError: 'NoneType' object has no attribute 'author'`, after the reply's own `replies_enabled` write and raw-SQL subtree `UPDATE` had already committed. A federated comment-Unlock could complete neither successfully nor with a clean refusal. Fix: both references changed to `post_reply.author`/`post_reply.community`. | fixed and verified | **measured**: pre-fix, Task 8's report records the `AttributeError` observed directly, against a test (since superseded by Task 9's inversion of the same scenario, per this document's numbering convention of citing current test names) that left `add_to_modlog` real/undoubled, since its arguments are evaluated before any double is entered; post-fix, `tests/test_inbox_dispatch_undo_moderation.py`'s current `test_unlocking_a_comment_records_the_reply_author_and_community` asserts (via `sa_inspect(obj).identity[0]`, not `.id` -- the captured kwargs are objects from the dispatcher's own closed session) that the modlog call now receives the reply's own author and community |
+| D107 | `process_inbox_request`, `Undo`/`Lock` (routes.py:1813 pre-fix) | **FIXED, commit `0905ba1a`.** The trailing `else:` was indented to bind to `if post_reply:` (routes.py:1802), not to the `post`/`post_reply` pair -- the two are independent sibling `if` statements, not `if`/`elif`. Consequence: a successful POST unlock (which never touches `post_reply`, leaving it `None`) logged SUCCESS from the `if post:` branch, then always fell into the misbound `else`, logging a second, contradictory FAILURE `'Unlock: post not found'` for the same activity. Fix: the `else:` replaced with `if not post and not post_reply:`. | fixed and verified | **measured**: pre-fix, Task 8's report records a test (since superseded by Task 9's inversion of the same scenario) that showed exactly 2 `ActivityPubLog` rows (SUCCESS then FAILURE) for one successful post unlock; post-fix, `tests/test_inbox_dispatch_undo_moderation.py`'s current `test_a_successful_post_unlock_logs_success_and_nothing_else` asserts exactly 1 row, paired with `test_an_unlock_of_something_that_exists_nowhere_logs_not_found` asserting the FAILURE log's remaining, correct reason to exist |
+| D108 | `process_inbox_request`, `Undo`/`Lock`, `/post/` branch (routes.py, post-D105 regression) | **FIXED, commit `9bfe5d5a`.** A regression D105's own fix introduced: making the `/post/`/`/comment/` membership test read the real string (D105) removed the `PostReply` fallback the buggy `else` had accidentally been providing for every `/post/`-shaped id, including NodeBB-style replies whose `ap_id` contains `/post/` with no matching `Post` row -- `app/activitypub/util.py:1984` names this hostname-specific hint by comment ("no hint in in_reply_to, or it was misleading (e.g. replies to nodebb comments have '/post/' in them)"), and both canonical resolvers in this codebase (`find_reply_parent`, `_find_liked_object_id`, both `app/activitypub/util.py`) keep a `PostReply` fallback under a `/post/`-shaped id for exactly this reason. Fix: the `/post/` branch gained the same two-line `if post is None: post_reply = PostReply.get_by_ap_id(...)` fallback the `else` branch already had. Scoped to `Undo`/`Lock` only, per the authorisation -- the sibling `Lock` arm has the identical gap and is registered separately as D104 above, not fixed here. | fixed and verified | **measured**, test written first and confirmed to fail pre-fix (TDD): Task 9's `test_a_nodebb_reply_whose_url_contains_post_still_falls_back_to_the_reply` seeds a `PostReply` at `/post/999` with no matching `Post` row, dispatches, and asserts it unlocks with exactly one SUCCESS row; pre-fix it failed with `replies_enabled` still `False` (neither `post` nor `post_reply` resolved, so Fix 3's guard logged `'Unlock: post not found'` instead); mutation-killed by reverting the fallback and re-observing the same failure |
+| D109 | `process_inbox_request`, `Undo`/`ChooseAnswer` (routes.py:1872-1875 pre-fix) | **FIXED, this task, commit `4d604f18`.** `if isinstance(core_activity['object'], str): target_ap_id = core_activity['object'] else: target_ap_id = core_activity['object']['object']` -- the `isinstance(..., str)` branch was unreachable: control only reaches `ChooseAnswer` after `core_activity['object']['type'] == 'ChooseAnswer'` succeeded two lines above, and subscripting a string by `'type'` raises `TypeError` before that comparison can ever be reached with a string `core_activity['object']`. Same equivalent-mutant class as D95/D96 (5c). Fix: the conditional replaced with the direct assignment, `target_ap_id = core_activity['object']['object']`. No behaviour change. | fixed and verified | **measured**: this task's `test_a_string_inner_object_cannot_reach_choose_answer_at_all` (`tests/test_inbox_dispatch_undo_content.py`) sends a string inner `object` and asserts `dispatch()` raises `TypeError` -- proving the branch's own precondition can never be met; first identified by Task 7's report while writing `Undo`/`ChooseAnswer`'s own tests, deferred to this task by name |
+
+### 4. The allocation ledger, updated
+
+D1-D20 sub-project 2a, D21-D24 sub-project 2b, D25-D29 sub-project 2c,
+D30-D33 sub-project 2c's whole-branch review, D34-D40 sub-project 3, D41-D46
+sub-project 4, D47 sub-project 4's whole-branch review, D48 the follow-on
+audit of `instance_allowed`/`instance_banned`, D49-D63 sub-project 5a,
+D64-D77 sub-project 5b, D78-D79 5b's fix-wave review corrections, D80-D96
+sub-project 5c, D97-D102 5c's six explicitly-authorised fixes, D103 5c's
+fix-wave finding. **D104 this sub-project** (section 2 above): the sibling
+`Lock` arm's identical missing `/post/`-to-`PostReply` fallback, registered
+but not fixed (5c's territory). **D105-D109 this sub-project's five
+explicitly-authorised fixes** (section 3 above): D105-D106 `Undo`/`Lock`'s
+dead membership test and its `post`/`post_reply` mixup (`3afc7abd`); D107
+`Undo`/`Lock`'s misbound `else:` (`0905ba1a`); D108 the `/post/`-fallback
+regression D105's own fix introduced (`9bfe5d5a`); D109 `Undo`/`ChooseAnswer`'s
+unreachable string branch (`4d604f18`). **Next free number: D110.**
 
 
 
