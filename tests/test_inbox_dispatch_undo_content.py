@@ -20,9 +20,9 @@ the real lookup rather than a stand-in for it.
 """
 from app import db
 from app.activitypub import routes as activitypub_routes
-from app.models import ActivityPubLog, ChatMessage
-from tests.factories import (inbox_activity, make_community, make_chat_message, make_instance,
-                             make_post, make_post_reply, make_user, seed_community_owner)
+from app.models import ActivityPubLog, utcnow
+from tests.factories import (inbox_activity, make_community, make_post, make_user,
+                             seed_community_owner)
 from tests.test_inbox_dispatch_lock_delete import record_moderation
 from tests.test_inbox_dispatch_preamble import dispatch
 
@@ -46,8 +46,10 @@ def test_undo_delete_restores_a_deleted_post_and_announces_it(app, db_session, m
     itself, and both patch the same way.
 
     The activity is NOT announced (no Announce wrapper), so `if not announced:`
-    is true and the follower announce fires. Its sibling below proves the
-    guard by sending the same Undo inside an Announce.
+    is true and the follower announce fires.
+    `test_undo_delete_inside_an_announce_does_not_announce_again` below proves
+    the other side of the same guard, by sending the same Undo inside an
+    Announce.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance = seed_community_owner('peer.example')
@@ -68,6 +70,52 @@ def test_undo_delete_restores_a_deleted_post_and_announces_it(app, db_session, m
     assert restorer_arg.id == author.id
     assert to_restore_arg.id == post.id
     assert len(calls['announce_activity_to_followers']) == 1
+
+
+def test_undo_delete_inside_an_announce_does_not_announce_again(app, db_session, monkeypatch):
+    """The FALSE side of `if not announced:` -- the community that delivered
+    the Announce has already fanned it out to its own followers, so
+    `announce_activity_to_followers` must not fire a second time.
+    `restore_post_or_comment` still runs; only the announce is suppressed.
+
+    Unlike every other test in this file, the OUTER actor here must be a
+    Community, not a User: the preamble resolves an Announce's outer actor
+    via a community_only lookup (routes.py:862,
+    `find_actor_or_create_cached(actor_id, community_only=True,
+    create_if_not_found=False)`) before the Undo/Delete arm ever runs, and
+    only then walks to the INNER object's own 'actor' (routes.py:915,
+    `find_actor_or_create_cached(request_json['object']['actor'])`) to find
+    `user` -- confirmed by reading process_inbox_request's preamble rather
+    than assumed. `community.ap_fetched_at` is stamped for the same reason
+    tests/test_inbox_dispatch_announce.py's `_seed_announcing_community`
+    stamps it: `make_community` leaves it unset, and an unset
+    `ap_fetched_at` on a non-local actor makes `schedule_actor_refresh`
+    (app/activitypub/actor.py) fire a real, unmocked
+    `refresh_community_profile` fetch.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance = seed_community_owner('peer.example')
+    author = make_user(instance, 'author')
+    community = make_community(host='peer.example')
+    community.ap_fetched_at = utcnow()
+    post = make_post(community, author, 'https://peer.example/post/1')
+    post.deleted = True
+    db.session.commit()
+
+    calls = record_moderation(monkeypatch, 'restore_post_or_comment',
+                              'announce_activity_to_followers')
+
+    inner_undo = undo_activity(author, 'Delete', post.ap_id)
+    activity = inbox_activity(community, activity_type='Announce', object=inner_undo)
+
+    dispatch(activity)
+
+    assert len(calls['restore_post_or_comment']) == 1
+    args, kwargs = calls['restore_post_or_comment'][0]
+    restorer_arg, to_restore_arg = args[0], args[1]
+    assert restorer_arg.id == author.id
+    assert to_restore_arg.id == post.id
+    assert calls['announce_activity_to_followers'] == []
 
 
 def test_undo_delete_of_content_that_is_not_deleted_is_ignored(app, db_session, monkeypatch):
