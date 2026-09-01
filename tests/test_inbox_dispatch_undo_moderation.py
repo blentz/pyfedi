@@ -167,6 +167,45 @@ def test_unlocking_a_comment_records_the_reply_author_and_community(app, db_sess
     assert sa_inspect(kwargs['reply']).identity[0] == reply_id
 
 
+def test_unlocking_a_comment_re_enables_the_descendant_subtree(app, db_session, monkeypatch):
+    """The whole reason the raw-SQL `update post_reply set replies_enabled =
+    :replies_enabled where path @> ARRAY[:parent_id]` exists (routes.py:1805):
+    unlocking a reply must re-enable its descendants too, not just the reply
+    itself. 5c's sibling `test_a_moderator_can_lock_a_comment`
+    (tests/test_inbox_dispatch_lock_delete.py) asserts the LOCK direction
+    propagates to a child reply; no test on the unlock side seeded a child at
+    all, so this statement was executed but never behaviourally checked.
+
+    `child_reply.path` follows PostReply.new()'s own convention
+    (app/models.py:3016-3023): a root reply's path is `[0, self.id]`, a
+    child's is its parent's path with its own id appended -- the same
+    convention tests/test_inbox_dispatch_lock_delete.py's
+    `_seed_lockable_comment` uses.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, mod, community, author, post = _seed_lockable_post()
+    parent_reply = make_post_reply(post, author)
+    parent_reply.ap_id = 'https://peer.example/comment/1'
+    parent_reply.path = [0, parent_reply.id]
+    parent_reply.replies_enabled = False
+    db.session.commit()
+
+    child_reply = make_post_reply(post, author)
+    child_reply.path = [0, parent_reply.id, child_reply.id]
+    child_reply.replies_enabled = False  # seeded explicitly False, not left at the column default
+    db.session.commit()
+    parent_id, child_id = parent_reply.id, child_reply.id
+
+    dispatch(undo_lock_activity(mod, 'https://peer.example/comment/1'))
+
+    db.session.expire_all()
+    assert db.session.get(type(parent_reply), parent_id).replies_enabled is True
+    assert db.session.get(type(child_reply), child_id).replies_enabled is True
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
 def test_unlocking_without_permission_logs_failure(app, db_session, monkeypatch):
     """The permission guard, which is NOT defective. A user who is neither
     moderator nor instance admin gets FAILURE and no unlock.
