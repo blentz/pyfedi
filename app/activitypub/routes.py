@@ -2563,6 +2563,12 @@ def process_chat(user, store_ap_json, core_activity, session):
             log_incoming_ap(id, APLOG_CHATMESSAGE, APLOG_FAILURE, saved_json, 'Sender from untrusted instance')
             return True
         else:
+            if 'content' not in core_activity['object']:
+                log_incoming_ap(id, APLOG_CHATMESSAGE, APLOG_FAILURE, saved_json, 'ChatMessage has no content')
+                return True
+            if 'id' not in core_activity['object']:
+                log_incoming_ap(id, APLOG_CHATMESSAGE, APLOG_FAILURE, saved_json, 'ChatMessage has no id')
+                return True
             blocked_phrases_list = blocked_phrases()
             if core_activity['object']['content']:
                 for blocked_phrase in blocked_phrases_list:

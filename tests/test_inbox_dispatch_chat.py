@@ -534,47 +534,60 @@ def test_an_encrypted_flag_is_carried_through_and_defaults_to_none(app, db_sessi
         ap_id='https://peer.example/pm/2').one().encrypted is None
 
 
-def test_a_chat_message_with_no_content_crashes(app, db_session, monkeypatch):
-    """PINS defect 1. `core_activity['object']['content']` is read with no
-    membership check, first by the blocked-phrase filter (routes.py:2567) and
-    again when building the body (routes.py:2587-2588). `content` is
-    peer-controlled, so any peer can raise this KeyError out of a Celery task.
+def test_a_chat_message_with_no_content_is_refused_not_crashed(app, db_session, monkeypatch):
+    """Task 9 fix for defect 1. `core_activity['object']['content']` used to be
+    read with no membership check, first by the blocked-phrase filter
+    (routes.py:2567) and again when building the body (routes.py:2587-2588).
+    `content` is peer-controlled, so any peer could raise a KeyError out of a
+    Celery task. Now a missing `content` is refused through the arm's normal
+    idiom -- logged and returned -- rather than raised.
 
     The contrast is a few lines above in the same function: `object['to']` IS
     checked for membership AND for both plausible JSON-LD shapes, and
-    `object['encrypted']` is read with an `in` guard. The caution is present
-    either side of these two reads and absent between them.
+    `object['encrypted']` is read with an `in` guard. This closes the gap
+    between those two reads.
 
     The sender is aged past `created_very_recently()` and the recipient left at
-    an accepting setting, so the crash is reached rather than short-circuited by
-    an earlier refusal.
+    an accepting setting, so the new guard is reached rather than
+    short-circuited by an earlier refusal.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, sender, recipient = seed_chat_pair()
     sender.created = utcnow() - timedelta(days=2)
     db.session.commit()
 
-    with pytest.raises(KeyError):
-        dispatch(chat_activity(sender, to=recipient.ap_profile_id,
-                               id='https://peer.example/pm/1'))
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id,
+                           id='https://peer.example/pm/1'))
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert 'content' in log.exception_message.lower()
+    assert db_session.query(ChatMessage).count() == 0
 
 
-def test_a_chat_message_with_no_id_crashes(app, db_session, monkeypatch):
-    """PINS defect 2, the sibling unguarded read. `core_activity['object']['id']`
-    is used for the existing-message lookup (routes.py:2583) and for the new
-    row's `ap_id` (routes.py:2590).
+def test_a_chat_message_with_no_id_is_refused_not_crashed(app, db_session, monkeypatch):
+    """Task 9 fix for defect 2, the sibling unguarded read.
+    `core_activity['object']['id']` used to be read with no membership check,
+    used for the existing-message lookup (routes.py:2583) and for the new
+    row's `ap_id` (routes.py:2590). Now a missing `id` is refused the same way
+    a missing `content` is.
 
-    `content` IS supplied here, so this test fails for its own reason rather
-    than for the previous test's — without that, both tests would pass on a
-    single missing-field crash and neither would pin its own defect.
+    `content` IS supplied here, so this test is refused for its own reason
+    rather than for the previous test's -- without that, both tests would pass
+    on a single missing-field guard and neither would pin its own defect.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, sender, recipient = seed_chat_pair()
     sender.created = utcnow() - timedelta(days=2)
     db.session.commit()
 
-    with pytest.raises(KeyError):
-        dispatch(chat_activity(sender, to=recipient.ap_profile_id, content='hello'))
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id, content='hello'))
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert 'id' in log.exception_message.lower()
+    assert 'content' not in log.exception_message.lower()
+    assert db_session.query(ChatMessage).count() == 0
 
 
 def test_the_inner_is_local_check_can_never_be_false(app, db_session, monkeypatch):
