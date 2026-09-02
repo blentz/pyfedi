@@ -2118,6 +2118,95 @@ the Community lookup lowercases the actor (`actor.strip().lower()`,
 observe directly (`test_a_user_is_matched_case_insensitively`,
 `test_a_feed_name_lookup_is_case_sensitive`).
 
+**37. A test in this suite cannot log in after making an earlier request in
+the same test.** Flask-Login's `_get_user()` (`flask_login/utils.py:367-374`)
+caches the loaded user on `g`: `if "_login_user" not in g:
+current_app.login_manager._load_user()`, then `return g._login_user`. `g` is
+bound to the Flask **application** context, and `tests/conftest.py`'s `app`
+fixture (`:72-73`) is `scope='session'` and pushes exactly one application
+context for the whole run with `with application.app_context(): yield
+application` (`:112-113`) -- the `db_session` fixture's own docstring notes
+this (`:124`, "The `app` fixture pushes one app context for the whole test
+session"). `db_session` clears `g.__dict__` before **each test function**
+(`:137`), so `g` is fresh at the start of every test, but nothing clears it
+**between two requests inside the same test**. So a test that issues an
+anonymous first request caches `AnonymousUser` on `g._login_user`, and every
+later request in that same test -- session cookie, `session_transaction()`
+login and all -- reads the same cached anonymous user back; the login
+silently does nothing. This defeated a pin in sub-project 9 that looked
+correct, authenticated via `session_transaction()`, and passed for two whole
+tasks before commit `d661a12b`'s own investigation (`app/activitypub/routes.py`'s
+`user_profile`) discovered the admin branch the pin was written to reach had
+never actually run authenticated. A test that must authenticate should log in
+**before** its first request, not after.
+
+**38. `Vary` is never absent and never bare on a response this application
+sends.** Flask-Compress's `after_request` hook
+(`flask_compress/flask_compress.py:222-229`, confirmed empirically in
+sub-project 9's Task 3) unconditionally appends `Accept-Encoding` to the
+`Vary` header of every response, whether or not the view itself set one. A view that sets
+`Vary: Accept` therefore yields `'Accept, Accept-Encoding'`, and a view that
+sets no `Vary` at all still yields `'Accept-Encoding'` alone, never a missing
+header. Assert the full value (`response.headers.get('Vary') ==
+'Accept-Encoding'`, or `'Accept,' in ...`), never `'Vary' not in
+response.headers` -- that assertion cannot pass against any real response
+from this app and will misread "the view forgot to add Accept" as "the
+header is absent".
+
+**39. `icon_id`, `image_id`, `avatar_id`, `cover_id` are real foreign keys to
+`file.id`** (`app/models.py:541-542` `Community`, `:989-990` `User`,
+`:4057-4058` `Feed`, and similarly on `Post`/`PostReply`/`Feed` elsewhere in
+the file) -- a bare `= 1` on one of these columns raises `IntegrityError`
+against the test database unless a `File` row with that id actually exists.
+Seed a real `File()` row and commit it first. Setting only the `_id` column
+is not enough either: the model's own image method (`avatar_image()`,
+`icon_image()`, ...) reads the `_id` column to decide whether to return a
+real URL or a placeholder, so the accompanying image method must also be
+doubled to return the URL the test expects -- the guard and the renderer are
+two different things and both must be opened.
+
+**40. An optional block guarded by `if <obj>.<x>_id is not None:` needs an
+absence test for THAT outer guard, not only for the URL-shape branch
+inside it.** `Community.icon_image()`/`header_image()` (`app/models.py:642`,
+`:669`), `User.avatar_image()`/`cover_image()` (`:1188`, `:1203`)
+and `Feed.icon_image()`/`header_image()` (`app/models.py:4097`, `:4124`)
+each independently guard on the same `_id` column internally and fall
+through to a placeholder (`avatar_image()`/`header_image()`-style methods
+return `''` or a static placeholder path) rather than raising when the
+column is `None`. So if the *outer* `if ..._id is not None:` guard in the
+route is deleted, the block runs unconditionally, the image method's
+*inner* guard still returns a harmless-looking placeholder, and a bogus
+`icon`/`image` key is added to every response with no error and no visibly
+wrong value -- undetected by every test that only sets the column present
+and checks the URL branch. Test the column's *absence* explicitly and
+assert the key is missing from the response body.
+
+**41. Three relationships in this codebase attach in three different
+shapes; read the model rather than generalising from a sibling.**
+`Community.languages` (`app/models.py:622`) is `lazy='dynamic'` over a
+secondary (association) table but takes plain `.append()`.
+`User.extra_fields` (`:1072`) is likewise `lazy='dynamic'` (over
+`UserExtraField`, `:3556`, with `cascade="all, delete-orphan"`) and also
+takes `.append()` directly. `Feed.children` (`:4091`,
+`db.relationship('Feed', remote_side=[id], backref=db.backref('children',
+lazy='dynamic'))`) is a `lazy='dynamic'` **backref** over a plain
+`parent_feed_id` foreign-key column (`:4064`) with no association table --
+attach a child by setting `child.parent_feed_id = parent.id` directly and
+committing, never `.append()` on `parent.children`. All three report as
+`lazy='dynamic'` if inspected loosely, which invites assuming they share one
+attachment shape; they do not.
+
+**42. A mutation that strips a clause from two call sites at once proves the
+column, not the query.** If the same filter clause appears at two textually
+identical call sites (e.g. a local lookup and a fallback lookup both filtering
+`deleted=False, banned=False`), deleting the clause from both at once will be
+sole-killed by a test even if only one of the two call sites is what the test
+actually reaches -- the kill is real but its attribution is ambiguous. Mutate
+one call site at a time; a clause that turns out to be unkillable at one site
+alone (commonly because a factory-built row can never reach that site's query
+in the first place -- see finding 33 above) needs its own dedicated test, not
+credit borrowed from its sibling site's kill.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
