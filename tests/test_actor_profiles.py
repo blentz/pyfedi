@@ -1409,12 +1409,18 @@ def test_a_user_without_extra_fields_has_no_attachment_key(app, db_session, monk
 
 
 # ---------------------------------------------------------------------------
-# user_profile (Task 9): two current-behaviour defects, PINNED so Task 10 can
-# invert both tests once it fixes them. Fix neither defect here.
+# user_profile: three tests that began (Task 9) as pins on current-behaviour
+# defects. Task 10 fixed the first of the three -- the duplicated admin/else
+# lookup, now collapsed to one copy -- and rewrote its test to state what it
+# still proves. The two below it remain pins on the missing `deleted`/`banned`
+# guards until Task 10's second fix inverts them.
 # ---------------------------------------------------------------------------
 
-def test_the_admin_branch_and_the_else_branch_resolve_identically(app, db_session, monkeypatch):
-    """PINS a defect. `user_profile` opens (routes.py:370-384) with
+def test_the_same_user_resolves_identically_on_two_successive_requests(app, db_session, monkeypatch):
+    """`user_profile` resolves a local user from the request alone -- twice over.
+
+    HISTORY. This test was written (Task 9) to pin a defect: `user_profile`
+    opened with
 
         # admins can view deleted accounts
         if current_user.is_authenticated and current_user.is_admin():
@@ -1422,38 +1428,36 @@ def test_the_admin_branch_and_the_else_branch_resolve_identically(app, db_sessio
         else:
             <the same six lines, byte for byte>
 
-    Read directly off the source: both bodies run the identical `'@' in actor`
-    lookup, the identical bare-username lookup, and the identical
-    `ap_profile_id` fallback -- no line differs. The comment's claim, "admins
-    can view deleted accounts", is false as written: neither copy filters
-    `deleted` (see test_a_deleted_user_profile_is_served_to_anyone below), so
-    an admin gets nothing a non-admin does not already get. The branch
-    decides nothing.
+    Both bodies ran the identical `'@' in actor` lookup, the identical
+    bare-username lookup and the identical `ap_profile_id` fallback -- no line
+    differed, so the branch decided nothing, and the comment's claim was false
+    besides (neither copy filtered `deleted`). Task 10 collapsed the two
+    copies to one; `current_user` is now referenced nowhere in the function,
+    so there is no longer an admin branch for any test to reach.
 
-    THE STRONGER PIN. The brief's fallback was to request only anonymously,
-    which cannot distinguish "these branches are duplicated" from "they are
-    correct and happen to agree" -- only the source reading does that. This
-    suite already has a way to authenticate a test client as a real user:
-    `client.session_transaction()` setting `_user_id`/`_fresh` directly,
-    reused verbatim (not built here) from tests/test_request_hooks.py::login,
-    tests/test_redirect_back.py::login and tests/test_feed_cache.py::login.
-    Reading user_profile end to end confirms `current_user` is referenced
-    nowhere else in the function, so an admin request and an anonymous
-    request for the same user cannot differ for any reason this route
-    controls -- making the two JSON documents byte-identical is exactly the
-    branch's decision (or, here, the absence of one).
+    WHAT IT STILL PROVES, and it is deliberately narrow: two successive GETs
+    of /u/alice through two separate test clients return the same 200 and the
+    same actor document. That is a real property of the collapsed lookup --
+    it depends on nothing but the URL and the database -- and it is what
+    survives of the original pin. It does NOT prove anything about admins.
 
-    `seed_community_owner`'s 'communityowner' user is used as the admin: it
-    is the first User row inserted after truncation, so it lands on id 1,
-    and `User.is_admin()` (app/models.py:1250-1256) special-cases id==1 --
-    true without assigning any Role. `admin.is_admin()` is asserted directly
-    so the premise this test depends on is stated, not assumed.
+    WHY BOTH LEGS ARE ANONYMOUS, stated because the code below still logs a
+    user in and the reader would otherwise assume that works. It does not:
+    Flask-Login caches the loaded user on the APPLICATION context as
+    `g._login_user`, and this suite's `app` fixture pushes one app context for
+    the whole test, which Flask's request contexts then reuse rather than
+    replace. So the anonymous first request populates `g._login_user` with the
+    anonymous user, and the second request -- session cookie and all -- reads
+    that cached value back instead of loading user 1. Verified by tracing
+    `user_profile` line by line under exactly this sequence: with the first
+    request removed the second one authenticates; with it present the second
+    one is anonymous. The login is therefore inert here, and is kept only so
+    the second request is not a byte-for-byte repeat of the first.
 
-    What this pins: removing the branch (collapsing to the `else` body alone)
-    cannot change what either caller sees, which is the fix's precondition.
-    It does not by itself prove the two copies are exact text duplicates --
-    that is the source reading above, and Task 10's mutation-based collapse
-    is what proves removing one truly changes nothing.
+    `seed_community_owner`'s 'communityowner' user is id 1, so
+    `User.is_admin()` (app/models.py:1250-1256) is true for it without any
+    Role; that is asserted below to keep the historical premise honest, not
+    because the route reads it any more.
     """
     from app.models import User
 
@@ -1461,8 +1465,8 @@ def test_the_admin_branch_and_the_else_branch_resolve_identically(app, db_sessio
     make_user(instance, 'alice', local=True)
     _double_the_renderers(monkeypatch)
 
-    anonymous = profile_get(app, '/u/alice', accept=AP_ACCEPT)
-    assert anonymous.status_code == 200
+    first = profile_get(app, '/u/alice', accept=AP_ACCEPT)
+    assert first.status_code == 200
 
     admin = User.query.filter_by(user_name='communityowner').first()
     assert admin.id == 1
@@ -1472,17 +1476,17 @@ def test_the_admin_branch_and_the_else_branch_resolve_identically(app, db_sessio
         with client.session_transaction() as sess:
             sess['_user_id'] = str(admin.id)
             sess['_fresh'] = True
-        as_admin = client.get('/u/alice', headers={'Accept': AP_ACCEPT})
+        second = client.get('/u/alice', headers={'Accept': AP_ACCEPT})
 
-    assert as_admin.status_code == 200
-    assert as_admin.json == anonymous.json
+    assert second.status_code == 200
+    assert second.json == first.json
 
 
 def test_a_deleted_user_profile_is_served_to_anyone(app, db_session, monkeypatch):
     """PINS a defect, and the more consequential of the two.
 
-    Neither of user_profile's lookup branches filters `deleted` (see the test
-    above), so this endpoint hands out a deleted user's full actor document --
+    user_profile's local lookup does not filter `deleted`, so this endpoint
+    hands out a deleted user's full actor document --
     public key, inbox, shared inbox -- to an anonymous, unauthenticated
     caller. Webfinger's user lookup, by contrast, DOES filter
     `deleted=False, banned=False` together (app/activitypub/routes.py:118-119,

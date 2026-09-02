@@ -367,21 +367,12 @@ def user_profile(actor):
     The two types of requests are differentiated by the header """
     actor = actor.strip()
 
-    # admins can view deleted accounts
-    if current_user.is_authenticated and current_user.is_admin():
-        if '@' in actor:
-            user: User = User.query.filter_by(ap_id=actor.lower()).first()
-        else:
-            user: User = User.query.filter(or_(func.lower(User.user_name) == actor.lower())).filter_by(ap_id=None).first()
-            if user is None:
-                user = User.query.filter_by(ap_profile_id=f'{current_app.config["SERVER_URL"]}/u/{actor.lower()}', ap_id=None).first()
+    if '@' in actor:
+        user: User = User.query.filter_by(ap_id=actor.lower()).first()
     else:
-        if '@' in actor:
-            user: User = User.query.filter_by(ap_id=actor.lower()).first()
-        else:
-            user: User = User.query.filter(or_(func.lower(User.user_name) == actor.lower())).filter_by(ap_id=None).first()
-            if user is None:
-                user = User.query.filter_by(ap_profile_id=f'{current_app.config["SERVER_URL"]}/u/{actor.lower()}', ap_id=None).first()
+        user: User = User.query.filter(or_(func.lower(User.user_name) == actor.lower())).filter_by(ap_id=None).first()
+        if user is None:
+            user = User.query.filter_by(ap_profile_id=f'{current_app.config["SERVER_URL"]}/u/{actor.lower()}', ap_id=None).first()
 
     if user is None:
         user = resolve_remote_handle(actor)
