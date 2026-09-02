@@ -418,3 +418,88 @@ def test_an_update_on_an_already_edited_post_is_not_re_applied(app, db_session, 
     assert calls['update_post_from_activity'] == []
     log = ActivityPubLog.query.one()
     assert log.result == 'success'
+
+
+def test_a_refused_post_is_deleted_remotely_and_logs_nothing(app, db_session, monkeypatch):
+    """PINS a defect. `create_post` returning None means the post was not
+    allowed, so a Delete is sent back to the remote instance -- but the branch
+    then neither logs nor returns. Control leaves the `try` without the
+    `except` firing, leaves `if can_create_post(...)`, leaves the post half,
+    and falls off the end of the function.
+
+    Asserted with LOG_ACTIVITYPUB_TO_DB explicitly True, so the zero is real
+    silence rather than logging being switched off. An operator cannot tell a
+    refused-and-deleted post from one that was never received.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    _double_the_gate(monkeypatch, community)
+    _permit_and_return(monkeypatch, None)
+    calls = record_moderation(monkeypatch, 'proactively_delete_content')
+
+    dispatch(direct_activity(author, content_object('https://peer.example/post/1')))
+
+    assert len(calls['proactively_delete_content']) == 1
+    args, kwargs = calls['proactively_delete_content'][0]
+    assert args[1] == 'https://peer.example/post/1'
+    assert ActivityPubLog.query.count() == 0
+
+
+def test_a_refused_post_in_a_remote_community_is_not_deleted(app, db_session, monkeypatch):
+    """`if community.is_local():` -- the other side. A remote community's own
+    instance is responsible for its content, so no Delete is sent.
+
+    `make_community` never sets `ap_id`, so every factory community is
+    is_local() == True regardless of host (tests/README.md fact 20); the
+    community is made genuinely remote here by setting `ap_id` explicitly.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    community.ap_id = 'https://peer.example/c/microblogs'
+    db.session.commit()
+    _double_the_gate(monkeypatch, community)
+    _permit_and_return(monkeypatch, None)
+    calls = record_moderation(monkeypatch, 'proactively_delete_content')
+
+    dispatch(direct_activity(author, content_object('https://peer.example/post/1')))
+
+    assert calls['proactively_delete_content'] == []
+
+
+def test_a_type_error_from_create_post_is_logged_and_returned(app, db_session, monkeypatch):
+    """The `except TypeError:` fallback. The delegate is doubled to raise, which
+    is the only way to reach it -- nothing in this function raises TypeError
+    itself.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    _double_the_gate(monkeypatch, community)
+    monkeypatch.setattr(activitypub_routes, 'can_create_post', lambda user, content: True)
+
+    def boom(*args, **kwargs):
+        raise TypeError('malformed')
+
+    monkeypatch.setattr(activitypub_routes, 'create_post', boom)
+
+    dispatch(direct_activity(author, content_object('https://peer.example/post/1')))
+
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'TypeError. See log file.'
+
+
+def test_a_user_who_cannot_post_is_refused_and_their_content_deleted(app, db_session, monkeypatch):
+    """`can_create_post` false. Unlike the refused-by-the-delegate branch above,
+    this one DOES log -- which is the asymmetry the register records.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    _double_the_gate(monkeypatch, community)
+    monkeypatch.setattr(activitypub_routes, 'can_create_post', lambda user, content: False)
+    calls = record_moderation(monkeypatch, 'proactively_delete_content')
+
+    dispatch(direct_activity(author, content_object('https://peer.example/post/1')))
+
+    assert len(calls['proactively_delete_content']) == 1
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'User cannot create post in Community'
