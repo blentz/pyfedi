@@ -41,7 +41,8 @@
 
 ### Facts established before this plan — do not re-derive
 
-- **`is_activitypub_request()`** is `'application/ld+json' in request.headers.get('Accept','') or 'application/activity+json' in request.headers.get('Accept','')` (`app/utils.py`). A plain substring test on `Accept`, with two accepted values. **Drive it with a real header, not a double** — the parse is part of what is under test — and cover both accepted values plus at least one rejected one.
+- **`is_activitypub_request()`** is `'application/ld+json' in request.headers.get('Accept','') or 'application/activity+json' in request.headers.get('Accept','')`. A plain substring test on `Accept`, with two accepted values. **Drive it with a real header, not a double** — the parse is part of what is under test — and cover both accepted values plus at least one rejected one.
+- **THERE ARE TWO BYTE-IDENTICAL DEFINITIONS OF IT, AND ONE IS DEAD.** `app/activitypub/util.py:2200` is the one these routes call — `routes.py` imports it at its line 15. `app/utils.py:1862` is a duplicate that **nothing in the application imports**. Task 1 discovered this empirically: mutating the `app/utils.py` copy killed no test, while mutating the `app/activitypub/util.py` copy killed exactly one per disjunct. **Any later mutation or patch of this function must target `app.activitypub.util`, or better, patch the name as bound on `activitypub_routes`.** Registered as a finding by Task 11.
 - **`is_activitypub_request` is imported into `app.activitypub.routes` at its line 15**, so it *can* be patched there if a test genuinely needs a value a header cannot produce. Prefer the header.
 - `show_profile`, `show_community`, `show_feed` and `default_context` are **direct imports** in `routes.py`; `resolve_remote_handle` is in its namespace too. All are patched on `app.activitypub.routes`, following the campaign's binding-site convention (`record_moderation(monkeypatch, *names)` from `tests/test_inbox_dispatch_lock_delete.py`).
 - **`resolve_remote_handle` reaches the network and must never run.** Double it in every test that could reach it — `user_profile` calls it whenever its lookups return `None`.
@@ -1293,6 +1294,7 @@ Add a `## Sub-project 9` section to `docs/superpowers/specs/2026-08-25-coverage-
 Register at minimum:
 
 - Task 10's two fixes, with commits.
+- **`is_activitypub_request` is defined twice, byte-identically**, at `app/utils.py:1862` and `app/activitypub/util.py:2200`. The `app/utils.py` copy has **no importers anywhere in the application** — verified by grep. A change to the content-negotiation rule applied to the wrong copy would silently do nothing. Established `measured`: mutating each copy in turn showed only the `app/activitypub/util.py` one affects these routes.
 - Whatever Task 5 established about `Vary: Accept`, fixed or not.
 - **`user_profile` serves remote actors' ActivityPub documents** while the other two `abort(400)`. Not fixed — a federation-behaviour question beyond this slice.
 - **The local lookups have no ban guard** in `community_profile` and `feed_profile`, while their remote lookups do. This is D153 reappearing in two more endpoints; cross-reference it.
