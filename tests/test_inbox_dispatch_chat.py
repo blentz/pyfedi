@@ -508,12 +508,12 @@ def test_a_repeat_ap_id_updates_the_existing_message_and_says_so(app, db_session
 
 
 def test_an_encrypted_flag_is_carried_through_and_defaults_to_none(app, db_session, monkeypatch):
-    """`encrypted` is read with a membership check — unlike `content` and `id`
-    a few lines away, which are not (see Task 8). Both halves are covered here:
-    supplied, and absent -- the second dispatch's `encrypted is None` is
-    process_chat's own `else None` (routes.py:2582), not the ChatMessage
-    column's declared default, because it is explicitly passed to the
-    constructor either way.
+    """`encrypted` is read with a membership check — the same as `content` and
+    `id`, guarded twenty lines above this read (routes.py:2566-2571) since the
+    Task 9 fix. Both halves are covered here: supplied, and absent -- the
+    second dispatch's `encrypted is None` is process_chat's own `else None`
+    (routes.py:2588), not the ChatMessage column's declared default, because
+    it is explicitly passed to the constructor either way.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, sender, recipient = seed_chat_pair()
@@ -568,8 +568,8 @@ def test_a_chat_message_with_no_content_is_refused_not_crashed(app, db_session, 
 def test_a_chat_message_with_no_id_is_refused_not_crashed(app, db_session, monkeypatch):
     """Task 9 fix for defect 2, the sibling unguarded read.
     `core_activity['object']['id']` used to be read with no membership check,
-    used for the existing-message lookup (routes.py:2583) and for the new
-    row's `ap_id` (routes.py:2590). Now a missing `id` is refused the same way
+    used for the existing-message lookup (routes.py:2589) and for the new
+    row's `ap_id` (routes.py:2596). Now a missing `id` is refused the same way
     a missing `content` is.
 
     `content` IS supplied here, so this test is refused for its own reason
@@ -585,24 +585,32 @@ def test_a_chat_message_with_no_id_is_refused_not_crashed(app, db_session, monke
 
     log = ActivityPubLog.query.one()
     assert log.result == 'failure'
-    assert 'id' in log.exception_message.lower()
-    assert 'content' not in log.exception_message.lower()
+    assert log.exception_message == 'ChatMessage has no id'
     assert db_session.query(ChatMessage).count() == 0
 
 
 def test_the_inner_is_local_check_can_never_be_false(app, db_session, monkeypatch):
-    """PINS defect 3, an equivalent mutant. The SSE event and notification sit
-    under `if recipient.is_local():` (routes.py:2607), inside a block already
-    guarded by `if recipient and recipient.is_local():` (routes.py:2548) — the
-    same call on the same object, with nothing between them that could change
-    it: `recipient` is reassigned at routes.py:2549 to a row fetched by the
-    SAME id from the SAME session, and nothing in between ever writes
-    `recipient.ap_id`.
+    """PINS defect 3, an equivalent mutant that Task 9 (commit `d0c8d13f`)
+    removed. The SSE event and notification used to sit under a second
+    `if recipient.is_local():` check, nested inside the block already entered
+    via `if recipient and recipient.is_local():` (routes.py:2548). That is
+    not the same call on the same object twice: `recipient` is reassigned at
+    routes.py:2549 to a row fetched by `session.query(User).get(recipient.id)`
+    -- a different object from a different session than the one
+    `find_actor_or_create_cached` returned at routes.py:2547, representing the
+    same row by id. The comment on routes.py:2549 exists precisely to flag
+    that distinction ("for some reason find_actor_or_create_cached was giving
+    me a user from the wrong DB session"). Nothing between that reassignment
+    and the removed inner check ever wrote `recipient.ap_id` or
+    `recipient.ap_profile_id` (the fields `User.is_local()` reads), so the
+    inner check could never observe a different truth value than the outer
+    one already established.
 
     This test cannot observe the inner guard directly; what it establishes is
     that every accepted message notifies, so there is no reachable case where
-    the outer check passes and the inner one does not. Task 9 removes the inner
-    guard, and this test must keep passing — that is the proof it was dead.
+    the outer check passes and the inner one does not. Task 9 removed the
+    inner guard, and this test kept passing unchanged -- that is the proof it
+    was dead.
 
     Same class as D95 (Remove's dead `if proceed:`), D96 (Block's dead Mastodon
     isinstance) and D103 (the site-ban already_banned guard).
