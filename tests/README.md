@@ -1950,6 +1950,89 @@ anything in this suite — a test that sets `Site.blocked_phrases` and then
 dispatches an activity that calls `blocked_phrases()` sees the fresh value
 every time, with no need to clear a cache or worry about call order.
 
+**26. `Post.edited_at` and `PostReply.edited_at` have no declared default,
+so asserting `is None` on them is not vacuous -- but pins the other side
+explicitly.** Both columns are a plain `db.Column(db.DateTime)`
+(`app/models.py:1706` for `Post`, `:2886` for `PostReply`), with no
+`default=` at all -- unlike `ChatMessage.edited_at` (`:294`) and several
+other `edited_at` columns in this file, which default to `utcnow`. A test
+asserting `post.edited_at is None` after a fresh `make_post()` (or
+`make_reply()`) is genuinely testing the column's absence of a value, not a
+default the factory happened to reproduce. The other side of that same
+lost-race check needs the opposite state seeded explicitly: a test proving
+an `Update` does NOT re-apply because it lost a race to a `Create` must set
+`post.edited_at` (or `reply.edited_at`) to a real, non-`None` timestamp
+itself before dispatching -- nothing in the schema or the factory will do
+it for you (`process_new_content`'s own guard reads exactly this:
+`activity_json['type'] == 'Update' and post.edited_at is None`,
+`app/activitypub/routes.py:2343`, and the `reply` equivalent at `:2391`).
+
+**27. Reaching `process_new_content` on the DIRECT path requires doubling
+both `find_community` and `ensure_domains_match`; on the ANNOUNCED path
+both are structurally unreachable.** The Create/Update arm gates both
+calls behind one condition, `if not announced and not community:`
+(`app/activitypub/routes.py:1244-1251`) -- so an announced activity (or one
+whose `community` the preamble already resolved) never reaches either
+call, no matter how they are doubled. On the direct, un-announced path with
+no community yet resolved, both must be doubled for a test to get past this
+block cleanly: `find_community(request_json)` (`:1245`) supplies
+`community`, and `ensure_domains_match(core_activity['object'])` (`:1249`)
+must return truthy or the arm logs `'Domains do not match'` and returns
+before `process_new_content` is ever called. On the ANNOUNCED path, the
+community instead comes from the outer preamble's own, real
+`find_actor_or_create_cached(actor_id, community_only=True,
+create_if_not_found=False)` lookup (`app/activitypub/routes.py:862`) --
+resolving the community row the test itself seeded -- which is why an
+announced-path test must stamp that community's `ap_fetched_at` (`utcnow()`
+or later) to suppress a genuine outbound fetch attempt, the same reason
+`seed_content_pair`/`seed_chat_pair`-style fixtures stamp it elsewhere in
+this suite.
+
+**28. `shorten_string(s, n)` returns `s[:n-3] + '…'`, which is `n - 2`
+characters long, not `n`.** The function (`app/utils.py:1595-1602`) takes
+97 characters of the input plus one ellipsis character (`'…'` is a single
+Unicode code point, so `len()` counts it as 1) when `len(s) > n`. For
+`n=100` that is **98** characters, not 100 -- a test asserting a truncated
+length against this function must use `n - 2`, not `n`, or it fails against
+a passing implementation.
+
+**29. Stopping `run_tests.sh` on the host does not kill pytest inside the
+container -- check for and kill survivors before starting another run.**
+Cancelling a run from the host leaves the container's pytest process alive,
+still holding the test database. Starting a second run then puts two
+pytest sessions against one Postgres instance at once (see fact 18 above),
+and the second run's `db_session` teardown `TRUNCATE` can block for many
+minutes -- nearly ten, once -- behind the survivor's `idle in transaction`
+session. The image has no `kill` binary, so list and kill survivors through
+the venv's own Python:
+
+    podman exec pyfedi_test-runner_1 sh -c 'ls -d /proc/[0-9]*| while read d; do tr "\0" " " < "$d/cmdline" | grep -q bin/pytest && echo $d; done'
+
+lists any `/proc/<pid>` directory whose `cmdline` contains `bin/pytest`.
+For each PID found, kill it with:
+
+    podman exec pyfedi_test-runner_1 /venv/bin/python -c "import os, signal; os.kill(<pid>, signal.SIGKILL)"
+
+Then confirm the database has no lingering `idle in transaction` backends
+before starting the next run (see fact 18's `pg_stat_activity` query).
+
+**30. Inverting a defect-pinning test vacates the branch that pin used to
+cover -- check what the inversion just lost.** A test that pins a defect by
+asserting the buggy branch was taken is also, incidentally, that branch's
+only coverage. Flipping its assertions to prove the fix moves the test onto
+the *other* branch and silently drops the one it left, and the suite can
+stay fully green while a real branch loses its last test. This happened for
+real in sub-project 7 (2026-09-02): inverting
+`test_an_instance_admin_cannot_edit_a_reply` into
+`test_an_instance_admin_can_edit_a_reply` left no test anywhere in
+`tests/test_inbox_dispatch_new_content.py` reaching the reply-edit permission
+guard's `else:` refusal branch (`app/activitypub/routes.py:2381-2383`,
+`'Edit attempt denied'`) any more -- every remaining reply-side test passed
+the three-disjunct guard by one disjunct or another. It was caught only by a
+reviewer deliberately asking, after every inversion, "which branch has no
+test left now?" and repaired with a new test built to isolate that guard.
+Ask the same question after every inversion.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
