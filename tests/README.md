@@ -2009,6 +2009,20 @@ the venv's own Python:
     podman exec pyfedi_test-runner_1 sh -c 'ls -d /proc/[0-9]*| while read d; do tr "\0" " " < "$d/cmdline" | grep -q bin/pytest && echo $d; done'
 
 lists any `/proc/<pid>` directory whose `cmdline` contains `bin/pytest`.
+
+**Correction: this probe false-positives on its own subshell.** The `sh -c
+'...'` process running the probe carries the literal argument string
+`grep -q bin/pytest` in its own `/proc/<pid>/cmdline`, and that string
+contains the substring `bin/pytest` -- so the loop matches and reports the
+probe's own PID as a "survivor" every time it runs, even with nothing else
+alive. Both "survivors" reported once in this project turned out to be this
+false positive; neither vanished because a real process was killed, they
+vanished because they had never existed. Fix the probe (exclude its own
+`$$`, or grep for the more specific `/venv/bin/pytest`) or, at minimum,
+verify each reported PID by reading its `/proc/<pid>/cmdline` before
+killing anything -- a real pytest survivor's cmdline names the test files
+and options it was invoked with, not a `grep` argument.
+
 For each PID found, kill it with:
 
     podman exec pyfedi_test-runner_1 /venv/bin/python -c "import os, signal; os.kill(<pid>, signal.SIGKILL)"
@@ -2032,6 +2046,77 @@ the three-disjunct guard by one disjunct or another. It was caught only by a
 reviewer deliberately asking, after every inversion, "which branch has no
 test left now?" and repaired with a new test built to isolate that guard.
 Ask the same question after every inversion.
+
+**31. `make_feed` (`tests/factories.py:154-188`) sets `ap_id` unconditionally
+-- even at `local=True` -- so no Feed it builds is reachable by any lookup
+that filters `ap_id=None`.** `make_local_feed` (`tests/factories.py:191-210`)
+exists for exactly this: it never sets `ap_id`, so the column stays `None`
+and the row is visible to an `ap_id=None` filter. `make_feed`'s `ap_id` is
+load-bearing elsewhere -- `find_remote_actor` branches on the `/f/` substring
+in `ap_profile_id` -- so this is a sibling factory, not a change to it. Use
+`make_feed` when a test needs a Feed resolvable as a REMOTE actor; use
+`make_local_feed` when it needs to be resolvable as a LOCAL one (e.g. by
+webfinger).
+
+**32. `requestor_domain()` (`app/utils.py:5721-5728`) reads the `User-Agent`
+header's `+URL` comment, not a doubled function.** It splits on `'+'`, takes
+the last segment, strips a trailing `')'`, and parses the host out with
+`furl`. A route guarded by it (webfinger's allowlist/ban checks) is driven in
+a test with a `User-Agent` header carrying that shape (e.g.
+`'Mastodon/4.2 (+https://evil.example)'`), not with a monkeypatched double --
+the header IS the interface.
+
+**33. A filter clause whose value equals what the factory always produces
+cannot be killed by any mutation, for any test using that factory
+unmodified.** The fix is always the same shape: a test that sets the field
+explicitly to something contrary to the factory's default, never one that
+trusts the default to already differ. This sub-project's own ledger hit it
+twice: the Community lookup's `ap_id=None` clause was unkillable by any
+`make_community`-built row, since `make_community` never sets `ap_id`
+(closed by `test_a_community_with_a_non_null_ap_id_is_not_served`, which sets
+`ap_id` explicitly post-construction); the Feed lookup's identical
+`ap_id=None` clause, present at both of its textually-duplicated occurrences,
+was unkillable by any `make_local_feed`-built row for the same reason and was
+closed the same way. State the rule generally -- it is the most transferable
+lesson here, and it recurs across factories, not just this one.
+
+**34. `webfinger` returned HTTP 200 for a not-found actor, a malformed
+resource, and a successful lookup alike, before this sub-project's fixes --
+a status-only assertion could not tell them apart, and that blindness
+disarmed a test.** `test_a_user_is_matched_by_alt_user_name`, written to
+isolate the `alt_user_name` disjunct, originally asserted only
+`status_code == 200`; dropping the disjunct still returned 200 (the pinned
+not-found defect, at the time), so the mutation survived. The fix is the
+same for every positive-resolution test: assert on the response body or
+`response.json`, never on the status code alone, unless the test's entire
+contract is refuse-or-don't (the allowlist/ban guards, correctly, do this).
+This is now **partly historical**: the not-found and malformed-resource
+fixes (D143, D144 in the findings register) mean a miss is 404 and a
+malformed request is 400, so status alone now discriminates those two from a
+200. It still does not discriminate WHICH actor a 200 resolved to, so a
+positive-resolution test must still assert on the body.
+
+**35. `CACHE_TYPE=NullCache` under test (`tests/conftest.py:68`,
+`.env.test:11`) makes every `@cache.memoize`/`@cache.cached` decorator inert
+-- which is why no test in this suite clears a cache, and why a
+cache-staleness defect can only ever be registered, not demonstrated, from
+inside this harness.** `process_webfinger_request` is
+`@cache.memoize(timeout=60)` (`app/activitypub/routes.py:74`); in production,
+`CACHE_TYPE` defaults to `FileSystemCache` (`config.py:38`) and the memo is
+live there, but no test config in this repository can exercise that.
+
+**36. `SERVER_URL` resolves to `https://test.piefed.local` under test.**
+`HTTP_PROTOCOL` defaults to `'https'` (`config.py:52`) and is not overridden
+by `.env.test` or `TestConfig`, so `create_app` (`app/__init__.py:132-135`)
+builds `SERVER_URL` from `f"{HTTP_PROTOCOL}://{SERVER_NAME}"` with
+`SERVER_NAME = 'test.piefed.local'` (`tests/conftest.py:69`). Confirm this
+rather than re-deriving it. Separately: of webfinger's three actor lookups,
+the Community lookup lowercases the actor (`actor.strip().lower()`,
+`app/activitypub/routes.py:122`) and so does the User lookup
+(`func.lower(...)`, `:118`), but the Feed lookup does not (`actor.strip()`,
+`:126`, `:130`) -- a case-sensitivity asymmetry a mixed-case query can
+observe directly (`test_a_user_is_matched_case_insensitively`,
+`test_a_feed_name_lookup_is_case_sensitive`).
 
 ## Known noise
 
