@@ -331,9 +331,9 @@ def test_an_update_by_an_instance_admin_is_permitted(app, db_session, monkeypatc
 
 def _permit_and_return(monkeypatch, post_or_none):
     """Double `can_create_post` to True and `create_post` to return the given
-    object. `create_post` is doubled in every test in this file: it is large,
-    writes many rows, and is its own future slice -- and its return value is
-    exactly the switch this function branches on.
+    object. `create_post` is doubled in every test that reaches the creation
+    path: it is large, writes many rows, and is its own future slice -- and
+    its return value is exactly the switch this function branches on.
     """
     monkeypatch.setattr(activitypub_routes, 'can_create_post', lambda user, content: True)
     monkeypatch.setattr(activitypub_routes, 'create_post',
