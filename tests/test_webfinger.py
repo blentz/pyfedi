@@ -225,6 +225,8 @@ def test_a_plain_http_url_resource_also_resolves(app, db_session):
     response = webfinger_get(app, resource='http://test.piefed.local/u/alice')
 
     assert response.status_code == 200
+    assert response.content_type == 'application/jrd+json'
+    assert response.json['subject'] == 'acct:alice@test.piefed.local'
 
 
 def test_a_malformed_resource_returns_a_bare_string_with_status_200(app, db_session):
