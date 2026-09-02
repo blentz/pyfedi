@@ -4,8 +4,8 @@ user_profile (/u/<actor>), community_profile (/c/<actor>) and feed_profile
 ActivityPub JSON or as HTML, chosen by the Accept header" -- these are the
 documents every federated interaction with this instance begins by fetching.
 
-This file covers the content-negotiation switch (`is_activitypub_request()`,
-app/utils.py) that governs all three endpoints, using community_profile as the
+This file covers the content-negotiation switch (`is_activitypub_request()`)
+that governs all three endpoints, using community_profile as the
 representative because it starts the least covered of the three (16% vs.
 user_profile's 52.9%, inherited from tests/test_remote_handle_resolution.py and
 tests/test_request_hooks.py -- see those files' docstrings and this task's
@@ -13,6 +13,14 @@ report for exactly what they already prove). Later tasks in this sub-project
 build community- and feed-specific coverage on top of the two helpers below;
 their names and signatures (`profile_get`, `seed_actors`) are a contract those
 tasks depend on.
+
+`is_activitypub_request` IS DEFINED TWICE, BYTE-IDENTICALLY, AND ONE COPY IS
+DEAD. app/activitypub/util.py:2200 is the one these routes call -- routes.py
+imports it there. app/utils.py:1862 is a duplicate that nothing in the
+application imports. Mutating the app/utils.py copy kills no test here, which
+is easy to misread as weak coverage; mutating the app/activitypub/util.py copy
+kills one test per disjunct. Any change or mutation of this function must
+target app.activitypub.util, or patch the name as bound on activitypub_routes.
 """
 
 from app import db
@@ -29,9 +37,10 @@ def profile_get(app, path, accept=None):
 
     `accept` is passed as a real Accept header rather than doubling
     `is_activitypub_request()`, which is a plain substring test over exactly
-    two values (app/utils.py). The parse is part of what is under test, so a
-    double would hide it -- the same reason sub-project 8 drove
-    `requestor_domain()` with a real User-Agent.
+    two values (app/activitypub/util.py:2200 -- NOT the dead byte-identical
+    twin in app/utils.py; see this module's docstring). The parse is part of
+    what is under test, so a double would hide it -- the same reason
+    sub-project 8 drove `requestor_domain()` with a real User-Agent.
     """
     headers = {'Accept': accept} if accept is not None else {}
     with app.test_client() as client:
