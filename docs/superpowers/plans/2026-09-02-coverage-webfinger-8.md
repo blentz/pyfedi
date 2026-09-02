@@ -448,6 +448,7 @@ def test_a_deleted_user_is_not_served(app, db_session):
 
     response = webfinger_get(app, resource='acct:alice@test.piefed.local')
 
+    assert response.status_code == 200
     assert response.get_data(as_text=True) == ''
 
 
@@ -462,6 +463,7 @@ def test_a_banned_user_is_not_served(app, db_session):
 
     response = webfinger_get(app, resource='acct:alice@test.piefed.local')
 
+    assert response.status_code == 200
     assert response.get_data(as_text=True) == ''
 
 
@@ -475,6 +477,7 @@ def test_a_remote_user_is_not_served(app, db_session):
 
     response = webfinger_get(app, resource='acct:alice@test.piefed.local')
 
+    assert response.status_code == 200
     assert response.get_data(as_text=True) == ''
 
 
@@ -489,6 +492,7 @@ def test_a_user_response_carries_the_fep_3b86_create_template(app, db_session):
     response = webfinger_get(app, resource='acct:alice@test.piefed.local')
 
     rels = {link['rel'] for link in response.json['links']}
+    assert response.status_code == 200
     assert 'https://w3id.org/fep/3b86/Create' in rels
 ```
 
@@ -541,6 +545,7 @@ def test_a_local_only_community_is_not_served(app, db_session):
 
     response = webfinger_get(app, resource='acct:books@test.piefed.local')
 
+    assert response.status_code == 200
     assert response.get_data(as_text=True) == ''
 
 
@@ -553,6 +558,7 @@ def test_a_remote_community_is_not_served(app, db_session):
 
     response = webfinger_get(app, resource='acct:books@test.piefed.local')
 
+    assert response.status_code == 200
     assert response.get_data(as_text=True) == ''
 
 
@@ -566,6 +572,7 @@ def test_a_community_response_carries_the_fep_3b86_follow_template(app, db_sessi
     response = webfinger_get(app, resource='acct:books@test.piefed.local')
 
     rels = {link['rel'] for link in response.json['links']}
+    assert response.status_code == 200
     assert 'https://w3id.org/fep/3b86/Follow' in rels
     assert 'https://w3id.org/fep/3b86/Create' not in rels
 ```
@@ -685,6 +692,7 @@ def test_a_remote_feed_is_not_served(app, db_session):
 
     response = webfinger_get(app, resource='acct:news@test.piefed.local')
 
+    assert response.status_code == 200
     assert response.get_data(as_text=True) == ''
 
 
@@ -699,6 +707,7 @@ def test_a_feed_response_carries_neither_fep_3b86_template(app, db_session):
     response = webfinger_get(app, resource='acct:news@test.piefed.local')
 
     rels = {link['rel'] for link in response.json['links']}
+    assert response.status_code == 200
     assert 'https://w3id.org/fep/3b86/Create' not in rels
     assert 'https://w3id.org/fep/3b86/Follow' not in rels
 ```
