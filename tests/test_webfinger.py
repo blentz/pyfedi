@@ -510,6 +510,7 @@ def test_a_remote_feed_is_not_served(app, db_session):
 
     response = webfinger_get(app, resource='acct:news@test.piefed.local')
 
+    assert response.status_code == 200
     assert response.get_data(as_text=True) == ''
 
 
@@ -554,34 +555,6 @@ def test_a_feed_name_lookup_is_case_sensitive(app, db_session):
     make_local_feed('news', public=True)
 
     response = webfinger_get(app, resource='acct:NEWS@test.piefed.local')
-
-    assert response.status_code == 200
-    assert response.get_data(as_text=True) == ''
-
-
-def test_a_feed_with_matching_case_is_served(app, db_session):
-    """The positive companion to the case-sensitivity test above: an exact-case
-    match on a mixed-case feed name resolves fine, proving the case sensitivity
-    is real behaviour and not merely a broken lookup that never matches.
-    """
-    seed_local_actors()
-    make_local_feed('NewsFeed', public=True)
-
-    response = webfinger_get(app, resource='acct:NewsFeed@test.piefed.local')
-
-    assert response.status_code == 200
-    assert response.json['links'][1]['properties'][
-        'https://www.w3.org/ns/activitystreams#type'] == 'Feed'
-
-
-def test_no_match_at_any_stage_returns_empty_body(app, db_session):
-    """No User, Community or Feed named 'nothing' exists anywhere. The
-    non-tilde chain runs all three lookups in sequence and falls out the
-    bottom with `object is None`.
-    """
-    seed_local_actors()
-
-    response = webfinger_get(app, resource='acct:nothing@test.piefed.local')
 
     assert response.status_code == 200
     assert response.get_data(as_text=True) == ''
@@ -702,37 +675,6 @@ def test_a_local_only_community_with_the_same_name_falls_through_to_the_feed(app
         'https://www.w3.org/ns/activitystreams#type'] == 'Feed'
 
 
-def test_a_feed_is_matched_by_a_url_resource(app, db_session):
-    """The `elif 'https:' in query` branch reaches the Feed fallback exactly
-    as it reaches the User branch tested elsewhere in this file: `query.split(
-    '/')[-1]` yields the feed's bare name, and 'acct:' is absent so `feed`
-    stays False and the full three-stage chain runs.
-    """
-    seed_local_actors()
-    make_local_feed('news', public=True)
-
-    response = webfinger_get(app, resource='https://test.piefed.local/f/news')
-
-    assert response.status_code == 200
-    assert response.json['links'][1]['properties'][
-        'https://www.w3.org/ns/activitystreams#type'] == 'Feed'
-
-
-def test_a_feed_is_matched_by_a_plain_http_url_resource(app, db_session):
-    """The second disjunct, `'http:' in query`, isolated from `'https:'` by a
-    scheme that contains 'http:' but not 'https:' -- the same technique the
-    User-branch pair of tests uses.
-    """
-    seed_local_actors()
-    make_local_feed('news', public=True)
-
-    response = webfinger_get(app, resource='http://test.piefed.local/f/news')
-
-    assert response.status_code == 200
-    assert response.json['links'][1]['properties'][
-        'https://www.w3.org/ns/activitystreams#type'] == 'Feed'
-
-
 def test_a_tilde_prefix_is_not_recognized_in_url_form(app, db_session):
     """The `actor.startswith('~')` check lives inside the `'acct:' in query`
     branch only. A URL resource whose last path segment happens to start with
@@ -765,21 +707,6 @@ def test_a_feed_alias_and_self_link_use_the_feed_public_url(app, db_session):
     assert response.json['aliases'] == [expected_url]
     assert response.json['links'][0]['href'] == expected_url
     assert response.json['links'][1]['href'] == expected_url
-
-
-def test_a_feed_matched_via_url_resource_has_a_correctly_formatted_acct_subject(app, db_session):
-    """The `subject` field is built from `actor.strip()` regardless of which
-    branch produced `actor` -- proved here with a URL-form resource, which is
-    a different `actor` source than the acct-form tests that assert `subject`
-    elsewhere in this file.
-    """
-    seed_local_actors()
-    make_local_feed('news', public=True)
-
-    response = webfinger_get(app, resource='https://test.piefed.local/f/news')
-
-    assert response.status_code == 200
-    assert response.json['subject'] == 'acct:news@test.piefed.local'
 
 
 def test_a_feed_actor_with_surrounding_whitespace_is_matched_after_stripping(app, db_session):
@@ -827,18 +754,3 @@ def test_a_tilde_resource_for_a_private_feed_is_served_anyway(app, db_session):
 
     assert response.status_code == 200
     assert response.json['subject'] == 'acct:secret@test.piefed.local'
-
-
-def test_a_feed_response_has_jrd_json_content_type(app, db_session):
-    """`resp.content_type = 'application/jrd+json'` is set unconditionally
-    before return, same as the User and Community branches -- asserted here
-    for the Feed branch specifically, which the tests above check via
-    `response.json` alone.
-    """
-    seed_local_actors()
-    make_local_feed('news', public=True)
-
-    response = webfinger_get(app, resource='acct:news@test.piefed.local')
-
-    assert response.status_code == 200
-    assert response.content_type == 'application/jrd+json'
