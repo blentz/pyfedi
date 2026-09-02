@@ -247,6 +247,109 @@ def test_an_unknown_community_returns_404_to_an_anonymous_browser(app, db_sessio
     assert response.status_code == 404
 
 
+def test_a_local_only_community_refuses_an_activitypub_request(app, db_session, monkeypatch):
+    """First disjunct of `if community.local_only or community.private: abort(403)`.
+    `private` is left False so this test isolates `local_only`.
+    """
+    seed_actors()
+    community = make_community(name='books', host='test.piefed.local')
+    community.local_only = True
+    community.private = False
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/c/books', accept=AP_ACCEPT)
+
+    assert response.status_code == 403
+
+
+def test_a_private_community_refuses_an_activitypub_request(app, db_session, monkeypatch):
+    """Second disjunct. `local_only` is left False, so this test is the only one
+    that can kill `community.private`.
+    """
+    seed_actors()
+    community = make_community(name='books', host='test.piefed.local')
+    community.local_only = False
+    community.private = True
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/c/books', accept=AP_ACCEPT)
+
+    assert response.status_code == 403
+
+
+def test_a_local_only_community_still_serves_html(app, db_session, monkeypatch):
+    """The 403 guard sits INSIDE `if is_activitypub_request()`, so a browser
+    still gets the page. Pins the guard's scope, not just its existence.
+    """
+    seed_actors()
+    community = make_community(name='books', host='test.piefed.local')
+    community.local_only = True
+    db.session.commit()
+    calls = _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/c/books', accept='text/html')
+
+    assert response.status_code == 200
+    assert len(calls['show_community']) == 1
+
+
+def test_the_community_document_carries_its_federation_contract(app, db_session, monkeypatch):
+    """The fields a remote instance actually needs: the id it will store, the
+    inbox it will deliver to, the shared inbox, and the public key it will
+    verify signatures against. Asserted together because a document missing any
+    one of them is unusable, and nothing else in this file asserts them.
+    """
+    seed_actors()
+    community = make_community(name='books', host='test.piefed.local')
+    community.public_key = 'PUBKEY'
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/c/books', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    data = response.json
+    assert data['id'] == 'https://test.piefed.local/c/books'
+    assert data['inbox'] == 'https://test.piefed.local/c/books/inbox'
+    assert data['outbox'] == 'https://test.piefed.local/c/books/outbox'
+    assert data['endpoints']['sharedInbox'] == 'https://test.piefed.local/inbox'
+    assert data['publicKey']['id'] == 'https://test.piefed.local/c/books#main-key'
+    assert data['publicKey']['publicKeyPem'] == 'PUBKEY'
+
+
+def test_the_community_response_headers_are_set(app, db_session, monkeypatch):
+    """Cache-Control, Vary and Link. `Vary: Accept` matters most: the body
+    depends on the Accept header, so a shared cache that does not vary on it
+    may serve this JSON to a browser. `feed_profile` omits it -- registered as
+    a defect, and this test is the community half of the comparison.
+
+    The route sets `Vary: Accept` (routes.py), but Flask-Compress runs as an
+    `after_request` registered ahead of the route and appends 'Accept-Encoding'
+    to whatever Vary is already on the response (see the comment on
+    `register_request_hooks(app)` in app/__init__.py and
+    test_request_hooks.py::test_after_request_runs_before_flask_compress, which
+    pins the same ordering for HTML responses). So the header actually observed
+    here is 'Accept, Accept-Encoding', not the bare 'Accept' the route sets --
+    asserted as a substring so this test does not depend on Flask-Compress's
+    append order. Asserted as the exact, deterministic two-token string rather
+    than a substring check, since a bare substring match on 'Accept' would
+    also match 'Accept-Encoding' alone and so would not catch the route
+    dropping its own 'Accept' token.
+    """
+    seed_actors()
+    make_community(name='books', host='test.piefed.local')
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/c/books', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.headers['Cache-Control'] == 'public, max-age=30'
+    assert response.headers['Vary'] == 'Accept, Accept-Encoding'
+    assert 'rel="alternate"' in response.headers['Link']
+
+
 # NOT TESTED HERE (already covered elsewhere -- see this task's report):
 #
 # - user_profile's AP-JSON happy path for a local user found by bare username,
