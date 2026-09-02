@@ -1023,3 +1023,166 @@ def test_a_childless_feed_lists_no_child_feeds(app, db_session, monkeypatch):
 # and childFeeds are covered above (Task 6). Any remaining feed_profile fields
 # (languages) and feed_outbox/feed_following are left to later tasks in this
 # sub-project.
+#
+# ---------------------------------------------------------------------------
+# user_profile (Task 7): its HEAD branch, its ap_profile_id fallback lookup,
+# its HTML delegation, and its bot/Service type branch.
+#
+# NOT TESTED HERE (already covered elsewhere -- see this task's report):
+# - the AP-JSON happy path for a local user found by bare username, its
+#   Accept-driven content_type, and the suppressed session cookie:
+#   tests/test_request_hooks.py::test_activity_json_response_does_not_set_a_session_cookie
+# - both lookup branches (handle-with-@ and bare-username) returning None,
+#   gated three ways (anonymous, AP-Accept, banned-instance-exception-not-500),
+#   and the resulting resolve_remote_handle/search_for_user call:
+#   tests/test_remote_handle_resolution.py (all four tests)
+# ---------------------------------------------------------------------------
+
+def test_a_head_request_for_an_activitypub_client_returns_an_empty_json_body(app, db_session, monkeypatch):
+    """`user_profile` is the ONLY one of the three whose route accepts HEAD and
+    the only one with an explicit HEAD branch -- an asymmetry the spec registers.
+    The branch returns `jsonify('')` with the AP content type and no actor
+    document at all -- critically, no Cache-Control, Vary or Link headers, which
+    the real AP-JSON branch below (routes.py) sets explicitly via
+    `resp.headers.set(...)`.
+
+    That header absence is what actually proves the explicit branch ran, rather
+    than the GET path running and Werkzeug silently emptying the body for a HEAD
+    request. `Response.get_app_iter()` (werkzeug/wrappers/response.py) forces an
+    empty body whenever `environ['REQUEST_METHOD'] == 'HEAD'`, REGARDLESS of
+    what the view returned -- so if this route's own HEAD branch were deleted,
+    a HEAD request would fall through to the exact same `is_activitypub_request()`
+    branch a GET takes, build the full actor_data JSON, set Cache-Control/Vary/
+    Link on it, and Werkzeug would still empty the body before it reached the
+    test client. `response.content_type` and `response.data` are identical
+    (application/activity+json, b'') in both the genuine-branch and
+    Werkzeug-stripped-GET cases -- only the extra headers differ. Verified
+    empirically in Step 3: deleting the branch does NOT change status_code or
+    content_type, only the Cache-Control assertion below dies (see this task's
+    report).
+    """
+    site, instance = seed_actors()
+    make_user(instance, 'alice', local=True)
+    _double_the_renderers(monkeypatch)
+
+    with app.test_client() as client:
+        response = client.head('/u/alice', headers={'Accept': AP_ACCEPT})
+
+    assert response.status_code == 200
+    assert response.content_type == 'application/activity+json'
+    assert 'Cache-Control' not in response.headers
+
+
+def test_a_head_request_from_a_browser_returns_an_empty_string(app, db_session, monkeypatch):
+    """The HEAD branch's else: no content type is set, and `show_profile` is
+    never reached -- asserted through the double's call list, which is what
+    distinguishes this from the browser GET path. Unlike the AP-Accept HEAD
+    test above, this one does not need a header-absence trick: if the branch
+    were deleted, a HEAD request with a browser Accept would fall to
+    `is_activitypub_request()`'s false arm and call `show_profile(user)`,
+    which the double records -- so `calls['show_profile'] == []` directly
+    proves the branch, not Werkzeug's HEAD body-stripping, produced this
+    response.
+    """
+    site, instance = seed_actors()
+    make_user(instance, 'alice', local=True)
+    calls = _double_the_renderers(monkeypatch)
+
+    with app.test_client() as client:
+        response = client.head('/u/alice', headers={'Accept': 'text/html'})
+
+    assert response.status_code == 200
+    assert calls['show_profile'] == []
+
+
+def test_a_user_is_resolved_by_ap_profile_id_when_the_name_does_not_match(app, db_session, monkeypatch):
+    """The second local lookup, reached only when the `user_name` query returns
+    None. The user's `user_name` deliberately differs from the path segment, so
+    only the `ap_profile_id` fallback can find them.
+
+    Asserts `id` (built from `user.public_url()`, which falls back to
+    `.../u/{user.user_name}` -- i.e. 'alice', not the requested path segment
+    'bob') rather than `type`, deviating from this task's brief. The brief's
+    literal assertion was `response.json['type'] == 'Person'`, which rests on
+    `User.bot`'s declared default (False, app/models.py:1007) without setting
+    it explicitly -- exactly the pattern this campaign's global constraints
+    forbid ("No assertion may rest on a column's declared default... User.bot
+    in particular: check it") and the reason Task 4 was rejected. Asserting on
+    `id` instead proves the SAME thing the brief's assertion was reaching for
+    (the fallback found the right row, not just any row) without resting on
+    that default, and more strongly: 'Person' could results from a coincidence
+    of the ternary's default, whereas 'alice' appearing in the id can only come
+    from the actual matched User object.
+    """
+    site, instance = seed_actors()
+    user = make_user(instance, 'alice', local=True)
+    user.ap_profile_id = 'https://test.piefed.local/u/bob'
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/u/bob', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['id'] == 'https://test.piefed.local/u/alice'
+
+
+def test_a_browser_request_for_a_user_reaches_show_profile(app, db_session, monkeypatch):
+    """The HTML delegation, which nothing else in this file or the two existing
+    files asserts. `show_profile` is doubled, so this asserts the delegation
+    happened and with which user -- not what the template rendered.
+    """
+    site, instance = seed_actors()
+    user = make_user(instance, 'alice', local=True)
+    user_id = user.id                    # captured BEFORE the request: see Task 1
+    calls = _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/u/alice', accept='text/html')
+
+    assert response.status_code == 200
+    assert len(calls['show_profile']) == 1
+    assert calls['show_profile'][0].id == user_id
+
+
+def test_a_bot_user_is_typed_as_a_service(app, db_session, monkeypatch):
+    """`"type": "Person" if not user.bot else "Service"`. Nothing else covers
+    the Service side; `User.bot` is set explicitly rather than left to default
+    (its declared default is False, app/models.py:1007 -- see this task's
+    report for why that matters).
+    """
+    site, instance = seed_actors()
+    user = make_user(instance, 'alice', local=True)
+    user.bot = True
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['type'] == 'Service'
+
+
+def test_a_non_bot_user_is_typed_as_a_person(app, db_session, monkeypatch):
+    """The false side of the same ternary, added beyond this task's brief (which
+    specified only the Service side above). Without this test, a mutation
+    collapsing the ternary to an unconditional 'Service' would still satisfy
+    test_a_bot_user_is_typed_as_a_service and survive undetected -- the same
+    absence-testing discipline this file already applies to every other
+    optional/branching field (theme, description, icon, image, ...).
+
+    `user.bot` is set to False EXPLICITLY rather than left unset. Its declared
+    default is also False (app/models.py:1007), so leaving it alone would rest
+    the assertion on that default -- forbidden by this campaign's constraints
+    ("User.bot in particular: check it"). Setting it states the premise this
+    test depends on, the same way test_a_community_without_a_theme_omits_the_key
+    sets `theme = None` explicitly despite '' already being falsy.
+    """
+    site, instance = seed_actors()
+    user = make_user(instance, 'alice', local=True)
+    user.bot = False
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['type'] == 'Person'
