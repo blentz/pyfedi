@@ -21,6 +21,7 @@
 - Every guard is mutation-tested with **each conjunct dropped separately**, each killed by a distinct named test. Record whether each kill is an **assertion-kill or a crash-kill**, and whether it is a **sole death**.
 - **The unkillable-clause pattern.** A filter clause whose value equals what the factory always produces cannot be killed by any test using that factory unmodified. Sub-project 8 hit this four times. All three local lookups filter `ap_id=None` and every local-actor factory produces exactly that — **expect those clauses to be unkillable, and add a test that sets `ap_id` explicitly to something contrary.**
 - A kill by `respx.models.AllMockedAssertionError` is an **infrastructure kill, not behavioural**.
+- **An optional block guarded by `if <obj>.<x>_id is not None:` needs an absence test for THAT guard, not only for the URL branch inside it.** The image METHODS (`icon_image`, `header_image`, `avatar_image`, `cover_image`) each guard on the same column internally and return a placeholder rather than raising — so deleting the outer guard adds a bogus key to every response and passes any test that only covers the `startswith('http')` split. Task 6 shipped without these and the review caught it.
 - **`icon_id`, `image_id`, `avatar_id` and `cover_id` are real foreign keys to `file.id`.** Assigning a bare `1` raises `IntegrityError` — Task 4 hit this. Seed a real row first with the `_seed_file()` helper Task 4 adds:
   ```python
   def _seed_file():
