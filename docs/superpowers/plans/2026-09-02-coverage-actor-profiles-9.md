@@ -21,6 +21,7 @@
 - Every guard is mutation-tested with **each conjunct dropped separately**, each killed by a distinct named test. Record whether each kill is an **assertion-kill or a crash-kill**, and whether it is a **sole death**.
 - **The unkillable-clause pattern.** A filter clause whose value equals what the factory always produces cannot be killed by any test using that factory unmodified. Sub-project 8 hit this four times. All three local lookups filter `ap_id=None` and every local-actor factory produces exactly that — **expect those clauses to be unkillable, and add a test that sets `ap_id` explicitly to something contrary.**
 - A kill by `respx.models.AllMockedAssertionError` is an **infrastructure kill, not behavioural**.
+- **Capture any model `id` you plan to assert on BEFORE issuing the request.** The test client runs the view in its own application context, and an instance the test seeded can be expired or detached by the time the assertion reads it — touching `.id` then raises `DetachedInstanceError` or silently re-queries. Sub-project 7 lost a round to this; the fix there was `sa_inspect(obj).identity[0]`, and capturing the value up front is simpler.
 - **Any docstring claim about another test must be verified true**, and must remain true after Task 10's fixes. After inverting a pin, check which branch that pin used to cover.
 - **One pytest session at a time.** Implementers run only their own file; the controller runs the full suite and supplies all coverage figures. Stopping `run_tests.sh` on the host does not kill pytest in the container.
 - **Delete nothing** the task did not create. `claude_test` and `scratch_full_cov.json` in the repository root are not ours.
@@ -163,13 +164,14 @@ def test_a_browser_accept_header_selects_the_html_renderer(app, db_session, monk
     """
     seed_actors()
     community = make_community(name='books', host='test.piefed.local')
+    community_id = community.id          # captured BEFORE the request: see below
     calls = _double_the_renderers(monkeypatch)
 
     response = profile_get(app, '/c/books', accept='text/html')
 
     assert response.status_code == 200
     assert len(calls['show_community']) == 1
-    assert calls['show_community'][0].id == community.id
+    assert calls['show_community'][0].id == community_id
 
 
 def test_no_accept_header_at_all_selects_the_html_renderer(app, db_session, monkeypatch):
@@ -952,13 +954,14 @@ def test_a_browser_request_for_a_user_reaches_show_profile(app, db_session, monk
     """
     site, instance = seed_actors()
     user = make_user(instance, 'alice', local=True)
+    user_id = user.id                    # captured BEFORE the request: see Task 1
     calls = _double_the_renderers(monkeypatch)
 
     response = profile_get(app, '/u/alice', accept='text/html')
 
     assert response.status_code == 200
     assert len(calls['show_profile']) == 1
-    assert calls['show_profile'][0].id == user.id
+    assert calls['show_profile'][0].id == user_id
 
 
 def test_a_bot_user_is_typed_as_a_service(app, db_session, monkeypatch):
