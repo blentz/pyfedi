@@ -773,46 +773,44 @@ def test_a_user_who_cannot_reply_is_refused_and_their_content_deleted(app, db_se
     assert log.exception_message == 'User cannot create reply in Community'
 
 
-def test_the_id_truncation_mutates_the_callers_activity(app, db_session, monkeypatch):
-    """PINS a defect. `activity_json['id'] = shorten_string(activity_json['id'], 100)`
-    writes back into the dict the caller owns. For an ANNOUNCED activity
-    `activity_json` IS `request_json['object']`, so the truncation is visible
-    in the activity object this test constructed: production mutates a dict
-    the caller still holds a reference to, after `dispatch()` returns.
+def test_the_id_truncation_leaves_the_callers_activity_untouched(app, db_session, monkeypatch):
+    """The over-long id is still truncated, but into a copy: the dict the
+    caller owns is not written back into. For an ANNOUNCED activity
+    `activity_json` IS `request_json['object']`, so a write-back would be
+    visible in the activity object this test constructed and still holds a
+    reference to after `dispatch()` returns. It is not.
 
-    Follower propagation of the truncated id is a DIRECT-path consequence,
-    not an announced-path one: both `announce_activity_to_followers(...,
-    request_json)` call sites inside this function's post-creation branches
-    sit under `if not announced:`, so on the announced shape this test
-    exercises, neither is reachable. What IS true on both paths is that the
-    already-truncated `activity_json` is passed into `create_post` /
+    The truncation itself is load-bearing and deliberately kept: the
+    (truncated) `activity_json` is passed into `create_post` /
     `create_post_reply`, which forward it into `Post.new`/`PostReply.new`,
     where it is stored as `ap_create_id` (app/models.py:1861 and :2968
-    respectively) -- a `db.String(100)` column on both `Post` and
-    `PostReply` (app/models.py:1722 and :2893). That width is very likely why
-    the truncation exists at all: the comment above the mutation says
-    over-long ids "will crash the app", and String(100) is exactly what an
-    untruncated id would overflow.
+    respectively) -- a `db.String(100)` column on both `Post` and `PostReply`
+    (app/models.py:1722 and :2893). That width is what the comment above the
+    truncation means by an over-long id "will crash the app".
 
-    The comment above that line claims the id is "not referred to again, so it
-    shouldn't matter if they're truncated". This test is the counter-example:
-    the object asserted below is the very dict the test passed in.
+    Follower propagation is a DIRECT-path concern, not an announced-path one:
+    both `announce_activity_to_followers(..., request_json)` call sites inside
+    this function's post-creation branches sit under `if not announced:`, so
+    on the announced shape this test exercises, neither is reachable.
 
-    The inner id is deliberately longer than 100 characters so truncation is
-    observable; a short id would leave the mutation invisible.
+    The inner id is deliberately longer than 100 characters so that a
+    write-back would be observable; a short id would leave one invisible.
 
     `shorten_string(s, 100)` (defined in app/utils.py, imported into
     routes.py) does NOT return a 100-character string: for input longer than
     max_length it returns `s[:max_length - 3] + '…'`, i.e. 97 characters of
-    the original plus a single ellipsis character, for a total length of 98
-    -- confirmed by running the function directly against a 150-character
-    input before writing this assertion.
+    the original plus a single ellipsis character, for a total length of 98.
+    The length assertion below is against the original length captured before
+    `dispatch()`, not a hardcoded number.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, author = seed_content_pair()
     community.ap_fetched_at = utcnow()
     db.session.commit()
-    _permit_and_return(monkeypatch, None)
+    monkeypatch.setattr(activitypub_routes, 'can_create_post', lambda user, content: True)
+    calls = []
+    monkeypatch.setattr(activitypub_routes, 'create_post',
+                        lambda *args, **kwargs: calls.append((args, kwargs)) or None)
     record_moderation(monkeypatch, 'proactively_delete_content')
 
     long_id = f'{author.ap_profile_id}/activities/' + ('x' * 150)
@@ -823,5 +821,11 @@ def test_the_id_truncation_mutates_the_callers_activity(app, db_session, monkeyp
     dispatch(activity)
 
     assert original_length > 100
-    assert len(activity['object']['id']) == 98
-    assert activity['object']['id'] == long_id[:97] + '…'
+    assert len(activity['object']['id']) == original_length
+    assert activity['object']['id'] == long_id
+
+    # ...and the truncated value still reaches create_post, whose `request_json`
+    # argument is what Post.new stores as the String(100) `ap_create_id`.
+    args, kwargs = calls[0]
+    assert args[2]['id'] == long_id[:97] + '…'
+    assert len(args[2]['id']) == 98
