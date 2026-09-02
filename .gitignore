@@ -185,3 +185,11 @@ compose.override.yaml
 # the reviewable corpus is tests/fuzz/corpus/, which only ever holds
 # hand-written seeds and reproducers for real findings.
 tests/fuzz/.work/
+
+# User scratch files (ad-hoc coverage/debug output). Untracked scratch_*
+# files kept showing up in `git status` as apparent debris and getting
+# deleted by agents that assumed they were disposable -- they are the
+# user's own working files. Note: scratch_cov.json is already tracked;
+# .gitignore has no effect on a file git already tracks, so this does not
+# change its tracked status.
+scratch_*
