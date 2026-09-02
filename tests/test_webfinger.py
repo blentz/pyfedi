@@ -2,7 +2,7 @@
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.models import Site
-from tests.factories import make_site, make_user, seed_community_owner
+from tests.factories import make_community, make_site, make_user, seed_community_owner
 
 
 def webfinger_get(app, resource=None, user_agent=None):
@@ -370,3 +370,81 @@ def test_a_user_response_carries_the_fep_3b86_create_template(app, db_session):
     assert response.status_code == 200
     rels = {link['rel'] for link in response.json['links']}
     assert 'https://w3id.org/fep/3b86/Create' in rels
+
+
+def test_a_community_is_served_when_no_user_matches(app, db_session):
+    """The fallback after the User lookup returns None. `make_community` leaves
+    `ap_id` None and builds `ap_profile_id` as https://<host>/c/<name>, which is
+    what the lookup compares against -- so the community's host must be this
+    instance's own for it to be found. No User named 'books' is seeded by this
+    file, so the User lookup above this in the code returns None first and the
+    Community branch is what actually resolves it.
+    """
+    seed_local_actors()
+    make_community(name='books', host='test.piefed.local')
+
+    response = webfinger_get(app, resource='acct:books@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.json['links'][1]['properties'][
+        'https://www.w3.org/ns/activitystreams#type'] == 'Group'
+
+
+def test_a_local_only_community_is_not_served(app, db_session):
+    """`local_only=False`. `make_community` sets local_only=False explicitly, so
+    flipping it here is a real state change.
+    """
+    seed_local_actors()
+    community = make_community(name='books', host='test.piefed.local')
+    community.local_only = True
+    db.session.commit()
+
+    response = webfinger_get(app, resource='acct:books@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.get_data(as_text=True) == ''
+
+
+def test_a_remote_community_is_not_served(app, db_session):
+    """The lookup builds the profile id from OUR SERVER_URL, so a community
+    published on another host cannot match it whatever its name.
+    """
+    seed_local_actors()
+    make_community(name='books', host='peer.example')
+
+    response = webfinger_get(app, resource='acct:books@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.get_data(as_text=True) == ''
+
+
+def test_a_community_with_a_non_null_ap_id_is_not_served(app, db_session):
+    """`ap_id=None`. `make_community` leaves `ap_id` unset (None) by default, so
+    every other community test in this file is blind to this filter -- flipping
+    it here to a non-None value (as a remote-cached copy of a community would
+    carry) is the one state change needed to prove the filter does something.
+    """
+    seed_local_actors()
+    community = make_community(name='books', host='test.piefed.local')
+    community.ap_id = 'books@test.piefed.local'
+    db.session.commit()
+
+    response = webfinger_get(app, resource='acct:books@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.get_data(as_text=True) == ''
+
+
+def test_a_community_response_carries_the_fep_3b86_follow_template(app, db_session):
+    """`elif isinstance(object, Community)` -- a different template from the
+    User branch asserted in the previous test.
+    """
+    seed_local_actors()
+    make_community(name='books', host='test.piefed.local')
+
+    response = webfinger_get(app, resource='acct:books@test.piefed.local')
+
+    assert response.status_code == 200
+    rels = {link['rel'] for link in response.json['links']}
+    assert 'https://w3id.org/fep/3b86/Follow' in rels
+    assert 'https://w3id.org/fep/3b86/Create' not in rels
