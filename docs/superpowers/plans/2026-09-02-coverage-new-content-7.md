@@ -16,7 +16,7 @@
 - Findings are numbered from **D132**; the register's index note ("Next free number") is updated in the same change that takes them.
 - The coverage floor in `coverage_floors.ini` rises to the measured blended figure **rounded down**.
 - **Locate every code target by content, not by the line numbers in this plan.** They drift; every sub-project since 5c has found them stale.
-- **`create_post` and `create_post_reply` are doubled in EVERY test.** They are large, write many rows, and are their own future slice. Their return value (`Post`/`PostReply` or `None`) is the branch switch, so each test chooses it deliberately.
+- **`create_post` and `create_post_reply` are doubled in every test THAT REACHES THE CREATION PATH.** Tests that exercise the existing-object branch never call them and must not claim to double them. They are large, write many rows, and are their own future slice. Their return value (`Post`/`PostReply` or `None`) is the branch switch, so each test that reaches them chooses it deliberately.
 - **No assertion may rest on a column's declared default.** Note `Post.edited_at` and `PostReply.edited_at` have **no** declared default (`app/models.py:1706`, `:2886`), so asserting `is None` on them is not vacuous — but a test of the *not*-a-lost-race side must seed a non-`None` value.
 - Every guard is mutation-tested with **each conjunct dropped separately**, each killed by a distinct named test. The post half's permission check is a **three-way disjunction needing three kills**.
 - A kill by `respx.models.AllMockedAssertionError` is an **infrastructure kill, not behavioural**.
@@ -449,9 +449,10 @@ git commit -m "test: pin all three disjuncts of the post half's permission check
 ```python
 def _permit_and_return(monkeypatch, post_or_none):
     """Double `can_create_post` to True and `create_post` to return the given
-    object. `create_post` is doubled in every test in this file: it is large,
-    writes many rows, and is its own future slice -- and its return value is
-    exactly the switch this function branches on.
+    object. `create_post` is doubled in every test that REACHES the creation
+    path -- the existing-post tests above never call it. It is large, writes
+    many rows, and is its own future slice, and its return value is exactly the
+    switch this function branches on.
     """
     monkeypatch.setattr(activitypub_routes, 'can_create_post', lambda user, content: True)
     monkeypatch.setattr(activitypub_routes, 'create_post',
@@ -791,9 +792,10 @@ The mirror of Tasks 4 and 5, using `create_post_reply` and `can_create_post_repl
 
 ```python
 def _permit_and_return_reply(monkeypatch, reply_or_none):
-    """`create_post_reply` is doubled in every test for the same reason
-    `create_post` is: it is large, writes many rows, and is its own future
-    slice, and its return value is the switch this half branches on.
+    """`create_post_reply` is doubled in every test that REACHES the reply
+    creation path, for the same reason `create_post` is: it is large, writes
+    many rows, and is its own future slice, and its return value is the switch
+    this half branches on. The existing-reply tests above never call it.
     """
     monkeypatch.setattr(activitypub_routes, 'can_create_post_reply', lambda user, content: True)
     monkeypatch.setattr(activitypub_routes, 'create_post_reply',
