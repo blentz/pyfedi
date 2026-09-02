@@ -1215,8 +1215,10 @@ says which numbers are taken. So there is one now, and it is this file:
   D139 are out-of-scope instances of the same write-through-a-shared-dict
   class D135's fix addressed only partially, by design. D140 is not a
   defect — a deliberate federation behavioural change introduced by D135's
-  fix, ruled KEEP.
-  **Next free number: D141.** If you take it, say so here in the change
+  fix, ruled KEEP. D141 was added by this fix wave's whole-branch review
+  (2026-09-02): a residual inner-guard asymmetry between the two halves'
+  existing-content edit paths, registered but not fixed.
+  **Next free number: D142.** If you take it, say so here in the change
   that takes it.
 
 Two entries in the reports were deliberately **not** counted as defects, and are
@@ -3610,7 +3612,26 @@ empty.
 |---|---|---|---|---|
 | D140 | `process_new_content`'s DIRECT path, via D135's fix (`app/activitypub/routes.py:2316`), consumed by `announce_activity_to_followers(..., request_json)` at `app/activitypub/routes.py:2332`, `:2350`, `:2377` and `:2398` | **Not a defect -- deliberate behavioural change, ruled KEEP.** Before D135's fix, the DIRECT path's four `announce_activity_to_followers` calls (all under `if not announced:`) relayed `request_json` after its `'id'` had already been truncated in place; after the fix, they relay the caller's **original, untruncated** activity id. Ruled KEEP: the truncated form is `s[:97] + '…'` (`shorten_string`, `app/utils.py:1600`) containing U+2026, which no receiving instance can dereference as a URI, and two origin activities sharing a 97-character prefix would collapse onto the same relayed id. The truncation exists only to fit this instance's own `String(100)` `ap_create_id` column (`app/models.py:1722`, `:2893`) and is preserved for that purpose -- D135's fix narrows only what gets written back into the caller's dict, not what gets stored. Preserving the old relay behaviour would have required *adding* a second, deliberate truncation, a strictly larger change than the one made. | deliberate change, ruled keep | measured: `test_a_create_that_succeeds_logs_success_and_announces` (`tests/test_inbox_dispatch_new_content.py:361`) asserts `args[2]['id'] == long_activity_id` (the untruncated value) off `announce_activity_to_followers`'s captured call. This assertion did not exist when D135 first landed -- Task 9's own review found the original pin used the ANNOUNCED shape, where all four call sites are unreachable under `if not announced:`, so this federation-behaviour consequence had been asserted by no test at all; it was added in the same fix round as D132's missing-branch repair, and mutation-killed by re-truncating immediately before the direct-path announce call |
 
-**Next free number: D141.** If you take it, say so here in the change that
+### 4. One residual asymmetry, registered but not fixed -- D141
+
+| # | function | defect | status | evidence |
+|---|---|---|---|---|
+| D141 | `process_new_content`, both halves' existing-content edit paths (`app/activitypub/routes.py:2328-2329` post, `:2372-2373` reply) | **Not fixed, registered only -- reading-level.** Once the outer author/moderator/instance-admin guard passes (post: `:2328`, reply: `:2372`), the reply half gates the actual edit behind a second, inner check, `can_create_post_reply(user, community)` (`:2373`); the post half's mirror calls `update_post_from_activity(post, activity_json)` straight away (`:2329`) with no equivalent inner check at all. So a moderator or instance admin who fails `can_create_post(user, community)` can still edit an existing POST in a community they are not permitted to post in, while the identical actor failing `can_create_post_reply` is refused editing an existing REPLY there. D132 (#1 above) made the two halves' OUTER guards symmetric; this INNER difference is a separate gap the same fix round did not touch, and is arguably more consequential than D132's, since it is reachable by exactly the moderators and instance admins the outer guard exists to trust. No fix is proposed here -- this is a registration, not a recommendation, since closing the gap either way (adding the check to the post half, or removing it from the reply half) is a policy decision outside this sub-project's bounded authorisation. | not fixed, registered only | reading-level: `app/activitypub/routes.py:2328-2329` (post) and `:2372-2373` (reply) read side by side; no test in this suite doubles `can_create_post` to False on the post-half edit path to demonstrate the asymmetry end to end, though `test_a_permitted_editor_who_cannot_reply_is_logged`'s docstring (`tests/test_inbox_dispatch_new_content.py:614-615`) already states the same finding: "The post half has no equivalent inner check at all, so there is nothing to mirror this on that side" |
+
+Six branch arcs remain partial in `process_new_content` beyond D118's debug
+`pass` (`[2297,2298]`): `[2349,2351]`, `[2362,2364]`, `[2376,2380]`,
+`[2397,2406]`, `[2403,2405]`, `[2413,2416]` (confirmed against a full-suite
+`coverage.json`). None is a regression -- every one of the six was already
+partial before this sub-project's fixes. The cause is a test asymmetry, not a
+code one: the reply half has no announced-shape test at all (every
+`announced_activity(...)` call in `tests/test_inbox_dispatch_new_content.py`
+exercises the post half), and of the function's four `community.is_local()`
+call sites (`:2353`, `:2362`, `:2403`, `:2413`), only `:2353` has its False
+side covered (`test_a_refused_post_in_a_remote_community_is_not_deleted`).
+D134's "the two halves end consistent" is true of the CODE; it is the TESTS,
+not the code, that remain unmirrored between the two halves.
+
+**Next free number: D142.** If you take it, say so here in the change that
 takes it.
 
 ## Ratchet gotchas

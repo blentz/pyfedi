@@ -157,9 +157,10 @@ true of `request_json`.
 
 **Corrected during implementation.** An earlier draft of this section claimed
 the truncated id reaches followers because `request_json` is passed to
-`announce_activity_to_followers`. That is false as stated: both call sites in
-this function sit inside `if not announced:`, so on the *announced* path — the
-one where `activity_json` is a caller's nested dict — neither is reachable.
+`announce_activity_to_followers`. That is false as stated: all four call sites
+in this function (`routes.py:2332, 2350, 2377, 2398`) sit inside `if not
+announced:`, so on the *announced* path — the one where `activity_json` is a
+caller's nested dict — none is reachable.
 Follower propagation is a **direct-path** consequence, where `activity_json is
 request_json` and the guard does hold.
 

@@ -108,8 +108,11 @@ def test_a_direct_create_reads_the_object_and_passes_announced_false(app, db_ses
     its arguments recorded: `announce_id` must be None for a direct activity,
     which is the observable difference from the announced shape below.
 
-    `args[2]` is `activity_json`, which on this path IS `request_json` (the
-    whole envelope) -- so the content's id is checked at `args[2]['object']
+    `args[2]` is `activity_json`, which on this path STARTS as `request_json`
+    (the whole envelope, routes.py:2305) -- but routes.py:2316 rebinds it to a
+    shallow copy carrying a truncated `id` before any delegate is called, so
+    by the time `create_post` sees it `args[2]` is that copy, not
+    `request_json` itself. The content's id is checked at `args[2]['object']
     ['id']`, not `args[2]['id']` (that is the envelope's own uuid-based
     activity id, unrelated to the content).
     """
@@ -139,8 +142,10 @@ def test_an_announced_create_reads_the_nested_object_and_carries_an_announce_id(
 
     Paired with the test above so neither half of the preamble can be dropped
     without a failure. As with the direct case, `args[2]` (`activity_json`)
-    is the wrapping Create/Update activity here (`request_json['object']`),
-    so the content's id is at `args[2]['object']['id']`.
+    starts as the wrapping Create/Update activity here (`request_json
+    ['object']`), but routes.py:2316 rebinds it to a shallow copy before any
+    delegate is called, so `args[2]` is that copy by the time `create_post`
+    sees it. The content's id is at `args[2]['object']['id']`.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, author = seed_content_pair()
@@ -531,8 +536,10 @@ def test_a_type_error_from_create_post_is_logged_and_returned(app, db_session, m
 
 
 def test_a_user_who_cannot_post_is_refused_and_their_content_deleted(app, db_session, monkeypatch):
-    """`can_create_post` false. Unlike the refused-by-the-delegate branch above,
-    this one DOES log -- which is the asymmetry the register records.
+    """`can_create_post` false. Both this branch and the refused-by-the-delegate
+    branch above now log -- the asymmetry the register records is the MESSAGE,
+    not whether logging happens: 'User cannot create post in Community' here
+    versus 'Post creation refused' when the delegate itself refuses.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, author = seed_content_pair()
@@ -682,7 +689,6 @@ def test_an_update_by_a_reply_community_moderator_is_permitted(app, db_session, 
     assert log.result == 'success'
 
 
-
 def test_an_unrelated_user_cannot_edit_a_reply(app, db_session, monkeypatch):
     """All three disjuncts of the reply guard false: not the reply's author,
     not a moderator of its community, not an instance admin. This is the only
@@ -732,6 +738,13 @@ def _permit_and_return_reply(monkeypatch, reply_or_none):
 
 
 def test_a_new_reply_that_succeeds_logs_success_and_announces(app, db_session, monkeypatch):
+    """The ordinary new-reply creation path. `create_post_reply` returns a
+    non-None reply and `activity_json['type']` is `'Create'` (not `'Update'`),
+    so control takes the `else:` at `:2394` (log CREATE success) rather than
+    the Update-lost-a-race branch above it, and the direct path's `if not
+    announced:` (`:2397`) sends exactly one `announce_activity_to_followers`
+    call.
+    """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, author = seed_content_pair()
     parent, reply = _seed_reply(community, author, ap_id='https://peer.example/comment/existing')
@@ -813,6 +826,10 @@ def test_a_refused_reply_is_deleted_remotely_and_logged(app, db_session, monkeyp
 
 
 def test_a_type_error_from_create_post_reply_is_logged(app, db_session, monkeypatch):
+    """The reply half's `except TypeError:` fallback (`:2407-2409`), reached
+    the same way as the post half's mirror above: `create_post_reply` is
+    doubled to raise, since nothing in this function raises TypeError itself.
+    """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, author = seed_content_pair()
     parent = make_post(community, author, 'https://peer.example/post/1')
@@ -833,6 +850,13 @@ def test_a_type_error_from_create_post_reply_is_logged(app, db_session, monkeypa
 
 
 def test_a_user_who_cannot_reply_is_refused_and_their_content_deleted(app, db_session, monkeypatch):
+    """`can_create_post_reply` false, on the reply half's own creation path
+    (`:2411-2416`). Distinguished from the delegate-refused branch above
+    (`test_a_refused_reply_is_deleted_remotely_and_logged`, which logs 'Reply
+    creation refused') by its message, 'User cannot create reply in
+    Community' -- the reply-side half of the same message-not-logging
+    asymmetry the post half's equivalent test records.
+    """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, author = seed_content_pair()
     parent = make_post(community, author, 'https://peer.example/post/1')
