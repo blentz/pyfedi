@@ -894,6 +894,53 @@ def test_a_relative_feed_header_url_is_prefixed(app, db_session, monkeypatch):
     assert response.json['image']['url'] == 'https://test.piefed.local/static/h.png'
 
 
+def test_a_feed_with_no_icon_omits_the_key(app, db_session, monkeypatch):
+    """The outer guard `if feed.icon_id is not None:` (routes.py:2697),
+    distinct from the `startswith('http')` split inside it. `icon_id` has no
+    declared default (app/models.py:4057, a bare `db.Column(db.Integer,
+    db.ForeignKey('file.id'))`), so leaving it unset on `make_local_feed` is
+    None-by-construction, not a default the test happens to rest on.
+
+    This matters because `Feed.icon_image()` (app/models.py:4097) itself
+    guards on `self.icon_id is not None` and falls through to
+    '/static/images/1px.gif' rather than raising when it is None -- so a
+    mutation deleting the outer guard in `feed_profile` would still call
+    `icon_image()` successfully and add a harmless-looking `icon` key with
+    that placeholder URL, undetected by the four tests above (all of which
+    set `icon_id`). This test is what makes that mutation observable.
+    """
+    seed_actors()
+    make_local_feed('news', public=True)
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/f/news', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert 'icon' not in response.json
+
+
+def test_a_feed_with_no_header_image_omits_the_key(app, db_session, monkeypatch):
+    """The outer guard `if feed.image_id is not None:` (routes.py:2709),
+    mirroring the icon guard above. `image_id` likewise has no declared
+    default (app/models.py:4058), so this rests on None-by-construction.
+
+    `Feed.header_image()` (app/models.py:4124) guards on `self.image_id is
+    not None` internally and falls through to `''` rather than raising, so
+    -- exactly as with the icon guard -- deleting this outer guard would add
+    an `image` key built from that empty-string placeholder to every
+    response, undetected by the header tests above (all of which set
+    `image_id`).
+    """
+    seed_actors()
+    make_local_feed('news', public=True)
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/f/news', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert 'image' not in response.json
+
+
 def test_a_feed_description_adds_summary_and_source(app, db_session, monkeypatch):
     """`if feed.description_html:` adds two keys. Both asserted -- a test
     checking only `summary` would survive deleting the `source` line, the same
