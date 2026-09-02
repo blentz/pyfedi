@@ -755,3 +755,48 @@ def test_a_tilde_resource_for_a_private_feed_is_served_anyway(app, db_session):
 
     assert response.status_code == 200
     assert response.json['subject'] == 'acct:secret@test.piefed.local'
+
+
+def test_an_unknown_actor_returns_an_empty_body_with_status_200(app, db_session):
+    """PINS a defect. `if object is None: return ''` -- Flask makes that HTTP
+    200 with an empty body.
+
+    RFC 7033 wants 404. As it stands a remote instance cannot distinguish "no
+    such actor here" from "this endpoint is broken", and neither from a
+    successful lookup, by status alone. The content type is asserted too: it is
+    text/html, not the application/jrd+json every real answer carries.
+    """
+    seed_local_actors()
+
+    response = webfinger_get(app, resource='acct:nobody@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.get_data(as_text=True) == ''
+    assert 'text/html' in response.content_type
+
+
+def test_a_query_for_another_domain_is_answered_with_our_own_user(app, db_session):
+    """Documents accepted behaviour, not a bug awaiting a fix: the resource's
+    domain is split off and discarded --
+
+        actor = query.split(':')[1].split('@')[0]
+
+    so `acct:alice@evil.example` is answered with THIS instance's `alice`, and
+    the reply asserts the subject is alice@test.piefed.local -- a handle the
+    query never asked about.
+
+    RFC 7033 has a server answer only for resources it is authoritative for.
+    The assertion below is on the subject rather than merely on the status,
+    because the status is 200 either way: what makes this worth pinning is the
+    identity the response claims. A later task registers this rather than
+    fixing it: rejecting a foreign domain changes who this instance will
+    answer for and could break federation with software that queries loosely,
+    so this test's expectations stay as they are permanently.
+    """
+    site, instance = seed_local_actors()
+    make_user(instance, 'alice', local=True)
+
+    response = webfinger_get(app, resource='acct:alice@evil.example')
+
+    assert response.status_code == 200
+    assert response.json['subject'] == 'acct:alice@test.piefed.local'
