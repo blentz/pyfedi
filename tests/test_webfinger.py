@@ -251,8 +251,8 @@ def test_the_instance_actor_is_served_from_the_special_case(app, db_session):
     """`actor == current_app.config['SERVER_NAME']` short-circuits every
     database lookup and returns a fixed JRD pointing at /actor. No User, Community
     or Feed row exists in this test, which is what proves the short-circuit: any
-    other path would return '' for an unknown actor (app/activitypub/routes.py,
-    `if object is None: return ''`).
+    other path would 404 on an unknown actor (app/activitypub/routes.py,
+    `if object is None: abort(404)`).
     """
     seed_local_actors()
 
@@ -324,8 +324,7 @@ def test_a_deleted_user_is_not_served(app, db_session):
 
     response = webfinger_get(app, resource='acct:alice@test.piefed.local')
 
-    assert response.status_code == 200
-    assert response.get_data(as_text=True) == ''
+    assert response.status_code == 404
 
 
 def test_a_banned_user_is_not_served(app, db_session):
@@ -339,8 +338,7 @@ def test_a_banned_user_is_not_served(app, db_session):
 
     response = webfinger_get(app, resource='acct:alice@test.piefed.local')
 
-    assert response.status_code == 200
-    assert response.get_data(as_text=True) == ''
+    assert response.status_code == 404
 
 
 def test_a_remote_user_is_not_served(app, db_session):
@@ -353,8 +351,7 @@ def test_a_remote_user_is_not_served(app, db_session):
 
     response = webfinger_get(app, resource='acct:alice@test.piefed.local')
 
-    assert response.status_code == 200
-    assert response.get_data(as_text=True) == ''
+    assert response.status_code == 404
 
 
 def test_a_user_response_carries_the_fep_3b86_create_template(app, db_session):
@@ -401,8 +398,7 @@ def test_a_local_only_community_is_not_served(app, db_session):
 
     response = webfinger_get(app, resource='acct:books@test.piefed.local')
 
-    assert response.status_code == 200
-    assert response.get_data(as_text=True) == ''
+    assert response.status_code == 404
 
 
 def test_a_remote_community_is_not_served(app, db_session):
@@ -414,8 +410,7 @@ def test_a_remote_community_is_not_served(app, db_session):
 
     response = webfinger_get(app, resource='acct:books@test.piefed.local')
 
-    assert response.status_code == 200
-    assert response.get_data(as_text=True) == ''
+    assert response.status_code == 404
 
 
 def test_a_community_with_a_non_null_ap_id_is_not_served(app, db_session):
@@ -431,8 +426,7 @@ def test_a_community_with_a_non_null_ap_id_is_not_served(app, db_session):
 
     response = webfinger_get(app, resource='acct:books@test.piefed.local')
 
-    assert response.status_code == 200
-    assert response.get_data(as_text=True) == ''
+    assert response.status_code == 404
 
 
 def test_a_community_response_carries_the_fep_3b86_follow_template(app, db_session):
@@ -496,8 +490,7 @@ def test_a_private_feed_is_not_served(app, db_session):
 
     response = webfinger_get(app, resource='acct:secret@test.piefed.local')
 
-    assert response.status_code == 200
-    assert response.get_data(as_text=True) == ''
+    assert response.status_code == 404
 
 
 def test_a_remote_feed_is_not_served(app, db_session):
@@ -513,8 +506,7 @@ def test_a_remote_feed_is_not_served(app, db_session):
 
     response = webfinger_get(app, resource='acct:news@test.piefed.local')
 
-    assert response.status_code == 200
-    assert response.get_data(as_text=True) == ''
+    assert response.status_code == 404
 
 
 def test_a_feed_response_carries_neither_fep_3b86_template(app, db_session):
@@ -547,8 +539,7 @@ def test_a_banned_feed_is_not_served(app, db_session):
 
     response = webfinger_get(app, resource='acct:news@test.piefed.local')
 
-    assert response.status_code == 200
-    assert response.get_data(as_text=True) == ''
+    assert response.status_code == 404
 
 
 def test_a_deleted_feed_is_not_served(app, db_session):
@@ -566,8 +557,7 @@ def test_a_deleted_feed_is_not_served(app, db_session):
 
     response = webfinger_get(app, resource='acct:news@test.piefed.local')
 
-    assert response.status_code == 200
-    assert response.get_data(as_text=True) == ''
+    assert response.status_code == 404
 
 
 def test_a_feed_name_lookup_is_case_sensitive(app, db_session):
@@ -580,21 +570,20 @@ def test_a_feed_name_lookup_is_case_sensitive(app, db_session):
 
     response = webfinger_get(app, resource='acct:NEWS@test.piefed.local')
 
-    assert response.status_code == 200
-    assert response.get_data(as_text=True) == ''
+    assert response.status_code == 404
 
 
-def test_a_tilde_resource_for_a_nonexistent_feed_returns_empty_body(app, db_session):
+def test_a_tilde_resource_for_a_nonexistent_feed_is_404(app, db_session):
     """The `feed = True` branch's own miss path: no Feed named 'ghost' exists,
     so the tilde branch's Feed query (a separate `Feed.query.filter_by(...)`
-    call from the one in the non-tilde chain) also falls through to `None`.
+    call from the one in the non-tilde chain) also falls through to `None` and
+    reaches the shared `abort(404)`.
     """
     seed_local_actors()
 
     response = webfinger_get(app, resource='acct:~ghost@test.piefed.local')
 
-    assert response.status_code == 200
-    assert response.get_data(as_text=True) == ''
+    assert response.status_code == 404
 
 
 def test_a_tilde_resource_bypasses_the_community_lookup_too(app, db_session):
@@ -711,8 +700,7 @@ def test_a_tilde_prefix_is_not_recognized_in_url_form(app, db_session):
 
     response = webfinger_get(app, resource='https://test.piefed.local/f/~news')
 
-    assert response.status_code == 200
-    assert response.get_data(as_text=True) == ''
+    assert response.status_code == 404
 
 
 def test_a_feed_alias_and_self_link_use_the_feed_public_url(app, db_session):
@@ -762,8 +750,7 @@ def test_a_tilde_resource_does_not_resolve_a_remote_feed(app, db_session):
 
     response = webfinger_get(app, resource='acct:~news@test.piefed.local')
 
-    assert response.status_code == 200
-    assert response.get_data(as_text=True) == ''
+    assert response.status_code == 404
 
 
 def test_a_tilde_resource_for_a_private_feed_is_not_served(app, db_session):
@@ -777,8 +764,7 @@ def test_a_tilde_resource_for_a_private_feed_is_not_served(app, db_session):
 
     response = webfinger_get(app, resource='acct:~secret@test.piefed.local')
 
-    assert response.status_code == 200
-    assert response.get_data(as_text=True) == ''
+    assert response.status_code == 404
 
 
 def test_a_tilde_resource_for_a_banned_feed_is_not_served(app, db_session):
@@ -793,8 +779,7 @@ def test_a_tilde_resource_for_a_banned_feed_is_not_served(app, db_session):
 
     response = webfinger_get(app, resource='acct:~news@test.piefed.local')
 
-    assert response.status_code == 200
-    assert response.get_data(as_text=True) == ''
+    assert response.status_code == 404
 
 
 def test_a_tilde_resource_for_a_deleted_feed_is_not_served(app, db_session):
@@ -809,26 +794,21 @@ def test_a_tilde_resource_for_a_deleted_feed_is_not_served(app, db_session):
 
     response = webfinger_get(app, resource='acct:~news@test.piefed.local')
 
-    assert response.status_code == 200
-    assert response.get_data(as_text=True) == ''
+    assert response.status_code == 404
 
 
-def test_an_unknown_actor_returns_an_empty_body_with_status_200(app, db_session):
-    """PINS a defect. `if object is None: return ''` -- Flask makes that HTTP
-    200 with an empty body.
-
-    RFC 7033 wants 404. As it stands a remote instance cannot distinguish "no
-    such actor here" from "this endpoint is broken", and neither from a
-    successful lookup, by status alone. The content type is asserted too: it is
-    text/html, not the application/jrd+json every real answer carries.
+def test_an_unknown_actor_is_404(app, db_session):
+    """`if object is None: abort(404)`. This is the test that proves the
+    endpoint distinguishes "this instance does not host that actor" from a
+    successful lookup: a remote instance reading only the status can now tell
+    the two apart, which RFC 7033 requires and which the previous empty 200
+    made impossible.
     """
     seed_local_actors()
 
     response = webfinger_get(app, resource='acct:nobody@test.piefed.local')
 
-    assert response.status_code == 200
-    assert response.get_data(as_text=True) == ''
-    assert 'text/html' in response.content_type
+    assert response.status_code == 404
 
 
 def test_a_query_for_another_domain_is_answered_with_our_own_user(app, db_session):
@@ -842,9 +822,9 @@ def test_a_query_for_another_domain_is_answered_with_our_own_user(app, db_sessio
     query never asked about.
 
     RFC 7033 has a server answer only for resources it is authoritative for.
-    The assertion below is on the subject rather than merely on the status,
-    because the status is 200 either way: what makes this worth pinning is the
-    identity the response claims. A later task registers this rather than
+    The assertion below is on the subject as well as the status, because a
+    status alone does not say WHICH actor was served: what makes this worth
+    pinning is the identity the response claims. A later task registers this rather than
     fixing it: rejecting a foreign domain changes who this instance will
     answer for and could break federation with software that queries loosely,
     so this test's expectations stay as they are permanently.

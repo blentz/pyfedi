@@ -132,7 +132,7 @@ def process_webfinger_request(resource):
         type = 'Feed'
 
     if object is None:
-        return ''
+        abort(404)
 
     webfinger_data = {
         "subject": f"acct:{actor.strip()}@{current_app.config['SERVER_NAME']}",
