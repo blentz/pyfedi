@@ -1193,3 +1193,216 @@ def test_a_non_bot_user_is_typed_as_a_person(app, db_session, monkeypatch):
 
     assert response.status_code == 200
     assert response.json['type'] == 'Person'
+
+
+def test_an_absolute_user_avatar_url_is_used_as_is(app, db_session, monkeypatch):
+    """`if avatar_image.startswith('http')` -- the true side. `user_profile`
+    names its image column `avatar_id` and its method `avatar_image()`, but
+    emits the SAME JSON key as community/feed's icon block: `icon`. The guard
+    above the block is `if user.avatar_id is not None:`, and the method double
+    alone does not enter it -- `avatar_file.id` is assigned to `avatar_id`, a
+    real foreign key to `file.id` (app/models.py:989), the same reason the
+    icon/header tests above seed a real File row.
+    """
+    site, instance = seed_actors()
+    avatar_file = _seed_file()
+    user = make_user(instance, 'alice', local=True)
+    user.avatar_id = avatar_file.id
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+    monkeypatch.setattr(type(user), 'avatar_image',
+                        lambda self, size='default': 'https://cdn.example/a.png')
+
+    response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['icon'] == {'type': 'Image', 'url': 'https://cdn.example/a.png'}
+
+
+def test_a_relative_user_avatar_url_is_prefixed_with_the_server_url(app, db_session, monkeypatch):
+    """The false side of the same branch: a stored path is made absolute."""
+    site, instance = seed_actors()
+    avatar_file = _seed_file()
+    user = make_user(instance, 'alice', local=True)
+    user.avatar_id = avatar_file.id
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+    monkeypatch.setattr(type(user), 'avatar_image',
+                        lambda self, size='default': '/static/a.png')
+
+    response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['icon']['url'] == 'https://test.piefed.local/static/a.png'
+
+
+def test_a_user_with_no_avatar_omits_the_icon_key(app, db_session, monkeypatch):
+    """The outer guard `if user.avatar_id is not None:`, distinct from the
+    `startswith('http')` split inside it. `avatar_id` has no declared default
+    (app/models.py:989, a bare `db.Column(db.Integer, db.ForeignKey('file.id'),
+    index=True)`), so leaving it unset on `make_user` is None-by-construction,
+    not a default the test happens to rest on.
+
+    This test exists because `User.avatar_image()` itself guards on
+    `self.avatar_id` internally and returns a placeholder rather than raising
+    when it is None, so a mutation deleting this outer guard would still
+    succeed and add a bogus `icon` key -- undetected by the two tests above,
+    both of which set `avatar_id`. Without a dedicated absence test, that
+    mutation survives (this is the gap Task 6 shipped with and was rejected
+    for; see this task's report).
+    """
+    site, instance = seed_actors()
+    make_user(instance, 'alice', local=True)
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert 'icon' not in response.json
+
+
+def test_an_absolute_user_cover_url_is_used_as_is(app, db_session, monkeypatch):
+    """The cover block mirrors the avatar block exactly but is separate code,
+    so it needs its own coverage. It emits `image`, from the `cover_id`
+    column and `cover_image()` method -- the same siblings-use-icon/image-
+    naming pattern as the avatar block above.
+    """
+    site, instance = seed_actors()
+    cover_file = _seed_file()
+    user = make_user(instance, 'alice', local=True)
+    user.cover_id = cover_file.id
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+    monkeypatch.setattr(type(user), 'cover_image', lambda self: 'https://cdn.example/c.png')
+
+    response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['image'] == {'type': 'Image', 'url': 'https://cdn.example/c.png'}
+
+
+def test_a_relative_user_cover_url_is_prefixed(app, db_session, monkeypatch):
+    """The false side of the cover-image branch, mirroring the avatar pair."""
+    site, instance = seed_actors()
+    cover_file = _seed_file()
+    user = make_user(instance, 'alice', local=True)
+    user.cover_id = cover_file.id
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+    monkeypatch.setattr(type(user), 'cover_image', lambda self: '/static/c.png')
+
+    response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['image']['url'] == 'https://test.piefed.local/static/c.png'
+
+
+def test_a_user_with_no_cover_omits_the_image_key(app, db_session, monkeypatch):
+    """The outer guard `if user.cover_id is not None:`, the cover-block twin
+    of test_a_user_with_no_avatar_omits_the_icon_key above -- same reasoning:
+    `User.cover_image()` guards internally and returns a placeholder rather
+    than raising, so only a dedicated absence test makes deleting this guard
+    observable.
+    """
+    site, instance = seed_actors()
+    make_user(instance, 'alice', local=True)
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert 'image' not in response.json
+
+
+def test_a_user_without_an_about_omits_summary_and_source(app, db_session, monkeypatch):
+    """The false side of `if user.about_html:`. `about_html` has no declared
+    default (app/models.py:981, a bare `db.Column(db.Text)`), so it is
+    None-by-construction on a freshly made user -- asserting ABSENCE is what
+    makes the guard killable.
+    """
+    site, instance = seed_actors()
+    make_user(instance, 'alice', local=True)
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert 'summary' not in response.json
+    assert 'source' not in response.json
+
+
+def test_a_user_about_adds_summary_and_source(app, db_session, monkeypatch):
+    """The true side of the same guard."""
+    site, instance = seed_actors()
+    user = make_user(instance, 'alice', local=True)
+    user.about_html = '<p>Hello</p>'
+    user.about = 'Hello'
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['summary'] == '<p>Hello</p>'
+    assert response.json['source'] == {'content': 'Hello', 'mediaType': 'text/markdown'}
+
+
+def test_a_user_matrix_id_is_included(app, db_session, monkeypatch):
+    """`if user.matrix_user_id:`, the true side. `matrix_user_id` has no
+    declared default (app/models.py:983), so it is None-by-construction
+    without this assignment.
+    """
+    site, instance = seed_actors()
+    user = make_user(instance, 'alice', local=True)
+    user.matrix_user_id = '@alice:matrix.example'
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['matrixUserId'] == '@alice:matrix.example'
+
+
+def test_user_extra_fields_become_property_value_attachments(app, db_session, monkeypatch):
+    """`if user.extra_fields.count() > 0:` then a loop building one
+    PropertyValue dict per row from `field.label`/`field.text`.
+    `User.extra_fields` is `db.relationship('UserExtraField', lazy='dynamic',
+    cascade="all, delete-orphan")` (app/models.py:1072) -- a `dynamic`
+    relationship, like `Community.languages` in the tests above, so it
+    supports `.append()` directly as an AppenderQuery. `UserExtraField`
+    (app/models.py:3556-3560) is its own table with exactly two content
+    columns, `label` and `text` -- both bare `db.Column(db.String(1024))`,
+    no default -- which the route maps directly to the PropertyValue's `name`
+    and `value` keys, verified by reading app/activitypub/routes.py:450-455
+    before writing this assertion.
+    """
+    site, instance = seed_actors()
+    user = make_user(instance, 'alice', local=True)
+    from app.models import UserExtraField
+    field = UserExtraField(label='Website', text='https://example.com')
+    user.extra_fields.append(field)
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert {'type': 'PropertyValue', 'name': 'Website',
+            'value': 'https://example.com'} in response.json['attachment']
+
+
+def test_a_user_without_extra_fields_has_no_attachment_key(app, db_session, monkeypatch):
+    """The false side of the count guard: `attachment` is created INSIDE the
+    guard, so its absence is what the guard controls. A freshly made user has
+    no `UserExtraField` rows, so `extra_fields.count()` is 0 without any
+    extra setup.
+    """
+    site, instance = seed_actors()
+    make_user(instance, 'alice', local=True)
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert 'attachment' not in response.json
