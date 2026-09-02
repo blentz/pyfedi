@@ -84,7 +84,7 @@ def process_webfinger_request(resource):
     elif 'https:' in query or 'http:' in query:
         actor = query.split('/')[-1]
     else:
-        return 'Webfinger regex failed to match'
+        abort(400, description='Webfinger regex failed to match')
 
     # special case: instance actor
     if actor == current_app.config['SERVER_NAME']:

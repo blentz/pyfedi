@@ -10,8 +10,9 @@ def webfinger_get(app, resource=None, user_agent=None):
 
     Driving the route rather than calling `process_webfinger_request` directly
     is what exercises the allowlist and ban guards, and it is the only way the
-    handler's status codes are observable at all -- Flask turns its bare-string
-    returns into 200s, which a direct call would hide.
+    handler's status codes are observable at all: `abort()` raises an
+    HTTPException that only a request context turns into a response, so a
+    direct call would see an exception rather than the 400 or 404 a peer gets.
 
     `user_agent` is how the requesting domain is set: `requestor_domain()`
     (app/utils.py) parses the URL out of a `+`-delimited User-Agent comment and
@@ -229,22 +230,27 @@ def test_a_plain_http_url_resource_also_resolves(app, db_session):
     assert response.json['subject'] == 'acct:alice@test.piefed.local'
 
 
-def test_a_malformed_resource_returns_a_bare_string_with_status_200(app, db_session):
-    """PINS a defect. Neither 'acct:' nor a scheme appears, so the function
-    returns the bare string 'Webfinger regex failed to match'. Flask turns that
-    into HTTP 200 with a text/html content type.
+def test_a_malformed_resource_is_400(app, db_session):
+    """The parse chain's `else` arm: neither 'acct:' nor a scheme appears, so
+    no branch can extract an actor and the request is malformed. RFC 7033 wants
+    400 for that, and 400 is also what separates it from the 404 a well-formed
+    resource that names no local actor gets (test_an_unknown_actor_is_404) and
+    from the 200 a successful lookup gets.
 
-    RFC 7033 wants 400 for a malformed request. A remote instance cannot tell
-    this apart from a successful lookup by status alone, and a client that
-    checks only the status will try to parse an English sentence as JRD.
+    Only the status is asserted. The old bare-string return carried the sentence
+    'Webfinger regex failed to match'; it is kept as the `description=` on the
+    abort, but it does not reach the wire: flask_smorest's app-wide
+    HTTPException handler (registered by `rest_api = Api()`, app/__init__.py:97)
+    renders `{"code": 400, "status": "Bad Request"}` from its own `e.data` and
+    ignores werkzeug's `description`. Asserting the sentence's ABSENCE would
+    freeze that accident in place, so this test asserts neither presence nor
+    absence of a body.
     """
     seed_local_actors()
 
     response = webfinger_get(app, resource='alice-with-no-scheme')
 
-    assert response.status_code == 200
-    assert response.get_data(as_text=True) == 'Webfinger regex failed to match'
-    assert 'text/html' in response.content_type
+    assert response.status_code == 400
 
 
 def test_the_instance_actor_is_served_from_the_special_case(app, db_session):
