@@ -327,3 +327,94 @@ def test_an_update_by_an_instance_admin_is_permitted(app, db_session, monkeypatc
     assert len(calls['update_post_from_activity']) == 1
     log = ActivityPubLog.query.one()
     assert log.result == 'success'
+
+
+def _permit_and_return(monkeypatch, post_or_none):
+    """Double `can_create_post` to True and `create_post` to return the given
+    object. `create_post` is doubled in every test in this file: it is large,
+    writes many rows, and is its own future slice -- and its return value is
+    exactly the switch this function branches on.
+    """
+    monkeypatch.setattr(activitypub_routes, 'can_create_post', lambda user, content: True)
+    monkeypatch.setattr(activitypub_routes, 'create_post',
+                        lambda *args, **kwargs: post_or_none)
+
+
+def _seed_created_post(community, author):
+    """The Post that `create_post` is doubled to return.
+
+    Its ap_id MUST DIFFER from the one the test dispatches. `process_new_content`
+    looks up an existing post by the dispatched ap_id BEFORE it reaches the
+    creation path -- seeding the returned post under the dispatched ap_id would
+    make the function take the existing-post branch instead, and the test would
+    silently measure Task 2's path rather than this one.
+    """
+    return make_post(community, author, 'https://peer.example/post/created')
+
+
+def test_a_create_that_succeeds_logs_success_and_announces(app, db_session, monkeypatch):
+    """The ordinary new-post path. `edited_at` is left None (the column has no
+    declared default), so the lost-race branch below is the one NOT taken here
+    -- proved by `update_post_from_activity` never being called.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    created = _seed_created_post(community, author)
+    db.session.commit()
+    _double_the_gate(monkeypatch, community)
+    _permit_and_return(monkeypatch, created)
+    calls = record_moderation(monkeypatch, 'update_post_from_activity',
+                              'announce_activity_to_followers')
+
+    dispatch(direct_activity(author, content_object('https://peer.example/post/new')))
+
+    assert calls['update_post_from_activity'] == []
+    assert len(calls['announce_activity_to_followers']) == 1
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_an_update_that_lost_a_race_to_a_create_is_applied_afterwards(app, db_session, monkeypatch):
+    """`activity_json['type'] == 'Update' and post.edited_at is None` -- an
+    Update arrived, found no post, created one, and must then apply itself.
+    Both conjuncts are true here.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    created = _seed_created_post(community, author)
+    created.edited_at = None
+    db.session.commit()
+    _double_the_gate(monkeypatch, community)
+    _permit_and_return(monkeypatch, created)
+    calls = record_moderation(monkeypatch, 'update_post_from_activity',
+                              'announce_activity_to_followers')
+
+    dispatch(direct_activity(author, content_object('https://peer.example/post/new'),
+                             activity_type='Update'))
+
+    assert len(calls['update_post_from_activity']) == 1
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_an_update_on_an_already_edited_post_is_not_re_applied(app, db_session, monkeypatch):
+    """The second conjunct: `post.edited_at is None` is FALSE, so the freshly
+    created post is left alone. `edited_at` is seeded to an explicit timestamp
+    -- the column has no declared default, so the value is this test's own
+    choice and the assertion is not vacuous.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    created = _seed_created_post(community, author)
+    created.edited_at = utcnow()
+    db.session.commit()
+    _double_the_gate(monkeypatch, community)
+    _permit_and_return(monkeypatch, created)
+    calls = record_moderation(monkeypatch, 'update_post_from_activity')
+
+    dispatch(direct_activity(author, content_object('https://peer.example/post/new'),
+                             activity_type='Update'))
+
+    assert calls['update_post_from_activity'] == []
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
