@@ -1,8 +1,8 @@
 """tests/test_webfinger.py"""
 from app import db
 from app.activitypub import routes as activitypub_routes
-from app.models import Site, utcnow
-from tests.factories import make_community, make_local_feed, make_site, make_user, seed_community_owner
+from app.models import utcnow
+from tests.factories import make_community, make_feed, make_local_feed, make_site, make_user, seed_community_owner
 
 
 def webfinger_get(app, resource=None, user_agent=None):
@@ -27,8 +27,12 @@ def webfinger_get(app, resource=None, user_agent=None):
 
 
 def seed_local_actors(host='peer.example'):
-    """A Site row (id 1, which the route's `g.site` lookup needs) plus the
-    Instance and User that id-1-hardcoding factories require.
+    """A Site row (id 1, needed by `before_request`'s `get_site_as_dict()`
+    (`app/utils.py:5414-5418`, `db.session.query(Site).get(1)`), which runs on
+    every request before any view function -- `webfinger`'s own `g.site`
+    lookup (`app/activitypub/routes.py:59-60`) is dead code by the time the
+    route body runs (D147) -- plus the Instance and User that id-1-hardcoding
+    factories require.
 
     `seed_community_owner` rather than a bare `make_instance`: it creates BOTH
     the Instance (id 1) and a local User (id 1), and `make_community` hardcodes
@@ -507,7 +511,6 @@ def test_a_remote_feed_is_not_served(app, db_session):
     `ap_id` the way `make_feed` does.
     """
     site, instance = seed_local_actors()
-    from tests.factories import make_feed
     make_feed(instance, name='news', public=True)
 
     response = webfinger_get(app, resource='acct:news@test.piefed.local')
@@ -751,7 +754,6 @@ def test_a_tilde_resource_does_not_resolve_a_remote_feed(app, db_session):
     public, unbanned and undeleted, so only `ap_id` can produce the miss.
     """
     site, instance = seed_local_actors()
-    from tests.factories import make_feed
     make_feed(instance, name='news', public=True)
 
     response = webfinger_get(app, resource='acct:~news@test.piefed.local')
@@ -830,10 +832,10 @@ def test_a_query_for_another_domain_is_answered_with_our_own_user(app, db_sessio
     RFC 7033 has a server answer only for resources it is authoritative for.
     The assertion below is on the subject as well as the status, because a
     status alone does not say WHICH actor was served: what makes this worth
-    pinning is the identity the response claims. A later task registers this rather than
-    fixing it: rejecting a foreign domain changes who this instance will
-    answer for and could break federation with software that queries loosely,
-    so this test's expectations stay as they are permanently.
+    pinning is the identity the response claims. This is registered as D145
+    rather than fixed: rejecting a foreign domain changes who this instance
+    will answer for and could break federation with software that queries
+    loosely, so this test's expectations stay as they are permanently.
     """
     site, instance = seed_local_actors()
     make_user(instance, 'alice', local=True)
