@@ -420,16 +420,18 @@ def test_an_update_on_an_already_edited_post_is_not_re_applied(app, db_session, 
     assert log.result == 'success'
 
 
-def test_a_refused_post_is_deleted_remotely_and_logs_nothing(app, db_session, monkeypatch):
-    """PINS a defect. `create_post` returning None means the post was not
-    allowed, so a Delete is sent back to the remote instance -- but the branch
-    then neither logs nor returns. Control leaves the `try` without the
-    `except` firing, leaves `if can_create_post(...)`, leaves the post half,
-    and falls off the end of the function.
+def test_a_refused_post_is_deleted_remotely_and_logged(app, db_session, monkeypatch):
+    """`create_post` returning None means the post was not allowed, so a Delete
+    is sent back to the remote instance -- and the refusal is now recorded and
+    the function returns, instead of control falling off the end of the post
+    half unlogged.
 
-    Asserted with LOG_ACTIVITYPUB_TO_DB explicitly True, so the zero is real
-    silence rather than logging being switched off. An operator cannot tell a
-    refused-and-deleted post from one that was never received.
+    Asserted with LOG_ACTIVITYPUB_TO_DB explicitly True, so the row is real
+    rather than an artefact of logging being switched on for this test alone.
+    `.one()` also proves this is the ONLY row: the branch does not log twice.
+
+    The reply half's mirror, `test_a_refused_reply_is_deleted_remotely_and_logged`,
+    asserts the same shape with 'Reply creation refused'.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, author = seed_content_pair()
@@ -442,7 +444,9 @@ def test_a_refused_post_is_deleted_remotely_and_logs_nothing(app, db_session, mo
     assert len(calls['proactively_delete_content']) == 1
     args, kwargs = calls['proactively_delete_content'][0]
     assert args[1] == 'https://peer.example/post/1'
-    assert ActivityPubLog.query.count() == 0
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Post creation refused'
 
 
 def test_a_refused_post_in_a_remote_community_is_not_deleted(app, db_session, monkeypatch):
@@ -707,10 +711,13 @@ def test_a_reply_update_on_an_already_edited_reply_is_not_re_applied(app, db_ses
     assert calls['update_post_reply_from_activity'] == []
 
 
-def test_a_refused_reply_is_deleted_remotely_and_logs_nothing(app, db_session, monkeypatch):
-    """The reply half's mirror of the post half's refusal. This one DOES return
-    explicitly, unlike its post-half twin -- but it still logs nothing, which
-    is the shared half of that defect.
+def test_a_refused_reply_is_deleted_remotely_and_logged(app, db_session, monkeypatch):
+    """The reply half's mirror of the post half's refusal, kept consistent with
+    it: `create_post_reply` returning None sends a Delete back to the remote
+    instance and now records why, where before it returned silently.
+
+    The message differs from the post half's only in the noun, because the
+    branches differ only in which delegate refused.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, author = seed_content_pair()
@@ -724,7 +731,9 @@ def test_a_refused_reply_is_deleted_remotely_and_logs_nothing(app, db_session, m
                                                     in_reply_to=parent.ap_id)))
 
     assert len(calls['proactively_delete_content']) == 1
-    assert ActivityPubLog.query.count() == 0
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Reply creation refused'
 
 
 def test_a_type_error_from_create_post_reply_is_logged(app, db_session, monkeypatch):
