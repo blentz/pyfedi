@@ -192,9 +192,9 @@ def make_local_feed(name: str = 'localfeed', public: bool = False) -> Feed:
     """A Feed webfinger can actually resolve: `ap_id` is None.
 
     `make_feed` cannot be used here. It sets `ap_id` unconditionally -- even at
-    `local=True`, as its own docstring records -- and webfinger's lookup is
-    `Feed.query.filter_by(name=..., ap_id=None)`, so no feed `make_feed` builds
-    is reachable by webfinger at any argument. `make_feed`'s `ap_id` is
+    `local=True`, as its own docstring records -- and webfinger's lookup filters
+    on `ap_id=None` (among other guards), so no feed `make_feed` builds is
+    reachable by webfinger at any argument. `make_feed`'s `ap_id` is
     load-bearing elsewhere (find_remote_actor branches on `/f/` in
     `ap_profile_id`), so this is a sibling rather than a change to it.
 
