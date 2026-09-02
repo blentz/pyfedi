@@ -154,6 +154,28 @@ def test_allowlist_mode_below_intense_falls_through_to_the_ban_check(app, db_ses
     assert response.status_code != 403
 
 
+def test_use_allowlist_off_falls_through_to_the_ban_check_even_at_intense_mode(app, db_session, monkeypatch):
+    """Isolates the FIRST conjunct: `allowlist_mode` is 2 (intense) but
+    `get_setting('use_allowlist')` is doubled to `False`, so `and` short-
+    circuits and the `else` arm runs. `instance_allowed` is doubled to refuse
+    and `instance_banned` to permit -- so a mutation that drops
+    `get_setting('use_allowlist') and` (leaving only the mode check) would
+    wrongly take the `if` arm and see instance_allowed's refusal, turning
+    this into a 403.
+    """
+    site, instance = seed_local_actors()
+    site.allowlist_mode = 2
+    db.session.commit()
+    monkeypatch.setattr(activitypub_routes, 'get_setting', lambda name, default=None: False)
+    monkeypatch.setattr(activitypub_routes, 'instance_allowed', lambda domain: False)
+    monkeypatch.setattr(activitypub_routes, 'instance_banned', lambda domain: False)
+
+    response = webfinger_get(app, resource='acct:nobody@test.piefed.local',
+                             user_agent='Mastodon/4.2 (+https://offmode.example)')
+
+    assert response.status_code != 403
+
+
 def test_a_request_without_a_resource_argument_is_404(app, db_session):
     """`abort(404)` when `request.args.get('resource')` is falsy. No User-Agent,
     so the access guards are skipped and this isolates the resource check.
