@@ -188,6 +188,28 @@ def make_feed(instance, name: str = 'peerfeed', public: bool = False,
     return feed
 
 
+def make_local_feed(name: str = 'localfeed', public: bool = False) -> Feed:
+    """A Feed webfinger can actually resolve: `ap_id` is None.
+
+    `make_feed` cannot be used here. It sets `ap_id` unconditionally -- even at
+    `local=True`, as its own docstring records -- and webfinger's lookup is
+    `Feed.query.filter_by(name=..., ap_id=None)`, so no feed `make_feed` builds
+    is reachable by webfinger at any argument. `make_feed`'s `ap_id` is
+    load-bearing elsewhere (find_remote_actor branches on `/f/` in
+    `ap_profile_id`), so this is a sibling rather than a change to it.
+
+    `public` defaults to False to match Feed.public's own column default
+    (app/models.py:4062); callers pass it explicitly either way, because an
+    assertion resting on a declared default proves nothing.
+    """
+    feed = Feed(name=name, title=name, instance_id=1, public=public,
+                ap_profile_id=f"https://test.piefed.local/f/{name}",
+                ap_public_url=f"https://test.piefed.local/f/{name}")
+    db.session.add(feed)
+    db.session.commit()
+    return feed
+
+
 def make_feed_item(feed: Feed, community: Community) -> FeedItem:
     """One community's membership of a feed. Add creates these; Remove deletes them."""
     item = FeedItem(feed_id=feed.id, community_id=community.id)
