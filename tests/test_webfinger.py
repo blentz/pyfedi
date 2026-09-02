@@ -243,3 +243,37 @@ def test_a_malformed_resource_returns_a_bare_string_with_status_200(app, db_sess
     assert response.status_code == 200
     assert response.get_data(as_text=True) == 'Webfinger regex failed to match'
     assert 'text/html' in response.content_type
+
+
+def test_the_instance_actor_is_served_from_the_special_case(app, db_session):
+    """`actor == current_app.config['SERVER_NAME']` short-circuits every
+    database lookup and returns a fixed JRD pointing at /actor. No User, Community
+    or Feed row exists in this test, which is what proves the short-circuit: any
+    other path would return '' for an unknown actor (app/activitypub/routes.py,
+    `if object is None: return ''`).
+    """
+    seed_local_actors()
+
+    response = webfinger_get(app, resource='acct:test.piefed.local@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.content_type == 'application/jrd+json'
+    assert response.json['subject'] == 'acct:test.piefed.local@test.piefed.local'
+    assert response.json['aliases'] == ['https://test.piefed.local/actor']
+    assert response.headers['Cache-Control'] == 'public, max-age=15'
+    assert response.headers['Access-Control-Allow-Origin'] == '*'
+
+
+def test_the_instance_actor_links_name_the_profile_page_and_the_actor(app, db_session):
+    """Both entries of the special case's `links` list, which no other test
+    asserts. `rel` values are the contract remote software matches on.
+    """
+    seed_local_actors()
+
+    response = webfinger_get(app, resource='acct:test.piefed.local@test.piefed.local')
+
+    rels = {link['rel']: link for link in response.json['links']}
+    assert rels['http://webfinger.net/rel/profile-page']['type'] == 'text/html'
+    assert rels['http://webfinger.net/rel/profile-page']['href'] == 'https://test.piefed.local/about'
+    assert rels['self']['type'] == 'application/activity+json'
+    assert rels['self']['href'] == 'https://test.piefed.local/actor'
