@@ -21,6 +21,7 @@
 - Every guard is mutation-tested with **each conjunct dropped separately**, each killed by a distinct named test. Record whether each kill is an **assertion-kill or a crash-kill**, and whether it is a **sole death**.
 - **The unkillable-clause pattern.** A filter clause whose value equals what the factory always produces cannot be killed by any test using that factory unmodified. Sub-project 8 hit this four times. All three local lookups filter `ap_id=None` and every local-actor factory produces exactly that — **expect those clauses to be unkillable, and add a test that sets `ap_id` explicitly to something contrary.**
 - A kill by `respx.models.AllMockedAssertionError` is an **infrastructure kill, not behavioural**.
+- **`Vary` is never absent and never bare.** Flask-Compress registers an `after_request` that appends `Accept-Encoding` to every response's `Vary` (`app/__init__.py`, `compress.init_app(app)`). An endpoint that sets `Vary: Accept` yields `'Accept, Accept-Encoding'`; one that sets nothing yields `'Accept-Encoding'`. Assert the full value — never `'Vary' not in response.headers`, which is false for every response in this application.
 - **Capture any model `id` you plan to assert on BEFORE issuing the request.** The test client runs the view in its own application context, and an instance the test seeded can be expired or detached by the time the assertion reads it — touching `.id` then raises `DetachedInstanceError` or silently re-queries. Sub-project 7 lost a round to this; the fix there was `sa_inspect(obj).identity[0]`, and capturing the value up front is simpler.
 - **Any docstring claim about another test must be verified true**, and must remain true after Task 10's fixes. After inverting a pin, check which branch that pin used to cover.
 - **One pytest session at a time.** Implementers run only their own file; the controller runs the full suite and supplies all coverage figures. Stopping `run_tests.sh` on the host does not kill pytest in the container.
@@ -411,7 +412,7 @@ def test_the_community_response_headers_are_set(app, db_session, monkeypatch):
 
     assert response.status_code == 200
     assert response.headers['Cache-Control'] == 'public, max-age=30'
-    assert response.headers['Vary'] == 'Accept'
+    assert response.headers['Vary'] == 'Accept, Accept-Encoding'
     assert 'rel="alternate"' in response.headers['Link']
 ```
 
@@ -708,6 +709,15 @@ def test_the_feed_response_omits_the_vary_header(app, db_session, monkeypatch):
 
     Cache-Control and Link ARE set, so this is an omission in an otherwise
     complete header block, not a block nobody wrote.
+
+    NOTE THE ASSERTION SHAPE. A `Vary` header is always present, because
+    Flask-Compress registers an `after_request` that appends `Accept-Encoding`
+    to every response (app/__init__.py -- `compress.init_app(app)`, and the
+    comment there explains the ordering). So the defect is NOT a missing Vary
+    header; it is that `Accept` is missing FROM it. `community_profile`, which
+    does set it, yields 'Accept, Accept-Encoding'; this endpoint yields
+    'Accept-Encoding' alone. Asserting `'Vary' not in response.headers` would
+    fail against a real response and prove nothing about the defect.
     """
     seed_actors()
     make_local_feed('news', public=True)
@@ -718,7 +728,8 @@ def test_the_feed_response_omits_the_vary_header(app, db_session, monkeypatch):
     assert response.status_code == 200
     assert response.headers['Cache-Control'] == 'public, max-age=5'
     assert 'rel="alternate"' in response.headers['Link']
-    assert 'Vary' not in response.headers
+    assert response.headers['Vary'] == 'Accept-Encoding'
+    assert 'Accept,' not in response.headers['Vary']
 ```
 
 - [ ] **Step 2: Run the file**
