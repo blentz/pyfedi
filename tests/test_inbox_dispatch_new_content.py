@@ -757,9 +757,22 @@ def test_the_id_truncation_mutates_the_callers_activity(app, db_session, monkeyp
     """PINS a defect. `activity_json['id'] = shorten_string(activity_json['id'], 100)`
     writes back into the dict the caller owns. For an ANNOUNCED activity
     `activity_json` IS `request_json['object']`, so the truncation is visible
-    in the activity object this test constructed -- and `request_json` is then
-    handed to `announce_activity_to_followers` on the success path (routes.py:2329),
-    so the truncated id would propagate to followers there.
+    in the activity object this test constructed: production mutates a dict
+    the caller still holds a reference to, after `dispatch()` returns.
+
+    Follower propagation of the truncated id is a DIRECT-path consequence,
+    not an announced-path one: both `announce_activity_to_followers(...,
+    request_json)` call sites inside this function's post-creation branches
+    sit under `if not announced:`, so on the announced shape this test
+    exercises, neither is reachable. What IS true on both paths is that the
+    already-truncated `activity_json` is passed into `create_post` /
+    `create_post_reply`, which forward it into `Post.new`/`PostReply.new`,
+    where it is stored as `ap_create_id` (app/models.py:1861 and :2968
+    respectively) -- a `db.String(100)` column on both `Post` and
+    `PostReply` (app/models.py:1722 and :2893). That width is very likely why
+    the truncation exists at all: the comment above the mutation says
+    over-long ids "will crash the app", and String(100) is exactly what an
+    untruncated id would overflow.
 
     The comment above that line claims the id is "not referred to again, so it
     shouldn't matter if they're truncated". This test is the counter-example:
@@ -768,12 +781,12 @@ def test_the_id_truncation_mutates_the_callers_activity(app, db_session, monkeyp
     The inner id is deliberately longer than 100 characters so truncation is
     observable; a short id would leave the mutation invisible.
 
-    `shorten_string(s, 100)` (app/activitypub/routes.py) does NOT return a
-    100-character string: for input longer than max_length it returns
-    `s[:max_length - 3] + '…'`, i.e. 97 characters of the original plus a
-    single ellipsis character, for a total length of 98 -- confirmed by
-    running the function directly against a 150-character input before
-    writing this assertion.
+    `shorten_string(s, 100)` (defined in app/utils.py, imported into
+    routes.py) does NOT return a 100-character string: for input longer than
+    max_length it returns `s[:max_length - 3] + '…'`, i.e. 97 characters of
+    the original plus a single ellipsis character, for a total length of 98
+    -- confirmed by running the function directly against a 150-character
+    input before writing this assertion.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, author = seed_content_pair()
