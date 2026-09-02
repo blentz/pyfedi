@@ -2370,6 +2370,8 @@ def process_new_content(user, community, store_ap_json, request_json, announced)
                     log_incoming_ap(id, APLOG_UPDATE, APLOG_SUCCESS, saved_json)
                     if not announced:
                         announce_activity_to_followers(reply.community, reply.author, request_json)
+                else:
+                    log_incoming_ap(id, APLOG_UPDATE, APLOG_FAILURE, saved_json, 'User cannot create reply in Community')
                 return
             else:
                 log_incoming_ap(id, APLOG_UPDATE, APLOG_FAILURE, saved_json, 'Edit attempt denied')
