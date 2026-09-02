@@ -751,3 +751,44 @@ def test_a_user_who_cannot_reply_is_refused_and_their_content_deleted(app, db_se
     assert len(calls['proactively_delete_content']) == 1
     log = ActivityPubLog.query.one()
     assert log.exception_message == 'User cannot create reply in Community'
+
+
+def test_the_id_truncation_mutates_the_callers_activity(app, db_session, monkeypatch):
+    """PINS a defect. `activity_json['id'] = shorten_string(activity_json['id'], 100)`
+    writes back into the dict the caller owns. For an ANNOUNCED activity
+    `activity_json` IS `request_json['object']`, so the truncation is visible
+    in the activity object this test constructed -- and `request_json` is then
+    handed to `announce_activity_to_followers` on the success path (routes.py:2329),
+    so the truncated id would propagate to followers there.
+
+    The comment above that line claims the id is "not referred to again, so it
+    shouldn't matter if they're truncated". This test is the counter-example:
+    the object asserted below is the very dict the test passed in.
+
+    The inner id is deliberately longer than 100 characters so truncation is
+    observable; a short id would leave the mutation invisible.
+
+    `shorten_string(s, 100)` (app/activitypub/routes.py) does NOT return a
+    100-character string: for input longer than max_length it returns
+    `s[:max_length - 3] + '…'`, i.e. 97 characters of the original plus a
+    single ellipsis character, for a total length of 98 -- confirmed by
+    running the function directly against a 150-character input before
+    writing this assertion.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    community.ap_fetched_at = utcnow()
+    db.session.commit()
+    _permit_and_return(monkeypatch, None)
+    record_moderation(monkeypatch, 'proactively_delete_content')
+
+    long_id = f'{author.ap_profile_id}/activities/' + ('x' * 150)
+    activity = announced_activity(community, author, content_object('https://peer.example/post/1'))
+    activity['object']['id'] = long_id
+    original_length = len(activity['object']['id'])
+
+    dispatch(activity)
+
+    assert original_length > 100
+    assert len(activity['object']['id']) == 98
+    assert activity['object']['id'] == long_id[:97] + '…'
