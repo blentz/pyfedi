@@ -1918,12 +1918,14 @@ members are `{A, B}`, the query matches `(user_id_1=A, user_id_2=B)` via
 not to a refusing value.** The column (`app/models.py:1035`) is
 `db.Column(db.Integer, default=3)`. A test of `process_chat`'s accepting
 path that relies on the column default without setting it explicitly is
-resting on an assertion that would still pass if the default silently
-changed to `2` or `1` for a same-instance/trusted-instance sender — seed
-`accept_private_messages` explicitly even when the value you want happens
-to equal the default (see `tests/test_inbox_dispatch_chat.py`'s
-`seed_chat_pair`, which always passes `accept=` explicitly for this
-reason).
+resting on a dependency the test itself never states — if the default
+silently changed to `2` or `1`, such a test would fail (loudly, since `2`
+and `1` both refuse a same-instance/trusted-instance sender that `3`
+accepts), and nothing in the test would say why, since no line in it names
+the value the assertion actually depends on. Seed `accept_private_messages`
+explicitly even when the value you want happens to equal the default (see
+`tests/test_inbox_dispatch_chat.py`'s `seed_chat_pair`, which always passes
+`accept=` explicitly for this reason).
 
 **24. `make_user` never sets `ap_domain`, unlike `make_community` and
 `make_feed`.** `make_community` (`tests/factories.py:144`) and
