@@ -374,6 +374,7 @@ def test_the_instance_actor_links_name_the_profile_page_and_the_actor(app, db_se
 
     response = webfinger_get(app, resource='acct:test.piefed.local@test.piefed.local')
 
+    assert response.status_code == 200
     rels = {link['rel']: link for link in response.json['links']}
     assert rels['http://webfinger.net/rel/profile-page']['type'] == 'text/html'
     assert rels['http://webfinger.net/rel/profile-page']['href'] == 'https://test.piefed.local/about'
