@@ -2,8 +2,7 @@
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.models import Site
-from tests.factories import (make_community, make_site, make_user,
-                             seed_community_owner)
+from tests.factories import make_site, make_user, seed_community_owner
 
 
 def webfinger_get(app, resource=None, user_agent=None):
@@ -185,3 +184,62 @@ def test_a_request_without_a_resource_argument_is_404(app, db_session):
     response = webfinger_get(app)
 
     assert response.status_code == 404
+
+
+def test_an_acct_resource_resolves_a_local_user(app, db_session):
+    """The `'acct:' in query` branch. `make_user(..., local=True)` is required:
+    webfinger filters `ap_id=None`, and a remote user (the factory's default)
+    is invisible to it.
+    """
+    site, instance = seed_local_actors()
+    make_user(instance, 'alice', local=True)
+
+    response = webfinger_get(app, resource='acct:alice@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.content_type == 'application/jrd+json'
+    assert response.json['subject'] == 'acct:alice@test.piefed.local'
+
+
+def test_a_url_resource_resolves_by_its_last_path_segment(app, db_session):
+    """The `elif 'https:' in query or 'http:' in query` branch, which takes
+    `query.split('/')[-1]`. Reached only when 'acct:' is absent from the whole
+    string -- the acct test above is its pair.
+    """
+    site, instance = seed_local_actors()
+    make_user(instance, 'alice', local=True)
+
+    response = webfinger_get(app, resource='https://test.piefed.local/u/alice')
+
+    assert response.status_code == 200
+    assert response.json['subject'] == 'acct:alice@test.piefed.local'
+
+
+def test_a_plain_http_url_resource_also_resolves(app, db_session):
+    """The second disjunct, `'http:' in query`. Isolated from `'https:'` by
+    using a scheme that contains 'http:' but not 'https:'.
+    """
+    site, instance = seed_local_actors()
+    make_user(instance, 'alice', local=True)
+
+    response = webfinger_get(app, resource='http://test.piefed.local/u/alice')
+
+    assert response.status_code == 200
+
+
+def test_a_malformed_resource_returns_a_bare_string_with_status_200(app, db_session):
+    """PINS a defect. Neither 'acct:' nor a scheme appears, so the function
+    returns the bare string 'Webfinger regex failed to match'. Flask turns that
+    into HTTP 200 with a text/html content type.
+
+    RFC 7033 wants 400 for a malformed request. A remote instance cannot tell
+    this apart from a successful lookup by status alone, and a client that
+    checks only the status will try to parse an English sentence as JRD.
+    """
+    seed_local_actors()
+
+    response = webfinger_get(app, resource='alice-with-no-scheme')
+
+    assert response.status_code == 200
+    assert response.get_data(as_text=True) == 'Webfinger regex failed to match'
+    assert 'text/html' in response.content_type
