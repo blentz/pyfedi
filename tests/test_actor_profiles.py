@@ -331,9 +331,8 @@ def test_the_community_response_headers_are_set(app, db_session, monkeypatch):
     `register_request_hooks(app)` in app/__init__.py and
     test_request_hooks.py::test_after_request_runs_before_flask_compress, which
     pins the same ordering for HTML responses). So the header actually observed
-    here is 'Accept, Accept-Encoding', not the bare 'Accept' the route sets --
-    asserted as a substring so this test does not depend on Flask-Compress's
-    append order. Asserted as the exact, deterministic two-token string rather
+    here is 'Accept, Accept-Encoding', not the bare 'Accept' the route sets.
+    Asserted as the exact, deterministic two-token string rather
     than a substring check, since a bare substring match on 'Accept' would
     also match 'Accept-Encoding' alone and so would not catch the route
     dropping its own 'Accept' token.
