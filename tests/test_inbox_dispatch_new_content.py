@@ -41,10 +41,16 @@ def direct_activity(author, obj, *, activity_type='Create'):
     """A Create/Update sent straight to the inbox: `announced` is False, and
     the function reads `inReplyTo`/`id` from request_json['object'].
 
-    NOTE: request_json IS activity_json on this path (routes.py:2305), so
-    `args[2]` in the tests below is the whole envelope, not `obj` -- the
-    content lives at `args[2]['object']`, and `args[2]['id']` is the
-    envelope's own (uuid-based) activity id, unrelated to the content's id.
+    NOTE: `activity_json` STARTS as request_json on this path
+    (routes.py:2305), so `args[2]` in the tests below is the whole envelope,
+    not `obj` -- the content lives at `args[2]['object']`, and `args[2]['id']`
+    is the envelope's own (uuid-based) activity id, unrelated to the content's
+    id. It is not request_json itself by the time a delegate sees it:
+    routes.py:2316 rebinds `activity_json` to a shallow copy carrying a
+    truncated `id`, so `args[2]` is that copy. The nested `['object']` is the
+    same object either way, which is why the content assertions below still
+    read through it. `test_the_id_truncation_leaves_the_callers_activity_untouched`
+    is the test that pins the copy.
     """
     return inbox_activity(author, activity_type=activity_type, object=obj)
 
@@ -356,6 +362,26 @@ def test_a_create_that_succeeds_logs_success_and_announces(app, db_session, monk
     """The ordinary new-post path. `edited_at` is left None (the column has no
     declared default), so the lost-race branch below is the one NOT taken here
     -- proved by `update_post_from_activity` never being called.
+
+    This is also the ONLY test that reaches an `announce_activity_to_followers`
+    call inside `process_new_content` with an over-long activity id, so it is
+    where the DIRECT-path half of the id-truncation fix is pinned. The three
+    facts that make that half reachable only here:
+
+      * all four `announce_activity_to_followers(..., request_json)` call sites
+        in `process_new_content` (routes.py:2332, 2350, 2377, 2398) sit under
+        `if not announced:`, so no announced-shape test can reach one;
+      * on the direct path `activity_json` starts out as `request_json`, so
+        routes.py:2316 truncating in place used to truncate the very dict that
+        is then relayed to our followers;
+      * `test_the_id_truncation_leaves_the_callers_activity_untouched` uses the
+        ANNOUNCED shape and therefore cannot witness this at all -- it pins the
+        caller's dict and the value handed to `create_post`, not the relay.
+
+    The envelope id is LENGTHENED rather than replaced, so it stays unique per
+    run: `inbox_activity` deliberately makes it uuid-based because shared_inbox
+    writes it to Redis for 90 seconds to suppress duplicates, and a fixed id
+    would make two runs inside that window interfere through Redis.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, author = seed_content_pair()
@@ -366,12 +392,24 @@ def test_a_create_that_succeeds_logs_success_and_announces(app, db_session, monk
     calls = record_moderation(monkeypatch, 'update_post_from_activity',
                               'announce_activity_to_followers')
 
-    dispatch(direct_activity(author, content_object('https://peer.example/post/new')))
+    activity = direct_activity(author, content_object('https://peer.example/post/new'))
+    activity['id'] = activity['id'] + '-' + ('y' * 150)
+    long_activity_id = activity['id']
+
+    dispatch(activity)
 
     assert calls['update_post_from_activity'] == []
     assert len(calls['announce_activity_to_followers']) == 1
     log = ActivityPubLog.query.one()
     assert log.result == 'success'
+
+    # What is relayed to our followers must carry the ORIGINAL id. Truncating
+    # it in place used to hand every follower `s[:97] + '…'`: not dereferenceable,
+    # and two origin activities sharing a 97-character prefix collapse onto one
+    # relayed id.
+    args, kwargs = calls['announce_activity_to_followers'][0]
+    assert len(long_activity_id) > 100
+    assert args[2]['id'] == long_activity_id
 
 
 def test_an_update_that_lost_a_race_to_a_create_is_applied_afterwards(app, db_session, monkeypatch):
@@ -642,6 +680,44 @@ def test_an_update_by_a_reply_community_moderator_is_permitted(app, db_session, 
     assert len(calls['update_post_reply_from_activity']) == 1
     log = ActivityPubLog.query.one()
     assert log.result == 'success'
+
+
+
+def test_an_unrelated_user_cannot_edit_a_reply(app, db_session, monkeypatch):
+    """All three disjuncts of the reply guard false: not the reply's author,
+    not a moderator of its community, not an instance admin. This is the only
+    test that reaches the reply half's `else:` and its 'Edit attempt denied'
+    log, so it is the only one that can kill a mutation deleting that `else`
+    or making the guard unconditional.
+
+    It exists because inverting the instance-admin pin (Task 9 Fix A) turned
+    the file's only reply-side guard-refusal test into a guard-acceptance test:
+    every other reply test now dispatches as the author, a moderator, or an
+    admin. This restores the branch the fix would otherwise have cost.
+
+    Mirrors `test_an_update_by_an_unrelated_user_is_denied`, the post half's
+    equivalent, which asserts the same two things about the post arm.
+
+    `can_create_post_reply` is doubled TRUE so the refusal observed can only
+    come from the outer guard: if the guard let this user through, the inner
+    check would not stop them and `update_post_reply_from_activity` would fire.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    outsider = make_user(instance, 'outsider')
+    outsider.ap_fetched_at = utcnow()
+    parent, reply = _seed_reply(community, author)
+    _double_the_gate(monkeypatch, community)
+    monkeypatch.setattr(activitypub_routes, 'can_create_post_reply', lambda user, content: True)
+    calls = record_moderation(monkeypatch, 'update_post_reply_from_activity')
+
+    dispatch(direct_activity(outsider, content_object(reply.ap_id, in_reply_to=parent.ap_id),
+                             activity_type='Update'))
+
+    assert calls['update_post_reply_from_activity'] == []
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Edit attempt denied'
 
 
 def _permit_and_return_reply(monkeypatch, reply_or_none):
