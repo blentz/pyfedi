@@ -524,6 +524,7 @@ def test_a_feed_response_carries_neither_fep_3b86_template(app, db_session):
 
     response = webfinger_get(app, resource='acct:news@test.piefed.local')
 
+    assert response.status_code == 200
     rels = {link['rel'] for link in response.json['links']}
     assert 'https://w3id.org/fep/3b86/Create' not in rels
     assert 'https://w3id.org/fep/3b86/Follow' not in rels
