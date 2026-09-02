@@ -3,7 +3,7 @@ from app import db
 from app.activitypub import routes as activitypub_routes
 from app.models import ActivityPubLog, utcnow
 from tests.factories import (inbox_activity, make_community, make_community_member, make_post,
-                             make_user, seed_community_owner, make_site)
+                             make_post_reply, make_user, seed_community_owner, make_site)
 from tests.test_inbox_dispatch_lock_delete import record_moderation
 from tests.test_inbox_dispatch_preamble import dispatch
 
@@ -503,3 +503,127 @@ def test_a_user_who_cannot_post_is_refused_and_their_content_deleted(app, db_ses
     assert len(calls['proactively_delete_content']) == 1
     log = ActivityPubLog.query.one()
     assert log.exception_message == 'User cannot create post in Community'
+
+
+def _seed_reply(community, author, ap_id='https://peer.example/comment/1'):
+    """A reply with an explicit ap_id -- `make_post_reply` does not set one, and
+    `process_new_content` resolves the reply by exactly that value.
+    """
+    parent = make_post(community, author, 'https://peer.example/post/1')
+    reply = make_post_reply(parent, author)
+    reply.ap_id = ap_id
+    db.session.commit()
+    return parent, reply
+
+
+def test_a_create_for_an_existing_reply_is_refused_as_processed_after_update(
+        app, db_session, monkeypatch):
+    """The reply half's mirror of the post half's ordering refusal."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    parent, reply = _seed_reply(community, author)
+    _double_the_gate(monkeypatch, community)
+    calls = record_moderation(monkeypatch, 'update_post_reply_from_activity')
+
+    dispatch(direct_activity(author, content_object(reply.ap_id, in_reply_to=parent.ap_id)))
+
+    assert calls['update_post_reply_from_activity'] == []
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Create processed after Update'
+
+
+def test_an_update_by_the_replys_author_updates_and_announces(app, db_session, monkeypatch):
+    """The permitted path, with `can_create_post_reply` true."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    parent, reply = _seed_reply(community, author)
+    _double_the_gate(monkeypatch, community)
+    monkeypatch.setattr(activitypub_routes, 'can_create_post_reply', lambda user, content: True)
+    calls = record_moderation(monkeypatch, 'update_post_reply_from_activity',
+                              'announce_activity_to_followers')
+
+    dispatch(direct_activity(author, content_object(reply.ap_id, in_reply_to=parent.ap_id),
+                             activity_type='Update'))
+
+    assert len(calls['update_post_reply_from_activity']) == 1
+    assert len(calls['announce_activity_to_followers']) == 1
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_a_permitted_editor_who_cannot_reply_is_dropped_silently(app, db_session, monkeypatch):
+    """PINS a defect. The outer permission check passes but
+    `can_create_post_reply` is false, so the bare `return` fires with NO log on
+    any path -- the update does not happen and nothing records why.
+
+    The post half has no equivalent inner check at all, which is what makes
+    this an asymmetry rather than a deliberate design.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    parent, reply = _seed_reply(community, author)
+    _double_the_gate(monkeypatch, community)
+    monkeypatch.setattr(activitypub_routes, 'can_create_post_reply', lambda user, content: False)
+    calls = record_moderation(monkeypatch, 'update_post_reply_from_activity')
+
+    dispatch(direct_activity(author, content_object(reply.ap_id, in_reply_to=parent.ap_id),
+                             activity_type='Update'))
+
+    assert calls['update_post_reply_from_activity'] == []
+    assert ActivityPubLog.query.count() == 0
+
+
+def test_an_instance_admin_cannot_edit_a_reply(app, db_session, monkeypatch):
+    """PINS the headline defect. The post half permits an instance admin via a
+    third disjunct; the reply half's check is
+    `user.id == reply.user_id or reply.community.is_moderator(user)` -- the
+    third disjunct is absent, so the same admin who may edit a post is refused
+    on a reply.
+
+    Seeded identically to Task 3's post-side admin test, so the difference
+    observed is the code's, not the fixture's.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    admin = make_user(instance, 'admin')
+    admin.ap_fetched_at = utcnow()
+    from app.models import InstanceRole
+    db.session.add(InstanceRole(instance_id=community.instance_id, user_id=admin.id, role='admin'))
+    parent, reply = _seed_reply(community, author)
+    _double_the_gate(monkeypatch, community)
+    monkeypatch.setattr(activitypub_routes, 'can_create_post_reply', lambda user, content: True)
+    calls = record_moderation(monkeypatch, 'update_post_reply_from_activity')
+
+    dispatch(direct_activity(admin, content_object(reply.ap_id, in_reply_to=parent.ap_id),
+                             activity_type='Update'))
+
+    assert calls['update_post_reply_from_activity'] == []
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Edit attempt denied'
+
+
+def test_an_update_by_a_reply_community_moderator_is_permitted(app, db_session, monkeypatch):
+    """Second disjunct of the reply guard, isolated: the editor is NOT the
+    reply's author (first disjunct false) but IS a moderator of the reply's
+    community (`reply.community.is_moderator(user)` true). Added per Task 6's
+    Step 3 -- this is the test that kills the mutation dropping `or
+    reply.community.is_moderator(user)`; no earlier test in this file isolates
+    that disjunct alone for a reply.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    mod = make_user(instance, 'mod')
+    mod.ap_fetched_at = utcnow()
+    make_community_member(mod, community, is_moderator=True)
+    parent, reply = _seed_reply(community, author)
+    _double_the_gate(monkeypatch, community)
+    monkeypatch.setattr(activitypub_routes, 'can_create_post_reply', lambda user, content: True)
+    calls = record_moderation(monkeypatch, 'update_post_reply_from_activity',
+                              'announce_activity_to_followers')
+
+    dispatch(direct_activity(mod, content_object(reply.ap_id, in_reply_to=parent.ap_id),
+                             activity_type='Update'))
+
+    assert len(calls['update_post_reply_from_activity']) == 1
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
