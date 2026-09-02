@@ -370,9 +370,15 @@ def user_profile(actor):
     if '@' in actor:
         user: User = User.query.filter_by(ap_id=actor.lower()).first()
     else:
-        user: User = User.query.filter(or_(func.lower(User.user_name) == actor.lower())).filter_by(ap_id=None).first()
+        # deleted and banned local users are not served, matching the webfinger
+        # lookup above -- otherwise the two endpoints answer differently about
+        # the same actor.
+        user: User = User.query.filter(or_(func.lower(User.user_name) == actor.lower())).filter_by(deleted=False,
+                                                                                                  banned=False,
+                                                                                                  ap_id=None).first()
         if user is None:
-            user = User.query.filter_by(ap_profile_id=f'{current_app.config["SERVER_URL"]}/u/{actor.lower()}', ap_id=None).first()
+            user = User.query.filter_by(ap_profile_id=f'{current_app.config["SERVER_URL"]}/u/{actor.lower()}',
+                                        deleted=False, banned=False, ap_id=None).first()
 
     if user is None:
         user = resolve_remote_handle(actor)

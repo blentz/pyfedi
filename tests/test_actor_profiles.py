@@ -800,9 +800,13 @@ def test_a_local_feed_with_a_non_null_ap_id_is_not_found(app, db_session, monkey
 #   tests/test_remote_handle_resolution.py (all four tests)
 #   NOTE: all four request '/u/wakko@mastodon.cloud', so they take ONLY the
 #   `'@' in actor` branch. The bare-username branch missing and then falling
-#   through to resolve_remote_handle is NOT covered there -- and cannot be
-#   meaningfully covered, since resolve_remote_handle returns None immediately
-#   for any actor without an '@'.
+#   through to resolve_remote_handle is not covered there. It IS covered here,
+#   as of Task 10, by test_a_deleted_user_profile_is_not_served and
+#   test_a_banned_user_profile_is_not_served: the `deleted=False, banned=False`
+#   filter makes an existing local row invisible, which is the only way a bare
+#   username reaches the fall-through. Production's resolve_remote_handle would
+#   return None immediately for such an actor (no '@'); those tests stub it to
+#   None via _double_the_renderers, which is the same answer.
 #
 def _seed_file():
     """A bare File row, for an icon_id/image_id foreign key.
@@ -1042,7 +1046,8 @@ def test_a_childless_feed_lists_no_child_feeds(app, db_session, monkeypatch):
 #   resulting resolve_remote_handle/search_for_user call:
 #   tests/test_remote_handle_resolution.py (all four tests)
 #   NOTE: all four request '/u/wakko@mastodon.cloud', so the BARE-USERNAME
-#   branch missing is not covered there.
+#   branch missing is not covered there. Task 10's two guard tests at the end
+#   of this file cover it, and with it user_profile's own abort(404).
 # ---------------------------------------------------------------------------
 
 def test_a_head_request_for_an_activitypub_client_returns_an_empty_json_body(app, db_session, monkeypatch):
@@ -1410,10 +1415,11 @@ def test_a_user_without_extra_fields_has_no_attachment_key(app, db_session, monk
 
 # ---------------------------------------------------------------------------
 # user_profile: three tests that began (Task 9) as pins on current-behaviour
-# defects. Task 10 fixed the first of the three -- the duplicated admin/else
-# lookup, now collapsed to one copy -- and rewrote its test to state what it
-# still proves. The two below it remain pins on the missing `deleted`/`banned`
-# guards until Task 10's second fix inverts them.
+# defects, all three of which Task 10 then fixed. The duplicated admin/else
+# lookup is collapsed to one copy, and the local lookup now filters
+# `deleted=False, banned=False` as webfinger's already did. Each test below
+# was rewritten to assert the fixed behaviour; none of them pins anything any
+# more.
 # ---------------------------------------------------------------------------
 
 def test_the_same_user_resolves_identically_on_two_successive_requests(app, db_session, monkeypatch):
@@ -1482,57 +1488,74 @@ def test_the_same_user_resolves_identically_on_two_successive_requests(app, db_s
     assert second.json == first.json
 
 
-def test_a_deleted_user_profile_is_served_to_anyone(app, db_session, monkeypatch):
-    """PINS a defect, and the more consequential of the two.
+def test_a_deleted_user_profile_is_not_served(app, db_session, monkeypatch):
+    """A deleted local user's actor document is 404, not handed out.
 
-    user_profile's local lookup does not filter `deleted`, so this endpoint
-    hands out a deleted user's full actor document --
-    public key, inbox, shared inbox -- to an anonymous, unauthenticated
-    caller. Webfinger's user lookup, by contrast, DOES filter
-    `deleted=False, banned=False` together (app/activitypub/routes.py:118-119,
-    added in sub-project 8) -- so the two endpoints give opposite answers
-    about the same deleted actor. This is wrong: a deleted account should not
-    be discoverable or federatable through either path, and right now only
-    one of the two refuses it.
+    Until Task 10 this endpoint served it: `user_profile`'s local lookup did
+    not filter `deleted`, so an anonymous, unauthenticated caller got a
+    deleted user's full actor document -- public key, inbox, shared inbox.
+    Webfinger's user lookup, by contrast, has filtered `deleted=False,
+    banned=False` together since sub-project 8
+    (app/activitypub/routes.py:117-120), so the two endpoints gave opposite
+    answers about the same deleted actor. `user_profile` now matches
+    webfinger.
 
     `user.deleted` is set to True EXPLICITLY. Its declared default is also
     False (app/models.py:978), so leaving it alone would assert nothing about
-    the `deleted` column at all -- forbidden by this campaign's constraints.
-    The assertion on `id` (built from the real `user.public_url()`) confirms
-    the deleted row was genuinely FOUND and served, not that some unrelated
-    404/other path happened to also return 200.
+    the `deleted` column at all.
+
+    THE ROW IS ASSERTED TO STILL EXIST before the request. Without that this
+    test would pass just as happily against a lookup that finds nobody for
+    any reason -- a typo in the query, a truncated table, a factory that never
+    committed. The row is there and the name matches; the only thing standing
+    between it and a 200 is the `deleted=False` filter.
+
+    `_double_the_renderers` stubs `resolve_remote_handle` to None, so the
+    now-missing user falls through it to `abort(404)` rather than reaching the
+    network. 'alice' has no '@' in it, so production's own
+    `resolve_remote_handle` would return None immediately too.
     """
+    from app.models import User
+
     site, instance = seed_actors()
     user = make_user(instance, 'alice', local=True)
     user.deleted = True
     db.session.commit()
     _double_the_renderers(monkeypatch)
 
+    assert User.query.filter_by(user_name='alice', ap_id=None).first() is not None
+
     response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
 
-    assert response.status_code == 200
-    assert response.json['id'] == 'https://test.piefed.local/u/alice'
+    assert response.status_code == 404
 
 
-def test_a_banned_user_profile_is_served_to_anyone(app, db_session, monkeypatch):
-    """The same gap, on the other column. Pinned as its own test, separate
-    from `deleted` above, so a fix that adds a guard for only one of the two
-    columns is still caught by whichever test it left unfixed.
+def test_a_banned_user_profile_is_not_served(app, db_session, monkeypatch):
+    """The same guard, on the other column. Kept as its own test, separate
+    from `deleted` above, so a fix that guarded only one of the two columns
+    would still be caught by whichever test it left unfixed -- which is
+    exactly how Task 10's two mutations were told apart.
 
     `user.banned` is set to True EXPLICITLY, for the same reason as `deleted`
     above: its declared default is also False (app/models.py:974), so leaving
     it alone would assert nothing about this column either. `make_user`
     already passes `banned=False` at construction, so this assignment is the
     only thing distinguishing this test's premise from every earlier test in
-    this file that uses an ordinary user.
+    this file that uses an ordinary user -- all of which still expect 200.
+
+    The surviving-row assertion is load-bearing here for the same reason it is
+    above: it separates "the guard rejected this user" from "no such user".
     """
+    from app.models import User
+
     site, instance = seed_actors()
     user = make_user(instance, 'alice', local=True)
     user.banned = True
     db.session.commit()
     _double_the_renderers(monkeypatch)
 
+    assert User.query.filter_by(user_name='alice', ap_id=None).first() is not None
+
     response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
 
-    assert response.status_code == 200
-    assert response.json['id'] == 'https://test.piefed.local/u/alice'
+    assert response.status_code == 404
