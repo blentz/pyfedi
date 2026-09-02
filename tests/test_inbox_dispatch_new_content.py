@@ -2,8 +2,8 @@
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.models import ActivityPubLog, utcnow
-from tests.factories import (inbox_activity, make_community, make_post, make_user,
-                             seed_community_owner, make_site)
+from tests.factories import (inbox_activity, make_community, make_community_member, make_post,
+                             make_user, seed_community_owner, make_site)
 from tests.test_inbox_dispatch_lock_delete import record_moderation
 from tests.test_inbox_dispatch_preamble import dispatch
 
@@ -277,3 +277,53 @@ def test_an_update_by_an_unrelated_user_is_denied(app, db_session, monkeypatch):
     assert calls['update_post_from_activity'] == []
     log = ActivityPubLog.query.one()
     assert log.exception_message == 'Edit attempt denied'
+
+
+def test_an_update_by_a_community_moderator_is_permitted(app, db_session, monkeypatch):
+    """Second disjunct. The editor is NOT the author, so the first disjunct is
+    false and this test isolates `post.community.is_moderator(user)`.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    mod = make_user(instance, 'mod')
+    mod.ap_fetched_at = utcnow()
+    make_community_member(mod, community, is_moderator=True)
+    post = make_post(community, author, 'https://peer.example/post/1')
+    db.session.commit()
+    _double_the_gate(monkeypatch, community)
+    calls = record_moderation(monkeypatch, 'update_post_from_activity',
+                              'announce_activity_to_followers')
+
+    dispatch(direct_activity(mod, content_object(post.ap_id), activity_type='Update'))
+
+    assert len(calls['update_post_from_activity']) == 1
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_an_update_by_an_instance_admin_is_permitted(app, db_session, monkeypatch):
+    """Third disjunct: `post.community.is_instance_admin(user)`. The editor is
+    neither the author nor a moderator, so this test is the only one that can
+    kill that disjunct.
+
+    `Community.is_instance_admin(user)` checks an InstanceRole against the
+    COMMUNITY's instance -- a different method from `User.is_instance_admin()`,
+    which takes no arguments and checks the user's own. Read both before
+    seeding; sub-project 5c documented the pair being easy to conflate.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    admin = make_user(instance, 'admin')
+    admin.ap_fetched_at = utcnow()
+    from app.models import InstanceRole
+    db.session.add(InstanceRole(instance_id=community.instance_id, user_id=admin.id, role='admin'))
+    post = make_post(community, author, 'https://peer.example/post/1')
+    db.session.commit()
+    _double_the_gate(monkeypatch, community)
+    calls = record_moderation(monkeypatch, 'update_post_from_activity')
+
+    dispatch(direct_activity(admin, content_object(post.ap_id), activity_type='Update'))
+
+    assert len(calls['update_post_from_activity']) == 1
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
