@@ -349,6 +349,232 @@ def test_the_community_response_headers_are_set(app, db_session, monkeypatch):
     assert 'rel="alternate"' in response.headers['Link']
 
 
+def test_a_community_description_adds_summary_and_source(app, db_session, monkeypatch):
+    """`if community.description_html:` adds two keys. Both asserted -- a test
+    checking only `summary` would survive deleting the `source` line.
+    """
+    seed_actors()
+    community = make_community(name='books', host='test.piefed.local')
+    community.description_html = '<p>About books</p>'
+    community.description = 'About books'
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/c/books', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['summary'] == '<p>About books</p>'
+    assert response.json['source'] == {'content': 'About books', 'mediaType': 'text/markdown'}
+
+
+def test_a_community_without_a_description_omits_both_keys(app, db_session, monkeypatch):
+    """The false side. Asserting ABSENCE is what makes the guard killable: a
+    mutation making the block unconditional would still satisfy the test above.
+    """
+    seed_actors()
+    make_community(name='books', host='test.piefed.local')
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/c/books', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert 'summary' not in response.json
+    assert 'source' not in response.json
+
+
+def test_a_community_theme_is_included(app, db_session, monkeypatch):
+    """`if community.theme:` -- the true side. There is no false-side test
+    needed beyond the baseline: the many earlier tests that build the document
+    with `theme` left at its default (None, per `make_community`) never assert
+    on the 'theme' key, so this single test carries the whole guard; a false
+    side is added below to make the absence explicit and mutation-resistant.
+    """
+    seed_actors()
+    community = make_community(name='books', host='test.piefed.local')
+    community.theme = 'dark'
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/c/books', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['theme'] == 'dark'
+
+
+def test_a_community_without_a_theme_omits_the_key(app, db_session, monkeypatch):
+    """The false side of the theme guard, paired with the test above per the
+    absence discipline this task follows for every optional field.
+    """
+    seed_actors()
+    make_community(name='books', host='test.piefed.local')
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/c/books', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert 'theme' not in response.json
+
+
+def test_an_absolute_community_icon_url_is_used_as_is(app, db_session, monkeypatch):
+    """`if icon_image.startswith('http')` -- the true side. `icon_image()` is
+    doubled rather than relying on the real one, because this test is about
+    the URL branch, not about image storage. `community.icon_id` has a real
+    foreign key to `file.id`, so a real (otherwise-empty) File row is seeded
+    and its id assigned -- an arbitrary integer like 1 is rejected by the FK
+    constraint unless a File with that id exists. The guard above the block
+    is `if community.icon_id is not None:`, and the method double alone does
+    not enter it.
+    """
+    seed_actors()
+    from app.models import File
+    icon_file = File()
+    db.session.add(icon_file)
+    db.session.commit()
+    community = make_community(name='books', host='test.piefed.local')
+    community.icon_id = icon_file.id
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+    monkeypatch.setattr(type(community), 'icon_image',
+                        lambda self, size='default': 'https://cdn.example/icon.png')
+
+    response = profile_get(app, '/c/books', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['icon'] == {'type': 'Image', 'url': 'https://cdn.example/icon.png'}
+
+
+def test_a_relative_community_icon_url_is_prefixed_with_the_server_url(app, db_session, monkeypatch):
+    """The false side of the same branch: a stored path is made absolute."""
+    seed_actors()
+    from app.models import File
+    icon_file = File()
+    db.session.add(icon_file)
+    db.session.commit()
+    community = make_community(name='books', host='test.piefed.local')
+    community.icon_id = icon_file.id
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+    monkeypatch.setattr(type(community), 'icon_image',
+                        lambda self, size='default': '/static/icon.png')
+
+    response = profile_get(app, '/c/books', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['icon']['url'] == 'https://test.piefed.local/static/icon.png'
+
+
+def test_a_community_with_no_icon_omits_the_key(app, db_session, monkeypatch):
+    """The guard above the whole icon block: `if community.icon_id is not
+    None:`. `icon_id` is left unset (None, per `make_community`), so this is
+    the absence side for the guard itself, distinct from the absolute/relative
+    split inside it.
+    """
+    seed_actors()
+    make_community(name='books', host='test.piefed.local')
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/c/books', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert 'icon' not in response.json
+
+
+def test_an_absolute_community_header_url_is_used_as_is(app, db_session, monkeypatch):
+    """The image block mirrors the icon block exactly; both need covering
+    because they are separate code, not a shared helper. `image_id` needs a
+    real File row for the same FK reason as `icon_id` above.
+    """
+    seed_actors()
+    from app.models import File
+    header_file = File()
+    db.session.add(header_file)
+    db.session.commit()
+    community = make_community(name='books', host='test.piefed.local')
+    community.image_id = header_file.id
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+    monkeypatch.setattr(type(community), 'header_image',
+                        lambda self: 'https://cdn.example/header.png')
+
+    response = profile_get(app, '/c/books', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['image'] == {'type': 'Image', 'url': 'https://cdn.example/header.png'}
+
+
+def test_a_relative_community_header_url_is_prefixed(app, db_session, monkeypatch):
+    seed_actors()
+    from app.models import File
+    header_file = File()
+    db.session.add(header_file)
+    db.session.commit()
+    community = make_community(name='books', host='test.piefed.local')
+    community.image_id = header_file.id
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+    monkeypatch.setattr(type(community), 'header_image', lambda self: '/static/header.png')
+
+    response = profile_get(app, '/c/books', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['image']['url'] == 'https://test.piefed.local/static/header.png'
+
+
+def test_a_community_with_no_header_image_omits_the_key(app, db_session, monkeypatch):
+    """The guard above the whole image block: `if community.image_id is not
+    None:`. `image_id` is left unset, mirroring the icon absence test above.
+    """
+    seed_actors()
+    make_community(name='books', host='test.piefed.local')
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/c/books', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert 'image' not in response.json
+
+
+def test_community_languages_are_listed(app, db_session, monkeypatch):
+    """The `for language in community.languages` loop. A community with no
+    languages yields an empty list, so this test seeds one to enter the loop
+    body -- otherwise the append line is never executed. `Community.languages`
+    is a `lazy='dynamic'` relationship (an AppenderQuery), which -- unlike a
+    plain dynamic query -- supports `.append()` directly; no `.all()` or list
+    conversion is needed to mutate it.
+    """
+    seed_actors()
+    community = make_community(name='books', host='test.piefed.local')
+    from app.models import Language
+    language = Language(code='en', name='English')
+    db.session.add(language)
+    db.session.commit()
+    community.languages.append(language)
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/c/books', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert {'identifier': 'en', 'name': 'English'} in response.json['language']
+
+
+def test_a_community_with_no_languages_gets_an_empty_language_list(app, db_session, monkeypatch):
+    """The unconditional `actor_data['language'] = []` line runs regardless of
+    the loop, so a community with no attached languages still gets the key --
+    just with an empty list rather than the key being absent. This is not an
+    absence test paired with the one above; it pins that 'language' is always
+    present, unlike every other optional field in this file.
+    """
+    seed_actors()
+    make_community(name='books', host='test.piefed.local')
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/c/books', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['language'] == []
+
+
 # NOT TESTED HERE (already covered elsewhere -- see this task's report):
 #
 # - user_profile's AP-JSON happy path for a local user found by bare username,
