@@ -1,7 +1,7 @@
 """tests/test_webfinger.py"""
 from app import db
 from app.activitypub import routes as activitypub_routes
-from app.models import Site
+from app.models import Site, utcnow
 from tests.factories import make_community, make_local_feed, make_site, make_user, seed_community_owner
 
 
@@ -481,14 +481,15 @@ def test_a_tilde_resource_resolves_a_feed_directly(app, db_session):
         'https://www.w3.org/ns/activitystreams#type'] == 'Feed'
 
 
-def test_a_private_feed_is_served_anyway(app, db_session):
-    """PINS a defect. The User lookup excludes deleted and banned accounts and
-    the Community lookup excludes local_only communities, but the Feed lookup
-    filters on `ap_id=None` and NOTHING ELSE.
+def test_a_private_feed_is_not_served(app, db_session):
+    """`public=True` in the non-tilde chain's Feed lookup. A feed its owner has
+    not published must not have its existence and URL advertised to any
+    instance that asks, exactly as the User lookup's `deleted=False`/
+    `banned=False` and the Community lookup's `local_only=False` keep those
+    actors off the wire.
 
     `Feed.public` is passed False explicitly here rather than left to the
     column's own default (app/models.py:4062), so the test states its premise.
-    A private feed's existence and URL are published to any instance that asks.
     """
     seed_local_actors()
     make_local_feed('secret', public=False)
@@ -496,12 +497,14 @@ def test_a_private_feed_is_served_anyway(app, db_session):
     response = webfinger_get(app, resource='acct:secret@test.piefed.local')
 
     assert response.status_code == 200
-    assert response.json['subject'] == 'acct:secret@test.piefed.local'
+    assert response.get_data(as_text=True) == ''
 
 
 def test_a_remote_feed_is_not_served(app, db_session):
-    """`ap_id=None` is the one filter the feed lookup DOES apply. This is also
-    the test that would fail if a later change made `make_local_feed` set
+    """The `ap_id=None` conjunct of the non-tilde chain's feed lookup, isolated
+    from the `public`/`banned`/`ap_deleted_at` guards beside it by a feed that
+    is public, unbanned and undeleted and differs only in being remote. This is
+    also the test that would fail if a later change made `make_local_feed` set
     `ap_id` the way `make_feed` does.
     """
     site, instance = seed_local_actors()
@@ -530,11 +533,12 @@ def test_a_feed_response_carries_neither_fep_3b86_template(app, db_session):
     assert 'https://w3id.org/fep/3b86/Follow' not in rels
 
 
-def test_a_banned_feed_is_served_anyway(app, db_session):
-    """PINS a second facet of the same defect. `Feed.banned` exists
-    (app/models.py:4081) but the feed lookup does not filter on it, unlike the
-    User lookup's `banned=False`. Set explicitly to True -- `Feed.banned`
-    defaults to False, so leaving it alone would assert nothing.
+def test_a_banned_feed_is_not_served(app, db_session):
+    """`banned=False` in the non-tilde chain's Feed lookup, the same guard the
+    User lookup already carries. `Feed.banned` (app/models.py:4081) is set
+    explicitly to True -- it defaults to False, so leaving it alone would
+    assert nothing -- while `public` stays True, which is what isolates this
+    guard from the `public` one proved above.
     """
     seed_local_actors()
     feed = make_local_feed('news', public=True)
@@ -544,7 +548,26 @@ def test_a_banned_feed_is_served_anyway(app, db_session):
     response = webfinger_get(app, resource='acct:news@test.piefed.local')
 
     assert response.status_code == 200
-    assert response.json['subject'] == 'acct:news@test.piefed.local'
+    assert response.get_data(as_text=True) == ''
+
+
+def test_a_deleted_feed_is_not_served(app, db_session):
+    """`ap_deleted_at=None` in the non-tilde chain's Feed lookup. `Feed` has no
+    `deleted` boolean: `ap_deleted_at` (app/models.py:4076) is its soft-delete
+    marker, so it is the column that plays the part `User.deleted` plays in the
+    User lookup. It has no column default, so it is None until set, and is set
+    explicitly here. `public` is True and `banned` untouched, so this isolates
+    the third guard from the other two.
+    """
+    seed_local_actors()
+    feed = make_local_feed('news', public=True)
+    feed.ap_deleted_at = utcnow()
+    db.session.commit()
+
+    response = webfinger_get(app, resource='acct:news@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.get_data(as_text=True) == ''
 
 
 def test_a_feed_name_lookup_is_case_sensitive(app, db_session):
@@ -728,10 +751,10 @@ def test_a_feed_actor_with_surrounding_whitespace_is_matched_after_stripping(app
 
 def test_a_tilde_resource_does_not_resolve_a_remote_feed(app, db_session):
     """The tilde branch's `ap_id=None` filter (app/activitypub/routes.py's
-    second, textually-separate `Feed.query.filter_by(name=actor.strip(),
-    ap_id=None)` call, reached only when `feed = True`) is its own mutation
-    target distinct from the non-tilde chain's copy proven by
-    test_a_remote_feed_is_not_served.
+    second, textually-separate `Feed.query.filter_by(...)` call, reached only
+    when `feed = True`) is its own mutation target distinct from the non-tilde
+    chain's copy proven by test_a_remote_feed_is_not_served. The feed is
+    public, unbanned and undeleted, so only `ap_id` can produce the miss.
     """
     site, instance = seed_local_actors()
     from tests.factories import make_feed
@@ -743,10 +766,11 @@ def test_a_tilde_resource_does_not_resolve_a_remote_feed(app, db_session):
     assert response.get_data(as_text=True) == ''
 
 
-def test_a_tilde_resource_for_a_private_feed_is_served_anyway(app, db_session):
-    """The pin in test_a_private_feed_is_served_anyway proved via the
-    non-tilde fallback; this confirms the same missing `public` guard is
-    absent from the tilde branch's separate Feed query too.
+def test_a_tilde_resource_for_a_private_feed_is_not_served(app, db_session):
+    """The tilde branch's Feed query is a second, textually separate copy of the
+    non-tilde chain's, so every guard has to be present twice. This is the only
+    test that can kill `public=True` in the tilde copy --
+    test_a_private_feed_is_not_served proves it in the other one.
     """
     seed_local_actors()
     make_local_feed('secret', public=False)
@@ -754,7 +778,39 @@ def test_a_tilde_resource_for_a_private_feed_is_served_anyway(app, db_session):
     response = webfinger_get(app, resource='acct:~secret@test.piefed.local')
 
     assert response.status_code == 200
-    assert response.json['subject'] == 'acct:secret@test.piefed.local'
+    assert response.get_data(as_text=True) == ''
+
+
+def test_a_tilde_resource_for_a_banned_feed_is_not_served(app, db_session):
+    """`banned=False` in the tilde copy of the Feed lookup, the counterpart of
+    test_a_banned_feed_is_not_served. `public` is True so the miss can only be
+    the `banned` guard.
+    """
+    seed_local_actors()
+    feed = make_local_feed('news', public=True)
+    feed.banned = True
+    db.session.commit()
+
+    response = webfinger_get(app, resource='acct:~news@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.get_data(as_text=True) == ''
+
+
+def test_a_tilde_resource_for_a_deleted_feed_is_not_served(app, db_session):
+    """`ap_deleted_at=None` in the tilde copy of the Feed lookup, the
+    counterpart of test_a_deleted_feed_is_not_served. `public` is True and
+    `banned` untouched, so only the soft-delete guard can produce the miss.
+    """
+    seed_local_actors()
+    feed = make_local_feed('news', public=True)
+    feed.ap_deleted_at = utcnow()
+    db.session.commit()
+
+    response = webfinger_get(app, resource='acct:~news@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.get_data(as_text=True) == ''
 
 
 def test_an_unknown_actor_returns_an_empty_body_with_status_200(app, db_session):
