@@ -458,6 +458,18 @@ def _permit_and_return(monkeypatch, post_or_none):
                         lambda *args, **kwargs: post_or_none)
 
 
+def _seed_created_post(community, author):
+    """The Post that `create_post` is doubled to return.
+
+    Its ap_id MUST DIFFER from the one the test dispatches. `process_new_content`
+    looks up an existing post by the dispatched ap_id BEFORE it reaches the
+    creation path -- seeding the returned post under the dispatched ap_id would
+    make the function take the existing-post branch instead, and the test would
+    silently measure Task 2's path rather than this one.
+    """
+    return make_post(community, author, 'https://peer.example/post/created')
+
+
 def test_a_create_that_succeeds_logs_success_and_announces(app, db_session, monkeypatch):
     """The ordinary new-post path. `edited_at` is left None (the column has no
     declared default), so the lost-race branch below is the one NOT taken here
@@ -465,14 +477,14 @@ def test_a_create_that_succeeds_logs_success_and_announces(app, db_session, monk
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, author = seed_content_pair()
-    created = make_post(community, author, 'https://peer.example/post/1')
+    created = _seed_created_post(community, author)
     db.session.commit()
     _double_the_gate(monkeypatch, community)
     _permit_and_return(monkeypatch, created)
     calls = record_moderation(monkeypatch, 'update_post_from_activity',
                               'announce_activity_to_followers')
 
-    dispatch(direct_activity(author, content_object('https://peer.example/post/1')))
+    dispatch(direct_activity(author, content_object('https://peer.example/post/new')))
 
     assert calls['update_post_from_activity'] == []
     assert len(calls['announce_activity_to_followers']) == 1
@@ -487,7 +499,7 @@ def test_an_update_that_lost_a_race_to_a_create_is_applied_afterwards(app, db_se
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, author = seed_content_pair()
-    created = make_post(community, author, 'https://peer.example/post/1')
+    created = _seed_created_post(community, author)
     created.edited_at = None
     db.session.commit()
     _double_the_gate(monkeypatch, community)
@@ -495,7 +507,7 @@ def test_an_update_that_lost_a_race_to_a_create_is_applied_afterwards(app, db_se
     calls = record_moderation(monkeypatch, 'update_post_from_activity',
                               'announce_activity_to_followers')
 
-    dispatch(direct_activity(author, content_object('https://peer.example/post/1'),
+    dispatch(direct_activity(author, content_object('https://peer.example/post/new'),
                              activity_type='Update'))
 
     assert len(calls['update_post_from_activity']) == 1
@@ -511,14 +523,14 @@ def test_an_update_on_an_already_edited_post_is_not_re_applied(app, db_session, 
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, author = seed_content_pair()
-    created = make_post(community, author, 'https://peer.example/post/1')
+    created = _seed_created_post(community, author)
     created.edited_at = utcnow()
     db.session.commit()
     _double_the_gate(monkeypatch, community)
     _permit_and_return(monkeypatch, created)
     calls = record_moderation(monkeypatch, 'update_post_from_activity')
 
-    dispatch(direct_activity(author, content_object('https://peer.example/post/1'),
+    dispatch(direct_activity(author, content_object('https://peer.example/post/new'),
                              activity_type='Update'))
 
     assert calls['update_post_from_activity'] == []
