@@ -2,7 +2,7 @@
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.models import Site
-from tests.factories import make_community, make_site, make_user, seed_community_owner
+from tests.factories import make_community, make_local_feed, make_site, make_user, seed_community_owner
 
 
 def webfinger_get(app, resource=None, user_agent=None):
@@ -448,3 +448,397 @@ def test_a_community_response_carries_the_fep_3b86_follow_template(app, db_sessi
     rels = {link['rel'] for link in response.json['links']}
     assert 'https://w3id.org/fep/3b86/Follow' in rels
     assert 'https://w3id.org/fep/3b86/Create' not in rels
+
+
+def test_a_feed_is_served_when_no_user_or_community_matches(app, db_session):
+    """The third fallback in the chain. Requires `make_local_feed`: see its
+    docstring for why `make_feed` cannot reach this branch.
+    """
+    seed_local_actors()
+    make_local_feed('news', public=True)
+
+    response = webfinger_get(app, resource='acct:news@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.json['links'][1]['properties'][
+        'https://www.w3.org/ns/activitystreams#type'] == 'Feed'
+
+
+def test_a_tilde_resource_resolves_a_feed_directly(app, db_session):
+    """The `feed = True` path: a leading `~` skips the User and Community
+    lookups entirely. Proved by seeding a USER with the same name -- the tilde
+    branch must return the Feed, which the non-tilde chain would never reach
+    because the user matches first.
+    """
+    site, instance = seed_local_actors()
+    make_user(instance, 'news', local=True)
+    make_local_feed('news', public=True)
+
+    response = webfinger_get(app, resource='acct:~news@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.json['links'][1]['properties'][
+        'https://www.w3.org/ns/activitystreams#type'] == 'Feed'
+
+
+def test_a_private_feed_is_served_anyway(app, db_session):
+    """PINS a defect. The User lookup excludes deleted and banned accounts and
+    the Community lookup excludes local_only communities, but the Feed lookup
+    filters on `ap_id=None` and NOTHING ELSE.
+
+    `Feed.public` is passed False explicitly here rather than left to the
+    column's own default (app/models.py:4062), so the test states its premise.
+    A private feed's existence and URL are published to any instance that asks.
+    """
+    seed_local_actors()
+    make_local_feed('secret', public=False)
+
+    response = webfinger_get(app, resource='acct:secret@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.json['subject'] == 'acct:secret@test.piefed.local'
+
+
+def test_a_remote_feed_is_not_served(app, db_session):
+    """`ap_id=None` is the one filter the feed lookup DOES apply. This is also
+    the test that would fail if a later change made `make_local_feed` set
+    `ap_id` the way `make_feed` does.
+    """
+    site, instance = seed_local_actors()
+    from tests.factories import make_feed
+    make_feed(instance, name='news', public=True)
+
+    response = webfinger_get(app, resource='acct:news@test.piefed.local')
+
+    assert response.get_data(as_text=True) == ''
+
+
+def test_a_feed_response_carries_neither_fep_3b86_template(app, db_session):
+    """The isinstance chain's implicit third outcome: a Feed is neither a User
+    nor a Community, so no template is appended. Nothing else in this file
+    asserts that absence.
+    """
+    seed_local_actors()
+    make_local_feed('news', public=True)
+
+    response = webfinger_get(app, resource='acct:news@test.piefed.local')
+
+    rels = {link['rel'] for link in response.json['links']}
+    assert 'https://w3id.org/fep/3b86/Create' not in rels
+    assert 'https://w3id.org/fep/3b86/Follow' not in rels
+
+
+def test_a_banned_feed_is_served_anyway(app, db_session):
+    """PINS a second facet of the same defect. `Feed.banned` exists
+    (app/models.py:4081) but the feed lookup does not filter on it, unlike the
+    User lookup's `banned=False`. Set explicitly to True -- `Feed.banned`
+    defaults to False, so leaving it alone would assert nothing.
+    """
+    seed_local_actors()
+    feed = make_local_feed('news', public=True)
+    feed.banned = True
+    db.session.commit()
+
+    response = webfinger_get(app, resource='acct:news@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.json['subject'] == 'acct:news@test.piefed.local'
+
+
+def test_a_feed_name_lookup_is_case_sensitive(app, db_session):
+    """`Feed.query.filter_by(name=actor.strip(), ...)` -- no `.lower()`, unlike
+    the Community lookup's `actor.strip().lower()`. A mixed-case query against
+    a lowercase-named feed must NOT match.
+    """
+    seed_local_actors()
+    make_local_feed('news', public=True)
+
+    response = webfinger_get(app, resource='acct:NEWS@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.get_data(as_text=True) == ''
+
+
+def test_a_feed_with_matching_case_is_served(app, db_session):
+    """The positive companion to the case-sensitivity test above: an exact-case
+    match on a mixed-case feed name resolves fine, proving the case sensitivity
+    is real behaviour and not merely a broken lookup that never matches.
+    """
+    seed_local_actors()
+    make_local_feed('NewsFeed', public=True)
+
+    response = webfinger_get(app, resource='acct:NewsFeed@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.json['links'][1]['properties'][
+        'https://www.w3.org/ns/activitystreams#type'] == 'Feed'
+
+
+def test_no_match_at_any_stage_returns_empty_body(app, db_session):
+    """No User, Community or Feed named 'nothing' exists anywhere. The
+    non-tilde chain runs all three lookups in sequence and falls out the
+    bottom with `object is None`.
+    """
+    seed_local_actors()
+
+    response = webfinger_get(app, resource='acct:nothing@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.get_data(as_text=True) == ''
+
+
+def test_a_tilde_resource_for_a_nonexistent_feed_returns_empty_body(app, db_session):
+    """The `feed = True` branch's own miss path: no Feed named 'ghost' exists,
+    so the tilde branch's Feed query (a separate `Feed.query.filter_by(...)`
+    call from the one in the non-tilde chain) also falls through to `None`.
+    """
+    seed_local_actors()
+
+    response = webfinger_get(app, resource='acct:~ghost@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.get_data(as_text=True) == ''
+
+
+def test_a_tilde_resource_bypasses_the_community_lookup_too(app, db_session):
+    """The tilde branch skips the Community lookup exactly as it skips the User
+    lookup. Proved by seeding a COMMUNITY with the same name as the feed --
+    the tilde branch must still return the Feed, not the Group.
+    """
+    seed_local_actors()
+    make_community(name='news', host='test.piefed.local')
+    make_local_feed('news', public=True)
+
+    response = webfinger_get(app, resource='acct:~news@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.json['links'][1]['properties'][
+        'https://www.w3.org/ns/activitystreams#type'] == 'Feed'
+
+
+def test_a_community_with_the_same_name_precedes_a_feed_in_the_non_tilde_chain(app, db_session):
+    """The other side of the ordering: in the NON-tilde chain, the Community
+    lookup runs before the Feed lookup, so a Community and Feed sharing a name
+    resolve to the Community.
+    """
+    seed_local_actors()
+    make_community(name='books', host='test.piefed.local')
+    make_local_feed('books', public=True)
+
+    response = webfinger_get(app, resource='acct:books@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.json['links'][1]['properties'][
+        'https://www.w3.org/ns/activitystreams#type'] == 'Group'
+
+
+def test_a_deleted_user_with_the_same_name_falls_through_to_the_feed(app, db_session):
+    """Natural fallthrough, not the tilde shortcut: the User lookup's own
+    `deleted=False` filter excludes this row, so `object` stays `None` after
+    the User stage and the chain proceeds to Community (no match) and then
+    Feed (match) -- all without a `~` in the resource.
+    """
+    site, instance = seed_local_actors()
+    user = make_user(instance, 'news', local=True)
+    user.deleted = True
+    db.session.commit()
+    make_local_feed('news', public=True)
+
+    response = webfinger_get(app, resource='acct:news@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.json['links'][1]['properties'][
+        'https://www.w3.org/ns/activitystreams#type'] == 'Feed'
+
+
+def test_a_banned_user_with_the_same_name_falls_through_to_the_feed(app, db_session):
+    """Same fallthrough, isolating the User lookup's `banned=False` conjunct
+    instead of `deleted=False`.
+    """
+    site, instance = seed_local_actors()
+    user = make_user(instance, 'news', local=True)
+    user.banned = True
+    db.session.commit()
+    make_local_feed('news', public=True)
+
+    response = webfinger_get(app, resource='acct:news@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.json['links'][1]['properties'][
+        'https://www.w3.org/ns/activitystreams#type'] == 'Feed'
+
+
+def test_a_remote_user_with_the_same_name_falls_through_to_the_feed(app, db_session):
+    """Same fallthrough, isolating the User lookup's `ap_id=None` conjunct: a
+    remote user (`make_user`'s default, `local=False`) is invisible to the
+    User lookup, so the chain proceeds past it to the Feed.
+    """
+    site, instance = seed_local_actors()
+    make_user(instance, 'news')
+    make_local_feed('news', public=True)
+
+    response = webfinger_get(app, resource='acct:news@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.json['links'][1]['properties'][
+        'https://www.w3.org/ns/activitystreams#type'] == 'Feed'
+
+
+def test_a_local_only_community_with_the_same_name_falls_through_to_the_feed(app, db_session):
+    """The Community-stage equivalent of the fallthrough tests above: the
+    Community lookup's own `local_only=False` filter excludes this row, so the
+    chain proceeds to the Feed instead of stopping at the Community.
+    """
+    seed_local_actors()
+    community = make_community(name='news', host='test.piefed.local')
+    community.local_only = True
+    db.session.commit()
+    make_local_feed('news', public=True)
+
+    response = webfinger_get(app, resource='acct:news@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.json['links'][1]['properties'][
+        'https://www.w3.org/ns/activitystreams#type'] == 'Feed'
+
+
+def test_a_feed_is_matched_by_a_url_resource(app, db_session):
+    """The `elif 'https:' in query` branch reaches the Feed fallback exactly
+    as it reaches the User branch tested elsewhere in this file: `query.split(
+    '/')[-1]` yields the feed's bare name, and 'acct:' is absent so `feed`
+    stays False and the full three-stage chain runs.
+    """
+    seed_local_actors()
+    make_local_feed('news', public=True)
+
+    response = webfinger_get(app, resource='https://test.piefed.local/f/news')
+
+    assert response.status_code == 200
+    assert response.json['links'][1]['properties'][
+        'https://www.w3.org/ns/activitystreams#type'] == 'Feed'
+
+
+def test_a_feed_is_matched_by_a_plain_http_url_resource(app, db_session):
+    """The second disjunct, `'http:' in query`, isolated from `'https:'` by a
+    scheme that contains 'http:' but not 'https:' -- the same technique the
+    User-branch pair of tests uses.
+    """
+    seed_local_actors()
+    make_local_feed('news', public=True)
+
+    response = webfinger_get(app, resource='http://test.piefed.local/f/news')
+
+    assert response.status_code == 200
+    assert response.json['links'][1]['properties'][
+        'https://www.w3.org/ns/activitystreams#type'] == 'Feed'
+
+
+def test_a_tilde_prefix_is_not_recognized_in_url_form(app, db_session):
+    """The `actor.startswith('~')` check lives inside the `'acct:' in query`
+    branch only. A URL resource whose last path segment happens to start with
+    `~` never reaches that check, so `feed` stays False and the literal actor
+    `~news` (tilde included) is looked up -- which matches nothing, even
+    though a feed named plain 'news' exists.
+    """
+    seed_local_actors()
+    make_local_feed('news', public=True)
+
+    response = webfinger_get(app, resource='https://test.piefed.local/f/~news')
+
+    assert response.status_code == 200
+    assert response.get_data(as_text=True) == ''
+
+
+def test_a_feed_alias_and_self_link_use_the_feed_public_url(app, db_session):
+    """`object.public_url()` is called for `aliases[0]` and both links' `href`
+    exactly as it is for User and Community. Asserted here against the Feed's
+    own `ap_public_url` so a mutation swapping in some other URL-producing
+    method would be caught.
+    """
+    seed_local_actors()
+    make_local_feed('news', public=True)
+
+    response = webfinger_get(app, resource='acct:news@test.piefed.local')
+
+    assert response.status_code == 200
+    expected_url = 'https://test.piefed.local/f/news'
+    assert response.json['aliases'] == [expected_url]
+    assert response.json['links'][0]['href'] == expected_url
+    assert response.json['links'][1]['href'] == expected_url
+
+
+def test_a_feed_matched_via_url_resource_has_a_correctly_formatted_acct_subject(app, db_session):
+    """The `subject` field is built from `actor.strip()` regardless of which
+    branch produced `actor` -- proved here with a URL-form resource, which is
+    a different `actor` source than the acct-form tests that assert `subject`
+    elsewhere in this file.
+    """
+    seed_local_actors()
+    make_local_feed('news', public=True)
+
+    response = webfinger_get(app, resource='https://test.piefed.local/f/news')
+
+    assert response.status_code == 200
+    assert response.json['subject'] == 'acct:news@test.piefed.local'
+
+
+def test_a_feed_actor_with_surrounding_whitespace_is_matched_after_stripping(app, db_session):
+    """`.strip()` in the Feed lookup's own filter clause (`Feed.query.filter_by(
+    name=actor.strip(), ...)`), isolated from the `.strip()` calls in the User
+    and Community lookups above it. `%20` decodes to a literal space before
+    `acct:` is split, landing in `actor` where only `.strip()` removes it.
+    """
+    seed_local_actors()
+    make_local_feed('news', public=True)
+
+    response = webfinger_get(app, resource='acct:%20news@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.json['links'][1]['properties'][
+        'https://www.w3.org/ns/activitystreams#type'] == 'Feed'
+
+
+def test_a_tilde_resource_does_not_resolve_a_remote_feed(app, db_session):
+    """The tilde branch's `ap_id=None` filter (app/activitypub/routes.py's
+    second, textually-separate `Feed.query.filter_by(name=actor.strip(),
+    ap_id=None)` call, reached only when `feed = True`) is its own mutation
+    target distinct from the non-tilde chain's copy proven by
+    test_a_remote_feed_is_not_served.
+    """
+    site, instance = seed_local_actors()
+    from tests.factories import make_feed
+    make_feed(instance, name='news', public=True)
+
+    response = webfinger_get(app, resource='acct:~news@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.get_data(as_text=True) == ''
+
+
+def test_a_tilde_resource_for_a_private_feed_is_served_anyway(app, db_session):
+    """The pin in test_a_private_feed_is_served_anyway proved via the
+    non-tilde fallback; this confirms the same missing `public` guard is
+    absent from the tilde branch's separate Feed query too.
+    """
+    seed_local_actors()
+    make_local_feed('secret', public=False)
+
+    response = webfinger_get(app, resource='acct:~secret@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.json['subject'] == 'acct:secret@test.piefed.local'
+
+
+def test_a_feed_response_has_jrd_json_content_type(app, db_session):
+    """`resp.content_type = 'application/jrd+json'` is set unconditionally
+    before return, same as the User and Community branches -- asserted here
+    for the Feed branch specifically, which the tests above check via
+    `response.json` alone.
+    """
+    seed_local_actors()
+    make_local_feed('news', public=True)
+
+    response = webfinger_get(app, resource='acct:news@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.content_type == 'application/jrd+json'
