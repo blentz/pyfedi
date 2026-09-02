@@ -370,9 +370,9 @@ def user_profile(actor):
     if '@' in actor:
         user: User = User.query.filter_by(ap_id=actor.lower()).first()
     else:
-        # deleted and banned local users are not served, matching the webfinger
-        # lookup above -- otherwise the two endpoints answer differently about
-        # the same actor.
+        # deleted and banned local users are not served here, matching the
+        # deleted=False/banned=False guards the webfinger lookup above applies
+        # to its own User query.
         user: User = User.query.filter(or_(func.lower(User.user_name) == actor.lower())).filter_by(deleted=False,
                                                                                                   banned=False,
                                                                                                   ap_id=None).first()

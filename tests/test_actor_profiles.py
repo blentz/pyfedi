@@ -511,6 +511,9 @@ def test_an_absolute_community_header_url_is_used_as_is(app, db_session, monkeyp
 
 
 def test_a_relative_community_header_url_is_prefixed(app, db_session, monkeypatch):
+    """The false side of the same branch as the absolute-URL test above: a
+    stored relative path is made absolute with the server URL.
+    """
     seed_actors()
     from app.models import File
     header_file = File()
@@ -700,6 +703,9 @@ def test_a_non_public_feed_still_serves_html(app, db_session, monkeypatch):
 
 
 def test_an_unknown_feed_is_404(app, db_session, monkeypatch):
+    """No feed matches the requested name -- the not-found path, mirroring
+    community_profile's and user_profile's equivalent 404s.
+    """
     seed_actors()
     _double_the_renderers(monkeypatch)
 
@@ -709,6 +715,13 @@ def test_an_unknown_feed_is_404(app, db_session, monkeypatch):
 
 
 def test_the_feed_document_carries_its_federation_contract(app, db_session, monkeypatch):
+    """The fields a remote instance actually needs: the id it will store, the
+    inbox it will deliver to, the following collection, the shared inbox, and
+    the public key it will verify signatures against. Asserted together
+    because a document missing any one of them is unusable, and nothing else
+    in this file asserts them -- the feed half of the community/feed/user
+    contract-test trio.
+    """
     seed_actors()
     feed = make_local_feed('news', public=True)
     feed.public_key = 'FEEDKEY'
@@ -789,25 +802,6 @@ def test_a_local_feed_with_a_non_null_ap_id_is_not_found(app, db_session, monkey
     assert response.status_code == 404
 
 
-# NOT TESTED HERE (already covered elsewhere -- see this task's report):
-#
-# - user_profile's AP-JSON happy path for a local user found by bare username,
-#   its Accept-driven content_type, and the suppressed session cookie:
-#   tests/test_request_hooks.py::test_activity_json_response_does_not_set_a_session_cookie
-# - user_profile's HANDLE-WITH-@ lookup branch returning None, gated three ways
-#   (anonymous, AP-Accept, banned-instance-exception-not-500), plus
-#   resolve_remote_handle's own guards and its exception-to-404 path:
-#   tests/test_remote_handle_resolution.py (all four tests)
-#   NOTE: all four request '/u/wakko@mastodon.cloud', so they take ONLY the
-#   `'@' in actor` branch. The bare-username branch missing and then falling
-#   through to resolve_remote_handle is not covered there. It IS covered here,
-#   as of Task 10, by test_a_deleted_user_profile_is_not_served and
-#   test_a_banned_user_profile_is_not_served: the `deleted=False, banned=False`
-#   filter makes an existing local row invisible, which is the only way a bare
-#   username reaches the fall-through. Production's resolve_remote_handle would
-#   return None immediately for such an actor (no '@'); those tests stub it to
-#   None via _double_the_renderers, which is the same answer.
-#
 def _seed_file():
     """A bare File row, for an icon_id/image_id foreign key.
 
@@ -1029,9 +1023,10 @@ def test_a_childless_feed_lists_no_child_feeds(app, db_session, monkeypatch):
 
 # feed_profile's remote branch's `banned=False` filter and its two-segment
 # route's slash-joined name are covered above (Task 5). icon/image, description,
-# and childFeeds are covered above (Task 6). Any remaining feed_profile fields
-# (languages) and feed_outbox/feed_following are left to later tasks in this
-# sub-project.
+# and childFeeds are covered above (Task 6). feed_outbox and feed_following are
+# left to later tasks in this sub-project; feed_profile emits no `language` key
+# at all (that field belongs to Community, app/models.py:622), so there is
+# nothing else of feed_profile's own document left uncovered.
 #
 # ---------------------------------------------------------------------------
 # user_profile (Task 7): its HEAD branch, its ap_profile_id fallback lookup,
@@ -1046,8 +1041,23 @@ def test_a_childless_feed_lists_no_child_feeds(app, db_session, monkeypatch):
 #   resulting resolve_remote_handle/search_for_user call:
 #   tests/test_remote_handle_resolution.py (all four tests)
 #   NOTE: all four request '/u/wakko@mastodon.cloud', so the BARE-USERNAME
-#   branch missing is not covered there. Task 10's two guard tests at the end
-#   of this file cover it, and with it user_profile's own abort(404).
+#   branch missing is not covered there. Task 10's two guard tests below
+#   (test_a_deleted_user_profile_is_not_served, test_a_banned_user_profile_is_not_served)
+#   cover it, and with it user_profile's own abort(404): each makes an
+#   existing local row invisible via the `deleted=False`/`banned=False`
+#   filter -- the only way a bare username reaches the fall-through -- and
+#   `_double_the_renderers` stubs resolve_remote_handle to None there, which
+#   is the same answer production's own resolve_remote_handle gives
+#   immediately for an actor with no '@'.
+#   ONLY ONE of resolve_remote_handle's own three guards is actually pinned
+#   by tests/test_remote_handle_resolution.py's four tests -- not "its own
+#   guards" plural: the anonymous-caller guard (routes.py:484-485) and the
+#   exception-to-404 path (:490-491) are covered. The `'@' not in actor`
+#   guard (:482-483) is unreached there, because all four tests request a
+#   handle containing '@'; the AP-Accept guard (:486-487) is also unreached,
+#   because test_activitypub_request_does_not_resolve never authenticates and
+#   so returns at the anonymous-caller guard before line 486 is ever asked to
+#   branch true. Registered as D165 in the coverage-campaign findings doc.
 # ---------------------------------------------------------------------------
 
 def test_a_head_request_for_an_activitypub_client_returns_an_empty_json_body(app, db_session, monkeypatch):
@@ -1122,7 +1132,7 @@ def test_a_user_is_resolved_by_ap_profile_id_when_the_name_does_not_match(app, d
     in particular: check it") and the reason Task 4 was rejected. Asserting on
     `id` instead proves the SAME thing the brief's assertion was reaching for
     (the fallback found the right row, not just any row) without resting on
-    that default, and more strongly: 'Person' could results from a coincidence
+    that default, and more strongly: 'Person' could result from a coincidence
     of the ternary's default, whereas 'alice' appearing in the id can only come
     from the actual matched User object.
     """
@@ -1200,6 +1210,136 @@ def test_a_non_bot_user_is_typed_as_a_person(app, db_session, monkeypatch):
     assert response.json['type'] == 'Person'
 
 
+def test_the_user_document_carries_its_federation_contract(app, db_session, monkeypatch):
+    """The fields a remote instance actually needs: the id it will store, the
+    inbox it will deliver to, the outbox, the shared inbox, and the public key
+    it will verify signatures against. Asserted together because a document
+    missing any one of them is unusable, and nothing else in this file asserts
+    them -- the user half of the community/feed/user contract-test trio
+    (test_the_community_document_carries_its_federation_contract,
+    test_the_feed_document_carries_its_federation_contract above).
+
+    `id` is `user.public_url()` (routes.py:397), NOT built from the request
+    path the way community_profile's and feed_profile's `id` are (see D159 in
+    the coverage-campaign findings doc). It falls back to
+    `f"{SERVER_URL}/u/{user.user_name}"` (app/models.py:1449-1450) here only
+    because `ap_public_url` is unset on this local user; a local user with
+    `ap_public_url` set would report that value instead.
+    """
+    site, instance = seed_actors()
+    user = make_user(instance, 'alice', local=True)
+    user.public_key = 'USERKEY'
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    data = response.json
+    assert data['id'] == 'https://test.piefed.local/u/alice'
+    assert data['inbox'] == 'https://test.piefed.local/u/alice/inbox'
+    assert data['outbox'] == 'https://test.piefed.local/u/alice/outbox'
+    assert data['endpoints']['sharedInbox'] == 'https://test.piefed.local/inbox'
+    assert data['publicKey']['id'] == 'https://test.piefed.local/u/alice#main-key'
+    assert data['publicKey']['publicKeyPem'] == 'USERKEY'
+
+
+def test_the_user_response_headers_are_set(app, db_session, monkeypatch):
+    """Cache-Control, Vary and Link -- the user half of the same comparison
+    test_the_community_response_headers_are_set makes for community_profile
+    above. `feed_profile` omits `Vary` entirely (registered as D161 in the
+    coverage-campaign findings doc).
+
+    Flask-Compress appends 'Accept-Encoding' to whatever `Vary` the route
+    sets (see test_the_community_response_headers_are_set above), so the
+    header actually observed here is 'Accept, Accept-Encoding', not the bare
+    'Accept' the route sets (routes.py:456).
+    """
+    site, instance = seed_actors()
+    make_user(instance, 'alice', local=True)
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.headers['Cache-Control'] == 'public, max-age=15'
+    assert response.headers['Vary'] == 'Accept, Accept-Encoding'
+    assert 'rel="alternate"' in response.headers['Link']
+
+
+def test_a_users_title_becomes_their_display_name(app, db_session, monkeypatch):
+    """`"name": user.title if user.title else user.user_name` (routes.py:399)
+    -- the true side. Nothing else in this file sets `title`, so without this
+    test a mutation collapsing the ternary to an unconditional `user.user_name`
+    would survive undetected.
+    """
+    site, instance = seed_actors()
+    user = make_user(instance, 'alice', local=True)
+    user.title = 'Alice A. Cooper'
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['name'] == 'Alice A. Cooper'
+
+
+def test_a_user_without_a_title_is_named_by_their_username(app, db_session, monkeypatch):
+    """The false side of the same ternary. `title` is set to None EXPLICITLY;
+    its declared default is already None, but stating the premise matches
+    this file's convention of not resting an assertion on an unstated
+    default (see test_a_non_bot_user_is_typed_as_a_person above).
+    """
+    site, instance = seed_actors()
+    user = make_user(instance, 'alice', local=True)
+    user.title = None
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['name'] == 'alice'
+
+
+def test_a_user_manually_approving_followers_reports_it(app, db_session, monkeypatch):
+    """`"manuallyApprovesFollowers": False if not user.ap_manually_approves_followers
+    else user.ap_manually_approves_followers` (routes.py:405) -- the true
+    side. `ap_manually_approves_followers`'s declared default is False
+    (app/models.py:1063), so it is set to True EXPLICITLY here rather than
+    left unset, following this file's "check it" discipline for declared
+    Boolean defaults (see test_a_bot_user_is_typed_as_a_service above).
+    """
+    site, instance = seed_actors()
+    user = make_user(instance, 'alice', local=True)
+    user.ap_manually_approves_followers = True
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['manuallyApprovesFollowers'] is True
+
+
+def test_a_user_not_manually_approving_followers_reports_false(app, db_session, monkeypatch):
+    """The false side of the same ternary. Set explicitly to False, matching
+    its declared default (app/models.py:1063) -- stated rather than assumed,
+    per this file's convention.
+    """
+    site, instance = seed_actors()
+    user = make_user(instance, 'alice', local=True)
+    user.ap_manually_approves_followers = False
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['manuallyApprovesFollowers'] is False
+
+
 def test_an_absolute_user_avatar_url_is_used_as_is(app, db_session, monkeypatch):
     """`if avatar_image.startswith('http')` -- the true side. `user_profile`
     names its image column `avatar_id` and its method `avatar_image()`, but
@@ -1216,7 +1356,7 @@ def test_an_absolute_user_avatar_url_is_used_as_is(app, db_session, monkeypatch)
     db.session.commit()
     _double_the_renderers(monkeypatch)
     monkeypatch.setattr(type(user), 'avatar_image',
-                        lambda self, size='default': 'https://cdn.example/a.png')
+                        lambda self: 'https://cdn.example/a.png')
 
     response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
 
@@ -1233,7 +1373,7 @@ def test_a_relative_user_avatar_url_is_prefixed_with_the_server_url(app, db_sess
     db.session.commit()
     _double_the_renderers(monkeypatch)
     monkeypatch.setattr(type(user), 'avatar_image',
-                        lambda self, size='default': '/static/a.png')
+                        lambda self: '/static/a.png')
 
     response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
 
@@ -1451,8 +1591,9 @@ def test_the_same_user_resolves_identically_on_two_successive_requests(app, db_s
     WHY BOTH LEGS ARE ANONYMOUS, stated because the code below still logs a
     user in and the reader would otherwise assume that works. It does not:
     Flask-Login caches the loaded user on the APPLICATION context as
-    `g._login_user`, and this suite's `app` fixture pushes one app context for
-    the whole test, which Flask's request contexts then reuse rather than
+    `g._login_user`, and this suite's `app` fixture is `scope='session'`
+    (tests/conftest.py:72) and pushes one app context for the whole test
+    session, which Flask's request contexts then reuse rather than
     replace. So the anonymous first request populates `g._login_user` with the
     anonymous user, and the second request -- session cookie and all -- reads
     that cached value back instead of loading user 1. Verified by tracing
