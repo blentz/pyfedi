@@ -278,3 +278,93 @@ def test_the_instance_actor_links_name_the_profile_page_and_the_actor(app, db_se
     assert rels['http://webfinger.net/rel/profile-page']['href'] == 'https://test.piefed.local/about'
     assert rels['self']['type'] == 'application/activity+json'
     assert rels['self']['href'] == 'https://test.piefed.local/actor'
+
+
+def test_a_user_is_matched_case_insensitively(app, db_session):
+    """`func.lower(User.user_name) == actor.strip().lower()`. The stored name is
+    lowercase and the query is mixed case, so a case-sensitive comparison would
+    fail this.
+    """
+    site, instance = seed_local_actors()
+    make_user(instance, 'alice', local=True)
+
+    response = webfinger_get(app, resource='acct:ALICE@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.json['links'][1]['properties'][
+        'https://www.w3.org/ns/activitystreams#type'] == 'Person'
+
+
+def test_a_user_is_matched_by_alt_user_name(app, db_session):
+    """The second disjunct of the `or_(...)`. `user_name` deliberately does NOT
+    match the query, so this test is the only one that can kill that disjunct.
+    """
+    site, instance = seed_local_actors()
+    user = make_user(instance, 'alice', local=True)
+    user.alt_user_name = 'alice_alt'
+    db.session.commit()
+
+    response = webfinger_get(app, resource='acct:alice_alt@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.content_type == 'application/jrd+json'
+    assert response.json['subject'] == 'acct:alice_alt@test.piefed.local'
+
+
+def test_a_deleted_user_is_not_served(app, db_session):
+    """`deleted=False`. Seeded explicitly to True -- `User.deleted` defaults to
+    False (app/models.py:978), so leaving it alone would assert nothing.
+    """
+    site, instance = seed_local_actors()
+    user = make_user(instance, 'alice', local=True)
+    user.deleted = True
+    db.session.commit()
+
+    response = webfinger_get(app, resource='acct:alice@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.get_data(as_text=True) == ''
+
+
+def test_a_banned_user_is_not_served(app, db_session):
+    """`banned=False`. `make_user` sets banned=False explicitly, so flipping it
+    here is a real change of state rather than a default being restated.
+    """
+    site, instance = seed_local_actors()
+    user = make_user(instance, 'alice', local=True)
+    user.banned = True
+    db.session.commit()
+
+    response = webfinger_get(app, resource='acct:alice@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.get_data(as_text=True) == ''
+
+
+def test_a_remote_user_is_not_served(app, db_session):
+    """`ap_id=None`. A remote user is `make_user`'s DEFAULT (local=False), which
+    is why every positive test in this file passes local=True. This instance must
+    not answer webfinger for an actor it does not host.
+    """
+    site, instance = seed_local_actors()
+    make_user(instance, 'alice')
+
+    response = webfinger_get(app, resource='acct:alice@test.piefed.local')
+
+    assert response.status_code == 200
+    assert response.get_data(as_text=True) == ''
+
+
+def test_a_user_response_carries_the_fep_3b86_create_template(app, db_session):
+    """`isinstance(object, User)` appends a share template. The Community branch
+    below appends a different one, and a Feed gets neither -- three outcomes from
+    one isinstance chain.
+    """
+    site, instance = seed_local_actors()
+    make_user(instance, 'alice', local=True)
+
+    response = webfinger_get(app, resource='acct:alice@test.piefed.local')
+
+    assert response.status_code == 200
+    rels = {link['rel'] for link in response.json['links']}
+    assert 'https://w3id.org/fep/3b86/Create' in rels
