@@ -2349,6 +2349,8 @@ def process_new_content(user, community, store_ap_json, request_json, announced)
                     else:  # The post was not allowed - send a 'Delete' to remove it from the remote instance
                         if community.is_local():
                             proactively_delete_content(community, ap_id)
+                        log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, 'Post creation refused')
+                        return
                 except TypeError:
                     current_app.logger.error('TypeError: ' + str(request_json))
                     log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, 'TypeError. See log file.')
@@ -2397,6 +2399,7 @@ def process_new_content(user, community, store_ap_json, request_json, announced)
                         # a reply is coming in through mastodon.
                         if community.is_local():
                             proactively_delete_content(community, ap_id)
+                        log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE, saved_json, 'Reply creation refused')
                     return
                 except TypeError:
                     current_app.logger.error('TypeError: ' + str(request_json))
