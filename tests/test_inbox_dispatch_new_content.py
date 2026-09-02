@@ -627,3 +627,127 @@ def test_an_update_by_a_reply_community_moderator_is_permitted(app, db_session, 
     assert len(calls['update_post_reply_from_activity']) == 1
     log = ActivityPubLog.query.one()
     assert log.result == 'success'
+
+
+def _permit_and_return_reply(monkeypatch, reply_or_none):
+    """`create_post_reply` is doubled in every test that REACHES the reply
+    creation path, for the same reason `create_post` is: it is large, writes
+    many rows, and is its own future slice, and its return value is the switch
+    this half branches on. The existing-reply tests above never call it.
+    """
+    monkeypatch.setattr(activitypub_routes, 'can_create_post_reply', lambda user, content: True)
+    monkeypatch.setattr(activitypub_routes, 'create_post_reply',
+                        lambda *args, **kwargs: reply_or_none)
+
+
+def test_a_new_reply_that_succeeds_logs_success_and_announces(app, db_session, monkeypatch):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    parent, reply = _seed_reply(community, author, ap_id='https://peer.example/comment/existing')
+    _double_the_gate(monkeypatch, community)
+    _permit_and_return_reply(monkeypatch, reply)
+    calls = record_moderation(monkeypatch, 'update_post_reply_from_activity',
+                              'announce_activity_to_followers')
+
+    dispatch(direct_activity(author, content_object('https://peer.example/comment/new',
+                                                    in_reply_to=parent.ap_id)))
+
+    assert calls['update_post_reply_from_activity'] == []
+    assert len(calls['announce_activity_to_followers']) == 1
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_a_reply_update_that_lost_a_race_is_applied_afterwards(app, db_session, monkeypatch):
+    """`activity_json['type'] == 'Update' and reply.edited_at is None`, both
+    conjuncts true. `edited_at` has no declared default on PostReply either.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    parent, reply = _seed_reply(community, author, ap_id='https://peer.example/comment/existing')
+    reply.edited_at = None
+    db.session.commit()
+    _double_the_gate(monkeypatch, community)
+    _permit_and_return_reply(monkeypatch, reply)
+    calls = record_moderation(monkeypatch, 'update_post_reply_from_activity')
+
+    dispatch(direct_activity(author, content_object('https://peer.example/comment/new',
+                                                    in_reply_to=parent.ap_id),
+                             activity_type='Update'))
+
+    assert len(calls['update_post_reply_from_activity']) == 1
+
+
+def test_a_reply_update_on_an_already_edited_reply_is_not_re_applied(app, db_session, monkeypatch):
+    """The second conjunct false: `edited_at` seeded to an explicit timestamp."""
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    parent, reply = _seed_reply(community, author, ap_id='https://peer.example/comment/existing')
+    reply.edited_at = utcnow()
+    db.session.commit()
+    _double_the_gate(monkeypatch, community)
+    _permit_and_return_reply(monkeypatch, reply)
+    calls = record_moderation(monkeypatch, 'update_post_reply_from_activity')
+
+    dispatch(direct_activity(author, content_object('https://peer.example/comment/new',
+                                                    in_reply_to=parent.ap_id),
+                             activity_type='Update'))
+
+    assert calls['update_post_reply_from_activity'] == []
+
+
+def test_a_refused_reply_is_deleted_remotely_and_logs_nothing(app, db_session, monkeypatch):
+    """The reply half's mirror of the post half's refusal. This one DOES return
+    explicitly, unlike its post-half twin -- but it still logs nothing, which
+    is the shared half of that defect.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    parent = make_post(community, author, 'https://peer.example/post/1')
+    db.session.commit()
+    _double_the_gate(monkeypatch, community)
+    _permit_and_return_reply(monkeypatch, None)
+    calls = record_moderation(monkeypatch, 'proactively_delete_content')
+
+    dispatch(direct_activity(author, content_object('https://peer.example/comment/new',
+                                                    in_reply_to=parent.ap_id)))
+
+    assert len(calls['proactively_delete_content']) == 1
+    assert ActivityPubLog.query.count() == 0
+
+
+def test_a_type_error_from_create_post_reply_is_logged(app, db_session, monkeypatch):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    parent = make_post(community, author, 'https://peer.example/post/1')
+    db.session.commit()
+    _double_the_gate(monkeypatch, community)
+    monkeypatch.setattr(activitypub_routes, 'can_create_post_reply', lambda user, content: True)
+
+    def boom(*args, **kwargs):
+        raise TypeError('malformed')
+
+    monkeypatch.setattr(activitypub_routes, 'create_post_reply', boom)
+
+    dispatch(direct_activity(author, content_object('https://peer.example/comment/new',
+                                                    in_reply_to=parent.ap_id)))
+
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'TypeError. See log file.'
+
+
+def test_a_user_who_cannot_reply_is_refused_and_their_content_deleted(app, db_session, monkeypatch):
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    parent = make_post(community, author, 'https://peer.example/post/1')
+    db.session.commit()
+    _double_the_gate(monkeypatch, community)
+    monkeypatch.setattr(activitypub_routes, 'can_create_post_reply', lambda user, content: False)
+    calls = record_moderation(monkeypatch, 'proactively_delete_content')
+
+    dispatch(direct_activity(author, content_object('https://peer.example/comment/new',
+                                                    in_reply_to=parent.ap_id)))
+
+    assert len(calls['proactively_delete_content']) == 1
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'User cannot create reply in Community'
