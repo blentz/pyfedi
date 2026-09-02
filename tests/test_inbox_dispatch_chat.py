@@ -510,7 +510,10 @@ def test_a_repeat_ap_id_updates_the_existing_message_and_says_so(app, db_session
 def test_an_encrypted_flag_is_carried_through_and_defaults_to_none(app, db_session, monkeypatch):
     """`encrypted` is read with a membership check — unlike `content` and `id`
     a few lines away, which are not (see Task 8). Both halves are covered here:
-    supplied, and absent.
+    supplied, and absent -- the second dispatch's `encrypted is None` is
+    process_chat's own `else None` (routes.py:2582), not the ChatMessage
+    column's declared default, because it is explicitly passed to the
+    constructor either way.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, sender, recipient = seed_chat_pair()
@@ -521,4 +524,88 @@ def test_an_encrypted_flag_is_carried_through_and_defaults_to_none(app, db_sessi
     dispatch(chat_activity(sender, to=recipient.ap_profile_id, content='hello',
                            id='https://peer.example/pm/1', encrypted='pgp'))
 
-    assert db_session.query(ChatMessage).one().encrypted == 'pgp'
+    assert db_session.query(ChatMessage).filter_by(
+        ap_id='https://peer.example/pm/1').one().encrypted == 'pgp'
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id, content='hello again',
+                           id='https://peer.example/pm/2'))
+
+    assert db_session.query(ChatMessage).filter_by(
+        ap_id='https://peer.example/pm/2').one().encrypted is None
+
+
+def test_a_chat_message_with_no_content_crashes(app, db_session, monkeypatch):
+    """PINS defect 1. `core_activity['object']['content']` is read with no
+    membership check, first by the blocked-phrase filter (routes.py:2567) and
+    again when building the body (routes.py:2587-2588). `content` is
+    peer-controlled, so any peer can raise this KeyError out of a Celery task.
+
+    The contrast is a few lines above in the same function: `object['to']` IS
+    checked for membership AND for both plausible JSON-LD shapes, and
+    `object['encrypted']` is read with an `in` guard. The caution is present
+    either side of these two reads and absent between them.
+
+    The sender is aged past `created_very_recently()` and the recipient left at
+    an accepting setting, so the crash is reached rather than short-circuited by
+    an earlier refusal.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair()
+    sender.created = utcnow() - timedelta(days=2)
+    db.session.commit()
+
+    with pytest.raises(KeyError):
+        dispatch(chat_activity(sender, to=recipient.ap_profile_id,
+                               id='https://peer.example/pm/1'))
+
+
+def test_a_chat_message_with_no_id_crashes(app, db_session, monkeypatch):
+    """PINS defect 2, the sibling unguarded read. `core_activity['object']['id']`
+    is used for the existing-message lookup (routes.py:2583) and for the new
+    row's `ap_id` (routes.py:2590).
+
+    `content` IS supplied here, so this test fails for its own reason rather
+    than for the previous test's — without that, both tests would pass on a
+    single missing-field crash and neither would pin its own defect.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair()
+    sender.created = utcnow() - timedelta(days=2)
+    db.session.commit()
+
+    with pytest.raises(KeyError):
+        dispatch(chat_activity(sender, to=recipient.ap_profile_id, content='hello'))
+
+
+def test_the_inner_is_local_check_can_never_be_false(app, db_session, monkeypatch):
+    """PINS defect 3, an equivalent mutant. The SSE event and notification sit
+    under `if recipient.is_local():` (routes.py:2607), inside a block already
+    guarded by `if recipient and recipient.is_local():` (routes.py:2548) — the
+    same call on the same object, with nothing between them that could change
+    it: `recipient` is reassigned at routes.py:2549 to a row fetched by the
+    SAME id from the SAME session, and nothing in between ever writes
+    `recipient.ap_id`.
+
+    This test cannot observe the inner guard directly; what it establishes is
+    that every accepted message notifies, so there is no reachable case where
+    the outer check passes and the inner one does not. Task 9 removes the inner
+    guard, and this test must keep passing — that is the proof it was dead.
+
+    Same class as D95 (Remove's dead `if proceed:`), D96 (Block's dead Mastodon
+    isinstance) and D103 (the site-ban already_banned guard).
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, sender, recipient = seed_chat_pair()
+    sender.created = utcnow() - timedelta(days=2)
+    recipient.unread_notifications = 0
+    db.session.commit()
+    recipient_id = recipient.id
+    calls = record_moderation(monkeypatch, 'publish_sse_event')
+
+    dispatch(chat_activity(sender, to=recipient.ap_profile_id,
+                           content='hello', id='https://peer.example/pm/1'))
+
+    db.session.expire_all()
+    assert len(calls['publish_sse_event']) == 1
+    assert db_session.query(Notification).count() == 1
+    assert db_session.query(User).get(recipient_id).unread_notifications == 1
