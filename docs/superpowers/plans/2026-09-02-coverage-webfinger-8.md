@@ -48,7 +48,7 @@ Do **not** change `make_feed`'s behaviour to fix this. Its `ap_id` is load-beari
 - `make_site()` — the `Site` row with id 1 that the route's `g.site` lookup needs.
 - `make_user(instance, name, local=False, with_keys=False)` — `local=True` leaves `ap_id` `None`, which is what webfinger requires.
 - `make_community(name='microblogs', host='test.piefed.local')` — leaves `ap_id` `None` and sets `ap_profile_id` to `https://<host>/c/<name>`.
-- `make_instance(domain, software)`, `seed_community_owner(domain)`.
+- `seed_community_owner(domain='peer.example') -> Instance` creates the Instance (id 1) **and** the local User (id 1) that `make_community`'s hardcoded `user_id=1`/`instance_id=1` require. Always use it rather than a bare `make_instance` when a Community will be built — two tasks in sub-project 5e hit that foreign key.
 - `record_moderation(monkeypatch, *names)` — `tests/test_inbox_dispatch_lock_delete.py`, patches names on `app.activitypub.routes`.
 
 ### Facts established before this plan — do not re-derive
@@ -76,7 +76,8 @@ Covers `webfinger`: the no-requesting-domain path, the ban path, both arms of th
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.models import Site
-from tests.factories import make_community, make_instance, make_site, make_user
+from tests.factories import (make_community, make_site, make_user,
+                             seed_community_owner)
 
 
 def webfinger_get(app, resource=None, user_agent=None):
@@ -99,13 +100,20 @@ def webfinger_get(app, resource=None, user_agent=None):
         return client.get(f'/.well-known/webfinger{query}', headers=headers)
 
 
-def seed_local_actors():
-    """A Site row (id 1, which the route's `g.site` lookup needs) and a remote
-    Instance for the factories that require one. Local actors are added by the
-    tests that need them.
+def seed_local_actors(host='peer.example'):
+    """A Site row (id 1, which the route's `g.site` lookup needs) plus the
+    Instance and User that id-1-hardcoding factories require.
+
+    `seed_community_owner` rather than a bare `make_instance`: it creates BOTH
+    the Instance (id 1) and a local User (id 1), and `make_community` hardcodes
+    `user_id=1`/`instance_id=1` against real foreign keys. A Site-and-Instance-only
+    seed would fail the FK the moment any test built a Community.
+
+    The 'communityowner' user it creates is local (ap_id None) and so is
+    webfinger-resolvable, but no test in this file queries that name.
     """
     site = make_site()
-    instance = make_instance('peer.example', 'mastodon')
+    instance = seed_community_owner(host)
     db.session.commit()
     return site, instance
 
