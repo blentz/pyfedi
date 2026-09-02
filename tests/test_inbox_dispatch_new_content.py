@@ -551,13 +551,19 @@ def test_an_update_by_the_replys_author_updates_and_announces(app, db_session, m
     assert log.result == 'success'
 
 
-def test_a_permitted_editor_who_cannot_reply_is_dropped_silently(app, db_session, monkeypatch):
-    """PINS a defect. The outer permission check passes but
-    `can_create_post_reply` is false, so the bare `return` fires with NO log on
-    any path -- the update does not happen and nothing records why.
+def test_a_permitted_editor_who_cannot_reply_is_logged(app, db_session, monkeypatch):
+    """The outer permission check passes but `can_create_post_reply` is false,
+    so the edit does not happen -- and the refusal is now recorded rather than
+    falling through the bare `return` with nothing written.
 
-    The post half has no equivalent inner check at all, which is what makes
-    this an asymmetry rather than a deliberate design.
+    The message matches the reply-creation refusal asserted by
+    `test_a_user_who_cannot_reply_is_refused_and_their_content_deleted`
+    ('User cannot create reply in Community'), because the predicate refused is
+    the same `can_create_post_reply(user, community)`. The Update type
+    distinguishes this occurrence from that one.
+
+    The post half has no equivalent inner check at all, so there is nothing to
+    mirror this on that side.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, author = seed_content_pair()
@@ -570,7 +576,10 @@ def test_a_permitted_editor_who_cannot_reply_is_dropped_silently(app, db_session
                              activity_type='Update'))
 
     assert calls['update_post_reply_from_activity'] == []
-    assert ActivityPubLog.query.count() == 0
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.activity_type == 'Update'
+    assert log.exception_message == 'User cannot create reply in Community'
 
 
 def test_an_instance_admin_can_edit_a_reply(app, db_session, monkeypatch):
