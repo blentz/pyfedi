@@ -794,10 +794,15 @@ def test_a_local_feed_with_a_non_null_ap_id_is_not_found(app, db_session, monkey
 # - user_profile's AP-JSON happy path for a local user found by bare username,
 #   its Accept-driven content_type, and the suppressed session cookie:
 #   tests/test_request_hooks.py::test_activity_json_response_does_not_set_a_session_cookie
-# - user_profile's two lookup branches (handle-with-@ and bare-username-then-
-#   ap_profile_id-fallback) returning None, gated three ways (anonymous,
-#   AP-Accept, banned-instance-exception-not-500):
+# - user_profile's HANDLE-WITH-@ lookup branch returning None, gated three ways
+#   (anonymous, AP-Accept, banned-instance-exception-not-500), plus
+#   resolve_remote_handle's own guards and its exception-to-404 path:
 #   tests/test_remote_handle_resolution.py (all four tests)
+#   NOTE: all four request '/u/wakko@mastodon.cloud', so they take ONLY the
+#   `'@' in actor` branch. The bare-username branch missing and then falling
+#   through to resolve_remote_handle is NOT covered there -- and cannot be
+#   meaningfully covered, since resolve_remote_handle returns None immediately
+#   for any actor without an '@'.
 #
 def _seed_file():
     """A bare File row, for an icon_id/image_id foreign key.
@@ -1032,10 +1037,12 @@ def test_a_childless_feed_lists_no_child_feeds(app, db_session, monkeypatch):
 # - the AP-JSON happy path for a local user found by bare username, its
 #   Accept-driven content_type, and the suppressed session cookie:
 #   tests/test_request_hooks.py::test_activity_json_response_does_not_set_a_session_cookie
-# - both lookup branches (handle-with-@ and bare-username) returning None,
-#   gated three ways (anonymous, AP-Accept, banned-instance-exception-not-500),
-#   and the resulting resolve_remote_handle/search_for_user call:
+# - the HANDLE-WITH-@ lookup branch returning None, gated three ways
+#   (anonymous, AP-Accept, banned-instance-exception-not-500), and the
+#   resulting resolve_remote_handle/search_for_user call:
 #   tests/test_remote_handle_resolution.py (all four tests)
+#   NOTE: all four request '/u/wakko@mastodon.cloud', so the BARE-USERNAME
+#   branch missing is not covered there.
 # ---------------------------------------------------------------------------
 
 def test_a_head_request_for_an_activitypub_client_returns_an_empty_json_body(app, db_session, monkeypatch):
