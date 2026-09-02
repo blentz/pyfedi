@@ -385,9 +385,10 @@ def test_a_community_without_a_description_omits_both_keys(app, db_session, monk
 def test_a_community_theme_is_included(app, db_session, monkeypatch):
     """`if community.theme:` -- the true side. There is no false-side test
     needed beyond the baseline: the many earlier tests that build the document
-    with `theme` left at its default (None, per `make_community`) never assert
-    on the 'theme' key, so this single test carries the whole guard; a false
-    side is added below to make the absence explicit and mutation-resistant.
+    with `theme` left at its declared default of '' (app/models.py:548 --
+    `db.Column(db.String(20), default='')`, NOT None) never assert on the
+    'theme' key, so this single test carries the whole guard; a false side is
+    added below to make the absence explicit and mutation-resistant.
     """
     seed_actors()
     community = make_community(name='books', host='test.piefed.local')
@@ -404,9 +405,16 @@ def test_a_community_theme_is_included(app, db_session, monkeypatch):
 def test_a_community_without_a_theme_omits_the_key(app, db_session, monkeypatch):
     """The false side of the theme guard, paired with the test above per the
     absence discipline this task follows for every optional field.
+
+    `theme` is set to None EXPLICITLY rather than left alone. Its declared
+    default is '' (app/models.py:548), which is falsy, so this test would pass
+    without the assignment -- but only by resting on that default, which the
+    campaign forbids. Setting it states the premise the test depends on.
     """
     seed_actors()
-    make_community(name='books', host='test.piefed.local')
+    community = make_community(name='books', host='test.piefed.local')
+    community.theme = None
+    db.session.commit()
     _double_the_renderers(monkeypatch)
 
     response = profile_get(app, '/c/books', accept=AP_ACCEPT)
