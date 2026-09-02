@@ -904,7 +904,7 @@ def test_a_relative_feed_header_url_is_prefixed(app, db_session, monkeypatch):
 
 
 def test_a_feed_with_no_icon_omits_the_key(app, db_session, monkeypatch):
-    """The outer guard `if feed.icon_id is not None:` (routes.py:2697),
+    """The outer guard `if feed.icon_id is not None:` (routes.py:2694),
     distinct from the `startswith('http')` split inside it. `icon_id` has no
     declared default (app/models.py:4057, a bare `db.Column(db.Integer,
     db.ForeignKey('file.id'))`), so leaving it unset on `make_local_feed` is
@@ -929,7 +929,7 @@ def test_a_feed_with_no_icon_omits_the_key(app, db_session, monkeypatch):
 
 
 def test_a_feed_with_no_header_image_omits_the_key(app, db_session, monkeypatch):
-    """The outer guard `if feed.image_id is not None:` (routes.py:2709),
+    """The outer guard `if feed.image_id is not None:` (routes.py:2706),
     mirroring the icon guard above. `image_id` likewise has no declared
     default (app/models.py:4058), so this rests on None-by-construction.
 
@@ -1379,7 +1379,7 @@ def test_user_extra_fields_become_property_value_attachments(app, db_session, mo
     (app/models.py:3556-3560) is its own table with exactly two content
     columns, `label` and `text` -- both bare `db.Column(db.String(1024))`,
     no default -- which the route maps directly to the PropertyValue's `name`
-    and `value` keys, verified by reading app/activitypub/routes.py:450-455
+    and `value` keys, verified by reading app/activitypub/routes.py:447-452
     before writing this assertion.
     """
     site, instance = seed_actors()
@@ -1419,7 +1419,8 @@ def test_a_user_without_extra_fields_has_no_attachment_key(app, db_session, monk
 # lookup is collapsed to one copy, and the local lookup now filters
 # `deleted=False, banned=False` as webfinger's already did. Each test below
 # was rewritten to assert the fixed behaviour; none of them pins anything any
-# more.
+# more. The last two tests in the block are new, and cover the SECOND local
+# lookup -- the `ap_profile_id` fallback -- which the first two cannot reach.
 # ---------------------------------------------------------------------------
 
 def test_the_same_user_resolves_identically_on_two_successive_requests(app, db_session, monkeypatch):
@@ -1494,11 +1495,11 @@ def test_a_deleted_user_profile_is_not_served(app, db_session, monkeypatch):
     Until Task 10 this endpoint served it: `user_profile`'s local lookup did
     not filter `deleted`, so an anonymous, unauthenticated caller got a
     deleted user's full actor document -- public key, inbox, shared inbox.
-    Webfinger's user lookup, by contrast, has filtered `deleted=False,
-    banned=False` together since sub-project 8
-    (app/activitypub/routes.py:117-120), so the two endpoints gave opposite
-    answers about the same deleted actor. `user_profile` now matches
-    webfinger.
+    Webfinger's user lookup, by contrast, has always filtered `deleted=False,
+    banned=False` together (app/activitypub/routes.py:117-120) -- the filter
+    dates from `3b1c087a` ("webfinger and nodeinfo"), long before this
+    campaign. So the two endpoints gave opposite answers about the same
+    deleted actor. `user_profile` now matches webfinger.
 
     `user.deleted` is set to True EXPLICITLY. Its declared default is also
     False (app/models.py:978), so leaving it alone would assert nothing about
@@ -1557,5 +1558,80 @@ def test_a_banned_user_profile_is_not_served(app, db_session, monkeypatch):
     assert User.query.filter_by(user_name='alice', ap_id=None).first() is not None
 
     response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
+
+    assert response.status_code == 404
+
+
+def test_a_deleted_user_is_not_served_through_the_ap_profile_id_fallback(app, db_session, monkeypatch):
+    """The guards on the SECOND local lookup, which the two tests above cannot
+    reach and therefore cannot prove.
+
+    `user_profile` runs two local queries: `user_name` first
+    (app/activitypub/routes.py:376-378), then an `ap_profile_id` fallback
+    (routes.py:380-381) only if the first returned None. Task 10 added
+    `deleted=False, banned=False` to BOTH. But `tests/factories.py:59` sets
+    `ap_profile_id=None` for every local user, so in the two tests above the
+    fallback query matches nothing whether its guards are there or not -- a
+    mutation dropping them from routes.py:381 alone leaves the whole file
+    green. That is precisely the "production change no test can kill" this
+    campaign forbids, so it gets its own test.
+
+    THE SETUP IS test_a_user_is_resolved_by_ap_profile_id_when_the_name_does_
+    not_match's, plus `deleted`. The user is named 'alice' and given
+    `ap_profile_id` '.../u/bob'; the request is for '/u/bob'. The `user_name`
+    query therefore CANNOT match ('bob' != 'alice') and the fallback is the
+    only query that can find this row -- which is what makes a 404 here
+    attributable to the fallback's guards and nothing else. That sibling test
+    proves the same setup returns 200 when the row is neither deleted nor
+    banned, so the 404 below is the `deleted` column and not the setup.
+
+    `user.deleted` is set to True EXPLICITLY (declared default False,
+    app/models.py:978), and the row is asserted to still exist -- and to still
+    be findable BY THE UNGUARDED FORM of the fallback's own query -- before the
+    request, so "the guard rejected it" cannot be confused with "no such row".
+    """
+    from app.models import User
+
+    site, instance = seed_actors()
+    user = make_user(instance, 'alice', local=True)
+    user.ap_profile_id = 'https://test.piefed.local/u/bob'
+    user.deleted = True
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    assert User.query.filter_by(ap_profile_id='https://test.piefed.local/u/bob',
+                                ap_id=None).first() is not None
+
+    response = profile_get(app, '/u/bob', accept=AP_ACCEPT)
+
+    assert response.status_code == 404
+
+
+def test_a_banned_user_is_not_served_through_the_ap_profile_id_fallback(app, db_session, monkeypatch):
+    """The same fallback, the other column, and its own test for the same
+    reason the first pair is split in two: a mutation that drops only
+    `deleted=False` from routes.py:381 must still be told apart from one that
+    drops only `banned=False`, and one test asserting both columns at once
+    could not do that.
+
+    `user.banned` is set to True EXPLICITLY (declared default False,
+    app/models.py:974; `make_user` also passes `banned=False` at
+    construction). Everything else -- the name/path mismatch that forces the
+    fallback, and the surviving-row assertion -- is as in the test above, and
+    load-bearing for the same reasons.
+    """
+    from app.models import User
+
+    site, instance = seed_actors()
+    user = make_user(instance, 'alice', local=True)
+    user.ap_profile_id = 'https://test.piefed.local/u/bob'
+    user.banned = True
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    assert User.query.filter_by(ap_profile_id='https://test.piefed.local/u/bob',
+                                ap_id=None).first() is not None
+
+    response = profile_get(app, '/u/bob', accept=AP_ACCEPT)
 
     assert response.status_code == 404
