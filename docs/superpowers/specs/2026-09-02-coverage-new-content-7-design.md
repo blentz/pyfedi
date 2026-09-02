@@ -149,11 +149,27 @@ received. Verified at source rather than inferred.
 activity_json['id'] = shorten_string(activity_json['id'], 100)
 ```
 
-For an announced activity `activity_json` **is** `request_json['object']`, so
-this mutates the dict the caller owns. `request_json` is then passed to
-`announce_activity_to_followers`, so the truncated id propagates to followers.
-The comment above the line says *"Not referred to again, so it shouldn't matter
-if they're truncated"* — which is not true of `request_json`.
+For an announced activity `activity_json` **is** `request_json['object']`, and
+for a direct one `activity_json` **is** `request_json` itself — either way this
+mutates a dict the caller still holds. The comment above the line says *"Not
+referred to again, so it shouldn't matter if they're truncated"* — which is not
+true of `request_json`.
+
+**Corrected during implementation.** An earlier draft of this section claimed
+the truncated id reaches followers because `request_json` is passed to
+`announce_activity_to_followers`. That is false as stated: both call sites in
+this function sit inside `if not announced:`, so on the *announced* path — the
+one where `activity_json` is a caller's nested dict — neither is reachable.
+Follower propagation is a **direct-path** consequence, where `activity_json is
+request_json` and the guard does hold.
+
+**The truncation itself is load-bearing and must survive any fix.** The
+already-truncated `activity_json` is forwarded into `create_post` /
+`create_post_reply` and stored by `Post.new` / `PostReply.new` as `ap_create_id`
+(`app/models.py:1861`, `:2968`) — a `db.String(100)` column on both models
+(`:1722`, `:2893`). That width is what the comment's "will crash the app" refers
+to. A fix must remove the write-back into the caller's structure while keeping
+the truncated value flowing to storage.
 
 Whether the truncation itself is right is a separate question the tests should
 answer rather than assume; the defect registered here is the in-place mutation
