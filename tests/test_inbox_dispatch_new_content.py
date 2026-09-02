@@ -1,9 +1,9 @@
 """tests/test_inbox_dispatch_new_content.py"""
 from app import db
 from app.activitypub import routes as activitypub_routes
-from app.models import utcnow
-from tests.factories import (inbox_activity, make_community, make_user, seed_community_owner,
-                             make_site)
+from app.models import ActivityPubLog, utcnow
+from tests.factories import (inbox_activity, make_community, make_post, make_user,
+                             seed_community_owner, make_site)
 from tests.test_inbox_dispatch_lock_delete import record_moderation
 from tests.test_inbox_dispatch_preamble import dispatch
 
@@ -193,3 +193,87 @@ def test_a_missing_community_falls_back_to_the_microblogging_community(app, db_s
     dispatch(direct_activity(author, content_object('https://peer.example/post/1')))
 
     assert seen['community_id'] == microblog.id
+
+
+def test_a_create_for_an_existing_post_is_refused_as_processed_after_update(
+        app, db_session, monkeypatch):
+    """`activity_json['type'] == 'Create'` for a post that already exists means
+    an Update won an async race and this Create arrived late. Refused before
+    any permission check, so the actor here is the post's own author -- proving
+    the refusal is about ordering, not permission.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    post = make_post(community, author, 'https://peer.example/post/1')
+    db.session.commit()
+    _double_the_gate(monkeypatch, community)
+    calls = record_moderation(monkeypatch, 'update_post_from_activity')
+
+    dispatch(direct_activity(author, content_object(post.ap_id)))
+
+    assert calls['update_post_from_activity'] == []
+    log = ActivityPubLog.query.one()
+    assert log.result == 'failure'
+    assert log.exception_message == 'Create processed after Update'
+
+
+def test_an_update_by_the_posts_author_updates_and_announces(app, db_session, monkeypatch):
+    """First disjunct of the permission check: `user.id == post.user_id`. The
+    announce fires because the activity is not announced -- its own guard,
+    asserted here and pinned from the other side by the announced test below.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    post = make_post(community, author, 'https://peer.example/post/1')
+    db.session.commit()
+    _double_the_gate(monkeypatch, community)
+    calls = record_moderation(monkeypatch, 'update_post_from_activity',
+                              'announce_activity_to_followers')
+
+    dispatch(direct_activity(author, content_object(post.ap_id), activity_type='Update'))
+
+    assert len(calls['update_post_from_activity']) == 1
+    assert len(calls['announce_activity_to_followers']) == 1
+    log = ActivityPubLog.query.one()
+    assert log.result == 'success'
+
+
+def test_an_announced_update_does_not_re_announce(app, db_session, monkeypatch):
+    """`if not announced:` -- the other side. An Announce-wrapped Update still
+    updates the post but must not be re-announced to followers, or the activity
+    would loop back out to the instance that sent it.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    community.ap_fetched_at = utcnow()
+    post = make_post(community, author, 'https://peer.example/post/1')
+    db.session.commit()
+    calls = record_moderation(monkeypatch, 'update_post_from_activity',
+                              'announce_activity_to_followers')
+
+    dispatch(announced_activity(community, author, content_object(post.ap_id),
+                                activity_type='Update'))
+
+    assert len(calls['update_post_from_activity']) == 1
+    assert calls['announce_activity_to_followers'] == []
+
+
+def test_an_update_by_an_unrelated_user_is_denied(app, db_session, monkeypatch):
+    """All three disjuncts false: not the author, not a moderator, not an
+    instance admin. This is the test the three permission mutations in Task 3
+    are measured against.
+    """
+    monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
+    instance, community, author = seed_content_pair()
+    outsider = make_user(instance, 'outsider')
+    outsider.ap_fetched_at = utcnow()
+    post = make_post(community, author, 'https://peer.example/post/1')
+    db.session.commit()
+    _double_the_gate(monkeypatch, community)
+    calls = record_moderation(monkeypatch, 'update_post_from_activity')
+
+    dispatch(direct_activity(outsider, content_object(post.ap_id), activity_type='Update'))
+
+    assert calls['update_post_from_activity'] == []
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Edit attempt denied'
