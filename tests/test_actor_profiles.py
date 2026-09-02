@@ -625,6 +625,52 @@ def test_a_remote_feed_refuses_an_activitypub_request(app, db_session, monkeypat
     assert response.status_code == 400
 
 
+def test_a_remote_feed_serves_html_to_a_browser(app, db_session, monkeypatch):
+    """The same remote path WITHOUT an AP Accept skips the 400 and looks the
+    feed up by `ap_id`, filtered `banned=False`. Mirrors
+    test_a_remote_community_serves_html_to_a_browser.
+
+    `make_local_feed` leaves `ap_id` None, so it is set explicitly here to the
+    exact string the remote lookup compares against (`ap_id=actor.lower()`,
+    where `actor` is the full `news@peer.example` path segment) -- the same
+    way the community factory's remote tests set `ap_id` explicitly.
+    """
+    seed_actors()
+    feed = make_local_feed('news', public=True)
+    feed.ap_id = 'news@peer.example'
+    db.session.commit()
+    calls = _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/f/news@peer.example', accept='text/html')
+
+    assert response.status_code == 200
+    assert len(calls['show_feed']) == 1
+
+
+def test_a_banned_remote_feed_is_not_found(app, db_session, monkeypatch):
+    """The remote lookup's `banned=False`. Seeded explicitly -- `Feed.banned`
+    defaults to False, so leaving it alone would assert nothing. Mirrors
+    test_a_banned_remote_community_is_not_found.
+
+    Differs from test_a_remote_feed_serves_html_to_a_browser in EXACTLY one
+    respect, `banned`, so this test's kill of the `banned=False` clause is not
+    confounded with the host, the ap_id, or anything else.
+
+    Note the LOCAL lookup has no such guard; that asymmetry is registered for
+    community_profile above and holds here too, not fixed in either place.
+    """
+    seed_actors()
+    feed = make_local_feed('news', public=True)
+    feed.ap_id = 'news@peer.example'
+    feed.banned = True
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/f/news@peer.example', accept='text/html')
+
+    assert response.status_code == 404
+
+
 def test_a_non_public_feed_refuses_an_activitypub_request(app, db_session, monkeypatch):
     """`if not feed.public: abort(403)`. `public=False` is passed EXPLICITLY --
     it is also the column default (app/models.py), so relying on the default
