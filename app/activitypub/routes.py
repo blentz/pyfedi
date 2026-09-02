@@ -2309,8 +2309,11 @@ def process_new_content(user, community, store_ap_json, request_json, announced)
         announce_id = shorten_string(request_json['id'], 100)
         activity_json = request_json['object']
 
-    # announce / create IDs that are too long will crash the app. Not referred to again, so it shouldn't matter if they're truncated
-    activity_json['id'] = shorten_string(activity_json['id'], 100)
+    # announce / create IDs that are too long will crash the app: they are stored as
+    # Post.ap_create_id / PostReply.ap_create_id, both db.String(100). Truncate into a
+    # shallow copy rather than writing back into request_json, which the caller owns and
+    # still uses afterwards (announce_activity_to_followers forwards it to our followers).
+    activity_json = {**activity_json, 'id': shorten_string(activity_json['id'], 100)}
 
     if community is None:
         # community was not found earlier - this means the incoming post is from a microblogging platform
