@@ -799,7 +799,180 @@ def test_a_local_feed_with_a_non_null_ap_id_is_not_found(app, db_session, monkey
 #   AP-Accept, banned-instance-exception-not-500):
 #   tests/test_remote_handle_resolution.py (all four tests)
 #
+def _seed_file():
+    """A bare File row, for an icon_id/image_id foreign key.
+
+    `icon_id` and `image_id` are real foreign keys to `file.id` (both Feed's
+    and Community's) -- an arbitrary integer like 1 is rejected by the FK
+    constraint unless a File with that id exists. Task 4 seeded this inline,
+    once per icon/header test, with `from app.models import File; f =
+    File(); db.session.add(f); db.session.commit()`; this helper is the same
+    four lines, factored out for Task 6's four callers. It did not already
+    exist under this name despite the brief listing it as an interface
+    already in this file -- see this task's report.
+    """
+    from app.models import File
+    file = File()
+    db.session.add(file)
+    db.session.commit()
+    return file
+
+
+def test_an_absolute_feed_icon_url_is_used_as_is(app, db_session, monkeypatch):
+    """`if icon_image.startswith('http')` -- the true side. `icon_image()` is
+    doubled rather than seeding a real File row's path: this test is about the
+    URL branch, not about image storage. `feed.icon_id` has a real foreign key
+    to `file.id`, so a real (otherwise-empty) File row is seeded and its id
+    assigned. The guard above the block is `if feed.icon_id is not None:`, and
+    the method double alone does not enter it.
+    """
+    seed_actors()
+    icon_file = _seed_file()
+    feed = make_local_feed('news', public=True)
+    feed.icon_id = icon_file.id
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+    monkeypatch.setattr(type(feed), 'icon_image',
+                        lambda self, size='default': 'https://cdn.example/icon.png')
+
+    response = profile_get(app, '/f/news', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['icon'] == {'type': 'Image', 'url': 'https://cdn.example/icon.png'}
+
+
+def test_a_relative_feed_icon_url_is_prefixed_with_the_server_url(app, db_session, monkeypatch):
+    """The false side of the same branch: a stored path is made absolute."""
+    seed_actors()
+    icon_file = _seed_file()
+    feed = make_local_feed('news', public=True)
+    feed.icon_id = icon_file.id
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+    monkeypatch.setattr(type(feed), 'icon_image',
+                        lambda self, size='default': '/static/icon.png')
+
+    response = profile_get(app, '/f/news', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['icon']['url'] == 'https://test.piefed.local/static/icon.png'
+
+
+def test_an_absolute_feed_header_url_is_used_as_is(app, db_session, monkeypatch):
+    """The image block is separate code from the icon block, not a shared
+    helper, so both need covering. `Feed.header_image` takes no `size`
+    argument (unlike `icon_image`), confirmed by reading app/models.py before
+    writing this double.
+    """
+    seed_actors()
+    header_file = _seed_file()
+    feed = make_local_feed('news', public=True)
+    feed.image_id = header_file.id
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+    monkeypatch.setattr(type(feed), 'header_image', lambda self: 'https://cdn.example/h.png')
+
+    response = profile_get(app, '/f/news', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['image'] == {'type': 'Image', 'url': 'https://cdn.example/h.png'}
+
+
+def test_a_relative_feed_header_url_is_prefixed(app, db_session, monkeypatch):
+    """The false side of the header-image branch, mirroring the icon pair."""
+    seed_actors()
+    header_file = _seed_file()
+    feed = make_local_feed('news', public=True)
+    feed.image_id = header_file.id
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+    monkeypatch.setattr(type(feed), 'header_image', lambda self: '/static/h.png')
+
+    response = profile_get(app, '/f/news', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['image']['url'] == 'https://test.piefed.local/static/h.png'
+
+
+def test_a_feed_description_adds_summary_and_source(app, db_session, monkeypatch):
+    """`if feed.description_html:` adds two keys. Both asserted -- a test
+    checking only `summary` would survive deleting the `source` line, the same
+    reasoning as the community equivalent above.
+    """
+    seed_actors()
+    feed = make_local_feed('news', public=True)
+    feed.description_html = '<p>News</p>'
+    feed.description = 'News'
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/f/news', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['summary'] == '<p>News</p>'
+    assert response.json['source'] == {'content': 'News', 'mediaType': 'text/markdown'}
+
+
+def test_a_feed_without_a_description_omits_both_keys(app, db_session, monkeypatch):
+    """The false side. `description_html` has no declared default (a bare
+    `db.Column(db.Text)`, no `default=`), so it is left alone -- None -- and
+    the absence rests on that None, not on any falsy declared default.
+    """
+    seed_actors()
+    make_local_feed('news', public=True)
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/f/news', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert 'summary' not in response.json
+    assert 'source' not in response.json
+
+
+def test_a_feeds_child_feeds_are_listed_by_profile_id(app, db_session, monkeypatch):
+    """The `for child_feed in feed.children.all()` loop. A childless feed yields
+    an empty list, so a child must be seeded to execute the append.
+
+    `Feed.children` (app/models.py:4091) is the backref of `Feed.parent`:
+    `parent = db.relationship('Feed', remote_side=[id],
+    backref=db.backref('children', lazy='dynamic'))`. The FK it walks is the
+    plain `parent_feed_id` column (app/models.py:4064,
+    `db.Column(db.Integer, db.ForeignKey('feed.id'), index=True)`) -- there is
+    no association table. Setting `child.parent_feed_id = parent.id` directly
+    and committing is therefore sufficient to attach it; `feed.children` is
+    `lazy='dynamic'`, matching `Community.languages`, so `.all()` in the route
+    (not `.append()` here -- that is on the child's own FK, not the parent's
+    collection) is what the route already calls.
+    """
+    seed_actors()
+    parent = make_local_feed('news', public=True)
+    child = make_local_feed('sports', public=True)
+    child.parent_feed_id = parent.id
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/f/news', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert child.ap_profile_id in response.json['childFeeds']
+
+
+def test_a_childless_feed_lists_no_child_feeds(app, db_session, monkeypatch):
+    """The loop's zero-iteration side: the key exists and is empty, because
+    `actor_data['childFeeds'] = []` runs unconditionally before the loop.
+    """
+    seed_actors()
+    make_local_feed('news', public=True)
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/f/news', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['childFeeds'] == []
+
+
 # feed_profile's remote branch's `banned=False` filter and its two-segment
-# route's slash-joined name are covered above (Task 5). Any remaining
-# feed_profile fields (icon/image, description, languages, childFeeds) and
-# feed_outbox/feed_following are left to later tasks in this sub-project.
+# route's slash-joined name are covered above (Task 5). icon/image, description,
+# and childFeeds are covered above (Task 6). Any remaining feed_profile fields
+# (languages) and feed_outbox/feed_following are left to later tasks in this
+# sub-project.
