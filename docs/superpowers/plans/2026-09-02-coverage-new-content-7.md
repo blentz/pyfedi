@@ -969,8 +969,10 @@ def test_the_id_truncation_mutates_the_callers_activity(app, db_session, monkeyp
     dispatch(activity)
 
     assert original_length > 100
-    assert len(activity['object']['id']) == 100
-    assert activity['object']['id'] == long_id[:100]
+    # shorten_string(s, 100) is `s[:97] + '…'` (app/utils.py:1600), so the
+    # truncated value is 98 characters, not 100.
+    assert len(activity['object']['id']) == 98
+    assert activity['object']['id'] == long_id[:97] + '…'
 ```
 
 - [ ] **Step 2: Run the file**
