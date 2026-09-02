@@ -1186,7 +1186,13 @@ says which numbers are taken. So there is one now, and it is this file:
   (2026-09-01, see that section's part 3): the Note-shaped poll-vote path's
   missing banned-instance check and neither federated poll-vote path
   enforcing `Poll.mode`, both registered but not fixed.
-  **Next free number: D121.** If you take it, say so here in the change
+  D121–D125 sub-project 6 (`process_chat`, the private-message acceptance
+  policy — see that section for the table). D121–D122 are fixed, not
+  merely registered — the unguarded `content`/`id` reads and the dead inner
+  `is_local()` check, two defects across two commits. D123–D125 are
+  registered but not fixed; D125 is explicitly judged unspecified
+  behaviour rather than a defect.
+  **Next free number: D126.** If you take it, say so here in the change
   that takes it.
 
 Two entries in the reports were deliberately **not** counted as defects, and are
@@ -3472,7 +3478,46 @@ having verified the ordinary case.
 
 **Next free number: D121.**
 
+## Sub-project 6: `process_chat`, the private-message acceptance policy
 
+`.superpowers/sdd/2026-09-01-coverage-inbox-chat-6/` (task briefs and
+reports), on branch `blentz`. Ten tasks brought `process_chat` -- the
+ActivityPub inbox's private-message acceptance policy,
+`app/activitypub/routes.py:2527-2630` -- from 4.1% statement coverage to
+**zero uncovered statements**, and fixed two defects. Task 1 added the
+`make_conversation` factory the later tasks needed; Tasks 2-9 wrote the
+coverage and, under separate authorisation, Task 9 fixed the two defects
+Task 8 had pinned; this task (10) closes the sub-project out with the
+findings register, the test-harness log, and the coverage floor.
+`app/activitypub/routes.py` measures **66.4223% blended** (1234/1828
+statements, 578/900 branches) after this sub-project, up from 62.5873%
+before it (full suite: 3077 passed, 3 skipped). Tests live in
+`tests/test_inbox_dispatch_chat.py` (25 test functions, two parametrized
+into two cases each, so 27 test invocations, added across Tasks 2-9).
+
+Like 5b, 5c, 5d and 5e before it, this sub-project carried a **narrow,
+explicitly authorised exception** to the campaign's report-don't-fix rule:
+Task 9 was separately authorised to fix the two defects Task 8 pinned,
+both confined to `process_chat`. `git diff --stat app/` is non-empty for
+exactly Task 9's two commits, `5783beb8` and `d0c8d13f`. Every other task's
+`git diff --stat app/` is empty.
+
+### 1. Two defects fixed, under explicit authorisation -- D121-D122
+
+| # | function | defect | status | evidence |
+|---|---|---|---|---|
+| D121 | `process_chat` (`app/activitypub/routes.py:2565-2571`) | **FIXED, commit `5783beb8`.** `core_activity['object']['content']` and `core_activity['object']['id']` were read with no membership check anywhere above them, in the branch reached once every recipient-policy check -- sender-too-new, blocked user/instance, and all three `accept_private_messages` outcomes (`routes.py:2550-2564`) -- has already declined to refuse the message. A peer-supplied `ChatMessage` missing either field raised an uncaught `KeyError` out of a Celery task instead of being refused like every sibling branch in this arm. Fix: two membership guards, `if 'content' not in core_activity['object']:` and `if 'id' not in core_activity['object']:` (`routes.py:2566-2571`), each logging a distinct message (`'ChatMessage has no content'` / `'ChatMessage has no id'`) and returning `True` ("handled") before either field is first dereferenced. Both guards sit inside the `else:` branch (`routes.py:2565`) that begins only after every recipient-policy refusal above it has failed to fire -- i.e. after, not before, the newness/block/PM-setting checks -- and `content` is checked before `id`, matching the order the two fields were read in the pre-fix code, so the two failure modes stay independently reachable and distinguishable by their log messages. | fixed and verified | measured: Task 8 pinned both pre-fix crashes with `pytest.raises(KeyError)`; Task 9 inverted both tests to assert a clean refusal (`log.result == 'failure'`, the matching field name in `log.exception_message`, zero `ChatMessage` rows) and mutation-killed the fix with a literal revert (`git apply -R` on the fix's diff), which reproduced the original `KeyError` failures -- a genuine assertion/exception kill, not a `respx.models.AllMockedAssertionError` infrastructure kill |
+| D122 | `process_chat` (`app/activitypub/routes.py:2548-2549`; the removed inner guard sat at `routes.py:2613` immediately before this fix) | **FIXED (equivalent-mutant removal), commit `d0c8d13f`.** The `publish_sse_event` call and `Notification` write sat under a second `if recipient.is_local():` check, nested inside a block already entered via `if recipient and recipient.is_local():` (`routes.py:2548`). `recipient` is reassigned immediately after, at `routes.py:2549`, to a row fetched by id from the same session -- that line's own comment explains this is because `find_actor_or_create_cached` was "giving me a user from the wrong DB session, causing an exception later on" -- and nothing between that reassignment and the inner check ever writes `recipient.ap_id` (the field `User.is_local()` reads) or otherwise changes which row `recipient` points at, so the inner check could never observe a different truth value than the outer one already established. A genuine equivalent mutant, same class as D95, D96 and D103. Fix: the inner guard was removed and its body (the `publish_sse_event` call and the `Notification` write, now unconditional starting at `routes.py:2613`) de-indented one level. | fixed and verified | measured: Task 8's `test_the_inner_is_local_check_can_never_be_false` passes identically before and after the removal -- that equality, not a pass/fail flip, is the intended proof of deadness for a true equivalent mutant. Task 9 additionally proved the test is not a tautology by temporarily forcing the guard's body unreachable pre-fix (`if False:`), which failed the same test for a real reason (assertions on `publish_sse_event` call count, `Notification` count, and `unread_notifications` never firing); a literal revert of the fix afterward produced no kill, which is the expected, honestly-reported result for an equivalent mutant, not a weak-test finding |
+
+### 2. Three items registered, not fixed -- D123-D125
+
+| # | function | defect | status | evidence |
+|---|---|---|---|---|
+| D123 | `process_chat` (`app/activitypub/routes.py:2562`) | **Not fixed, registered only.** `elif recipient.accept_private_messages == 2 and not sender.instance.trusted:` reads `sender.instance.trusted` with no check that `sender.instance` -- the `User.instance` relationship (`app/models.py:1052`), joined on the nullable `instance_id` column (`app/models.py:1017`, a plain `db.ForeignKey('instance.id')` with no `nullable=False`) -- is non-null. Reached whenever the recipient's `accept_private_messages` is `2` ("Trusted instances"). A `sender` whose `instance_id` were `NULL` would raise `AttributeError: 'NoneType' object has no attribute 'trusted'` here. | not fixed, registered only | reading-level for the null-dereference exposure itself (`app/models.py:1017,1052` confirm the nullable FK and the relationship it backs); the tests establish nothing about whether this state is reachable, in either direction -- `seed_chat_pair` (`tests/test_inbox_dispatch_chat.py:120-155`) always calls `make_instance(host)` and passes the resulting row into `make_user`, so every sender that reaches this line in this suite has a real, non-null `Instance` row; no test seeds a sender with a null `instance_id` and dispatches it through this branch, so whether a production code path can produce one is neither proven nor disproven here |
+| D124 | `process_chat` (`app/activitypub/routes.py:2550`) | **Not fixed, registered only -- harmless today.** The new-account exemption, `if sender.created_very_recently() and user.ap_domain != 'fediseer.com':`, reads `user.ap_domain` in its second conjunct where its first conjunct, and every other line in the function, reads `sender`. `sender` (`routes.py:2530`, `sender = session.query(User).get(user.id)`) is the same database row as the `user` parameter, re-fetched into the function's own `session` -- the identical session-identity concern the code's own comment two lines below describes for `recipient` (`routes.py:2549`: "for some reason find_actor_or_create_cached was giving me a user from the wrong DB session, causing an exception later on"). Because `sender` and `user` are the same row, `sender.ap_domain` and `user.ap_domain` return the same value today, so reading `user.ap_domain` here is harmless as written. It is recorded because the whole reason `sender` exists as a separate name is to keep the "same row, re-fetched into this session" distinction straight, and this line is the one place that distinction is not observed. | not fixed, harmless today | reading-level: `routes.py:2530` and `2549-2550` read directly; no test in the suite could distinguish `user.ap_domain` from `sender.ap_domain` since they are never diverged -- Task 4's `test_a_brand_new_sender_from_fediseer_is_exempt` sets `sender.ap_domain = 'fediseer.com'` on the very object `session.query(User).get(user.id)` returns, so the two names are aliases of one row throughout this file |
+| D125 | `process_chat` (`app/activitypub/routes.py:2556-2565`) | **Not a defect -- judged unspecified behaviour by both the implementer and this register.** The `accept_private_messages` chain checks `None`, `0` (`routes.py:2556`), `1` (`routes.py:2559`) and `2` (`routes.py:2562`) explicitly; any other value -- including the documented `3` ("All instances", the column's own default, `app/models.py:1035`) but equally any undocumented value such as `4` or `-1` -- falls through to the accepting `else:` (`routes.py:2565`) with no final `else` refusal for unexpected values. `accept_private_messages` is written from a fixed set of UI values `0`-`3` only (the settings form's `SelectField(choices=accept_from, coerce=int)`, `app/user/forms.py:123-129`, offers exactly those four; the account API's string-to-int mapping, `app/api/alpha/utils/user.py:554-562`, likewise only ever assigns `0`-`3`), so the `else` branch's true boundary (">= anything unmatched above" vs. "== 3 specifically") is unproven by any test but not reachable through any first-party path either. | not a defect, unspecified behaviour | reading-level: `routes.py:2556-2565` read directly; Task 5's report states no test distinguishes `3` from an untested out-of-range value, and its own judgment (concurred with here) is that this is unspecified rather than defective, since every first-party writer of the column restricts it to `0`-`3` |
+
+**Next free number: D126.**
 
 ## Ratchet gotchas
 
