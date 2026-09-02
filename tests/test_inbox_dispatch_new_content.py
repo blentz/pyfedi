@@ -573,15 +573,17 @@ def test_a_permitted_editor_who_cannot_reply_is_dropped_silently(app, db_session
     assert ActivityPubLog.query.count() == 0
 
 
-def test_an_instance_admin_cannot_edit_a_reply(app, db_session, monkeypatch):
-    """PINS the headline defect. The post half permits an instance admin via a
-    third disjunct; the reply half's check is
-    `user.id == reply.user_id or reply.community.is_moderator(user)` -- the
-    third disjunct is absent, so the same admin who may edit a post is refused
-    on a reply.
+def test_an_instance_admin_can_edit_a_reply(app, db_session, monkeypatch):
+    """The reply half's third disjunct, `reply.community.is_instance_admin(user)`
+    -- added so the two halves agree. The editor is neither the reply's author
+    nor a moderator of its community, so this test is the only one that can
+    kill that disjunct on the reply side.
 
-    Seeded identically to Task 3's post-side admin test, so the difference
-    observed is the code's, not the fixture's.
+    Seeded identically to `test_an_update_by_an_instance_admin_is_permitted`
+    (the post-side admin test above): the same `InstanceRole(role='admin')` row
+    against `community.instance_id`, which is what `Community.is_instance_admin`
+    queries. Any difference observed between the two is therefore the code's,
+    not the fixture's.
     """
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance, community, author = seed_content_pair()
@@ -597,9 +599,9 @@ def test_an_instance_admin_cannot_edit_a_reply(app, db_session, monkeypatch):
     dispatch(direct_activity(admin, content_object(reply.ap_id, in_reply_to=parent.ap_id),
                              activity_type='Update'))
 
-    assert calls['update_post_reply_from_activity'] == []
+    assert len(calls['update_post_reply_from_activity']) == 1
     log = ActivityPubLog.query.one()
-    assert log.exception_message == 'Edit attempt denied'
+    assert log.result == 'success'
 
 
 def test_an_update_by_a_reply_community_moderator_is_permitted(app, db_session, monkeypatch):
