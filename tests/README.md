@@ -1957,7 +1957,7 @@ explicitly.** Both columns are a plain `db.Column(db.DateTime)`
 `default=` at all -- unlike `ChatMessage.edited_at` (`:294`) and several
 other `edited_at` columns in this file, which default to `utcnow`. A test
 asserting `post.edited_at is None` after a fresh `make_post()` (or
-`make_reply()`) is genuinely testing the column's absence of a value, not a
+`make_post_reply()`) is genuinely testing the column's absence of a value, not a
 default the factory happened to reproduce. The other side of that same
 lost-race check needs the opposite state seeded explicitly: a test proving
 an `Update` does NOT re-apply because it lost a race to a `Create` must set
