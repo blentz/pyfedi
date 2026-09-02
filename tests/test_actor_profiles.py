@@ -140,6 +140,113 @@ def test_no_accept_header_at_all_selects_the_html_renderer(app, db_session, monk
     assert len(calls['show_community']) == 1
 
 
+def test_a_local_community_is_resolved_by_its_profile_id(app, db_session, monkeypatch):
+    """The local branch builds `https://<SERVER_NAME>/c/<actor.lower()>` and
+    compares it to `ap_profile_id`. `make_community(host='test.piefed.local')`
+    produces exactly that, and leaves `ap_id` None.
+    """
+    seed_actors()
+    make_community(name='books', host='test.piefed.local')
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/c/books', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['preferredUsername'] == 'books'
+
+
+def test_a_local_community_with_a_non_null_ap_id_is_not_found(app, db_session, monkeypatch):
+    """The local lookup's `ap_id=None` clause. `make_community` never sets
+    `ap_id` (it stays None), so the positive test above cannot distinguish
+    filtering on `ap_id=None` from not filtering on it at all -- dropping that
+    clause from the query changes nothing there. This test sets `ap_id`
+    explicitly to a non-null value on an otherwise-matching community, so the
+    filter is the ONLY thing standing between it and a 200.
+    """
+    seed_actors()
+    community = make_community(name='books', host='test.piefed.local')
+    community.ap_id = 'books@test.piefed.local'
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/c/books', accept=AP_ACCEPT)
+
+    assert response.status_code == 404
+
+
+def test_a_remote_community_refuses_an_activitypub_request(app, db_session, monkeypatch):
+    """`'@' in actor` plus an AP Accept aborts 400 -- the comment says "don't
+    provide activitypub info for remote communities". `user_profile` has NO
+    equivalent guard, which the spec registers as an asymmetry; this test is
+    the community half of that comparison.
+    """
+    seed_actors()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/c/books@peer.example', accept=AP_ACCEPT)
+
+    assert response.status_code == 400
+
+
+def test_a_remote_community_serves_html_to_a_browser(app, db_session, monkeypatch):
+    """The same remote path WITHOUT an AP Accept skips the 400 and looks the
+    community up by `ap_id`, filtered `banned=False`.
+    """
+    site, instance = seed_actors()
+    community = make_community(name='books', host='peer.example')
+    community.ap_id = 'books@peer.example'
+    db.session.commit()
+    calls = _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/c/books@peer.example', accept='text/html')
+
+    assert response.status_code == 200
+    assert len(calls['show_community']) == 1
+
+
+def test_a_banned_remote_community_is_not_found(app, db_session, monkeypatch):
+    """The remote lookup's `banned=False`. Seeded explicitly -- `Community.banned`
+    defaults to False, so leaving it alone would assert nothing.
+
+    Note the LOCAL lookup has no such guard; that asymmetry is registered, not
+    fixed here.
+    """
+    site, instance = seed_actors()
+    community = make_community(name='books', host='peer.example')
+    community.ap_id = 'books@peer.example'
+    community.banned = True
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/c/books@peer.example', accept='text/html')
+
+    assert response.status_code == 404
+
+
+def test_an_unknown_community_returns_404_to_an_activitypub_request(app, db_session, monkeypatch):
+    """The not-found path's first arm: `if is_activitypub_request(): abort(404)`,
+    ahead of the two authenticated redirects.
+    """
+    seed_actors()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/c/nosuch', accept=AP_ACCEPT)
+
+    assert response.status_code == 404
+
+
+def test_an_unknown_community_returns_404_to_an_anonymous_browser(app, db_session, monkeypatch):
+    """The not-found path's final `else`. An anonymous browser gets 404 rather
+    than either redirect, because both redirect arms require authentication.
+    """
+    seed_actors()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/c/nosuch', accept='text/html')
+
+    assert response.status_code == 404
+
+
 # NOT TESTED HERE (already covered elsewhere -- see this task's report):
 #
 # - user_profile's AP-JSON happy path for a local user found by bare username,
