@@ -21,6 +21,22 @@
 - Every guard is mutation-tested with **each conjunct dropped separately**, each killed by a distinct named test. Record whether each kill is an **assertion-kill or a crash-kill**, and whether it is a **sole death**.
 - **The unkillable-clause pattern.** A filter clause whose value equals what the factory always produces cannot be killed by any test using that factory unmodified. Sub-project 8 hit this four times. All three local lookups filter `ap_id=None` and every local-actor factory produces exactly that — **expect those clauses to be unkillable, and add a test that sets `ap_id` explicitly to something contrary.**
 - A kill by `respx.models.AllMockedAssertionError` is an **infrastructure kill, not behavioural**.
+- **`icon_id`, `image_id`, `avatar_id` and `cover_id` are real foreign keys to `file.id`.** Assigning a bare `1` raises `IntegrityError` — Task 4 hit this. Seed a real row first with the `_seed_file()` helper Task 4 adds:
+  ```python
+  def _seed_file():
+      """A File row to hang an icon/header/avatar/cover FK on.
+
+      The columns are real foreign keys to `file.id`; a bare `= 1` raises
+      IntegrityError. The row needs no attributes — the image METHOD is
+      doubled in these tests, so only the FK's existence matters.
+      """
+      from app.models import File
+      f = File()
+      db.session.add(f)
+      db.session.commit()
+      return f
+  ```
+  Setting the `_id` column is required as well as doubling the method: the guard is `if <obj>.<x>_id is not None:`, so the double alone never enters the block.
 - **`Vary` is never absent and never bare.** Flask-Compress registers an `after_request` that appends `Accept-Encoding` to every response's `Vary` (`app/__init__.py`, `compress.init_app(app)`). An endpoint that sets `Vary: Accept` yields `'Accept, Accept-Encoding'`; one that sets nothing yields `'Accept-Encoding'`. Assert the full value — never `'Vary' not in response.headers`, which is false for every response in this application.
 - **Capture any model `id` you plan to assert on BEFORE issuing the request.** The test client runs the view in its own application context, and an instance the test seeded can be expired or detached by the time the assertion reads it — touching `.id` then raises `DetachedInstanceError` or silently re-queries. Sub-project 7 lost a round to this; the fix there was `sa_inspect(obj).identity[0]`, and capturing the value up front is simpler.
 - **Any docstring claim about another test must be verified true**, and must remain true after Task 10's fixes. After inverting a pin, check which branch that pin used to cover.
@@ -492,8 +508,9 @@ def test_an_absolute_community_icon_url_is_used_as_is(app, db_session, monkeypat
     URL branch, not about image storage.
     """
     seed_actors()
+    icon_file = _seed_file()
     community = make_community(name='books', host='test.piefed.local')
-    community.icon_id = 1
+    community.icon_id = icon_file.id
     db.session.commit()
     _double_the_renderers(monkeypatch)
     monkeypatch.setattr(type(community), 'icon_image',
@@ -508,8 +525,9 @@ def test_an_absolute_community_icon_url_is_used_as_is(app, db_session, monkeypat
 def test_a_relative_community_icon_url_is_prefixed_with_the_server_url(app, db_session, monkeypatch):
     """The false side of the same branch: a stored path is made absolute."""
     seed_actors()
+    icon_file = _seed_file()
     community = make_community(name='books', host='test.piefed.local')
-    community.icon_id = 1
+    community.icon_id = icon_file.id
     db.session.commit()
     _double_the_renderers(monkeypatch)
     monkeypatch.setattr(type(community), 'icon_image',
@@ -526,8 +544,9 @@ def test_an_absolute_community_header_url_is_used_as_is(app, db_session, monkeyp
     because they are separate code, not a shared helper.
     """
     seed_actors()
+    header_file = _seed_file()
     community = make_community(name='books', host='test.piefed.local')
-    community.image_id = 1
+    community.image_id = header_file.id
     db.session.commit()
     _double_the_renderers(monkeypatch)
     monkeypatch.setattr(type(community), 'header_image',
@@ -541,8 +560,9 @@ def test_an_absolute_community_header_url_is_used_as_is(app, db_session, monkeyp
 
 def test_a_relative_community_header_url_is_prefixed(app, db_session, monkeypatch):
     seed_actors()
+    header_file = _seed_file()
     community = make_community(name='books', host='test.piefed.local')
-    community.image_id = 1
+    community.image_id = header_file.id
     db.session.commit()
     _double_the_renderers(monkeypatch)
     monkeypatch.setattr(type(community), 'header_image', lambda self: '/static/header.png')
@@ -764,8 +784,9 @@ def test_an_absolute_feed_icon_url_is_used_as_is(app, db_session, monkeypatch):
     branch, not about image storage.
     """
     seed_actors()
+    icon_file = _seed_file()
     feed = make_local_feed('news', public=True)
-    feed.icon_id = 1
+    feed.icon_id = icon_file.id
     db.session.commit()
     _double_the_renderers(monkeypatch)
     monkeypatch.setattr(type(feed), 'icon_image',
@@ -780,8 +801,9 @@ def test_an_absolute_feed_icon_url_is_used_as_is(app, db_session, monkeypatch):
 def test_a_relative_feed_icon_url_is_prefixed_with_the_server_url(app, db_session, monkeypatch):
     """The false side of the same branch: a stored path is made absolute."""
     seed_actors()
+    icon_file = _seed_file()
     feed = make_local_feed('news', public=True)
-    feed.icon_id = 1
+    feed.icon_id = icon_file.id
     db.session.commit()
     _double_the_renderers(monkeypatch)
     monkeypatch.setattr(type(feed), 'icon_image',
@@ -798,8 +820,9 @@ def test_an_absolute_feed_header_url_is_used_as_is(app, db_session, monkeypatch)
     helper, so both need covering.
     """
     seed_actors()
+    header_file = _seed_file()
     feed = make_local_feed('news', public=True)
-    feed.image_id = 1
+    feed.image_id = header_file.id
     db.session.commit()
     _double_the_renderers(monkeypatch)
     monkeypatch.setattr(type(feed), 'header_image', lambda self: 'https://cdn.example/h.png')
@@ -812,8 +835,9 @@ def test_an_absolute_feed_header_url_is_used_as_is(app, db_session, monkeypatch)
 
 def test_a_relative_feed_header_url_is_prefixed(app, db_session, monkeypatch):
     seed_actors()
+    header_file = _seed_file()
     feed = make_local_feed('news', public=True)
-    feed.image_id = 1
+    feed.image_id = header_file.id
     db.session.commit()
     _double_the_renderers(monkeypatch)
     monkeypatch.setattr(type(feed), 'header_image', lambda self: '/static/h.png')
@@ -1023,8 +1047,9 @@ def test_an_absolute_user_avatar_url_is_used_as_is(app, db_session, monkeypatch)
     `icon`, even though the column is `avatar_id`.
     """
     site, instance = seed_actors()
+    avatar_file = _seed_file()
     user = make_user(instance, 'alice', local=True)
-    user.avatar_id = 1
+    user.avatar_id = avatar_file.id
     db.session.commit()
     _double_the_renderers(monkeypatch)
     monkeypatch.setattr(type(user), 'avatar_image',
@@ -1038,8 +1063,9 @@ def test_an_absolute_user_avatar_url_is_used_as_is(app, db_session, monkeypatch)
 
 def test_a_relative_user_avatar_url_is_prefixed_with_the_server_url(app, db_session, monkeypatch):
     site, instance = seed_actors()
+    avatar_file = _seed_file()
     user = make_user(instance, 'alice', local=True)
-    user.avatar_id = 1
+    user.avatar_id = avatar_file.id
     db.session.commit()
     _double_the_renderers(monkeypatch)
     monkeypatch.setattr(type(user), 'avatar_image',
@@ -1054,8 +1080,9 @@ def test_a_relative_user_avatar_url_is_prefixed_with_the_server_url(app, db_sess
 def test_an_absolute_user_cover_url_is_used_as_is(app, db_session, monkeypatch):
     """The cover block emits `image`, from the `cover_id` column."""
     site, instance = seed_actors()
+    cover_file = _seed_file()
     user = make_user(instance, 'alice', local=True)
-    user.cover_id = 1
+    user.cover_id = cover_file.id
     db.session.commit()
     _double_the_renderers(monkeypatch)
     monkeypatch.setattr(type(user), 'cover_image', lambda self: 'https://cdn.example/c.png')
@@ -1068,8 +1095,9 @@ def test_an_absolute_user_cover_url_is_used_as_is(app, db_session, monkeypatch):
 
 def test_a_relative_user_cover_url_is_prefixed(app, db_session, monkeypatch):
     site, instance = seed_actors()
+    cover_file = _seed_file()
     user = make_user(instance, 'alice', local=True)
-    user.cover_id = 1
+    user.cover_id = cover_file.id
     db.session.commit()
     _double_the_renderers(monkeypatch)
     monkeypatch.setattr(type(user), 'cover_image', lambda self: '/static/c.png')
