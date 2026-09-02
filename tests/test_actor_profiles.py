@@ -1406,3 +1406,129 @@ def test_a_user_without_extra_fields_has_no_attachment_key(app, db_session, monk
 
     assert response.status_code == 200
     assert 'attachment' not in response.json
+
+
+# ---------------------------------------------------------------------------
+# user_profile (Task 9): two current-behaviour defects, PINNED so Task 10 can
+# invert both tests once it fixes them. Fix neither defect here.
+# ---------------------------------------------------------------------------
+
+def test_the_admin_branch_and_the_else_branch_resolve_identically(app, db_session, monkeypatch):
+    """PINS a defect. `user_profile` opens (routes.py:370-384) with
+
+        # admins can view deleted accounts
+        if current_user.is_authenticated and current_user.is_admin():
+            <six lines>
+        else:
+            <the same six lines, byte for byte>
+
+    Read directly off the source: both bodies run the identical `'@' in actor`
+    lookup, the identical bare-username lookup, and the identical
+    `ap_profile_id` fallback -- no line differs. The comment's claim, "admins
+    can view deleted accounts", is false as written: neither copy filters
+    `deleted` (see test_a_deleted_user_profile_is_served_to_anyone below), so
+    an admin gets nothing a non-admin does not already get. The branch
+    decides nothing.
+
+    THE STRONGER PIN. The brief's fallback was to request only anonymously,
+    which cannot distinguish "these branches are duplicated" from "they are
+    correct and happen to agree" -- only the source reading does that. This
+    suite already has a way to authenticate a test client as a real user:
+    `client.session_transaction()` setting `_user_id`/`_fresh` directly,
+    reused verbatim (not built here) from tests/test_request_hooks.py::login,
+    tests/test_redirect_back.py::login and tests/test_feed_cache.py::login.
+    Reading user_profile end to end confirms `current_user` is referenced
+    nowhere else in the function, so an admin request and an anonymous
+    request for the same user cannot differ for any reason this route
+    controls -- making the two JSON documents byte-identical is exactly the
+    branch's decision (or, here, the absence of one).
+
+    `seed_community_owner`'s 'communityowner' user is used as the admin: it
+    is the first User row inserted after truncation, so it lands on id 1,
+    and `User.is_admin()` (app/models.py:1250-1256) special-cases id==1 --
+    true without assigning any Role. `admin.is_admin()` is asserted directly
+    so the premise this test depends on is stated, not assumed.
+
+    What this pins: removing the branch (collapsing to the `else` body alone)
+    cannot change what either caller sees, which is the fix's precondition.
+    It does not by itself prove the two copies are exact text duplicates --
+    that is the source reading above, and Task 10's mutation-based collapse
+    is what proves removing one truly changes nothing.
+    """
+    from app.models import User
+
+    site, instance = seed_actors()
+    make_user(instance, 'alice', local=True)
+    _double_the_renderers(monkeypatch)
+
+    anonymous = profile_get(app, '/u/alice', accept=AP_ACCEPT)
+    assert anonymous.status_code == 200
+
+    admin = User.query.filter_by(user_name='communityowner').first()
+    assert admin.id == 1
+    assert admin.is_admin()
+
+    with app.test_client() as client:
+        with client.session_transaction() as sess:
+            sess['_user_id'] = str(admin.id)
+            sess['_fresh'] = True
+        as_admin = client.get('/u/alice', headers={'Accept': AP_ACCEPT})
+
+    assert as_admin.status_code == 200
+    assert as_admin.json == anonymous.json
+
+
+def test_a_deleted_user_profile_is_served_to_anyone(app, db_session, monkeypatch):
+    """PINS a defect, and the more consequential of the two.
+
+    Neither of user_profile's lookup branches filters `deleted` (see the test
+    above), so this endpoint hands out a deleted user's full actor document --
+    public key, inbox, shared inbox -- to an anonymous, unauthenticated
+    caller. Webfinger's user lookup, by contrast, DOES filter
+    `deleted=False, banned=False` together (app/activitypub/routes.py:118-119,
+    added in sub-project 8) -- so the two endpoints give opposite answers
+    about the same deleted actor. This is wrong: a deleted account should not
+    be discoverable or federatable through either path, and right now only
+    one of the two refuses it.
+
+    `user.deleted` is set to True EXPLICITLY. Its declared default is also
+    False (app/models.py:978), so leaving it alone would assert nothing about
+    the `deleted` column at all -- forbidden by this campaign's constraints.
+    The assertion on `id` (built from the real `user.public_url()`) confirms
+    the deleted row was genuinely FOUND and served, not that some unrelated
+    404/other path happened to also return 200.
+    """
+    site, instance = seed_actors()
+    user = make_user(instance, 'alice', local=True)
+    user.deleted = True
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['id'] == 'https://test.piefed.local/u/alice'
+
+
+def test_a_banned_user_profile_is_served_to_anyone(app, db_session, monkeypatch):
+    """The same gap, on the other column. Pinned as its own test, separate
+    from `deleted` above, so a fix that adds a guard for only one of the two
+    columns is still caught by whichever test it left unfixed.
+
+    `user.banned` is set to True EXPLICITLY, for the same reason as `deleted`
+    above: its declared default is also False (app/models.py:974), so leaving
+    it alone would assert nothing about this column either. `make_user`
+    already passes `banned=False` at construction, so this assignment is the
+    only thing distinguishing this test's premise from every earlier test in
+    this file that uses an ordinary user.
+    """
+    site, instance = seed_actors()
+    user = make_user(instance, 'alice', local=True)
+    user.banned = True
+    db.session.commit()
+    _double_the_renderers(monkeypatch)
+
+    response = profile_get(app, '/u/alice', accept=AP_ACCEPT)
+
+    assert response.status_code == 200
+    assert response.json['id'] == 'https://test.piefed.local/u/alice'
