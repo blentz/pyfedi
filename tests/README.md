@@ -1899,6 +1899,55 @@ Sub-project 5e's Tasks 8 and 10 each hit this independently, in unrelated
 files (`tests/test_inbox_dispatch_create_update.py` and
 `tests/test_inbox_dispatch_preamble.py`).
 
+**22. `Conversation.find_existing_conversation` joins `conversation_member`
+twice, so it only finds a conversation where BOTH parties are members.**
+The method (`app/models.py:254-272`) joins `public.conversation_member`
+against itself as `cm1`/`cm2`, binds `cm1.user_id = :user_id_1` and
+`cm2.user_id = :user_id_2`, and requires `cm1.user_id <> cm2.user_id`. A
+conversation row with only one of the two users attached to it (for
+example, one written by hand without appending both members) is invisible
+to this lookup — it never matches either join. This is exactly why
+`make_conversation` (`tests/factories.py:573-588`) appends both `sender`
+and `recipient` to `conversation.members` rather than just the initiator.
+The SQL is symmetric in `recipient`/`sender`: for a conversation whose
+members are `{A, B}`, the query matches `(user_id_1=A, user_id_2=B)` via
+`cm1=A, cm2=B` and equally matches `(user_id_1=B, user_id_2=A)` via
+`cm1=B, cm2=A` — so callers do not need to worry about argument order.
+
+**23. `User.accept_private_messages` defaults to `3` ("All instances"),
+not to a refusing value.** The column (`app/models.py:1035`) is
+`db.Column(db.Integer, default=3)`. A test of `process_chat`'s accepting
+path that relies on the column default without setting it explicitly is
+resting on an assertion that would still pass if the default silently
+changed to `2` or `1` for a same-instance/trusted-instance sender — seed
+`accept_private_messages` explicitly even when the value you want happens
+to equal the default (see `tests/test_inbox_dispatch_chat.py`'s
+`seed_chat_pair`, which always passes `accept=` explicitly for this
+reason).
+
+**24. `make_user` never sets `ap_domain`, unlike `make_community` and
+`make_feed`.** `make_community` (`tests/factories.py:144`) and
+`make_feed` (`tests/factories.py:178`) both pass `ap_domain=host` when
+building the row.
+`make_user` (`tests/factories.py:39-65`) sets `ap_id`, `ap_profile_id`,
+`ap_public_url` and `ap_inbox_url` from `instance.domain` but never touches
+`ap_domain`, which is left `NULL`. Code that branches on a sender's
+`ap_domain` (for example `process_chat`'s fediseer.com exemption,
+`app/activitypub/routes.py:2550`) will see `None`, not the instance's
+domain, unless a test sets `user.ap_domain` itself after calling
+`make_user`.
+
+**25. `blocked_phrases()` is `@cache.memoize`'d, but the test config
+disables the cache, so writing `Site.blocked_phrases` mid-test is
+reliable.** `blocked_phrases()` (`app/utils.py:1735-1748`) is decorated
+`@cache.memoize(timeout=86400)`. In production this would mean a change to
+`Site.blocked_phrases` made after the function's first call in a process
+would not be seen for up to a day. `tests/conftest.py:68` sets
+`CACHE_TYPE = 'NullCache'`, so `cache.memoize` never actually caches
+anything in this suite — a test that sets `Site.blocked_phrases` and then
+dispatches an activity that calls `blocked_phrases()` sees the fresh value
+every time, with no need to clear a cache or worry about call order.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
