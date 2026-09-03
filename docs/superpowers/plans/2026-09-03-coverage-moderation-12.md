@@ -6,7 +6,7 @@
 
 **Architecture:** One new test file calling the six functions **directly** with real rows, asserting on persisted database state. Four existing suites already drive these through the inbox dispatcher and largely double them, so direct calls complement rather than duplicate.
 
-**Tech Stack:** pytest, SQLAlchemy, `tests/factories.py`, the `redis_double` fixture, fakeredis.
+**Tech Stack:** pytest, SQLAlchemy, `tests/factories.py`, a lock-only fakeredis double.
 
 **Spec:** `docs/superpowers/specs/2026-09-03-coverage-moderation-12-design.md`
 
@@ -172,7 +172,7 @@ def test_a_moderator_deleting_a_post_marks_it_deleted_and_decrements_counters(
     """`delete_post_or_comment`'s Post branch, driven directly rather than
     through the inbox dispatcher.
 
-    `redis_double` is REQUIRED, not optional: this function takes
+    `redis_lock_only_double` is REQUIRED, not optional: this function takes
     `redis_client.lock(...)` on four keys, and it does `from app import
     redis_client` inside its own body, so the fixture's patch of
     `app.redis_client` reaches it. Without the fixture the test talks to the
@@ -578,7 +578,7 @@ def test_restoring_a_post_clears_deleted_and_restores_counters(
     """`restore_post_or_comment`'s Post branch. Note it takes NO redis locks
     where `delete_post_or_comment` wraps every one of these same counter
     mutations in one -- a registered asymmetry, not something this test
-    fixes. `redis_double` is still requested so the test is safe if that
+    fixes. `redis_lock_only_double` is still requested so the test is safe if that
     changes.
 
     Counters are seeded to 4 and asserted at 5, the mirror of Task 1's
