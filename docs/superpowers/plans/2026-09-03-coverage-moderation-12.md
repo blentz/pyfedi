@@ -953,7 +953,7 @@ def test_a_site_ban_skips_content_already_deleted(app, db_session, monkeypatch):
 - [ ] **Step 6: Run the tests, then mutation-test the `deleted=False` filter**
 
 Run: `./run_tests.sh tests/test_ap_moderation.py -q`
-Expected: 24 passed.
+Expected: 24 passed. (A controller-ordered fix round then added a sixth test — one seeding an already-deleted reply — to close a surviving mutant on the reply query's `deleted=False`, so the running total leaving this task is **25**.)
 
 Drop `deleted=False` from the Post query — `test_a_site_ban_skips_content_already_deleted` must fail. Then drop it from the reply query instead; **that is a separate call site and needs its own kill.** If no test dies on the reply site, that is a combinatorial gap of the kind sub-project 11 hit — report it rather than patching around it, and the controller will rule. Restore and verify the diff is empty.
 
