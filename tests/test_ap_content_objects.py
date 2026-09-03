@@ -626,3 +626,119 @@ def test_an_unknown_post_replies_collection_is_404(app, db_session, monkeypatch)
     response = ap_get(app, '/post/999999/replies')
 
     assert response.status_code == 404
+
+
+def test_a_post_context_lists_the_post_and_its_replies(app, db_session, monkeypatch):
+    """`post_ap_context` builds its own collection from a real query rather
+    than a delegate. `orderedItems` is `[post.ap_id] + [reply.ap_id ...]`, so
+    the post's own URI comes FIRST and `totalItems` counts it.
+
+    Both `ap_id`s are set explicitly. `make_post(..., None)` and
+    `make_post_reply` both leave `ap_id` None for a local object, and asserting
+    a list of Nones would be vacuous (harness fact 50) -- it would pass equally
+    against a route that rendered `public_url()` or nothing at all.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    post.ap_id = 'https://test.piefed.local/post/1'
+    reply = make_post_reply(post, author)
+    reply.ap_id = 'https://test.piefed.local/comment/1'
+    db.session.commit()
+
+    response = ap_get(app, f'/post/{post.id}/context')
+
+    assert response.status_code == 200
+    assert response.content_type == 'application/activity+json'
+    assert response.headers['Cache-Control'] == 'public, max-age=15'
+    assert response.json['type'] == 'OrderedCollection'
+    assert response.json['totalItems'] == 2
+    assert response.json['orderedItems'] == ['https://test.piefed.local/post/1',
+                                             'https://test.piefed.local/comment/1']
+    assert response.json['name'] == 'a post'
+
+
+def test_a_post_context_attributes_itself_to_the_community(app, db_session, monkeypatch):
+    """`attributedTo` and `audience` are BOTH `post.community.profile_id()`,
+    and `id` is `post.public_url() + '/context'`. Asserted together because
+    all three come from the post's relationships rather than from the request,
+    and a regression swapping community for author would be invisible in the
+    happy-path test above.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    post.ap_id = 'https://test.piefed.local/post/1'
+    db.session.commit()
+
+    response = ap_get(app, f'/post/{post.id}/context')
+
+    assert response.status_code == 200
+    assert response.json['attributedTo'] == community.profile_id()
+    assert response.json['audience'] == community.profile_id()
+    assert response.json['id'] == f'{post.public_url()}/context'
+    assert response.json['attributedTo'] != post.public_url()
+
+
+def test_a_deleted_post_has_no_context(app, db_session, monkeypatch):
+    """`if post.deleted: abort(404)` -- the ONLY `deleted` guard among the four
+    content-object endpoints. `post_replies_ap`, which serves the same post's
+    replies, has none, which is pinned by
+    `test_post_replies_are_served_for_a_deleted_post`.
+
+    `deleted` is set explicitly; `make_post` sets `deleted=False`.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    post.deleted = True
+    db.session.commit()
+
+    response = ap_get(app, f'/post/{post.id}/context')
+
+    assert response.status_code == 404
+
+
+def test_a_post_context_omits_deleted_replies(app, db_session, monkeypatch):
+    """The query's `deleted=False` filter. Two replies are seeded and one is
+    deleted, so `totalItems` of 2 (the post plus one surviving reply) rather
+    than 3 is what proves the filter ran -- a single-reply fixture could not
+    tell a working filter from a missing one.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    post.ap_id = 'https://test.piefed.local/post/1'
+    kept = make_post_reply(post, author, body='kept')
+    kept.ap_id = 'https://test.piefed.local/comment/kept'
+    gone = make_post_reply(post, author, body='gone')
+    gone.ap_id = 'https://test.piefed.local/comment/gone'
+    gone.deleted = True
+    db.session.commit()
+
+    response = ap_get(app, f'/post/{post.id}/context')
+
+    assert response.status_code == 200
+    assert response.json['totalItems'] == 2
+    assert 'https://test.piefed.local/comment/gone' not in response.json['orderedItems']
+
+
+def test_a_browser_request_for_a_post_context_is_400(app, db_session, monkeypatch):
+    """`post_ap_context`'s `else: abort(400)`.
+
+    400 rather than 404 is the right distinction and worth stating: the
+    resource exists and is resolvable, the request is simply not an
+    ActivityPub one. A 404 would tell a caller the post does not exist.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+
+    response = browser_get(app, f'/post/{post.id}/context')
+
+    assert response.status_code == 400
+
+
+def test_an_unknown_post_context_is_404(app, db_session, monkeypatch):
+    """`Post.query.get_or_404`, reached before the `deleted` check."""
+    _double_the_delegates(monkeypatch)
+    seed_actors()
+
+    response = ap_get(app, '/post/999999/context')
+
+    assert response.status_code == 404
