@@ -515,3 +515,114 @@ def test_a_head_request_for_a_post_returns_an_empty_activitypub_body(app, db_ses
     assert response.status_code == 200
     assert response.content_type == 'application/activity+json'
     assert calls['post_to_page'] == []
+
+
+def test_a_browser_request_for_post_replies_crashes(app, db_session, monkeypatch):
+    """PINS a crash, remotely reachable. DO NOT FIX -- a later task does.
+
+    `post_replies_ap`'s entire body sits inside `if (request.method == 'GET' or
+    request.method == 'HEAD') and is_activitypub_request():` and there is NO
+    `else`. A browser request falls off the end, the view returns None, and
+    Flask raises. `post_ap_context`, twelve lines below in the same file, gets
+    this right with `else: abort(400)`.
+
+    This is the FOURTH instance of the class sub-project 10 fixed three times
+    in the feed collections (D167-D169).
+
+    THE 500 DOES NOT MATERIALISE AS A RESPONSE. `tests/conftest.py` sets
+    `TESTING = True` with no `PROPAGATE_EXCEPTIONS` override, so Flask
+    re-raises rather than producing a 500, and the test client's default
+    `raise_server_exceptions=True` lets it escape `browser_get` entirely
+    (harness fact 43). So this asserts the exception, not a status code.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+
+    with pytest.raises(TypeError, match='did not return a valid response'):
+        browser_get(app, f'/post/{post.id}/replies')
+
+
+def test_post_replies_are_served_as_an_ordered_collection(app, db_session, monkeypatch):
+    """`post_replies_ap`'s only working path. `totalItems` is `len(replies)`
+    from the doubled `post_replies_for_ap`, and `Cache-Control` is 15 --
+    against `post_ap`'s and `comment_ap`'s 120, for the same content.
+    """
+    calls = _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+
+    response = ap_get(app, f'/post/{post.id}/replies')
+
+    assert response.status_code == 200
+    assert response.content_type == 'application/activity+json'
+    assert response.headers['Cache-Control'] == 'public, max-age=15'
+    assert response.headers['Vary'] == 'Accept, Accept-Encoding'
+    assert response.json['type'] == 'OrderedCollection'
+    assert response.json['totalItems'] == 1
+    assert '@context' in response.json
+    assert calls['post_replies_for_ap'] == [post.id]
+
+
+def test_post_replies_are_served_for_a_local_only_community(app, db_session, monkeypatch):
+    """PINS a defect. `post_ap` aborts 403 for a `local_only` community;
+    `post_replies_ap` has no visibility guard at all, so the same post's
+    replies are enumerated to any caller. `local_only` is set explicitly; it
+    defaults to False.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    community.local_only = True
+    community.private = False
+    db.session.commit()
+
+    response = ap_get(app, f'/post/{post.id}/replies')
+
+    assert response.status_code == 200
+    assert response.json['totalItems'] == 1
+
+
+def test_post_replies_are_served_for_an_unpublished_post(app, db_session, monkeypatch):
+    """PINS a defect. `post_ap` aborts 403 on `status < POST_STATUS_PUBLISHED`;
+    `post_replies_ap` applies no status guard, so an under-review post's
+    replies are published. Status is set explicitly -- the column default is
+    POST_STATUS_PUBLISHED, so leaving it implicit would assert nothing.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    post.status = POST_STATUS_REVIEWING
+    db.session.commit()
+
+    response = ap_get(app, f'/post/{post.id}/replies')
+
+    assert response.status_code == 200
+
+
+def test_post_replies_are_served_for_a_deleted_post(app, db_session, monkeypatch):
+    """PINS a defect, and it is the sharpest of the three: `post_ap_context`
+    -- the endpoint immediately BELOW this one, serving the same post's reply
+    URIs -- aborts 404 on `post.deleted`. `post_replies_ap` does not.
+
+    `deleted` is set explicitly; `make_post` sets `deleted=False`, so this is
+    a contrary baseline rather than a default.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    post.deleted = True
+    db.session.commit()
+
+    response = ap_get(app, f'/post/{post.id}/replies')
+
+    assert response.status_code == 200
+
+
+def test_an_unknown_post_replies_collection_is_404(app, db_session, monkeypatch):
+    """`Post.query.get_or_404` inside the ActivityPub branch. Reached only with
+    an ActivityPub Accept header -- a browser request for the same URL crashes
+    before the lookup, which is what
+    `test_a_browser_request_for_post_replies_crashes` pins.
+    """
+    _double_the_delegates(monkeypatch)
+    seed_actors()
+
+    response = ap_get(app, '/post/999999/replies')
+
+    assert response.status_code == 404
