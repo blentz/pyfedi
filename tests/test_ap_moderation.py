@@ -814,3 +814,85 @@ def test_a_site_ban_skips_replies_already_deleted(app, db_session, monkeypatch):
 
     assert community.post_reply_count == 5
     assert post.reply_count == 5
+
+
+def test_a_community_ban_deletes_only_that_communitys_content(
+        app, db_session, monkeypatch):
+    """`community_ban_remove_data` filters on `user_id` AND `community_id`,
+    where `site_ban_remove_data` filters on `user_id` alone. Content the same
+    user made elsewhere must survive.
+
+    Two communities are required. With one, the community filter is
+    unkillable -- dropping it changes nothing observable, exactly the
+    combinatorial gap sub-project 11 hit on `post_ap_context`'s post_id.
+    """
+    _double_file_deletion(monkeypatch)
+    site, instance, community, author, moderator = seed_moderation_scene()
+    other = make_community(name='elsewhere', host='test.piefed.local')
+    here = make_post(community, author, None, title='here')
+    there = make_post(other, author, None, title='there')
+    here_reply = make_post_reply(here, author)
+    there_reply = make_post_reply(there, author)
+    db.session.commit()
+
+    ap_util.community_ban_remove_data(moderator.id, community.id, author)
+
+    assert here.deleted is True
+    assert here_reply.deleted is True
+    assert there.deleted is False
+    assert there_reply.deleted is False
+
+
+def test_a_community_ban_decrements_the_users_real_reply_counter(
+        app, db_session, monkeypatch):
+    """The contrast with `site_ban_remove_data`'s broken line: this function
+    does `blocked.post_reply_count -= 1` per reply, against the real column,
+    and it works. Both are asserted so the pair reads as one finding.
+
+    Counters seeded to 5; one post and one reply are removed, so both fall
+    to 4 -- a relative decrement, unlike the site path's absolute zeroing.
+    """
+    _double_file_deletion(monkeypatch)
+    site, instance, community, author, moderator = seed_moderation_scene()
+    post = make_post(community, author, None, title='a post')
+    make_post_reply(post, author)
+    author.post_count = 5
+    author.post_reply_count = 5
+    author.bot = False
+    db.session.commit()
+
+    ap_util.community_ban_remove_data(moderator.id, community.id, author)
+
+    assert author.post_count == 4
+    assert author.post_reply_count == 4
+
+
+def test_a_community_ban_deletes_files_without_purging_the_cdn(
+        app, db_session, monkeypatch):
+    """PINS A NON-ASYMMETRY, which is why the assertion is `is True`.
+
+    `community_ban_remove_data` calls `delete_from_disk()` with no argument
+    and `site_ban_remove_data` passes `purge_cdn=True` explicitly -- but the
+    parameter DEFAULTS to True (`app/models.py`), so both paths purge and the
+    difference is in the spelling alone.
+
+    Asserting the flag's real value is what makes that legible: reading the
+    two call sites side by side invites the conclusion that a community ban
+    leaves files on the CDN, and this test says otherwise in the suite rather
+    than leaving the next reader to check the signature.
+    """
+    calls = _double_file_deletion(monkeypatch)
+    site, instance, community, author, moderator = seed_moderation_scene()
+    post = make_post(community, author, None, title='a post')
+    attached = File(source_url='https://peer.example/img.png')
+    db.session.add(attached)
+    db.session.commit()
+    post.image_id = attached.id
+    db.session.commit()
+
+    ap_util.community_ban_remove_data(moderator.id, community.id, author)
+
+    assert len(calls) == 1
+    assert calls[0][0] == attached.id
+    assert calls[0][1] is True   # the default -- same as the site path passes
+    assert attached.source_url == ''
