@@ -20,12 +20,12 @@ from flask_login import login_user
 
 from app import db
 from app.activitypub.signature import RsaKeys
-from app.models import (ChatMessage, Community, CommunityBan, CommunityBlock, CommunityFlair, CommunityFlairBlock,
-                        CommunityJoinRequest, CommunityMember, Conversation, Domain, DomainBlock, Feed, FeedItem,
-                        FeedJoinRequest, FeedMember, Instance, InstanceBan, InstanceBlock,
-                        NotificationSubscription, Poll, PollChoice, Post, PostReply, PostReplyBookmark, PostReplyVote,
-                        PostVote, Role, RolePermission, Site, User, UserBlock, UserFollower,
-                        UserFollowRequest, hidden_posts, read_posts, user_role, utcnow)
+from app.models import (ActivityPubLog, ChatMessage, Community, CommunityBan, CommunityBlock, CommunityFlair,
+                        CommunityFlairBlock, CommunityJoinRequest, CommunityMember, Conversation, Domain,
+                        DomainBlock, Feed, FeedItem, FeedJoinRequest, FeedMember, Instance, InstanceBan,
+                        InstanceBlock, NotificationSubscription, Poll, PollChoice, Post, PostReply,
+                        PostReplyBookmark, PostReplyVote, PostVote, Role, RolePermission, Site, User, UserBlock,
+                        UserFollower, UserFollowRequest, hidden_posts, read_posts, user_role, utcnow)
 from app.utils import get_deduped_post_ids
 
 
@@ -684,6 +684,37 @@ def make_flair_block(user: User, flair: CommunityFlair) -> CommunityFlairBlock:
     db.session.add(block)
     db.session.commit()
     return block
+
+
+def make_activitypub_log(activity_id: str, *, direction: str = 'in',
+                         activity_type: str = 'Create', activity_json: str = None,
+                         result: str = 'success', exception_message: str = None) -> ActivityPubLog:
+    """The row `activities_json` and `activity_result` both read.
+
+    `activity_id` is the FULL URI both endpoints match on, not a bare id:
+    `activities_json` builds `f"{SERVER_URL}/activities/{type}/{id}"` and
+    `activity_result` builds `f'https://{id}'` from a path parameter, so a
+    caller must pass whichever form the endpoint under test will construct.
+
+    `activity_json` is a JSON **string**, not a dict -- `activities_json` calls
+    `json.loads` on it -- and it is nullable, which is a branch that endpoint
+    takes (`activity_json = {}`). `result` and `exception_message` are what
+    `activity_result` branches on; `exception_message` defaults to None so a
+    test asserting on the disclosure must set it explicitly rather than rest
+    on a default.
+    """
+    log = ActivityPubLog(
+        direction=direction,
+        activity_id=activity_id,
+        activity_type=activity_type,
+        activity_json=activity_json,
+        result=result,
+        exception_message=exception_message,
+        created_at=utcnow(),
+    )
+    db.session.add(log)
+    db.session.commit()
+    return log
 
 
 def make_post_vote(user: User, post: Post, effect: float) -> PostVote:
