@@ -275,8 +275,10 @@ def test_a_post_under_review_is_excluded(app, db_session, monkeypatch):
     `Post.status` defaults to 1, which PASSES the filter, so the excluded side
     needs status set to 0 explicitly.
 
-    `community_featured` applies no such filter -- that asymmetry is pinned in
-    the next task.
+    `community_featured` filters only `deleted=False`, with no status clause at
+    all, so the same post is treated differently by the two endpoints. This test
+    proves only what `community_outbox` does; nothing here asserts anything
+    about `community_featured`.
     """
     seed_actors()
     community = seed_local_community('books')
