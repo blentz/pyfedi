@@ -896,3 +896,145 @@ def test_a_remote_feed_moderators_request_is_400(app, db_session):
     response = collection_get(app, '/f/news@peer.example/moderators')
 
     assert response.status_code == 400
+
+
+def _feed_item(feed, community):
+    from app.models import FeedItem
+    row = FeedItem(feed_id=feed.id, community_id=community.id)
+    db.session.add(row)
+    db.session.commit()
+    return row
+
+
+def test_a_feed_outbox_lists_its_communities(app, db_session):
+    """The ordinary path. `id` comes from `feed.ap_outbox_url`, which has no
+    declared default -- `_seed_local_feed` sets it.
+    """
+    seed_actors()
+    feed = _seed_local_feed('news', public=True)
+    community = seed_local_community('books')
+    _feed_item(feed, community)
+
+    response = collection_get(app, '/f/news/outbox')
+
+    assert response.status_code == 200
+    assert response.json['id'] == 'https://test.piefed.local/f/news/outbox'
+    assert response.json['type'] == 'Collection'
+
+
+def test_an_unknown_feed_outbox_crashes(app, db_session):
+    """PINS a crash, remotely reachable. DO NOT FIX -- a later task does.
+
+    `feed_outbox` has NO `if feed is not None:` guard at all -- unlike
+    `feed_followers` (correct, `else: abort(404)`) and `feed_moderators_route`
+    (has the guard, lacks the `else`, raising TypeError instead -- pinned by
+    `test_an_unknown_feed_moderators_returns_500` above). `feed_outbox` reads
+    `feed.public` directly right after the lookup, so an unknown feed makes
+    `feed` None and raises `AttributeError: 'NoneType' object has no
+    attribute 'public'` -- confirmed by running this test.
+
+    THE CRASH DOES NOT MATERIALISE AS A RESPONSE, for the same reason
+    registered against `feed_moderators_route` above: `tests/conftest.py`
+    sets `TESTING = True` with no `PROPAGATE_EXCEPTIONS` override, so Flask
+    re-raises instead of turning the exception into a 500, and the test
+    client's `raise_server_exceptions=True` lets it escape `collection_get`
+    entirely. So this asserts the exception, not `response.status_code` --
+    the brief's literal `assert response.status_code == 500` would never
+    run.
+    """
+    seed_actors()
+
+    with pytest.raises(AttributeError, match="'NoneType' object has no attribute 'public'"):
+        collection_get(app, '/f/nosuch/outbox')
+
+
+def test_a_non_public_feed_outbox_is_403(app, db_session):
+    """`if not feed.public: abort(403)`. `public=False` passed explicitly --
+    it is also the column default, so relying on it would hide the premise.
+    """
+    seed_actors()
+    _seed_local_feed('news', public=False)
+
+    response = collection_get(app, '/f/news/outbox')
+
+    assert response.status_code == 403
+
+
+def test_the_feed_outbox_publishes_local_only_communities(app, db_session):
+    """PINS a defect. `feed_outbox`'s own comment says it "will just be the
+    same as the /following collection". It is not: `feed_following`
+    (app/activitypub/routes.py, not yet covered by a test in this file) skips
+    communities that are `local_only` or `private` -- verified by reading its
+    code, which is identical to `feed_outbox`'s query and loop except for
+    that one extra `if c.local_only or c.private: continue` -- and
+    `feed_outbox` applies no such filter.
+
+    So the endpoint documented as equivalent publishes the URL of a community
+    its twin deliberately withholds. `local_only` is set explicitly; it
+    defaults to False.
+    """
+    seed_actors()
+    feed = _seed_local_feed('news', public=True)
+    community = seed_local_community('books')
+    community.local_only = True
+    db.session.commit()
+    _feed_item(feed, community)
+
+    response = collection_get(app, '/f/news/outbox')
+
+    assert response.status_code == 200
+    assert community.ap_public_url in response.json['items']
+
+
+def test_the_feed_outbox_malformed_join_is_masked_by_orm_deduplication(app, db_session):
+    """DEVIATES from the brief, which predicted `totalItems == 2` here.
+    Observed instead: `totalItems == 1`. Reported rather than forced, per this
+    task's own instructions.
+
+    The join is genuinely malformed -- confirmed directly, not just read:
+
+        db.session.query(FeedItem).join(Feed, FeedItem.feed_id == feed.id)
+
+    compiles to `... JOIN feed ON feed_item.feed_id = %(feed_id_1)s`, an ON
+    clause that never references the joined `feed` table at all. Run as raw
+    SQL against this test's data (one FeedItem, two feed rows -- `news` and
+    `sports`; `seed_actors` creates no Feed rows of its own, confirmed by
+    reading `tests/test_actor_profiles.py:seed_actors`, and `db_session`
+    truncates every table between tests, so exactly `len(feeds) == 2` holds),
+    it returns TWO rows, the same FeedItem paired with each feed row -- a
+    genuine cartesian product. `session.execute(select(FeedItem).join(...))`
+    without `.unique()` reproduces the same two-row duplication.
+
+    But `feed_outbox` does not call either of those; it calls
+    `db.session.query(...).all()` -- SQLAlchemy's legacy ORM `Query` API,
+    which (unlike 2.0-style `select()`) automatically de-duplicates its
+    result list by primary-key identity. Both cartesian rows carry the same
+    `FeedItem.id`, so `Query.all()` collapses them to one Python object
+    before `feed_outbox` ever builds `items`. Confirmed by running all four
+    forms side by side against identical data: raw SQL and un-`.unique()`d
+    `select()` each show 2 rows; `Query.all()` (what the route actually
+    calls) and `.unique()`d `select()` each show 1.
+
+    So the malformed join is real, but is not externally observable through
+    this endpoint: `totalItems` stays 1 regardless of how many feed rows
+    exist on the instance. `len(feeds) == 2` here, and `totalItems` does NOT
+    match it -- the opposite of the brief's prediction. The second feed is
+    kept in this test specifically to make that non-match visible; a
+    single-feed version of this test would look identical to the ordinary
+    path and prove nothing about the join at all.
+    """
+    seed_actors()
+    feed = _seed_local_feed('news', public=True)
+    _seed_local_feed('sports', public=True)
+    community = seed_local_community('books')
+    _feed_item(feed, community)
+    from app.models import Feed
+    feeds = Feed.query.all()
+
+    response = collection_get(app, '/f/news/outbox')
+
+    assert response.status_code == 200
+    assert len(feeds) == 2
+    assert response.json['totalItems'] == 1
+    assert response.json['totalItems'] != len(feeds)
+    assert response.json['items'] == [community.ap_public_url]
