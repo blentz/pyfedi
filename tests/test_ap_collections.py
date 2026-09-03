@@ -683,3 +683,129 @@ def test_an_unknown_user_followers_is_404(app, db_session):
     response = collection_get(app, '/u/nosuch/followers')
 
     assert response.status_code == 404
+
+
+def _seed_local_feed(name='news', public=True):
+    """A local feed the collection lookups resolve, with the AP URL columns set.
+
+    `Feed.ap_followers_url`/`ap_following_url`/`ap_outbox_url` have NO declared
+    defaults and `make_local_feed` does not set them -- `feed_outbox` and
+    `feed_following` use them directly as the response `id`, so it comes back
+    None unless a test sets it. `feed_followers`, covered here, builds its `id`
+    from `SERVER_URL` instead and never reads `ap_followers_url`, but the three
+    columns are set unconditionally so this helper is a single contract for
+    Tasks 7-9 too.
+    """
+    from tests.factories import make_local_feed
+    feed = make_local_feed(name, public=public)
+    base = f'https://test.piefed.local/f/{name}'
+    feed.ap_followers_url = f'{base}/followers'
+    feed.ap_following_url = f'{base}/following'
+    feed.ap_outbox_url = f'{base}/outbox'
+    db.session.commit()
+    return feed
+
+
+def _feed_member(feed, user):
+    from app.models import FeedMember
+    row = FeedMember(feed_id=feed.id, user_id=user.id)
+    db.session.add(row)
+    db.session.commit()
+    return row
+
+
+def test_a_feed_followers_collection_counts_its_members(app, db_session):
+    """`totalItems` is a real `FeedMember` count
+    (`FeedMember.query.filter_by(feed_id=feed.id).count()`,
+    app/activitypub/routes.py)."""
+    site, instance = seed_actors()
+    feed = _seed_local_feed('news', public=True)
+    member = make_user(instance, 'member', local=True)
+    _feed_member(feed, member)
+
+    response = collection_get(app, '/f/news/followers')
+
+    assert response.status_code == 200
+    assert response.json['type'] == 'Collection'
+    assert response.json['totalItems'] == 1
+
+
+def test_the_feed_followers_items_list_is_always_empty(app, db_session):
+    """PINS a defect. `totalItems` is a real count but `items` is hardcoded
+    `[]` in the route itself, so the document says "one follower" and lists
+    none.
+
+    Hiding follower lists is a defensible privacy choice, but reporting a
+    non-zero count beside an empty list is self-contradictory: a consumer
+    cannot tell "hidden" from "none". `community_followers` (covered in this
+    file) does the same. `user_followers` (also covered in this file), by
+    contrast, populates its items and filters blocked and unaccepted follows.
+    Two of the three contradict themselves; one does not.
+    """
+    site, instance = seed_actors()
+    feed = _seed_local_feed('news', public=True)
+    member = make_user(instance, 'member', local=True)
+    _feed_member(feed, member)
+
+    response = collection_get(app, '/f/news/followers')
+
+    assert response.status_code == 200
+    assert response.json['totalItems'] == 1
+    assert response.json['items'] == []
+
+
+def test_a_remote_feed_followers_request_is_400(app, db_session):
+    """`'@' in actor` -> abort(400). All four feed collections have this check;
+    none of the community or user collections in this file does.
+    """
+    seed_actors()
+
+    response = collection_get(app, '/f/news@peer.example/followers')
+
+    assert response.status_code == 400
+
+
+def test_an_unknown_feed_followers_is_404(app, db_session):
+    """`feed_followers` is the ONLY feed collection with a correct
+    `if feed is not None: ... else: abort(404)`. `feed_outbox`, `feed_following`
+    and `feed_moderators_route` all look the feed up the same way and then
+    dereference it (`feed.public`, `feed.user_id`, ...) with no None check at
+    all -- an unknown feed there is a 500, not a 404 (verified by reading
+    app/activitypub/routes.py; none of the three is exercised by a test in
+    this file yet).
+    """
+    seed_actors()
+
+    response = collection_get(app, '/f/nosuch/followers')
+
+    assert response.status_code == 404
+
+
+def test_the_feed_followers_collection_sets_its_cache_control(app, db_session):
+    seed_actors()
+    _seed_local_feed('news', public=True)
+
+    response = collection_get(app, '/f/news/followers')
+
+    assert response.status_code == 200
+    assert response.headers['Cache-Control'] == 'public, max-age=15'
+
+
+def test_a_non_public_feed_still_has_a_followers_collection(app, db_session):
+    """PINS a defect. `feed_followers` never reads `feed.public` at all.
+    `feed_outbox` and `feed_following` (app/activitypub/routes.py) both guard
+    `if not feed.public: abort(403)` right after the same lookup -- verified by
+    reading their code; neither is exercised by a test in this file yet, so
+    this test claims only what `feed_followers` itself does, not what tests
+    prove about its siblings.
+
+    `public=False` is passed explicitly: it is also `Feed.public`'s column
+    default, and `make_local_feed`'s own default, so leaving it implicit would
+    assert nothing about this endpoint's behaviour.
+    """
+    seed_actors()
+    _seed_local_feed('news', public=False)
+
+    response = collection_get(app, '/f/news/followers')
+
+    assert response.status_code == 200
