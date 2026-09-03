@@ -173,7 +173,8 @@ def test_a_moderator_deleting_a_post_marks_it_deleted_and_decrements_counters(
     through the inbox dispatcher.
 
     `redis_lock_only_double` is REQUIRED, not optional: this function takes
-    `redis_client.lock(...)` on four keys, and it does `from app import
+    `redis_client.lock(...)` on three keys in the Post branch and four more in
+    the PostReply branch, and it does `from app import
     redis_client` inside its own body, so the fixture's patch of
     `app.redis_client` reaches it. Without the fixture the test talks to the
     real, shared, never-truncated Redis in the compose stack.
