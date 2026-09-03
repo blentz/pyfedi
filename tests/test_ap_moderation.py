@@ -485,3 +485,100 @@ def test_deleting_a_post_removes_its_notifications_but_keeps_report_notifs(
     surviving = db.session.query(Notification).all()
     assert len(surviving) == 1
     assert surviving[0].notif_type == NOTIF_REPORT
+
+
+def test_restoring_a_post_clears_deleted_and_restores_counters(
+        app, db_session, monkeypatch, redis_lock_only_double):
+    """`restore_post_or_comment`'s Post branch. Note it takes NO redis locks
+    where `delete_post_or_comment` wraps every one of these same counter
+    mutations in one -- a registered asymmetry, not something this test
+    fixes. `redis_lock_only_double` is still requested so the test is safe if that
+    changes.
+
+    Counters are seeded to 4 and asserted at 5, the mirror of Task 1's
+    deletion test.
+    """
+    site, instance, community, author, moderator = seed_moderation_scene()
+    post = make_post(community, author, None, title='a post')
+    post.deleted = True
+    post.deleted_by = moderator.id
+    community.post_count = 4
+    author.post_count = 4
+    db.session.commit()
+
+    ap_util.restore_post_or_comment(moderator, post, False,
+                                    {'id': 'https://peer.example/activities/undo/1'}, 'appeal')
+
+    assert post.deleted is False
+    assert post.deleted_by is None
+    assert community.post_count == 5
+    assert author.post_count == 5
+
+
+def test_restoring_a_reply_restores_only_the_counters_it_knows_about(
+        app, db_session, monkeypatch, redis_lock_only_double):
+    """PINS A DEFECT. `restore_post_or_comment`'s PostReply branch increments
+    `post.reply_count` (when not a bot) and `author.post_reply_count` -- and
+    NOTHING ELSE. `delete_post_or_comment` decrements four counters for the
+    same row.
+
+    So `community.post_reply_count` and `post.reply_count_cross_posted` are
+    asserted UNCHANGED here, which is the defect: a restore does not undo
+    what the delete did. Task 5 proves this end to end with a round trip;
+    this test states it for the restore call in isolation.
+    """
+    site, instance, community, author, moderator = seed_moderation_scene()
+    post = make_post(community, author, None, title='a post')
+    reply = make_post_reply(post, author)
+    reply.deleted = True
+    post.reply_count = 4
+    post.reply_count_cross_posted = 4
+    author.post_reply_count = 4
+    community.post_reply_count = 4
+    author.bot = False
+    db.session.commit()
+
+    ap_util.restore_post_or_comment(moderator, reply, False,
+                                    {'id': 'https://peer.example/activities/undo/1'}, '')
+
+    assert reply.deleted is False
+    assert post.reply_count == 5
+    assert author.post_reply_count == 5
+    assert community.post_reply_count == 4      # NOT restored -- the defect
+    assert post.reply_count_cross_posted == 4   # NOT restored -- the defect
+
+
+def test_an_unrelated_user_cannot_restore_a_post(app, db_session, monkeypatch, redis_lock_only_double):
+    """The same four-disjunct guard `delete_post_or_comment` carries, copied
+    rather than shared -- verified textually identical, which is why this
+    task tests the refusal and one success instead of repeating Task 2's
+    four-way isolation.
+    """
+    site, instance, community, author, moderator = seed_moderation_scene()
+    stranger = make_user(instance, 'stranger', local=True)
+    post = make_post(community, author, None, title='a post')
+    post.deleted = True
+    db.session.commit()
+
+    ap_util.restore_post_or_comment(stranger, post, False,
+                                    {'id': 'https://peer.example/activities/undo/1'}, '')
+
+    assert post.deleted is True
+
+
+def test_restoring_another_users_post_writes_a_restore_modlog_entry(
+        app, db_session, monkeypatch, redis_lock_only_double):
+    """Action string `restore_post`, distinct from deletion's `delete_post`.
+    `add_to_modlog` raises on an unknown action, so the string is under test.
+    """
+    site, instance, community, author, moderator = seed_moderation_scene()
+    post = make_post(community, author, None, title='a post')
+    post.deleted = True
+    db.session.commit()
+
+    ap_util.restore_post_or_comment(moderator, post, False,
+                                    {'id': 'https://peer.example/activities/undo/1'}, 'appeal')
+
+    entries = db.session.query(ModLog).all()
+    assert len(entries) == 1
+    assert entries[0].action == 'restore_post'
