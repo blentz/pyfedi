@@ -32,7 +32,8 @@ import pytest
 from app import db
 from app.activitypub import util as ap_util
 from app.constants import NOTIF_REPORT, NOTIF_USER, POST_STATUS_PUBLISHED
-from app.models import File, InstanceRole, ModLog, Notification, Post, PostReply, User
+from app.models import (CommunityBan, CommunityMember, File, InstanceBan, InstanceRole, ModLog,
+                        Notification, Post, PostReply, User)
 from tests.factories import (make_community, make_community_ban, make_community_member,
                              make_instance, make_post, make_post_reply, make_site, make_user,
                              seed_community_owner)
@@ -896,3 +897,117 @@ def test_a_community_ban_deletes_files_without_purging_the_cdn(
     assert calls[0][0] == attached.id
     assert calls[0][1] is True   # the default -- same as the site path passes
     assert attached.source_url == ''
+
+
+def test_a_community_ban_creates_the_ban_row_and_flags_the_membership(
+        app, db_session, monkeypatch):
+    """`ban_user`'s community branch. It creates a CommunityBan, flags any
+    existing CommunityMember as banned, and writes a modlog entry.
+
+    The membership row is created BEFORE the call so the
+    `if community_membership_record:` branch is reached -- on a user with no
+    membership that branch is skipped, and the ban still succeeds.
+    """
+    site, instance, community, author, moderator = seed_moderation_scene()
+    make_community_member(author, community)
+    db.session.commit()
+
+    ap_util.ban_user(moderator, author, community,
+                     {'id': 'https://peer.example/activities/block/1', 'summary': 'spam'})
+
+    ban = db.session.query(CommunityBan).filter_by(user_id=author.id,
+                                                   community_id=community.id).first()
+    assert ban is not None
+    assert ban.reason == 'spam'
+    assert ban.banned_by == moderator.id
+    membership = db.session.query(CommunityMember).filter_by(
+        user_id=author.id, community_id=community.id).first()
+    assert membership.is_banned is True
+    assert db.session.query(ModLog).filter_by(action='ban_user').count() == 1
+
+
+def test_re_banning_in_a_community_writes_no_second_modlog_entry(
+        app, db_session, monkeypatch):
+    """PINS AN ASYMMETRY. In `ban_user`'s COMMUNITY branch the
+    `if not existing:` guard wraps the ENTIRE body, including
+    `add_to_modlog`. So re-banning an already-banned user is a total no-op.
+
+    In the INSTANCE branch the equivalent guard wraps only the InstanceBan
+    row creation, so a re-ban there still notifies and still writes a modlog
+    entry. Same intent, two different scopes -- pinned by this test and its
+    instance-side twin below.
+    """
+    site, instance, community, author, moderator = seed_moderation_scene()
+    make_community_ban(author, community, banned_by=moderator, reason='first')
+
+    ap_util.ban_user(moderator, author, community,
+                     {'id': 'https://peer.example/activities/block/2', 'summary': 'second'})
+
+    ban = db.session.query(CommunityBan).filter_by(user_id=author.id,
+                                                   community_id=community.id).first()
+    assert ban.reason == 'first'   # unchanged -- the whole body was skipped
+    assert db.session.query(ModLog).count() == 0
+
+
+def test_an_instance_ban_creates_an_instance_ban_row_and_a_modlog_entry(
+        app, db_session, monkeypatch):
+    """`ban_user`'s instance branch, reached by passing `community=None`. It
+    resolves the instance from `core_activity['target']`'s host via
+    `find_instance_id`, which CREATES AND COMMITS a sparse Instance row for
+    an unknown domain -- so the target host is one this test seeded, or the
+    ban would attach to a row that appeared as a side effect.
+    """
+    site, instance, community, author, moderator = seed_moderation_scene()
+
+    ap_util.ban_user(moderator, author, None,
+                     {'id': 'https://peer.example/activities/block/1',
+                      'target': 'https://peer.example/',
+                      'summary': 'spam'})
+
+    ban = db.session.query(InstanceBan).filter_by(user_id=author.id).first()
+    assert ban is not None
+    assert db.session.query(ModLog).filter_by(action='ban_user').count() == 1
+
+
+def test_re_banning_instance_wide_still_writes_a_second_modlog_entry(
+        app, db_session, monkeypatch):
+    """The twin of the community test above, and the finding. Here
+    `if not existing_ban:` guards ONLY the InstanceBan creation: the modlog
+    entry sits outside it, so a duplicate ban writes a second entry where the
+    community branch writes none.
+
+    One ban row, two modlog entries -- both asserted, because either alone
+    would be consistent with the other branch's behaviour.
+    """
+    site, instance, community, author, moderator = seed_moderation_scene()
+    activity = {'id': 'https://peer.example/activities/block/1',
+                'target': 'https://peer.example/', 'summary': 'spam'}
+
+    ap_util.ban_user(moderator, author, None, activity)
+    ap_util.ban_user(moderator, author, None, activity)
+
+    assert db.session.query(InstanceBan).filter_by(user_id=author.id).count() == 1
+    assert db.session.query(ModLog).filter_by(action='ban_user').count() == 2
+
+
+def test_a_ban_reason_longer_than_255_characters_is_shortened(
+        app, db_session, monkeypatch):
+    """Both branches pass the summary through `shorten_string(reason, 255)`.
+    `CommunityBan.reason` is a String(256) column, so an untruncated reason
+    would raise on commit rather than silently truncate -- which is why this
+    is worth a test rather than an assumption.
+
+    Note shorten_string does not return exactly 255 characters: it cuts to
+    252 and appends an ellipsis. The assertion is on the length bound, not
+    on an exact figure, and the ellipsis is asserted separately.
+    """
+    site, instance, community, author, moderator = seed_moderation_scene()
+
+    ap_util.ban_user(moderator, author, community,
+                     {'id': 'https://peer.example/activities/block/1',
+                      'summary': 'x' * 400})
+
+    ban = db.session.query(CommunityBan).filter_by(user_id=author.id,
+                                                   community_id=community.id).first()
+    assert len(ban.reason) <= 255
+    assert ban.reason.endswith('…')
