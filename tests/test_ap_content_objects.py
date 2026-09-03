@@ -32,9 +32,9 @@ def ap_get(app, path, user_agent=None):
 def browser_get(app, path):
     """GET with no Accept header at all -- the non-ActivityPub branch.
 
-    Four of these endpoints answer this differently: `comment_ap` delegates to
-    `continue_discussion`, `post_ap` to `show_post`, and `post_ap_context` and
-    `post_replies_ap` both abort 400.
+    Four of these endpoints answer it, in three different ways: `comment_ap`
+    delegates to `continue_discussion`, `post_ap` to `show_post`, and
+    `post_ap_context` and `post_replies_ap` both abort 400.
     """
     with app.test_client() as client:
         return client.get(path)
@@ -56,9 +56,9 @@ def seed_local_post(community=None, user=None, title='a post'):
 
 
 def _double_the_delegates(monkeypatch):
-    """Stop the five delegates from running, and record what they were passed.
+    """Stop the six delegates from running, and record what they were passed.
 
-    All five are imported INTO `app.activitypub.routes` -- `post_to_page`,
+    All six are imported INTO `app.activitypub.routes` -- `post_to_page`,
     `comment_model_to_json` and `post_replies_for_ap` from
     `app.activitypub.util`, `continue_discussion` and `show_post` from
     `app.post.routes`, and `block_honey_pot` from `app.utils` -- so they are
@@ -522,8 +522,8 @@ def test_a_browser_request_for_post_replies_is_400(app, db_session, monkeypatch)
     view returned None, and Flask raised
     `TypeError: The view function ... did not return a valid response`.
 
-    400 rather than 404 matches `post_ap_context`, the sibling twelve lines
-    below, which had the correct shape all along. `comment_ap` and `post_ap`
+    400 rather than 404 matches `post_ap_context`, the sibling below it in the
+    same file, which had the correct shape all along. `comment_ap` and `post_ap`
     answer a browser with HTML instead, which is a richer answer this fix
     deliberately did not adopt -- there is no HTML view for a replies
     collection.
