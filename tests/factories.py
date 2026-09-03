@@ -199,7 +199,7 @@ def make_local_feed(name: str = 'localfeed', public: bool = False) -> Feed:
     `ap_profile_id`), so this is a sibling rather than a change to it.
 
     `public` defaults to False to match Feed.public's own column default
-    (app/models.py:4062); callers pass it explicitly either way, because an
+    (app/models.py:4098); callers pass it explicitly either way, because an
     assertion resting on a declared default proves nothing.
     """
     feed = Feed(name=name, title=name, instance_id=1, public=public,
