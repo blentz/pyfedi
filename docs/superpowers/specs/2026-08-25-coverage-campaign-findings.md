@@ -1307,9 +1307,10 @@ says which numbers are taken. So there is one now, and it is this file:
   cross-endpoint rendering asymmetries (`public_url()` vs `ap_profile_id`;
   caller-casing echoed into `id`, the D159 class on two more endpoints);
   D185 is `outbox` declaring two different collection types on two
-  endpoints; D186 is a test-suite finding, not a production defect — three
+  endpoints; D186 is a test-suite finding, not a production defect — four
   filter clauses that no mutation could kill until this sub-project wrote
-  the tests for them. D187-D198 were taken by sub-project 11, the six
+  the tests for them: `community_outbox`'s three sticky-side duplicates and
+  `user_followers`' `banned=False`. D187-D198 were taken by sub-project 11, the six
   ActivityPub content-object and activity-log endpoints -- D187 is
   `activity_result` returning this instance's internal exception text to any
   unauthenticated caller, the most serious finding in that slice; D188 is the
