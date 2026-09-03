@@ -74,9 +74,19 @@ this with `user_profile` and the spec that ignored it wasted a task.
 | `log_incoming_ap` type | `APLOG_DELETE` | `APLOG_UNDO_DELETE` |
 
 The two counter rows are the finding: **a delete followed by a restore leaves
-`community.post_reply_count` and `post.reply_count_cross_posted` permanently
-one lower than they were.** Every subsequent cycle loses one more. Both columns
-exist (`app/models.py`), and the delete side maintains both.
+`community.post_reply_count` and `post.reply_count_cross_posted` one lower
+than they were.** Every subsequent cycle loses one more. Both columns exist
+(`app/models.py`), and the delete side maintains both.
+
+> **Retracted after execution.** This paragraph originally said *permanently*
+> one lower. That is false and D200 carries the corrected framing: nothing on
+> the delete/restore path repairs either counter, but `update_community_stats`
+> (`app/shared/tasks/maintenance.py`) rebuilds `community.post_reply_count`
+> from a `COUNT`, and the reply-creation path (`app/models.py`) rebuilds
+> `post.reply_count_cross_posted` for a whole cross-post set. The drift is
+> bounded by a maintenance cycle for the first and unbounded for the second
+> only on a post receiving no further replies. The defect stands: the undo
+> does not undo what the do did.
 
 ### Pair 2: `site_ban_remove_data` / `community_ban_remove_data`
 

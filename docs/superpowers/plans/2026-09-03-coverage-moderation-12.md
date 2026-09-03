@@ -1461,7 +1461,7 @@ Match the surrounding entries' house style — read several existing D-entries f
 
 At minimum, and the ledger will have more:
 
-1. **The delete/restore cycle permanently loses `community.post_reply_count` and `post.reply_count_cross_posted`** — proved by a round-trip test, registered because correcting a counter changes numbers users already see and the historical drift is unrepairable.
+1. **The delete/restore cycle loses `community.post_reply_count` and `post.reply_count_cross_posted`** *(this line originally read "permanently loses"; see D200 and the annotation above Task 5's test for why that was retracted)* — proved by a round-trip test, registered because correcting a counter changes numbers users already see and the historical drift is unrepairable.
 2. **`site_ban_remove_data` wrote to a non-existent `User.reply_count`** — FIXED, with its commit, and record that SQLAlchemy accepted the assignment silently, which is why it survived.
 3. **`restore_post_or_comment` takes no redis locks** where `delete_post_or_comment` wraps every one of the same counter mutations in one.
 4. **`restore_post_or_comment`'s cross-post guard drops a conjunct** — `if to_restore.url:` against delete's `if to_delete.url and to_delete.cross_posts is not None:`.
