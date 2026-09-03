@@ -92,7 +92,7 @@ def test_a_remote_community_outbox_is_404(app, db_session):
 
 
 def test_the_community_outbox_sets_its_cache_control(app, db_session):
-    """max-age=10. Its seven siblings use 5, 15, 120 and -- for
+    """max-age=10. Its eight siblings use 5, 15, 120 and -- for
     `community_featured` -- nothing at all, with no evident rationale. The
     values are asserted exactly so the spread is visible in the suite.
     """
@@ -334,7 +334,7 @@ def test_a_featured_post_under_review_is_published_anyway(app, db_session, monke
 
 
 def test_the_featured_collection_sets_no_cache_control(app, db_session, monkeypatch):
-    """PINS a defect. Every one of the seven sibling collections sets a
+    """PINS a defect. Every one of the eight sibling collections sets a
     Cache-Control header; this one sets none, so caching falls to whatever the
     deployment's default is.
 
