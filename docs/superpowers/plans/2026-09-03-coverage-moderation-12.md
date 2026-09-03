@@ -370,7 +370,7 @@ def test_a_community_moderator_may_delete_a_post(app, db_session, monkeypatch, r
 - [ ] **Step 3: Run the tests**
 
 Run: `./run_tests.sh tests/test_ap_moderation.py -q`
-Expected: 7 passed (or 8 if disjunct 4 proved reachable).
+Expected: 9 passed. (Disjunct 4 proved independently reachable, and my mutation table was wrong about one inner conjunct, so this task added two tests beyond the original estimate.)
 
 - [ ] **Step 4: Mutation-test each disjunct separately**
 
@@ -545,7 +545,7 @@ def test_deleting_a_post_removes_its_notifications_but_keeps_report_notifs(
 - [ ] **Step 5: Run the tests**
 
 Run: `./run_tests.sh tests/test_ap_moderation.py -q`
-Expected: 11 passed (12 if Task 2 added a disjunct-4 test).
+Expected: 13 passed.
 
 - [ ] **Step 6: Mutation-test the two guards**
 
@@ -683,7 +683,7 @@ def test_restoring_another_users_post_writes_a_restore_modlog_entry(
 - [ ] **Step 5: Run and commit**
 
 Run: `./run_tests.sh tests/test_ap_moderation.py -q`
-Expected: 15 passed.
+Expected: 17 passed.
 
 ```bash
 git add tests/test_ap_moderation.py
@@ -780,7 +780,7 @@ def test_a_post_delete_then_restore_cycle_is_lossless(
 - [ ] **Step 3: Run and commit**
 
 Run: `./run_tests.sh tests/test_ap_moderation.py -q`
-Expected: 17 passed.
+Expected: 19 passed.
 
 ```bash
 git add tests/test_ap_moderation.py
@@ -953,7 +953,7 @@ def test_a_site_ban_skips_content_already_deleted(app, db_session, monkeypatch):
 - [ ] **Step 6: Run the tests, then mutation-test the `deleted=False` filter**
 
 Run: `./run_tests.sh tests/test_ap_moderation.py -q`
-Expected: 22 passed.
+Expected: 24 passed.
 
 Drop `deleted=False` from the Post query — `test_a_site_ban_skips_content_already_deleted` must fail. Then drop it from the reply query instead; **that is a separate call site and needs its own kill.** If no test dies on the reply site, that is a combinatorial gap of the kind sub-project 11 hit — report it rather than patching around it, and the controller will rule. Restore and verify the diff is empty.
 
@@ -1071,7 +1071,7 @@ def test_a_community_ban_deletes_files_without_purging_the_cdn(
 - [ ] **Step 4: Run and commit**
 
 Run: `./run_tests.sh tests/test_ap_moderation.py -q`
-Expected: 25 passed.
+Expected: 27 passed.
 
 ```bash
 git add tests/test_ap_moderation.py
@@ -1229,7 +1229,7 @@ def test_a_ban_reason_longer_than_255_characters_is_shortened(
 - [ ] **Step 6: Run and commit**
 
 Run: `./run_tests.sh tests/test_ap_moderation.py -q`
-Expected: 30 passed.
+Expected: 32 passed.
 
 ```bash
 git add tests/test_ap_moderation.py
@@ -1338,7 +1338,7 @@ def test_a_community_unban_notifies_only_a_user_who_has_posted_there(
 - [ ] **Step 4: Run the tests, then mutation-test the `has_poster` guard**
 
 Run: `./run_tests.sh tests/test_ap_moderation.py -q`
-Expected: 33 passed.
+Expected: 35 passed.
 
 Drop `if community.has_poster(blocked):` so the notify runs unconditionally — `test_a_community_unban_notifies_only_a_user_who_has_posted_there` must fail on the lurker's count. Report the kill and its type. Restore and verify the diff is empty.
 
@@ -1385,7 +1385,7 @@ Locate `site_ban_remove_data` by content and change `blocked.reply_count = 0` to
 - [ ] **Step 4: Run the file**
 
 Run: `./run_tests.sh tests/test_ap_moderation.py -q`
-Expected: 33 passed.
+Expected: 35 passed.
 
 - [ ] **Step 5: Mutation-prove the fix**
 
