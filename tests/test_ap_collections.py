@@ -1,4 +1,6 @@
 """tests/test_ap_collections.py"""
+import pytest
+
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.models import Post
@@ -817,3 +819,80 @@ def test_a_non_public_feed_still_has_a_followers_collection(app, db_session):
     response = collection_get(app, '/f/news/followers')
 
     assert response.status_code == 200
+
+
+def test_a_feed_moderators_collection_lists_its_owner(app, db_session):
+    """Feeds have a single owner, wrapped in a list "in case we want to expand
+    that in the future" per the source comment (app/activitypub/routes.py).
+    Rendered as `ap_profile_id`, where `community_moderators_route` renders
+    `public_url()` -- both asserted below, not just claimed.
+
+    `Feed.user_id` (app/models.py) has NO declared default, and neither
+    `make_local_feed` nor `_seed_local_feed` sets it, so it is None unless a
+    test sets it explicitly -- unlike `seed_local_community`, which gives
+    every community `user_id=1` (the `communityowner` user `seed_actors`
+    creates) for free. Left at None, `db.session.query(User).get(feed.user_id)`
+    is `.get(None)`, which returns None, and the very next line --
+    `moderator.ap_profile_id` -- raises `AttributeError: 'NoneType' object has
+    no attribute 'ap_profile_id'`: confirmed by running this test with the
+    `feed.user_id` assignment below removed. So a real owner is created and
+    assigned here, which the brief's literal test body omitted.
+    """
+    site, instance = seed_actors()
+    feed = _seed_local_feed('news', public=True)
+    owner = make_user(instance, 'feedowner', local=True)
+    feed.user_id = owner.id
+    db.session.commit()
+
+    response = collection_get(app, '/f/news/moderators')
+
+    assert response.status_code == 200
+    assert response.json['type'] == 'OrderedCollection'
+    assert response.json['totalItems'] == 1
+    assert response.json['orderedItems'] == [owner.ap_profile_id]
+
+
+def test_an_unknown_feed_moderators_returns_500(app, db_session):
+    """PINS a crash, remotely reachable. DO NOT FIX -- a later task does.
+
+    `feed_moderators_route` opens `if feed is not None:` and has NO `else`, so
+    an unknown feed falls off the end of the function, returns None, and Flask
+    raises. `feed_followers` -- twenty lines away in the same file -- gets this
+    right with `else: abort(404)`. `feed_outbox` and `feed_following` (also
+    uncovered here) get it wrong too, but by a DIFFERENT mechanism: they have
+    no None check at all and read `feed.public` directly, so an unknown feed
+    raises AttributeError instead. Both are pinned in later tasks by that
+    other mechanism; this test pins only `feed_moderators_route`'s.
+
+    Any instance can trigger this with GET /f/<anything>/moderators.
+
+    THE 500 DOES NOT MATERIALISE AS A RESPONSE. `tests/conftest.py` sets
+    `TESTING = True` on the test app with no `PROPAGATE_EXCEPTIONS` override,
+    so Flask's `propagate_exceptions` property (which falls back to
+    `testing or debug` when unset) is True, and `handle_exception` re-raises
+    the exception instead of turning it into a 500 response; the test
+    client's default `raise_server_exceptions=True` then lets it escape
+    `collection_get` entirely. So the observable failure through this
+    suite's client is the exception itself -- confirmed by running this
+    test -- not a `response.status_code`: `TypeError: The view function for
+    'activitypub.feed_moderators_route' did not return a valid response. The
+    function either returned None or ended without a return statement.` This
+    is a deviation from the brief, which assumed a 500 response; the brief
+    said to report this rather than force it, so this test asserts what
+    actually happens.
+    """
+    seed_actors()
+
+    with pytest.raises(TypeError, match='did not return a valid response'):
+        collection_get(app, '/f/nosuch/moderators')
+
+
+def test_a_remote_feed_moderators_request_is_400(app, db_session):
+    """`'@' in actor` -> abort(400), checked BEFORE the None-check that lets
+    the 500 above through -- so a remote actor never reaches the broken path.
+    """
+    seed_actors()
+
+    response = collection_get(app, '/f/news@peer.example/moderators')
+
+    assert response.status_code == 400
