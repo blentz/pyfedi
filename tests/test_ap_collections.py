@@ -1038,3 +1038,133 @@ def test_the_feed_outbox_malformed_join_is_masked_by_orm_deduplication(app, db_s
     assert response.json['totalItems'] == 1
     assert response.json['totalItems'] != len(feeds)
     assert response.json['items'] == [community.ap_public_url]
+
+
+def test_a_feed_following_lists_its_communities(app, db_session):
+    """The ordinary path. `id` comes from `feed.ap_following_url`, which has no
+    declared default -- `_seed_local_feed` sets it. Items are `public_url()`,
+    where `feed_outbox` (above) uses `ap_public_url` -- two different accessors
+    for the same idea, one per endpoint.
+    """
+    seed_actors()
+    feed = _seed_local_feed('news', public=True)
+    community = seed_local_community('books')
+    _feed_item(feed, community)
+
+    response = collection_get(app, '/f/news/following')
+
+    assert response.status_code == 200
+    assert response.json['id'] == 'https://test.piefed.local/f/news/following'
+    assert community.public_url() in response.json['items']
+
+
+def test_an_unknown_feed_following_crashes(app, db_session):
+    """PINS a crash, remotely reachable -- the third of three. DO NOT FIX --
+    a later task does.
+
+    `feed_following` has NO `if feed is not None:` guard, the same as its twin
+    `feed_outbox` above (`test_an_unknown_feed_outbox_crashes`) and unlike
+    `feed_followers` (correct, `else: abort(404)`) or `feed_moderators_route`
+    (has the guard, lacks the `else`, raising TypeError instead -- pinned by
+    `test_an_unknown_feed_moderators_returns_500`). `feed_following` reads
+    `feed.public` directly right after the same lookup, so an unknown feed
+    makes `feed` None and raises `AttributeError: 'NoneType' object has no
+    attribute 'public'` -- confirmed by running this test.
+
+    THE CRASH DOES NOT MATERIALISE AS A RESPONSE, for the same reason
+    registered against `feed_outbox` and `feed_moderators_route` above:
+    `tests/conftest.py` sets `TESTING = True` with no `PROPAGATE_EXCEPTIONS`
+    override, so Flask re-raises instead of turning the exception into a 500,
+    and the test client's `raise_server_exceptions=True` lets it escape
+    `collection_get` entirely. So this asserts the exception, not
+    `response.status_code` -- the brief's literal
+    `assert response.status_code == 500` would never run.
+    """
+    seed_actors()
+
+    with pytest.raises(AttributeError, match="'NoneType' object has no attribute 'public'"):
+        collection_get(app, '/f/nosuch/following')
+
+
+def test_a_non_public_feed_following_is_403(app, db_session):
+    """`if not feed.public: abort(403)`. `public=False` passed explicitly --
+    it is also the column default, so relying on it would hide the premise.
+    """
+    seed_actors()
+    _seed_local_feed('news', public=False)
+
+    response = collection_get(app, '/f/news/following')
+
+    assert response.status_code == 403
+
+
+def test_feed_following_skips_local_only_communities(app, db_session):
+    """`if c.local_only or c.private: continue` -- the filter `feed_outbox`
+    LACKS, per `test_the_feed_outbox_publishes_local_only_communities` above.
+    First disjunct isolated here: `private` is set explicitly to False so a
+    failure can only come from `local_only`.
+    """
+    seed_actors()
+    feed = _seed_local_feed('news', public=True)
+    community = seed_local_community('books')
+    community.local_only = True
+    community.private = False
+    db.session.commit()
+    _feed_item(feed, community)
+
+    response = collection_get(app, '/f/news/following')
+
+    assert response.status_code == 200
+    assert response.json['items'] == []
+
+
+def test_feed_following_skips_private_communities(app, db_session):
+    """Second disjunct. `local_only` is set explicitly to False, so this is
+    the only test in this pair that can kill `c.private`.
+    """
+    seed_actors()
+    feed = _seed_local_feed('news', public=True)
+    community = seed_local_community('books')
+    community.local_only = False
+    community.private = True
+    db.session.commit()
+    _feed_item(feed, community)
+
+    response = collection_get(app, '/f/news/following')
+
+    assert response.status_code == 200
+    assert response.json['items'] == []
+
+
+def test_the_feed_following_malformed_join_is_masked_by_orm_deduplication(app, db_session):
+    """Twin of `test_the_feed_outbox_malformed_join_is_masked_by_orm_deduplication`
+    above. DEVIATES from the brief the same way that test does: the brief
+    predicted `totalItems == 2`; observed instead is `totalItems == 1`.
+    Reported rather than forced, per this task's own instructions.
+
+    The join at app/activitypub/routes.py:2790 is byte-identical in shape to
+    `feed_outbox`'s at :2756 -- `FeedItem.feed_id == feed.id`, an ON clause
+    that never references the joined `Feed` table -- so it produces the same
+    genuine cartesian product against raw SQL or an un-`.unique()`d 2.0-style
+    `select()`. But `feed_following` also calls legacy `Query.all()`, which
+    de-duplicates by `FeedItem.id` identity before the route ever builds
+    `items`, exactly as verified for `feed_outbox`. `seed_actors` creates no
+    Feed rows of its own, and `db_session` truncates every table between
+    tests, so `len(feeds) == 2` holds from the two explicit
+    `_seed_local_feed` calls below.
+    """
+    seed_actors()
+    feed = _seed_local_feed('news', public=True)
+    _seed_local_feed('sports', public=True)
+    community = seed_local_community('books')
+    _feed_item(feed, community)
+    from app.models import Feed
+    feeds = Feed.query.all()
+
+    response = collection_get(app, '/f/news/following')
+
+    assert response.status_code == 200
+    assert len(feeds) == 2
+    assert response.json['totalItems'] == 1
+    assert response.json['totalItems'] != len(feeds)
+    assert response.json['items'] == [community.public_url()]
