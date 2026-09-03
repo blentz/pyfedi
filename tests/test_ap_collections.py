@@ -154,8 +154,9 @@ def test_a_post_under_review_is_excluded(app, db_session, monkeypatch):
     `Post.status` defaults to 1, which PASSES the filter, so the excluded side
     needs status set to 0 explicitly.
 
-    `community_featured` applies no such filter -- that asymmetry is pinned in
-    the next task.
+    `community_featured` filters only `deleted=False`, with no status clause
+    at all, so the same post is treated differently by the two endpoints.
+    This test proves only what `community_outbox` does.
     """
     seed_actors()
     community = seed_local_community('books')
@@ -233,6 +234,31 @@ def test_a_sticky_post_under_review_is_excluded(app, db_session, monkeypatch):
     post = make_post(community, user, 'https://test.piefed.local/post/1')
     post.sticky = True
     post.status = 0
+    db.session.commit()
+    monkeypatch.setattr(activitypub_routes, 'post_to_activity',
+                        lambda post, community: 'AP')
+
+    response = collection_get(app, '/c/books/outbox')
+
+    assert response.status_code == 200
+    assert response.json['orderedItems'] == []
+
+
+def test_a_sticky_post_in_another_community_is_excluded(app, db_session, monkeypatch):
+    """`Post.community_id == community.id`, in the STICKY query specifically.
+    `test_a_post_in_another_community_is_excluded`'s post is `sticky=False`
+    (the column default), so it only ever reaches the REMAINING query and
+    cannot prove the STICKY query enforces this filter too. This test is
+    identical to it except the foreign post also has `sticky = True` set
+    explicitly, which would route it into the STICKY query if that query's
+    community filter were missing.
+    """
+    seed_actors()
+    community = seed_local_community('books')
+    other = make_community(name='films', host='test.piefed.local')
+    user = make_user(None, 'author', local=True)
+    post = make_post(other, user, 'https://test.piefed.local/post/1')
+    post.sticky = True
     db.session.commit()
     monkeypatch.setattr(activitypub_routes, 'post_to_activity',
                         lambda post, community: 'AP')
