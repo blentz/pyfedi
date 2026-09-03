@@ -355,3 +355,76 @@ def test_an_unknown_post_is_404_for_an_activitypub_request(app, db_session, monk
     response = ap_get(app, '/post/999999')
 
     assert response.status_code == 404
+
+
+def test_a_post_in_a_local_only_community_is_403(app, db_session, monkeypatch):
+    """First disjunct of three. `private` and `status` are both set explicitly
+    to their non-triggering values, so dropping `local_only` fails THIS test
+    alone.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    community.local_only = True
+    community.private = False
+    post.status = POST_STATUS_PUBLISHED
+    db.session.commit()
+
+    response = ap_get(app, f'/post/{post.id}')
+
+    assert response.status_code == 403
+
+
+def test_a_post_in_a_private_community_is_403(app, db_session, monkeypatch):
+    """Second disjunct."""
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    community.local_only = False
+    community.private = True
+    post.status = POST_STATUS_PUBLISHED
+    db.session.commit()
+
+    response = ap_get(app, f'/post/{post.id}')
+
+    assert response.status_code == 403
+
+
+def test_an_unpublished_post_is_403(app, db_session, monkeypatch):
+    """Third disjunct: `post.status < POST_STATUS_PUBLISHED`.
+
+    `POST_STATUS_REVIEWING` is 0 and `POST_STATUS_PUBLISHED` is 1
+    (app/constants.py), and `make_post` leaves `status` at the column default,
+    which IS `POST_STATUS_PUBLISHED` -- so this test must set it, and both
+    community flags are set to False so the other two disjuncts cannot be what
+    produced the 403.
+
+    Note `post_replies_ap` and `post_ap_context` apply NO status guard, so the
+    same under-review post's replies remain enumerable. Registered, not fixed.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    community.local_only = False
+    community.private = False
+    post.status = POST_STATUS_REVIEWING
+    db.session.commit()
+
+    response = ap_get(app, f'/post/{post.id}')
+
+    assert response.status_code == 403
+
+
+def test_a_post_is_401_when_the_author_has_blocked_the_requesting_instance(app, db_session, monkeypatch):
+    """`post_ap`'s copy of `comment_ap`'s 401 guard. The Instance row is created
+    with the exact domain `requestor_domain()` will extract, because
+    `find_instance_id` CREATES AND COMMITS a sparse Instance row for an unknown
+    domain -- so an absent row would silently yield an id the author has not
+    blocked and this test would measure the wrong branch.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    blocked = make_instance('blocked.example')
+    make_instance_block(author, blocked)
+
+    response = ap_get(app, f'/post/{post.id}',
+                      user_agent='Test (+https://blocked.example)')
+
+    assert response.status_code == 401
