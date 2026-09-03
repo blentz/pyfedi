@@ -783,3 +783,34 @@ def test_a_site_ban_skips_content_already_deleted(app, db_session, monkeypatch):
     ap_util.site_ban_remove_data(moderator.id, author)
 
     assert community.post_count == 5
+
+
+def test_a_site_ban_skips_replies_already_deleted(app, db_session, monkeypatch):
+    """The reply query's `deleted=False` filter, which NO other test can kill.
+
+    `test_a_site_ban_skips_content_already_deleted` covers the POST query's copy
+    of the same clause. The two are separate call sites in
+    `site_ban_remove_data`, and dropping either one is a distinct regression --
+    so each needs its own fixture, and until this test existed the reply copy
+    was enforced by nothing.
+
+    The reply is the ONLY content seeded, and it is already deleted, so a
+    working filter leaves every counter alone. Without the filter the function
+    would decrement `community.post_reply_count` for a row it had already
+    accounted for -- the double-decrement that makes this worth pinning rather
+    than registering.
+    """
+    _double_file_deletion(monkeypatch)
+    site, instance, community, author, moderator = seed_moderation_scene()
+    post = make_post(community, author, None, title='a post')
+    already = make_post_reply(post, author)
+    already.deleted = True
+    post.reply_count = 5
+    community.post_reply_count = 5
+    author.bot = False
+    db.session.commit()
+
+    ap_util.site_ban_remove_data(moderator.id, author)
+
+    assert community.post_reply_count == 5
+    assert post.reply_count == 5
