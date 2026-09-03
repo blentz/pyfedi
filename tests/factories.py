@@ -411,6 +411,32 @@ def ban_user_from_community(user: User, community: Community) -> CommunityBan:
     return ban
 
 
+def make_community_ban(user: User, community: Community, banned_by: User = None,
+                       reason: str = '', ban_until=None) -> CommunityBan:
+    """The row `ban_user` checks for before creating its own, and the row
+    `unban_user` deletes.
+
+    `CommunityBan` has a COMPOSITE primary key -- `user_id` and
+    `community_id` together (app/models.py) -- and no `id` column, so a test
+    that wants to assert the row is gone queries by both keys rather than by
+    an id it never received.
+
+    `banned_by` defaults to the community's own owner rather than to None,
+    because a NULL `banned_by` is not a state `ban_user` can produce and a
+    fixture that manufactures one would test a shape production never sees.
+    """
+    ban = CommunityBan(
+        user_id=user.id,
+        community_id=community.id,
+        banned_by=banned_by.id if banned_by else community.user_id,
+        reason=reason,
+        ban_until=ban_until,
+    )
+    db.session.add(ban)
+    db.session.commit()
+    return ban
+
+
 def make_instance_ban(user: User, instance: Instance) -> InstanceBan:
     """The InstanceBan half of banned_instances() -- ban_user_from_community's
     docstring ruled this out of scope for the earlier community-ban task on the
