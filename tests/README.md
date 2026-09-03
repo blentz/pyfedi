@@ -2058,7 +2058,7 @@ in `ap_profile_id` -- so this is a sibling factory, not a change to it. Use
 `make_local_feed` when it needs to be resolvable as a LOCAL one (e.g. by
 webfinger).
 
-**32. `requestor_domain()` (`app/utils.py:5721-5728`) reads the `User-Agent`
+**32. `requestor_domain()` (`app/utils.py:5736-5743`) reads the `User-Agent`
 header's `+URL` comment, not a doubled function.** It splits on `'+'`, takes
 the last segment, strips a trailing `')'`, and parses the host out with
 `furl`. A route guarded by it (webfinger's allowlist/ban checks) is driven in
@@ -2144,7 +2144,15 @@ never actually run authenticated. A test that must authenticate should log in
 sends.** Flask-Compress's `after_request` hook
 (`flask_compress/flask_compress.py:222-229`, confirmed empirically in
 sub-project 9's Task 3) unconditionally appends `Accept-Encoding` to the
-`Vary` header of every response, whether or not the view itself set one. A view that sets
+`Vary` header of every response, whether or not the view itself set one.
+**"Unconditionally" is literal in two directions that matter, both re-read at
+source in sub-project 11's Task 2:** the `Vary` append is the *first* thing
+`after_request` does (`:225-229`, the function itself opening at `:222`), before
+any mimetype, size or
+`COMPRESS_MIN_SIZE` test, so it is not gated on the response being large enough
+to compress; and `compress.init_app(app)` (`app/__init__.py:203`) is not gated
+on `TESTING`, so this is production behaviour observed in the harness, not a
+test-environment artefact. A view that sets
 `Vary: Accept` therefore yields `'Accept, Accept-Encoding'`, and a view that
 sets no `Vary` at all still yields `'Accept-Encoding'` alone, never a missing
 header. Assert the full value (`response.headers.get('Vary') ==
@@ -2323,6 +2331,83 @@ phrasing of the rule does not cover. The fix shape is to set the column and its
 near-twin to *different* values and assert the literal, plus an explicit `!=`
 against the twin -- then a mutation swapping one rendering for the other dies on
 the assertion instead of passing silently.
+
+**51. An instance-block guard is UNREACHABLE without a `+`-style `User-Agent`,
+and a test that omits one measures the wrong branch while looking correct.**
+Fact 32 says how `requestor_domain()` parses the header; this is what happens
+when the header is not there. `requestor_domain()` (`app/utils.py:5736-5743`)
+returns the empty string unless the `User-Agent` contains a `'+'` (`:5739`);
+`find_instance_id('')` returns `None` at its own `if not server:`
+(`app/activitypub/util.py:2065-2066`); and `User.has_blocked_instance(None)`
+returns `False` at `if instance_id is None:` (`app/models.py:1467-1469`). So
+`if author.has_blocked_instance(find_instance_id(requestor_domain())):` --
+the shape used by `comment_ap` (`app/activitypub/routes.py:2152`) and `post_ap`
+(`:2181`) -- is **always False** for a request that sent no `+URL` suffix, no
+matter what blocks are seeded. A test that seeds an `InstanceBlock`, omits the
+`User-Agent`, and asserts 200 will pass, and will go on passing if the guard is
+deleted entirely. Send `'Test (+https://blocked.example)'` and assert **401** to
+measure the guard; send a plain agent only when the *absence* of the block is
+the thing under test, and say so in the docstring. Registered as D194.
+
+**52. `find_instance_id()` CREATES AND COMMITS a sparse `Instance` row for a
+domain it does not know, so a test that names a domain it did not seed silently
+gets a brand-new id.** `app/activitypub/util.py:2064-2086`: on a miss it builds
+`Instance(domain=server, software='unknown', inbox=f'https://{server}/inbox',
+created_at=utcnow())` (`:2074`), `db.session.add`s and `db.session.commit`s it
+(`:2077-2078`), and returns the new id. Nothing about the call site announces
+this -- it reads like a lookup. The consequence for a test: send
+`'Test (+https://evil.example)'` without a `make_instance(domain='evil.example')`
+in the same test and the guard is evaluated against an instance id that exists
+but that the author has not blocked, so the test measures the **not-blocked**
+branch while its name says "blocked". **Every domain named in a `user_agent=`
+argument must have its own `make_instance()` in the same test**, which is the
+convention `tests/test_ap_content_objects.py` follows throughout. The write
+itself is registered as D193.
+
+**53. `has_blocked_instance(id)` and `has_blocked_instances()` differ by one
+letter and drive different branches of the same endpoint.** `User.has_blocked_instance(instance_id)`
+(`app/models.py:1467-1471`) asks whether **this** instance is blocked and gates
+the 401; `User.has_blocked_instances()` (`:1473-1475`) is a global "does this
+user block anyone at all" flag and gates whether the response carries `Vary:
+Accept, User-Agent` instead of `Vary: Accept`. `comment_ap` calls both
+(`app/activitypub/routes.py:2152` and `:2157`), and so does `post_ap` (`:2181`,
+`:2191`). Three consequences for tests: a test for the 401 must seed a block on
+the *requesting* domain; a test for the `Vary: Accept, User-Agent` branch needs
+only *some* block, on any instance; and a test that seeds one block and asserts
+both is not discriminating -- swap either method into the other's branch and it
+still passes. Seed a block on a **different** instance from the one requesting
+to separate them, as `test_a_comment_is_served_when_the_author_blocked_a_different_instance`
+and `test_a_comment_from_a_blocking_author_varies_on_user_agent` do.
+
+**54. A coverage figure identical to the previous sub-project's is a STALE-FILE
+symptom, not a result -- check the artefact's mtime, not just its contents.**
+Sub-project 11's first coverage run hit the 600s session-timeout wall at 2316 of
+~3290 tests, so it never wrote `scratch_full_cov.json`, and yesterday's file was
+still sitting there. The figures read out of it were byte-for-byte
+sub-project 10's own ending numbers -- which is impossible after 42 new tests
+closing 89 previously-uncovered statements, and is therefore the tell. Read
+plainly they would have raised the floor against a measurement predating the
+entire sub-project, **and the floor check would have passed**, because a stale
+number is a self-consistent number. Two mechanical defences, both cheap: `ls -l`
+the JSON and confirm its mtime is after the last commit under measurement, and
+refuse any figure from a run whose output does not end in a pytest completion
+line. When the wall is the cause, it is usually podman stack degradation -- the
+same run took 192.56s on a stack freshly torn down with `./run_tests.sh --down`
+(fact 29 and the process notes; the teardown replays ~269 migrations, so it is
+not a casual step).
+
+**55. A running total in a plan is invalidated by any mid-flight ruling that
+adds or removes a test, and the invalidation is SILENT.** Every later task's
+"Expected: N passed" stays internally consistent while being wrong by the same
+constant, so nothing in the plan contradicts itself and the error surfaces only
+when an implementer counts. It happened twice in one sub-project: once
+pre-flight (every count one too high, caught by the pre-flight scan) and once
+mid-flight, when a fix-round ruling ordered a seventh test to close a
+combinatorial gap and every downstream count silently went stale. **Whoever
+orders the addition owns correcting the counts downstream of it** -- and an
+implementer who finds the stated count off by one should report the discrepancy
+rather than invent a test to reach it, which is the failure this fact exists to
+prevent. Compare fact 49, which is the same class for counts embedded in prose.
 
 ## Known noise
 
