@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Bring the eight ActivityPub collection endpoints — how a remote instance enumerates a community's posts, a user's followers, a feed's communities and every actor's moderators, 111 uncovered statements — to full statement coverage, and fix the three that return HTTP 500 for an unknown actor.
+**Goal:** Bring the nine ActivityPub collection endpoints — how a remote instance enumerates a community's posts, a user's followers, a feed's communities and every actor's moderators, 120 uncovered statements — to full statement coverage, and fix the three that return HTTP 500 for an unknown actor.
 
-**Architecture:** Tests drive each endpoint's URL through `app.test_client()`. The eight are near-identical, so one harness and one seeding surface serve all of them; tests are written to make their differences visible rather than to cover each in isolation. One new test file.
+**Architecture:** Tests drive each endpoint's URL through `app.test_client()`. The nine are near-identical, so one harness and one seeding surface serve all of them; tests are written to make their differences visible rather than to cover each in isolation. One new test file.
 
 **Tech Stack:** pytest, Flask test client, SQLAlchemy, podman-compose (`./run_tests.sh`).
 
@@ -35,7 +35,7 @@
 
 | File | Responsibility |
 |---|---|
-| `tests/test_ap_collections.py` | **new** — all eight endpoints |
+| `tests/test_ap_collections.py` | **new** — all nine endpoints |
 | `app/activitypub/routes.py` | Task 10 fixes only |
 | `docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md` | findings from D167 |
 | `tests/README.md`, `coverage_floors.ini` | harness facts, floor raise |
@@ -440,7 +440,7 @@ git commit -m "test: cover community_featured and pin its two asymmetries"
 
 ---
 
-### Task 4: community_moderators_route
+### Task 4: community_moderators_route and community_followers
 
 **Files:** Modify `tests/test_ap_collections.py`
 
@@ -526,11 +526,77 @@ def test_an_unknown_community_moderators_is_404(app, db_session):
 
 Expected: PASS. `make_community_member`'s real signature governs — read it. If `community_moderators` is cached (it is a `@cache`-decorated helper in some builds), confirm `CACHE_TYPE='NullCache'` makes that inert, as it does elsewhere in this suite.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: Also cover `community_followers`**
+
+`community_followers` (`/c/<actor>/followers`) was missed by the spec's original count and added after a reviewer spotted it. It shares the community lookup and adds one defect worth pinning.
+
+```python
+def test_the_community_followers_collection_counts_its_members(app, db_session):
+    """`totalItems` is `community_members(community.id)` -- a real count.
+    Read that helper before seeding; it decides what a "member" is.
+    """
+    site, instance = seed_actors()
+    community = seed_local_community('books')
+    from tests.factories import make_community_member
+    member = make_user(instance, 'member', local=True)
+    make_community_member(member, community, is_moderator=False)
+    db.session.commit()
+
+    response = collection_get(app, '/c/books/followers')
+
+    assert response.status_code == 200
+    assert response.json['type'] == 'Collection'
+    assert response.json['totalItems'] >= 1
+
+
+def test_the_community_followers_items_list_is_always_empty(app, db_session):
+    """PINS a defect, and it is the SECOND of three followers collections to
+    have it. `totalItems` is a real count while `items` is hardcoded `[]`, so
+    the document says "one follower" and lists none.
+
+    `feed_followers` does the same. `user_followers` -- the third -- populates
+    its items with real follower URLs and filters blocked and unaccepted
+    follows. Two of three contradict themselves; one does not.
+    """
+    site, instance = seed_actors()
+    community = seed_local_community('books')
+    from tests.factories import make_community_member
+    member = make_user(instance, 'member', local=True)
+    make_community_member(member, community, is_moderator=False)
+    db.session.commit()
+
+    response = collection_get(app, '/c/books/followers')
+
+    assert response.status_code == 200
+    assert response.json['totalItems'] >= 1
+    assert response.json['items'] == []
+
+
+def test_an_unknown_community_followers_is_404(app, db_session):
+    seed_actors()
+
+    response = collection_get(app, '/c/nosuch/followers')
+
+    assert response.status_code == 404
+
+
+def test_the_community_followers_collection_sets_a_ten_second_cache(app, db_session):
+    seed_actors()
+    seed_local_community('books')
+
+    response = collection_get(app, '/c/books/followers')
+
+    assert response.status_code == 200
+    assert response.headers['Cache-Control'] == 'public, max-age=10'
+```
+
+**Read `community_members()` before writing these** — it decides what counts as a member, and the `>= 1` assertions above are deliberately loose because its exact semantics are unverified. If it returns an exact number you can predict, assert that instead and say so.
+
+- [ ] **Step 4: Commit**
 
 ```bash
 git add tests/test_ap_collections.py
-git commit -m "test: cover community_moderators_route"
+git commit -m "test: cover community_moderators_route and community_followers"
 ```
 
 ---
