@@ -830,3 +830,66 @@ def test_an_unlogged_activity_is_404_with_a_cache_header(app, db_session):
 
     assert response.status_code == 404
     assert response.headers['Cache-Control'] == 'public, max-age=2400'
+
+
+def test_a_successful_activity_result_is_ok(app, db_session):
+    """`activity_result` matches `f'https://{id}'` where `id` is a <path:id>
+    parameter, so the multi-segment path in the URL becomes the host and path
+    of the stored `activity_id`.
+
+    `result='success'` is passed explicitly even though it is the factory's
+    default, because the assertion is ABOUT that value -- its twin below sets
+    'failure' and gets a different document.
+    """
+    seed_actors()
+    make_activitypub_log('https://peer.example/activities/announce/abc',
+                         result='success')
+
+    with app.test_client() as client:
+        response = client.get('/activity_result/peer.example/activities/announce/abc')
+
+    assert response.status_code == 200
+    assert response.json == 'Ok'
+
+
+def test_a_failed_activity_result_discloses_the_internal_exception_message(app, db_session):
+    """PINS A DEFECT, and it is this slice's most serious. DO NOT FIX --
+    registered, because choosing the replacement is a decision about what peers
+    are told.
+
+    On a non-'success' result the endpoint returns
+    `{'error': activity.result, 'message': activity.exception_message}`.
+    `ActivityPubLog.exception_message` is populated from caught exceptions, so
+    this instance's internal error text is served to anyone who can name an
+    activity id -- and the id is one the REMOTE instance chose and therefore
+    already knows. There is no authentication on this route.
+
+    The message asserted here is deliberately shaped like a real internal
+    error, including a file path, to make the disclosure legible in the test
+    output rather than abstract.
+    """
+    seed_actors()
+    make_activitypub_log('https://peer.example/activities/announce/boom',
+                         result='failure',
+                         exception_message="IntegrityError at app/activitypub/util.py:1214: duplicate key value violates unique constraint \"user_ap_id_key\"")
+
+    with app.test_client() as client:
+        response = client.get('/activity_result/peer.example/activities/announce/boom')
+
+    assert response.status_code == 200
+    assert response.json['error'] == 'failure'
+    assert 'app/activitypub/util.py:1214' in response.json['message']
+    assert 'user_ap_id_key' in response.json['message']
+
+
+def test_an_unknown_activity_result_is_404(app, db_session):
+    """`else: abort(404)`. `activity_result` gets this right, which is worth
+    recording: `post_replies_ap` -- in the same file, covered by this same
+    suite -- has no else at all and crashes instead.
+    """
+    seed_actors()
+
+    with app.test_client() as client:
+        response = client.get('/activity_result/peer.example/activities/announce/nope')
+
+    assert response.status_code == 404
