@@ -534,3 +534,152 @@ def test_the_community_followers_collection_sets_a_ten_second_cache(app, db_sess
 
     assert response.status_code == 200
     assert response.headers['Cache-Control'] == 'public, max-age=10'
+
+
+def _follow(local_user, follower, accepted=True):
+    """A UserFollower row: `follower` follows `local_user`.
+
+    `is_accepted` has NO declared default (the model comments None = request
+    pending), so it is passed explicitly here and the endpoint's
+    `is_accepted == True` filter is not vacuous.
+    """
+    from app.models import UserFollower
+    row = UserFollower(local_user_id=local_user.id, remote_user_id=follower.id,
+                       is_accepted=accepted)
+    db.session.add(row)
+    db.session.commit()
+    return row
+
+
+def test_a_users_followers_are_listed(app, db_session):
+    """`user_followers` guards on `user is not None AND user.ap_followers_url`.
+    `User.ap_followers_url` has no declared default and `make_user` never sets
+    it, so a plain local user 404s -- every positive test here must set it.
+    """
+    site, instance = seed_actors()
+    alice = make_user(instance, 'alice', local=True)
+    alice.ap_followers_url = 'https://test.piefed.local/u/alice/followers'
+    bob = make_user(instance, 'bob')
+    db.session.commit()
+    _follow(alice, bob)
+
+    response = collection_get(app, '/u/alice/followers')
+
+    assert response.status_code == 200
+    assert response.json['type'] == 'Collection'
+    assert response.json['id'] == 'https://test.piefed.local/u/alice/followers'
+    assert response.json['totalItems'] == 1
+    assert bob.ap_public_url in response.json['items']
+
+
+def test_a_user_without_a_followers_url_is_404(app, db_session):
+    """The SECOND conjunct of `user is not None and user.ap_followers_url`.
+    The user exists and is local, so only the missing column can cause the 404 --
+    which is what makes this test the one that kills that conjunct.
+    """
+    site, instance = seed_actors()
+    alice = make_user(instance, 'alice', local=True)
+    alice.ap_followers_url = None
+    db.session.commit()
+
+    response = collection_get(app, '/u/alice/followers')
+
+    assert response.status_code == 404
+
+
+def test_a_banned_user_has_no_followers_collection(app, db_session):
+    """`banned=False` in the user lookup. Set explicitly -- `User.banned`
+    defaults to False and `make_user` also sets it explicitly, so leaving it
+    alone would assert nothing about this clause.
+
+    Not part of the brief's six tests; added because Step 3's first mutation
+    (dropping `banned=False` from the lookup) has no other test in this group
+    that seeds a banned user, and would otherwise be unkillable.
+    """
+    site, instance = seed_actors()
+    alice = make_user(instance, 'alice', local=True)
+    alice.ap_followers_url = 'https://test.piefed.local/u/alice/followers'
+    alice.banned = True
+    db.session.commit()
+
+    response = collection_get(app, '/u/alice/followers')
+
+    assert response.status_code == 404
+
+
+def test_an_unaccepted_follow_is_not_listed(app, db_session):
+    """`UserFollower.is_accepted == True`. Passed False explicitly rather than
+    left None, so the test states its premise.
+    """
+    site, instance = seed_actors()
+    alice = make_user(instance, 'alice', local=True)
+    alice.ap_followers_url = 'https://test.piefed.local/u/alice/followers'
+    bob = make_user(instance, 'bob')
+    db.session.commit()
+    _follow(alice, bob, accepted=False)
+
+    response = collection_get(app, '/u/alice/followers')
+
+    assert response.status_code == 200
+    assert response.json['totalItems'] == 0
+
+
+def test_a_blocked_follower_is_not_listed(app, db_session):
+    """The outer join against UserBlock excludes a follower who has blocked the
+    ACCOUNT OWNER -- the REVERSE of what the route's own comment claims
+    ("except those that are blocked by user", which reads as the owner
+    blocking the follower).
+
+    Traced from the query: `User` is joined via `UserFollower.remote_user_id`,
+    so in each row `User` is the FOLLOWER, not the account owner. The
+    UserBlock outer-join condition is
+    `(User.id == UserBlock.blocker_id) & (UserFollower.local_user_id == UserBlock.blocked_id)`,
+    i.e. `blocker_id == follower.id` and `blocked_id == owner.id`. The
+    `UserBlock.id == None` filter then excludes exactly the rows where such a
+    block exists -- so a follower is hidden when THEY blocked the owner, not
+    when the owner blocked them. This is a genuine comment/code disagreement,
+    seeded here to match the CODE, not the comment.
+    """
+    site, instance = seed_actors()
+    alice = make_user(instance, 'alice', local=True)
+    alice.ap_followers_url = 'https://test.piefed.local/u/alice/followers'
+    bob = make_user(instance, 'bob')
+    db.session.commit()
+    _follow(alice, bob)
+    from app.models import UserBlock
+    db.session.add(UserBlock(blocker_id=bob.id, blocked_id=alice.id))
+    db.session.commit()
+
+    response = collection_get(app, '/u/alice/followers')
+
+    assert response.status_code == 200
+    assert response.json['totalItems'] == 0
+
+
+def test_the_followers_collection_sets_cache_and_vary(app, db_session):
+    """`user_followers` is the ONLY one of the nine collections that sets
+    `Vary: Accept` -- and the only thing it varies on is nothing, since none
+    of the nine negotiates on Accept. Registered as an asymmetry; asserted
+    here so it is visible.
+
+    Flask-Compress appends Accept-Encoding to every response, so the observed
+    value is 'Accept, Accept-Encoding', not the bare 'Accept' the route sets.
+    """
+    site, instance = seed_actors()
+    alice = make_user(instance, 'alice', local=True)
+    alice.ap_followers_url = 'https://test.piefed.local/u/alice/followers'
+    db.session.commit()
+
+    response = collection_get(app, '/u/alice/followers')
+
+    assert response.status_code == 200
+    assert response.headers['Cache-Control'] == 'public, max-age=15'
+    assert response.headers['Vary'] == 'Accept, Accept-Encoding'
+
+
+def test_an_unknown_user_followers_is_404(app, db_session):
+    seed_actors()
+
+    response = collection_get(app, '/u/nosuch/followers')
+
+    assert response.status_code == 404
