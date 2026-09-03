@@ -2305,6 +2305,25 @@ for and fixed every occurrence of "eight". "Seven siblings" and "eight
 endpoints" encode the same fact and neither grep finds the other. Grep the old
 numeral, the old word, and the off-by-one on either side of it.
 
+**50. An assertion comparing a response value to the object's OWN column is
+vacuous whenever the factory never sets that column.** The no-vacuous-assertion
+rule is usually stated about *declared defaults* -- do not assert a value equal
+to a column's default without seeding a contrary baseline. This is the same
+failure with no default involved at all. `Feed.user_id`'s owner is rendered by
+`feed_moderators_route` as `moderator.ap_profile_id`, and
+`test_a_feed_moderators_collection_lists_its_owner` asserted
+`orderedItems == [owner.ap_profile_id]` -- which reads as a strong assertion and
+is one, right up until you notice `make_user(local=True)`
+(`tests/factories.py:58-60`) leaves `ap_profile_id`, `ap_public_url` and `ap_id`
+all `None`. The assertion compared `[None] == [None]` and would have passed
+against a `public_url()` regression, which is precisely the divergence its own
+docstring documented (D183). **So: check the FACTORY, not just the model.** A
+column with no declared default is not thereby safe; it is the case the usual
+phrasing of the rule does not cover. The fix shape is to set the column and its
+near-twin to *different* values and assert the literal, plus an explicit `!=`
+against the twin -- then a mutation swapping one rendering for the other dies on
+the assertion instead of passing silently.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
