@@ -773,3 +773,60 @@ def test_an_unknown_post_context_is_404(app, db_session, monkeypatch):
     response = ap_get(app, '/post/999999/context')
 
     assert response.status_code == 404
+
+
+def test_a_logged_activity_is_served_as_its_stored_json(app, db_session):
+    """`activities_json` matches `ActivityPubLog.activity_id` against the FULL
+    URI it builds from SERVER_URL and the two path segments, not against a bare
+    id -- so the seeded row carries the whole URI.
+
+    `activity_json` is stored as a TEXT column holding a JSON string and the
+    route calls `json.loads` on it, so the factory is given a string and the
+    assertion reads back a dict.
+
+    `@cache.cached(timeout=2400)` on this route is inert under test
+    (CACHE_TYPE='NullCache'), so this measures the view, not the cache.
+    """
+    seed_actors()
+    make_activitypub_log('https://test.piefed.local/activities/announce/abc123',
+                         activity_type='Announce',
+                         activity_json='{"type": "Announce", "id": "https://test.piefed.local/activities/announce/abc123"}')
+
+    with app.test_client() as client:
+        response = client.get('/activities/announce/abc123')
+
+    assert response.status_code == 200
+    assert response.content_type == 'application/activity+json'
+    assert response.headers['Cache-Control'] == 'public, max-age=2400'
+    assert response.json['type'] == 'Announce'
+
+
+def test_a_logged_activity_with_no_json_serves_an_empty_document(app, db_session):
+    """`if activity.activity_json is not None:` -- the else sets
+    `activity_json = {}`. The column is nullable and `make_activitypub_log`
+    defaults it to None, so this test passes `activity_json=None` EXPLICITLY
+    to state which branch it means rather than relying on the factory default.
+    """
+    seed_actors()
+    make_activitypub_log('https://test.piefed.local/activities/announce/nojson',
+                         activity_json=None)
+
+    with app.test_client() as client:
+        response = client.get('/activities/announce/nojson')
+
+    assert response.status_code == 200
+    assert response.json == {}
+
+
+def test_an_unlogged_activity_is_404_with_a_cache_header(app, db_session):
+    """`else: resp = make_response('', 404)`. The `Cache-Control` header is set
+    AFTER the if/else, so the 404 carries it too -- asserted because a
+    2400-second cache on a 404 is a real behaviour and not obviously intended.
+    """
+    seed_actors()
+
+    with app.test_client() as client:
+        response = client.get('/activities/announce/missing')
+
+    assert response.status_code == 404
+    assert response.headers['Cache-Control'] == 'public, max-age=2400'
