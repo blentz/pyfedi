@@ -31,7 +31,7 @@ import pytest
 
 from app import db
 from app.activitypub import util as ap_util
-from app.constants import NOTIF_REPORT, POST_STATUS_PUBLISHED
+from app.constants import NOTIF_REPORT, NOTIF_USER, POST_STATUS_PUBLISHED
 from app.models import File, InstanceRole, ModLog, Notification, Post, PostReply, User
 from tests.factories import (make_community, make_community_ban, make_community_member,
                              make_instance, make_post, make_post_reply, make_site, make_user,
@@ -339,3 +339,141 @@ def test_a_different_instances_admin_cannot_delete_an_unrelated_communitys_post(
 
     assert post.deleted is False
     assert community.post_count == 5
+
+
+def test_deleting_a_reply_decrements_every_counter_it_maintains(
+        app, db_session, monkeypatch, redis_lock_only_double):
+    """`delete_post_or_comment`'s PostReply branch. It decrements FIVE
+    counters where the Post branch decrements two:
+    `post.reply_count` (only when the author is not a bot),
+    `post.reply_count_cross_posted` (only when already non-zero),
+    `author.post_reply_count`, and `community.post_reply_count`.
+
+    All four are seeded to 5. They default to 0, and `reply_count_cross_posted`
+    is additionally guarded by `if to_delete.post.reply_count_cross_posted:`
+    -- at its default of 0 that guard is FALSE, so a test resting on the
+    default would never reach the decrement and would pass against its
+    removal.
+    """
+    site, instance, community, author, moderator = seed_moderation_scene()
+    post = make_post(community, author, None, title='a post')
+    reply = make_post_reply(post, author)
+    post.reply_count = 5
+    post.reply_count_cross_posted = 5
+    author.post_reply_count = 5
+    community.post_reply_count = 5
+    author.bot = False
+    db.session.commit()
+
+    ap_util.delete_post_or_comment(moderator, reply, False,
+                                   {'id': 'https://peer.example/activities/delete/1'}, '')
+
+    assert reply.deleted is True
+    assert reply.deleted_by == moderator.id
+    assert post.reply_count == 4
+    assert post.reply_count_cross_posted == 4
+    assert author.post_reply_count == 4
+    assert community.post_reply_count == 4
+
+
+def test_deleting_a_bots_reply_leaves_the_posts_reply_count_alone(
+        app, db_session, monkeypatch, redis_lock_only_double):
+    """`if not to_delete.author.bot:` guards BOTH `post.reply_count` and
+    `post.reply_count_cross_posted`. A bot's reply is deleted and its author
+    and community counters still fall, but the post's do not.
+
+    `bot` is set to True explicitly; `make_user` leaves it at the column
+    default, so a test resting on that default would be asserting the wrong
+    side of the branch.
+    """
+    site, instance, community, author, moderator = seed_moderation_scene()
+    post = make_post(community, author, None, title='a post')
+    reply = make_post_reply(post, author)
+    post.reply_count = 5
+    author.post_reply_count = 5
+    community.post_reply_count = 5
+    author.bot = True
+    db.session.commit()
+
+    ap_util.delete_post_or_comment(moderator, reply, False,
+                                   {'id': 'https://peer.example/activities/delete/1'}, '')
+
+    assert reply.deleted is True
+    assert post.reply_count == 5
+    assert author.post_reply_count == 4
+    assert community.post_reply_count == 4
+
+
+def test_deleting_a_nested_reply_decrements_its_ancestors_child_count(
+        app, db_session, monkeypatch, redis_lock_only_double):
+    """`if to_delete.path:` runs raw SQL decrementing `child_count` for every
+    id in `path[:-1]` -- the reply's ancestors, excluding itself.
+
+    `make_post_reply` leaves `path` as None, so this branch is unreachable
+    unless a test sets it. `PostReply.path` is `ARRAY(db.Integer)`
+    (app/models.py:2898), so a plain list of ids is the right shape. Both
+    replies get an explicit `path`, and the PARENT's child_count is seeded
+    to 5 so the decrement is an exact assertion rather than a "less than
+    before".
+
+    The raw SQL (`update post_reply set child_count = child_count - 1 where
+    id in :parents`) bypasses the ORM's identity map, so `parent.child_count`
+    read straight off the Python object would still show the seeded 5 even
+    though the row is now 4 in the database -- `db.session.refresh(parent)`
+    is load-bearing here, not decorative.
+    """
+    site, instance, community, author, moderator = seed_moderation_scene()
+    post = make_post(community, author, None, title='a post')
+    parent = make_post_reply(post, author, body='parent')
+    child = make_post_reply(post, author, body='child')
+    parent.path = [parent.id]
+    child.path = [parent.id, child.id]
+    parent.child_count = 5
+    db.session.commit()
+
+    ap_util.delete_post_or_comment(moderator, child, False,
+                                   {'id': 'https://peer.example/activities/delete/1'}, '')
+
+    db.session.refresh(parent)
+    assert child.deleted is True
+    assert parent.child_count == 4
+
+
+def test_deleting_a_post_removes_its_notifications_but_keeps_report_notifs(
+        app, db_session, monkeypatch, redis_lock_only_double):
+    """The Post branch deletes Notifications whose `targets->>'post_id'`
+    matches, EXCEPT those of type NOTIF_REPORT or NOTIF_REPORT_ESCALATION --
+    the `continue` inside the loop. This notification-cleanup code lives
+    only in the `isinstance(to_delete, Post)` half of `delete_post_or_comment`
+    (app/activitypub/util.py:2229-2236) -- the PostReply branch has no
+    equivalent -- so this test, unlike the other three in this task, deletes
+    a Post rather than a PostReply.
+
+    Two notifications are seeded against the same post so the test
+    discriminates: an ordinary one that must go and a report one that must
+    stay. A single-notification fixture could not tell a working exemption
+    from a loop that deleted nothing.
+
+    DEVIATION from the brief: the brief's `ordinary` notification uses
+    `notif_type=0`. Read literally that is not a magic number: 0 is
+    `NOTIF_USER` (app/constants.py:52), a real, non-report constant, so the
+    test's intent -- something the exemption must NOT protect -- still
+    holds. Named explicitly here rather than left as a bare 0.
+    """
+    site, instance, community, author, moderator = seed_moderation_scene()
+    post = make_post(community, author, None, title='a post')
+    ordinary = Notification(title='reply to your post', user_id=author.id,
+                            author_id=moderator.id, notif_type=NOTIF_USER,
+                            targets={'post_id': post.id})
+    report = Notification(title='post reported', user_id=moderator.id,
+                          author_id=author.id, notif_type=NOTIF_REPORT,
+                          targets={'post_id': post.id})
+    db.session.add_all([ordinary, report])
+    db.session.commit()
+
+    ap_util.delete_post_or_comment(moderator, post, False,
+                                   {'id': 'https://peer.example/activities/delete/1'}, '')
+
+    surviving = db.session.query(Notification).all()
+    assert len(surviving) == 1
+    assert surviving[0].notif_type == NOTIF_REPORT
