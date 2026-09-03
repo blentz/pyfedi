@@ -719,6 +719,37 @@ def test_a_post_context_omits_deleted_replies(app, db_session, monkeypatch):
     assert 'https://test.piefed.local/comment/gone' not in response.json['orderedItems']
 
 
+def test_a_post_context_omits_another_posts_replies(app, db_session, monkeypatch):
+    """The query's `post_id=post_id` filter, which NO other test in this file
+    can kill: every other fixture seeds replies under a single post, so
+    filtering on `deleted=False` alone returns the identical set and dropping
+    `post_id` changes nothing observable.
+
+    Two posts, one reply each. `totalItems` of 2 -- this post plus its own one
+    reply -- is what proves the filter ran; without it the collection would
+    carry 3 entries and name a reply belonging to a post nobody asked about.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    post.ap_id = 'https://test.piefed.local/post/1'
+    mine = make_post_reply(post, author, body='mine')
+    mine.ap_id = 'https://test.piefed.local/comment/mine'
+
+    other = make_post(community, author, None, title='another post')
+    other.ap_id = 'https://test.piefed.local/post/2'
+    theirs = make_post_reply(other, author, body='theirs')
+    theirs.ap_id = 'https://test.piefed.local/comment/theirs'
+    db.session.commit()
+
+    response = ap_get(app, f'/post/{post.id}/context')
+
+    assert response.status_code == 200
+    assert response.json['totalItems'] == 2
+    assert response.json['orderedItems'] == ['https://test.piefed.local/post/1',
+                                             'https://test.piefed.local/comment/mine']
+    assert 'https://test.piefed.local/comment/theirs' not in response.json['orderedItems']
+
+
 def test_a_browser_request_for_a_post_context_is_400(app, db_session, monkeypatch):
     """`post_ap_context`'s `else: abort(400)`.
 
