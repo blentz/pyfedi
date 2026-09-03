@@ -650,3 +650,136 @@ def test_a_post_delete_then_restore_cycle_is_lossless(
     assert post.deleted is False
     assert community.post_count == 5
     assert author.post_count == 5
+
+
+def test_a_site_ban_deletes_every_post_and_reply_the_user_made(
+        app, db_session, monkeypatch):
+    """`site_ban_remove_data` filters on `user_id` alone -- no community
+    filter, unlike `community_ban_remove_data`. So content in EVERY community
+    goes, which is what a site ban means.
+
+    Two communities are seeded precisely to prove the absence of that filter:
+    a one-community fixture cannot tell "all the user's content" from "this
+    community's content".
+    """
+    _double_file_deletion(monkeypatch)
+    site, instance, community, author, moderator = seed_moderation_scene()
+    other = make_community(name='elsewhere', host='test.piefed.local')
+    here = make_post(community, author, None, title='here')
+    there = make_post(other, author, None, title='there')
+    reply = make_post_reply(here, author)
+    db.session.commit()
+
+    ap_util.site_ban_remove_data(moderator.id, author)
+
+    assert here.deleted is True
+    assert there.deleted is True
+    assert reply.deleted is True
+    assert here.deleted_by == moderator.id
+
+
+def test_a_site_ban_does_not_zero_the_users_reply_count(app, db_session, monkeypatch):
+    """PINS A DEFECT. DO NOT FIX -- a later task does.
+
+    `site_ban_remove_data` contains `blocked.reply_count = 0`. `User` has no
+    `reply_count` column: it declares `post_count` and `post_reply_count`
+    (app/models.py), and `reply_count` belongs to `Post`. SQLAlchemy accepts
+    the assignment as an ordinary Python attribute on the instance, so it
+    never reaches the database and never raises.
+
+    The effect is that a site-banned user's REAL reply counter keeps its
+    pre-ban value forever, while `blocked.post_count = 0` on the very next
+    line works because that column does exist. `community_ban_remove_data`
+    decrements the real `post_reply_count` correctly.
+
+    Both counters are seeded to 5 so the contrast is exact: post_count is
+    asserted at 0 (the working line) and post_reply_count at 5 (the broken
+    one). Asserting only the second would leave a reader unable to tell a
+    bug from a deliberate choice not to zero anything.
+    """
+    _double_file_deletion(monkeypatch)
+    site, instance, community, author, moderator = seed_moderation_scene()
+    post = make_post(community, author, None, title='a post')
+    make_post_reply(post, author)
+    author.post_count = 5
+    author.post_reply_count = 5
+    db.session.commit()
+
+    ap_util.site_ban_remove_data(moderator.id, author)
+
+    assert author.post_count == 0        # the line that works
+    assert author.post_reply_count == 5  # the line that does not -- the defect
+
+
+def test_a_site_ban_deletes_attached_files_and_purges_the_cdn(
+        app, db_session, monkeypatch):
+    """`site_ban_remove_data` calls `delete_from_disk(purge_cdn=True)`
+    EXPLICITLY, where `community_ban_remove_data` takes the default. The
+    recorded flag is asserted so the asymmetry is observable in the suite
+    rather than read off the source.
+
+    `source_url` is set to '' afterwards by the function; it is asserted too,
+    because a File whose bytes are gone but whose source_url still points at
+    them is a broken row rather than a deleted one.
+    """
+    calls = _double_file_deletion(monkeypatch)
+    site, instance, community, author, moderator = seed_moderation_scene()
+    post = make_post(community, author, None, title='a post')
+    attached = File(source_url='https://peer.example/img.png')
+    db.session.add(attached)
+    db.session.commit()
+    post.image_id = attached.id
+    db.session.commit()
+
+    ap_util.site_ban_remove_data(moderator.id, author)
+
+    assert (attached.id, True) in calls
+    assert attached.source_url == ''
+
+
+def test_a_site_ban_deletes_the_users_avatar_and_cover(app, db_session, monkeypatch):
+    """`if blocked.avatar_id:` and `if blocked.cover_id:` -- both guarded, and
+    both are None on a factory-built user, so a test resting on the default
+    would never reach either branch.
+
+    `community_ban_remove_data` has NO equivalent: a community ban leaves the
+    avatar alone. That asymmetry is defensible and the source says so; it is
+    registered, not fixed.
+    """
+    calls = _double_file_deletion(monkeypatch)
+    site, instance, community, author, moderator = seed_moderation_scene()
+    avatar = File(source_url='https://peer.example/avatar.png')
+    cover = File(source_url='https://peer.example/cover.png')
+    db.session.add_all([avatar, cover])
+    db.session.commit()
+    author.avatar_id = avatar.id
+    author.cover_id = cover.id
+    db.session.commit()
+
+    ap_util.site_ban_remove_data(moderator.id, author)
+
+    assert avatar.id in [c[0] for c in calls]
+    assert cover.id in [c[0] for c in calls]
+    assert avatar.source_url == ''
+    assert cover.source_url == ''
+
+
+def test_a_site_ban_skips_content_already_deleted(app, db_session, monkeypatch):
+    """Both queries filter `deleted=False`. An already-deleted post must not
+    have its counters decremented a second time, which is what that filter
+    prevents.
+
+    The community's counter is seeded and asserted to prove the row was
+    skipped rather than merely left flagged: a post already deleted is
+    already flagged, so `deleted is True` alone cannot discriminate.
+    """
+    _double_file_deletion(monkeypatch)
+    site, instance, community, author, moderator = seed_moderation_scene()
+    already = make_post(community, author, None, title='already gone')
+    already.deleted = True
+    community.post_count = 5
+    db.session.commit()
+
+    ap_util.site_ban_remove_data(moderator.id, author)
+
+    assert community.post_count == 5
