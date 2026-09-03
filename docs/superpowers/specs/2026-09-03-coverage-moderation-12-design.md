@@ -86,7 +86,7 @@ exist (`app/models.py`), and the delete side maintains both.
 | User reply counter | **`blocked.reply_count = 0`** | `blocked.post_reply_count -= 1` |
 | User post counter | `blocked.post_count = 0` | `blocked.post_count -= 1` |
 | Community counters | `-= 1` per row | `-= 1` per row |
-| Files | `delete_from_disk(purge_cdn=True)` | `delete_from_disk()` — default |
+| Files | `delete_from_disk(purge_cdn=True)` | `delete_from_disk()` — **same effect** |
 | Avatar / cover | deleted too | untouched |
 | Query style | `db.session.query(...)` | legacy `.query` |
 
@@ -97,8 +97,15 @@ persisted, so **site-banning a user silently never zeroes their reply count**,
 while the community path decrements the real column correctly.
 
 The avatar/cover asymmetry is defensible — a community ban should not destroy a
-user's avatar — and the source says so. The `purge_cdn` difference is not
-explained anywhere.
+user's avatar — and the source says so.
+
+**The `purge_cdn` difference is not a difference.** `File.delete_from_disk`'s
+signature is `def delete_from_disk(self, purge_cdn=True)` (`app/models.py`), so
+the community path's bare call passes exactly what the site path passes
+explicitly. The two behave identically. This is worth registering precisely
+because reading the two call sites side by side invites the opposite
+conclusion: one names the flag and the other does not, which reads as a
+deliberate distinction and is not one.
 
 ### Pair 3: `ban_user` / `unban_user`
 
@@ -181,8 +188,10 @@ is small, self-contained, provable by mutation, and inside these six functions.
   to_delete.cross_posts is not None:`.
 - **`unban_user`'s instance branch writes no modlog entry.**
 - **`ban_user`'s existing-row guard has different scope in its two branches.**
-- **`site_ban_remove_data` purges the CDN and `community_ban_remove_data` does
-  not**, with no stated reason.
+- **The `purge_cdn` call-site difference is cosmetic, not behavioural** — the
+  parameter defaults to `True`, so both paths purge. Registered because the
+  asymmetric spelling invites a reader to infer a distinction that does not
+  exist.
 - **The two ban-removal functions use different query styles** —
   `db.session.query(...)` against the legacy `.query`, whose `Query.all()`
   auto-deduplication masked a malformed join in sub-project 10 (D171).
