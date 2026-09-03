@@ -51,12 +51,12 @@ SDD implementers see only their own brief, so this table is repeated into every 
 | `make_instance_ban(user, instance)` | `tests/factories.py` | |
 | `make_community_join_request(user, community, ...)` | `tests/factories.py` | |
 | `make_notification_subscription(user, entity_id, type_, ...)` | `tests/factories.py` | |
-| `redis_double` | `tests/conftest.py` fixture | **required by every `delete_post_or_comment` test** |
+| `redis_lock_only_double` | this file (Task 1) | **required by every `delete_post_or_comment` test** — `redis_double` does NOT work, see fact 2 |
 
 ## Facts every task needs
 
 1. **`log_incoming_ap` writes NOTHING under test unless you enable it.** It is gated on `current_app.config['LOG_ACTIVITYPUB_TO_DB']`, which `config.py:92` defaults to `False` and neither `tests/conftest.py` nor `.env.test` overrides. So an `ActivityPubLog` assertion is **vacuous by default** — it will find zero rows whether the code logged or not. **Assert the real effect instead** — the row's `deleted` flag, the counter, the `ModLog` entry. Every function in this slice has one, so no test in this plan needs the log row. If you find a branch whose ONLY observable is the log, say so in your report rather than enabling the config on your own: it would be the first, and it changes what the suite proves.
-2. **`delete_post_or_comment` takes four redis locks.** It does `from app import redis_client` **inside its body** — a re-executed import — so the `redis_double` fixture's patch of `app.redis_client` reaches it. **Without the fixture the test talks to the real, shared, never-truncated compose Redis.** The fixture's own docstring records a test that went green doing exactly that.
+2. **`delete_post_or_comment` takes SEVEN redis locks, and `redis_double` cannot serve them.** It does `from app import redis_client` **inside its body** — a re-executed import — so a patch of `app.redis_client` reaches it, and without one the test talks to the real, shared, never-truncated compose Redis. But the `redis_double` fixture is **not** the right patch: fakeredis with no `lupa` implements no Lua scripting, so `Lock.acquire()` succeeds (plain `SET NX PX`) and `Lock.release()` raises `unknown command 'evalsha'` (`tests/conftest.py:430-434` documents this). Task 1 defines a local `redis_lock_only_double` fixture, shaped after the existing one in `tests/test_inbox_dispatch_votes.py:145-158`. **Use `redis_lock_only_double`, never `redis_double`.** Only `delete_post_or_comment` locks; the other five functions take none.
 3. **`File.delete_from_disk(purge_cdn=True)`** (`app/models.py`) touches the filesystem and a CDN. Both ban-removal functions call it in a loop. It must be doubled, and `purge_cdn`'s value must be observable — the site/community difference is a registered finding.
 4. **`add_to_modlog` raises on an unknown action** (`app/utils.py`): `if action not in ModLog.action_map.keys(): raise Exception(...)`. The actions these six use are `delete_post`, `delete_post_reply`, `restore_post`, `restore_post_reply`, `ban_user`, `unban_user`.
 5. **`CommunityBan` has a composite primary key** — `user_id` and `community_id`, no `id` column (`app/models.py`). Columns: `banned_by`, `reason`, `created_at`, `ban_until`.
@@ -168,7 +168,7 @@ Add `CommunityBan` to the `from app.models import ...` block at the top of `test
 
 ```python
 def test_a_moderator_deleting_a_post_marks_it_deleted_and_decrements_counters(
-        app, db_session, monkeypatch, redis_double):
+        app, db_session, monkeypatch, redis_lock_only_double):
     """`delete_post_or_comment`'s Post branch, driven directly rather than
     through the inbox dispatcher.
 
@@ -203,7 +203,7 @@ def test_a_moderator_deleting_a_post_marks_it_deleted_and_decrements_counters(
 
 ```python
 def test_deleting_another_users_post_writes_a_modlog_entry(
-        app, db_session, monkeypatch, redis_double):
+        app, db_session, monkeypatch, redis_lock_only_double):
     """`if to_delete.author.id != deletor.id:` -- the modlog entry is written
     only when someone deletes SOMEONE ELSE'S content. A self-delete is not
     moderation and is not logged, which its twin below asserts.
@@ -227,7 +227,7 @@ def test_deleting_another_users_post_writes_a_modlog_entry(
 
 
 def test_an_author_deleting_their_own_post_writes_no_modlog_entry(
-        app, db_session, monkeypatch, redis_double):
+        app, db_session, monkeypatch, redis_lock_only_double):
     """The false side of `if to_delete.author.id != deletor.id:`. The post is
     still deleted -- both assertions are made, so this cannot pass by the
     deletion having been refused.
@@ -283,7 +283,7 @@ if (to_delete.user_id == deletor.id or
 - [ ] **Step 1: Write the refusal test first**
 
 ```python
-def test_an_unrelated_user_cannot_delete_a_post(app, db_session, monkeypatch, redis_double):
+def test_an_unrelated_user_cannot_delete_a_post(app, db_session, monkeypatch, redis_lock_only_double):
     """All four disjuncts false. This is the test every mutation below must
     leave passing -- if dropping a disjunct made an UNAUTHORISED delete
     succeed, this test is what catches it.
@@ -310,7 +310,7 @@ def test_an_unrelated_user_cannot_delete_a_post(app, db_session, monkeypatch, re
 - [ ] **Step 2: Write one test per disjunct**
 
 ```python
-def test_the_author_may_delete_their_own_post(app, db_session, monkeypatch, redis_double):
+def test_the_author_may_delete_their_own_post(app, db_session, monkeypatch, redis_lock_only_double):
     """Disjunct 1: `to_delete.user_id == deletor.id`. The author is given NO
     moderator row and is not an instance admin, so the other three disjuncts
     are false and dropping this one fails exactly this test.
@@ -325,7 +325,7 @@ def test_the_author_may_delete_their_own_post(app, db_session, monkeypatch, redi
     assert post.deleted is True
 
 
-def test_a_same_instance_admin_may_delete_a_post(app, db_session, monkeypatch, redis_double):
+def test_a_same_instance_admin_may_delete_a_post(app, db_session, monkeypatch, redis_lock_only_double):
     """Disjunct 2, which is itself a CONJUNCTION:
     `deletor.instance_id == to_delete.author.instance_id and
     deletor.is_instance_admin()`. Both halves must hold, and the two halves
@@ -346,7 +346,7 @@ def test_a_same_instance_admin_may_delete_a_post(app, db_session, monkeypatch, r
     assert post.deleted is True
 
 
-def test_a_community_moderator_may_delete_a_post(app, db_session, monkeypatch, redis_double):
+def test_a_community_moderator_may_delete_a_post(app, db_session, monkeypatch, redis_lock_only_double):
     """Disjunct 3: `community.is_moderator(deletor)`. `seed_moderation_scene`
     gives the moderator a CommunityMember row with `is_moderator=True` and
     nothing else -- not the author, not an admin -- so this disjunct is the
@@ -409,7 +409,7 @@ The reply branch maintains **five** counters where the post branch maintains two
 
 ```python
 def test_deleting_a_reply_decrements_every_counter_it_maintains(
-        app, db_session, monkeypatch, redis_double):
+        app, db_session, monkeypatch, redis_lock_only_double):
     """`delete_post_or_comment`'s PostReply branch. It decrements FIVE
     counters where the Post branch decrements two:
     `post.reply_count` (only when the author is not a bot),
@@ -447,7 +447,7 @@ def test_deleting_a_reply_decrements_every_counter_it_maintains(
 
 ```python
 def test_deleting_a_bots_reply_leaves_the_posts_reply_count_alone(
-        app, db_session, monkeypatch, redis_double):
+        app, db_session, monkeypatch, redis_lock_only_double):
     """`if not to_delete.author.bot:` guards BOTH `post.reply_count` and
     `post.reply_count_cross_posted`. A bot's reply is deleted and its author
     and community counters still fall, but the post's do not.
@@ -478,7 +478,7 @@ def test_deleting_a_bots_reply_leaves_the_posts_reply_count_alone(
 
 ```python
 def test_deleting_a_nested_reply_decrements_its_ancestors_child_count(
-        app, db_session, monkeypatch, redis_double):
+        app, db_session, monkeypatch, redis_lock_only_double):
     """`if to_delete.path:` runs raw SQL decrementing `child_count` for every
     id in `path[:-1]` -- the reply's ancestors, excluding itself.
 
@@ -510,7 +510,7 @@ def test_deleting_a_nested_reply_decrements_its_ancestors_child_count(
 
 ```python
 def test_deleting_a_post_removes_its_notifications_but_keeps_report_notifs(
-        app, db_session, monkeypatch, redis_double):
+        app, db_session, monkeypatch, redis_lock_only_double):
     """The Post branch deletes Notifications whose `targets->>'post_id'`
     matches, EXCEPT those of type NOTIF_REPORT or NOTIF_REPORT_ESCALATION --
     the `continue` inside the loop.
@@ -574,7 +574,7 @@ git commit -m "test: cover the reply branch's five counters and notification cle
 
 ```python
 def test_restoring_a_post_clears_deleted_and_restores_counters(
-        app, db_session, monkeypatch, redis_double):
+        app, db_session, monkeypatch, redis_lock_only_double):
     """`restore_post_or_comment`'s Post branch. Note it takes NO redis locks
     where `delete_post_or_comment` wraps every one of these same counter
     mutations in one -- a registered asymmetry, not something this test
@@ -605,7 +605,7 @@ def test_restoring_a_post_clears_deleted_and_restores_counters(
 
 ```python
 def test_restoring_a_reply_restores_only_the_counters_it_knows_about(
-        app, db_session, monkeypatch, redis_double):
+        app, db_session, monkeypatch, redis_lock_only_double):
     """PINS A DEFECT. `restore_post_or_comment`'s PostReply branch increments
     `post.reply_count` (when not a bot) and `author.post_reply_count` -- and
     NOTHING ELSE. `delete_post_or_comment` decrements four counters for the
@@ -640,7 +640,7 @@ def test_restoring_a_reply_restores_only_the_counters_it_knows_about(
 - [ ] **Step 3: Write the refusal**
 
 ```python
-def test_an_unrelated_user_cannot_restore_a_post(app, db_session, monkeypatch, redis_double):
+def test_an_unrelated_user_cannot_restore_a_post(app, db_session, monkeypatch, redis_lock_only_double):
     """The same four-disjunct guard `delete_post_or_comment` carries, copied
     rather than shared -- verified textually identical, which is why this
     task tests the refusal and one success instead of repeating Task 2's
@@ -662,7 +662,7 @@ def test_an_unrelated_user_cannot_restore_a_post(app, db_session, monkeypatch, r
 
 ```python
 def test_restoring_another_users_post_writes_a_restore_modlog_entry(
-        app, db_session, monkeypatch, redis_double):
+        app, db_session, monkeypatch, redis_lock_only_double):
     """Action string `restore_post`, distinct from deletion's `delete_post`.
     `add_to_modlog` raises on an unknown action, so the string is under test.
     """
@@ -706,7 +706,7 @@ git commit -m "test: cover restore and pin the counters it fails to restore"
 
 ```python
 def test_a_delete_then_restore_cycle_permanently_loses_two_counters(
-        app, db_session, monkeypatch, redis_double):
+        app, db_session, monkeypatch, redis_lock_only_double):
     """PINS A DEFECT, and it is this slice's most consequential.
 
     `delete_post_or_comment` decrements four counters for a reply;
@@ -751,7 +751,7 @@ def test_a_delete_then_restore_cycle_permanently_loses_two_counters(
 
 ```python
 def test_a_post_delete_then_restore_cycle_is_lossless(
-        app, db_session, monkeypatch, redis_double):
+        app, db_session, monkeypatch, redis_lock_only_double):
     """The contrast that makes the reply finding sharp: the POST branches of
     both functions maintain the same two counters, so a post round trip
     returns to exactly where it started.
