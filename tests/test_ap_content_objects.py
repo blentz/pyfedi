@@ -260,3 +260,98 @@ def test_a_browser_request_for_a_comment_delegates_to_the_discussion_view(app, d
 
     assert response.status_code == 200
     assert calls['continue_discussion'] == [((post.id, reply.id), {})]
+
+
+def test_a_local_post_is_served_as_activitypub_json(app, db_session, monkeypatch):
+    """`post_ap`'s ordinary path: a GET with an ActivityPub Accept header for a
+    LOCAL post. `post_to_page` is doubled and the route adds `@context` to what
+    it returns, so the assertion covers both the delegation and the wrapping.
+    """
+    calls = _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+
+    response = ap_get(app, f'/post/{post.id}')
+
+    assert response.status_code == 200
+    assert response.content_type == 'application/activity+json'
+    assert response.headers['Cache-Control'] == 'public, max-age=120'
+    assert response.json['type'] == 'Page'
+    assert '@context' in response.json
+    assert calls['post_to_page'] == [post]
+
+
+def test_a_post_without_a_slug_links_to_its_numeric_url(app, db_session, monkeypatch):
+    """The `else` half of `if post.slug:`. `make_post` never sets `slug`, so
+    this is the factory's state -- and it is asserted rather than assumed
+    because its twin below sets one explicitly and gets a different URL.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+
+    response = ap_get(app, f'/post/{post.id}')
+
+    assert response.status_code == 200
+    assert response.headers['Link'] == \
+        f'<https://test.piefed.local/post/{post.id}>; rel="alternate"; type="text/html"'
+
+
+def test_a_post_with_a_slug_links_to_its_slug_url(app, db_session, monkeypatch):
+    """The truthy half. The route interpolates the slug DIRECTLY after the host
+    with no separator, so a slug must begin with '/' to produce a valid URL --
+    which is itself worth knowing and is asserted here rather than papered over.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    post.slug = '/c/books/p/1/a-post'
+    db.session.commit()
+
+    response = ap_get(app, f'/post/{post.id}')
+
+    assert response.status_code == 200
+    assert response.headers['Link'] == \
+        '<https://test.piefed.local/c/books/p/1/a-post>; rel="alternate"; type="text/html"'
+
+
+def test_a_post_from_a_non_blocking_author_varies_on_accept_only(app, db_session, monkeypatch):
+    """`Vary` is `Accept` plus Flask-Compress's `Accept-Encoding`. The author
+    blocks nobody, which is `make_user`'s state and is made contrary by the
+    twin below rather than being asserted bare.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+
+    response = ap_get(app, f'/post/{post.id}')
+
+    assert response.status_code == 200
+    assert response.headers['Vary'] == 'Accept, Accept-Encoding'
+
+
+def test_a_post_from_a_blocking_author_varies_on_user_agent(app, db_session, monkeypatch):
+    """`if post.author.has_blocked_instances():` -- the global flag. The author
+    blocks 'other.example' and the request arrives from 'peer2.example', so the
+    401 does not fire and the header branch is reached.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    other = make_instance('other.example')
+    make_instance_block(author, other)
+    make_instance('peer2.example')
+
+    response = ap_get(app, f'/post/{post.id}',
+                      user_agent='Test (+https://peer2.example)')
+
+    assert response.status_code == 200
+    assert response.headers['Vary'] == 'Accept, User-Agent, Accept-Encoding'
+
+
+def test_an_unknown_post_is_404_for_an_activitypub_request(app, db_session, monkeypatch):
+    """`Post.query.get_or_404` sits INSIDE the `is_activitypub_request()`
+    branch, so this 404 is reached only for an ActivityPub request. A browser
+    request for the same id goes to `show_post` instead, which is doubled.
+    """
+    _double_the_delegates(monkeypatch)
+    seed_actors()
+
+    response = ap_get(app, '/post/999999')
+
+    assert response.status_code == 404
