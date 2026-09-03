@@ -103,3 +103,90 @@ def test_the_community_outbox_sets_its_cache_control(app, db_session):
 
     assert response.status_code == 200
     assert response.headers['Cache-Control'] == 'public, max-age=10'
+
+
+def test_sticky_posts_come_before_the_rest(app, db_session, monkeypatch):
+    """Two queries, concatenated sticky-first. `post_to_activity` is doubled to
+    return an identifiable marker so ORDER is observable -- the real delegate
+    builds a large document and is its own future slice.
+    """
+    seed_actors()
+    community = seed_local_community('books')
+    user = make_user(None, 'author', local=True)
+    plain = make_post(community, user, 'https://test.piefed.local/post/1')
+    sticky = make_post(community, user, 'https://test.piefed.local/post/2')
+    sticky.sticky = True
+    plain.sticky = False
+    db.session.commit()
+    monkeypatch.setattr(activitypub_routes, 'post_to_activity',
+                        lambda post, community: f'AP:{post.ap_id}')
+
+    response = collection_get(app, '/c/books/outbox')
+
+    assert response.status_code == 200
+    items = response.json['orderedItems']
+    assert items == ['AP:https://test.piefed.local/post/2',
+                     'AP:https://test.piefed.local/post/1']
+
+
+def test_a_deleted_post_is_excluded(app, db_session, monkeypatch):
+    """`Post.deleted == False`, applied to BOTH queries. Set explicitly --
+    `Post.deleted` defaults to False.
+    """
+    seed_actors()
+    community = seed_local_community('books')
+    user = make_user(None, 'author', local=True)
+    post = make_post(community, user, 'https://test.piefed.local/post/1')
+    post.deleted = True
+    db.session.commit()
+    monkeypatch.setattr(activitypub_routes, 'post_to_activity',
+                        lambda post, community: 'AP')
+
+    response = collection_get(app, '/c/books/outbox')
+
+    assert response.status_code == 200
+    assert response.json['orderedItems'] == []
+    assert response.json['totalItems'] == 0
+
+
+def test_a_post_under_review_is_excluded(app, db_session, monkeypatch):
+    """`Post.status > POST_STATUS_REVIEWING` (0, app/constants.py:21).
+    `Post.status` defaults to 1, which PASSES the filter, so the excluded side
+    needs status set to 0 explicitly.
+
+    `community_featured` applies no such filter -- that asymmetry is pinned in
+    the next task.
+    """
+    seed_actors()
+    community = seed_local_community('books')
+    user = make_user(None, 'author', local=True)
+    post = make_post(community, user, 'https://test.piefed.local/post/1')
+    post.status = 0
+    db.session.commit()
+    monkeypatch.setattr(activitypub_routes, 'post_to_activity',
+                        lambda post, community: 'AP')
+
+    response = collection_get(app, '/c/books/outbox')
+
+    assert response.status_code == 200
+    assert response.json['orderedItems'] == []
+
+
+def test_a_post_in_another_community_is_excluded(app, db_session, monkeypatch):
+    """`Post.community_id == community.id`, applied to both queries. Without
+    this test the community filter is unkillable, since every other test seeds
+    exactly one community.
+    """
+    seed_actors()
+    community = seed_local_community('books')
+    other = make_community(name='films', host='test.piefed.local')
+    user = make_user(None, 'author', local=True)
+    make_post(other, user, 'https://test.piefed.local/post/1')
+    db.session.commit()
+    monkeypatch.setattr(activitypub_routes, 'post_to_activity',
+                        lambda post, community: 'AP')
+
+    response = collection_get(app, '/c/books/outbox')
+
+    assert response.status_code == 200
+    assert response.json['orderedItems'] == []
