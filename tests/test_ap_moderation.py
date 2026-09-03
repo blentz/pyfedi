@@ -554,17 +554,25 @@ def test_an_unrelated_user_cannot_restore_a_post(app, db_session, monkeypatch, r
     rather than shared -- verified textually identical, which is why this
     task tests the refusal and one success instead of repeating Task 2's
     four-way isolation.
+
+    `community.post_count` is seeded and asserted for the same reason the
+    delete-side twin (`test_an_unrelated_user_cannot_delete_a_post`) does it:
+    `post.deleted` alone shows the flag was not flipped, but the permitted
+    path also moves counters, and a refusal has to leave those alone too. The
+    two halves of the pair are held to the same standard.
     """
     site, instance, community, author, moderator = seed_moderation_scene()
     stranger = make_user(instance, 'stranger', local=True)
     post = make_post(community, author, None, title='a post')
     post.deleted = True
+    community.post_count = 5
     db.session.commit()
 
     ap_util.restore_post_or_comment(stranger, post, False,
                                     {'id': 'https://peer.example/activities/undo/1'}, '')
 
     assert post.deleted is True
+    assert community.post_count == 5
 
 
 def test_restoring_another_users_post_writes_a_restore_modlog_entry(
@@ -648,6 +656,13 @@ def test_a_post_delete_then_restore_cycle_is_lossless(
     Without this test the reply result reads as "these functions are sloppy
     about counters". With it, the finding is specific: the Post branches
     agree and the PostReply branches do not.
+
+    THE MID-CYCLE ASSERTION IS LOAD-BEARING. The three end-state assertions
+    are all satisfied by neither call having any effect: `deleted` defaults to
+    False and both counters are read back at exactly the value they were
+    seeded to. Checking `community.post_count == 4` between the two calls is
+    what makes this a round trip rather than a pair of no-ops -- it proves the
+    delete moved the counter that the restore then gives back.
     """
     site, instance, community, author, moderator = seed_moderation_scene()
     post = make_post(community, author, None, title='a post')
@@ -657,6 +672,11 @@ def test_a_post_delete_then_restore_cycle_is_lossless(
 
     ap_util.delete_post_or_comment(moderator, post, False,
                                    {'id': 'https://peer.example/activities/delete/1'}, '')
+
+    # The delete really happened -- without this the three assertions below
+    # would also pass if neither call did anything.
+    assert community.post_count == 4
+
     ap_util.restore_post_or_comment(moderator, post, False,
                                     {'id': 'https://peer.example/activities/undo/1'}, '')
 
