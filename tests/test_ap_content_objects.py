@@ -411,6 +411,33 @@ def test_an_unpublished_post_is_403(app, db_session, monkeypatch):
     assert response.status_code == 403
 
 
+def test_a_deleted_post_is_still_served_as_activitypub_json(app, db_session, monkeypatch):
+    """PINS a defect. `post_ap` contains no `post.deleted` reference at all, so
+    a soft-deleted post's full `Page` JSON is served to any ActivityPub caller,
+    while `GET /post/<id>/context` for the SAME row aborts 404 on
+    `if post.deleted:` -- the contrast
+    `test_a_deleted_post_has_no_context` asserts from the other side.
+
+    Not fixed: adding the guard is a federation-visibility decision, the same
+    class as D189-D191. This test asserts 200, so it fails loudly the moment
+    the guard is added.
+
+    `deleted` is set explicitly; `make_post` sets `deleted=False`, so resting
+    on the default would assert nothing.
+    """
+    calls = _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    post.deleted = True
+    db.session.commit()
+
+    response = ap_get(app, f'/post/{post.id}')
+
+    assert response.status_code == 200
+    assert response.content_type == 'application/activity+json'
+    assert response.json['type'] == 'Page'
+    assert calls['post_to_page'] == [post]
+
+
 def test_a_post_is_401_when_the_author_has_blocked_the_requesting_instance(app, db_session, monkeypatch):
     """`post_ap`'s copy of `comment_ap`'s 401 guard. The Instance row is created
     with the exact domain `requestor_domain()` will extract, because
@@ -631,6 +658,11 @@ def test_a_post_context_lists_the_post_and_its_replies(app, db_session, monkeypa
     `make_post_reply` both leave `ap_id` None for a local object, and asserting
     a list of Nones would be vacuous (harness fact 50) -- it would pass equally
     against a route that rendered `public_url()` or nothing at all.
+
+    `Vary` is asserted here because this was the file's one success path
+    without such an assertion; as everywhere else, the observable value is
+    `'Accept, Accept-Encoding'` and never bare `'Accept'` -- Flask-Compress
+    appends `Accept-Encoding` unconditionally (harness fact 38).
     """
     _double_the_delegates(monkeypatch)
     community, author, post = seed_local_post()
@@ -644,6 +676,7 @@ def test_a_post_context_lists_the_post_and_its_replies(app, db_session, monkeypa
     assert response.status_code == 200
     assert response.content_type == 'application/activity+json'
     assert response.headers['Cache-Control'] == 'public, max-age=15'
+    assert response.headers['Vary'] == 'Accept, Accept-Encoding'
     assert response.json['type'] == 'OrderedCollection'
     assert response.json['totalItems'] == 2
     assert response.json['orderedItems'] == ['https://test.piefed.local/post/1',
@@ -676,7 +709,9 @@ def test_a_deleted_post_has_no_context(app, db_session, monkeypatch):
     """`if post.deleted: abort(404)` -- the ONLY `deleted` guard among the four
     content-object endpoints. `post_replies_ap`, which serves the same post's
     replies, has none, which is pinned by
-    `test_post_replies_are_served_for_a_deleted_post`.
+    `test_post_replies_are_served_for_a_deleted_post`; neither does `post_ap`,
+    which serves the post itself, pinned by
+    `test_a_deleted_post_is_still_served_as_activitypub_json`.
 
     `deleted` is set explicitly; `make_post` sets `deleted=False`.
     """
