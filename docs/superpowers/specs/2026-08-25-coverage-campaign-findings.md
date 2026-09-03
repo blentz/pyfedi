@@ -51,6 +51,44 @@ Before believing a new test, name the production change that would make it fail.
 If you cannot name one, the test is decoration. Where it is cheap, actually make
 that change and watch the test fail.
 
+## Line numbers in this register are dated records, not maintained pointers — 2026-09-03
+
+Every `file:line` citation below means *the line as it stood at the commit that
+filed the entry*. It is not kept in step with the file afterwards, and it will
+not be. **Locate the code an entry names by its content — the function name, the
+guard, the header string it quotes — never by the number.**
+
+The occasion for writing this down: sub-project 11 inserted two lines into
+`app/activitypub/routes.py` — the `else: abort(400)` now at `:2233-2234`, its
+Task 10, commit `e1951de5`, closing D188. Every citation in this register that
+names a line at or after `:2233` in that file, and was filed before D187, was
+measured against the pre-insertion file and so reads two lines low today. That
+is roughly fifty rows — D47, D55, D57, D60, D62, D91, D113, D118–D141, D156,
+D158–D164, D167–D172, D175, D176, D180, D181, D183–D185 — plus prose in the
+sub-project 6 and sub-project 7 section openings.
+
+**They are deliberately not being swept, and no future line-shifting change to
+production code will trigger a sweep either.** Three reasons:
+
+- A register entry is a dated record of what was true when the finding was made.
+  That is what makes it evidence. Rewriting the number to match today's file
+  converts a record into an assertion about today that nobody re-verified — the
+  campaign's own dominant failure mode, a confident citation to a line that does
+  not say what it is claimed to say.
+- A sweep would have to be repeated after every future production change to the
+  file, and each sweep is fifty chances to corrupt a citation that was correct.
+- Every spec in this campaign already instructs its implementers to locate every
+  code target by content, not by line number. This note codifies existing
+  practice rather than introducing a rule.
+
+**The one citation that was corrected, and the distinction that justifies it.**
+D177's evidence column claimed a *current re-measurement* — it said, in effect,
+"measured at this commit". A citation that asserts its own freshness and is
+stale is a false claim, and false claims get fixed. A citation that is merely
+old is a record, and records do not. That is the whole test: fix a stale line
+number when the entry claims the number is current; leave it alone when the
+entry is simply dated.
+
 ## Harness properties you must know before writing tests
 
 ### Eager Celery runs federation inline, and failures are swallowed
