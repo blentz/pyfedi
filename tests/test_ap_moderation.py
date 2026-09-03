@@ -883,9 +883,15 @@ def test_a_community_ban_decrements_the_users_real_reply_counter(
     assert author.post_reply_count == 4
 
 
-def test_a_community_ban_deletes_files_without_purging_the_cdn(
+def test_a_community_ban_purges_the_cdn_despite_its_bare_call(
         app, db_session, monkeypatch):
-    """PINS A NON-ASYMMETRY, which is why the assertion is `is True`.
+    """PINS A NON-ASYMMETRY, which is why the assertion is `is True` and why
+    the name says the CDN IS purged.
+
+    An earlier name -- `..._deletes_files_without_purging_the_cdn` -- asserted
+    the opposite of what the body checks. It came from the spec's original
+    claim that the two ban-removal paths differ on `purge_cdn`, which reading
+    the signature falsified.
 
     `community_ban_remove_data` calls `delete_from_disk()` with no argument
     and `site_ban_remove_data` passes `purge_cdn=True` explicitly -- but the
