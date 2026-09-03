@@ -42,7 +42,6 @@ SDD implementers see only their own brief, so this table is repeated into every 
 |---|---|---|
 | `seed_moderation_scene()` | this file | returns `(site, instance, community, author, moderator)`; author is the content owner, moderator is a `CommunityMember(is_moderator=True)` |
 | `_double_file_deletion(monkeypatch)` | this file | patches `File.delete_from_disk`; returns a list of `(file_id, purge_cdn)` tuples |
-| `_enable_ap_logging(app)` | this file | sets `LOG_ACTIVITYPUB_TO_DB=True` for the test; see the fact below |
 | `make_community_ban(user, community, banned_by=None, reason='', ban_until=None)` | `tests/factories.py` | Task 1 adds it; composite PK, no `id` column |
 | `make_user(instance, name, local=False, with_keys=False)` | `tests/factories.py` | leaves `ap_profile_id`/`ap_public_url`/`ap_id` `None` when `local=True` |
 | `make_community(name='microblogs', host='test.piefed.local')` | `tests/factories.py` | |
@@ -76,7 +75,7 @@ SDD implementers see only their own brief, so this table is repeated into every 
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `seed_moderation_scene`, `_double_file_deletion`, `_enable_ap_logging`, and `make_community_ban`. Every later task uses these.
+- Produces: `seed_moderation_scene`, `_double_file_deletion`, and `make_community_ban`. Every later task uses these.
 
 - [ ] **Step 1: Write the file header and helpers**
 
@@ -132,27 +131,7 @@ def _double_file_deletion(monkeypatch):
     return calls
 
 
-def _enable_ap_logging(app):
-    """Turn on the config gate `log_incoming_ap` gets its rows past.
-
-    `log_incoming_ap` (app/activitypub/util.py) writes an ActivityPubLog row
-    only `if current_app.config['LOG_ACTIVITYPUB_TO_DB']`. config.py defaults
-    that to False and NEITHER tests/conftest.py NOR .env.test overrides it,
-    so an ActivityPubLog assertion in this suite finds zero rows whether the
-    code logged or not -- vacuous, and it would pass against a function that
-    deleted the logging entirely.
-
-    Tests that assert on a log row call this first. Tests that can assert a
-    real effect instead -- the row's `deleted` flag, a counter, a ModLog
-    entry -- should prefer that effect and not need this at all.
-
-    The `app` fixture is session-scoped, so the flag is restored on exit to
-    keep one test from leaking logging into the next.
-    """
-    app.config['LOG_ACTIVITYPUB_TO_DB'] = True
 ```
-
-**Note on restoring the flag:** `_enable_ap_logging` as written does not restore. **Make it restore** — either take `monkeypatch` and use `monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)`, or return a teardown the caller invokes. Pick the `monkeypatch.setitem` form; it is one line and cannot be forgotten. Update the signature to `_enable_ap_logging(app, monkeypatch)` and say so in your report, since later tasks are briefed against it.
 
 - [ ] **Step 2: Add `make_community_ban` to `tests/factories.py`**
 
@@ -1503,4 +1482,4 @@ git commit -m "docs: register sub-project 12's findings and raise the util.py fl
 
 **Type consistency.** `seed_moderation_scene()` returns the same five-tuple in every task that calls it. `_double_file_deletion(monkeypatch)` returns `(file_id, purge_cdn)` tuples in Tasks 1, 6 and 7. `make_community_ban(user, community, banned_by=None, reason='', ban_until=None)` is called with that signature in Tasks 8 and 9. `test_a_site_ban_does_not_zero_the_users_reply_count` is the name Task 6 produces and Task 10 consumes, and Task 10 states the new name explicitly.
 
-**Two gaps found and fixed inline.** `_enable_ap_logging` as first drafted did not restore the config flag, which would leak logging from one test into every later one in a session-scoped app — Task 1 Step 1 now carries an explicit instruction to use `monkeypatch.setitem` and to report the changed signature. And Task 2's mutation table originally listed only the four top-level disjuncts; the second disjunct is itself a conjunction whose two halves need their own kills, so the table now names them and Step 4 carries the analysis the implementer must do.
+**Two gaps found and fixed inline.** A drafted `_enable_ap_logging` helper was removed: no task called it, and the fact it encoded — that `log_incoming_ap` writes nothing unless `LOG_ACTIVITYPUB_TO_DB` is set — is already carried by "Facts every task needs" and is better served by every test asserting the real effect instead of a log row. And Task 2's mutation table originally listed only the four top-level disjuncts; the second disjunct is itself a conjunction whose two halves need their own kills, so the table now names them and Step 4 carries the analysis the implementer must do.
