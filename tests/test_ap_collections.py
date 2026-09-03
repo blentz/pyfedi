@@ -767,12 +767,20 @@ def test_a_remote_feed_followers_request_is_400(app, db_session):
 
 def test_an_unknown_feed_followers_is_404(app, db_session):
     """`feed_followers` is the ONLY feed collection with a correct
-    `if feed is not None: ... else: abort(404)`. `feed_outbox`, `feed_following`
-    and `feed_moderators_route` all look the feed up the same way and then
-    dereference it (`feed.public`, `feed.user_id`, ...) with no None check at
-    all -- an unknown feed there is a 500, not a 404 (verified by reading
-    app/activitypub/routes.py; none of the three is exercised by a test in
-    this file yet).
+    `if feed is not None: ... else: abort(404)`. Its three siblings all look the
+    feed up the same way and then get an unknown feed wrong, but by TWO
+    DIFFERENT mechanisms -- verified by reading app/activitypub/routes.py, and
+    none of the three is exercised by a test in this file yet:
+
+      * `feed_outbox` and `feed_following` have NO None check at all. They read
+        `feed.public` directly, so an unknown feed raises AttributeError.
+      * `feed_moderators_route` DOES have `if feed is not None:`, and simply has
+        no `else`. An unknown feed falls off the end, the view returns None, and
+        Flask raises TypeError -- the same failure this test's own guard
+        produces when its `else: abort(404)` is deleted.
+
+    Both mechanisms surface as a 500 rather than a 404, but they are not the
+    same bug and a fix for one is not a fix for the other.
     """
     seed_actors()
 
