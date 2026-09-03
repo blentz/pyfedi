@@ -190,3 +190,54 @@ def test_a_post_in_another_community_is_excluded(app, db_session, monkeypatch):
 
     assert response.status_code == 200
     assert response.json['orderedItems'] == []
+
+
+def test_a_deleted_sticky_post_is_excluded(app, db_session, monkeypatch):
+    """`Post.deleted == False`, in the STICKY query specifically.
+    `test_a_deleted_post_is_excluded`'s post is `sticky=False` (the column
+    default), so it only ever reaches the REMAINING query and cannot prove
+    the STICKY query enforces this filter too. This test is identical to it
+    except `sticky` is also set to True, which routes the post into the
+    STICKY query instead. Both `sticky` and `deleted` are set explicitly --
+    neither's column default would exercise what is being tested here.
+    """
+    seed_actors()
+    community = seed_local_community('books')
+    user = make_user(None, 'author', local=True)
+    post = make_post(community, user, 'https://test.piefed.local/post/1')
+    post.sticky = True
+    post.deleted = True
+    db.session.commit()
+    monkeypatch.setattr(activitypub_routes, 'post_to_activity',
+                        lambda post, community: 'AP')
+
+    response = collection_get(app, '/c/books/outbox')
+
+    assert response.status_code == 200
+    assert response.json['orderedItems'] == []
+
+
+def test_a_sticky_post_under_review_is_excluded(app, db_session, monkeypatch):
+    """`Post.status > POST_STATUS_REVIEWING`, in the STICKY query
+    specifically. `test_a_post_under_review_is_excluded`'s post is
+    `sticky=False` (the column default), so it only ever reaches the
+    REMAINING query and cannot prove the STICKY query enforces this filter
+    too. This test is identical to it except `sticky` is also set to True,
+    which routes the post into the STICKY query instead. Both `sticky` and
+    `status` are set explicitly -- `Post.status` defaults to 1, which PASSES
+    the filter, so only an explicit `status=0` exercises the excluded side.
+    """
+    seed_actors()
+    community = seed_local_community('books')
+    user = make_user(None, 'author', local=True)
+    post = make_post(community, user, 'https://test.piefed.local/post/1')
+    post.sticky = True
+    post.status = 0
+    db.session.commit()
+    monkeypatch.setattr(activitypub_routes, 'post_to_activity',
+                        lambda post, community: 'AP')
+
+    response = collection_get(app, '/c/books/outbox')
+
+    assert response.status_code == 200
+    assert response.json['orderedItems'] == []
