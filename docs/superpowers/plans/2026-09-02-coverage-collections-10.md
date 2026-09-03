@@ -815,8 +815,6 @@ def test_a_feed_moderators_collection_lists_its_owner(app, db_session):
     """
     site, instance = seed_actors()
     feed = _seed_local_feed('news', public=True)
-    owner = db.session.query(type(feed)).get(feed.id).user_id
-    db.session.commit()
 
     response = collection_get(app, '/f/news/moderators')
 
