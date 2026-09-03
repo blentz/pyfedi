@@ -357,3 +357,180 @@ def test_an_unknown_community_featured_is_404(app, db_session):
     response = collection_get(app, '/c/nosuch/featured')
 
     assert response.status_code == 404
+
+
+def test_the_moderators_collection_lists_moderator_urls(app, db_session):
+    """`community_moderators(community.id)` (app/utils.py) queries CommunityMember
+    rows filtered on `is_owner OR is_moderator`, then unconditionally appends a
+    SYNTHETIC, never-persisted CommunityMember for `community.user_id` whenever
+    that id is not already among the query results -- so the community's owner
+    is always resolved as a moderator, membership row or not (see the next
+    test). To keep this test about the `is_moderator` filter alone, the seeded
+    moderator is ALSO made the community's owner (`community.user_id = mod.id`
+    after `make_community_member`), which puts them in the query result and
+    short-circuits the append -- otherwise a second, synthetic entry for the
+    real owner (`communityowner`, user id 1 from `seed_actors`) would also
+    appear in `orderedItems`, and `totalItems` would be 2, not 1.
+
+    `make_community_member(user, community, is_moderator=False)` (tests/factories.py)
+    already matches the brief's call shape.
+    """
+    site, instance = seed_actors()
+    community = seed_local_community('books')
+    from tests.factories import make_community_member
+    mod = make_user(instance, 'mod', local=True)
+    make_community_member(mod, community, is_moderator=True)
+    community.user_id = mod.id
+    db.session.commit()
+
+    response = collection_get(app, '/c/books/moderators')
+
+    assert response.status_code == 200
+    assert response.json['type'] == 'OrderedCollection'
+    assert response.json['totalItems'] == 1
+    assert response.json['orderedItems'] == [mod.public_url()]
+
+
+def test_a_community_with_no_explicit_moderators_still_lists_its_owner(app, db_session):
+    """Registers a fact the brief did not anticipate. `community_moderators`
+    appends a never-persisted CommunityMember for `community.user_id` whenever
+    that id is absent from its query result (app/utils.py). `seed_local_community`
+    gives every community `user_id=1` -- the `communityowner` user `seed_actors`
+    creates -- and never gives that user a real CommunityMember row, so this is
+    the only way an unmoderated community's moderators collection is reachable
+    through these factories: it is never actually empty. `totalItems` is 1 and
+    `orderedItems` holds the owner's URL, not 0 and `[]` as the brief assumed.
+    """
+    seed_actors()
+    seed_local_community('books')
+    from app.models import User
+    owner = User.query.filter_by(user_name='communityowner').first()
+
+    response = collection_get(app, '/c/books/moderators')
+
+    assert response.status_code == 200
+    assert response.json['totalItems'] == 1
+    assert response.json['orderedItems'] == [owner.public_url()]
+
+
+def test_a_non_moderator_member_is_not_listed(app, db_session):
+    """`community_moderators` filters on `is_owner OR is_moderator`. A plain
+    member satisfies neither, so this is what makes that filter killable --
+    weakening it to include everyone would put `member.public_url()` into
+    `orderedItems`.
+
+    Asserted as `not in` rather than `orderedItems == []`: the community's
+    owner is synthesized into the result regardless (see the fact above), so
+    an exact-list assertion would be confounded by a URL this test isn't about.
+    """
+    site, instance = seed_actors()
+    community = seed_local_community('books')
+    from tests.factories import make_community_member
+    member = make_user(instance, 'member', local=True)
+    make_community_member(member, community, is_moderator=False)
+    db.session.commit()
+
+    response = collection_get(app, '/c/books/moderators')
+
+    assert response.status_code == 200
+    assert member.public_url() not in response.json['orderedItems']
+
+
+def test_the_moderators_collection_sets_a_two_minute_cache(app, db_session):
+    """max-age=120 -- the longest of the nine (eight plus `community_followers`,
+    which this task also covers), against `community_outbox`'s 10 and
+    `feed_outbox`'s 5, for data that changes less often than either.
+    """
+    seed_actors()
+    seed_local_community('books')
+
+    response = collection_get(app, '/c/books/moderators')
+
+    assert response.status_code == 200
+    assert response.headers['Cache-Control'] == 'public, max-age=120'
+
+
+def test_an_unknown_community_moderators_is_404(app, db_session):
+    seed_actors()
+
+    response = collection_get(app, '/c/nosuch/moderators')
+
+    assert response.status_code == 404
+
+
+def test_the_community_followers_collection_counts_its_members(app, db_session):
+    """`totalItems` is `community_members(community.id)` (app/activitypub/util.py)
+    -- a raw SQL COUNT of `community_member` rows joined to `user`, filtered on
+    `u.banned is false`, `u.deleted is false` and `cm.is_banned is false`. It is
+    a genuine count of persisted rows, unlike `community_moderators`, which
+    synthesizes an owner entry that is never written to the table -- so seeding
+    exactly one CommunityMember row makes this an exact count, tightened from
+    the brief's `>= 1` now that the helper has been read.
+
+    `member.deleted` is set explicitly: `make_user` sets `banned=False`
+    explicitly but leaves `deleted` at the column default, and no assertion
+    here may rest on that default.
+    """
+    site, instance = seed_actors()
+    community = seed_local_community('books')
+    from tests.factories import make_community_member
+    member = make_user(instance, 'member', local=True)
+    member.deleted = False
+    make_community_member(member, community, is_moderator=False)
+    db.session.commit()
+
+    response = collection_get(app, '/c/books/followers')
+
+    assert response.status_code == 200
+    assert response.json['type'] == 'Collection'
+    assert response.json['totalItems'] == 1
+
+
+def test_the_community_followers_items_list_is_always_empty(app, db_session):
+    """PINS a defect, and it is the SECOND of three followers collections to
+    have it. `totalItems` is a real count (`community_members`, a genuine SQL
+    COUNT of persisted rows) while `items` is hardcoded `[]` in the route
+    itself (app/activitypub/routes.py), so the document says "one follower"
+    and lists none.
+
+    `feed_followers` does the same, per the brief. `user_followers` -- the
+    third -- populates its items with real follower URLs and filters blocked
+    and unaccepted follows (verified by reading app/activitypub/routes.py
+    directly; neither sibling collection is exercised by a test in this file
+    yet). Two of three contradict themselves; one does not.
+
+    `member.deleted` is set explicitly for the same reason as the previous
+    test: `make_user` leaves it at the column default, and no assertion here
+    may rest on that default.
+    """
+    site, instance = seed_actors()
+    community = seed_local_community('books')
+    from tests.factories import make_community_member
+    member = make_user(instance, 'member', local=True)
+    member.deleted = False
+    make_community_member(member, community, is_moderator=False)
+    db.session.commit()
+
+    response = collection_get(app, '/c/books/followers')
+
+    assert response.status_code == 200
+    assert response.json['totalItems'] == 1
+    assert response.json['items'] == []
+
+
+def test_an_unknown_community_followers_is_404(app, db_session):
+    seed_actors()
+
+    response = collection_get(app, '/c/nosuch/followers')
+
+    assert response.status_code == 404
+
+
+def test_the_community_followers_collection_sets_a_ten_second_cache(app, db_session):
+    seed_actors()
+    seed_local_community('books')
+
+    response = collection_get(app, '/c/books/followers')
+
+    assert response.status_code == 200
+    assert response.headers['Cache-Control'] == 'public, max-age=10'
