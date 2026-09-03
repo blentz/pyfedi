@@ -2474,11 +2474,20 @@ do moved it proves nothing about whether the undo gives it back. Sub-project
 single-direction test and obvious to the round trip: `delete_post_or_comment`
 decrements four counters for a reply and `restore_post_or_comment` increments
 two, so a moderator who removes a comment and reverses it on appeal leaves two
-counters permanently lower. Write the pair as `do(); undo(); assert
-<everything back to the seeded value>`, and pair it with a **control** on a
-branch you believe is lossless -- here the `Post` branches of the same two
+counters lower than the cycle found them. Write the pair as `do(); undo();
+assert <everything back to the seeded value>`, and pair it with a **control**
+on a branch you believe is lossless -- here the `Post` branches of the same two
 functions -- so a reader can see the finding is specific rather than a general
 complaint about counter hygiene.
+
+**State what the round trip measured -- "the undo does not undo what the do
+did" -- and stop there.** An earlier version of this fact, of D200 and of the
+pin's own docstring all said the two counters were left *permanently* lower.
+That is a claim about the whole system, and a two-call test cannot support it:
+it was false here, because both counters are rebuilt away from this path
+(D200 names the recompute sites and the bound on each drift). Whether the drift
+ever recovers has to be read out of production code separately, and belongs in
+the register entry, not in the assertion's docstring.
 
 **60. A filter clause is unkillable when the set it excludes is EMPTY under
 every fixture in the file, however many tests exercise the function.** This is

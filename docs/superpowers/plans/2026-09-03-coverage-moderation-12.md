@@ -705,6 +705,26 @@ git commit -m "test: cover restore and pin the counters it fails to restore"
 
 - [ ] **Step 1: Write the round trip**
 
+> **Annotation added 2026-09-03 by the final whole-sub-project review. The
+> block below is left as written -- it is the historical plan -- but two things
+> in it are superseded.**
+>
+> - **SUPERSEDED, and it was false: "permanently one lower ... and nothing
+>   later notices or repairs it" (the docstring lines below). See D200 in
+>   `docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md` for the
+>   corrected claim.** Nothing on the delete/restore path repairs either
+>   counter, but both are rebuilt away from it: `community.post_reply_count`
+>   from a `COUNT` by `update_community_stats`
+>   (`app/shared/tasks/maintenance.py`, run by the `daily-maintenance` CLI
+>   commands), so its drift is bounded by a maintenance cycle; and
+>   `post.reply_count_cross_posted` for a whole cross-post set by the
+>   reply-creation path (`app/models.py`), so its drift is unbounded only on a
+>   post that receives no further replies. The defect is that the undo does not
+>   undo what the do did -- not that the number can never recover. The shipped
+>   docstring and D200 were both corrected by `9ab1546d`.
+> - **Renamed:** `test_a_delete_then_restore_cycle_permanently_loses_two_counters`
+>   ships as `test_a_delete_then_restore_cycle_loses_two_counters`.
+
 ```python
 def test_a_delete_then_restore_cycle_permanently_loses_two_counters(
         app, db_session, monkeypatch, redis_lock_only_double):
@@ -1033,6 +1053,13 @@ def test_a_community_ban_decrements_the_users_real_reply_counter(
 ```
 
 - [ ] **Step 3: Write the CDN asymmetry test**
+
+> **Annotation added 2026-09-03 by the final whole-sub-project review.
+> Renamed:** `test_a_community_ban_deletes_files_without_purging_the_cdn` ships
+> as `test_a_community_ban_purges_the_cdn_despite_its_bare_call` -- the planned
+> name says the opposite of what the block's own docstring and assertion say,
+> which is why the shipped file does not use it. No technical claim below is
+> superseded.
 
 ```python
 def test_a_community_ban_deletes_files_without_purging_the_cdn(
