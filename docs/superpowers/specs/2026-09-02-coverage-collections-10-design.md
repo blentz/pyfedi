@@ -2,8 +2,8 @@
 
 **Date:** 2026-09-02
 **Module:** `app/activitypub/routes.py` — `community_outbox`, `community_featured`,
-`community_moderators_route`, `user_followers`, `feed_outbox`, `feed_following`,
-`feed_moderators_route`, `feed_followers`
+`community_moderators_route`, `community_followers`, `user_followers`, `feed_outbox`,
+`feed_following`, `feed_moderators_route`, `feed_followers`
 **Predecessors:** 5a-7 covered the inbox dispatcher and its delegates; 8 the
 webfinger discovery surface; 9 the actor-profile endpoints. This is the third
 slice of the outbound side, and the last large one.
@@ -25,9 +25,10 @@ sub-projects 7, 8 and 9, the defects live in what they do **differently**.
 | `community_moderators_route` | 2069-2091 | **13 / 14** |
 | `feed_moderators_route` | 2812-2837 | **13 / 14** |
 | `community_featured` | 2044-2065 | **11 / 12** |
+| `community_followers` | 2095-2111 | **9 / 10** |
 | `feed_followers` | 2841-2861 | **11 / 12** |
 
-**111 uncovered statements**, and all eight sit between 4% and 8% covered. They
+**120 uncovered statements**, and all nine sit between 4% and 10% covered. They
 are how a remote instance enumerates a community's posts, a user's followers, a
 feed's communities and every actor's moderators.
 
@@ -161,9 +162,13 @@ falls to whatever default the deployment applies.
   A remote instance paginating on that number sees a collection that claims to
   be complete at 50. Correcting it changes what peers are told, so it is
   registered by default.
-- **`feed_followers` reports a real `totalItems` with `items` permanently `[]`.**
-  Possibly deliberate — hiding follower lists is common — but the shape is
-  self-contradictory and undocumented.
+- **Two of the three followers collections report a real `totalItems` with
+  `items` permanently `[]`** — `community_followers` and `feed_followers`.
+  `user_followers`, the third, populates its items with real follower URLs and
+  filters blocked and unaccepted follows. Hiding follower lists is a defensible
+  privacy choice, but reporting a non-zero count beside an empty list is
+  self-contradictory: a consumer cannot tell "hidden" from "none". That two of
+  three do it and one does not is the asymmetry.
 - **The feed lookups have neither a `banned` nor a `public` guard**, while the
   community and user lookups both filter `banned=False`. Two of the four feed
   endpoints check `feed.public` after the fact; two do not check it at all.
