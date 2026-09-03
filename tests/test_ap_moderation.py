@@ -417,10 +417,18 @@ def test_deleting_a_nested_reply_decrements_its_ancestors_child_count(
     before".
 
     The raw SQL (`update post_reply set child_count = child_count - 1 where
-    id in :parents`) bypasses the ORM's identity map, so `parent.child_count`
-    read straight off the Python object would still show the seeded 5 even
-    though the row is now 4 in the database -- `db.session.refresh(parent)`
-    is load-bearing here, not decorative.
+    id in :parents`) bypasses the ORM's identity map, so the row changes
+    without the mapped `parent` object being notified. The explicit
+    `db.session.refresh(parent)` below is nevertheless NOT currently
+    required to make the assertion pass -- verified by removing it and
+    running this test, not reasoned about: `app/__init__.py:81` leaves
+    `expire_on_commit` at its default of `True` (it overrides only
+    `autoflush`), and `delete_post_or_comment` calls `db.session.commit()`
+    immediately after the raw SQL, which expires `parent` along with every
+    other object in the session -- the next read of `parent.child_count`
+    re-fetches it from the database on its own. The refresh is kept anyway
+    so this assertion stays correct if `session_options` ever changes to
+    stop expiring on commit, not because the test fails without it today.
     """
     site, instance, community, author, moderator = seed_moderation_scene()
     post = make_post(community, author, None, title='a post')
