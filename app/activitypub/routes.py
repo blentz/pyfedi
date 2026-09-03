@@ -2785,6 +2785,10 @@ def feed_following(actor):
     else:
         feed: Feed = db.session.query(Feed).filter_by(name=actor.lower(), ap_id=None).first()
 
+    # unknown feed - 404 rather than crashing on feed.public below
+    if feed is None:
+        abort(404)
+
     # check if feed is public, if not abort
     # with 403 (forbidden)
     if not feed.public:
