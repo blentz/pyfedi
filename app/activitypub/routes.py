@@ -2240,6 +2240,8 @@ def post_replies_ap(post_id):
         resp.headers.set('Vary', 'Accept')
         resp.headers.set('Cache-Control', 'public, max-age=15')
         return resp
+    else:
+        abort(400)
 
 
 @bp.route('/post/<int:post_id>/context', methods=['GET'])
