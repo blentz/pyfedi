@@ -582,3 +582,71 @@ def test_restoring_another_users_post_writes_a_restore_modlog_entry(
     entries = db.session.query(ModLog).all()
     assert len(entries) == 1
     assert entries[0].action == 'restore_post'
+
+
+def test_a_delete_then_restore_cycle_permanently_loses_two_counters(
+        app, db_session, monkeypatch, redis_lock_only_double):
+    """PINS A DEFECT, and it is this slice's most consequential.
+
+    `delete_post_or_comment` decrements four counters for a reply;
+    `restore_post_or_comment` increments two. So a delete followed by a
+    restore -- the exact sequence a moderator produces by removing a comment
+    and then reversing it on appeal -- leaves `community.post_reply_count`
+    and `post.reply_count_cross_posted` permanently one lower. Every
+    subsequent cycle loses one more, and nothing later notices or repairs it.
+
+    A single-direction test cannot show this. Asserting that restore leaves a
+    counter alone is only a defect if delete moved it, so the two calls have
+    to happen in one test with the starting values recorded.
+
+    DO NOT FIX -- registered, because correcting a counter changes numbers
+    users already see and the historical drift is unknown.
+    """
+    site, instance, community, author, moderator = seed_moderation_scene()
+    post = make_post(community, author, None, title='a post')
+    reply = make_post_reply(post, author)
+    post.reply_count = 5
+    post.reply_count_cross_posted = 5
+    author.post_reply_count = 5
+    community.post_reply_count = 5
+    author.bot = False
+    db.session.commit()
+
+    ap_util.delete_post_or_comment(moderator, reply, False,
+                                   {'id': 'https://peer.example/activities/delete/1'}, '')
+    ap_util.restore_post_or_comment(moderator, reply, False,
+                                    {'id': 'https://peer.example/activities/undo/1'}, '')
+
+    assert reply.deleted is False
+    # The two counters both halves maintain come back:
+    assert post.reply_count == 5
+    assert author.post_reply_count == 5
+    # The two only the delete side maintains do NOT:
+    assert community.post_reply_count == 4
+    assert post.reply_count_cross_posted == 4
+
+
+def test_a_post_delete_then_restore_cycle_is_lossless(
+        app, db_session, monkeypatch, redis_lock_only_double):
+    """The contrast that makes the reply finding sharp: the POST branches of
+    both functions maintain the same two counters, so a post round trip
+    returns to exactly where it started.
+
+    Without this test the reply result reads as "these functions are sloppy
+    about counters". With it, the finding is specific: the Post branches
+    agree and the PostReply branches do not.
+    """
+    site, instance, community, author, moderator = seed_moderation_scene()
+    post = make_post(community, author, None, title='a post')
+    community.post_count = 5
+    author.post_count = 5
+    db.session.commit()
+
+    ap_util.delete_post_or_comment(moderator, post, False,
+                                   {'id': 'https://peer.example/activities/delete/1'}, '')
+    ap_util.restore_post_or_comment(moderator, post, False,
+                                    {'id': 'https://peer.example/activities/undo/1'}, '')
+
+    assert post.deleted is False
+    assert community.post_count == 5
+    assert author.post_count == 5
