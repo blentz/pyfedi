@@ -1,6 +1,4 @@
 """tests/test_ap_content_objects.py"""
-import pytest
-
 from app import db
 from app.activitypub import routes as activitypub_routes
 from app.constants import POST_STATUS_PUBLISHED, POST_STATUS_REVIEWING
@@ -35,8 +33,8 @@ def browser_get(app, path):
     """GET with no Accept header at all -- the non-ActivityPub branch.
 
     Four of these endpoints answer this differently: `comment_ap` delegates to
-    `continue_discussion`, `post_ap` to `show_post`, `post_ap_context` aborts
-    400, and `post_replies_ap` falls off the end of the function entirely.
+    `continue_discussion`, `post_ap` to `show_post`, and `post_ap_context` and
+    `post_replies_ap` both abort 400.
     """
     with app.test_client() as client:
         return client.get(path)
@@ -248,9 +246,10 @@ def test_a_browser_request_for_a_comment_delegates_to_the_discussion_view(app, d
     in that order -- the two are different rows and swapping them is a real
     regression this assertion catches.
 
-    `post_replies_ap` has NO else branch at all and crashes here; that is
-    pinned by `test_a_browser_request_for_post_replies_crashes` and fixed in a
-    later task.
+    `post_replies_ap` answers a browser with a bare 400 instead of delegating
+    to any HTML view, because a replies collection has no HTML view to
+    delegate to; that is covered by
+    `test_a_browser_request_for_post_replies_is_400`.
     """
     calls = _double_the_delegates(monkeypatch)
     community, author, post = seed_local_post()
@@ -517,29 +516,24 @@ def test_a_head_request_for_a_post_returns_an_empty_activitypub_body(app, db_ses
     assert calls['post_to_page'] == []
 
 
-def test_a_browser_request_for_post_replies_crashes(app, db_session, monkeypatch):
-    """PINS a crash, remotely reachable. DO NOT FIX -- a later task does.
+def test_a_browser_request_for_post_replies_is_400(app, db_session, monkeypatch):
+    """`post_replies_ap`'s `else: abort(400)`, added because the function
+    previously had no `else` at all: a browser request fell off the end, the
+    view returned None, and Flask raised
+    `TypeError: The view function ... did not return a valid response`.
 
-    `post_replies_ap`'s entire body sits inside `if (request.method == 'GET' or
-    request.method == 'HEAD') and is_activitypub_request():` and there is NO
-    `else`. A browser request falls off the end, the view returns None, and
-    Flask raises. `post_ap_context`, twelve lines below in the same file, gets
-    this right with `else: abort(400)`.
-
-    This is the FOURTH instance of the class sub-project 10 fixed three times
-    in the feed collections (D167-D169).
-
-    THE 500 DOES NOT MATERIALISE AS A RESPONSE. `tests/conftest.py` sets
-    `TESTING = True` with no `PROPAGATE_EXCEPTIONS` override, so Flask
-    re-raises rather than producing a 500, and the test client's default
-    `raise_server_exceptions=True` lets it escape `browser_get` entirely
-    (harness fact 43). So this asserts the exception, not a status code.
+    400 rather than 404 matches `post_ap_context`, the sibling twelve lines
+    below, which had the correct shape all along. `comment_ap` and `post_ap`
+    answer a browser with HTML instead, which is a richer answer this fix
+    deliberately did not adopt -- there is no HTML view for a replies
+    collection.
     """
     _double_the_delegates(monkeypatch)
     community, author, post = seed_local_post()
 
-    with pytest.raises(TypeError, match='did not return a valid response'):
-        browser_get(app, f'/post/{post.id}/replies')
+    response = browser_get(app, f'/post/{post.id}/replies')
+
+    assert response.status_code == 400
 
 
 def test_post_replies_are_served_as_an_ordered_collection(app, db_session, monkeypatch):
@@ -616,9 +610,9 @@ def test_post_replies_are_served_for_a_deleted_post(app, db_session, monkeypatch
 
 def test_an_unknown_post_replies_collection_is_404(app, db_session, monkeypatch):
     """`Post.query.get_or_404` inside the ActivityPub branch. Reached only with
-    an ActivityPub Accept header -- a browser request for the same URL crashes
-    before the lookup, which is what
-    `test_a_browser_request_for_post_replies_crashes` pins.
+    an ActivityPub Accept header -- a browser request for the same URL is
+    turned away with a 400 before the lookup ever runs, which is what
+    `test_a_browser_request_for_post_replies_is_400` covers.
     """
     _double_the_delegates(monkeypatch)
     seed_actors()
@@ -756,6 +750,9 @@ def test_a_browser_request_for_a_post_context_is_400(app, db_session, monkeypatc
     400 rather than 404 is the right distinction and worth stating: the
     resource exists and is resolvable, the request is simply not an
     ActivityPub one. A 404 would tell a caller the post does not exist.
+
+    `post_replies_ap` now returns the same 400 from the same shape; this
+    function is the sibling its fix was copied from.
     """
     _double_the_delegates(monkeypatch)
     community, author, post = seed_local_post()
@@ -883,9 +880,9 @@ def test_a_failed_activity_result_discloses_the_internal_exception_message(app, 
 
 
 def test_an_unknown_activity_result_is_404(app, db_session):
-    """`else: abort(404)`. `activity_result` gets this right, which is worth
-    recording: `post_replies_ap` -- in the same file, covered by this same
-    suite -- has no else at all and crashes instead.
+    """`else: abort(404)`. 404 rather than the 400 that `post_ap_context` and
+    `post_replies_ap` return for their own else branches: here the else means
+    no such activity was found, not that the request was the wrong shape.
     """
     seed_actors()
 
