@@ -2317,7 +2317,7 @@ def site_ban_remove_data(blocker_id, blocked):
         if reply.path:
             db.session.execute(text('update post_reply set child_count = child_count - 1 where id in :parents'),
                                {'parents': tuple(reply.path[:-1])})
-    blocked.reply_count = 0
+    blocked.post_reply_count = 0
     db.session.commit()
 
     posts = db.session.query(Post).filter_by(user_id=blocked.id, deleted=False)
