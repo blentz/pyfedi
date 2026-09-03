@@ -293,7 +293,7 @@ def test_an_unknown_comment_is_404(app, db_session, monkeypatch):
 - [ ] **Step 7: Run the tests**
 
 Run: `./run_tests.sh tests/test_ap_content_objects.py -q`
-Expected: 4 passed.
+Expected: 3 passed.
 
 - [ ] **Step 8: Commit**
 
@@ -474,7 +474,7 @@ def test_a_browser_request_for_a_comment_delegates_to_the_discussion_view(app, d
 - [ ] **Step 7: Run the tests**
 
 Run: `./run_tests.sh tests/test_ap_content_objects.py -q`
-Expected: 10 passed.
+Expected: 9 passed.
 
 - [ ] **Step 8: Commit**
 
@@ -614,7 +614,7 @@ def test_an_unknown_post_is_404_for_an_activitypub_request(app, db_session, monk
 - [ ] **Step 5: Run the tests**
 
 Run: `./run_tests.sh tests/test_ap_content_objects.py -q`
-Expected: 16 passed.
+Expected: 15 passed.
 
 - [ ] **Step 6: Commit**
 
@@ -741,7 +741,7 @@ def test_a_post_is_401_when_the_author_has_blocked_the_requesting_instance(app, 
 - [ ] **Step 4: Run the tests**
 
 Run: `./run_tests.sh tests/test_ap_content_objects.py -q`
-Expected: 20 passed.
+Expected: 19 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -863,7 +863,7 @@ def test_a_head_request_for_a_post_returns_an_empty_activitypub_body(app, db_ses
 - [ ] **Step 5: Run the tests**
 
 Run: `./run_tests.sh tests/test_ap_content_objects.py -q`
-Expected: 24 passed.
+Expected: 23 passed.
 
 - [ ] **Step 6: Commit**
 
@@ -1022,7 +1022,7 @@ def test_an_unknown_post_replies_collection_is_404(app, db_session, monkeypatch)
 - [ ] **Step 6: Run the tests**
 
 Run: `./run_tests.sh tests/test_ap_content_objects.py -q`
-Expected: 30 passed.
+Expected: 29 passed.
 
 - [ ] **Step 7: Commit**
 
@@ -1166,11 +1166,11 @@ is empty. Report both kills.
 
 ```python
 def test_a_browser_request_for_a_post_context_is_400(app, db_session, monkeypatch):
-    """`post_ap_context`'s `else: abort(400)` -- the shape `post_replies_ap`
-    is missing entirely. This is the model a later task copies.
+    """`post_ap_context`'s `else: abort(400)`.
 
-    400 rather than 404: the resource exists, the request is simply not an
-    ActivityPub one.
+    400 rather than 404 is the right distinction and worth stating: the
+    resource exists and is resolvable, the request is simply not an
+    ActivityPub one. A 404 would tell a caller the post does not exist.
     """
     _double_the_delegates(monkeypatch)
     community, author, post = seed_local_post()
@@ -1196,7 +1196,7 @@ def test_an_unknown_post_context_is_404(app, db_session, monkeypatch):
 - [ ] **Step 7: Run the tests**
 
 Run: `./run_tests.sh tests/test_ap_content_objects.py -q`
-Expected: 36 passed.
+Expected: 35 passed.
 
 - [ ] **Step 8: Commit**
 
@@ -1298,7 +1298,7 @@ def test_an_unlogged_activity_is_404_with_a_cache_header(app, db_session):
 - [ ] **Step 4: Run the tests**
 
 Run: `./run_tests.sh tests/test_ap_content_objects.py -q`
-Expected: 39 passed.
+Expected: 38 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1409,7 +1409,7 @@ problem. Restore and verify the diff is empty.
 - [ ] **Step 5: Run the tests**
 
 Run: `./run_tests.sh tests/test_ap_content_objects.py -q`
-Expected: 42 passed.
+Expected: 41 passed.
 
 - [ ] **Step 6: Commit**
 
