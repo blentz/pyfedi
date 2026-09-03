@@ -267,3 +267,93 @@ def test_a_sticky_post_in_another_community_is_excluded(app, db_session, monkeyp
 
     assert response.status_code == 200
     assert response.json['orderedItems'] == []
+
+
+def test_the_featured_collection_lists_sticky_posts(app, db_session, monkeypatch):
+    """`community_featured` selects `sticky=True, deleted=False` and renders each
+    with `post_to_page` -- a DIFFERENT delegate from `community_outbox`'s
+    `post_to_activity`, which is why both are doubled separately.
+    """
+    seed_actors()
+    community = seed_local_community('books')
+    user = make_user(None, 'author', local=True)
+    post = make_post(community, user, 'https://test.piefed.local/post/1')
+    post.sticky = True
+    db.session.commit()
+    monkeypatch.setattr(activitypub_routes, 'post_to_page',
+                        lambda post: f'PAGE:{post.ap_id}')
+
+    response = collection_get(app, '/c/books/featured')
+
+    assert response.status_code == 200
+    assert response.json['type'] == 'OrderedCollection'
+    assert response.json['orderedItems'] == ['PAGE:https://test.piefed.local/post/1']
+
+
+def test_a_non_sticky_post_is_not_featured(app, db_session, monkeypatch):
+    """`sticky=True`. Set explicitly on the excluded post -- `Post.sticky`
+    defaults to False, so the absence would otherwise rest on that default.
+    """
+    seed_actors()
+    community = seed_local_community('books')
+    user = make_user(None, 'author', local=True)
+    post = make_post(community, user, 'https://test.piefed.local/post/1')
+    post.sticky = False
+    db.session.commit()
+    monkeypatch.setattr(activitypub_routes, 'post_to_page', lambda post: 'PAGE')
+
+    response = collection_get(app, '/c/books/featured')
+
+    assert response.status_code == 200
+    assert response.json['orderedItems'] == []
+
+
+def test_a_featured_post_under_review_is_published_anyway(app, db_session, monkeypatch):
+    """PINS a defect. `community_outbox` filters
+    `Post.status > POST_STATUS_REVIEWING`; `community_featured` filters only
+    `deleted=False`. So a sticky post still under review is HIDDEN from the
+    outbox and PUBLISHED in the featured collection -- the same post, two
+    endpoints, opposite answers.
+
+    Status is set to 0 (POST_STATUS_REVIEWING) explicitly; the column defaults
+    to 1, which would pass any filter.
+    """
+    seed_actors()
+    community = seed_local_community('books')
+    user = make_user(None, 'author', local=True)
+    post = make_post(community, user, 'https://test.piefed.local/post/1')
+    post.sticky = True
+    post.status = 0
+    db.session.commit()
+    monkeypatch.setattr(activitypub_routes, 'post_to_page', lambda post: 'PAGE')
+
+    response = collection_get(app, '/c/books/featured')
+
+    assert response.status_code == 200
+    assert response.json['orderedItems'] == ['PAGE']
+
+
+def test_the_featured_collection_sets_no_cache_control(app, db_session, monkeypatch):
+    """PINS a defect. Every one of the seven sibling collections sets a
+    Cache-Control header; this one sets none, so caching falls to whatever the
+    deployment's default is.
+
+    Asserted as absence rather than as a value, which is what makes it
+    discriminating: adding any Cache-Control would fail this test.
+    """
+    seed_actors()
+    seed_local_community('books')
+    monkeypatch.setattr(activitypub_routes, 'post_to_page', lambda post: 'PAGE')
+
+    response = collection_get(app, '/c/books/featured')
+
+    assert response.status_code == 200
+    assert 'Cache-Control' not in response.headers
+
+
+def test_an_unknown_community_featured_is_404(app, db_session):
+    seed_actors()
+
+    response = collection_get(app, '/c/nosuch/featured')
+
+    assert response.status_code == 404
