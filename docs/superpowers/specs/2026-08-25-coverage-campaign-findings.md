@@ -1360,7 +1360,37 @@ says which numbers are taken. So there is one now, and it is this file:
   sub-project's final whole-sub-project fix wave: `post_ap` has no `deleted`
   guard, so a soft-deleted post's full `Page` JSON is served where the same
   post's `/context` 404s -- the fourth cell of the slice's `deleted`-guard
-  row, and the one nothing else disposed of. **Next free number: D200.**
+  row, and the one nothing else disposed of.
+  D200-D212 sub-project 12 (the six moderation and ban-removal functions in
+  `app/activitypub/util.py` -- `delete_post_or_comment`,
+  `restore_post_or_comment`, `site_ban_remove_data`,
+  `community_ban_remove_data`, `ban_user`, `unban_user` -- see that section for
+  the tables). D201 is fixed, not merely registered: `site_ban_remove_data`
+  assigned `blocked.reply_count = 0` to a column `User` does not declare, so
+  site-banning a user never zeroed their real reply counter, one commit
+  (`25de721d`) under this sub-project's own bounded authorisation. D200 and
+  D202-D210 are registered but not fixed: D200 is the delete/restore cycle
+  losing `community.post_reply_count` and `post.reply_count_cross_posted` on
+  every round trip, the most consequential finding in the slice and the only
+  one proved by a round-trip test rather than by reading; D202 is
+  `restore_post_or_comment` taking none of the seven redis locks
+  `delete_post_or_comment` wraps the same counter mutations in; D203 is
+  restore's cross-post guard dropping delete's second conjunct; D204 is
+  `unban_user`'s instance branch writing no modlog entry where the other three
+  ban/unban branches do; D205 is `ban_user`'s existing-row guard having
+  different scope in its two branches, so a re-ban is a silent no-op in a
+  community and a duplicate modlog entry instance-wide; D206 is both
+  ban-removal functions omitting the `reply_count_cross_posted` decrement that
+  `delete_post_or_comment` performs on the same rows, a third site of D200's
+  counter; D207 is the two ban-removal functions splitting between
+  `db.session.query(...)` and the legacy `.query`, cross-referencing D171;
+  D208 is the four-disjunct authorisation guard being copied between delete and
+  restore rather than shared; D209 is the `purge_cdn` call-site asymmetry being
+  cosmetic rather than behavioural -- a **falsified spec claim**, registered in
+  its corrected form; D210 is `Post.post_reply_count_recalculate`, a
+  never-called method writing the same class of undeclared attribute D201
+  fixed. D211 and D212 are test-suite findings, not production defects.
+  **Next free number: D213.**
   If you take it, say so here in the change that takes it.
 
 Two entries in the reports were deliberately **not** counted as defects, and are
@@ -3887,10 +3917,10 @@ which was tests, docstrings, comments and this register only.
 | D165 | `resolve_remote_handle` (`app/activitypub/routes.py:466-491`) | **Not fixed -- two of its own three guards are uncovered, despite this sub-project's report describing them as pinned.** `tests/test_remote_handle_resolution.py`'s four tests cover only the anonymous-caller guard (`:484-485`) and the exception-to-404 path (`:490-491`). The `'@' not in actor` guard (`:482-483`) is unreached: all four tests request `/u/wakko@mastodon.cloud`, a handle that always contains `@`. The AP-Accept guard (`:486-487`) is also unreached: `test_activitypub_request_does_not_resolve` sends the AP-Accept header but never authenticates, so it returns at the anonymous-caller guard (`:484-485`) before line `:486` is ever asked to branch true -- deleting the AP-Accept guard entirely would leave that test's `assert calls == []` green. Two cheap closures: the AP-Accept guard needs a test that logs in via `session_transaction()` **before** its first request (harness fact 37, `tests/README.md` -- a test cannot authenticate after an earlier request in the same test, because Flask-Login caches the loaded user on the app-context-scoped `g` for the life of the session-scoped `app` fixture) and then sends the AP-Accept header; the `'@' not in actor` guard needs one of Task 10's guard tests (`test_a_deleted_user_profile_is_not_served`, `test_a_banned_user_profile_is_not_served`) to stop stubbing `resolve_remote_handle` to `None` via `_double_the_renderers` and instead let it run for real against a bare (no `@`) actor name -- safe, because a bare name returns `None` at the first guard and never reaches `search_for_user`. | not fixed, registered only | reading-level plus measured: `scratch_full_cov.json`'s `app/activitypub/routes.py` entry lists `483` and `487` in `missing_lines` and `[482, 483]`/`[486, 487]` in `missing_branches`; `tests/test_remote_handle_resolution.py`'s four tests read directly, confirming all four target a handle containing `@` and that the AP-Accept test never authenticates |
 | D166 | webfinger's User lookup (`app/activitypub/routes.py:117-120`) vs. `user_profile`'s local lookup (`:376`) | **Not fixed -- a fourth lookup asymmetry, on a column D158 did not name.** Webfinger matches `func.lower(User.user_name) == actor` **or** `func.lower(User.alt_user_name) == actor` (`:117-120`). `user_profile`'s bare-username local lookup matches only `func.lower(User.user_name) == actor.lower()` (`:376`) -- `alt_user_name` plays no part. So a user reachable by their alt name via webfinger 404s at `/u/<altname>`, the same class of cross-endpoint disagreement D158 registers for the `deleted`/`banned` guards, but on a different column entirely; `alt_user_name` appeared nowhere in this register before this entry. | not fixed, registered only | reading-level: `app/activitypub/routes.py:117-120` and `:376` read directly, side by side; no test in this sub-project or `tests/test_actor_profiles.py` drives a user with a distinct `alt_user_name` through both endpoints to observe the divergence, so this is derived from reading, not measured |
 
-**Next free number: D200.** D165 and D166 were taken by this fix wave;
-D167-D186 were taken by sub-project 10 and D187-D199 by sub-project 11 -- see
-the two sections immediately below. If you take D200, say so here in the change
-that takes it.
+**Next free number: D213.** D165 and D166 were taken by this fix wave;
+D167-D186 were taken by sub-project 10, D187-D199 by sub-project 11 and
+D200-D212 by sub-project 12 -- see the three sections immediately below. If you
+take D213, say so here in the change that takes it.
 
 ## Sub-project 10: the nine ActivityPub collection endpoints
 
@@ -4118,6 +4148,171 @@ printed no completion line; and a running total in a plan is invalidated by any
 mid-flight ruling that adds or removes a test, silently -- every later number
 stays internally consistent while being wrong, and the controller who orders the
 addition owns correcting the counts downstream of it.
+
+## Sub-project 12: the moderation and ban-removal cluster
+
+`docs/superpowers/specs/2026-09-03-coverage-moderation-12-design.md` and
+`docs/superpowers/plans/2026-09-03-coverage-moderation-12.md` (design and plan;
+the per-task briefs and reports live in the gitignored workspace
+`.superpowers/sdd/2026-09-03-coverage-moderation-12/`, not committed), on branch
+`blentz`. Eleven tasks brought six functions in `app/activitypub/util.py` under
+test -- `delete_post_or_comment` (`:2204-2265`), `restore_post_or_comment`
+(`:2268-2306`), `site_ban_remove_data` (`:2309-2346`),
+`community_ban_remove_data` (`:2349-2378`), `ban_user` (`:2412-2507`) and
+`unban_user` (`:2510-2569`) -- and fixed one defect in one commit (`25de721d`),
+under this sub-project's own bounded, explicit authorisation; this task (11)
+closes the sub-project out with the findings register, the test-harness log, and
+the coverage floor. `app/activitypub/util.py` measures **55.1080% blended**
+(1639/2854 statements, 810/1590 branches) after this sub-project, up from
+48.9424%. Full suite after this sub-project: **3365 passed, 3 skipped, 6
+subtests passed**, in 227.31s. Tests live in `tests/test_ap_moderation.py` (36
+test functions, none parametrized: 33 added across Tasks 1-9 plus three added by
+two mid-flight fix rounds, and one of the 36 inverted in place by Task 10). The
+coverage figure above is the controller's single authoritative module-level
+measurement taken after Task 10 on a freshly torn-down stack; **no per-function
+residual breakdown was re-measured at Task 11**, so this section claims the
+module figure and not "zero uncovered statements" for any individual function.
+
+Like 5c through 11 before it, this sub-project carried a **narrow, explicitly
+authorised exception** to the campaign's report-don't-fix rule: Task 10 was
+authorised to fix the one silently-non-persisting counter write Task 6's pin had
+established, confined to `site_ban_remove_data`. `git diff --stat app/` is
+non-empty for exactly that one commit (`25de721d`), and its production diff is
+exactly one line; every other task's `git diff --stat app/` is empty.
+
+The slice exists because these six functions are three do/undo pairs, and -- as
+in sub-projects 8 through 11 -- the defects live in what the halves of a pair do
+**differently**. `delete_post_or_comment`'s `PostReply` branch decrements four
+counters; `restore_post_or_comment`'s increments two. That contrast is D200, it
+is the shape the whole slice was built to expose, and it is the only finding here
+that no amount of reading either function alone would have settled: a
+single-direction test asserting that restore leaves a counter alone proves
+nothing unless the delete moved it.
+
+**Three of the spec's and plan's claims were falsified, and each falsification
+is worth more than the claim was.**
+
+1. **The spec claimed `site_ban_remove_data` purges the CDN while
+   `community_ban_remove_data` does not.** `File.delete_from_disk`'s signature is
+   `def delete_from_disk(self, purge_cdn=True)` (`app/models.py:421`), so the
+   community path's bare call passes exactly what the site path passes
+   explicitly and the two are identical. Caught in pre-flight against source and
+   corrected in the spec itself (`90742a46`) before any task ran. The finding
+   survives in a better form and is registered as D209: the asymmetric spelling
+   invites a reader to infer a distinction that does not exist, **which is
+   precisely what the spec's own author did**.
+2. **The plan prescribed the shared `redis_double` fixture for every
+   `delete_post_or_comment` test, and said the function locks four keys. Both
+   halves were wrong.** `redis_double` cannot serve a redis-py lock at all in
+   this environment -- fakeredis with no `lupa` implements no Lua, so
+   `Lock.acquire()` succeeds on plain `SET NX PX` and `Lock.release()` raises
+   `unknown command 'evalsha'` on every `__exit__`; and the function takes
+   **seven** locks, not four (`app/activitypub/util.py:2214`, `:2220`, `:2222`,
+   `:2238`, `:2245`, `:2249`, `:2254`). Task 1's implementer hit the first,
+   found the campaign's two existing lock-only doubles, built a third after the
+   `tests/test_inbox_dispatch_votes.py:145-158` pattern and **reported it rather
+   than silently diverging**; the controller then verified the lock count and
+   corrected the plan. Registered as D212, and the third copy of the double is
+   now noted in `tests/README.md`'s existing fakeredis item.
+3. **The spec assumed every conjunct of every guard in the slice was killable;
+   one was not.** `site_ban_remove_data`'s reply query filters
+   `user_id=blocked.id, deleted=False` (`:2310`), and dropping `deleted=False`
+   killed nothing, because no fixture in the file seeded an already-deleted
+   `PostReply`. This is the **third** instance in the campaign of the
+   combinatorial gap that produced D186 and D197 -- and the second where the
+   same clause appears at two call sites in one function with only one of them
+   reachable. Registered as D211 and closed inside the same sub-project by
+   Task 6's fix round. Its sibling in `community_ban_remove_data` did **not**
+   repeat it: that function's `community_id` clause killed on the first attempt,
+   because the fixture was built with two communities prospectively.
+
+A fourth prediction came close enough to record: the spec expected 214 uncovered
+statements to close and **200** did (missing statements 1415 -> 1215). The same
+shape as sub-project 11's 87-against-89 -- not a shortfall, but the four
+`tests/test_inbox_dispatch_*.py` suites already reached some of those statements
+through the dispatcher, so covering the six functions properly could not claim
+credit for all 214. The spec's headline prediction -- "toward **56%**" -- landed
+at 55.1080%.
+
+### 1. The most consequential finding in this slice, registered not fixed -- D200
+
+Registered first and on its own, not buried in the list below, because it is the
+only finding here that **silently corrupts stored data on an ordinary moderator
+action**, and because it is the only one that required a round-trip test to
+establish rather than a reading of source.
+
+| # | function | defect | status | evidence |
+|---|---|---|---|---|
+| D200 | `delete_post_or_comment`'s `PostReply` branch (`app/activitypub/util.py:2237-2256`) vs. `restore_post_or_comment`'s (`:2289-2298`) | **Not fixed -- a delete-then-restore cycle leaves `community.post_reply_count` and `post.reply_count_cross_posted` one lower than it found them, and every further cycle loses one more.** Delete decrements four counters for a reply: `to_delete.author.post_reply_count` (`:2246`), `to_delete.post.reply_count` when the author is not a bot (`:2250`), `to_delete.post.reply_count_cross_posted` when it is truthy (`:2251-2252`) and `community.post_reply_count` (`:2255`). Restore increments **two**: `to_restore.post.reply_count` (`:2293`) and `to_restore.author.post_reply_count` (`:2294`). The words `post_reply_count` on a community and `reply_count_cross_posted` do not appear anywhere in `restore_post_or_comment`'s body. The `Post` branches are the control and they are symmetric -- delete decrements `community.post_count` (`:2221`) and `author.post_count` (`:2223`), restore increments both (`:2279-2280`) -- so this is specific to the reply halves, not a general complaint about counter hygiene. **The same asymmetry exists in the local, non-federated pair**, which is the sharper form of the finding: `app/shared/reply.py`'s `delete_reply` decrements all four (`:252-255`) and its `restore_reply` increments only two (`:280-281`), so the drift accrues from a moderator using the web UI as readily as from an inbound `Undo`. (`mod_remove_reply`/`mod_restore_reply` in the same file, `:400-450`, are symmetric with each other and touch neither of the two.) **Correction to the pin's own docstring, which says "nothing later notices or repairs it":** that is too strong, and the weaker claim is the supportable one. Nothing on the delete/restore path repairs either counter, but `community.post_reply_count` is recomputed from the `post_reply` table by `update_community_stats` (`app/shared/tasks/maintenance.py:283`, the recompute at `:313-315`), which the `daily-maintenance` and `daily-maintenance-celery` CLI commands run (`app/cli.py:838`, `:915`); and `post.reply_count_cross_posted` is recomputed for a whole cross-post set by the reply-creation path (`app/models.py:3094-3104`). So the drift is bounded by one maintenance cycle for the community counter, and unbounded for `reply_count_cross_posted` on a post that receives no further replies. Not fixed because correcting a counter changes numbers users already see, the historical drift is unmeasurable from the rows that survive, and the local pair would have to move in the same commit for the fix to mean anything -- all three are decisions outside this sub-project's authorisation. | not fixed, registered only | measured: `test_a_delete_then_restore_cycle_permanently_loses_two_counters` (`tests/test_ap_moderation.py`) seeds all four counters to 5, calls `delete_post_or_comment` and then `restore_post_or_comment` on the same reply in one test, and asserts `post.reply_count == 5` and `author.post_reply_count == 5` against `community.post_reply_count == 4` and `post.reply_count_cross_posted == 4`. `reply_count_cross_posted` is seeded to 5 deliberately: its decrement sits behind `if to_delete.post.reply_count_cross_posted:` (`:2251`), which is false at the column's `default=0`, so an unseeded test would not reach the line at all. `test_a_post_delete_then_restore_cycle_is_lossless` is the lossless `Post`-side control in the same file. The `app/shared/reply.py` half is reading-level: read directly at this commit, not covered by this sub-project's tests |
+
+### 2. One defect fixed, test-first with a mutation-proved test -- D201
+
+| # | function | defect | status | evidence |
+|---|---|---|---|---|
+| D201 | `site_ban_remove_data` (`app/activitypub/util.py:2309-2346`, the line now at `:2320`) | **FIXED, commit `25de721d`. The function wrote `blocked.reply_count = 0` to a column `User` does not have, so site-banning a user never zeroed their reply counter.** `User` (class at `app/models.py:973`) declares `post_count` (`:1010`) and `post_reply_count` (`:1011`) and no `reply_count`; `reply_count` belongs to `Post` (`:1722`). SQLAlchemy accepted the assignment as **an ordinary Python attribute on the instance** -- it was never mapped, so it never reached the database and never raised. That is the entire explanation for how the defect survived: it sat one line below `blocked.post_count = 0` (`:2330`), which works because that column does exist, and differed from a working sibling only by a column name. A defect that crashes is found on its first execution; this one had to be **read** to be found. The sister function `community_ban_remove_data` decrements the real `blocked.post_reply_count` (`:2357`), which is what identified the correct target. The fix is one line: `blocked.reply_count` -> `blocked.post_reply_count`. | **fixed**, commit `25de721d` | measured: `test_a_site_ban_zeroes_the_users_reply_count` (`tests/test_ap_moderation.py`) seeds both `post_count` and `post_reply_count` to 5 and asserts both at 0 -- both, because `post_count` was always zeroed, so asserting `post_reply_count` alone would not distinguish the fix from a regression that zeroed some other attribute. The pre-fix failure was witnessed (`assert 5 == 0 ... post_reply_count`). Mutation-proved: restoring `blocked.reply_count = 0` kills exactly this test **by assertion, not by crash** -- the mutant sets a harmless Python attribute and commits cleanly. The reviewer established that this is a property of the model rather than of one run, by confirming `User` carries no `@validates` hook and no `__setattr__` override that could turn the plain-attribute write into a raise. `tests/test_inbox_dispatch_block.py` was checked for assertions encoding the old broken value and contains none, so no other suite was edited |
+
+### 3. Nine items registered, not fixed -- D202-D210
+
+| # | function | defect | status | evidence |
+|---|---|---|---|---|
+| D202 | `restore_post_or_comment` (`app/activitypub/util.py:2268-2306`) vs. `delete_post_or_comment` (`:2214-2255`) | **Not fixed -- restore mutates the same counters delete does, under no lock at all.** `delete_post_or_comment` wraps every counter mutation in `with redis_client.lock(...)`: seven of them, three in the `Post` branch (`:2214` post, `:2220` community, `:2222` user) and four in the `PostReply` branch (`:2238` post_reply, `:2245` user, `:2249` post, `:2254` community). `restore_post_or_comment` contains no `redis_client.lock` call anywhere in its body, and does not even import `redis_client` -- `delete_post_or_comment` does so at `:2205`, inside its own body. So the same `community.post_count`, `author.post_count`, `post.reply_count` and `author.post_reply_count` fields are read-modify-written unserialised on the restore path and serialised on the delete path. **The scope is wider than the pair:** the controller verified that none of the other five functions in this slice takes a lock either -- the next `redis_client.lock` in the file is at `:2938`, in `notify_about_post_task`. So `site_ban_remove_data` and `community_ban_remove_data`, which decrement the same community and user counters in a loop, are unlocked too. Not fixed because adding locks to five functions is a concurrency change with its own deadlock-ordering questions, not a defect repair. | not fixed, registered only | reading-level, and verified independently by two agents against current source: the reviewer confirmed zero `redis_client.lock` occurrences in `:2268-2306`, the controller confirmed the seven in `:2214-2254` and the next occurrence at `:2938`. Not asserted by any test -- the suite's `redis_lock_only_double` replaces the lock with `contextlib.nullcontext()`, so no test in this file can observe locking either way |
+| D203 | `restore_post_or_comment`'s cross-post guard (`app/activitypub/util.py:2281`) vs. `delete_post_or_comment`'s (`:2218`) | **Not fixed -- the restore guard drops one of delete's two conjuncts.** Delete tests `if to_delete.url and to_delete.cross_posts is not None:` before calling `calculate_cross_posts(delete_only=True)` (`:2218-2219`); restore tests only `if to_restore.url:` before calling `calculate_cross_posts()` (`:2281-2282`). The same two-conjunct spelling appears in both ban-removal functions (`:2328` and `:2368`), so restore is the **single** call site of the four that omits `cross_posts is not None`. Whether that matters depends on `calculate_cross_posts`'s own tolerance of a null `cross_posts`, which this sub-project did not establish and does not claim -- what is registered is the inconsistency itself, on a guard whose other three spellings agree. Not fixed for the reason the whole slice is registered rather than repaired: changing which posts get cross-post recalculation changes what peers see. | not fixed, registered only | reading-level: all four call sites read directly at this commit. Noted in `restore_post_or_comment`'s test docstrings; no test drives the differing branch, because doing so would require a post with a `url` and a null `cross_posts`, which this suite's factories do not produce |
+| D204 | `unban_user`'s instance branch (`app/activitypub/util.py:2515-2539`) vs. its community branch (`:2540-2569`) | **Not fixed -- an instance-wide unban is recorded nowhere, while the ban that it reverses is.** The community branch ends with `add_to_modlog('unban_user', ...)` (`:2568-2569`), unconditionally and outside the `if blocked.is_local():` block, so a community unban is logged for local and remote users alike. The instance branch has **no `add_to_modlog` call anywhere**: it deletes the `InstanceBan` row (`:2518`), commits, notifies a local user and clears six memoized caches, and returns. Both branches of `ban_user` log (`:2458-2459` and `:2506-2507`), so this is the one cell of a four-cell table that is empty. The consequence is that a moderator reading the modlog sees an instance ban with no reversal beside it, and the ban looks live when it is not. Not fixed because writing a modlog entry is a new user-visible record on a federated code path, not a repair. | not fixed, registered only | measured: `test_an_instance_unban_writes_no_modlog_entry` (`tests/test_ap_moderation.py`) pins the current behaviour and cannot pass through a failed call -- it asserts `InstanceBan` count 0 **and** `ModLog` count 0, so an unban that did nothing at all would fail the first assertion. The reviewer confirmed the absence by reading `unban_user`'s whole body rather than trusting the report |
+| D205 | `ban_user`'s existing-row guards (`app/activitypub/util.py:2424` and `:2462`) | **Not fixed -- the same guard, written twice in one function, has two different scopes, so re-banning behaves differently instance-wide and in a community.** In the community branch, `if not existing:` (`:2462`) wraps the **entire** remaining body through `add_to_modlog` (`:2506-2507`), so re-banning an already-banned user is a total no-op: no notification, no membership flag, no modlog entry. In the instance branch, `if not existing_ban:` (`:2424`) wraps **only** the `InstanceBan` insert and its commit (`:2425-2428`); the notification block, the six cache invalidations and `add_to_modlog` (`:2458-2459`) all sit outside it, so re-banning instance-wide re-notifies the user and writes a **second** modlog entry for a ban that was already in force. Same intent, two scopes, one function, and nothing in the code says which is meant. Not fixed because either direction is a behaviour change on a federated path -- and a peer that retransmits a `Block` is the common case, so the choice has real consequences. | not fixed, registered only | measured, as a discriminating pair: `test_re_banning_in_a_community_writes_no_second_modlog_entry` and `test_re_banning_instance_wide_still_writes_a_second_modlog_entry` (`tests/test_ap_moderation.py`) pin the two behaviours against each other. Both were confirmed load-bearing as a pair and neither vacuous alone. Line numbers verified against source by the Task 8 reviewer |
+| D206 | `site_ban_remove_data` (`app/activitypub/util.py:2311-2319`) and `community_ban_remove_data` (`:2351-2360`) vs. `delete_post_or_comment` (`:2251-2252`) | **Not fixed -- both ban-removal loops soft-delete replies without decrementing `post.reply_count_cross_posted`, which the ordinary reply-deletion path does decrement on the same rows.** Each loop performs the same three maintenance steps as `delete_post_or_comment`'s `PostReply` branch -- `reply.post.reply_count -= 1` behind a bot check (`:2314-2315` / `:2354-2355`), `reply.community.post_reply_count -= 1` (`:2316` / `:2356`) and the ancestors' `child_count` update (`:2317-2319` / `:2358-2360`) -- and neither touches `reply_count_cross_posted`. Of the four places in `app/` that maintain that column, two decrement it on a reply deletion (`app/activitypub/util.py:2252` and `app/shared/reply.py:253`) and these two do not. **This is a third site of D200's counter**, drifting in the opposite direction: D200 loses one on a restore that never gave it back, this one keeps one that the underlying reply no longer justifies. Not fixed for D200's reasons, and because a ban removal deletes an unbounded number of replies at once, so the correction is a loop-body change whose blast radius is a whole user's history. | not fixed, registered only | reading-level: all four maintenance sites for `reply_count_cross_posted` enumerated by grep at this commit (`app/models.py:1723` declaration, `:3094-3104` recompute; `app/activitypub/util.py:2251-2252`; `app/shared/reply.py:253`) and both ban-removal loops read in full. No test asserts it -- the sub-project's ban-removal tests seed `post_reply_count` and `reply_count`, not `reply_count_cross_posted` |
+| D207 | `site_ban_remove_data` (`app/activitypub/util.py:2310`, `:2323`, `:2335`) vs. `community_ban_remove_data` (`:2350`, `:2363`, `:2374`) | **Not fixed -- two functions written to the same shape query in two different SQLAlchemy styles, and one of the styles has already masked a defect in this codebase.** The site path uses `db.session.query(PostReply)`, `db.session.query(Post)` and `db.session.query(File).join(Post)`; the community path uses the legacy `PostReply.query`, `Post.query` and `File.query.join(Post)` for the identical three queries. The difference is not cosmetic in the way D209's is: legacy `Query.all()` **deduplicates entities automatically**, which is exactly what hid the cartesian-product join registered as D171 in `feed_outbox`/`feed_following` until this campaign read the SQL. The community path's `File.query.join(Post)` (`:2374`) is the same join shape on the legacy side. Not fixed because migrating query styles is the unrelated refactor D171 is already waiting on, and doing half of it here would leave the file more mixed, not less. | not fixed, registered only | reading-level: all six query sites read at this commit. Cross-reference D171 and `tests/README.md` fact 45, which states the deduplication behaviour and the class of bug it hides |
+| D208 | The authorisation guard in `delete_post_or_comment` (`app/activitypub/util.py:2209-2212`) and `restore_post_or_comment` (`:2272-2275`) | **Not fixed -- the campaign's largest guard is copied, not shared.** Four disjuncts each -- author identity, same-instance admin, community moderator, community-instance admin -- with the same operators in the same order, **textually identical modulo two consistently substituted variable names** (`to_delete`/`deletor` -> `to_restore`/`restorer`). Verified as identical by the Task 4 implementer and independently re-verified against source by its reviewer rather than accepted from the report. The cost of the duplication is that an authorisation change has to be made twice, and this codebase's own history says that is where such changes go wrong: sub-project 11's D164 and sub-project 8's Task 1 both registered byte-identical dead copies, and this register's fact 49 exists because a correction landing in one of two copies is the campaign's most repeated mistake. Not fixed because extracting a shared predicate is a refactor of a security-relevant guard, which needs its own test-first change rather than a drive-by. | not fixed, registered only | measured, in the strongest form the slice produced: all four disjuncts of the **delete** copy are independently mutation-killed, each by exactly one named test, and the second disjunct's two inner conjuncts are killed separately as well -- six sole kills across nine tests, hand-traced by the reviewer. Establishing that required moving the community off `instance_id=1`, because `User.is_instance_admin()` filters on the user's instance and `Community.is_instance_admin(user)` on the community's, and `make_community` hardcodes `instance_id=1` (now `tests/README.md` fact 61). The **restore** copy is covered by a refusal test and a permitted-path test, not by four separate disjunct kills |
+| D209 | The `delete_from_disk` call sites in `site_ban_remove_data` (`app/activitypub/util.py:2337`) and `community_ban_remove_data` (`:2376`) | **Not fixed -- and, unusually for this register, not a behavioural defect either: it is an asymmetry of spelling that reads as one of behaviour.** The site path calls `file.delete_from_disk(purge_cdn=True)`; the community path calls `file.delete_from_disk()`. `File.delete_from_disk`'s signature is `def delete_from_disk(self, purge_cdn=True)` (`app/models.py:421`), so the bare call passes exactly what the explicit one passes and the two paths behave identically. It is registered because **this sub-project's own spec drew the wrong conclusion from these two lines** before the signature was checked, asserting a CDN-purge difference that does not exist; the claim was falsified in pre-flight and corrected in the spec at `90742a46`. Two call sites of one defaulted parameter, one naming the default and one not, is a standing invitation to that error. Not fixed because the repair -- spelling both the same way -- is a cosmetic change to production code, which this sub-project was not authorised to make. | not fixed, registered only | measured: `test_a_community_ban_deletes_files_without_purging_the_cdn` (`tests/test_ap_moderation.py`) doubles `File.delete_from_disk` at its binding site and asserts the flag's **real value** -- `calls[0][1] is True` -- so the suite states the non-difference rather than leaving the next reader to check the signature. **The test's own name reads against what it asserts**; its docstring opens "PINS A NON-ASYMMETRY, which is why the assertion is `is True`", but the name would mislead a reader skimming the file, and renaming it was outside this task's authorisation. `site_ban_remove_data`'s twin (`test_a_site_ban_deletes_attached_files_and_purges_the_cdn`) asserts the same value on the explicit side |
+| D210 | `Post.post_reply_count_recalculate` (`app/models.py:2702-2705`) | **Not fixed -- a second, unfired instance of the exact defect D201 fixed, in dead code.** The method assigns `self.post_reply_count = <SELECT COUNT(*) ... WHERE post_id = :post_id AND deleted is false>`. `Post` (class at `app/models.py:1700`) declares `reply_count` (`:1722`), not `post_reply_count` -- `post_reply_count` belongs to `Community` (`:571`) and `User` (`:1011`). So the method would set a plain Python attribute that is never persisted and never raises, exactly as `site_ban_remove_data` did, and the count it computes would be discarded. It has never been observed to do so because **nothing calls it**: `grep -rn 'post_reply_count_recalculate' app/` finds only its own definition. Registered rather than fixed for two reasons -- it is outside this sub-project's slice, and the right repair is ambiguous between renaming the target to `reply_count` and deleting an uncalled method. Its value here is corroborative: it shows D201 was not a one-off typo but a class of defect this codebase produces, which is why `tests/README.md` fact 57 states the general rule rather than the instance. | not fixed, registered only | reading-level: the method, both class boundaries and the column declarations read directly at this commit, plus the whole-tree grep for callers. Not covered by any test, and not coverable -- an uncalled method has no reachable branch |
+
+### 4. Two test-suite findings, not production defects -- D211-D212
+
+Recorded so nobody re-files either as a production defect, and because both are
+harness failure modes that reading the production code cannot reveal.
+
+| # | function | defect | status | evidence |
+|---|---|---|---|---|
+| D211 | `site_ban_remove_data`'s reply query (`app/activitypub/util.py:2310`) -- a **test-suite** finding | **Not a production defect. The `deleted=False` clause of `db.session.query(PostReply).filter_by(user_id=blocked.id, deleted=False)` was enforced by no test until this sub-project's Task 6 fix round, and the cause was a COMBINATORIAL GAP -- the third instance in this campaign, after D186 and D197.** Dropping the clause left all 24 tests then in the file green: every fixture seeded only undeleted replies, so the set the filter exists to exclude was empty and the mutant could not be distinguished. The **post-side** `deleted=False` at `:2323` was killed cleanly by an existing test, which is what makes this a per-call-site gap rather than a missing test for the function: one clause, two call sites, one of them unreachable by the fixtures at hand. The consequence had the clause ever been dropped is concrete rather than theoretical -- `site_ban_remove_data` would re-process replies it had already soft-deleted, decrementing `post.reply_count`, `community.post_reply_count` and the ancestors' `child_count` a second time for rows already accounted for, so counters would drift down on every re-ban. Closed in the same sub-project under a controller fix-round authorisation. | closed by a test in the same sub-project | measured: `test_a_site_ban_skips_replies_already_deleted` (`tests/test_ap_moderation.py`) seeds an already-deleted `PostReply` as the user's only content, so a working filter leaves every counter alone. After it, **both** `deleted=False` mutations kill exactly one distinct test each, sole and non-overlapping -- the post-side test seeds no reply at all and the reply-side test seeds only an undeleted post, so each kill is attributable to one call site. `git diff app/activitypub/util.py` verified empty after each mutation |
+| D212 | `redis_double` (`tests/conftest.py:428-445`, the CAVEAT paragraph) against `delete_post_or_comment` (`app/activitypub/util.py:2214-2254`) -- a **test-suite** finding | **Not a production defect, and recorded because a plan told nine tasks to use a fixture that cannot work.** The shared `redis_double` fixture cannot serve a redis-py lock in this environment: fakeredis with no `lupa` implements no Lua, so `Lock.acquire()` succeeds on a plain `SET NX PX` and `Lock.release()` raises `unknown command 'evalsha'` on every `__exit__`. The failure mode is the awkward one -- the fixture looks correct, the lock is acquired, and the test dies on the way out of the `with` block. This is the **third** file in the repo to need a local lock-only double (`tests/test_inbox_dispatch_undo_content.py:35`, `tests/test_inbox_dispatch_votes.py:145-158`, and now `tests/test_ap_moderation.py`), and the pattern is identical in all three: patch `app.redis_client` -- the binding `delete_post_or_comment` reaches through its in-body re-executed import at `:2205` -- with an object whose `.lock(...)` returns `contextlib.nullcontext()`. The plan also stated the wrong lock count (four; there are seven). Registered rather than fixed because the alternative -- adding Lua support to the shared conftest fixture -- changes every suite that uses it and was outside this sub-project's authorisation. | not fixed, registered only; a local double is the accepted remedy | measured: the failure was hit by Task 1's implementer as real test failures, not reasoned about; the controller verified the documented cause in the fixture's own docstring and the two precedents, and the reviewer confirmed the new double patches the right binding and returns a genuine no-op context manager with no silent fallthrough to the real shared compose Redis. The seven lock sites were counted against source, and the next `redis_client.lock` in the file placed at `:2938`, outside the slice |
+
+### 5. Three asymmetries deliberately NOT counted as defects
+
+Recorded so nobody re-files them. Each was examined against source in this
+sub-project and each has an explanation that survives reading.
+
+- **`site_ban_remove_data` deletes the user's avatar and cover
+  (`app/activitypub/util.py:2339-2344`) and `community_ban_remove_data` does
+  not.** Defensible on its face -- a community ban should not destroy a user's
+  profile images -- and the source says so in its own comments at `:2333-2334`
+  and `:2373`. Pinned by `test_a_site_ban_deletes_the_users_avatar_and_cover`.
+- **`ban_user` and `unban_user` clear six memoized caches on their instance
+  branches (`:2451-2456`, `:2534-2539`) and four on their community branches
+  (`:2501-2504`, `:2563-2566`).** The two extra are `banned_instances` and
+  `blocked_or_banned_instances`, both instance-scoped, so the asymmetry is the
+  correct one and the count difference is not a finding.
+- **`ban_user` reads the reason from `core_activity['summary']` while
+  `unban_user` reads it from `core_activity['object']['summary']`
+  (`:2415-2416` vs. `:2511-2512`).** Consistent with an `Undo` wrapping the
+  original activity, and almost certainly correct. Recorded because the nesting
+  difference is a real trap for a test fixture: a top-level `summary` passes
+  through `unban_user` proving nothing, which is why all three of this
+  sub-project's `unban_user` tests nest one level deeper.
+
+**Seven shapes worth carrying forward from this sub-project's rulings, now in
+`tests/README.md` as facts 56-62:** a logging call that writes nothing unless a
+config flag is set makes every assertion about its rows vacuous by default;
+assigning an undeclared attribute to a SQLAlchemy instance is silent in both
+directions, so a counter name must be grepped against the model before it is
+trusted; `expire_on_commit` is default-`True` here, so a `db.session.refresh()`
+added to observe a raw-SQL update is usually a no-op and a docstring calling it
+load-bearing is a claim about the session config rather than the SQL; a
+do/undo pair needs a **round-trip** test, because asserting that the undo leaves
+a counter alone proves nothing unless the do moved it; a filter whose excluded
+set is empty under the fixture is unkillable no matter how many tests exercise
+the function; `make_community` hardcodes `instance_id=1`, so a fixture meant to
+satisfy one clause of a guard can silently satisfy a second; and
+`Community.has_poster(user)` falls back to counting replies, so "has posted
+there" includes "has only replied there".
 
 ## Ratchet gotchas
 
