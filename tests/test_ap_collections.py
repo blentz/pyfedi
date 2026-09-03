@@ -51,11 +51,11 @@ def test_a_local_community_outbox_is_served(app, db_session):
 
 
 def test_an_unknown_community_outbox_is_404(app, db_session):
-    """`else: abort(404)`. This is the shape two of the four FEED collections
-    still get wrong AS OF THIS COMMIT -- `feed_outbox` and `feed_following`
-    crash on an unknown feed instead, each fixed by its own later commit in
-    this task. `feed_followers` always had this shape and
-    `feed_moderators_route` was given it by this task's first commit.
+    """`else: abort(404)`. This is the shape one of the four FEED collections
+    still gets wrong AS OF THIS COMMIT -- `feed_following` crashes on an
+    unknown feed instead, and is fixed by this task's next commit.
+    `feed_followers` always had this shape; `feed_moderators_route` was given
+    it by this task's first commit and `feed_outbox` by its second.
     """
     seed_actors()
 
@@ -780,9 +780,12 @@ def test_an_unknown_feed_followers_is_404(app, db_session):
         and Flask raised TypeError -- the same failure this test's own guard
         produces when its `else: abort(404)` is deleted. FIXED by this task's
         first commit, which copied the shape below.
-      * `feed_outbox` and `feed_following` have NO None check at all. They read
-        `feed.public` directly, so an unknown feed raises AttributeError. Still
-        broken AS OF THIS COMMIT; each has its own commit in this task.
+      * `feed_outbox` and `feed_following` had NO None check at all. They read
+        `feed.public` directly, so an unknown feed raised AttributeError.
+        `feed_outbox` was FIXED by this task's second commit, with an early
+        `if feed is None: abort(404)` rather than this nesting -- see
+        `test_an_unknown_feed_outbox_is_404` for why. `feed_following` is
+        still broken AS OF THIS COMMIT and has the next one.
 
     Both mechanisms surfaced as a crash rather than a 404, but they are not the
     same bug and a fix for one is not a fix for the other.
@@ -868,10 +871,11 @@ def test_an_unknown_feed_moderators_is_404(app, db_session):
     witnessed as this test's pre-fix failure.
 
     The shape now matches `feed_followers` twenty lines away in the same file,
-    which always had it right. `feed_outbox` and `feed_following` are still
-    wrong AS OF THIS COMMIT, but by a DIFFERENT mechanism -- no None check at
-    all, `feed.public` read directly, so an unknown feed raises
-    `AttributeError` -- and each gets its own commit in this task.
+    which always had it right. `feed_outbox` and `feed_following` were wrong by
+    a DIFFERENT mechanism -- no None check at all, `feed.public` read directly,
+    so an unknown feed raises `AttributeError` -- and each gets its own commit
+    in this task: `feed_outbox` in the second, `feed_following` (still broken
+    AS OF THIS COMMIT) in the third.
 
     Note the crash never materialised as a 500 response under this suite:
     `tests/conftest.py` sets `TESTING = True` with no `PROPAGATE_EXCEPTIONS`
@@ -921,30 +925,41 @@ def test_a_feed_outbox_lists_its_communities(app, db_session):
     assert response.json['type'] == 'Collection'
 
 
-def test_an_unknown_feed_outbox_crashes(app, db_session):
-    """PINS a crash, remotely reachable. DO NOT FIX -- a later task does.
+def test_an_unknown_feed_outbox_is_404(app, db_session):
+    """`if feed is None: abort(404)` -- the guard this task's second commit
+    adds, and this test is what proves it.
 
-    `feed_outbox` has NO `if feed is not None:` guard at all -- unlike
-    `feed_followers` (correct, `else: abort(404)`) and `feed_moderators_route`
-    (has the guard, lacks the `else`, raising TypeError instead -- pinned by
-    `test_an_unknown_feed_moderators_returns_500` above). `feed_outbox` reads
-    `feed.public` directly right after the lookup, so an unknown feed makes
-    `feed` None and raises `AttributeError: 'NoneType' object has no
-    attribute 'public'` -- confirmed by running this test.
+    Before that commit `feed_outbox` had NO None check at all: it read
+    `feed.public` directly on the line after the lookup, so an unknown feed
+    made `feed` None and raised `AttributeError: 'NoneType' object has no
+    attribute 'public'`, remotely reachable by any instance with
+    GET /f/<anything>/outbox and witnessed as this test's pre-fix failure.
+    That is a DIFFERENT mechanism from `feed_moderators_route`'s, which had
+    the guard and lacked only the `else` (see
+    `test_an_unknown_feed_moderators_is_404` above); a fix for one was not a
+    fix for the other.
 
-    THE CRASH DOES NOT MATERIALISE AS A RESPONSE, for the same reason
-    registered against `feed_moderators_route` above: `tests/conftest.py`
-    sets `TESTING = True` with no `PROPAGATE_EXCEPTIONS` override, so Flask
-    re-raises instead of turning the exception into a 500, and the test
-    client's `raise_server_exceptions=True` lets it escape `collection_get`
-    entirely. So this asserts the exception, not `response.status_code` --
-    the brief's literal `assert response.status_code == 500` would never
-    run.
+    The guard is spelled as an early `if feed is None: abort(404)` rather
+    than by nesting the body inside `if feed is not None:` the way
+    `feed_followers` does. Both are equivalent -- `abort` raises -- but
+    `feed_outbox` already carries a flat guard on the next line,
+    `if not feed.public: abort(403)`, so the early form makes the two
+    guards read as one sequence instead of nesting one and leaving the other
+    flat, and it leaves this endpoint's two registered-but-unfixed defects
+    (the malformed join and the `local_only` leak, pinned below) untouched by
+    a re-indent.
+
+    Note the crash never materialised as a 500 response under this suite:
+    `tests/conftest.py` sets `TESTING = True` with no `PROPAGATE_EXCEPTIONS`
+    override, so Flask re-raised and the test client's default
+    `raise_server_exceptions=True` let the exception escape `collection_get`.
+    The pre-fix pin therefore asserted the exception, not a status code.
     """
     seed_actors()
 
-    with pytest.raises(AttributeError, match="'NoneType' object has no attribute 'public'"):
-        collection_get(app, '/f/nosuch/outbox')
+    response = collection_get(app, '/f/nosuch/outbox')
+
+    assert response.status_code == 404
 
 
 def test_a_non_public_feed_outbox_is_403(app, db_session):
@@ -1061,11 +1076,14 @@ def test_an_unknown_feed_following_crashes(app, db_session):
     """PINS a crash, remotely reachable -- the third of three. DO NOT FIX --
     a later task does.
 
-    `feed_following` has NO `if feed is not None:` guard, the same as its twin
-    `feed_outbox` above (`test_an_unknown_feed_outbox_crashes`) and unlike
-    `feed_followers` (correct, `else: abort(404)`) or `feed_moderators_route`
-    (has the guard, lacks the `else`, raising TypeError instead -- pinned by
-    `test_an_unknown_feed_moderators_returns_500`). `feed_following` reads
+    `feed_following` has NO `if feed is not None:` guard -- the last of the
+    four feed collections still missing one AS OF THIS COMMIT. Its twin
+    `feed_outbox` had the identical defect and was fixed by this task's second
+    commit (`test_an_unknown_feed_outbox_is_404` above); `feed_followers` was
+    always correct (`else: abort(404)`) and `feed_moderators_route` had the
+    guard but lacked the `else`, raising TypeError instead, fixed by this
+    task's first commit (`test_an_unknown_feed_moderators_is_404`).
+    `feed_following` reads
     `feed.public` directly right after the same lookup, so an unknown feed
     makes `feed` None and raises `AttributeError: 'NoneType' object has no
     attribute 'public'` -- confirmed by running this test.
@@ -1141,8 +1159,8 @@ def test_the_feed_following_malformed_join_is_masked_by_orm_deduplication(app, d
     predicted `totalItems == 2`; observed instead is `totalItems == 1`.
     Reported rather than forced, per this task's own instructions.
 
-    The join at app/activitypub/routes.py:2790 is byte-identical in shape to
-    `feed_outbox`'s at :2756 -- `FeedItem.feed_id == feed.id`, an ON clause
+    The join at app/activitypub/routes.py:2794 is byte-identical in shape to
+    `feed_outbox`'s at :2760 -- `FeedItem.feed_id == feed.id`, an ON clause
     that never references the joined `Feed` table -- so it produces the same
     genuine cartesian product against raw SQL or an un-`.unique()`d 2.0-style
     `select()`. But `feed_following` also calls legacy `Query.all()`, which
