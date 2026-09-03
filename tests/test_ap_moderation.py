@@ -585,7 +585,7 @@ def test_restoring_another_users_post_writes_a_restore_modlog_entry(
     assert entries[0].action == 'restore_post'
 
 
-def test_a_delete_then_restore_cycle_permanently_loses_two_counters(
+def test_a_delete_then_restore_cycle_loses_two_counters(
         app, db_session, monkeypatch, redis_lock_only_double):
     """PINS A DEFECT, and it is this slice's most consequential.
 
@@ -593,15 +593,27 @@ def test_a_delete_then_restore_cycle_permanently_loses_two_counters(
     `restore_post_or_comment` increments two. So a delete followed by a
     restore -- the exact sequence a moderator produces by removing a comment
     and then reversing it on appeal -- leaves `community.post_reply_count`
-    and `post.reply_count_cross_posted` permanently one lower. Every
-    subsequent cycle loses one more, and nothing later notices or repairs it.
+    and `post.reply_count_cross_posted` one lower, and every subsequent cycle
+    loses one more.
+
+    NOTHING ON THIS PATH REPAIRS EITHER, but both are recomputed elsewhere and
+    an earlier draft of this docstring overstated the consequence as
+    permanent. `community.post_reply_count` is rebuilt from a COUNT by
+    `update_community_stats` (`app/shared/tasks/maintenance.py`), so its drift
+    is bounded by a maintenance cycle rather than forever;
+    `post.reply_count_cross_posted` is rebuilt for a whole cross-post set by
+    the reply-creation path (`app/models.py`). The defect is that the undo
+    does not undo what the do did -- not that the number can never recover.
+    See D200, which carries the corrected framing.
 
     A single-direction test cannot show this. Asserting that restore leaves a
     counter alone is only a defect if delete moved it, so the two calls have
     to happen in one test with the starting values recorded.
 
-    DO NOT FIX -- registered, because correcting a counter changes numbers
-    users already see and the historical drift is unknown.
+    DO NOT FIX -- registered. Correcting a counter changes numbers users
+    already see, and the same asymmetry exists in the local web-UI pair
+    (`app/shared/reply.py`), so a fix here alone would leave the two paths
+    disagreeing.
     """
     site, instance, community, author, moderator = seed_moderation_scene()
     post = make_post(community, author, None, title='a post')
