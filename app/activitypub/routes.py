@@ -2835,6 +2835,8 @@ def feed_moderators_route(actor):
         resp.content_type = 'application/activity+json'
         resp.headers.set('Cache-Control', 'public, max-age=10')
         return resp
+    else:
+        abort(404)
 
 
 @bp.route('/f/<actor>/followers', methods=['GET'])
