@@ -808,10 +808,11 @@ def test_the_feed_followers_collection_sets_its_cache_control(app, db_session):
 def test_a_non_public_feed_still_has_a_followers_collection(app, db_session):
     """PINS a defect. `feed_followers` never reads `feed.public` at all.
     `feed_outbox` and `feed_following` (app/activitypub/routes.py) both guard
-    `if not feed.public: abort(403)` right after the same lookup -- verified by
-    reading their code; neither is exercised by a test in this file yet, so
-    this test claims only what `feed_followers` itself does, not what tests
-    prove about its siblings.
+    `if not feed.public: abort(403)` right after the same lookup, and both
+    are exercised here -- `test_a_non_public_feed_outbox_is_403` and
+    `test_a_non_public_feed_following_is_403`. So the asymmetry this test
+    pins is proved on both sides: the two siblings 403 on a non-public feed
+    and `feed_followers` serves it.
 
     `public=False` is passed explicitly: it is also `Feed.public`'s column
     default, and `make_local_feed`'s own default, so leaving it implicit would
@@ -975,11 +976,13 @@ def test_a_non_public_feed_outbox_is_403(app, db_session):
 def test_the_feed_outbox_publishes_local_only_communities(app, db_session):
     """PINS a defect. `feed_outbox`'s own comment says it "will just be the
     same as the /following collection". It is not: `feed_following`
-    (app/activitypub/routes.py, not yet covered by a test in this file) skips
-    communities that are `local_only` or `private` -- verified by reading its
-    code, which is identical to `feed_outbox`'s query and loop except for
-    that one extra `if c.local_only or c.private: continue` -- and
-    `feed_outbox` applies no such filter.
+    (app/activitypub/routes.py) skips communities that are `local_only` or
+    `private` -- its query and loop are identical to `feed_outbox`'s except
+    for that one extra `if c.local_only or c.private: continue`, and each of
+    its disjuncts is pinned separately by
+    `test_feed_following_skips_local_only_communities` and
+    `test_feed_following_skips_private_communities`. `feed_outbox` applies no
+    such filter.
 
     So the endpoint documented as equivalent publishes the URL of a community
     its twin deliberately withholds. `local_only` is set explicitly; it
