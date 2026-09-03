@@ -1657,6 +1657,15 @@ but with an object whose `.lock(...)` returns `contextlib.nullcontext()` — a
 genuine no-op context manager, sufficient because none of these tests depend
 on real mutual-exclusion semantics.
 
+Sub-project 12 made `tests/test_ap_moderation.py` the **third** file to carry
+one, for `delete_post_or_comment` — which takes **seven** locks, not the four
+its plan claimed. That plan told nine tasks to use `redis_double`; the
+implementer hit the `evalsha` failure on the first test, found the two
+existing doubles, copied the `test_inbox_dispatch_votes.py` shape and reported
+the plan defect rather than diverging silently. Registered as **D212**. If a
+plan hands you `redis_double` for a function that locks, this is the fact it
+was written against.
+
 This will recur. `grep -rn 'redis_client\.lock(' app/` finds 34 call sites in
 total, of which 2 are in `app/activitypub/routes.py` (routes.py:1872 and
 :2476, the latter covered by Task 6's workaround above) — leaving 32 further
@@ -1994,7 +2003,12 @@ characters long, not `n`.** The function (`app/utils.py:1595-1602`) takes
 Unicode code point, so `len()` counts it as 1) when `len(s) > n`. For
 `n=100` that is **98** characters, not 100 -- a test asserting a truncated
 length against this function must use `n - 2`, not `n`, or it fails against
-a passing implementation.
+a passing implementation. Confirmed a second time at a different limit by
+sub-project 12: `shorten_string(reason, 255)` in `ban_user` measures **253**.
+The other wrong form to avoid is `endswith('...')` -- the ellipsis is the
+single code point `U+2026`, not three ASCII dots, so that assertion fails
+against a correct implementation too. (The definition has moved since this
+fact was written; locate it by name, not by the line numbers above.)
 
 **29. Stopping `run_tests.sh` on the host does not kill pytest inside the
 container -- check for and kill survivors before starting another run.**
@@ -2408,6 +2422,106 @@ orders the addition owns correcting the counts downstream of it** -- and an
 implementer who finds the stated count off by one should report the discrepancy
 rather than invent a test to reach it, which is the failure this fact exists to
 prevent. Compare fact 49, which is the same class for counts embedded in prose.
+
+**56. `log_incoming_ap` writes NOTHING unless `LOG_ACTIVITYPUB_TO_DB` is set,
+and it is off in every test run.** The function
+(`app/activitypub/util.py:4534`) guards its whole body with `if
+current_app.config['LOG_ACTIVITYPUB_TO_DB']:` (`:4538`), and `config.py:92`
+reads `os.environ.get('LOG_ACTIVITYPUB_TO_DB') or False` with no override in
+`tests/conftest.py` and none in `.env.test`. So **any assertion about an
+`ActivityPubLog` row is vacuous by default**: it passes against a function
+that logged correctly, against one that logged the wrong thing, and against
+one whose logging was deleted entirely. Every branch of the inbox delegates
+ends in a `log_incoming_ap(...)` call, which makes the log row the most
+tempting observable in the file and the one that proves least. Assert the real
+effect the branch produced -- the row it deleted, the counter it moved, the
+modlog entry it wrote -- and if a branch's *only* observable is the log row,
+say so and get a ruling rather than writing the vacuous assertion.
+
+**57. Assigning an undeclared attribute to a SQLAlchemy model instance is
+silent in BOTH directions -- it is never persisted and it never raises.** It
+sets an ordinary Python attribute on the instance, the surrounding `commit()`
+succeeds, and the value is simply gone on the next load. Sub-project 12 found
+this in production code that had shipped: `site_ban_remove_data` contained
+`blocked.reply_count = 0`, and `User` has no `reply_count` -- it declares
+`post_count` and `post_reply_count`, while `reply_count` belongs to `Post`
+(registered and fixed as **D201**; a second, never-called instance in
+`app/models.py` is **D210**). Two consequences for testing. **Grep the model
+for a counter name before trusting it**, in production code and in your own
+fixtures alike -- `grep -n 'reply_count' app/models.py` would have settled it
+in one command. And note the kill type: a mutation restoring such a line dies
+**by assertion, not by crash**, because the model carries no `@validates` hook
+and no `__setattr__` override to turn the write into a raise. A defect that
+crashes is found on first execution; this class has to be read to be found,
+which is why it survives next to a working sibling line.
+
+**58. `expire_on_commit` is default-`True` in this app, so a commit inside the
+function under test expires the session's objects and post-call attribute
+reads re-fetch.** `app/__init__.py:81` constructs `SQLAlchemy(session_options={"autoflush": False}, ...)`, overriding **only** `autoflush`. So a
+`db.session.refresh(obj)` added to a test in order to observe an update made
+by raw SQL is usually a no-op: the function's own `commit()` already expired
+`obj`. Verified empirically -- the line was removed, the test run twice, and it
+passed both times. Keep the refresh if you like (it costs one redundant SELECT
+and keeps the assertion correct if `session_options` ever changes), but **do
+not write a docstring calling it load-bearing**: that is a claim about the
+session configuration, not about the SQL, and it was false here.
+
+**59. A pair of do/undo functions needs a ROUND-TRIP test, in one test
+function, with the starting values recorded.** Asserting that the undo leaves
+a counter alone proves nothing unless the do moved it, and asserting that the
+do moved it proves nothing about whether the undo gives it back. Sub-project
+12's most consequential finding (**D200**) is invisible to either
+single-direction test and obvious to the round trip: `delete_post_or_comment`
+decrements four counters for a reply and `restore_post_or_comment` increments
+two, so a moderator who removes a comment and reverses it on appeal leaves two
+counters permanently lower. Write the pair as `do(); undo(); assert
+<everything back to the seeded value>`, and pair it with a **control** on a
+branch you believe is lossless -- here the `Post` branches of the same two
+functions -- so a reader can see the finding is specific rather than a general
+complaint about counter hygiene.
+
+**60. A filter clause is unkillable when the set it excludes is EMPTY under
+every fixture in the file, however many tests exercise the function.** This is
+distinct from fact 33, which is about a clause whose value matches what the
+factory always produces; here the clause is fine and the *rows it would
+exclude have never been created*. Two mutants have survived this way in this
+campaign -- `post_ap_context`'s `post_id` (**D197**) and
+`site_ban_remove_data`'s reply-side `deleted=False` (**D211**) -- and in both
+the same clause appeared at two call sites in one function with only one of
+them reachable, so a clean sole kill on the first call site says nothing about
+the second. (**D186** records four related clauses that no mutation could kill
+because no test reached them at all, which is the same symptom from a
+different cause.) The remedy is
+always a fixture that creates the row the filter exists to exclude, and the
+test that does it should seed **only** that row, so the kill is attributable
+to one call site rather than shared with its sibling. The prospective version
+is cheaper: when a scoping clause names an id, build the fixture with two of
+whatever it scopes by. Sub-project 12 did that for
+`community_ban_remove_data`'s `community_id` and the mutation killed on the
+first attempt.
+
+**61. `make_community` hardcodes `instance_id=1`, so a fixture built to
+satisfy one clause of a guard can silently satisfy a second.**
+`User.is_instance_admin()` filters `InstanceRole` on the **user's**
+`instance_id`; `Community.is_instance_admin(user)` filters it on the
+**community's** (`app/models.py`). Those two clauses are only distinguishable
+when the two instances differ -- and with `make_community`'s hardcoded 1
+(fact 21) against a `seed_*` helper that creates instance 1, they collapse
+into one. A fixture that satisfies two disjuncts of an `or` does not fail: it
+**stops attributing**, and a mutation dropping either clause then kills two
+tests where it should kill one. Move the community off instance 1 first. Two
+general points: this is found by RUNNING the mutation and counting the
+failures, never by reasoning about the fixture, and **a mutation that kills
+more than one test is as much a signal as one that kills none**.
+
+**62. `Community.has_poster(user)` falls back to counting REPLIES when the
+user has no posts, so "has posted there" includes "has only replied there".**
+The method (`app/models.py:818-825`) runs a `COUNT(*)` against `post` and, only
+`if not post_count`, a second against `post_reply`, returning `post_count or
+post_reply_count`. It gates the ban and unban notifications in `ban_user` and
+`unban_user`, so a fixture built to make `has_poster` false must give the user
+neither a post nor a reply in that community -- seeding a reply and no post
+produces a true that reads like a false.
 
 ## Known noise
 
