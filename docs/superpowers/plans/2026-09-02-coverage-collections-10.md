@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Defects found **inside these eight functions** are fixed test-first, each in its own commit, each proved by a mutation that fails a named test. Anything outside them is **registered, not fixed**.
+- Defects found **inside these nine functions** are fixed test-first, each in its own commit, each proved by a mutation that fails a named test. Anything outside them is **registered, not fixed**.
 - Findings are numbered from **D167**; **both** of the register's "Next free number" notes are updated in the same change.
 - The coverage floor in `coverage_floors.ini` rises to the measured blended figure **rounded down**. It is currently 80.
 - **Locate every code target by content, not by the line numbers in this plan.** They drift; every sub-project since 5c has found them stale, and this slice's own fixes will move things.
@@ -75,7 +75,7 @@ throughout.
 
 `tests/test_actor_profiles.py` already defines `seed_actors(host='peer.example') -> (site, instance)`. **Import it** — the campaign already imports helpers across test files (`record_moderation` from `test_inbox_dispatch_lock_delete.py`, `dispatch` from `test_inbox_dispatch_preamble.py`). Do not copy it.
 
-Do NOT import `profile_get`: none of these eight endpoints checks `is_activitypub_request()`, so no `Accept` header is needed and a simpler local helper reads better.
+Do NOT import `profile_get`: none of these nine endpoints checks `is_activitypub_request()`, so no `Accept` header is needed and a simpler local helper reads better.
 
 ---
 
@@ -104,7 +104,7 @@ def collection_get(app, path):
     """GET a collection endpoint through the real route.
 
     No Accept header is sent and none is needed: unlike the three actor-profile
-    endpoints, NONE of these eight checks `is_activitypub_request()`, so all of
+    endpoints, NONE of these nine checks `is_activitypub_request()`, so all of
     them return ActivityPub JSON to any caller. That asymmetry is registered by
     the final task; this helper exists to make it visible rather than to work
     around it.
@@ -1210,11 +1210,11 @@ Register at minimum:
 - **The cartesian-product join** in `feed_outbox` and `feed_following`, with the duplication factor the tests actually measured. Not fixed — say why.
 - **`feed_outbox` publishes `local_only` and `private` communities** that `feed_following` skips, despite a comment calling them equivalent.
 - **`community_featured` ignores the post-status filter** its sibling applies, so a post under review is hidden from the outbox and published in featured.
-- **`community_featured` sets no `Cache-Control`**, and the eight use 5, 10, 10, 15, 15, 120 and none, with no evident rationale.
+- **`community_featured` sets no `Cache-Control`**, and the other eight use one 5, four 10s, two 15s and one 120 -- four distinct values -- with no evident rationale.
 - **`totalItems` is the page size in `community_outbox`** — `posts` is capped at 50.
 - **`feed_followers` reports a real count with `items` always `[]`.**
 - **The feed lookups have neither a `banned` nor a `public` guard**, while community and user lookups filter `banned=False`; two of four feed endpoints check `public` after the fact.
-- **None of the eight checks `is_activitypub_request()`**, unlike all three actor-profile endpoints.
+- **None of the nine checks `is_activitypub_request()`**, unlike all three actor-profile endpoints.
 - **Only `user_followers` sets `Vary: Accept`**, and nothing here negotiates on `Accept`.
 - Any mutation that could not be killed, with the test added to kill it.
 

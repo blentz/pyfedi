@@ -10,10 +10,9 @@ def collection_get(app, path):
     """GET a collection endpoint through the real route.
 
     No Accept header is sent and none is needed: unlike the three actor-profile
-    endpoints, NONE of these eight checks `is_activitypub_request()`, so all of
-    them return ActivityPub JSON to any caller. That asymmetry is registered by
-    the final task; this helper exists to make it visible rather than to work
-    around it.
+    endpoints, NONE of these nine checks `is_activitypub_request()`, so all of
+    them return ActivityPub JSON to any caller. That asymmetry is registered as
+    D177; this helper exists to make it visible rather than to work around it.
     """
     with app.test_client() as client:
         return client.get(path)
@@ -96,9 +95,12 @@ def test_a_remote_community_outbox_is_404(app, db_session):
 
 
 def test_the_community_outbox_sets_its_cache_control(app, db_session):
-    """max-age=10. Its eight siblings use 5, 15, 120 and -- for
-    `community_featured` -- nothing at all, with no evident rationale. The
-    values are asserted exactly so the spread is visible in the suite.
+    """max-age=10. Across the nine the values are one 5, four 10s, two 15s,
+    one 120 and -- for `community_featured` -- nothing at all, with no evident
+    rationale (D180). Six of the nine assert their value exactly, so the spread
+    is partly visible in the suite; `feed_outbox`, `feed_following` and
+    `feed_moderators_route` have no header assertion, which is why D180 grades
+    the full spread as read from source rather than measured.
     """
     seed_actors()
     seed_local_community('books')
@@ -497,11 +499,13 @@ def test_the_community_followers_items_list_is_always_empty(app, db_session):
     itself (app/activitypub/routes.py), so the document says "one follower"
     and lists none.
 
-    `feed_followers` does the same, per the brief. `user_followers` -- the
-    third -- populates its items with real follower URLs and filters blocked
-    and unaccepted follows (verified by reading app/activitypub/routes.py
-    directly; neither sibling collection is exercised by a test in this file
-    yet). Two of three contradict themselves; one does not.
+    `feed_followers` does the same -- pinned by
+    `test_the_feed_followers_items_list_is_always_empty`. `user_followers` --
+    the third -- populates its items with real follower URLs and filters
+    blocked and unaccepted follows, pinned by `test_a_users_followers_are_listed`.
+    So both siblings are exercised here and the two-of-three pattern is proved
+    in the suite, not merely read off the source. Two of three contradict
+    themselves; one does not.
 
     `member.deleted` is set explicitly for the same reason as the previous
     test: `make_user` leaves it at the column default, and no assertion here
