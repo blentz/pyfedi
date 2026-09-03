@@ -830,7 +830,14 @@ def test_a_feed_moderators_collection_lists_its_owner(app, db_session):
     """Feeds have a single owner, wrapped in a list "in case we want to expand
     that in the future" per the source comment (app/activitypub/routes.py).
     Rendered as `ap_profile_id`, where `community_moderators_route` renders
-    `public_url()` -- both asserted below, not just claimed.
+    `public_url()`. The owner is given `ap_profile_id` and `ap_public_url` at
+    DIFFERENT values so this assertion can tell the two renderings apart.
+    `make_user(local=True)` (tests/factories.py:58-60) leaves `ap_id`,
+    `ap_profile_id` and `ap_public_url` all None, so without those two
+    assignments the assertion would compare `[None] == [None]` and pass
+    equally against a `public_url()` regression -- vacuous, and the reason
+    D183 records that this test could not discriminate the difference it
+    documents. The final assertion states the discrimination outright.
 
     `Feed.user_id` (app/models.py) has NO declared default, and neither
     `make_local_feed` nor `_seed_local_feed` sets it, so it is None unless a
@@ -846,6 +853,8 @@ def test_a_feed_moderators_collection_lists_its_owner(app, db_session):
     site, instance = seed_actors()
     feed = _seed_local_feed('news', public=True)
     owner = make_user(instance, 'feedowner', local=True)
+    owner.ap_profile_id = 'https://test.piefed.local/u/feedowner'
+    owner.ap_public_url = 'https://test.piefed.local/users/feedowner'
     feed.user_id = owner.id
     db.session.commit()
 
@@ -854,7 +863,8 @@ def test_a_feed_moderators_collection_lists_its_owner(app, db_session):
     assert response.status_code == 200
     assert response.json['type'] == 'OrderedCollection'
     assert response.json['totalItems'] == 1
-    assert response.json['orderedItems'] == [owner.ap_profile_id]
+    assert response.json['orderedItems'] == ['https://test.piefed.local/u/feedowner']
+    assert response.json['orderedItems'] != [owner.ap_public_url]
 
 
 def test_an_unknown_feed_moderators_is_404(app, db_session):
