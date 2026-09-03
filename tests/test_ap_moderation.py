@@ -35,8 +35,8 @@ from app.constants import NOTIF_REPORT, NOTIF_USER, POST_STATUS_PUBLISHED
 from app.models import (CommunityBan, CommunityMember, File, InstanceBan, InstanceRole, ModLog,
                         Notification, Post, PostReply, User)
 from tests.factories import (make_community, make_community_ban, make_community_member,
-                             make_instance, make_post, make_post_reply, make_site, make_user,
-                             seed_community_owner)
+                             make_instance, make_instance_ban, make_post, make_post_reply,
+                             make_site, make_user, seed_community_owner)
 
 
 class _RedisLockOnlyDouble:
@@ -1011,3 +1011,76 @@ def test_a_ban_reason_longer_than_255_characters_is_shortened(
                                                    community_id=community.id).first()
     assert len(ban.reason) <= 255
     assert ban.reason.endswith('…')
+
+
+def test_a_community_unban_removes_the_ban_and_clears_the_membership_flag(
+        app, db_session, monkeypatch):
+    """`unban_user`'s community branch. Note the activity shape: reason comes
+    from `core_activity['object']['summary']`, one level deeper than
+    `ban_user` reads it, because an Undo wraps the activity it reverses.
+    """
+    site, instance, community, author, moderator = seed_moderation_scene()
+    make_community_ban(author, community, banned_by=moderator)
+    membership = make_community_member(author, community)
+    membership.is_banned = True
+    db.session.commit()
+
+    ap_util.unban_user(moderator, author, community,
+                       {'id': 'https://peer.example/activities/undo/1',
+                        'object': {'summary': 'appeal upheld'}})
+
+    remaining = db.session.query(CommunityBan).filter_by(user_id=author.id,
+                                                         community_id=community.id).first()
+    assert remaining is None
+    assert membership.is_banned is False
+    assert db.session.query(ModLog).filter_by(action='unban_user').count() == 1
+
+
+def test_an_instance_unban_writes_no_modlog_entry(app, db_session, monkeypatch):
+    """PINS A DEFECT. `unban_user`'s INSTANCE branch calls no
+    `add_to_modlog` at all, while its community branch does and BOTH
+    branches of `ban_user` do. So an instance-wide ban is recorded in the
+    moderation log and its reversal is not.
+
+    The unban itself is asserted to have worked, so this cannot pass by the
+    call having failed: the InstanceBan row is gone and the modlog is empty.
+    """
+    site, instance, community, author, moderator = seed_moderation_scene()
+    make_instance_ban(author, instance)
+
+    ap_util.unban_user(moderator, author, None,
+                       {'id': 'https://peer.example/activities/undo/1',
+                        'object': {'target': 'https://peer.example/',
+                                   'summary': 'appeal upheld'}})
+
+    assert db.session.query(InstanceBan).filter_by(user_id=author.id).count() == 0
+    assert db.session.query(ModLog).count() == 0
+
+
+def test_a_community_unban_notifies_only_a_user_who_has_posted_there(
+        app, db_session, monkeypatch):
+    """`if community.has_poster(blocked):` -- a user who never posted in the
+    community is unbanned silently. The source comment on the matching guard
+    in `ban_user` explains why: mods can use bans to harass, so a ban
+    notification to someone with no history there would itself be the
+    harassment.
+
+    Two users, one with a post and one without, in one test -- a single-user
+    fixture could not tell the guard from an unconditional notify.
+    """
+    site, instance, community, author, moderator = seed_moderation_scene()
+    lurker = make_user(instance, 'thelurker', local=True)
+    make_post(community, author, None, title='a post')
+    make_community_ban(author, community, banned_by=moderator)
+    make_community_ban(lurker, community, banned_by=moderator)
+    db.session.commit()
+
+    activity = {'id': 'https://peer.example/activities/undo/1',
+                'object': {'summary': ''}}
+    ap_util.unban_user(moderator, author, community, activity)
+    ap_util.unban_user(moderator, lurker, community, activity)
+
+    notified = db.session.query(Notification).filter_by(user_id=author.id).count()
+    not_notified = db.session.query(Notification).filter_by(user_id=lurker.id).count()
+    assert notified == 1
+    assert not_notified == 0
