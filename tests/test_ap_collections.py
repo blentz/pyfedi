@@ -51,8 +51,11 @@ def test_a_local_community_outbox_is_served(app, db_session):
 
 
 def test_an_unknown_community_outbox_is_404(app, db_session):
-    """`else: abort(404)`. This is the shape three of the four FEED collections
-    get wrong -- they 500 instead. Pinned there, correct here.
+    """`else: abort(404)`. This is the shape two of the four FEED collections
+    still get wrong AS OF THIS COMMIT -- `feed_outbox` and `feed_following`
+    crash on an unknown feed instead, each fixed by its own later commit in
+    this task. `feed_followers` always had this shape and
+    `feed_moderators_route` was given it by this task's first commit.
     """
     seed_actors()
 
@@ -768,20 +771,20 @@ def test_a_remote_feed_followers_request_is_400(app, db_session):
 
 
 def test_an_unknown_feed_followers_is_404(app, db_session):
-    """`feed_followers` is the ONLY feed collection with a correct
-    `if feed is not None: ... else: abort(404)`. Its three siblings all look the
-    feed up the same way and then get an unknown feed wrong, but by TWO
-    DIFFERENT mechanisms -- verified by reading app/activitypub/routes.py, and
-    none of the three is exercised by a test in this file yet:
+    """`if feed is not None: ... else: abort(404)`. `feed_followers` was the
+    ONLY feed collection that had this right; the other three were wrong by TWO
+    DIFFERENT mechanisms, and this task fixes them one commit at a time:
 
+      * `feed_moderators_route` DID have `if feed is not None:` and simply had
+        no `else`. An unknown feed fell off the end, the view returned None,
+        and Flask raised TypeError -- the same failure this test's own guard
+        produces when its `else: abort(404)` is deleted. FIXED by this task's
+        first commit, which copied the shape below.
       * `feed_outbox` and `feed_following` have NO None check at all. They read
-        `feed.public` directly, so an unknown feed raises AttributeError.
-      * `feed_moderators_route` DOES have `if feed is not None:`, and simply has
-        no `else`. An unknown feed falls off the end, the view returns None, and
-        Flask raises TypeError -- the same failure this test's own guard
-        produces when its `else: abort(404)` is deleted.
+        `feed.public` directly, so an unknown feed raises AttributeError. Still
+        broken AS OF THIS COMMIT; each has its own commit in this task.
 
-    Both mechanisms surface as a 500 rather than a 404, but they are not the
+    Both mechanisms surfaced as a crash rather than a 404, but they are not the
     same bug and a fix for one is not a fix for the other.
     """
     seed_actors()
@@ -852,44 +855,40 @@ def test_a_feed_moderators_collection_lists_its_owner(app, db_session):
     assert response.json['orderedItems'] == [owner.ap_profile_id]
 
 
-def test_an_unknown_feed_moderators_returns_500(app, db_session):
-    """PINS a crash, remotely reachable. DO NOT FIX -- a later task does.
+def test_an_unknown_feed_moderators_is_404(app, db_session):
+    """`if feed is not None: ... else: abort(404)` -- where the `else` is the
+    fix this task's first commit adds, and this test is what proves it.
 
-    `feed_moderators_route` opens `if feed is not None:` and has NO `else`, so
-    an unknown feed falls off the end of the function, returns None, and Flask
-    raises. `feed_followers` -- twenty lines away in the same file -- gets this
-    right with `else: abort(404)`. `feed_outbox` and `feed_following` (also
-    uncovered here) get it wrong too, but by a DIFFERENT mechanism: they have
-    no None check at all and read `feed.public` directly, so an unknown feed
-    raises AttributeError instead. Both are pinned in later tasks by that
-    other mechanism; this test pins only `feed_moderators_route`'s.
-
-    Any instance can trigger this with GET /f/<anything>/moderators.
-
-    THE 500 DOES NOT MATERIALISE AS A RESPONSE. `tests/conftest.py` sets
-    `TESTING = True` on the test app with no `PROPAGATE_EXCEPTIONS` override,
-    so Flask's `propagate_exceptions` property (which falls back to
-    `testing or debug` when unset) is True, and `handle_exception` re-raises
-    the exception instead of turning it into a 500 response; the test
-    client's default `raise_server_exceptions=True` then lets it escape
-    `collection_get` entirely. So the observable failure through this
-    suite's client is the exception itself -- confirmed by running this
-    test -- not a `response.status_code`: `TypeError: The view function for
+    Before that commit `feed_moderators_route` opened the guard and had NO
+    `else`, so an unknown feed fell off the end of the function, the view
+    returned None, and Flask raised `TypeError: The view function for
     'activitypub.feed_moderators_route' did not return a valid response. The
-    function either returned None or ended without a return statement.` This
-    is a deviation from the brief, which assumed a 500 response; the brief
-    said to report this rather than force it, so this test asserts what
-    actually happens.
+    function either returned None or ended without a return statement.` --
+    remotely reachable by any instance with GET /f/<anything>/moderators, and
+    witnessed as this test's pre-fix failure.
+
+    The shape now matches `feed_followers` twenty lines away in the same file,
+    which always had it right. `feed_outbox` and `feed_following` are still
+    wrong AS OF THIS COMMIT, but by a DIFFERENT mechanism -- no None check at
+    all, `feed.public` read directly, so an unknown feed raises
+    `AttributeError` -- and each gets its own commit in this task.
+
+    Note the crash never materialised as a 500 response under this suite:
+    `tests/conftest.py` sets `TESTING = True` with no `PROPAGATE_EXCEPTIONS`
+    override, so Flask re-raised and the test client's default
+    `raise_server_exceptions=True` let the exception escape `collection_get`.
+    The pre-fix pin therefore asserted the exception, not a status code.
     """
     seed_actors()
 
-    with pytest.raises(TypeError, match='did not return a valid response'):
-        collection_get(app, '/f/nosuch/moderators')
+    response = collection_get(app, '/f/nosuch/moderators')
+
+    assert response.status_code == 404
 
 
 def test_a_remote_feed_moderators_request_is_400(app, db_session):
-    """`'@' in actor` -> abort(400), checked BEFORE the None-check that lets
-    the 500 above through -- so a remote actor never reaches the broken path.
+    """`'@' in actor` -> abort(400), checked BEFORE the feed lookup -- so a
+    remote actor never reaches the None-check the test above exercises.
     """
     seed_actors()
 
