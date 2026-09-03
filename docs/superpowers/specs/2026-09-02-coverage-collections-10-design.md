@@ -12,7 +12,7 @@ continuing at **D167**
 
 ## The unit
 
-Eight endpoints, taken together because they are eight near-identical answers to
+Nine endpoints, taken together because they are nine near-identical answers to
 one question — *list the things attached to this actor* — and because, as in
 sub-projects 7, 8 and 9, the defects live in what they do **differently**.
 
@@ -32,7 +32,7 @@ sub-projects 7, 8 and 9, the defects live in what they do **differently**.
 are how a remote instance enumerates a community's posts, a user's followers, a
 feed's communities and every actor's moderators.
 
-The count is larger than sub-project 9's 96, but the work is not: the eight share
+The count is larger than sub-project 9's 96, but the work is not: the nine share
 one harness, one seeding surface and one response shape. The marginal cost after
 the first endpoint is small.
 
@@ -44,28 +44,28 @@ Quoted lines are navigational aids, never identifiers.
 
 ## What they do
 
-All eight share a skeleton: strip the actor, resolve it, build a JSON collection
+All nine share a skeleton: strip the actor, resolve it, build a JSON collection
 document, set `content_type` and usually `Cache-Control`, return. Where they
 differ is the whole point.
 
-| Axis | community (3) | user (1) | feed (4) |
+| Axis | community (4) | user (1) | feed (4) |
 |---|---|---|---|
 | `'@'` remote check | **none** | **none** | `abort(400)` |
 | Lookup guards | `name, banned=False, ap_id=None` | `user_name, banned=False, ap_id=None` | `name.lower(), ap_id=None` — **no ban, no public** |
 | Not-found path | `abort(404)` | `abort(404)` | **three of four are broken — see below** |
 | Visibility guard | none | none | `if not feed.public: abort(403)` on two of four |
-| Collection type | `OrderedCollection` | `Collection` | `Collection` ×3, `OrderedCollection` ×1 |
-| `Cache-Control` | 10 / **none** / 120 | 15 | 5 / 10 / 10 / 15 |
+| Collection type | `OrderedCollection` ×3, `Collection` ×1 | `Collection` | `Collection` ×3, `OrderedCollection` ×1 |
+| `Cache-Control` | 10 / **none** / 120 / 10 | 15 | 5 / 10 / 10 / 15 |
 | `Vary: Accept` | none | **yes** | none |
-| Items populated | yes | yes | yes ×3, **`[]` always** ×1 |
+| Items populated | yes ×3, **`[]` always** ×1 | yes | yes ×3, **`[]` always** ×1 |
 
-`is_activitypub_request()` is checked by **none** of the eight — unlike the
+`is_activitypub_request()` is checked by **none** of the nine — unlike the
 three actor-profile endpoints, which all branch on it. These return ActivityPub
 JSON to a browser.
 
 ## Goal
 
-Full statement coverage of all eight, and branch coverage sufficient that no
+Full statement coverage of all nine, and branch coverage sufficient that no
 guard survives having any one of its conjuncts dropped. Expected effect:
 `app/activitypub/routes.py` moves from its measured **80.3676%** blended toward
 **86%**, and the floor rises from 80 to the measured figure rounded down.
@@ -85,7 +85,7 @@ rows here, not tested here.
 ## The defects this slice must confront
 
 This slice carries the same bounded fix authorisation 5c through 9 had:
-**defects found inside these eight functions are fixed test-first, each in its
+**defects found inside these nine functions are fixed test-first, each in its
 own commit, separate from every test-only commit, and each proved by a mutation
 that fails a named test.** Anything larger is registered.
 
@@ -151,7 +151,7 @@ collection.
 
 ### `community_featured` sets no `Cache-Control` at all
 
-Its seven siblings set one, ranging from 5 to 120 seconds with no evident
+Its eight siblings set one, ranging from 5 to 120 seconds with no evident
 rationale for any particular value. `community_featured` sets none, so caching
 falls to whatever default the deployment applies.
 
@@ -172,7 +172,7 @@ falls to whatever default the deployment applies.
 - **The feed lookups have neither a `banned` nor a `public` guard**, while the
   community and user lookups both filter `banned=False`. Two of the four feed
   endpoints check `feed.public` after the fact; two do not check it at all.
-- **None of the eight checks `is_activitypub_request()`**, so all eight return
+- **None of the nine checks `is_activitypub_request()`**, so all nine return
   ActivityPub JSON to a browser, unlike the three actor-profile endpoints.
 - **Only `user_followers` sets `Vary: Accept`** — and it is the one endpoint
   whose body does *not* vary by `Accept`, since none of them negotiate.
@@ -236,7 +236,7 @@ arise; it is recorded because it silently defeated a pin in sub-project 9.
 
 ## New test file
 
-One new file, `tests/test_ap_collections.py`. Eight endpoints across ~110
+One new file, `tests/test_ap_collections.py`. Nine endpoints across ~120
 statements is one coherent unit sharing a harness, and splitting it by actor
 type would hide exactly the cross-type comparisons this slice exists to make.
 
@@ -246,7 +246,7 @@ and was wrong.
 
 ## Global constraints
 
-- Defects found in these eight functions are fixed test-first, each in its own
+- Defects found in these nine functions are fixed test-first, each in its own
   commit, each proved by mutation. Anything outside them is registered.
 - Findings are numbered from **D167**, and **both** of the register's "Next free
   number" notes are updated in the same change.
@@ -259,7 +259,7 @@ and was wrong.
 
 ## Success criteria
 
-1. All eight functions reach full statement coverage.
+1. All nine functions reach full statement coverage.
 2. No guard survives any one conjunct being dropped, each kill by a distinct
    named test.
 3. Every test asserts the status code; success paths also assert the response
