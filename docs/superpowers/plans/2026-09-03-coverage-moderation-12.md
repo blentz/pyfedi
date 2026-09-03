@@ -1071,7 +1071,7 @@ def test_a_community_ban_deletes_files_without_purging_the_cdn(
 - [ ] **Step 4: Run and commit**
 
 Run: `./run_tests.sh tests/test_ap_moderation.py -q`
-Expected: 27 passed.
+Expected: 28 passed.
 
 ```bash
 git add tests/test_ap_moderation.py
@@ -1229,7 +1229,7 @@ def test_a_ban_reason_longer_than_255_characters_is_shortened(
 - [ ] **Step 6: Run and commit**
 
 Run: `./run_tests.sh tests/test_ap_moderation.py -q`
-Expected: 32 passed.
+Expected: 33 passed.
 
 ```bash
 git add tests/test_ap_moderation.py
@@ -1338,7 +1338,7 @@ def test_a_community_unban_notifies_only_a_user_who_has_posted_there(
 - [ ] **Step 4: Run the tests, then mutation-test the `has_poster` guard**
 
 Run: `./run_tests.sh tests/test_ap_moderation.py -q`
-Expected: 35 passed.
+Expected: 36 passed.
 
 Drop `if community.has_poster(blocked):` so the notify runs unconditionally — `test_a_community_unban_notifies_only_a_user_who_has_posted_there` must fail on the lurker's count. Report the kill and its type. Restore and verify the diff is empty.
 
@@ -1385,7 +1385,7 @@ Locate `site_ban_remove_data` by content and change `blocked.reply_count = 0` to
 - [ ] **Step 4: Run the file**
 
 Run: `./run_tests.sh tests/test_ap_moderation.py -q`
-Expected: 35 passed.
+Expected: 36 passed.
 
 - [ ] **Step 5: Mutation-prove the fix**
 
