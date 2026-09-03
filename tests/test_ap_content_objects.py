@@ -138,3 +138,125 @@ def test_an_unknown_comment_is_404(app, db_session, monkeypatch):
     response = ap_get(app, '/comment/999999')
 
     assert response.status_code == 404
+
+
+def test_a_comment_in_a_local_only_community_is_403(app, db_session, monkeypatch):
+    """First disjunct of `if reply.community.local_only or reply.community.private`.
+
+    `private` is set to False explicitly, not left at its column default, so
+    dropping the `local_only` disjunct fails THIS test and not its twin.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    community.local_only = True
+    community.private = False
+    db.session.commit()
+    reply = make_post_reply(post, author)
+
+    response = ap_get(app, f'/comment/{reply.id}')
+
+    assert response.status_code == 403
+
+
+def test_a_comment_in_a_private_community_is_403(app, db_session, monkeypatch):
+    """Second disjunct. `local_only` is set to False explicitly for the same
+    reason its twin sets `private` explicitly.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    community.local_only = False
+    community.private = True
+    db.session.commit()
+    reply = make_post_reply(post, author)
+
+    response = ap_get(app, f'/comment/{reply.id}')
+
+    assert response.status_code == 403
+
+
+def test_a_comment_is_401_when_the_author_has_blocked_the_requesting_instance(app, db_session, monkeypatch):
+    """The 401 branch, and it is UNREACHABLE without a '+'-style User-Agent.
+
+    `requestor_domain()` (app/utils.py) returns '' unless the agent string
+    contains a '+', `find_instance_id('')` returns None, and
+    `has_blocked_instance(None)` returns False. So this test sends
+    'Test (+https://blocked.example)', from which `requestor_domain()` extracts
+    'blocked.example' -- and the Instance row must already exist with that
+    domain, or `find_instance_id` would CREATE one (and return an id the
+    author has not blocked).
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    blocked = make_instance('blocked.example')
+    make_instance_block(author, blocked)
+    reply = make_post_reply(post, author)
+
+    response = ap_get(app, f'/comment/{reply.id}',
+                      user_agent='Test (+https://blocked.example)')
+
+    assert response.status_code == 401
+    assert b'blocked.example' in response.data
+
+
+def test_a_comment_is_served_when_the_author_blocked_a_different_instance(app, db_session, monkeypatch):
+    """The block is per-instance, not a global flag. The author blocks
+    'other.example' and the request arrives from 'peer.example', so the 401
+    must NOT fire -- this is what stops the guard being satisfied by any block
+    at all, and it is a different assertion from the `has_blocked_instances()`
+    Vary branch below, which IS a global flag.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    other = make_instance('other.example')
+    make_instance_block(author, other)
+    make_instance('peer2.example')
+    reply = make_post_reply(post, author)
+
+    response = ap_get(app, f'/comment/{reply.id}',
+                      user_agent='Test (+https://peer2.example)')
+
+    assert response.status_code == 200
+
+
+def test_a_comment_from_a_blocking_author_varies_on_user_agent(app, db_session, monkeypatch):
+    """`if reply.author.has_blocked_instances():` -- a GLOBAL "does this author
+    block anyone at all" flag, distinct from the per-instance
+    `has_blocked_instance(id)` the 401 uses. The response varies on User-Agent
+    because the body now depends on who is asking.
+
+    The author blocks 'other.example' while the request comes from
+    'peer2.example', so the 401 does NOT fire and this test reaches the header
+    -- which is exactly what makes it discriminate the two different methods.
+    """
+    _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    other = make_instance('other.example')
+    make_instance_block(author, other)
+    make_instance('peer2.example')
+    reply = make_post_reply(post, author)
+
+    response = ap_get(app, f'/comment/{reply.id}',
+                      user_agent='Test (+https://peer2.example)')
+
+    assert response.status_code == 200
+    assert response.headers['Vary'] == 'Accept, User-Agent, Accept-Encoding'
+
+
+def test_a_browser_request_for_a_comment_delegates_to_the_discussion_view(app, db_session, monkeypatch):
+    """`comment_ap`'s else branch calls `continue_discussion(reply.post.id,
+    comment_id)`. It is asserted to receive the POST's id and the COMMENT's id,
+    in that order -- the two are different rows and swapping them is a real
+    regression this assertion catches.
+
+    `post_replies_ap` has NO else branch at all and crashes here; that is
+    pinned by `test_a_browser_request_for_post_replies_crashes` and fixed in a
+    later task.
+    """
+    calls = _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+    reply = make_post_reply(post, author)
+
+    response = browser_get(app, f'/comment/{reply.id}')
+
+    assert response.status_code == 200
+    assert calls['continue_discussion'] == [((post.id, reply.id), {})]
