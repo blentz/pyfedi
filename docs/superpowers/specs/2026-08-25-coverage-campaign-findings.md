@@ -3997,8 +3997,9 @@ figure). Full suite after this sub-project: **3328 passed, 3 skipped, 6 subtests
 passed**, in 192.56s. Tests live in `tests/test_ap_content_objects.py` (43 test
 functions, none parametrized: 42 added across Tasks 1-9, one of those inverted in
 place by Task 10, and a forty-third -- D199's pin -- added by the final review's
-fix wave. The coverage figure below was measured at 42, before that pin existed;
-the pin covers an already-covered path, so it does not move the figure). The coverage figure above is the controller's single
+fix wave. That pin postdates the 90.8059% above, which was measured at 42 test
+functions; it covers an already-covered path, so it does not move the figure).
+The coverage figure above is the controller's single
 authoritative module-level measurement taken after Task 10; **no per-function
 residual breakdown was re-measured at Task 11**, so this section claims the
 module figure and not "zero uncovered statements" for any individual function.
