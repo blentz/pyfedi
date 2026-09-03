@@ -2207,6 +2207,104 @@ alone (commonly because a factory-built row can never reach that site's query
 in the first place -- see finding 33 above) needs its own dedicated test, not
 credit borrowed from its sibling site's kill.
 
+**43. A view that crashes surfaces to a test as a RAISED EXCEPTION, not as a
+500 response.** `tests/conftest.py:64` sets `TESTING = True` and never
+overrides `PROPAGATE_EXCEPTIONS`, so Flask re-raises rather than converting the
+exception to a 500, and the test client's default `raise_server_exceptions=True`
+lets it escape the `client.get(...)` call entirely. A test written as
+`assert response.status_code == 500` against a crashing view therefore **never
+runs its assertion** -- the request line raises first, and the test fails as an
+error with the view's own traceback. Pin a crash with `pytest.raises(<ExcType>,
+match=...)` wrapped around the request instead, and match on wording specific to
+the *mechanism*, because different mechanisms crash differently: a view that
+falls off the end and implicitly returns `None` gives Flask's `TypeError: The
+view function ... did not return a valid response`, while a view that
+dereferences an unresolved row gives `AttributeError: 'NoneType' object has no
+attribute '<column>'`. Established empirically in sub-project 10 with a scratch
+probe, after a brief that assumed a 500 response would be observable.
+
+**44. A crash-to-404 inversion can only be mutation-killed by a CRASH-kill; an
+assertion-kill is structurally impossible for that shape.** When a fix turns a
+crashing view into a 404 and its pin is inverted from `pytest.raises(...)` to
+`assert response.status_code == 404`, restoring the defect makes the request
+raise *before* the assertion is ever evaluated. The kill is real and can be
+sole, but it is a crash-kill by construction. Do not read that as a weaker
+result and do not go looking for the assertion-kill this campaign usually
+prefers -- it cannot exist here. Label which shape the kill is (the campaign's
+convention) and say why. Finding 30 covers the separate question of which branch
+an inverted pin stops covering.
+
+**45. SQLAlchemy's legacy `Query.all()` deduplicates entities, and can mask a
+malformed join completely.** `Query._iter`
+(`sqlalchemy/orm/query.py:2859-2879`, installed 2.0.52) calls `result.unique()`
+**unconditionally** whenever the query returns mapper entities, and the
+per-entity unique filter (`sqlalchemy/orm/loading.py:184-196`) keys on Python's
+`id()` of the mapped object -- which the Session's identity map makes the *same*
+object for every row sharing a primary key. So a query whose `ON` clause
+produces a cartesian product returns the right number of *objects* through
+`.all()` and the wrong number through raw SQL or a 2.0-style `select()` without
+`.unique()`. A plausible row count is therefore not evidence the query is
+correct: compare all four forms -- raw SQL, `select()`, `select().unique()`,
+`Query.all()` -- before concluding anything about a join. (This is not the
+stricter `multi_row_eager_loaders` path at `loading.py:281-291`, which raises
+unless the caller calls `.unique()`; that one needs `joinedload`/
+`contains_eager`, not a plain `.join()`.)
+
+**46. A "do not fix X" constraint scopes the CODE, not the prose about it.** A
+task told to leave a defect alone still owns every docstring, comment and report
+sentence that describes it. A docstring made false by a *sibling* task -- "not
+exercised by a test in this file yet", when a later task added exactly that test
+-- is a defect the constraint never covered, and leaving it is a bug, not
+obedience. Two such claims shipped in sub-project 10 and needed a follow-up
+commit. When correcting one, make the replacement **name** the test that now
+carries the fact, so the next falsification is greppable rather than a matter of
+re-reading the file.
+
+**47. `Feed` and `User` carry AP URL columns that have no defaults, that no
+factory sets, and that routes use directly as the response `id`.**
+`Feed.ap_followers_url`, `Feed.ap_following_url` and `Feed.ap_outbox_url`
+(`app/models.py:4106`, `:4107`, `:4114`) and `Feed.user_id` (`:4079`) all have
+no declared default; `make_local_feed` (`tests/factories.py:191-210`) sets none
+of them, and `make_feed` -- which sets `ap_id` unconditionally, see finding 31 --
+sets none of them either. `User.ap_followers_url` (`:1070`) is the same, and
+`make_user` never sets it. This bites twice. `feed_outbox` and `feed_following`
+use `feed.ap_outbox_url` / `feed.ap_following_url` **directly** as the response
+document's `id`, so it comes back `null` unless the test assigns it. And
+`feed_moderators_route` does `db.session.query(User).get(feed.user_id)`, which
+with `user_id` unset is `.get(None)` -> `None` -> `AttributeError` on the very
+next line's `moderator.ap_profile_id`. `seed_local_community` by contrast gives
+every community `user_id=1` for free (finding 21), which invites assuming feeds
+behave the same way; they do not.
+`tests/test_ap_collections.py:_seed_local_feed` sets all three URL columns as a
+single contract for the feed collection tests -- `user_id` is still each test's
+own job.
+
+**48. `community_moderators` synthesises an owner, so a factory-built community
+can NEVER have an empty moderators collection.** `app/utils.py:2889-2899`
+appends an **unpersisted** `CommunityMember(user_id=community.user_id,
+is_owner=True, community_id=community.id)` whenever the community's own
+`user_id` is absent from its `is_owner OR is_moderator` query results; the
+object is constructed and never added to the session, so it has no `id` and no
+backing row. `seed_local_community` and `make_community` always set `user_id=1`
+(finding 21), and no `CommunityMember` row is ever created for that user, so the
+synthesis fires on **every** seeded community. A "community with zero
+moderators" test is therefore impossible through these factories, and any
+exact-equality assertion on `orderedItems` must account for the always-present
+phantom owner -- prefer a `not in` form for exclusion tests, which still kills
+the `OR` filter's mutation without going vacuous. `community_members`
+(`app/activitypub/util.py:54-58`), which the followers collection uses, has no
+such synthesis -- a plain `SELECT COUNT(*)` over persisted rows -- so exact
+counts *are* safe there, and a deliberately loose `>= 1` should be tightened to
+`== 1`.
+
+**49. When a count in prose changes, grep for every spelling of the OLD value,
+not just the new one.** Adding a ninth endpoint to sub-project 10 mid-flight
+left two already-merged docstrings saying `community_featured` has "seven
+siblings" without a `Cache-Control` header, *after* a cleanup pass had grepped
+for and fixed every occurrence of "eight". "Seven siblings" and "eight
+endpoints" encode the same fact and neither grep finds the other. Grep the old
+numeral, the old word, and the off-by-one on either side of it.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
