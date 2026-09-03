@@ -679,24 +679,25 @@ def test_a_site_ban_deletes_every_post_and_reply_the_user_made(
     assert here.deleted_by == moderator.id
 
 
-def test_a_site_ban_does_not_zero_the_users_reply_count(app, db_session, monkeypatch):
-    """PINS A DEFECT. DO NOT FIX -- a later task does.
+def test_a_site_ban_zeroes_the_users_reply_count(app, db_session, monkeypatch):
+    """GUARDS A FIX.
 
-    `site_ban_remove_data` contains `blocked.reply_count = 0`. `User` has no
-    `reply_count` column: it declares `post_count` and `post_reply_count`
-    (app/models.py), and `reply_count` belongs to `Post`. SQLAlchemy accepts
-    the assignment as an ordinary Python attribute on the instance, so it
-    never reaches the database and never raises.
+    `site_ban_remove_data` used to contain `blocked.reply_count = 0`. `User`
+    has no `reply_count` column: it declares `post_count` and
+    `post_reply_count` (app/models.py), and `reply_count` belongs to `Post`.
+    SQLAlchemy accepted that assignment as an ordinary Python attribute on
+    the instance, so it never reached the database and never raised.
 
-    The effect is that a site-banned user's REAL reply counter keeps its
+    The effect was that a site-banned user's REAL reply counter kept its
     pre-ban value forever, while `blocked.post_count = 0` on the very next
-    line works because that column does exist. `community_ban_remove_data`
-    decrements the real `post_reply_count` correctly.
+    line worked because that column does exist. `community_ban_remove_data`
+    decrements the real `post_reply_count` correctly, which is what fixed
+    the site path: the target is now `post_reply_count`.
 
-    Both counters are seeded to 5 so the contrast is exact: post_count is
-    asserted at 0 (the working line) and post_reply_count at 5 (the broken
-    one). Asserting only the second would leave a reader unable to tell a
-    bug from a deliberate choice not to zero anything.
+    Both counters are seeded to 5 and both are asserted at 0, which is what
+    shows the fix retargeted the right column: post_count was always zeroed,
+    so asserting post_reply_count alone would not distinguish a working line
+    from a regression that zeroed some other attribute.
     """
     _double_file_deletion(monkeypatch)
     site, instance, community, author, moderator = seed_moderation_scene()
@@ -708,8 +709,8 @@ def test_a_site_ban_does_not_zero_the_users_reply_count(app, db_session, monkeyp
 
     ap_util.site_ban_remove_data(moderator.id, author)
 
-    assert author.post_count == 0        # the line that works
-    assert author.post_reply_count == 5  # the line that does not -- the defect
+    assert author.post_count == 0        # the line that always worked
+    assert author.post_reply_count == 0  # the line that was broken -- now fixed
 
 
 def test_a_site_ban_deletes_attached_files_and_purges_the_cdn(
@@ -846,9 +847,11 @@ def test_a_community_ban_deletes_only_that_communitys_content(
 
 def test_a_community_ban_decrements_the_users_real_reply_counter(
         app, db_session, monkeypatch):
-    """The contrast with `site_ban_remove_data`'s broken line: this function
-    does `blocked.post_reply_count -= 1` per reply, against the real column,
-    and it works. Both are asserted so the pair reads as one finding.
+    """This function does `blocked.post_reply_count -= 1` per reply, against
+    the real column. It is what `site_ban_remove_data`'s once-broken line was
+    corrected to target: that line wrote to a `reply_count` attribute `User`
+    does not have, and this one had always been right. Both counters are
+    asserted so the pair reads as one finding.
 
     Counters seeded to 5; one post and one reply are removed, so both fall
     to 4 -- a relative decrement, unlike the site path's absolute zeroing.
