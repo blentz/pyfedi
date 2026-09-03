@@ -428,3 +428,90 @@ def test_a_post_is_401_when_the_author_has_blocked_the_requesting_instance(app, 
                       user_agent='Test (+https://blocked.example)')
 
     assert response.status_code == 401
+
+
+def test_a_remote_post_redirects_to_its_origin(app, db_session, monkeypatch):
+    """`post_ap`'s `else` on `if post.is_local():` -- a 301 to the post's own
+    `ap_id`. `Post.is_local()` is `ap_id is None or
+    ap_id.startswith(SERVER_URL)` (app/models.py), so a remote `ap_id` on a
+    DIFFERENT host is what makes it false.
+
+    This is an asymmetry, not just a branch: `comment_ap` has no `is_local()`
+    check at all and re-serves a remote reply's JSON as though this instance
+    were authoritative for it. Registered, not fixed.
+    """
+    _double_the_delegates(monkeypatch)
+    site, instance = seed_actors()
+    community = make_community(name='books', host='test.piefed.local')
+    author = make_user(instance, 'remoteposter')
+    post = make_post(community, author, 'https://peer.example/objects/xyz')
+    db.session.commit()
+
+    response = ap_get(app, f'/post/{post.id}')
+
+    assert response.status_code == 301
+    assert response.headers['Location'] == 'https://peer.example/objects/xyz'
+
+
+def test_a_browser_request_for_a_post_delegates_to_show_post(app, db_session, monkeypatch):
+    """`post_ap`'s outer else: `block_honey_pot()` then `show_post(...)`.
+
+    Both are asserted. `block_honey_pot` running is not incidental -- it is a
+    side effect on the non-ActivityPub path that the ActivityPub path does not
+    have, and no other endpoint in this slice calls it.
+
+    `sort` comes from `current_user.default_comment_sort or 'hot'` for a logged
+    -in user and 'hot' for an anonymous one; the test client is anonymous, so
+    'hot' is the value asserted.
+    """
+    calls = _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+
+    response = browser_get(app, f'/post/{post.id}')
+
+    assert response.status_code == 200
+    assert calls['block_honey_pot'] == [True]
+    assert len(calls['show_post']) == 1
+    args, kwargs = calls['show_post'][0]
+    assert args == (post.id,)
+    assert kwargs['sort'] == 'hot'
+    assert kwargs['low_bandwidth'] is False
+
+
+def test_a_post_request_to_a_post_url_never_takes_the_activitypub_path(app, db_session, monkeypatch):
+    """`post_ap`'s route accepts POST -- `methods=['GET', 'HEAD', 'POST']` --
+    but its ActivityPub branch requires GET or HEAD, so a POST with an
+    ActivityPub Accept header falls to `show_post` regardless of the header.
+
+    `post_ap` is the ONLY one of the four content-object endpoints whose route
+    accepts POST; the other three are GET-only (`comment_ap` also allows HEAD).
+    """
+    calls = _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+
+    with app.test_client() as client:
+        response = client.post(f'/post/{post.id}', headers={'Accept': AP_ACCEPT})
+
+    assert response.status_code == 200
+    assert len(calls['show_post']) == 1
+    assert calls['post_to_page'] == []
+
+
+def test_a_head_request_for_a_post_returns_an_empty_activitypub_body(app, db_session, monkeypatch):
+    """`post_ap`'s `else: post_data = []` for HEAD -- an empty LIST, jsonified,
+    not an empty body. `post_to_page` is NOT called, which is the observable
+    difference and is asserted rather than inferred from the body.
+
+    This branch is REACHABLE here because `post_ap`'s route lists HEAD.
+    `post_replies_ap` and `post_ap_context` contain the same branch on
+    GET-only routes, where it is dead code -- registered, not fixed.
+    """
+    calls = _double_the_delegates(monkeypatch)
+    community, author, post = seed_local_post()
+
+    with app.test_client() as client:
+        response = client.head(f'/post/{post.id}', headers={'Accept': AP_ACCEPT})
+
+    assert response.status_code == 200
+    assert response.content_type == 'application/activity+json'
+    assert calls['post_to_page'] == []
