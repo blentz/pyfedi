@@ -26,7 +26,7 @@ import pytest
 from app import db
 from app.activitypub.util import create_post_reply, notify_about_post_reply
 from app.constants import NOTIF_MENTION, NOTIF_POST, NOTIF_REPLY
-from app.models import ActivityPubLog, Notification, PostReply, User
+from app.models import ActivityPubLog, Language, Notification, PostReply, User
 from app.utils import utcnow
 from tests.factories import (make_community, make_instance, make_instance_block,
                              make_post, make_post_reply, make_site, make_user,
@@ -272,6 +272,254 @@ def test_a_reply_from_a_blocked_user_is_refused(app, db_session, redis_lock_only
     assert PostReply.query.count() == 0
     log = ActivityPubLog.query.one()
     assert log.exception_message == 'Post author blocked replier'
+
+
+def test_bare_content_is_wrapped_and_allowlisted(app, db_session, redis_lock_only_double):
+    """Content that starts with neither `<p>` nor `<blockquote>` is wrapped
+    before allowlisting, and `body` is derived from the html because no
+    `source` was supplied.
+    """
+    community, post, replier = _seed_scenario()
+
+    reply = _create(community, post, replier, document=_reply_doc(content='hello there'))
+
+    assert reply.body_html == '<p>hello there</p>'
+    assert reply.body == 'hello there'
+
+
+def test_already_wrapped_content_is_not_double_wrapped(app, db_session, redis_lock_only_double):
+    """The `startswith('<p>')` disjunct of the wrap guard."""
+    community, post, replier = _seed_scenario()
+
+    reply = _create(community, post, replier, document=_reply_doc(content='<p>hello</p>'))
+
+    assert reply.body_html == '<p>hello</p>'
+
+
+def test_blockquote_content_is_not_wrapped(app, db_session, redis_lock_only_double):
+    """The `startswith('<blockquote>')` disjunct, which needs its own test or
+    it can be deleted with the `<p>` case still passing.
+    """
+    community, post, replier = _seed_scenario()
+
+    reply = _create(community, post, replier,
+                    document=_reply_doc(content='<blockquote>q</blockquote>'))
+
+    assert reply.body_html.startswith('<blockquote>')
+
+
+def test_a_markdown_source_overwrites_the_html_derived_body(app, db_session, redis_lock_only_double):
+    """`source` with `mediaType: text/markdown` wins, overwriting the body the
+    html arm computed. The two strings differ deliberately, or the assertion
+    could not tell which arm won.
+    """
+    community, post, replier = _seed_scenario()
+    document = _reply_doc(content='<p>from html</p>',
+                          source={'mediaType': 'text/markdown', 'content': 'from markdown'})
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply.body == 'from markdown'
+    assert 'from markdown' in reply.body_html
+    assert 'from html' not in reply.body_html
+
+
+def test_a_source_with_no_media_type_leaves_the_html_body(app, db_session, redis_lock_only_double):
+    """The `'mediaType' in ...` conjunct, which THIS function has and its
+    update-path twin lacked until sub-project 14 added it.
+
+    A dict `source` carrying only `content` must fall to the `else`.
+    """
+    community, post, replier = _seed_scenario()
+    document = _reply_doc(content='<p>from html</p>', source={'content': 'from markdown'})
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply.body == 'from html'
+
+
+def test_a_source_that_is_not_a_dict_leaves_the_html_body(app, db_session, redis_lock_only_double):
+    """The `isinstance(..., dict)` conjunct. Choose the fixture value with
+    care: `in` against a string is a SUBSTRING test, so a string `source` lets
+    the next conjunct return False rather than raise, and the guard
+    short-circuits identically with or without `isinstance`. Use a value on
+    which `'mediaType' in ...` raises or succeeds-then-fails.
+    """
+    community, post, replier = _seed_scenario()
+    document = _reply_doc(content='<p>from html</p>', source=None)
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply.body == 'from html'
+
+
+def test_a_source_with_a_non_markdown_media_type_leaves_the_html_body(app, db_session, redis_lock_only_double):
+    """The `== 'text/markdown'` equality conjunct. `source` is a dict and DOES
+    carry a `mediaType` key here, unlike `test_a_source_with_no_media_type_
+    leaves_the_html_body` above -- that test's `source` has no `mediaType` key
+    at all, so it cannot reach this conjunct (the guard short-circuits one
+    conjunct earlier); only a `mediaType` that is present but wrong reaches
+    the `==` comparison itself.
+    """
+    community, post, replier = _seed_scenario()
+    document = _reply_doc(content='<p>from html</p>',
+                          source={'mediaType': 'text/html', 'content': 'from markdown'})
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply.body == 'from html'
+
+
+def _make_language(code, name):
+    """Seed and commit a `Language` row directly, bypassing
+    `find_language_or_create`.
+
+    `find_language_or_create` (app/activitypub/util.py) reads:
+
+        new_language = Language(code=code, name=name)
+        if session:
+            session.add(new_language)
+        else:
+            db.session.add(new_language)
+        return new_language
+
+    -- no `flush()` on either path, and `app/__init__.py` constructs
+    `db = SQLAlchemy(session_options={"autoflush": False}, ...)`, so a
+    `Language` created through the "not found" branch has `.id is None` at
+    the moment `create_post_reply` reads `language.id` for
+    `PostReply.language_id`. Every language test below therefore pre-seeds
+    and commits the `Language` row itself, so `find_language_or_create`'s
+    "already exists" branch (`existing_language = Language.query.filter(
+    Language.code == code).first()`, returned directly) runs instead --
+    that row has a real, committed id. This is a workaround for a defect
+    Task 9 fixes, not ordinary setup: left to itself, the create branch
+    would hand back an unflushed, id-less `Language`, and
+    `PostReply.language_id` would be set to `None` regardless of which
+    `code`/`name` the document carried.
+    """
+    language = Language(code=code, name=name)
+    db.session.add(language)
+    db.session.commit()
+    return language
+
+
+def test_a_language_dict_is_applied(app, db_session, redis_lock_only_double):
+    """The `if 'language' in request_json['object'] and isinstance(
+    request_json['object']['language'], dict):` arm, taking `find_language_or
+    _create`'s "already exists" branch (see `_make_language`'s docstring).
+    """
+    community, post, replier = _seed_scenario()
+    spanish = _make_language('es', 'Spanish')
+    document = _reply_doc(content='hello',
+                          language={'identifier': 'es', 'name': 'Spanish'})
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply.language_id == spanish.id
+
+
+def test_a_non_dict_language_is_ignored_in_favour_of_content_map(app, db_session, redis_lock_only_double):
+    """The `isinstance(request_json['object']['language'], dict)` conjunct.
+
+    `language` is a plain string here, so the `if` arm's `isinstance` conjunct
+    is False and control falls to the `elif 'contentMap' in ... and isinstance
+    (..., dict):` arm. Two different `Language` rows are seeded so the result
+    is only explained by the `elif` firing on `contentMap`, not by the `if`
+    arm having fired on `language` after all (which would raise, since a
+    string does not support `['identifier']` the way a dict does -- indexing
+    a string by a non-integer key raises `TypeError`).
+    """
+    community, post, replier = _seed_scenario()
+    _make_language('es', 'Spanish')
+    german = _make_language('de', 'German')
+    document = _reply_doc(content='hello', language='not-a-dict',
+                          contentMap={'de': 'hallo'})
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply.language_id == german.id
+
+
+def test_a_non_dict_content_map_is_ignored_in_favour_of_site_language_id(app, db_session, redis_lock_only_double):
+    """The `isinstance(request_json['object']['contentMap'], dict)` conjunct
+    -- the `elif` arm's mirror of the `if` arm's isinstance check above.
+
+    `contentMap` is a plain string here, so `isinstance(..., dict)` is False
+    and control falls to the `else`. Seeding a decoy Spanish `Language`
+    alongside the English one seeds a contrary baseline for the same reason
+    `test_neither_language_nor_content_map_falls_to_site_language_id` does.
+    """
+    community, post, replier = _seed_scenario()
+    _make_language('es', 'Spanish')
+    english = _make_language('en', 'English')
+    document = _reply_doc(content='hello', contentMap='not-a-dict')
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply.language_id == english.id
+
+
+def test_content_map_supplies_the_language_when_language_is_absent(app, db_session, redis_lock_only_double):
+    """The `elif 'contentMap' in request_json['object'] and isinstance(
+    request_json['object']['contentMap'], dict):` arm, with no `language` key
+    at all.
+
+    `find_language` (app/activitypub/util.py) only looks up --
+    `Language.query.filter(Language.code == code).first()`, returning `None`
+    on a miss -- so the `Language` row named by `contentMap`'s first key must
+    already exist in the test database, unlike `find_language_or_create`.
+    """
+    community, post, replier = _seed_scenario()
+    italian = _make_language('it', 'Italian')
+    document = _reply_doc(content='hello', contentMap={'it': 'ciao'})
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply.language_id == italian.id
+
+
+def test_a_language_dict_wins_over_a_present_content_map(app, db_session, redis_lock_only_double):
+    """The `if`/`elif` ordering: when both `language` and `contentMap` are
+    present, the `if` arm's `find_language_or_create` runs and the `elif`
+    arm's `find_language` does not. The two seeded languages are deliberately
+    different, or the winner would not be observable.
+    """
+    community, post, replier = _seed_scenario()
+    french = _make_language('fr', 'French')
+    _make_language('de', 'German')
+    document = _reply_doc(content='hello',
+                          language={'identifier': 'fr', 'name': 'French'},
+                          contentMap={'de': 'hallo'})
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply.language_id == french.id
+
+
+def test_neither_language_nor_content_map_falls_to_site_language_id(app, db_session, redis_lock_only_double):
+    """The `else: ... language_id = site_language_id()` arm, reached when
+    neither `language` nor `contentMap` is present at all.
+
+    `site_language_id()` (app/utils.py) checks an explicit `site` argument
+    (not passed here), then `g.site.language_id` (there is no request cycle
+    here, so `g` carries no `site` -- `tests/conftest.py`'s `db_session`
+    fixture clears `g.__dict__` before every test and nothing in this module
+    populates `g.site`), and only then falls to its own `else`:
+    `Language.query.filter(Language.code == 'en').first()`, returning that
+    row's id. Seeding a Spanish decoy alongside the English row seeds a
+    contrary baseline: if the `else` arm were skipped and `language_id` were
+    left at whatever a broken guard produced, the assertion below would not
+    coincidentally pass by both sides being the same non-English row or both
+    being `None`.
+    """
+    community, post, replier = _seed_scenario()
+    _make_language('es', 'Spanish')
+    english = _make_language('en', 'English')
+    document = _reply_doc(content='hello')
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply.language_id == english.id
 
 
 def test_a_reply_from_a_blocked_instance_is_refused(app, db_session, redis_lock_only_double, ap_log):
