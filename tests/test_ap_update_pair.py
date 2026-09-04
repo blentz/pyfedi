@@ -1617,3 +1617,222 @@ def test_an_nsfl_key_is_applied(app, db_session, redis_lock_only_double):
     update_post_from_activity(post, _update(name='a title', content='x', nsfl=False, type='Note'))
 
     assert post.nsfl is False
+
+
+def test_a_post_language_dict_is_applied(app, db_session, redis_lock_only_double):
+    """The `language` arm, the one both functions share: `find_language_or_create`
+    is called with the document's identifier and name, and the returned row's
+    id lands on the post.
+
+    Both English and German are seeded and COMMITTED before the call, so
+    German already has a real, flushed id when `find_language_or_create` finds
+    it -- the app factory sets `autoflush=False` (see this module's
+    docstring), so a language created fresh inside the function under test
+    would still have `id is None` at the moment `post.language_id =
+    new_language.id` reads it, and the comparison
+    `new_language.id != old_language_id` would then compare `None` against the
+    stored id. Pre-seeding and committing avoids exercising that unrelated
+    defect (Task 10's Fix D) and isolates the guard this test is about -- see
+    this file's module docstring for the mirrored reply-side note.
+
+    The post is seeded with a real, non-NULL `language_id` (English) first --
+    not left at the factory's default `None` -- so "applied" is distinguishable
+    from "was already non-NULL": the assertion checks the id actually became
+    the German row's id, not merely that it changed from NULL to something.
+    """
+    post = _seed_post()
+    english = Language(code='en', name='English')
+    german = Language(code='de', name='German')
+    db.session.add(english)
+    db.session.add(german)
+    db.session.commit()
+    post.language_id = english.id
+    db.session.commit()
+    seeded = post.language_id
+
+    update_post_from_activity(post, _update(
+        name='t', content='x', language={'identifier': 'de', 'name': 'German'}, type='Note',
+    ))
+
+    assert post.language_id == german.id
+    assert post.language_id != seeded
+
+
+def test_a_post_content_map_supplies_the_language(app, db_session, redis_lock_only_double):
+    """THE ASYMMETRY. `contentMap`'s first key is read as a language code
+    through `find_language`, a fallback the reply function does not have.
+
+    `find_language` LOOKS UP rather than creating -- it returns `None` for a
+    code the database does not already carry, and `if new_language and ...`
+    would then simply skip the assignment. So the code used here must already
+    exist as a `Language` row: this test seeds and commits one itself (`de`,
+    consulted from the reply-side pattern above and from `app/cli.py`'s
+    `flask db init-language` seed list, which the production database is
+    populated from -- neither `tests/conftest.py` nor the factories seed the
+    `Language` table, so nothing here relies on either).
+
+    The post is seeded with a real, non-NULL `language_id` (English) first, so
+    "supplied by contentMap" is distinguishable from "was already non-NULL".
+    """
+    post = _seed_post()
+    english = Language(code='en', name='English')
+    german = Language(code='de', name='German')
+    db.session.add(english)
+    db.session.add(german)
+    db.session.commit()
+    post.language_id = english.id
+    db.session.commit()
+    seeded = post.language_id
+
+    update_post_from_activity(post, _update(
+        name='t', content='x', contentMap={'de': '<p>hallo</p>'}, type='Note',
+    ))
+
+    assert post.language_id == german.id
+    assert post.language_id != seeded
+
+
+def test_a_post_content_map_that_is_not_a_dict_is_ignored(app, db_session, redis_lock_only_double):
+    """The `isinstance(..., dict)` conjunct on the `contentMap` arm. A list
+    must not reach the `next(iter(...))` read the way a dict's first key
+    would.
+
+    `next(iter(...))` does not itself distinguish a list from a dict -- both
+    are iterable, and iterating this list yields `'de'`, a real, seeded
+    language code, same as iterating `{'de': ...}` would. So a list input
+    does not merely avoid a crash if the isinstance guard were skipped:
+    without it, `find_language('de')` would still resolve and reassign the
+    post, making the guard's removal observable as a WRONG assignment rather
+    than a crash. German is seeded and committed so that this potential wrong
+    assignment, if the guard were absent, would actually happen and be
+    caught -- an unseeded code would make the guard's absence invisible
+    (`find_language` would just return `None` either way, same as with the
+    guard present).
+
+    With `language` absent, the post is seeded with a real, non-NULL
+    `language_id` (English) first, so "the guard skipped the arm" is
+    distinguishable from "the arm never had anything to write".
+    """
+    post = _seed_post()
+    english = Language(code='en', name='English')
+    german = Language(code='de', name='German')
+    db.session.add(english)
+    db.session.add(german)
+    db.session.commit()
+    post.language_id = english.id
+    db.session.commit()
+    seeded = post.language_id
+
+    update_post_from_activity(post, _update(
+        name='t', content='x', contentMap=['de', 'fr'], type='Note',
+    ))
+
+    assert post.language_id == seeded
+
+
+def test_a_post_language_dict_wins_over_content_map(app, db_session, redis_lock_only_double):
+    """`elif` -- the two are alternatives, not both. A document carrying both
+    must resolve through `language` and never consult `contentMap`.
+
+    The two name DIFFERENT languages -- German via `language`, French via
+    `contentMap` -- which is what makes the winner observable: the assertion
+    checks the post landed on the German row's id, not merely that some
+    language was assigned.
+
+    German is seeded and committed beforehand for the same
+    `autoflush=False`/Fix-D reason the tests above give. French is
+    deliberately NOT seeded: if the `elif` mutated to an unconditional second
+    check (or the `language` arm were skipped), `find_language('fr')` would
+    look up a row that does not exist and return `None`, which would surface
+    as `post.language_id` staying at the seeded English id rather than landing
+    on French -- still distinguishable from the correct (German) outcome, so
+    the missing French row does not weaken this test.
+    """
+    post = _seed_post()
+    english = Language(code='en', name='English')
+    german = Language(code='de', name='German')
+    db.session.add(english)
+    db.session.add(german)
+    db.session.commit()
+    post.language_id = english.id
+    db.session.commit()
+
+    update_post_from_activity(post, _update(
+        name='t', content='x',
+        language={'identifier': 'de', 'name': 'German'},
+        contentMap={'fr': '<p>bonjour</p>'},
+        type='Note',
+    ))
+
+    assert post.language_id == german.id
+
+
+def test_a_post_language_that_is_not_a_dict_is_ignored(app, db_session, redis_lock_only_double):
+    """The `isinstance(..., dict)` conjunct on the `language` arm. A bare
+    string must not reach `['identifier']`.
+
+    With `contentMap` absent, the `elif` is not taken either, so the seeded
+    language must survive untouched.
+
+    The post is seeded with a real, non-NULL `language_id` (English) first,
+    so "the guard skipped the arm" is distinguishable from "the arm never had
+    anything to write" -- asserting equality against a seeded `None` would
+    hold whether or not the guard fired.
+    """
+    post = _seed_post()
+    english = Language(code='en', name='English')
+    db.session.add(english)
+    db.session.commit()
+    post.language_id = english.id
+    db.session.commit()
+    seeded = post.language_id
+
+    update_post_from_activity(post, _update(name='t', content='x', language='de', type='Note'))
+
+    assert post.language_id == seeded
+
+
+def test_an_unchanged_post_language_is_not_reassigned(app, db_session, redis_lock_only_double):
+    """THE SECOND ASYMMETRY. `if new_language and (new_language.id !=
+    old_language_id)` -- the post path assigns only on a change; the reply
+    path assigns unconditionally.
+
+    The post is seeded with German already assigned (committed, with a real
+    id, for the same Fix-D reason as the tests above), and the document also
+    names German. `find_language_or_create` takes its "already exists" branch
+    and returns the SAME row, so `new_language.id != old_language_id` is
+    False and the guard's write is skipped.
+
+    That write being skipped has no observable through `post.language_id`
+    alone: assigning `post.language_id = new_language.id` here would write the
+    identical value already stored, so the id is exactly the same whether the
+    guard runs or is mutated into `if new_language:` (unconditional). Proving
+    "the write was skipped" therefore needs a SEPARATE observable, not a
+    stronger assertion on the same one -- this test additionally counts the
+    `Language` rows carrying the `de` code, which is what `find_language_or_
+    create`'s create branch (the arm this scenario must NOT reach) would add
+    a second one of. If `find_language_or_create` were called with a code
+    that did not already exist, the create branch would build a new
+    `Language(code=code, name=name)`, `session.add()` it (without flushing --
+    the app factory's `autoflush=False`, see the module docstring and Task 2's
+    note above) and return it unflushed; that path is not exercised here
+    because `de` already exists, so the row count made possible by that branch
+    is the second observable this test relies on to distinguish "skipped
+    assignment" from "reassigned to the same value" -- see this test's own
+    report note on why the `!=` conjunct itself is not killable through either
+    observable.
+    """
+    post = _seed_post()
+    german = Language(code='de', name='German')
+    db.session.add(german)
+    db.session.commit()
+    post.language_id = german.id
+    db.session.commit()
+    first = post.language_id
+
+    update_post_from_activity(post, _update(
+        name='t2', content='x', language={'identifier': 'de', 'name': 'German'}, type='Note',
+    ))
+
+    assert post.language_id == first
+    assert db.session.query(Language).filter_by(code='de').count() == 1
