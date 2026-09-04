@@ -23,9 +23,11 @@ from app.activitypub import util as ap_util
 from app.activitypub.util import (refresh_community_profile_task,
                                   refresh_feed_profile_task,
                                   refresh_user_profile_task)
-from app.models import Community, CommunityMember, Feed, Instance, User, utcnow
-from tests.factories import (make_community, make_feed, make_instance, make_local_feed,
-                             make_user, seed_community_owner, seed_signing_site)
+from app.models import (Community, CommunityMember, Feed, FeedMember, Instance, User,
+                        utcnow)
+from tests.factories import (make_community, make_feed, make_feed_member, make_instance,
+                             make_local_feed, make_user, seed_community_owner,
+                             seed_signing_site)
 
 PEER = 'peer.example'
 
@@ -748,6 +750,50 @@ def test_a_sensitive_document_sets_nsfw(app, db_session, http_mock):
     assert community.nsfw is True
 
 
+def test_a_followers_url_is_fetched_and_counted(app, db_session, http_mock):
+    """The followers collection is fetched only when `ap_followers_url` is set.
+    `_remote_community` clears it, so this test sets it back -- which is the
+    contrast that makes the guard killable.
+
+    DEVIATION FROM THE BRIEF: the brief names the target column
+    `Community.subscriptions_count` (app/models.py:568, "Local subscribers").
+    Reading `refresh_community_profile_task` (app/activitypub/util.py) shows
+    it writes `community.total_subscriptions_count` (app/models.py:569,
+    "Local AND remote") with the fetched `totalItems` instead --
+    `subscriptions_count` is never touched by this fetch. This test asserts
+    the column the task actually writes.
+    """
+    community = _remote_community()
+    followers_url = f'https://{PEER}/c/memes/followers'
+    community.ap_followers_url = followers_url
+    db.session.commit()
+    _serve(http_mock, followers_url,
+           {'type': 'Collection', 'totalItems': 42})
+
+    refresh_community_profile_task(community.id, _group_document())
+
+    db.session.refresh(community)
+    assert community.total_subscriptions_count == 42
+
+
+def test_no_followers_url_means_no_followers_fetch(app, db_session, http_mock):
+    """The absent side. No route is registered for the followers collection,
+    and `block_outbound_http` raises if the task fetches one -- so this test
+    proves the guard short-circuits rather than merely that a count stayed
+    put. `total_subscriptions_count` is seeded to a non-default value (the
+    column default is 0, app/models.py:569) so "unchanged" is distinguishable
+    from "never set".
+    """
+    community = _remote_community()
+    community.total_subscriptions_count = 7
+    db.session.commit()
+
+    refresh_community_profile_task(community.id, _group_document())
+
+    db.session.refresh(community)
+    assert community.total_subscriptions_count == 7
+
+
 def test_refreshing_a_feed_applies_the_peers_document(app, db_session, http_mock):
     """`refresh_feed_profile_task` always fetches -- it takes a feed id alone,
     with no `activity_json` parameter, unlike the community task.
@@ -845,6 +891,65 @@ def test_a_feed_with_no_following_url_crashes(app, db_session, http_mock):
 
     with pytest.raises(httpx.HTTPError, match='invalid uri'):
         refresh_feed_profile_task(feed.id)
+
+
+def test_a_feed_owners_url_is_fetched_and_recorded(app, db_session, http_mock):
+    """The feed task's equivalent of the community followers pair above, for
+    the one feed-side collection that is genuinely gated: `ap_moderators_url`
+    guards a fetch of the feed's owners, exactly as `community.ap_moderators_url`
+    guards the community's moderators fetch. Unlike the community task's
+    moderators fetch -- already covered by
+    `test_the_moderators_url_is_taken_from_attributed_to` and its kbin
+    sibling -- no existing test in this file drives the feed's owners fetch at
+    all, so this is new coverage rather than a restatement.
+
+    `ap_following_url` is set and mocked to an empty collection for the same
+    reason as `test_refreshing_a_feed_applies_the_peers_document`: the task's
+    own ungated tail would otherwise crash this test before it reaches its own
+    assertion (pinned separately by `test_a_feed_with_no_following_url_crashes`).
+    """
+    feed = _remote_feed()
+    feed.ap_following_url = f'https://{PEER}/f/news/following'
+    db.session.commit()
+    owner = make_user(feed.instance, 'fauxowner')
+    owner.ap_fetched_at = utcnow()
+    db.session.commit()
+    owners_url = f'https://{PEER}/f/news/owners'
+    _serve(http_mock, feed.ap_public_url,
+           _feed_document(fields={'attributedTo': owners_url}))
+    _serve(http_mock, owners_url,
+           {'type': 'OrderedCollection', 'orderedItems': [owner.ap_profile_id]})
+    _serve(http_mock, feed.ap_following_url, {'items': []})
+
+    refresh_feed_profile_task(feed.id)
+
+    membership = db.session.query(FeedMember).filter_by(
+        feed_id=feed.id, user_id=owner.id).first()
+    assert membership is not None
+    assert membership.is_owner is True
+
+
+def test_no_feed_owners_url_means_no_owners_fetch(app, db_session, http_mock):
+    """The absent side. No route is registered for the owners collection, and
+    `block_outbound_http` raises if the task fetches one anyway. An existing
+    membership is seeded first with `is_owner=True` so "unchanged" is
+    distinguishable from "never created" -- the same contrast the community
+    followers pair draws with a non-default count.
+    """
+    feed = _remote_feed()
+    feed.ap_following_url = f'https://{PEER}/f/news/following'
+    db.session.commit()
+    filler = make_user(feed.instance, 'fillerowner')
+    db.session.commit()
+    existing_membership = make_feed_member(filler, feed, is_owner=True)
+    _serve(http_mock, feed.ap_public_url, _feed_document())
+    _serve(http_mock, feed.ap_following_url, {'items': []})
+
+    refresh_feed_profile_task(feed.id)
+
+    db.session.refresh(existing_membership)
+    assert existing_membership.is_owner is True
+    assert db.session.query(FeedMember).filter_by(feed_id=feed.id).count() == 1
 
 
 def test_a_failed_community_fetch_is_retried_once(
