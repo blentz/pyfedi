@@ -26,7 +26,7 @@ import pytest
 from app import db
 from app.activitypub.util import create_post_reply, notify_about_post_reply
 from app.constants import NOTIF_MENTION, NOTIF_POST, NOTIF_REPLY
-from app.models import ActivityPubLog, Language, Notification, PostReply, User
+from app.models import ActivityPubLog, Language, Notification, PostReply, User, UserFlair
 from app.utils import utcnow
 from tests.factories import (make_community, make_instance, make_instance_block,
                              make_post, make_post_reply, make_site, make_user,
@@ -700,3 +700,380 @@ def test_a_non_empty_attachment_list_regenerates_body_html(app, db_session, redi
 
     assert '<img' in reply.body_html
     assert 'https://cdn.example/a.png' in reply.body_html
+
+
+# --- Mention collection --------------------------------------------------
+#
+# Two-phase here, unlike `update_post_reply_from_activity` (sub-project 14's
+# twin): the tag scan (app/activitypub/util.py, right after the attachment
+# loop) only APPENDS matching profile ids to a local, `local_users_to_notify`;
+# the actual `Notification` rows are created later, in the `for lutn in
+# local_users_to_notify:` loop nested inside `PostReply.new`'s try block.
+# `local_users_to_notify` is a local, so every assertion below reads the
+# resulting `Notification` rows, never the list.
+
+
+def _seed_local_recipient(name='localuser'):
+    """A local user the Mention block can resolve.
+
+    The lookup is `filter_by(ap_profile_id=..., ap_id=None)`, so both columns
+    matter. `make_user(None, name, local=True)` leaves `ap_id` None and
+    `ap_profile_id` None; this helper sets the profile id to the lowercased
+    form the document will send.
+    """
+    recipient = make_user(None, name, local=True)
+    recipient.ap_profile_id = f'https://test.piefed.local/u/{name}'
+    db.session.commit()
+    return recipient
+
+
+def _mention(name='localuser'):
+    return {'type': 'Mention', 'href': f'https://test.piefed.local/u/{name}'}
+
+
+def _use_a_non_microblog_instance(replier):
+    """Steers `post_reply.instance.software` off `_seed_scenario`'s default.
+
+    `make_instance` (tests/factories.py) defaults `software='mastodon'`,
+    which IS in `MICROBLOG_APPS` (app/constants.py) -- so by default every
+    reply built by `_seed_scenario` trips `create_post_reply`'s mbin/
+    microblog mirroring branch (app/activitypub/util.py, inside the `for
+    lutn in local_users_to_notify:` loop) the moment any Mention is actually
+    collected. That branch's last query -- `db.session.execute(text('SELECT
+    user_id FROM "post_reply" WHERE id IN :ids'), {'ids': ids})` -- binds
+    `ids` as a Python tuple; every reply built in this module is a top-level
+    reply (`post_reply.path == [0, post_reply.id]`), so that tuple is always
+    empty, and psycopg2 raises a syntax error on `IN ()` -- confirmed
+    directly against this suite's own Postgres container:
+    `cur.execute('SELECT 1 WHERE 1 IN %s', ((),))` raises `syntax error at
+    or near ")"`. That raise happens inside `create_post_reply`'s own
+    `try`/`except Exception`, so it is swallowed into a `None` return --
+    silently discarding the very `Notification` a test needs to observe,
+    for a reason that has nothing to do with whatever guard the test is
+    actually aimed at.
+
+    Fixing that defect is out of scope for a test-only task; every test
+    below that needs a REAL Notification to be created routes around it by
+    calling this first, the same way `_seed_scenario`'s own docstring routes
+    around `make_community`'s hardcoded ids.
+    """
+    replier.instance.software = 'lemmy'
+    db.session.commit()
+
+
+def test_a_mention_of_a_local_user_produces_a_notification(app, db_session, redis_lock_only_double):
+    """The Mention block's normal job, start to finish: collected into
+    `local_users_to_notify` during the tag scan, then turned into a
+    `Notification` row in the loop after `PostReply.new`.
+
+    A second, typeless tag (`{'name': 'decoy'}`) rides along in the list --
+    needed only to get the list past `len(request_json['object']['tag']) >
+    1` (see `test_the_tag_length_gate_skips_a_lone_mention` below), and, as a
+    side effect, it also kills a mutant that drops the `'type' in json_tag`
+    conjunct: with that conjunct forced true, `json_tag['type']` would raise
+    `KeyError` on this decoy (it carries no `'type'` key at all), and that
+    raise sits outside `create_post_reply`'s `try`/`except`, so it would
+    surface as an uncaught exception here instead of a clean `reply`.
+    """
+    community, post, replier = _seed_scenario()
+    _use_a_non_microblog_instance(replier)
+    recipient = _seed_local_recipient('localuser')
+    document = _reply_doc(content='hello',
+                          tag=[_mention('localuser'), {'name': 'decoy'}])
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    notification = Notification.query.filter_by(user_id=recipient.id).one()
+    assert notification.notif_type == NOTIF_MENTION
+    assert notification.subtype == 'comment_mention'
+    assert notification.author_id == replier.id
+    refreshed = User.query.get(recipient.id)
+    assert refreshed.unread_notifications == 1
+
+
+def test_the_tag_length_gate_skips_a_lone_mention(app, db_session, redis_lock_only_double):
+    """`len(request_json['object']['tag']) > 1`. Pinning CURRENT behaviour,
+    not endorsing it: read directly off `create_post_reply`
+    (app/activitypub/util.py), a genuine single `Mention` -- the ordinary
+    "@user, thanks" case -- is silently dropped and notifies no one, purely
+    because the tag list has exactly one entry. Nothing here argues that is
+    the right behaviour; it only pins what the code does today.
+
+    Needs `_use_a_non_microblog_instance`: with this conjunct forced true, a
+    lone, otherwise-valid Mention WOULD reach the notify loop and create a
+    real Notification, and only steering the instance off 'mastodon' lets
+    that difference surface instead of being masked by the unrelated
+    microblog-mirror defect (see that helper's docstring) -- which also ends
+    in zero Notifications, for a reason unrelated to this guard.
+    """
+    community, post, replier = _seed_scenario()
+    _use_a_non_microblog_instance(replier)
+    _seed_local_recipient('localuser')
+    document = _reply_doc(content='hello', tag=[_mention('localuser')])
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    assert Notification.query.count() == 0
+
+
+def test_a_mention_of_a_remote_user_produces_no_notification(app, db_session, redis_lock_only_double):
+    """The `profile_id.startswith('https://' + SERVER_NAME)` guard's
+    ordinary job: a foreign-host href is never collected.
+
+    Kept for what it proves, NOT for killing the `startswith` guard itself --
+    a remote host cannot do that (see
+    `test_a_same_host_case_mismatched_href_produces_no_notification`'s
+    docstring): no local user's `ap_profile_id` can ever equal a
+    'peer.example' href, so whether this guard runs or is deleted looks
+    identical from here -- both leave `local_users_to_notify` empty (correct
+    code, because the guard rejects it) or non-empty but pointing at a
+    profile id no local `User` row matches (a deleted guard), and either way
+    the notify loop's `if not recipient: continue` produces zero
+    Notifications.
+    """
+    community, post, replier = _seed_scenario()
+    document = _reply_doc(content='hello',
+                          tag=[{'type': 'Mention', 'href': f'https://{PEER}/u/someone'},
+                              {'name': 'decoy'}])
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    assert Notification.query.count() == 0
+
+
+def test_a_same_host_case_mismatched_href_produces_no_notification(app, db_session, redis_lock_only_double):
+    """Kills the `.startswith('https://' + current_app.config['SERVER_NAME'])`
+    conjunct -- the trap sub-project 14 hit on its own twin guard. This href
+    names the right host with the wrong CASE; `str.startswith` is
+    case-sensitive, so correctly-guarded code refuses it here, but a
+    recipient is seeded that WOULD match it once `.lower()`'d -- so a guard
+    forced to always pass would find that recipient and create a real
+    Notification, which the assertion below would catch.
+
+    Needs `_use_a_non_microblog_instance` for the same reason as the length
+    gate test above: without it, a guard forced to always pass would still
+    end in zero Notifications via the unrelated microblog-mirror defect,
+    masking the kill.
+    """
+    community, post, replier = _seed_scenario()
+    _use_a_non_microblog_instance(replier)
+    _seed_local_recipient('localuser')
+    document = _reply_doc(content='hello',
+                          tag=[{'type': 'Mention',
+                               'href': 'https://TEST.PIEFED.LOCAL/u/localuser'},
+                              {'name': 'decoy'}])
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    assert Notification.query.count() == 0
+
+
+def test_a_mention_with_no_href_produces_no_notification(app, db_session, redis_lock_only_double):
+    """`profile_id = json_tag['href'] if 'href' in json_tag else None`, then
+    the `if profile_id and isinstance(profile_id, str) and profile_id.
+    startswith(...)` guard's truthiness half on that `None`.
+    """
+    community, post, replier = _seed_scenario()
+    document = _reply_doc(content='hello',
+                          tag=[{'type': 'Mention'}, {'name': 'decoy'}])
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    assert Notification.query.count() == 0
+
+
+def test_a_non_string_href_produces_no_notification(app, db_session, redis_lock_only_double):
+    """The `isinstance(profile_id, str)` conjunct. A non-string, truthy
+    `href` -- `.startswith` would raise `AttributeError` on a bare `int`, so
+    a passing test here also confirms `isinstance` runs before `.startswith`,
+    not merely that the two conjuncts agree.
+    """
+    community, post, replier = _seed_scenario()
+    document = _reply_doc(content='hello',
+                          tag=[{'type': 'Mention', 'href': 12345}, {'name': 'decoy'}])
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    assert Notification.query.count() == 0
+
+
+def test_a_non_mention_tag_type_is_not_treated_as_a_mention(app, db_session, redis_lock_only_double):
+    """`json_tag['type'] == 'Mention'`. This tag carries a `type` key (so
+    `'type' in json_tag` alone cannot explain a skip) whose value is not
+    `'Mention'`, and an `href` that WOULD resolve to a seeded local recipient
+    if the equality comparison were dropped -- proving this specific
+    conjunct, not merely that some unrelated non-Mention tag is ignored.
+
+    Needs `_use_a_non_microblog_instance` for the same reason as the other
+    Mention-guard tests above: a dropped equality still reaches the notify
+    loop, and the unrelated microblog-mirror defect would otherwise swallow
+    the difference into the same zero-Notification outcome.
+    """
+    community, post, replier = _seed_scenario()
+    _use_a_non_microblog_instance(replier)
+    _seed_local_recipient('localuser')
+    document = _reply_doc(content='hello',
+                          tag=[{'type': 'Hashtag',
+                               'href': 'https://test.piefed.local/u/localuser'},
+                              {'name': 'decoy'}])
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    assert Notification.query.count() == 0
+
+
+def test_a_non_list_tag_is_not_scanned_for_mentions(app, db_session, redis_lock_only_double):
+    """`isinstance(request_json['object']['tag'], list)`. A bare dict here
+    has two keys, so a dropped `isinstance` conjunct would still clear the
+    following `len(...) > 1` (a 2-key dict's `len` is 2), then `for json_tag
+    in request_json['object']['tag']:` would iterate the dict's KEYS as bare
+    strings ('type', then 'href'). `'type' in 'type'` is a true substring
+    test, so the loop would go on to evaluate `'type'['type']` -- indexing a
+    string with a string -- which raises `TypeError`. That raise sits
+    OUTSIDE `create_post_reply`'s `try`/`except`, so it would propagate out
+    of the call uncaught rather than resolve to the plain successful reply
+    asserted below.
+    """
+    community, post, replier = _seed_scenario()
+    document = _reply_doc(content='hello',
+                          tag={'type': 'Mention',
+                              'href': 'https://test.piefed.local/u/localuser'})
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    assert Notification.query.count() == 0
+
+
+def test_the_self_mention_exclusion_produces_no_notification(app, db_session, redis_lock_only_double):
+    """`profile_id != reply_parent.author.ap_profile_id`. `reply_parent` is
+    `parent_comment if parent_comment else post` (app/activitypub/util.py);
+    every test in this module replies directly to the post, with no
+    `parent_comment`, so `reply_parent` is always `post` here and the
+    excluded author is the POST's author.
+
+    The comparison is only reachable for a Mention that already cleared the
+    local-host guard, so the excluded author must itself be local --
+    `_seed_scenario`'s ordinary `post.author` is a remote user on `PEER` and
+    can never match a 'test.piefed.local' href. `post.author` is reassigned
+    to a freshly-seeded local user for this test only.
+
+    Needs `_use_a_non_microblog_instance` for the same reason as the other
+    Mention-guard tests: a dropped `!=` comparison would still append the
+    profile id and reach the notify loop, and the unrelated microblog-mirror
+    defect would otherwise swallow the difference into the same
+    zero-Notification outcome.
+    """
+    community, post, replier = _seed_scenario()
+    _use_a_non_microblog_instance(replier)
+    parent_author = _seed_local_recipient('postauthor')
+    post.author = parent_author
+    db.session.commit()
+    document = _reply_doc(content='hello',
+                          tag=[_mention('postauthor'), {'name': 'decoy'}])
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    assert Notification.query.count() == 0
+
+
+# --- User flair ------------------------------------------------------------
+#
+# `request_json['object']['flair']` (Lemmy-style user flair on a comment),
+# read after the Mention scan and before `PostReply.new`. `UserFlair`
+# (app/models.py) has no factory in tests/factories.py -- it is a bare
+# `id`/`user_id`/`community_id`/`flair` row with no timestamps or ap_id, so
+# every test below seeds it by hand.
+
+
+def test_a_flair_on_a_user_with_none_creates_a_user_flair_row(app, db_session, redis_lock_only_double):
+    """Both conjuncts of `'flair' in request_json['object'] and request_json[
+    'object']['flair']` true, and the `UserFlair.query.filter(...).first()`
+    lookup finds nothing, so the `else:` branch creates. Only the CREATE
+    branch calls `.strip()` on the value (read directly off
+    app/activitypub/util.py: `flair=request_json['object']['flair'].strip()`)
+    -- padding the fixture value proves that, and distinguishes this branch
+    from the update branch below, which assigns the raw string.
+    """
+    community, post, replier = _seed_scenario()
+    document = _reply_doc(content='hello', flair='  gold  ')
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    flair = UserFlair.query.filter_by(user_id=replier.id, community_id=community.id).one()
+    assert flair.flair == 'gold'
+
+
+def test_a_flair_on_a_user_with_an_existing_flair_updates_it(app, db_session, redis_lock_only_double):
+    """The `if existing_flair:` branch. Unlike the create branch above, this
+    one assigns the raw value with no `.strip()` call (read directly off
+    app/activitypub/util.py: `existing_flair.flair = request_json['object'][
+    'flair']`) -- the fixture value below carries no padding, so this test
+    cannot be confused with the create branch's stripped assertion.
+
+    Asserted by a row count of exactly one, not merely that some row carries
+    the new value -- a create-instead-of-update bug would leave two rows,
+    one of them still matching this filter and satisfying a weaker
+    assertion.
+    """
+    community, post, replier = _seed_scenario()
+    existing = UserFlair(user_id=replier.id, community_id=community.id, flair='bronze')
+    db.session.add(existing)
+    db.session.commit()
+    document = _reply_doc(content='hello', flair='gold')
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    rows = UserFlair.query.filter_by(user_id=replier.id, community_id=community.id).all()
+    assert len(rows) == 1
+    assert rows[0].flair == 'gold'
+
+
+def test_an_absent_flair_key_leaves_an_existing_flair_unchanged(app, db_session, redis_lock_only_double):
+    """The `'flair' in request_json['object']` conjunct: no `flair` key at
+    all in the document. A non-zero baseline is seeded first, so a guard
+    that fired anyway (deleting a UserFlair row, say, or blanking its value)
+    would be caught, not just a guard that failed to CREATE one.
+    """
+    community, post, replier = _seed_scenario()
+    existing = UserFlair(user_id=replier.id, community_id=community.id, flair='bronze')
+    db.session.add(existing)
+    db.session.commit()
+    document = _reply_doc(content='hello')
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    rows = UserFlair.query.filter_by(user_id=replier.id, community_id=community.id).all()
+    assert len(rows) == 1
+    assert rows[0].flair == 'bronze'
+
+
+def test_a_falsy_flair_value_leaves_an_existing_flair_unchanged(app, db_session, redis_lock_only_double):
+    """The truthiness half of `'flair' in request_json['object'] and
+    request_json['object']['flair']` -- the key is present but empty, unlike
+    the test above where the key is absent entirely. A non-zero baseline is
+    seeded first for the same reason.
+    """
+    community, post, replier = _seed_scenario()
+    existing = UserFlair(user_id=replier.id, community_id=community.id, flair='bronze')
+    db.session.add(existing)
+    db.session.commit()
+    document = _reply_doc(content='hello', flair='')
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    rows = UserFlair.query.filter_by(user_id=replier.id, community_id=community.id).all()
+    assert len(rows) == 1
+    assert rows[0].flair == 'bronze'
