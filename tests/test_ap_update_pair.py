@@ -1035,32 +1035,39 @@ def test_a_microblog_reply_mention_already_sent_as_a_post_mention_is_suppressed(
         user_id=recipient.id, subtype='comment_mention').count() == 0
 
 
-def test_a_microblog_reply_mention_is_not_suppressed_by_a_comment_mention_in_the_chain(app, db_session, redis_lock_only_double):
+def test_a_microblog_reply_mention_mirroring_a_comment_mention_in_the_chain_is_suppressed(app, db_session, redis_lock_only_double):
     """De-duplication rule 3 -- "ignore Mentions mirroring a Mention someone
-    else made in the comment chain" -- DOES NOT SUPPRESS. This test pins the
-    behaviour, it does not endorse it.
+    else made in the comment chain".
 
-    Its `continue` is the last statement of the `for element in reply.path`
-    loop body, not of the enclosing `for json_tag in ...` loop:
+    The loop gathers the reply's ancestor ids and the query then asks, once,
+    whether this recipient already has a `comment_mention` notification for any
+    of them; its `continue` skips the enclosing `for json_tag in ...`
+    iteration, so a hit suppresses this Mention:
 
+        ids = []
         for element in reply.path:
             if element == 0 or element == reply.id:
                 continue
             ids.append(element)
-            notifs = db.session.query(Notification).filter(...).first()
-            if notifs:
-                continue
-
-    Continuing the innermost loop from its final statement skips nothing, and
-    `notifs` is never read after the loop. So the rule finds its row and has no
-    effect: execution falls through to rule 4 and then to the notification.
+        notifs = db.session.query(Notification).filter(...).first()
+        if notifs:
+            continue
 
     Seeded so rule 3's query matches exactly -- NOTIF_MENTION,
     subtype 'comment_mention', `targets->>'comment_id'` equal to the ancestor
     whose id is the only entry in `ids` -- and so nothing else suppresses: the
     ancestor is authored by the remote author, so rule 4 does not fire, and the
     seeded row carries the ancestor's url, so the `existing_notification` check
-    does not either.
+    does not either. test_a_microblog_reply_mention_still_notifies_when_no_rule
+    _applies runs the same fixture without the seeded row and gets the
+    notification, so the zero counted here is rule 3's doing and not the
+    fixture's.
+
+    Both a url-filtered count (no notification for THIS reply) and a
+    subtype-filtered count (the seeded row is the only `comment_mention` the
+    recipient has) are asserted: the second would be 1 either way without the
+    first, and the first alone would not notice a notification written under
+    some other url.
     """
     top, reply = _seed_microblog_chain()
     recipient = _seed_local_recipient()
@@ -1073,7 +1080,9 @@ def test_a_microblog_reply_mention_is_not_suppressed_by_a_comment_mention_in_the
     ))
 
     assert db.session.query(Notification).filter_by(
-        user_id=recipient.id, url=f'https://test.piefed.local/comment/{reply.id}').count() == 1
+        user_id=recipient.id, url=f'https://test.piefed.local/comment/{reply.id}').count() == 0
+    assert db.session.query(Notification).filter_by(
+        user_id=recipient.id, subtype='comment_mention').count() == 1
 
 
 def test_a_microblog_reply_mention_of_an_ancestor_comments_author_is_suppressed(app, db_session, redis_lock_only_double):

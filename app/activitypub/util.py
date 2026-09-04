@@ -3090,12 +3090,12 @@ def update_post_reply_from_activity(reply: PostReply, request_json: dict):
                                         if element == 0 or element == reply.id:
                                             continue
                                         ids.append(element)
-                                        notifs = db.session.query(Notification).filter(Notification.user_id == recipient.id,
-                                                                                       Notification.notif_type == NOTIF_MENTION,
-                                                                                       Notification.subtype == "comment_mention",
-                                                                                       Notification.targets.op("->>")("comment_id").cast(Integer).in_(ids)).first()
-                                        if notifs:
-                                            continue
+                                    notifs = db.session.query(Notification).filter(Notification.user_id == recipient.id,
+                                                                                   Notification.notif_type == NOTIF_MENTION,
+                                                                                   Notification.subtype == "comment_mention",
+                                                                                   Notification.targets.op("->>")("comment_id").cast(Integer).in_(ids)).first()
+                                    if notifs:
+                                        continue
 
                                     # ignore Mentions generated because a local user authored a comment further up in the comment chain
                                     # a top-level comment has no ancestors, and psycopg2 renders an empty tuple as an
