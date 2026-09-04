@@ -13,7 +13,6 @@ actor re-fetch that file scopes out, for all three tasks.
 `is_invalid_get_request_uri()` before respx ever sees the request, so a
 `.local` fixture fails for a reason unrelated to the code under test.
 """
-import json
 
 import httpx
 import pytest
@@ -197,8 +196,11 @@ def test_refreshing_a_user_with_no_instance_does_nothing(app, db_session, monkey
     would never reach this branch.
 
     This conjunct is the one `refresh_community_profile_task` and
-    `refresh_feed_profile_task` LACK, which is what makes them crash on the
-    same row. Their pins are in Tasks 5 and 7.
+    `refresh_feed_profile_task` LACKED, which used to make them crash on the
+    same row. Task 10 gave both the same guard;
+    `test_a_community_with_no_instance_is_skipped` and
+    `test_a_feed_with_no_instance_is_skipped` are its siblings' versions of
+    this test.
 
     THE OBSERVABLE IS A SPY ON `get_request`, NOT `block_outbound_http`. See
     `test_refreshing_a_user_on_a_dormant_instance_does_nothing` for why: the
@@ -230,8 +232,12 @@ def test_refreshing_a_user_on_a_dormant_instance_does_nothing(app, db_session, m
     THE OBSERVABLE IS A SPY ON `get_request`, NOT `block_outbound_http`.
     Dropping this conjunct lets the task reach the fetch, where respx raises
     `AllMockedAssertionError` -- not an `httpx.HTTPError`, so the task's bare
-    `except:` at util.py:669 catches it, `signed_get_request` fails too, the
-    inner bare `except:` at :674 catches that, and the task returns silently.
+    `except:` (the one guarding the `signed_get_request` fallback, below the
+    `except httpx.HTTPError:` retry) catches it, `signed_get_request` fails
+    too, the inner bare `except:` around it catches that, and the task returns
+    silently. Both are cited by content rather than by line number: line
+    numbers in this file went stale once already when Task 10 inserted guards
+    into the two sibling tasks.
     The guard firing and not firing are then indistinguishable via outbound
     HTTP. Asserting the fetch was never attempted survives that swallow.
 
@@ -282,13 +288,15 @@ def test_a_failed_fetch_is_retried_once(app, db_session, http_mock, no_real_slee
 
 def test_a_malformed_actor_document_counts_an_instance_failure(
         app, db_session, http_mock):
-    """PINS THE CORRECT BEHAVIOUR, which is the control for two defects.
+    """PINS THE CORRECT BEHAVIOUR, which was the control for two defects.
 
     `refresh_user_profile_task` wraps `actor_data.json()` in
     `try/except JSONDecodeError`, increments `user.instance.failures` and
     returns. `refresh_community_profile_task` and `refresh_feed_profile_task`
-    call `.json()` unguarded and raise instead -- pinned in Tasks 5 and 7 and
-    fixed in Task 10.
+    called `.json()` unguarded and raised instead; Task 10 gave both the same
+    handler, so all three now behave alike -- see
+    `test_a_malformed_community_document_counts_an_instance_failure` and
+    `test_a_malformed_feed_document_counts_an_instance_failure`.
 
     `failures` is seeded to 5 because it defaults to 0: an assertion of `1`
     against a default of `0` cannot tell an increment from an assignment, and
@@ -1024,20 +1032,18 @@ def test_refreshing_a_feed_applies_the_peers_document(app, db_session, http_mock
     """`refresh_feed_profile_task` always fetches -- it takes a feed id alone,
     with no `activity_json` parameter, unlike the community task.
 
-    Deviation from the brief: after applying the actor document,
-    `refresh_feed_profile_task` unconditionally calls
-    `get_request(feed.ap_following_url)` with no guard and no try/except --
-    unlike the owners fetch a few lines above it, which is gated on
-    `feed.ap_moderators_url` being set. `_remote_feed()` leaves
-    `ap_following_url` at its column default of `None`, and
-    `get_request(None)` raises `httpx.HTTPError` (via
-    `is_invalid_get_request_uri`) before respx ever sees a request -- so the
-    brief's test as written crashes before reaching its own assertion.
-    `ap_following_url` is set and mocked to an empty collection here so the
-    task's unconditional tail does not turn this happy-path test into an
-    unrelated failure. This assignment exists to route around the ungated
-    fetch pinned by `test_a_feed_with_no_following_url_crashes` below, not as
-    incidental setup -- without it this test would hit that same crash.
+    After applying the actor document the task fetches the feed's `/following`
+    collection, now gated on `feed.ap_following_url` being set (Task 10; it
+    was ungated, and `_remote_feed()` leaves the column at its default of
+    `None`, so this test used to crash on `get_request(None)` before reaching
+    its own assertion).
+
+    `ap_following_url` IS SET AND MOCKED DELIBERATELY, not as leftover
+    workaround: the happy path is a feed whose peer sent a `following` key, so
+    driving the gate's PRESENT side is what makes this the happy path rather
+    than a second copy of `test_a_feed_with_no_following_url_is_skipped`,
+    which drives the absent side. The collection is served empty so the
+    feed-item loop stays out of a test about applying the actor document.
     """
     feed = _remote_feed()
     feed.ap_following_url = f'https://{PEER}/f/news/following'
@@ -1163,9 +1169,14 @@ def test_a_feed_owners_url_is_fetched_and_recorded(app, db_session, http_mock):
     all, so this is new coverage rather than a restatement.
 
     `ap_following_url` is set and mocked to an empty collection for the same
-    reason as `test_refreshing_a_feed_applies_the_peers_document`: the task's
-    own ungated tail would otherwise crash this test before it reaches its own
-    assertion (pinned separately by `test_a_feed_with_no_following_url_crashes`).
+    reason as `test_refreshing_a_feed_applies_the_peers_document`: the feed
+    this test describes is an ordinary remote one whose peer sent a
+    `following` key, so the tail's gate is satisfied and its collection is
+    served empty to keep the feed-item loop out of a test about owners. Before
+    Task 10 gated that fetch the assignment was mandatory rather than
+    descriptive -- without it the task crashed on `get_request(None)` before
+    reaching this test's assertion. The unset column is now covered on its own
+    by `test_a_feed_with_no_following_url_is_skipped`.
     """
     feed = _remote_feed()
     feed.ap_following_url = f'https://{PEER}/f/news/following'
@@ -1194,6 +1205,12 @@ def test_no_feed_owners_url_means_no_owners_fetch(app, db_session, http_mock):
     membership is seeded first with `is_owner=True` so "unchanged" is
     distinguishable from "never created" -- the same contrast the community
     followers pair draws with a non-default count.
+
+    `ap_following_url` is set and served empty for the reason given in
+    `test_refreshing_a_feed_applies_the_peers_document`: it keeps this feed an
+    ordinary remote one, so the only absent collection is the owners one this
+    test is about. Before Task 10 gated the following fetch the assignment was
+    load-bearing rather than descriptive.
     """
     feed = _remote_feed()
     feed.ap_following_url = f'https://{PEER}/f/news/following'
@@ -1253,14 +1270,14 @@ def test_a_failed_feed_fetch_is_retried_once(
         app, db_session, http_mock, no_real_sleeping):
     """The feed task's retry, identical in shape to the community task's.
 
-    Deviation from the brief: as in `test_refreshing_a_feed_applies_the_peers_document`
-    above, `refresh_feed_profile_task` unconditionally fetches
-    `feed.ap_following_url` after applying the document, with no guard. The
-    brief's version of this test does not set that column, which would crash
-    on `get_request(None)` before reaching this test's own assertion.
-    `ap_following_url` is set and mocked to an empty collection here so the
-    retry path is what's under test, not the ungated tail pinned separately by
-    `test_a_feed_with_no_following_url_crashes`.
+    `ap_following_url` is set and served empty as in
+    `test_refreshing_a_feed_applies_the_peers_document` above: the retry is
+    what's under test, so the feed is kept an ordinary remote one and its
+    following collection is emptied rather than left to add a second variable.
+    Before Task 10 gated that fetch the assignment was mandatory -- without it
+    the task crashed on `get_request(None)` before reaching this test's
+    assertion. The unset column now has its own test,
+    `test_a_feed_with_no_following_url_is_skipped`.
     """
     feed = _remote_feed()
     feed.ap_following_url = f'https://{PEER}/f/news/following'
@@ -1289,6 +1306,11 @@ def test_a_user_fetch_failing_outside_httpx_falls_back_to_a_signed_get(
     error, and it is registered rather than fixed: a bare except also catches
     KeyboardInterrupt and SystemExit, so changing it changes which failures
     retry and which propagate.
+
+    `test_a_community_fetch_failing_outside_httpx_propagates` and
+    `test_a_feed_fetch_failing_outside_httpx_propagates` are the other half of
+    this asymmetry: the same non-httpx failure raises out of the two sibling
+    tasks. Task 10 did not close the gap; it left it registered, as here.
     """
     site = seed_signing_site()
     user = _remote_user()
@@ -1310,3 +1332,81 @@ def test_a_user_fetch_failing_outside_httpx_falls_back_to_a_signed_get(
     assert calls and calls[0][0] == user.ap_public_url
     assert calls[0][1] == site.private_key
     assert user.title == 'Signed'
+
+
+def test_a_community_fetch_failing_outside_httpx_propagates(
+        app, db_session, http_mock, monkeypatch):
+    """THE OTHER HALF OF `test_a_user_fetch_failing_outside_httpx_falls_back_to_a_signed_get`,
+    and the test that keeps `refresh_community_profile_task`'s
+    `except Exception: session.rollback(); raise` covered.
+
+    That handler used to be reached by
+    `test_a_community_with_no_instance_is_skipped` and
+    `test_a_malformed_community_document_counts_an_instance_failure` back when
+    both pinned crashes. Task 10 fixed both crashes, which vacated the
+    handler: with the guards in place no other test in this file makes this
+    task raise. This one does, deliberately, through the one remaining
+    reachable route.
+
+    That route is the asymmetry itself. The user task catches a non-httpx
+    fetch failure with a bare `except:` and retries with `signed_get_request`;
+    the community task's first `get_request` is wrapped only in
+    `except httpx.HTTPError:`, so anything else propagates straight out. A
+    peer requiring HTTP signatures is refreshable for users and raises for
+    communities -- registered, not fixed.
+
+    `RuntimeError` is raised rather than an `httpx.HTTPError` precisely
+    because an `httpx.HTTPError` would take the retry path
+    (`test_a_community_whose_retry_also_fails_returns_quietly`) and return
+    quietly instead of reaching the handler.
+
+    The seeded title is asserted after the raise because the rollback must not
+    leave a half-applied document behind. Note the rollback itself is not
+    independently observable here: nothing uncommitted is pending at the only
+    reachable raise point, so this test kills the `raise` and not the
+    `session.rollback()` beside it. That is registered rather than papered
+    over with an assertion that could not fail.
+    """
+    community = _remote_community()
+    community.title = 'Before'
+    db.session.commit()
+
+    def exploding_get_request(uri, params=None, headers=None):
+        raise RuntimeError('not an httpx error')
+
+    monkeypatch.setattr(ap_util, 'get_request', exploding_get_request)
+
+    with pytest.raises(RuntimeError, match='not an httpx error'):
+        refresh_community_profile_task(community.id, None)
+
+    db.session.refresh(community)
+    assert community.title == 'Before'
+
+
+def test_a_feed_fetch_failing_outside_httpx_propagates(
+        app, db_session, http_mock, monkeypatch):
+    """The feed task's twin of the community test above, and what keeps
+    `refresh_feed_profile_task`'s `except Exception: session.rollback(); raise`
+    covered after Task 10 fixed all three of the crashes that used to reach
+    it -- the NULL instance, the malformed document and the ungated following
+    fetch.
+
+    Same asymmetry, same reason for `RuntimeError` over `httpx.HTTPError`
+    (which would take the retry path instead), and the same registered limit:
+    the `raise` is killed by this test, the `session.rollback()` beside it is
+    not observable at the only reachable raise point.
+    """
+    feed = _remote_feed()
+    feed.title = 'Before'
+    db.session.commit()
+
+    def exploding_get_request(uri, params=None, headers=None):
+        raise RuntimeError('not an httpx error')
+
+    monkeypatch.setattr(ap_util, 'get_request', exploding_get_request)
+
+    with pytest.raises(RuntimeError, match='not an httpx error'):
+        refresh_feed_profile_task(feed.id)
+
+    db.session.refresh(feed)
+    assert feed.title == 'Before'
