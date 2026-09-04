@@ -3019,7 +3019,10 @@ def update_post_reply_from_activity(reply: PostReply, request_json: dict):
         if 'language' in request_json['object'] and isinstance(request_json['object']['language'], dict):
             language = find_language_or_create(request_json['object']['language']['identifier'],
                                                request_json['object']['language']['name'])
-            reply.language_id = language.id
+            # find_language_or_create() can return a row it has only add()ed, whose id is
+            # still None (the app factory sets autoflush=False). Assign the relationship
+            # and let SQLAlchemy resolve the id at flush, as the tag and flair arms do.
+            reply.language = language
 
         # Distinguished
         if 'distinguished' in request_json['object']:
@@ -3190,8 +3193,12 @@ def update_post_from_activity(post: Post, request_json: dict):
                                                    request_json['object']['language']['name'])
         elif 'contentMap' in request_json['object'] and isinstance(request_json['object']['contentMap'], dict):
             new_language = find_language(next(iter(request_json['object']['contentMap'])))
-        if new_language and (new_language.id != old_language_id):
-            post.language_id = new_language.id
+        # find_language_or_create() can return a row it has only add()ed, whose id is still
+        # None (the app factory sets autoflush=False), so `id is None` means "brand new" and
+        # not "same as a post that has no language". Assign the relationship and let
+        # SQLAlchemy resolve the id at flush, as the tag and flair arms do.
+        if new_language and (new_language.id is None or new_language.id != old_language_id):
+            post.language = new_language
 
         # Tags
         if 'tag' in request_json['object'] and isinstance(request_json['object']['tag'], list):
