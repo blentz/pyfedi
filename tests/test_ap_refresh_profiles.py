@@ -482,15 +482,16 @@ def test_attachment_property_values_become_extra_fields(app, db_session, http_mo
 def test_a_service_actor_type_marks_the_user_as_a_bot(app, db_session, http_mock):
     """`if 'type' in activity_json: user.bot = True if activity_json['type'] ==
     'Service' else False` -- a `Service` actor type marks the user as a bot.
-    No `else` exists, so absent leaves `user.bot` alone, which every other
-    test in this file already exercises via `_person_document`'s `'Person'`
-    baseline together with the default `bot=False`.
 
-    `user.bot` is seeded to `True` first so a broken guard that always
-    assigns `False` (or never assigns at all) both fail visibly.
+    `user.bot` is seeded to `False` -- the column's own default -- but stated
+    explicitly rather than left to it, so a later default change cannot
+    silently hollow the test out. Seeding the contrary value here matters:
+    `False` differs from the `True` this test asserts, so the assertion can
+    only pass if the assignment actually ran, rather than passing the same
+    way whether the branch runs or not.
     """
     user = _remote_user()
-    user.bot = True
+    user.bot = False
     db.session.commit()
     _serve(http_mock, user.ap_public_url, _person_document(fields={'type': 'Service'}))
 
@@ -498,6 +499,27 @@ def test_a_service_actor_type_marks_the_user_as_a_bot(app, db_session, http_mock
 
     db.session.refresh(user)
     assert user.bot is True
+
+
+def test_a_non_service_actor_type_leaves_the_user_not_a_bot(app, db_session, http_mock):
+    """The `else` on the same ternary -- a `type` present but not `'Service'`
+    sets `user.bot` to `False`. `_person_document`'s baseline always carries
+    `'type': 'Person'`, so this is the branch pair's actual "off" side; `type`
+    is never absent from a real peer document, so there is no absent-key case
+    to exercise here.
+
+    `user.bot` is seeded to `True` first so the assertion of `False` proves
+    the assignment ran, rather than resting on the column's own default.
+    """
+    user = _remote_user()
+    user.bot = True
+    db.session.commit()
+    _serve(http_mock, user.ap_public_url, _person_document())
+
+    refresh_user_profile_task(user.id)
+
+    db.session.refresh(user)
+    assert user.bot is False
 
 
 def test_an_absent_accept_private_messages_falls_back_to_all_instances(app, db_session, http_mock):
