@@ -2202,6 +2202,23 @@ def test_comments_enabled_is_applied_when_present(app, db_session, redis_lock_on
     assert post.comments_enabled is False
 
 
+def test_a_post_updated_timestamp_is_parsed(app, db_session, redis_lock_only_double):
+    """`ap_updated` comes from the document's `updated` when it parses,
+    mirroring the reply side's `test_a_reply_updated_timestamp_is_parsed`.
+
+    Asserting the parsed VALUE, not merely that it is set -- `utcnow()` is
+    what the fallback would give, so "is not None" would pass either way.
+    """
+    post = _seed_post()
+
+    update_post_from_activity(post, _update(
+        name='t', content='x', updated='2020-01-02T03:04:05+00:00', type='Note',
+    ))
+
+    assert post.ap_updated.year == 2020
+    assert post.ap_updated.month == 1
+
+
 def test_a_post_unparseable_updated_falls_back_to_now(app, db_session, redis_lock_only_double):
     """The post side's `except ValueError`, mirroring the reply's."""
     post = _seed_post()
