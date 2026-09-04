@@ -178,6 +178,7 @@ def test_refreshing_an_unknown_user_id_does_nothing(app, db_session, monkeypatch
 
     def _spy(*a, **kw):
         calls.append(a)
+        return httpx.Response(200, json=_person_document())
 
     monkeypatch.setattr(ap_util, 'get_request', _spy)
 
@@ -207,6 +208,7 @@ def test_refreshing_a_user_with_no_instance_does_nothing(app, db_session, monkey
 
     def _spy(*a, **kw):
         calls.append(a)
+        return httpx.Response(200, json=_person_document())
 
     monkeypatch.setattr(ap_util, 'get_request', _spy)
 
@@ -226,8 +228,14 @@ def test_refreshing_a_user_on_a_dormant_instance_does_nothing(app, db_session, m
     `AllMockedAssertionError` -- not an `httpx.HTTPError`, so the task's bare
     `except:` at util.py:669 catches it, `signed_get_request` fails too, the
     inner bare `except:` at :674 catches that, and the task returns silently.
-    The guard firing and not firing are then indistinguishable. Asserting the
-    fetch was never attempted survives that swallow.
+    The guard firing and not firing are then indistinguishable via outbound
+    HTTP. Asserting the fetch was never attempted survives that swallow.
+
+    The spy returns a real `httpx.Response` (rather than `None`) so that, if
+    this conjunct is dropped, the task runs to completion -- fetches,
+    applies the document, and returns normally -- and the kill lands on
+    `assert calls == []` itself, not on an incidental crash one line past the
+    spy.
     """
     user = _remote_user()
     user.instance.dormant = True
@@ -236,6 +244,7 @@ def test_refreshing_a_user_on_a_dormant_instance_does_nothing(app, db_session, m
 
     def _spy(*a, **kw):
         calls.append(a)
+        return httpx.Response(200, json=_person_document())
 
     monkeypatch.setattr(ap_util, 'get_request', _spy)
 
