@@ -2630,7 +2630,7 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
             return None
 
         body = body_html = ''
-        if 'content' in request_json['object']:  # Kbin, Mastodon, etc provide their posts as html
+        if 'content' in request_json['object'] and request_json['object']['content'] is not None:  # Kbin, Mastodon, etc provide their posts as html
             if not (request_json['object']['content'].startswith('<p>') or request_json['object']['content'].startswith('<blockquote>')):
                 request_json['object']['content'] = '<p>' + request_json['object']['content'] + '</p>'
             body_html = allowlist_html(request_json['object']['content'])

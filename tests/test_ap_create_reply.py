@@ -370,6 +370,67 @@ def test_a_source_with_a_non_markdown_media_type_leaves_the_html_body(app, db_se
     assert reply.body == 'from html'
 
 
+def test_a_reply_with_null_content_is_created_with_an_empty_body(app, db_session, redis_lock_only_double):
+    """A peer sending `content` as an explicit `null` used to raise
+    `AttributeError` on the `content.startswith('<p>')` call that opens the
+    arm -- and, unlike the crash D243 produces, that raise was NOT swallowed:
+    the content block sits ABOVE this function's `try`/`except Exception`, so
+    it propagated out of `create_post_reply` to its caller.
+
+    `update_post_reply_from_activity` guards
+    `request_json['object']['content'] is not None`; this function now carries
+    the same conjunct, so the arm is skipped and `body`/`body_html` keep the
+    `''` they were initialised with two lines earlier.
+
+    The assertions read the persisted row, not the returned object.
+    `distinguished` is sent alongside and asserted for the reason the twin's
+    `test_a_reply_with_null_content_keeps_its_body` sends it: a guard that
+    abandoned the whole reply, rather than just the content arm, would leave
+    no row to read at all, and one that abandoned everything after the
+    content block would not carry the flag the document set.
+    """
+    community, post, replier = _seed_scenario()
+    document = _reply_doc(content=None, distinguished=True)
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    persisted = PostReply.query.filter_by(ap_id=f'https://{PEER}/comment/1').one()
+    assert persisted.body == ''
+    assert persisted.body_html == ''
+    assert persisted.distinguished is True
+
+
+def test_a_reply_missing_the_content_key_is_created_with_an_empty_body(app, db_session, redis_lock_only_double):
+    """The guard's OTHER conjunct, `'content' in request_json['object']`.
+
+    Written because the mutation run for the fix above found it unkilled:
+    every other document in this module carries `content`, so a mutant that
+    drops the membership conjunct and leaves only `request_json['object']
+    ['content'] is not None` raises `KeyError` on a document that omits the
+    key -- and, before this test, nothing in the file sent one. That gap
+    predates Fix A (the old one-conjunct guard had it too) but the fix is
+    what put a second conjunct there to confuse with the first, so it is
+    closed here rather than left.
+
+    This is the create-path twin of
+    `test_a_reply_missing_content_key_leaves_the_body_untouched` in
+    tests/test_ap_update_pair.py, and sends `distinguished` alongside for the
+    same reason the null-content test above does.
+    """
+    community, post, replier = _seed_scenario()
+    document = _reply_doc(distinguished=True)
+    assert 'content' not in document['object']
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    persisted = PostReply.query.filter_by(ap_id=f'https://{PEER}/comment/1').one()
+    assert persisted.body == ''
+    assert persisted.body_html == ''
+    assert persisted.distinguished is True
+
+
 def _make_language(code, name):
     """Seed and commit a `Language` row directly, bypassing
     `find_language_or_create`.
