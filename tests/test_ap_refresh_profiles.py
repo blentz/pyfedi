@@ -763,7 +763,9 @@ def test_refreshing_a_feed_applies_the_peers_document(app, db_session, http_mock
     brief's test as written crashes before reaching its own assertion.
     `ap_following_url` is set and mocked to an empty collection here so the
     task's unconditional tail does not turn this happy-path test into an
-    unrelated failure.
+    unrelated failure. This assignment exists to route around the ungated
+    fetch pinned by `test_a_feed_with_no_following_url_crashes` below, not as
+    incidental setup -- without it this test would hit that same crash.
     """
     feed = _remote_feed()
     feed.ap_following_url = f'https://{PEER}/f/news/following'
@@ -819,4 +821,27 @@ def test_a_malformed_feed_document_crashes(app, db_session, http_mock):
     _serve(http_mock, feed.ap_public_url, text='<html>not json</html>')
 
     with pytest.raises(json.JSONDecodeError, match='Expecting value'):
+        refresh_feed_profile_task(feed.id)
+
+
+def test_a_feed_with_no_following_url_crashes(app, db_session, http_mock):
+    """PINS A CRASH. DO NOT FIX -- Task 10 does.
+
+    `refresh_feed_profile_task` fetches `feed.ap_following_url` UNGATED
+    (app/activitypub/util.py), where every other collection fetch in the trio
+    is guarded by a truthiness check on its url: `community.ap_moderators_url`,
+    `community.ap_followers_url`, `community.ap_featured_url` and even this
+    task's own `feed.ap_moderators_url`. Four gated, one not.
+
+    `Feed.ap_following_url` has no default, so a feed that arrives without a
+    `following` key -- which `make_feed` reproduces -- reaches `get_request(None)`
+    and raises. The peer chooses whether to send that key, so this is remotely
+    triggerable, exactly like the malformed-document crash above.
+    """
+    feed = _remote_feed()
+    feed.ap_following_url = None
+    db.session.commit()
+    _serve(http_mock, feed.ap_public_url, _feed_document())
+
+    with pytest.raises(httpx.HTTPError, match='invalid uri'):
         refresh_feed_profile_task(feed.id)
