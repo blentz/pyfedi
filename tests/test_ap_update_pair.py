@@ -21,6 +21,7 @@ tests that would need one elsewhere say so.
 import contextlib
 
 import pytest
+from sqlalchemy.exc import ProgrammingError
 
 from app import db
 from app.activitypub.util import (update_post_from_activity,
@@ -741,3 +742,393 @@ def test_a_reply_mention_with_a_non_string_href_notifies_nobody(app, db_session,
     ))
 
     assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
+
+def _seed_microblog_chain(length=2):
+    """A comment chain on a microblog instance, with `path` and `parent_id`
+    populated by hand.
+
+    Two facts about `path` this helper exists to supply. First, its shape:
+    `PostReply.new` (app/models.py) sets `path` to `[0, reply.id]` for a
+    top-level comment, and to `parent.path[:] + [reply.id]` for a child -- so a
+    chain's path is a leading 0 followed by every ancestor's id in order,
+    ending with the row's own id. Second, `tests.factories.make_post_reply`
+    sets neither `path` nor `parent_id`; the column has no default, so a
+    factory-made reply's `path` is NULL. Production's de-duplication block does
+    `for element in reply.path`, which would raise TypeError on None, so this
+    helper sets both columns to what `PostReply.new` would have written.
+
+    `length` is the number of comments in the chain. Returns them oldest-first;
+    the LAST element is the reply to hand to `update_post_reply_from_activity`,
+    and the earlier ones are the ancestors its `path` names.
+
+    Every comment is authored by the post's remote author, not by the local
+    recipient and not by the post author-of-record where a test has moved that
+    -- each suppression test moves exactly the one row its own rule keys on.
+    """
+    top = _seed_reply(software='mastodon')
+    top.path = [0, top.id]
+    db.session.commit()
+    chain = [top]
+    author = db.session.query(User).get(top.user_id)
+    for _ in range(length - 1):
+        parent = chain[-1]
+        child = make_post_reply(parent.post, author, body='child')
+        child.parent_id = parent.id
+        child.path = parent.path + [child.id]
+        db.session.commit()
+        chain.append(child)
+    return chain
+
+
+def _seed_notification(recipient, subtype, targets, url):
+    """A pre-existing Notification row for the de-duplication queries to find.
+
+    `url` is passed explicitly because production's own later
+    `existing_notification` check matches on url alone. A seeded row carrying
+    the url of the reply under test would suppress the notification through
+    THAT check instead of through the de-duplication rule the test is aiming
+    at, so each caller gives its seeded row a url belonging to a different
+    object.
+    """
+    notification = Notification(user_id=recipient.id, title='seeded', url=url,
+                                notif_type=NOTIF_MENTION, subtype=subtype,
+                                targets=targets)
+    db.session.add(notification)
+    db.session.commit()
+    return notification
+
+
+def test_a_reply_whose_parent_row_is_missing_notifies_nobody(app, db_session, redis_lock_only_double):
+    """The `reply_parent` conjunct of `if reply_parent and profile_id !=
+    reply_parent.author.ap_profile_id`, on its own.
+
+    `reply_parent` is `PostReply.query.get(reply.parent_id)` when `parent_id`
+    is set, and `reply.post` otherwise -- so the only way it comes back falsy
+    is a `parent_id` pointing at a row that is not there. That is what this
+    seeds: a `parent_id` no PostReply has.
+
+    Distinguishable from the sibling conjunct's test because dropping
+    `reply_parent and` here does not merely let the Mention through -- it
+    evaluates `None.author`, so the mutant raises AttributeError rather than
+    quietly notifying.
+    """
+    reply = _seed_reply()
+    reply.parent_id = 999999
+    db.session.commit()
+    recipient = _seed_local_recipient()
+
+    update_post_reply_from_activity(reply, _update(
+        content='hello',
+        tag=[{'type': 'Hashtag', 'name': '#x'}, _mention()],
+    ))
+
+    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
+
+
+def test_a_reply_mention_of_the_parent_authors_own_profile_notifies_nobody(app, db_session, redis_lock_only_double):
+    """The `profile_id != reply_parent.author.ap_profile_id` conjunct -- the
+    self-mention exclusion -- on its own.
+
+    A reply with no `parent_id` takes `reply_parent = reply.post`, so the
+    profile compared against is the POST author's. Seeded by making the local
+    recipient the post's author, which is the shape a microblog reply to a
+    local user's post arrives in: the Mention names the person being replied
+    to, who does not need telling.
+
+    The instance is left at `_seed_reply`'s 'lemmy' so the de-duplication block
+    is skipped: its first rule (`recipient.id == reply.post.user_id`) keys on
+    exactly the same row this test moves, and running both would make the kill
+    unattributable.
+    """
+    reply = _seed_reply()
+    recipient = _seed_local_recipient()
+    reply.post.user_id = recipient.id
+    db.session.commit()
+
+    update_post_reply_from_activity(reply, _update(
+        content='hello',
+        tag=[{'type': 'Hashtag', 'name': '#x'}, _mention()],
+    ))
+
+    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
+
+
+def test_a_reply_mention_of_an_unregistered_local_name_notifies_nobody(app, db_session, redis_lock_only_double):
+    """The `if recipient:` existence check that follows
+    `User.query.filter_by(ap_profile_id=profile_id, ap_id=None).first()`.
+
+    The href is on THIS server -- so `startswith('https://' + SERVER_NAME)`
+    passes and the case-mismatch test's guard is not what stops it -- but names
+    a local user who does not exist. A different local user IS seeded, so the
+    lookup is against a populated table rather than an empty one.
+
+    Dropping `if recipient:` makes the next line evaluate `None.id`, so the
+    mutant raises AttributeError rather than reproducing this no-notification
+    outcome.
+    """
+    reply = _seed_reply()
+    existing = _seed_local_recipient()
+
+    update_post_reply_from_activity(reply, _update(
+        content='hello',
+        tag=[{'type': 'Hashtag', 'name': '#x'}, _mention(name='nobody')],
+    ))
+
+    assert db.session.query(Notification).count() == 0
+    assert existing.unread_notifications == 0
+
+
+def test_a_microblog_reply_mention_still_notifies_when_no_rule_applies(app, db_session, redis_lock_only_double):
+    """The de-duplication block runs -- the instance is 'mastodon', which is in
+    MICROBLOG_APPS -- and none of its four rules matches, so the notification is
+    still created.
+
+    This test exists so the suppression tests below cannot pass for the wrong
+    reason: it proves the path reaches the notification at all under the same
+    fixture they use. Each of those tests is a "zero notifications" assertion,
+    which on its own is satisfied by any fixture that never got near the
+    notification.
+
+    A two-comment chain rather than a lone reply, because a lone reply's path
+    is `[0, reply.id]` -- both entries skipped by the loop's own `continue` --
+    which leaves the fourth rule's `id IN :ids` with an empty tuple. See
+    test_a_top_level_microblog_reply_mention_raises_on_its_empty_id_list.
+    """
+    _, reply = _seed_microblog_chain()
+    recipient = _seed_local_recipient()
+
+    update_post_reply_from_activity(reply, _update(
+        content='hello',
+        tag=[{'type': 'Hashtag', 'name': '#x'}, _mention()],
+    ))
+
+    assert db.session.query(Notification).filter_by(
+        user_id=recipient.id, notif_type=NOTIF_MENTION).count() == 1
+
+
+def test_a_microblog_reply_mention_of_the_post_author_is_suppressed(app, db_session, redis_lock_only_double):
+    """De-duplication rule 1: `if recipient.id == reply.post.user_id: continue`
+    -- "ignore Mention of post author".
+
+    The post's author is moved to the local recipient while every comment in
+    the chain keeps the remote author, so the reply's PARENT author is still
+    somebody else. That separation is load-bearing: with a top-level reply,
+    `reply_parent` is `reply.post` and the earlier self-mention exclusion would
+    suppress the Mention before this rule ever ran, and the kill would belong
+    to that guard instead.
+    """
+    _, reply = _seed_microblog_chain()
+    recipient = _seed_local_recipient()
+    reply.post.user_id = recipient.id
+    db.session.commit()
+
+    update_post_reply_from_activity(reply, _update(
+        content='hello',
+        tag=[{'type': 'Hashtag', 'name': '#x'}, _mention()],
+    ))
+
+    assert db.session.query(Notification).filter_by(
+        user_id=recipient.id, subtype='comment_mention').count() == 0
+
+
+def test_a_microblog_reply_mention_already_sent_as_a_post_mention_is_suppressed(app, db_session, redis_lock_only_double):
+    """De-duplication rule 2 -- "ignore Mentions mirroring a Mention made in a
+    post body". The query is
+
+        Notification.user_id == recipient.id,
+        Notification.notif_type == NOTIF_MENTION,
+        Notification.subtype == "post_mention",
+        Notification.targets.op("->>")("post_id").cast(Integer) == reply.post_id
+
+    so all four columns must match. `targets` is a JSON column and `->>`
+    extracts the value as text before the cast to Integer, so the seeded
+    `post_id` is stored as the int it is in production's own `targets_data`.
+
+    The seeded row's url is the post's, not the reply's, so production's later
+    `existing_notification` url check cannot be what suppresses this instead.
+    The assertion filters on `subtype='comment_mention'` because the seeded row
+    is itself a NOTIF_MENTION for this recipient -- an unfiltered count would
+    be 1 either way.
+    """
+    _, reply = _seed_microblog_chain()
+    recipient = _seed_local_recipient()
+    _seed_notification(recipient, 'post_mention', {'post_id': reply.post_id},
+                       f'https://test.piefed.local/post/{reply.post_id}')
+
+    update_post_reply_from_activity(reply, _update(
+        content='hello',
+        tag=[{'type': 'Hashtag', 'name': '#x'}, _mention()],
+    ))
+
+    assert db.session.query(Notification).filter_by(
+        user_id=recipient.id, subtype='comment_mention').count() == 0
+
+
+def test_a_microblog_reply_mention_is_not_suppressed_by_a_comment_mention_in_the_chain(app, db_session, redis_lock_only_double):
+    """De-duplication rule 3 -- "ignore Mentions mirroring a Mention someone
+    else made in the comment chain" -- DOES NOT SUPPRESS. This test pins the
+    behaviour, it does not endorse it.
+
+    Its `continue` is the last statement of the `for element in reply.path`
+    loop body, not of the enclosing `for json_tag in ...` loop:
+
+        for element in reply.path:
+            if element == 0 or element == reply.id:
+                continue
+            ids.append(element)
+            notifs = db.session.query(Notification).filter(...).first()
+            if notifs:
+                continue
+
+    Continuing the innermost loop from its final statement skips nothing, and
+    `notifs` is never read after the loop. So the rule finds its row and has no
+    effect: execution falls through to rule 4 and then to the notification.
+
+    Seeded so rule 3's query matches exactly -- NOTIF_MENTION,
+    subtype 'comment_mention', `targets->>'comment_id'` equal to the ancestor
+    whose id is the only entry in `ids` -- and so nothing else suppresses: the
+    ancestor is authored by the remote author, so rule 4 does not fire, and the
+    seeded row carries the ancestor's url, so the `existing_notification` check
+    does not either.
+    """
+    top, reply = _seed_microblog_chain()
+    recipient = _seed_local_recipient()
+    _seed_notification(recipient, 'comment_mention', {'comment_id': top.id},
+                       f'https://test.piefed.local/comment/{top.id}')
+
+    update_post_reply_from_activity(reply, _update(
+        content='hello',
+        tag=[{'type': 'Hashtag', 'name': '#x'}, _mention()],
+    ))
+
+    assert db.session.query(Notification).filter_by(
+        user_id=recipient.id, url=f'https://test.piefed.local/comment/{reply.id}').count() == 1
+
+
+def test_a_microblog_reply_mention_of_an_ancestor_comments_author_is_suppressed(app, db_session, redis_lock_only_double):
+    """De-duplication rule 4 -- "ignore Mentions generated because a local user
+    authored a comment further up in the comment chain":
+
+        ids = tuple(ids)
+        user_ids = db.session.execute(text('SELECT user_id FROM "post_reply" WHERE id IN :ids'), {'ids': ids}).scalars()
+        if recipient.id in user_ids:
+            continue
+
+    `ids` is what the rule-3 loop accumulated: every entry of `reply.path`
+    except the leading 0 and the reply's own id -- that is, its ancestors.
+
+    A three-comment chain, with the OLDEST comment reassigned to the local
+    recipient. Depth three is required: in a two-comment chain the only
+    ancestor is the reply's own parent, and making the recipient its author
+    would trip the earlier `profile_id != reply_parent.author.ap_profile_id`
+    exclusion first, so the kill would belong to that guard. Here the parent
+    (the middle comment) keeps the remote author, and the post's author is
+    untouched, so rules 1 and 2 do not fire either.
+    """
+    top, _, reply = _seed_microblog_chain(3)
+    recipient = _seed_local_recipient()
+    top.user_id = recipient.id
+    db.session.commit()
+
+    update_post_reply_from_activity(reply, _update(
+        content='hello',
+        tag=[{'type': 'Hashtag', 'name': '#x'}, _mention()],
+    ))
+
+    assert db.session.query(Notification).filter_by(
+        user_id=recipient.id, subtype='comment_mention').count() == 0
+
+
+def test_a_top_level_microblog_reply_mention_raises_on_its_empty_id_list(app, db_session, redis_lock_only_double):
+    """A BUG, pinned rather than endorsed, and the reason every other test here
+    uses a chain.
+
+    A top-level comment's `path` is `[0, reply.id]` (`PostReply.new`,
+    app/models.py). Rule 3's loop skips both entries -- `if element == 0 or
+    element == reply.id: continue` -- so `ids` is still empty when rule 4 does
+    `ids = tuple(ids)` and interpolates it into `WHERE id IN :ids`. psycopg2
+    renders the empty tuple as a literal `()`, which Postgres rejects, so the
+    whole Update handler dies with a ProgrammingError before the notification
+    is reached.
+
+    This is not a rare shape: it is every top-level Mastodon/mbin comment that
+    mentions a local user. The session is left unusable by the failed
+    statement, so the assertion that nothing was written needs a rollback
+    first.
+    """
+    reply = _seed_reply(software='mastodon')
+    reply.path = [0, reply.id]
+    db.session.commit()
+    recipient = _seed_local_recipient()
+
+    with pytest.raises(ProgrammingError):
+        update_post_reply_from_activity(reply, _update(
+            content='hello',
+            tag=[{'type': 'Hashtag', 'name': '#x'}, _mention()],
+        ))
+
+    db.session.rollback()
+    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
+
+
+def test_an_mbin_reply_mention_of_the_post_author_is_suppressed(app, db_session, redis_lock_only_double):
+    """The `reply.instance.software == 'mbin'` disjunct of the gate on the
+    whole de-duplication block, which is
+    `software == 'mbin' or software in MICROBLOG_APPS`.
+
+    'mbin' is NOT in MICROBLOG_APPS (app/constants.py lists mastodon, misskey,
+    akkoma, iceshrimp, pleroma, fedibird), so this disjunct is the only way an
+    mbin instance reaches the block -- and every other test in this group opts
+    in through the other disjunct, with 'mastodon'. Without this test the
+    'mbin' comparison can be deleted with the suite green.
+
+    Rule 1 is the suppression used to make the gate observable; it is covered
+    on its own in
+    test_a_microblog_reply_mention_of_the_post_author_is_suppressed.
+    """
+    _, reply = _seed_microblog_chain()
+    reply.instance.software = 'mbin'
+    recipient = _seed_local_recipient()
+    reply.post.user_id = recipient.id
+    db.session.commit()
+
+    update_post_reply_from_activity(reply, _update(
+        content='hello',
+        tag=[{'type': 'Hashtag', 'name': '#x'}, _mention()],
+    ))
+
+    assert db.session.query(Notification).filter_by(
+        user_id=recipient.id, subtype='comment_mention').count() == 0
+
+
+def test_a_microblog_reply_mention_of_its_own_author_is_still_notified(app, db_session, redis_lock_only_double):
+    """The `element == reply.id` disjunct of the path loop's skip:
+
+        for element in reply.path:
+            if element == 0 or element == reply.id:
+                continue
+            ids.append(element)
+
+    The reply's own id is the last entry of its own `path`, and this disjunct
+    keeps it out of `ids` -- so rule 4, which suppresses when the recipient
+    authored any comment whose id is in `ids`, is asking about ancestors only
+    and not about the reply being updated.
+
+    Seeded with the recipient as the author of the reply itself and of nothing
+    else in the chain: production notifies, and a mutant that drops this
+    disjunct puts `reply.id` into `ids`, whereupon rule 4 finds the recipient
+    and suppresses. Pins the current behaviour rather than asserting it is
+    desirable.
+    """
+    _, reply = _seed_microblog_chain()
+    recipient = _seed_local_recipient()
+    reply.user_id = recipient.id
+    db.session.commit()
+
+    update_post_reply_from_activity(reply, _update(
+        content='hello',
+        tag=[{'type': 'Hashtag', 'name': '#x'}, _mention()],
+    ))
+
+    assert db.session.query(Notification).filter_by(
+        user_id=recipient.id, subtype='comment_mention').count() == 1
