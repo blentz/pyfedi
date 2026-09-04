@@ -1115,27 +1115,41 @@ def test_a_malformed_feed_document_counts_an_instance_failure(
     assert feed.title == 'Before'
 
 
-def test_a_feed_with_no_following_url_crashes(app, db_session, http_mock):
-    """PINS A CRASH. DO NOT FIX -- Task 10 does.
-
-    `refresh_feed_profile_task` fetches `feed.ap_following_url` UNGATED
-    (app/activitypub/util.py), where every other collection fetch in the trio
-    is guarded by a truthiness check on its url: `community.ap_moderators_url`,
-    `community.ap_followers_url`, `community.ap_featured_url` and even this
-    task's own `feed.ap_moderators_url`. Four gated, one not.
+def test_a_feed_with_no_following_url_is_skipped(app, db_session, http_mock):
+    """`refresh_feed_profile_task`'s fetch of `feed.ap_following_url` is now
+    gated on the column being set -- `if feed.ap_following_url:` -- which is
+    the shape every other collection fetch in the trio already had:
+    `community.ap_moderators_url`, `community.ap_followers_url`,
+    `community.ap_featured_url` and this task's own `feed.ap_moderators_url`.
+    It was the one of the five with no gate.
 
     `Feed.ap_following_url` has no default, so a feed that arrives without a
-    `following` key -- which `make_feed` reproduces -- reaches `get_request(None)`
-    and raises. The peer chooses whether to send that key, so this is remotely
-    triggerable, exactly like the malformed-document crash above.
+    `following` key -- which `make_feed` reproduces -- used to reach
+    `get_request(None)` and raise
+    `httpx.HTTPError: invalid uri` (via `is_invalid_get_request_uri`). The
+    peer chooses whether to send that key, so this was remotely triggerable.
+
+    THE ASSERTIONS ARE ON THE FEED'S OWN COLUMNS, NOT "nothing raised",
+    because this fix must skip only the FETCH and not the refresh. A gate that
+    returned early, or one placed above the document application, would also
+    raise nothing -- and would silently stop remote feeds refreshing at all.
+    The seeded `'Before'` title must therefore have been REPLACED by the
+    document's, not preserved.
+
+    No route is registered for a following collection, so `block_outbound_http`
+    raises if the task fetches one anyway.
     """
     feed = _remote_feed()
     feed.ap_following_url = None
+    feed.title = 'Before'
     db.session.commit()
     _serve(http_mock, feed.ap_public_url, _feed_document())
 
-    with pytest.raises(httpx.HTTPError, match='invalid uri'):
-        refresh_feed_profile_task(feed.id)
+    refresh_feed_profile_task(feed.id)
+
+    db.session.refresh(feed)
+    assert feed.title == 'News, refreshed'
+    assert feed.public_key == '-----BEGIN PUBLIC KEY-----refreshed'
 
 
 def test_a_feed_owners_url_is_fetched_and_recorded(app, db_session, http_mock):
