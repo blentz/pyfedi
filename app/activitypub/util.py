@@ -1142,6 +1142,8 @@ def refresh_feed_profile_task(feed_id):
                                     member_user = session.query(User).get(member.user_id)
                                     is_owner = False
                                     for actor in owners_data['orderedItems']:
+                                        if isinstance(actor, dict):
+                                            actor = actor['id']
                                         if actor.lower() == member_user.profile_id().lower():
                                             is_owner = True
                                             break
