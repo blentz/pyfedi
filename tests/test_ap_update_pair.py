@@ -29,7 +29,6 @@ key inside `fields`, not one of the envelope-level `type`/`actor`/`id` keys
 import contextlib
 
 import pytest
-from sqlalchemy.exc import ProgrammingError
 
 from app import db
 from app.activitypub.util import (update_post_from_activity,
@@ -962,8 +961,9 @@ def test_a_microblog_reply_mention_still_notifies_when_no_rule_applies(app, db_s
 
     A two-comment chain rather than a lone reply, because a lone reply's path
     is `[0, reply.id]` -- both entries skipped by the loop's own `continue` --
-    which leaves the fourth rule's `id IN :ids` with an empty tuple. See
-    test_a_top_level_microblog_reply_mention_raises_on_its_empty_id_list.
+    which leaves the fourth rule with no ids at all, a case its `if ids:` guard
+    short-circuits rather than a case any rule evaluates. See
+    test_a_top_level_microblog_reply_mention_skips_the_ancestor_lookup.
     """
     _, reply = _seed_microblog_chain()
     recipient = _seed_local_recipient()
@@ -1110,47 +1110,59 @@ def test_a_microblog_reply_mention_of_an_ancestor_comments_author_is_suppressed(
         user_id=recipient.id, subtype='comment_mention').count() == 0
 
 
-def test_a_top_level_microblog_reply_mention_raises_on_its_empty_id_list(app, db_session, redis_lock_only_double):
-    """A BUG, pinned rather than endorsed, and the reason every other test here
-    uses a chain.
+def test_a_top_level_microblog_reply_mention_skips_the_ancestor_lookup(app, db_session, redis_lock_only_double):
+    """Rule 4's `if ids:` guard -- the reason a top-level comment survives this
+    block at all.
 
     A top-level comment's `path` is `[0, reply.id]` (`PostReply.new`,
     app/models.py). Rule 3's loop skips both entries -- `if element == 0 or
     element == reply.id: continue` -- so `ids` is still empty when rule 4 does
-    `ids = tuple(ids)` and interpolates it into `WHERE id IN :ids`. psycopg2
-    renders the empty tuple as a literal `()`, which Postgres rejects, so the
-    whole Update handler dies with a ProgrammingError before the notification
-    is reached.
+    `ids = tuple(ids)`. Without the guard the empty tuple was interpolated into
+    `WHERE id IN :ids`, psycopg2 rendered it as a literal `()`, and Postgres
+    rejected the statement: the whole Update handler died with a
+    ProgrammingError before the notification was reached. A comment with no
+    ancestors has nothing for rule 4 to suppress, so skipping the query and
+    running it to an empty result reach the same outcome -- the notification is
+    created.
 
     Reaching that line needs all of: an UPDATE (this function is the edit path
-    only -- creates go through the other copy of this block, at
-    app/activitypub/util.py:2705-2736, whose loop is written correctly); a
-    `tag` list of length greater than one, since a lone Mention never enters
-    the block at all (test_a_lone_reply_mention_is_ignored pins that); a
-    mentioned local user who is NOT the post's author, because for a top-level
-    reply `reply_parent` is `reply.post` and the self-mention exclusion catches
-    that case first; and no pre-existing `post_mention` notification for that
-    recipient and post, which rule 2 would have caught. So the accurate scope
-    is every EDIT of a top-level microblog comment carrying two or more tags
-    that Mentions a local user other than the post's author. Narrower than
-    "every top-level microblog comment", but not exotic.
+    only -- creates go through the other copy of this block, in
+    `notify_about_post_reply`'s Mention loop, whose rule-4 query is reached the
+    same way); a `tag` list of length greater than one, since a lone Mention
+    never enters the block at all (test_a_lone_reply_mention_is_ignored pins
+    that); a mentioned local user who is NOT the post's author, because for a
+    top-level reply `reply_parent` is `reply.post` and the self-mention
+    exclusion catches that case first; and no pre-existing `post_mention`
+    notification for that recipient and post, which rule 2 would have caught.
 
-    The session is left unusable by the failed statement, so the assertion that
-    nothing was written needs a rollback first.
+    The notification row is asserted, not merely the absence of a crash: a
+    guard that skipped the whole Mention block rather than just the query would
+    also avoid the ProgrammingError, and this assertion tells the two apart.
+
+    ONE THING THIS SUITE NO LONGER KILLS. While the crash existed, this test
+    was the only kill for the `element == 0` half of rule 3's skip -- dropping
+    that half left `ids` as `(0,)`, non-empty, so no ProgrammingError was
+    raised and the test asserting one failed. With the guard in place that half
+    is unkillable through any observable: `0` in `ids` only widens two `IN`
+    lists that nothing matches. `post_reply.id` starts at 1, so `SELECT
+    user_id FROM "post_reply" WHERE id IN (0, ...)` returns exactly the rows
+    `IN (...)` returns, and no Notification carries `targets->>'comment_id'`
+    of `0` either. The leading `0` is unreachable data, not unreachable
+    behaviour, and no honest test can distinguish its presence.
     """
     reply = _seed_reply(software='mastodon')
     reply.path = [0, reply.id]
     db.session.commit()
     recipient = _seed_local_recipient()
 
-    with pytest.raises(ProgrammingError):
-        update_post_reply_from_activity(reply, _update(
-            content='hello',
-            tag=[{'type': 'Hashtag', 'name': '#x'}, _mention()],
-        ))
+    update_post_reply_from_activity(reply, _update(
+        content='hello',
+        tag=[{'type': 'Hashtag', 'name': '#x'}, _mention()],
+    ))
 
-    db.session.rollback()
-    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
+    assert db.session.query(Notification).filter_by(
+        user_id=recipient.id, subtype='comment_mention',
+        url=f'https://test.piefed.local/comment/{reply.id}').count() == 1
 
 
 def test_an_mbin_reply_mention_of_the_post_author_is_suppressed(app, db_session, redis_lock_only_double):
