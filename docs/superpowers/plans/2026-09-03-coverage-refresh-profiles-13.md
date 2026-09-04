@@ -933,7 +933,34 @@ def test_a_user_fetch_failing_outside_httpx_falls_back_to_a_signed_get(
     """
 ```
 
-**Write this test's body yourself.** It needs a `Site` row with a `private_key` (see `seed_signing_site` in `tests/factories.py`) and an error that is **not** an `httpx.HTTPError`, so the bare `except:` catches it where `except httpx.HTTPError:` did not. Double `signed_get_request` at its binding site in `app.activitypub.util` and assert it was called. **If the path proves unreachable in a test — for instance because every failure respx can produce is an `httpx` error — say so and register it as unreachable rather than forcing it.**
+```python
+    site = seed_signing_site()
+    user = _remote_user()
+    calls = []
+
+    def exploding_get_request(uri, params=None, headers=None):
+        raise RuntimeError('not an httpx error')
+
+    def fake_signed_get(uri, private_key, key_id, **kwargs):
+        calls.append((uri, private_key))
+        return httpx.Response(200, json=_person_document(fields={'name': 'Signed'}))
+
+    monkeypatch.setattr(ap_util, 'get_request', exploding_get_request)
+    monkeypatch.setattr(ap_util, 'signed_get_request', fake_signed_get)
+
+    refresh_user_profile_task(user.id)
+
+    db.session.refresh(user)
+    assert calls and calls[0][0] == user.ap_public_url
+    assert calls[0][1] == site.private_key
+    assert user.title == 'Signed'
+```
+
+Add `from app.activitypub import util as ap_util` to the imports, and request `monkeypatch` in the signature. Both names are bound into `app.activitypub.util` — `signed_get_request` at its line 25 import and `get_request` at its line 32 import — so patching them on that module is the campaign's binding-site convention, not a shortcut.
+
+`RuntimeError` is the point: it is **not** an `httpx.HTTPError`, so `except httpx.HTTPError:` does not catch it and the bare `except:` does. That is the only way into this path, and it is why the bare `except:` is registered rather than fixed — narrowing it to `except Exception:` would keep this path, but narrowing it to the sibling's shape and no more would delete it.
+
+**Do not use `http_mock` in this test.** `get_request` never runs, so no route is exercised, and `assert_all_called=True` would fail on any route you registered. **If patching `get_request` turns out not to reach the fallback** — say, because the task calls it through a different name — read the task and report what it actually calls, rather than forcing the fixture.
 
 - [ ] **Step 3: Run and commit**
 
