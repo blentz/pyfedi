@@ -1419,9 +1419,15 @@ def test_a_microblog_mention_mirroring_a_post_mention_is_suppressed(app, db_sess
     whose `targets->>'post_id'`, cast to Integer, equals `post_reply.post_id`.
 
     `post_id` is stored as an int, matching what app/models.py's post_mention
-    block stores (`'post_id': post.id`); the production filter casts the
-    `->>` text back to Integer, so a mismatched type here would silently miss
-    and the test would pass for the wrong reason.
+    block stores (`'post_id': post.id`). That is a fidelity choice, not a
+    correctness one: `->>` yields text for a JSON number and for a JSON
+    string alike, so `{'post_id': '1'}` would cast to the same Integer and
+    match just as well. The int is used because it is the shape every
+    production post_mention writer stores, so this fixture cannot pass
+    against a row production never produces. (Had the lookup missed, the
+    failure direction would be loud, not silent: rule 2 would not fire, the
+    Mention would be delivered, and `len(rows) == 1` below would see two
+    rows and fail.)
 
     Replies to a comment so `ids` is non-empty, routing around D243 for the
     same reason rule 1's test does: with rule 2 dropped, the fall-through has
@@ -1549,6 +1555,7 @@ def test_the_mbin_arm_of_the_gate_reaches_the_rules(app, db_session, redis_lock_
                     in_reply_to=parent.ap_id)
 
     assert reply is not None
+    assert reply.path == [0, parent.id, reply.id]
     assert Notification.query.filter_by(user_id=recipient.id).count() == 0
 
 
@@ -1668,6 +1675,18 @@ def test_a_top_level_microblog_mention_is_lost_to_the_empty_id_tuple(app, db_ses
     the transaction aborted, so every later statement in it fails with
     InFailedSqlTransaction until it is rolled back. `PostReply.new` committed
     the reply before the crash, so the row survives the rollback.
+
+    `assert reply is None` deliberately does NOT say which exception was
+    swallowed, and that gap is accepted rather than overlooked: the tail
+    catches everything, so in principle an unrelated error would satisfy it.
+    The natural strengthening -- asserting the `ActivityPubLog` message the
+    way this module's head-guard tests do via the `ap_log` fixture -- is not
+    available here, because `log_incoming_ap` writes that row with
+    `db.session.add(...)` / `commit()` INSIDE the already-aborted
+    transaction, so turning the config flag on replaces the pinned state with
+    a second, different failure. The three assertions below pin the shape of
+    THIS crash instead: an empty `ids` (`path == [0, id]`), a committed
+    PostReply, a None return, and no Notification.
     """
     community, post, replier = _seed_scenario()
     recipient = _seed_local_recipient('localuser')
