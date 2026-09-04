@@ -17,6 +17,14 @@ is at SQLAlchemy's default True -- the app factory overrides only `autoflush`
 -- so a commit inside the function under test expires these objects and the
 next attribute access re-loads them. No explicit refresh is needed here, and
 tests that would need one elsewhere say so.
+
+Unlike the reply function, `update_post_from_activity` reads
+`request_json['object']['type']` unconditionally, right after the content and
+title handling, to route Video/Question/Event objects -- so every post test
+in this file passes `type='Note'` through `_update(...)` to reach the plain
+Article/Note path, even tests that exist only to cover the content arm. This
+is an object-level key inside `fields`, not one of the envelope-level
+`type`/`actor`/`id` keys `_update` deliberately omits below.
 """
 import contextlib
 
@@ -1153,3 +1161,238 @@ def test_a_microblog_reply_mention_of_its_own_author_is_still_notified(app, db_s
 
     assert db.session.query(Notification).filter_by(
         user_id=recipient.id, subtype='comment_mention').count() == 1
+
+
+def test_a_post_markdown_source_sets_body_and_html(app, db_session, redis_lock_only_double):
+    """`update_post_from_activity`'s `source` arm -- the first branch of the
+    content elif chain. Unlike the reply function, which always computes an
+    html-derived body first and lets `source` overwrite it, this function's
+    `source` check runs BEFORE any html handling: `content` is read only for
+    the outer `is not None` guard, never allowlisted, when a markdown
+    `source` is present.
+
+    `content` and `source['content']` are deliberately different strings, so
+    the assertion tells which one produced `body`.
+    """
+    post = _seed_post()
+
+    update_post_from_activity(post, _update(
+        content='<p>from html</p>',
+        source={'mediaType': 'text/markdown', 'content': 'from markdown'},
+        type='Note',
+    ))
+
+    assert post.body == 'from markdown'
+    assert 'from markdown' in post.body_html
+    assert 'from html' not in post.body_html
+
+
+def test_a_post_source_that_is_not_markdown_falls_through_to_the_next_arm(app, db_session, redis_lock_only_double):
+    """The source guard's `source['mediaType'] == 'text/markdown'` conjunct's
+    False side. A `source` that IS a dict but carries the wrong `mediaType`
+    must fall past the `source` arm; with no object-level `mediaType` either,
+    it lands in the `else` wrap-and-allowlist arm and keeps the html-derived
+    body.
+    """
+    post = _seed_post()
+
+    update_post_from_activity(post, _update(
+        content='<p>from html</p>',
+        source={'mediaType': 'text/plain', 'content': 'from markdown'},
+        type='Note',
+    ))
+
+    assert post.body == 'from html'
+
+
+def test_a_post_source_that_is_not_a_dict_falls_through_to_the_wrap(app, db_session, redis_lock_only_double):
+    """The source guard's `isinstance(..., dict)` conjunct.
+
+    The reply function's analogous guard has a fourth conjunct,
+    `'mediaType' in request_json['object']['source']`, which is why a string
+    `source` there proves nothing about `isinstance` (`'mediaType' in
+    'a string'` is a harmless substring test). This function's guard has NO
+    such conjunct -- past `isinstance` it goes straight to the subscript
+    `request_json['object']['source']['mediaType']` -- so a string `source`
+    already distinguishes the two: with `isinstance` in place (production)
+    the guard short-circuits to `else` before that subscript ever runs; with
+    it removed, `'not a dict'['mediaType']` raises `TypeError` (string
+    indices must be integers), not a graceful `False`. So this one fixture
+    proves the conjunct on its own -- no `source=None` companion test is
+    needed the way the reply suite needed one.
+    """
+    post = _seed_post()
+
+    update_post_from_activity(post, _update(
+        content='<p>from html</p>', source='not a dict', type='Note',
+    ))
+
+    assert post.body == 'from html'
+
+
+def test_a_post_html_media_type_allowlists_the_content(app, db_session, redis_lock_only_double):
+    """The object-level `mediaType: text/html` arm, which the reply function
+    has no counterpart for. `body` is derived from the allowlisted html.
+
+    Content is pre-wrapped in `<p>` here on purpose: this test alone does
+    NOT prove the arm still exists (the `else` arm would wrap-then-allowlist
+    the same already-wrapped string to the identical result), it only proves
+    what the arm computes. See the next test for the one that tells this arm
+    apart from `else`.
+    """
+    post = _seed_post()
+
+    update_post_from_activity(post, _update(
+        content='<p>plain html</p>', mediaType='text/html', type='Note',
+    ))
+
+    assert post.body_html == '<p>plain html</p>'
+    assert post.body == 'plain html'
+
+
+def test_a_post_html_media_type_skips_the_wrap_that_else_would_apply(app, db_session, redis_lock_only_double):
+    """The `mediaType: text/html` arm's actual distinguishing behaviour: it
+    calls `allowlist_html` directly on `content`, with none of the `else`
+    arm's `<p>`-wrap step first.
+
+    Content here does NOT start with `<p>` or `<blockquote>`, so the two
+    arms diverge: this arm leaves it unwrapped (`allowlist_html('plain
+    html')` returns `'plain html'` unchanged), while `else` would wrap it to
+    `'<p>plain html</p>'` before allowlisting. That divergence is what a
+    mutant deleting this elif arm (falling through to `else`) breaks, and
+    what the previous test's already-wrapped fixture could not detect.
+    """
+    post = _seed_post()
+
+    update_post_from_activity(post, _update(
+        content='plain html', mediaType='text/html', type='Note',
+    ))
+
+    assert post.body_html == 'plain html'
+
+
+def test_a_post_markdown_media_type_renders_the_content(app, db_session, redis_lock_only_double):
+    """The object-level `mediaType: text/markdown` arm. `content` IS the
+    markdown here, so `body` keeps it verbatim and `body_html` is rendered.
+
+    `else` would wrap-then-allowlist `'**bold**'` to the literal
+    `'<p>**bold**</p>'` -- allowlist_html does not render markdown syntax --
+    so `'<strong>'` only appears here if this arm actually ran.
+    """
+    post = _seed_post()
+
+    update_post_from_activity(post, _update(
+        content='**bold**', mediaType='text/markdown', type='Note',
+    ))
+
+    assert post.body == '**bold**'
+    assert '<strong>' in post.body_html or '<b>' in post.body_html
+
+
+def test_a_post_unrecognized_media_type_falls_through_to_the_wrap(app, db_session, redis_lock_only_double):
+    """An object-level `mediaType` that matches neither `text/html` nor
+    `text/markdown` falls all the way to `else`, exactly as if no
+    `mediaType` had been supplied at all.
+
+    This is the one fixture that tells the markdown arm's
+    `mediaType == 'text/markdown'` conjunct apart from a mutant that keeps
+    only the `'mediaType' in ...` membership half: with the equality
+    dropped, ANY present `mediaType` (here `'text/plain'`) would satisfy the
+    weakened guard and route through `markdown_to_html` instead of the wrap.
+    `markdown_to_html('bare words')` renders to `'<p>bare words</p>\\n'`
+    (trailing newline, confirmed by calling it directly) where `else`'s
+    wrap-then-allowlist produces `'<p>bare words</p>'` (no newline) -- an
+    exact `==` is needed to catch that difference; `in` would not.
+    """
+    post = _seed_post()
+
+    update_post_from_activity(post, _update(
+        content='bare words', mediaType='text/plain', type='Note',
+    ))
+
+    assert post.body_html == '<p>bare words</p>'
+    assert post.body == 'bare words'
+
+
+def test_a_post_already_wrapped_content_is_not_double_wrapped(app, db_session, redis_lock_only_double):
+    """The `startswith('<p>')` half of the `else` arm's wrap guard.
+
+    The two `source`-fallthrough tests above also reach `else` with content
+    already starting `<p>`, but both assert only `post.body`: html_to_text
+    strips tags regardless of how many `<p>` wrappers surround the text, so
+    `html_to_text('<p><p>from html</p></p>')` reads back as `'from html'`
+    same as the correctly-single-wrapped case -- a double-wrap mutant on this
+    disjunct passes both of those tests. `body_html` is the one place a
+    double wrap is visible, so it is what this test asserts.
+    """
+    post = _seed_post()
+
+    update_post_from_activity(post, _update(content='<p>hello</p>', type='Note'))
+
+    assert post.body_html == '<p>hello</p>'
+
+
+def test_a_post_bare_content_is_wrapped_and_allowlisted(app, db_session, redis_lock_only_double):
+    """The `else` arm's wrap. No `source`, no `mediaType`, and content that
+    starts with neither `<p>` nor `<blockquote>`.
+    """
+    post = _seed_post()
+
+    update_post_from_activity(post, _update(content='bare words', type='Note'))
+
+    assert post.body_html == '<p>bare words</p>'
+
+
+def test_a_post_blockquote_content_is_not_wrapped(app, db_session, redis_lock_only_double):
+    """The `<blockquote>` disjunct of the wrap guard, which needs its own
+    test or it can be deleted with the `<p>` case still passing.
+    """
+    post = _seed_post()
+
+    update_post_from_activity(post, _update(content='<blockquote>q</blockquote>', type='Note'))
+
+    assert post.body_html.startswith('<blockquote>')
+
+
+def test_a_post_with_null_content_keeps_its_body(app, db_session, redis_lock_only_double):
+    """THE ASYMMETRY, on the side that gets it right. This function guards
+    `request_json['object']['content'] is not None`; the reply function does
+    not, and Task 10 fixes that.
+
+    The seeded body is asserted unchanged, which is what distinguishes "the
+    guard skipped the arm" from "the arm ran and wrote None". A mutant that
+    drops this conjunct reaches the `else` arm's `content.startswith(...)`
+    with `content` still `None`, which raises `AttributeError` rather than
+    producing a wrong value -- this test kills that mutant by crash, not by
+    assertion.
+    """
+    post = _seed_post()
+    post.body = 'seeded body'
+    db.session.commit()
+
+    update_post_from_activity(post, _update(content=None, name='a title', type='Note'))
+
+    assert post.body == 'seeded body'
+
+
+def test_a_post_missing_content_key_leaves_the_body_untouched(app, db_session, redis_lock_only_double):
+    """The outer guard's `'content' in request_json['object']` conjunct,
+    which `test_a_post_with_null_content_keeps_its_body` does not cover: that
+    test supplies `content` as an explicit `None`, this one omits the key
+    altogether. A mutant that drops this conjunct, leaving only `... is not
+    None`, evaluates `request_json['object']['content']` unconditionally and
+    raises `KeyError` on this fixture -- another crash-kill, distinct from
+    the explicit-`None` one.
+
+    Both `body` and `body_html` are asserted, since the whole content block
+    -- not just the wrap step -- must be skipped.
+    """
+    post = _seed_post()
+    post.body = 'seeded body'
+    post.body_html = '<p>seeded body html</p>'
+    db.session.commit()
+
+    update_post_from_activity(post, _update(name='a title', type='Note'))
+
+    assert post.body == 'seeded body'
+    assert post.body_html == '<p>seeded body html</p>'
