@@ -2676,6 +2676,179 @@ The same applies to stale citations, renamed pins and inverted tests: search for
 the symbol, the column, the URL, the old test name -- something the code must
 contain -- rather than for how you would describe it in prose.
 
+**71. `in` against a string is a SUBSTRING test, not a type error -- so a
+"wrong type" fixture chosen as a string sails through a downstream membership
+conjunct that would have raised on any other type.** Sub-project 14 hit this
+twice, in opposite directions. Proving `isinstance(source, dict)` in
+`'source' in obj and isinstance(obj['source'], dict) and 'mediaType' in
+obj['source'] and ...`, the obvious fixture is `source='not a dict'` -- but with
+the `isinstance` conjunct deleted, the next conjunct evaluates
+`'mediaType' in 'not a dict'`, which is `False`, not an exception. The guard
+short-circuits identically with and without the clause and the mutant survives.
+`'mediaType' in None` raises `TypeError`; `'mediaType' in ['a']` returns `False`
+but the following subscript then raises. **The fixture for a type guard must be
+a value on which the NEXT operation actually diverges** -- `None` if the
+membership test itself must raise, a list if you want it to succeed and the
+subscript to fail -- and a string is the one wrong-type value that quietly does
+neither. The other direction is worse because it appears later: **adding** a
+membership check in front of a subscript can turn a previously-crashing string
+input into a silent skip, which is a real behaviour widening to record (here it
+made a tag loop *uniform*, since a sibling arm already behaved that way) and
+which is also fact 74's mechanism. Verify the claim in a bare interpreter --
+`'x' in 'abc'` versus `'x' in None` -- rather than reasoning about it; two
+agents in sub-project 14 did, and it is two lines.
+
+**72. A test that reaches a guard's False side NATURALLY cannot kill a mutant
+that FORCES that guard False. The two are indistinguishable by construction.**
+Sub-project 14's `if attachment_list:` regeneration gate survived six tests
+written for it: the four with non-empty lists asserted only on `reply.body`,
+which is identical whether or not `body_html` is regenerated, the no-url test
+appended nothing either way, and the empty-list test exercised the natural False
+path -- so nothing observed the difference. **Proving such a guard needs a test
+on the TRUE side that asserts what the guard's BODY does**, which here meant
+asserting `body_html` after a non-empty attachment list, something no existing
+test did. The general rule: a forced-False mutation is killed only by evidence
+that the body ran, so the pin belongs on the True side even though the guard
+"looks" like it is about the False side. The corollary for reviewing a mutation
+table: an empty-input test listed as covering a truthiness guard is covering the
+*line*, not the *clause*, which is fact 68's distinction in a different shape.
+
+**73. Three ways a LATER step in the same run masks what your mutation changed
+-- and one remedy for all three: deny the mutant every downstream route to the
+observable.** Sub-project 14 hit all three in different tasks, and they read as
+separate puzzles until you see the shape.
+
+- **A later lookup independently produces the same negative.** A Mention guard
+  `profile_id.startswith('https://' + SERVER_NAME)` was to be pinned by a
+  remote-user test -- but a Mention naming a user on another host finds no
+  matching local recipient **either way**, so deleting the guard changes nothing
+  observable. The killer is a **case-mismatched HOST on the same server**: it
+  lowers to an exact match, so bypassing the guard produces a real notification.
+- **A later normalisation converges the value.** An assertion on a value that a
+  later idempotent step would produce anyway cannot kill the arm that produced
+  it early. A `text/html` content arm and the `else` arm both end up wrapping
+  bare content in `<p>`, and `html_to_text` renders single- and double-wrapped
+  input identically -- so a test whose fixture is *already wrapped*, or which
+  asserts only on `body`, passes under "delete the `text/html` arm". The killer
+  needs **unwrapped** content and an assertion on the value **before**
+  convergence.
+- **A later region of the same function overwrites the write.** A scoped
+  region's `post.url` write is invisible under `type='Note'`, because the
+  function's later Links section sets `new_url = None` when there is no
+  `attachment` key and overwrites unconditionally. Asserting it requires
+  steering the function down a branch that skips the later write -- here
+  `type='Video'`, which returns before it.
+
+The remedy in each case is the same and it is worth stating as one rule:
+**before believing a surviving mutant is unkillable, enumerate every other way
+the run reaches the value you asserted on**, and either remove those ways from
+the fixture or assert on something upstream of them. This is also why a
+deliberate convention break in one test (a lone `type='Video'` in a file that
+otherwise uses `'Note'`) can be correct and must be explained in its docstring
+rather than normalised away.
+
+**74. Adding a conjunct can UNKILL an existing test, so re-run the guard's
+EXISTING mutations after changing it, not only the new one.** This is the
+stronger form of fact 68's corollary, and sub-project 14 observed it as an
+actual regression in proof rather than as a theoretical shrinkage: a string
+`source` fixture had been the sole killer of an `isinstance(..., dict)` mutant;
+inserting `'mediaType' in ...` after it made `'mediaType' in 'not a dict'` a
+substring test returning `False` (fact 71), so the guard short-circuited with or
+without `isinstance` and **the existing test passed under the existing
+mutation**. Nothing in the diff hints at it -- the fix is one line, the test is
+untouched, and the suite is green. The operational rule: **a fix that changes a
+guard invalidates every mutation result previously recorded for that guard**;
+re-run all of them and restore the kills the fix vacated, in the same commit
+that vacated them. Sub-project 14 did, adding the `source=None` companion the
+sibling suite already carried.
+
+**75. The FIVE catalogued causes of an unkillable clause. Name which one you
+have and prove it; never invent a test to fake a kill.** Causes 4 and 5 were
+added by sub-project 14 and are the two that most often get mis-filed as
+ordinary fixture gaps.
+
+1. **The factory always produces the matching value** (fact 33) -- the clause is
+   fine, the fixture cannot vary what it tests. Fixable.
+2. **The excluded set is empty under every fixture in the file** (fact 60) --
+   the rows the filter exists to exclude have never been created. Fixable.
+3. **Subsumption** -- a later conjunct implies this one. Prove it
+   *algebraically*, not by observing zero failures: given
+   `isinstance(profile_id, str)` and `profile_id.startswith('https://...')`,
+   `profile_id` cannot be falsy, because the only falsy string is `''` and
+   `''.startswith(<non-empty>)` is always `False`. Not fixable.
+4. **Tautology** -- a guard whose body writes exactly what the guard's own False
+   condition asserts is already there. `if new_language.id != old_language_id:
+   post.language_id = new_language.id` cannot be killed by forcing it to fire,
+   because firing it writes back the value already present. Not subsumption and
+   not a fixture gap: **no test can ever kill it and none should be written.**
+5. **Unreachable data** -- a value the column **cannot hold**. Distinct from
+   causes 1 and 2 because no fixture could close it. `element == 0` in a
+   `reply.path` skip became unkillable once the surrounding empty-`IN` crash was
+   guarded: the leading `0` is a sentinel *precisely because* `post_reply.id`
+   starts at 1, so inserting a `PostReply` with id 0 to force the kill
+   fabricates a state production cannot reach -- a fake kill, and the reviewer
+   said so before the implementer was tempted.
+
+**Crash-only killability is a sixth thing that looks like this list but is not
+on it**: fact 68's third note describes a clause no *assertion* can kill because
+no input satisfies the remaining conjuncts while falsifying it. That is a shape
+of kill, not a cause of survival -- the mutant does die, by exception. Label
+which you have. And in every case the part that must be written down is the
+**proof**, not the observation: "0 failures" is a measurement, "no such input
+exists" is a finding.
+
+**76. A "missing header" defect cannot be pinned by asserting the header is
+ABSENT -- the HTTP client supplies its own default -- and the pin must read the
+request the mock RECORDED, not the outcome.** Sub-project 13 registered a
+`get_request` call that passed no `headers=`, describing the peer as seeing "a
+request that expresses no preference". Measured while writing the pin, that is
+false twice over. `httpx.Client`'s own defaults fill in `Accept: */*` when the
+caller sets none, and per-request headers **merge onto** client defaults rather
+than replacing them -- so the peer saw a **positive invitation to
+content-negotiate**, and `*/*` is the worst possible value here because it
+explicitly welcomes the HTML representation. Two consequences: **a presence
+check would have passed UNFIXED**, so the pin has to be an *equality* against
+the intended value (`assert ... == 'application/activity+json'`); and the
+assertion must read `route.calls.last.request`, because respx serves its canned
+response whatever the request asked for, so an **outcome-only** test passes
+either way. The general form: when the defect is "we did not say X", find out
+what the library said on your behalf before deciding what "fixed" looks like.
+
+**77. A quoted CODE BLOCK is the one kind of docstring claim that can be audited
+mechanically; prose claims about production structure cannot.** Sub-project 14
+shipped **five** false prose docstrings across six tasks -- "the block breaks out
+per tag", "matches on url alone", a wrong function attribution, an overstated
+crash scope, and a false adjacency claim -- and every one had to be found by a
+human re-reading source. Exactly **one** quoted block drifted, and a script
+found it. The method is the reusable part: `ast`-parse every docstring in the
+file, dedent each against **its own body indent** rather than against the whole
+string (the summary line sits at column 0 and otherwise defeats
+`textwrap.dedent`), and treat runs indented **further** than the body as
+quotations -- which separates real quoted blocks from ordinary paragraphs in a
+way a plain indent grep cannot. Then diff each block against source. The
+practical consequence for writing tests: **prefer a quoted block to a sentence
+whenever you are describing production structure**, because the block is
+checkable forever and the sentence is checkable only by whoever happens to
+re-read it. This is fact 70's mirror image and the more expensive half.
+
+**78. A stale stack produces SHIFTING false failures -- a different test fails
+on each run -- so any surprising failure gets `./run_tests.sh --down` and a
+re-run before it is believed.** Distinct from fact 18, which is two concurrent
+pytest sessions; this is a **single** session against a stack that has been up
+too long. Two agents hit it independently on 2026-09-04. One saw 4 failed / 102
+passed, then an immediate re-run **with nothing changed** giving 1 failed / 105
+passed **with a different test failing**; the other saw 4 failed / 54 passed on
+tests neither of its fixes touched, each passing in isolation, then 58 passed on
+a bare re-run. Every failure was
+`sqlalchemy.exc.IntegrityError: duplicate key value violates unique constraint
+"ix_instance_domain"` during seeding. `--down` then gave clean runs twice
+consecutively in both cases. **Because the failing test changes between runs, a
+single bad run reads as a real regression in whatever test happened to lose the
+race** -- and in a fix wave, that is a regression you will believe, because you
+just changed production code. The cost of `--down` is real (fact 29: it replays
+~269 migrations), which is exactly why the rule is "before it is believed"
+rather than "before every run".
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
