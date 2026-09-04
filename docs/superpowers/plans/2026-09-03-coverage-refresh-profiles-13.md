@@ -1035,19 +1035,21 @@ git commit -m "test: cover the opt-in collection fetches"
 
 ---
 
-### Task 10: Fix both crash paths
+### Task 10: Fix the three crash paths
 
 **Files:**
 - Modify: `app/activitypub/util.py`
 - Modify: `tests/test_ap_refresh_profiles.py`
 
 **Interfaces:**
-- Consumes: `test_a_community_with_no_instance_crashes`, `test_a_malformed_community_document_crashes`, `test_a_feed_with_no_instance_crashes`, `test_a_malformed_feed_document_crashes` from Tasks 5 and 7.
+- Consumes: `test_a_community_with_no_instance_crashes`, `test_a_malformed_community_document_crashes`, `test_a_feed_with_no_instance_crashes`, `test_a_malformed_feed_document_crashes` and `test_a_feed_with_no_following_url_crashes`, from Tasks 5 and 7.
 - Produces: nothing later tasks need.
 
-**This is the only task in the sub-project that changes production code. TWO FIXES, TWO SEPARATE COMMITS.**
+**This is the only task in the sub-project that changes production code. THREE FIXES, THREE SEPARATE COMMITS.**
 
-Both fixes take the shape `refresh_user_profile_task` already uses. **Match it rather than inventing a third spelling** — it is the one of the three that gets both right, in the same file.
+**The third fix was not in the spec.** Task 7's implementer found it by transcribing the feed happy-path test literally and watching it crash, and the controller ruled it in scope: it is a defect inside one of the three functions this slice owns, of exactly the same class as the two the spec named — an unguarded dereference of a nullable column that a peer decides whether to populate. The ruling is in the SDD ledger.
+
+All three fixes take a shape that already exists elsewhere in the same file. **Match it rather than inventing a new spelling.**
 
 **Fix A — the missing `instance_id` guard.** Add it to `refresh_community_profile_task` and `refresh_feed_profile_task`, in the position the user task has it. Inverts `test_a_community_with_no_instance_crashes` and `test_a_feed_with_no_instance_crashes`.
 
@@ -1055,7 +1057,9 @@ Both fixes take the shape `refresh_user_profile_task` already uses. **Match it r
 
 **Note Fix B gains behaviour, not just safety:** the two tasks will start counting instance failures they previously crashed on. That is intended and is what the user task already does.
 
-For each fix, four steps:
+**Fix C — the ungated `get_request(feed.ap_following_url)`** in `refresh_feed_profile_task`. It is the only one of the trio's five collection fetches with no `if <row>.ap_<x>_url:` gate; the other four — `community.ap_moderators_url`, `community.ap_followers_url`, `community.ap_featured_url`, `feed.ap_moderators_url` — all have one. Add the same gate, in that same shape, around the following-collection block. Inverts `test_a_feed_with_no_following_url_crashes`. **One call site, so one kill** — unlike Fixes A and B.
+
+For each fix, four steps.
 
 - [ ] **Fix A — Step 1:** Rename both `..._crashes` pins to `..._is_skipped`, replace the `pytest.raises` blocks with plain calls, and assert the row was **not** modified — a bare "nothing raised" would pass against a fix that returned early for the wrong reason. Rewrite both docstrings so they describe the fix in the past tense.
 - [ ] **Fix A — Step 2:** Run both and watch them FAIL. **Quote both failures verbatim in your report.**
@@ -1067,18 +1071,29 @@ git add app/activitypub/util.py tests/test_ap_refresh_profiles.py
 git commit -m "fix: skip refreshing an actor whose instance is unknown"
 ```
 
-- [ ] **Fix B — Steps 5-8:** the same four steps for the `.json()` guard. The inverted tests assert `instance.failures` incremented from a seeded non-zero baseline, matching `test_a_malformed_actor_document_counts_an_instance_failure`. Commit:
+- [ ] **Fix B — Steps 5-8:** the same four steps for the `.json()` guard, again with two call sites and two separate kills. The inverted tests assert `instance.failures` incremented from a seeded non-zero baseline, matching `test_a_malformed_actor_document_counts_an_instance_failure`. Commit:
 
 ```bash
 git commit -m "fix: count a malformed actor document as an instance failure"
 ```
 
-- [ ] **Step 9: Check for a vacated branch.** Each inversion may have removed the only test reaching some branch. For each inverted test, name the branch it used to cover and the test that covers it now. If none does, add one and mutation-prove it.
+- [ ] **Fix C — Steps 9-12:** the same four steps for the following-collection gate. Rename `test_a_feed_with_no_following_url_crashes` to `test_a_feed_with_no_following_url_is_skipped`, replace its `pytest.raises` with a plain call, and assert the feed's own columns show the actor document *was* applied — this fix must not abandon the refresh, only the fetch, and "nothing raised" alone cannot tell those apart. Watch it fail, quote the failure, apply the gate, then mutation-test by removing the gate alone and confirming only that test fails. Commit:
 
-- [ ] **Step 10: Audit docstrings falsified by the fixes.** Every claim in the file that the community or feed task crashes is now false — including `test_a_malformed_actor_document_counts_an_instance_failure`'s docstring, which says the siblings "raise instead", and the user-guard tests in Task 2 which say the siblings lack the `instance_id` check. Grep for `crash`, `raise`, `unguarded`, `LACK`, `wrong`, `oversight`, and check every hit. **Sub-projects 10, 11 and 12 each lost review rounds to exactly this.**
+```bash
+git commit -m "fix: only fetch a feed's following collection when it has one"
+```
+
+- [ ] **Step 13: Check for a vacated branch.** Each inversion may have removed the only test reaching some branch. For each of the five inverted tests, name the branch it used to cover and the test that covers it now. If none does, add one and mutation-prove it.
+
+- [ ] **Step 14: Audit docstrings and test names falsified by the fixes.** Every claim in the file that the community or feed task crashes is now false. Known hits, and there will be more:
+
+  - `test_a_malformed_actor_document_counts_an_instance_failure`'s docstring says the siblings "raise instead".
+  - The Task 2 user-guard tests say the siblings lack the `instance_id` check, **and two of them hardcode `util.py:669` and `util.py:674`**, which Fixes A and B will move.
+  - The feed tests from Tasks 7, 8 and 9 that set `ap_following_url` as a workaround explain themselves by citing the ungated fetch. After Fix C the fetch is gated, so those sentences are false. Keep the setup — the tests still need a route or an unset column to be deliberate — but rewrite the reason.
+
+  Grep for `crash`, `raise`, `unguarded`, `ungated`, `LACK`, `wrong`, `oversight`, `util.py:`, and check every hit. **Sub-projects 10, 11 and 12 each lost review rounds to exactly this**, and renaming a test invalidates every citation of it by name — grep the old names too.
 
 ---
-
 ### Task 11: Register the findings, record the harness facts, raise the floor
 
 **Files:**
@@ -1103,12 +1118,13 @@ Match the surrounding entries' house style — read several existing D-entries f
 At minimum, and the ledger will have more:
 
 1. **The community and feed tasks crashed on an actor with a NULL `instance_id`** — FIXED, with its commit. Record that the user task guarded it and the other two did not: two of three wrong, one right.
-2. **The community and feed tasks crashed on malformed JSON from a peer** — FIXED, with its commit. Record that this was remotely triggerable by any peer being refreshed from, and that the fix also gains the failure-counting the user task already did.
-3. **`refresh_user_profile_task` uses a bare `except:`** where its siblings use `except Exception:` — it catches `KeyboardInterrupt` and `SystemExit`, so a worker shutdown mid-refresh is swallowed into the signed-GET fallback.
-4. **Only the user task has a `signed_get_request` fallback**, so a signature-requiring peer is refreshable for users and not for communities or feeds.
-5. **Only the feed task checks `is_local()`.**
-6. **Only the community task takes `activity_json`**, so only it can be driven from a document a caller already holds.
-7. **All three sleep `randint(3, 10)` seconds inline** in a Celery worker rather than deferring the retry to the broker.
+2. **The feed task fetched `feed.ap_following_url` without checking it was set** — FIXED, with its commit. Found by Task 7's tests rather than by the spec's reading. Record that four of the trio's five collection fetches were gated and this one was not.
+3. **The community and feed tasks crashed on malformed JSON from a peer** — FIXED, with its commit. Record that this was remotely triggerable by any peer being refreshed from, and that the fix also gains the failure-counting the user task already did.
+4. **`refresh_user_profile_task` uses a bare `except:`** where its siblings use `except Exception:` — it catches `KeyboardInterrupt` and `SystemExit`, so a worker shutdown mid-refresh is swallowed into the signed-GET fallback.
+5. **Only the user task has a `signed_get_request` fallback**, so a signature-requiring peer is refreshable for users and not for communities or feeds.
+6. **Only the feed task checks `is_local()`.**
+7. **Only the community task takes `activity_json`**, so only it can be driven from a document a caller already holds.
+8. **All three sleep `randint(3, 10)` seconds inline** in a Celery worker rather than deferring the retry to the broker.
 
 - [ ] **Step 3: Update BOTH live "Next free number" notes.** Find every occurrence; the two carrying the campaign's current value must both change. The historical ones are frozen — leave them alone.
 
@@ -1136,10 +1152,10 @@ git commit -m "docs: register sub-project 13's findings and raise the util.py fl
 
 ## Self-review
 
-**Spec coverage.** Each of the spec's three functions has tasks: user Tasks 1-4, community Tasks 5-6, feed Task 7, all three Tasks 8-9. Every row of the spec's asymmetry table is reached: the guard's three conjuncts (Task 2), `instance_id` (Tasks 5, 7, 10), `is_local` (Task 7), `activity_json` (Task 5), always-fetches (Tasks 5, 7), retry catch (Task 8), signed-GET fallback (Task 8), `.json()` decode (Tasks 3, 5, 7, 10). The spec's eight success criteria map to Tasks 1-9 (1-3), Task 10 (4), Task 11 (5-7) and the controller's final run (8).
+**Spec coverage.** Each of the spec's three functions has tasks: user Tasks 1-4, community Tasks 5-6, feed Task 7, all three Tasks 8-9. Every row of the spec's asymmetry table is reached: the guard's three conjuncts (Task 2), `instance_id` (Tasks 5, 7, 10), `is_local` (Task 7), `activity_json` (Task 5), always-fetches (Tasks 5, 7), retry catch (Task 8), signed-GET fallback (Task 8), `.json()` decode (Tasks 3, 5, 7, 10). The spec's eight success criteria map to Tasks 1-9 (1-3), Task 10 (4, widened to three crash paths after Task 7), Task 11 (5-7) and the controller's final run (8).
 
 **Placeholder scan.** No "TBD", no "add appropriate error handling". Every code step carries real code. **Eight steps deliberately say "read X and follow what it actually does"** — those are falsifiable checks against a stated expectation, each naming what to read and what to report. Three of them (`user.title`'s unapplied value, the `summary` column, `subscriptions_count`) mark places where the plan is guessing a column name and says so; the implementer must replace the guess, not ship it.
 
 **Type consistency.** `_remote_user`/`_remote_community`/`_remote_feed` return a single row; `_person_document`/`_group_document`/`_feed_document` take `(name, fields)`; `_serve(http_mock, url, document=None, status=200, text=None)` is called with that signature in every task. The four `..._crashes` names Tasks 5 and 7 produce are the four Task 10 consumes, and Task 10 states the new names.
 
-**One gap found and fixed inline:** Task 10 originally had one commit for both fixes; the plan's own Global Constraints require one commit per defect, so it is now two, with the mutation step naming both call sites per fix — the one-clause-two-sites gap this campaign has hit three times.
+**One gap found and fixed inline:** Task 10 originally had one commit for both fixes; the plan's own Global Constraints require one commit per defect, so each fix gets its own, with the mutation step naming every call site per fix — the one-clause-two-sites gap this campaign has hit three times. **Amended after Task 7:** that task's implementer found a third crash of the same class, the ungated `get_request(feed.ap_following_url)`, which the controller ruled in scope. Task 10 now carries three fixes and three commits.
