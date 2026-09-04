@@ -29,8 +29,8 @@ from app.constants import MICROBLOG_APPS, NOTIF_MENTION, NOTIF_POST, NOTIF_REPLY
 from app.models import ActivityPubLog, Language, Notification, PostReply, User, UserFlair
 from app.utils import utcnow
 from tests.factories import (make_community, make_instance, make_instance_block,
-                             make_post, make_post_reply, make_site, make_user,
-                             make_user_block)
+                             make_notification_subscription, make_post, make_post_reply,
+                             make_site, make_user, make_user_block)
 
 PEER = 'peer.example'
 
@@ -1701,3 +1701,137 @@ def test_a_top_level_microblog_mention_is_lost_to_the_empty_id_tuple(app, db_ses
     persisted = PostReply.query.filter_by(ap_id=f'https://{PEER}/comment/1').one()
     assert persisted.path == [0, persisted.id]
     assert Notification.query.filter_by(user_id=recipient.id).count() == 0
+
+
+# --- notify_about_post_reply: the parent_reply-is-None branch -------------
+#
+# Called directly here, not through `create_post_reply`: its two arguments
+# are rows (a PostReply-or-None and a PostReply), and driving it end-to-end
+# would make every assertion depend on everything upstream, including D243's
+# swallowed crash (see the block comment above `_seed_chain_comment`), which
+# produces zero Notifications for a reason unrelated to any guard in this
+# function.
+#
+# `notification_subscribers(entity_id, entity_type)` (app/utils.py) is a
+# plain read: `SELECT user_id FROM "notification_subscription" WHERE
+# entity_id = :entity_id AND type = :type`. For this branch it is called as
+# `notification_subscribers(new_reply.post.id, NOTIF_POST)`, so a row seeded
+# via `make_notification_subscription(user, post.id, NOTIF_POST)`
+# (tests/factories.py) is exactly what it selects.
+#
+# The only guard in this branch is `if new_reply.user_id != notify_id:` --
+# one conjunct. Reaching its True side (a subscriber who is not the replier)
+# cannot kill a mutant that forces the guard False, and reaching its False
+# side (the replier, self-subscribed) cannot kill a mutant that forces it
+# True -- so the "subscriber notified" and "replier excluded" tests below
+# are both required and neither is redundant with the other for that
+# purpose, even though both incidentally also kill a `!=`-to-`==` flip.
+#
+# The unread counter here is `user.unread_notifications += 1` -- an
+# INCREMENT of whatever is already in the column, not a recount. (Contrast
+# `notify_about_post_reply`'s `else` branch -- parent_reply is not None,
+# Task 8's target -- which instead does
+# `user.unread_notifications = Notification.query.filter_by(...).count()`,
+# a recount.) An increment and an assignment agree if the seeded baseline is
+# the count of what gets created (here, 0 -> 1), so the baseline seeded below
+# is a non-zero, non-1 value that only an increment reproduces.
+
+
+def _seed_post_subscriber(post, name='subscriber'):
+    """A local user subscribed to `post` for NOTIF_POST -- what
+    `notification_subscribers(new_reply.post.id, NOTIF_POST)` selects.
+    """
+    subscriber = make_user(None, name, local=True)
+    make_notification_subscription(subscriber, post.id, NOTIF_POST)
+    return subscriber
+
+
+def test_a_post_subscriber_is_notified_of_a_top_level_reply(app, db_session, redis_lock_only_double):
+    """The branch's normal job: one subscriber, not the replier, gets a
+    Notification whose fields are read straight from the code -- `notif_type`
+    is the NOTIF_POST passed to `notification_subscribers`, `subtype` is the
+    literal `'top_level_comment_on_followed_post'`, `url` is built from the
+    post and reply ids, and `targets` carries the community's `name` (its
+    `ap_id` is None here -- `make_community` never sets it, so the `community.ap_id
+    if community.ap_id else community.name` fallback lands on `name`) and the
+    replier's `ap_id` (set, because `_seed_scenario`'s replier is remote).
+    """
+    community, post, replier = _seed_scenario()
+    subscriber = _seed_post_subscriber(post)
+    new_reply = make_post_reply(post, replier, body='a top level reply')
+
+    notify_about_post_reply(None, new_reply)
+
+    notification = Notification.query.filter_by(user_id=subscriber.id).one()
+    assert notification.notif_type == NOTIF_POST
+    assert notification.subtype == 'top_level_comment_on_followed_post'
+    assert notification.url == f'/post/{post.id}/comment/{new_reply.id}#comment_{new_reply.id}'
+    assert notification.targets == {
+        'gen': '0',
+        'post_id': post.id,
+        'post_title': post.title,
+        'community_name': community.name,
+        'author_user_name': replier.ap_id,
+        'comment_id': new_reply.id,
+        'comment_body': new_reply.body,
+    }
+
+
+def test_the_replier_is_not_notified_of_their_own_top_level_reply(app, db_session, redis_lock_only_double):
+    """The `new_reply.user_id != notify_id` guard's False side: the replier
+    subscribed to their own post (a plausible case -- someone subscribes,
+    then later comments on the same post themselves) gets no Notification
+    for their own comment even though `notification_subscribers` returns
+    their id.
+    """
+    community, post, replier = _seed_scenario()
+    make_notification_subscription(replier, post.id, NOTIF_POST)
+    new_reply = make_post_reply(post, replier, body='a top level reply')
+
+    notify_about_post_reply(None, new_reply)
+
+    assert Notification.query.filter_by(user_id=replier.id).count() == 0
+
+
+def test_the_subscriber_unread_count_is_incremented_not_reassigned(app, db_session, redis_lock_only_double):
+    """`user.unread_notifications += 1`, read directly from the source (see
+    this section's header comment). The baseline is seeded to 5, a value
+    that disagrees with both 0 (the column default) and 1 (the post-branch
+    Notification count) -- so only a true increment lands on 6; a recount or
+    a bare assignment of the created-count would leave 1.
+    """
+    community, post, replier = _seed_scenario()
+    subscriber = _seed_post_subscriber(post)
+    subscriber.unread_notifications = 5
+    db.session.commit()
+    new_reply = make_post_reply(post, replier, body='a top level reply')
+
+    notify_about_post_reply(None, new_reply)
+
+    assert subscriber.unread_notifications == 6
+
+
+def test_no_subscribers_creates_no_notification_for_the_reply(app, db_session, redis_lock_only_double):
+    """No row in `notification_subscription` names this post, so
+    `notification_subscribers` returns an empty list and the `for notify_id
+    in send_notifs_to:` loop body never runs.
+
+    A bystander's unrelated Notification is seeded first so the total count
+    is non-zero going in -- otherwise an unchanged count of 0 would prove
+    nothing distinguishable from "the table is simply empty".
+    """
+    community, post, replier = _seed_scenario()
+    bystander = make_user(None, 'bystander', local=True)
+    baseline = Notification(user_id=bystander.id, author_id=replier.id,
+                            title='an unrelated notification', url='/unrelated',
+                            notif_type=NOTIF_POST, subtype='top_level_comment_on_followed_post',
+                            targets={'gen': '0'})
+    db.session.add(baseline)
+    db.session.commit()
+    before = Notification.query.count()
+    assert before == 1
+    new_reply = make_post_reply(post, replier, body='a top level reply')
+
+    notify_about_post_reply(None, new_reply)
+
+    assert Notification.query.count() == before
