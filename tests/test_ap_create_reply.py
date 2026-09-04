@@ -547,3 +547,156 @@ def test_a_reply_from_a_blocked_instance_is_refused(app, db_session, redis_lock_
     assert PostReply.query.count() == 0
     log = ActivityPubLog.query.one()
     assert log.exception_message == 'Post author blocked replier'
+
+
+# --- attachment loop ---------------------------------------------------
+#
+# Structurally identical to the loop sub-project 14 covered in
+# `update_post_reply_from_activity`, its update-path twin -- confirmed by
+# reading both: same `isinstance(dict)` / `isinstance(list)` normalisation,
+# the same `href`-then-`url` precedence, the same `name`-as-alt-text and
+# `if url:` gates, and the same `if attachment_list:` regeneration gate.
+#
+# One difference matters here and changes nothing about what these tests
+# assert, only how they get there: in the twin, `body` is a column read back
+# off the row before the loop runs. Here it is a local the content arm just
+# built (`body = body_html = ''`, then the `'content' in ...` arm sets it),
+# and the loop mutates that local before `PostReply.new(..., body=body, ...)`
+# ever persists it. Every assertion below still reads the persisted
+# `PostReply`, not the local -- there is no other way to observe it.
+
+
+def test_a_single_attachment_dict_is_appended(app, db_session, redis_lock_only_double):
+    """The `isinstance(..., dict)` arm: a lone attachment object is wrapped
+    into a one-element list rather than iterated as a dict's keys (which
+    would loop over the strings `'url'`, not the attachment itself).
+
+    Exact equality: `content='hello'` makes the content arm's `body`
+    predictable ('hello'), so the appended markdown can be pinned precisely.
+    """
+    community, post, replier = _seed_scenario()
+    document = _reply_doc(content='hello',
+                          attachment={'url': 'https://cdn.example/a.png'})
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply.body == 'hello\n\n![](https://cdn.example/a.png)'
+
+
+def test_an_attachment_list_is_appended_in_order(app, db_session, redis_lock_only_double):
+    """The `isinstance(..., list)` arm, with two entries so the loop runs
+    more than once and order is observable.
+    """
+    community, post, replier = _seed_scenario()
+    document = _reply_doc(content='hello',
+                          attachment=[{'url': 'https://cdn.example/1.png'},
+                                      {'url': 'https://cdn.example/2.png'}])
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply.body == ('hello\n\n![](https://cdn.example/1.png)'
+                          '\n\n![](https://cdn.example/2.png)')
+
+
+def test_attachment_url_wins_over_href(app, db_session, redis_lock_only_double):
+    """Both keys are read and `url` is read second -- `if 'href' in
+    attachment: url = attachment['href']` then `if 'url' in attachment: url =
+    attachment['url']`, confirmed against the current source -- so the two
+    values differ here, which is what makes the precedence observable; equal
+    values would pass whichever won.
+    """
+    community, post, replier = _seed_scenario()
+    document = _reply_doc(content='hello',
+                          attachment=[{'href': 'https://cdn.example/href.png',
+                                      'url': 'https://cdn.example/url.png'}])
+
+    reply = _create(community, post, replier, document=document)
+
+    assert 'url.png' in reply.body
+    assert 'href.png' not in reply.body
+
+
+def test_attachment_href_is_used_when_there_is_no_url(app, db_session, redis_lock_only_double):
+    """The `href` half on its own. Without this test the `'href' in
+    attachment` conjunct can be deleted with the suite green, because the
+    precedence test above supplies both keys and would still pass (`url`
+    would simply stay unset by a route that never reads `href` at all).
+    """
+    community, post, replier = _seed_scenario()
+    document = _reply_doc(content='hello',
+                          attachment=[{'href': 'https://cdn.example/href.png'}])
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply.body == 'hello\n\n![](https://cdn.example/href.png)'
+
+
+def test_an_attachment_with_neither_href_nor_url_contributes_nothing(app, db_session, redis_lock_only_double):
+    """The `if url:` gate's normal (false) side. An attachment carrying
+    neither `href` nor `url` leaves `url` at its initial `''`, so nothing is
+    appended.
+
+    Asserted by exact equality against what the content arm alone produced,
+    so a stray `![]()` -- `url` falsy but the append happening anyway --
+    would fail this test rather than pass unnoticed.
+    """
+    community, post, replier = _seed_scenario()
+    document = _reply_doc(content='hello',
+                          attachment=[{'mediaType': 'image/png'}])
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply.body == 'hello'
+
+
+def test_attachment_name_supplies_alt_text(app, db_session, redis_lock_only_double):
+    """The `'name' in attachment` gate: `name` becomes the markdown alt text,
+    not folded into the url or dropped.
+    """
+    community, post, replier = _seed_scenario()
+    document = _reply_doc(content='hello',
+                          attachment=[{'url': 'https://cdn.example/a.png',
+                                      'name': 'alt words'}])
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply.body == 'hello\n\n![alt words](https://cdn.example/a.png)'
+
+
+def test_an_empty_attachment_list_does_not_regenerate_the_html(app, db_session, redis_lock_only_double):
+    """`if attachment_list:` guards the `body_html` regeneration. With an
+    empty list, `body_html` must remain exactly what the content arm
+    allowlisted -- `markdown_to_html(body)` must not run.
+
+    Seeded through the already-wrapped html arm (`<p>hello</p>`) rather than
+    the bare-content arm, so the pre- and post-regeneration spellings would
+    differ if regeneration ran, and the assertion can tell them apart.
+    """
+    community, post, replier = _seed_scenario()
+    document = _reply_doc(content='<p>hello</p>', attachment=[])
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply.body_html == '<p>hello</p>'
+
+
+def test_a_non_empty_attachment_list_regenerates_body_html(app, db_session, redis_lock_only_double):
+    """The `if attachment_list:` gate's true side. A non-empty list must
+    cause `body_html` to be re-derived (via `markdown_to_html`) from the
+    attachment-appended `body`, not merely leave `body` updated while
+    `body_html` still reflects only the content arm's `allowlist_html` pass.
+
+    Every other test in this block asserts only on `body`, which
+    `html_to_text` would render identically whether or not
+    `body_html = markdown_to_html(body)` ever ran -- this is the test
+    sub-project 14's brief found missing from its own six, in the twin.
+    """
+    community, post, replier = _seed_scenario()
+    document = _reply_doc(content='hello',
+                          attachment=[{'url': 'https://cdn.example/a.png',
+                                      'name': 'alt words'}])
+
+    reply = _create(community, post, replier, document=document)
+
+    assert '<img' in reply.body_html
+    assert 'https://cdn.example/a.png' in reply.body_html
