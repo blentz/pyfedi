@@ -17,6 +17,7 @@ import httpx
 import pytest
 
 from app import db
+from app.activitypub import util as ap_util
 from app.activitypub.util import (refresh_community_profile_task,
                                   refresh_feed_profile_task,
                                   refresh_user_profile_task)
@@ -162,19 +163,30 @@ def test_refreshing_a_user_applies_the_peers_document(app, db_session, http_mock
     assert user.title == 'Wakko Warner'
 
 
-def test_refreshing_an_unknown_user_id_does_nothing(app, db_session, http_mock):
+def test_refreshing_an_unknown_user_id_does_nothing(app, db_session, monkeypatch):
     """First conjunct: `user` is None when the id resolves to no row.
 
-    No route is registered, so `block_outbound_http` would raise if the task
-    fetched anything -- the absence of a request is asserted by the absence of
-    a failure, which is why this test registers nothing.
+    THE OBSERVABLE IS A SPY ON `get_request`, NOT `block_outbound_http`. A
+    dropped conjunct here reaches `user.instance_id` on `None` and crashes
+    with `AttributeError` before any fetch, so an outbound-HTTP observable
+    would still attribute this one correctly -- but is switched to a spy for
+    consistency with the other two conjuncts, where the swallow described
+    below applies.
     """
     _remote_user()
+    calls = []
+
+    def _spy(*a, **kw):
+        calls.append(a)
+
+    monkeypatch.setattr(ap_util, 'get_request', _spy)
 
     refresh_user_profile_task(999999)
 
+    assert calls == []
 
-def test_refreshing_a_user_with_no_instance_does_nothing(app, db_session, http_mock):
+
+def test_refreshing_a_user_with_no_instance_does_nothing(app, db_session, monkeypatch):
     """Second conjunct: `user.instance_id`. NO FACTORY produces a NULL
     instance_id, so it is set explicitly here -- a test resting on the factory
     would never reach this branch.
@@ -182,22 +194,51 @@ def test_refreshing_a_user_with_no_instance_does_nothing(app, db_session, http_m
     This conjunct is the one `refresh_community_profile_task` and
     `refresh_feed_profile_task` LACK, which is what makes them crash on the
     same row. Their pins are in Tasks 5 and 7.
+
+    THE OBSERVABLE IS A SPY ON `get_request`, NOT `block_outbound_http`. See
+    `test_refreshing_a_user_on_a_dormant_instance_does_nothing` for why: the
+    same swallow applies to any dropped conjunct that lets the task reach the
+    fetch, not only the third.
     """
     user = _remote_user()
     user.instance_id = None
     db.session.commit()
+    calls = []
+
+    def _spy(*a, **kw):
+        calls.append(a)
+
+    monkeypatch.setattr(ap_util, 'get_request', _spy)
 
     refresh_user_profile_task(user.id)
 
+    assert calls == []
 
-def test_refreshing_a_user_on_a_dormant_instance_does_nothing(app, db_session, http_mock):
+
+def test_refreshing_a_user_on_a_dormant_instance_does_nothing(app, db_session, monkeypatch):
     """Third conjunct: `user.instance.online()`, which is
     `not (dormant or gone_forever)` (app/models.py). `dormant` is set
     explicitly -- it defaults to False, so a test resting on the default
     would assert the wrong side of the branch.
+
+    THE OBSERVABLE IS A SPY ON `get_request`, NOT `block_outbound_http`.
+    Dropping this conjunct lets the task reach the fetch, where respx raises
+    `AllMockedAssertionError` -- not an `httpx.HTTPError`, so the task's bare
+    `except:` at util.py:669 catches it, `signed_get_request` fails too, the
+    inner bare `except:` at :674 catches that, and the task returns silently.
+    The guard firing and not firing are then indistinguishable. Asserting the
+    fetch was never attempted survives that swallow.
     """
     user = _remote_user()
     user.instance.dormant = True
     db.session.commit()
+    calls = []
+
+    def _spy(*a, **kw):
+        calls.append(a)
+
+    monkeypatch.setattr(ap_util, 'get_request', _spy)
 
     refresh_user_profile_task(user.id)
+
+    assert calls == []
