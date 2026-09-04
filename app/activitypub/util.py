@@ -2735,10 +2735,13 @@ def create_post_reply(store_ap_json, community: Community, in_reply_to, request_
                     # ignore Mentions in comments from MBIN if they're just there because a local user authored a comment further up in the comment chain
                     # (direct replies will generate a different kind of Notification)
                     # note: can't just check for any Notifications (reply or mention) 'cos local users could conceivably have turned inbox replies off
+                    # a top-level comment has no ancestors, and psycopg2 renders an empty tuple as an
+                    # invalid `IN ()`, so skip the lookup rather than ask it about nobody
                     ids = tuple(ids)
-                    user_ids = db.session.execute(text('SELECT user_id FROM "post_reply" WHERE id IN :ids'), {'ids': ids}).scalars()
-                    if recipient.id in user_ids:
-                        continue
+                    if ids:
+                        user_ids = db.session.execute(text('SELECT user_id FROM "post_reply" WHERE id IN :ids'), {'ids': ids}).scalars()
+                        if recipient.id in user_ids:
+                            continue
 
                     # if checking for previous comments seems overly-involved, a cheaper solution is perhaps to just be to reject Mentions from MBIN in comments with a depth > 0
 

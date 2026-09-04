@@ -1620,6 +1620,47 @@ def test_the_mbin_arm_of_the_gate_reaches_the_rules(app, db_session, redis_lock_
     assert Notification.query.filter_by(user_id=recipient.id).count() == 0
 
 
+def test_a_non_microblog_mention_of_the_post_author_is_delivered(app, db_session, redis_lock_only_double):
+    """The gate's FALSE side: `software` is neither 'mbin' nor in
+    `MICROBLOG_APPS`, so none of the four rules runs and a Mention rule 1
+    would have suppressed is delivered instead.
+
+    This test exists because Fix C UNKILLED an existing mutant. Before the
+    `if ids:` guard landed, a mutant forcing this gate True was killed by
+    five tests that route around D243 with `_use_a_non_microblog_instance`:
+    forced into the gated branch, their top-level replies reached rule 4's
+    empty `ids`, crashed on `IN ()` and returned None. That kill was a side
+    effect of the crash, not of any rule, and the guard removed it -- with
+    the guard, a forced-True gate simply falls through all four rules and
+    delivers the same notification those tests already expect.
+
+    The fixture is `test_a_microblog_mention_of_the_post_author_is_suppressed`
+    with one column changed and the opposite assertion, which is what makes
+    the gate the only difference between the two outcomes. It is a nested
+    reply for the same reason that test is: the collection phase's
+    `if profile_id != reply_parent.author.ap_profile_id` uses the PARENT
+    COMMENT here, so a Mention of the post's author still survives to the
+    loop.
+    """
+    community, post, replier = _seed_scenario()
+    parent = _seed_chain_comment(post, post.author, 'parent')
+    recipient = _seed_local_recipient('localuser')
+    post.user_id = recipient.id
+    _use_a_non_microblog_instance(replier)
+    assert replier.instance.software != 'mbin'
+    assert replier.instance.software not in MICROBLOG_APPS
+    document = _reply_doc(content='hello',
+                          tag=[_mention('localuser'), {'name': 'decoy'}])
+
+    reply = _create(community, post, replier, document=document,
+                    in_reply_to=parent.ap_id)
+
+    assert reply is not None
+    notification = Notification.query.filter_by(user_id=recipient.id).one()
+    assert notification.subtype == 'comment_mention'
+    assert notification.targets['comment_id'] == reply.id
+
+
 def test_a_post_mention_naming_another_post_does_not_suppress(app, db_session, redis_lock_only_double):
     """Rule 2's near miss: the recipient has a `post_mention`, but for a
     different post, so
@@ -1713,41 +1754,38 @@ def test_a_comment_mention_outside_the_chain_does_not_suppress(app, db_session, 
     assert sorted(n.targets['comment_id'] for n in delivered) == sorted([sibling.id, reply.id])
 
 
-def test_a_top_level_microblog_mention_is_lost_to_the_empty_id_tuple(app, db_session, redis_lock_only_double):
-    """D243, pinned as CURRENT behaviour, not endorsed.
+def test_a_top_level_microblog_mention_skips_the_ancestor_lookup(app, db_session, redis_lock_only_double):
+    """D243, fixed: rule 4's `if ids:` guard, the create-path twin of the
+    guard sub-project 14 put on the same query in
+    `update_post_reply_from_activity`.
 
-    A top-level reply's path is `[0, reply.id]`, so `ids` is empty; rule 4
-    then runs `ids = tuple(ids)` and
-    `db.session.execute(text('SELECT user_id FROM "post_reply" WHERE id IN :ids'), {'ids': ids})`,
-    which psycopg2 renders as `IN ()`. Postgres rejects that, and
-    `create_post_reply`'s tail `except Exception as ex: log_incoming_ap(...);
-    return None` swallows it -- so a caller sees None and the mentioned user
-    gets nothing, even though the PostReply row was already committed inside
-    `PostReply.new`.
+    A top-level reply's path is `[0, reply.id]`, so rule 4's `ids` is empty.
+    Unguarded, `ids = tuple(ids)` followed by
+    `db.session.execute(text('SELECT user_id FROM "post_reply" WHERE id IN :ids'), {'ids': ids})`
+    made psycopg2 render `IN ()`, which Postgres rejects with
+    `syntax error at or near ")"`; `create_post_reply`'s tail
+    `except Exception as ex: log_incoming_ap(...); return None` swallowed
+    that, so a caller saw None and the mentioned local user got nothing --
+    even though `PostReply.new` had already committed the reply row.
 
-    The assertions below name that split state: the reply row IS persisted,
-    the function returned None, and no Notification exists. Task 9 fixes the
-    defect (the update path's `if ids:` guard is the shape of the fix) and
-    this pin inverts: the reply will be returned and the Notification will be
-    created, exactly as `test_a_microblog_mention_no_rule_suppresses_is_delivered`
-    already sees for a nested reply.
+    This test was written by Task 6 as a crash pin (`reply is None`, the row
+    persisted anyway, zero Notifications) and inverted here in the commit
+    that lands the guard, because left as a crash pin it fails the moment the
+    guard exists. With no ancestors there is nobody for rule 4 to suppress on
+    behalf of, so skipping the query and running it to an empty result reach
+    the same outcome and only the crash differs.
 
-    The `db.session.rollback()` is not decoration: the psycopg2 error leaves
-    the transaction aborted, so every later statement in it fails with
-    InFailedSqlTransaction until it is rolled back. `PostReply.new` committed
-    the reply before the crash, so the row survives the rollback.
+    `assert replier.instance.software == 'mastodon'` is load-bearing rather
+    than decorative: `make_instance` defaults to `'mastodon'`, which is in
+    `MICROBLOG_APPS`, so this reply enters the gated branch and reaches rule
+    4 at all -- the whole point of the test. It is asserted rather than
+    assumed so that a factory default change turns this into a failure
+    instead of a silent skip past the branch.
 
-    `assert reply is None` deliberately does NOT say which exception was
-    swallowed, and that gap is accepted rather than overlooked: the tail
-    catches everything, so in principle an unrelated error would satisfy it.
-    The natural strengthening -- asserting the `ActivityPubLog` message the
-    way this module's head-guard tests do via the `ap_log` fixture -- is not
-    available here, because `log_incoming_ap` writes that row with
-    `db.session.add(...)` / `commit()` INSIDE the already-aborted
-    transaction, so turning the config flag on replaces the pinned state with
-    a second, different failure. The three assertions below pin the shape of
-    THIS crash instead: an empty `ids` (`path == [0, id]`), a committed
-    PostReply, a None return, and no Notification.
+    The `path` assertion names WHY `ids` is empty rather than leaving it to
+    be inferred, and the Notification's `comment_id` target names the reply
+    it is about, so a stray notification from some other source could not
+    satisfy it.
     """
     community, post, replier = _seed_scenario()
     recipient = _seed_local_recipient('localuser')
@@ -1757,11 +1795,12 @@ def test_a_top_level_microblog_mention_is_lost_to_the_empty_id_tuple(app, db_ses
 
     reply = _create(community, post, replier, document=document)
 
-    assert reply is None
-    db.session.rollback()
+    assert reply is not None
     persisted = PostReply.query.filter_by(ap_id=f'https://{PEER}/comment/1').one()
     assert persisted.path == [0, persisted.id]
-    assert Notification.query.filter_by(user_id=recipient.id).count() == 0
+    notification = Notification.query.filter_by(user_id=recipient.id,
+                                                subtype='comment_mention').one()
+    assert notification.targets['comment_id'] == persisted.id
 
 
 # --- notify_about_post_reply: the parent_reply-is-None branch -------------
