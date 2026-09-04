@@ -29,7 +29,8 @@ from app.constants import NOTIF_MENTION
 from app.models import Language, Notification, PostReply, User
 from app.utils import utcnow
 from tests.factories import (make_community, make_instance, make_post,
-                             make_post_reply, make_site, make_user)
+                             make_post_reply, make_site, make_user,
+                             make_user_block)
 
 PEER = 'peer.example'
 
@@ -487,3 +488,256 @@ def test_an_empty_attachment_list_does_not_regenerate_the_html(app, db_session, 
     ))
 
     assert reply.body_html == '<p>body text</p>'
+
+
+def _seed_local_recipient(name='localuser'):
+    """A local user the Mention block can resolve.
+
+    `User.query.filter_by(ap_profile_id=..., ap_id=None)` is the lookup, so
+    both columns matter. `make_user(None, name, local=True)` already leaves
+    `ap_id` None -- and leaves `ap_profile_id` None too, which is why this
+    helper sets it: the lookup needs it to equal the lowercased href the
+    document sends. Passing `instance=None` is supported; `make_user` falls
+    back to `instance_id=1`.
+    """
+    recipient = make_user(None, name, local=True)
+    recipient.ap_profile_id = f'https://test.piefed.local/u/{name}'
+    db.session.commit()
+    return recipient
+
+
+def _mention(name='localuser'):
+    return {'type': 'Mention', 'href': f'https://test.piefed.local/u/{name}'}
+
+
+def test_a_reply_mention_of_a_local_user_notifies_them(app, db_session, redis_lock_only_double):
+    """The simple path: two tags so the `len(...) > 1` gate is satisfied, a
+    Mention naming a local user, a non-microblog instance so the
+    de-duplication block is skipped.
+
+    Asserts the Notification row exists with the right recipient, type and
+    url -- not merely that some notification was created.
+    """
+    reply = _seed_reply()
+    recipient = _seed_local_recipient()
+
+    update_post_reply_from_activity(reply, _update(
+        content='hello',
+        tag=[{'type': 'Hashtag', 'name': '#x'}, _mention()],
+    ))
+
+    notification = db.session.query(Notification).filter_by(
+        user_id=recipient.id, notif_type=NOTIF_MENTION).one()
+    assert notification.url.endswith(f'/comment/{reply.id}')
+    assert notification.subtype == 'comment_mention'
+
+
+def test_a_reply_mention_increments_the_recipients_unread_count(app, db_session, redis_lock_only_double):
+    """`recipient.unread_notifications += 1` sits beside the `db.session.add`
+    and is a separate statement. Seeded to 3 rather than left at the column
+    default, so "incremented" is distinguishable from "set to 1".
+    """
+    reply = _seed_reply()
+    recipient = _seed_local_recipient()
+    recipient.unread_notifications = 3
+    db.session.commit()
+
+    update_post_reply_from_activity(reply, _update(
+        content='hello',
+        tag=[{'type': 'Hashtag', 'name': '#x'}, _mention()],
+    ))
+
+    assert recipient.unread_notifications == 4
+
+
+def test_a_lone_reply_mention_is_ignored(app, db_session, redis_lock_only_double):
+    """THE ASYMMETRY. The reply function's tag gate requires
+    `len(request_json['object']['tag']) > 1`, so a document carrying exactly
+    one tag -- a single Mention -- is skipped entirely. The post function's
+    gate has no length condition.
+
+    This test PINS the current behaviour rather than asserting it is correct.
+    The spec registers it rather than fixing it, because changing the gate
+    changes which notifications this instance generates.
+    """
+    reply = _seed_reply()
+    recipient = _seed_local_recipient()
+
+    update_post_reply_from_activity(reply, _update(content='hello', tag=[_mention()]))
+
+    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
+
+
+def test_a_reply_mention_of_a_remote_user_notifies_nobody(app, db_session, redis_lock_only_double):
+    """The `startswith('https://' + SERVER_NAME)` guard. A Mention naming a
+    user on another host is not ours to notify.
+    """
+    reply = _seed_reply()
+    _seed_local_recipient()
+
+    update_post_reply_from_activity(reply, _update(
+        content='hello',
+        tag=[{'type': 'Hashtag', 'name': '#x'},
+             {'type': 'Mention', 'href': f'https://{PEER}/u/someone'}],
+    ))
+
+    assert db.session.query(Notification).count() == 0
+
+
+def test_a_reply_mention_with_no_href_notifies_nobody(app, db_session, redis_lock_only_double):
+    """`profile_id = json_tag['href'] if 'href' in json_tag else None`, then
+    `if profile_id and ...`. A Mention with no href yields None and stops.
+    """
+    reply = _seed_reply()
+    _seed_local_recipient()
+
+    update_post_reply_from_activity(reply, _update(
+        content='hello',
+        tag=[{'type': 'Hashtag', 'name': '#x'}, {'type': 'Mention'}],
+    ))
+
+    assert db.session.query(Notification).count() == 0
+
+
+def test_a_reply_mention_of_a_blocked_sender_is_suppressed(app, db_session, redis_lock_only_double):
+    """`blocked_users(recipient.id)` -- a recipient who has blocked the
+    reply's author gets no notification.
+
+    `make_user_block(blocker, blocked)` inserts `UserBlock(blocker_id=blocker.id,
+    blocked_id=blocked.id)` (tests/factories.py), and `blocked_users(user_id)`
+    (app/utils.py) filters `UserBlock` on `blocker_id == user_id` and returns
+    the `blocked_id`s. Production checks `if reply.user_id not in
+    blocked_senders` where `blocked_senders = blocked_users(recipient.id)`, so
+    the recipient must be the BLOCKER and the reply's author the BLOCKED --
+    confirmed by reading both functions before writing this call.
+    """
+    reply = _seed_reply()
+    recipient = _seed_local_recipient()
+    author = db.session.query(User).get(reply.user_id)
+    make_user_block(recipient, author)
+
+    update_post_reply_from_activity(reply, _update(
+        content='hello',
+        tag=[{'type': 'Hashtag', 'name': '#x'}, _mention()],
+    ))
+
+    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
+
+
+def test_a_second_reply_mention_does_not_duplicate_the_notification(app, db_session, redis_lock_only_double):
+    """`existing_notification` -- the same comment mentioning the same user
+    twice produces one row, not two.
+
+    Two Updates rather than two tags in one document, because the block breaks
+    out per tag and the second Update is the realistic shape.
+    """
+    reply = _seed_reply()
+    recipient = _seed_local_recipient()
+    document = _update(content='hello',
+                       tag=[{'type': 'Hashtag', 'name': '#x'}, _mention()])
+
+    update_post_reply_from_activity(reply, document)
+    update_post_reply_from_activity(reply, document)
+
+    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 1
+
+
+def test_a_reply_mention_tag_that_is_not_a_list_notifies_nobody(app, db_session, redis_lock_only_double):
+    """The `isinstance(request_json['object']['tag'], list)` conjunct. `tag`
+    present with a length greater than 1 by `len()`'s reckoning, but not a
+    list, must not reach the `for json_tag in ...` loop.
+
+    An int rather than a string: a two-character string would be silently
+    absorbed by the loop (each character fails `'type' in json_tag`'s
+    substring check and produces no notification either way, so it would not
+    distinguish the guard from its absence). `len()` on an int raises
+    `TypeError`, so if the `isinstance` conjunct were dropped this call would
+    crash instead of quietly reproducing the guarded no-notification outcome.
+    """
+    reply = _seed_reply()
+    recipient = _seed_local_recipient()
+
+    update_post_reply_from_activity(reply, _update(content='hello', tag=42))
+
+    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
+
+
+def test_a_reply_mention_tag_entry_with_no_type_key_notifies_nobody(app, db_session, redis_lock_only_double):
+    """The `'type' in json_tag` conjunct. A tag entry with no `type` key at
+    all must not reach the `json_tag['type'] == 'Mention'` comparison it
+    guards -- the entry that WOULD be a Mention has no `type`, only `href`,
+    so the comparison would KeyError if this conjunct were dropped.
+    """
+    reply = _seed_reply()
+    recipient = _seed_local_recipient()
+
+    update_post_reply_from_activity(reply, _update(
+        content='hello',
+        tag=[{'type': 'Hashtag', 'name': '#x'},
+             {'href': f'https://test.piefed.local/u/{recipient.user_name}'}],
+    ))
+
+    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
+
+
+def test_a_reply_tag_of_another_type_is_not_treated_as_a_mention(app, db_session, redis_lock_only_double):
+    """The `json_tag['type'] == 'Mention'` comparison. A tag entry that has a
+    `type` key and an `href` that would otherwise resolve to the recipient,
+    but whose type is not `'Mention'`, must not notify.
+    """
+    reply = _seed_reply()
+    recipient = _seed_local_recipient()
+
+    update_post_reply_from_activity(reply, _update(
+        content='hello',
+        tag=[{'type': 'Hashtag', 'name': '#x'},
+             {'type': 'Emoji', 'href': f'https://test.piefed.local/u/{recipient.user_name}'}],
+    ))
+
+    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
+
+
+def test_a_reply_mention_with_a_case_mismatched_host_notifies_nobody(app, db_session, redis_lock_only_double):
+    """The `profile_id.startswith('https://' + SERVER_NAME)` conjunct itself,
+    as distinct from the recipient lookup that follows it. A href whose host
+    differs from SERVER_NAME only by case fails this case-sensitive
+    `startswith` before any lowering happens (`profile_id.lower()` only runs
+    INSIDE the guard, once it has already passed).
+
+    A same-host-but-wrong-case href, rather than
+    test_a_reply_mention_of_a_remote_user_notifies_nobody's foreign PEER href,
+    is what makes this conjunct's effect observable: PEER's href would find
+    no matching local recipient regardless of whether this conjunct ran, so
+    that test alone does not kill a mutant that drops this conjunct. Here,
+    lower-casing the mixed-case href (what the guard's own next line would do
+    if it were reached) reproduces the recipient's `ap_profile_id` exactly --
+    so if `startswith` were bypassed, this Mention WOULD resolve and notify.
+    """
+    reply = _seed_reply()
+    recipient = _seed_local_recipient()
+
+    update_post_reply_from_activity(reply, _update(
+        content='hello',
+        tag=[{'type': 'Hashtag', 'name': '#x'},
+             {'type': 'Mention', 'href': 'https://Test.Piefed.Local/u/localuser'}],
+    ))
+
+    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
+
+
+def test_a_reply_mention_with_a_non_string_href_notifies_nobody(app, db_session, redis_lock_only_double):
+    """The `isinstance(profile_id, str)` conjunct of `if profile_id and
+    isinstance(profile_id, str) and profile_id.startswith(...)`. `profile_id`
+    truthy alone is not enough -- a non-string href (here, an int, which is
+    truthy) must not reach `.startswith(...)`, which would raise
+    `AttributeError` on an int if this conjunct were dropped.
+    """
+    reply = _seed_reply()
+    recipient = _seed_local_recipient()
+
+    update_post_reply_from_activity(reply, _update(
+        content='hello',
+        tag=[{'type': 'Hashtag', 'name': '#x'}, {'type': 'Mention', 'href': 1}],
+    ))
+
+    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
