@@ -54,9 +54,22 @@ def redis_lock_only_double(monkeypatch):
 def ap_log(app):
     """Turn on the ActivityPubLog write so a head guard is attributable.
 
-    Without this, all five head guards return None and create nothing, which
+    Without this, every head guard returns None and creates nothing, which
     makes them indistinguishable from each other and from a guard that was
     deleted. With it, each writes its own message.
+
+    Counted from source rather than asserted: `create_post_reply` has SEVEN
+    `return None` guards between its signature and the tail `try` (local-only
+    community, non-public visibility, parent-comment author's block,
+    parent-comment lock, `post_id is None`, archived post, post author's
+    block), plus the outer `else` that logs 'Unable to find parent
+    post/comment' and a `return None` in the tail `except`. SIX of the seven
+    are reachable: `if post_id is None:` cannot fire, because it sits inside
+    `if post_id or parent_comment_id or root_id:` and `find_reply_parent`
+    never sets `parent_comment_id` or `root_id` without setting `post_id` in
+    the same statement group -- registered as D265 and pinned by nothing,
+    because nothing can pin it. So the count of guards this fixture can make
+    attributable is six, and no test below claims the seventh.
 
     `app` is session-scoped (tests/conftest.py), so this mutation of
     `app.config` leaks to every later test in the process unless restored --
@@ -116,14 +129,19 @@ def _reply_doc(**fields):
             'object': obj}
 
 
-def _create(community, post, replier, document=None, in_reply_to=None):
+def _create(community, post, replier, document=None, in_reply_to=None, store_ap_json=True):
     """Call the function under test with the arguments its callers pass.
 
-    `store_ap_json=True` so the log row carries the document, which is what
-    makes a head-guard assertion able to name the document that provoked it.
+    `store_ap_json` defaults to True so the log row carries the document,
+    which is what makes a head-guard assertion able to name the document that
+    provoked it. It is a parameter rather than a constant because
+    `saved_json = request_json if store_ap_json else None` is the function's
+    first statement and its `else` arm is only reachable through this
+    argument -- see
+    `test_store_ap_json_decides_whether_the_log_row_carries_the_document`.
     """
     return create_post_reply(
-        store_ap_json=True,
+        store_ap_json=store_ap_json,
         community=community,
         in_reply_to=in_reply_to if in_reply_to is not None else post.ap_id,
         request_json=document if document is not None else _reply_doc(content='hello'),
@@ -134,9 +152,11 @@ def _create(community, post, replier, document=None, in_reply_to=None):
 def test_a_local_only_community_discards_the_reply(app, db_session, redis_lock_only_double, ap_log):
     """The first guard. A local-only community takes no federated replies.
 
-    Asserts the log row's message as well as the None return, because all five
-    head guards return None and create nothing -- the message is the only thing
-    that says WHICH guard fired.
+    Asserts the log row's message as well as the None return, because every
+    head guard returns None and creates nothing -- the message is the only
+    thing that says WHICH guard fired. (There are seven, six of them
+    reachable; see the `ap_log` fixture's docstring for the count and for why
+    the seventh is dead.)
     """
     community, post, replier = _seed_scenario(local_only=True)
 
@@ -147,6 +167,61 @@ def test_a_local_only_community_discards_the_reply(app, db_session, redis_lock_o
     log = ActivityPubLog.query.one()
     assert log.result == 'failure'
     assert 'local only' in log.exception_message
+
+
+# --- the six conditional expressions, and why coverage never saw them ----
+#
+# Coverage.py emits NO ARC for a conditional expression: `a if c else b` is
+# one statement on one line, so an arm that never runs shows up neither as a
+# missed statement nor as a partial branch. This module's 71.0362% blended
+# figure is therefore SILENT about every ternary in the scoped region, and
+# criterion 2 -- no guard survives a dropped conjunct -- is not measurable by
+# coverage for ternaries at all. The six below were found by reading, and
+# each is pinned by exactly one test that dies when its arm's guard is
+# dropped:
+#
+#   saved_json = request_json if store_ap_json else None          (else)
+#   language_id = language.id if language else None               (else)
+#   author.ap_id if author.ap_id else author.user_name            (else)
+#     -- the Mention notification in create_post_reply
+#   community.ap_id if community.ap_id else community.name        (IF)
+#     -- notify_about_post_reply's parent_reply-is-None branch
+#   author.ap_id if author.ap_id else author.user_name            (else)
+#     -- notify_about_post_reply, both branches, two separate sites
+#
+# The `language` one is the substantive guard: `find_language` returns None
+# on a miss, so dropping `if language` raises AttributeError out of
+# create_post_reply. Everything else here is a display-name fallback.
+
+
+@pytest.mark.parametrize('store_ap_json, expect_document', [(True, True), (False, False)])
+def test_store_ap_json_decides_whether_the_log_row_carries_the_document(
+        app, db_session, redis_lock_only_double, ap_log, store_ap_json, expect_document):
+    """`saved_json = request_json if store_ap_json else None` --
+    `create_post_reply`'s first statement.
+
+    `log_incoming_ap` (app/activitypub/util.py) writes
+    `activity_log.activity_json = json.dumps(saved_json)` only `if
+    saved_json:`, so the PERSISTED `activity_json` column is the one
+    observable the two arms differ on. Every other test in this module takes
+    `_create`'s `store_ap_json=True` default, which is why the `else None`
+    arm had never run.
+
+    The local-only guard is the vehicle because it is the first
+    `log_incoming_ap` call the function reaches, so nothing between the
+    ternary and the log row can be the reason the column is empty.
+    """
+    community, post, replier = _seed_scenario(local_only=True)
+
+    result = _create(community, post, replier, store_ap_json=store_ap_json)
+
+    assert result is None
+    log = ActivityPubLog.query.one()
+    if expect_document:
+        assert log.activity_json is not None
+        assert f'https://{PEER}/activities/create/1' in log.activity_json
+    else:
+        assert log.activity_json is None
 
 
 @pytest.mark.parametrize('visibility_field,expected', [
@@ -589,6 +664,38 @@ def test_content_map_supplies_the_language_when_language_is_absent(app, db_sessi
     reply = _create(community, post, replier, document=document)
 
     assert reply.language_id == italian.id
+
+
+def test_a_content_map_naming_an_unknown_language_leaves_the_reply_unlanguaged(app, db_session,
+                                                                              redis_lock_only_double):
+    """The `else None` arm of `language_id = language.id if language else
+    None` -- the ONLY guard in this function against `find_language`
+    returning None, and the substantive member of this module's six
+    conditional expressions (see the block comment above
+    `test_store_ap_json_decides_whether_the_log_row_carries_the_document`).
+
+    `find_language` (app/activitypub/util.py) is a pure lookup --
+    `Language.query.filter(Language.code == code).first()` -- so a
+    `contentMap` whose first key names no seeded `Language` yields None.
+    Dropping `if language` makes the line `language.id`, which raises
+    `AttributeError: 'NoneType' object has no attribute 'id'` from a point
+    ABOVE the tail `try`, so it propagates out of `create_post_reply`
+    entirely rather than degrading to a None return.
+
+    English and Italian are seeded as decoys so `language_id is None` cannot
+    be confused with the `else` arm's `site_language_id()` (which would give
+    English) or with the `elif` arm having found something.
+    """
+    community, post, replier = _seed_scenario()
+    _make_language('en', 'English')
+    _make_language('it', 'Italian')
+    document = _reply_doc(content='hello', contentMap={'zz': 'unknown'})
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    persisted = PostReply.query.filter_by(ap_id=f'https://{PEER}/comment/1').one()
+    assert persisted.language_id is None
 
 
 def test_a_language_dict_wins_over_a_present_content_map(app, db_session, redis_lock_only_double):
@@ -1363,6 +1470,39 @@ def test_a_delivered_mention_notification_carries_the_expected_fields(app, db_se
     assert notification.notif_type == NOTIF_MENTION
     assert notification.subtype == 'comment_mention'
     assert notification.url == f"{app.config['SERVER_URL']}/comment/{reply.id}"
+
+
+def test_a_mention_notification_names_an_ap_id_less_author_by_user_name(app, db_session,
+                                                                       redis_lock_only_double):
+    """The `else` arm of `'author_user_name': author.ap_id if author.ap_id
+    else author.user_name` in the Mention block.
+
+    `author` here is `User.query.get(post_reply.user_id)` -- the replier, not
+    the mentioned user. `_seed_scenario`'s replier is remote, so `ap_id` is
+    set and every other test in this section takes the `if` arm; clearing
+    `ap_id` is the only way in, because that column is precisely what
+    separates a local account from a federated one (tests/factories.py's
+    `make_user` docstring).
+
+    Asserted on the persisted `targets` JSON, so a mutant that drops the
+    fallback and stores a null author name is visible as a null rather than
+    as a crash.
+    """
+    community, post, replier = _seed_scenario()
+    _use_a_non_microblog_instance(replier)
+    replier.ap_id = None
+    db.session.commit()
+    recipient = _seed_local_recipient('localuser')
+    document = _reply_doc(content='hello',
+                          tag=[_mention('localuser'), {'name': 'decoy'}])
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    notification = Notification.query.filter_by(user_id=recipient.id,
+                                                subtype='comment_mention').one()
+    assert notification.targets['author_user_name'] == replier.user_name
+    assert replier.user_name == 'replier'
 
 
 def test_the_unread_counter_increments_rather_than_resets(app, db_session, redis_lock_only_double):
@@ -2184,6 +2324,57 @@ def test_a_post_subscriber_is_notified_of_a_top_level_reply(app, db_session, red
     }
 
 
+def test_a_community_with_an_ap_id_is_named_by_it_in_a_top_level_notification(app, db_session,
+                                                                             redis_lock_only_double):
+    """The `if` arm of `'community_name': community.ap_id if community.ap_id
+    else community.name` -- the one member of this module's six conditional
+    expressions whose UNTESTED side is the `if`, because `make_community`
+    never sets `ap_id` and every other test therefore lands on `name`.
+
+    `ap_id` is set to a value that is deliberately NOT the community's name,
+    or a mutant collapsing the expression to `community.name` would produce
+    the same string and survive.
+    """
+    community, post, replier = _seed_scenario()
+    community.ap_id = f'microblogs@{PEER}'
+    db.session.commit()
+    subscriber = _seed_post_subscriber(post)
+    new_reply = make_post_reply(post, replier, body='a top level reply')
+
+    notify_about_post_reply(None, new_reply)
+
+    notification = Notification.query.filter_by(user_id=subscriber.id).one()
+    assert notification.targets['community_name'] == f'microblogs@{PEER}'
+    assert community.name != f'microblogs@{PEER}'
+
+
+def test_a_top_level_notification_names_an_ap_id_less_author_by_user_name(app, db_session,
+                                                                         redis_lock_only_double):
+    """The `else` arm of `'author_user_name': author.ap_id if author.ap_id
+    else author.user_name` in `notify_about_post_reply`'s
+    parent_reply-is-None branch. This is one of TWO sites in this function
+    spelling the same expression; the other lives in the `else` branch and is
+    pinned separately by
+    `test_a_reply_notification_names_an_ap_id_less_author_by_user_name`, so
+    reverting either site kills only its own test.
+
+    `_seed_scenario`'s replier is remote, so the `if` arm is what
+    `test_a_post_subscriber_is_notified_of_a_top_level_reply` already
+    asserts; clearing `ap_id` is what reaches the fallback.
+    """
+    community, post, replier = _seed_scenario()
+    replier.ap_id = None
+    db.session.commit()
+    subscriber = _seed_post_subscriber(post)
+    new_reply = make_post_reply(post, replier, body='a top level reply')
+
+    notify_about_post_reply(None, new_reply)
+
+    notification = Notification.query.filter_by(user_id=subscriber.id).one()
+    assert notification.targets['author_user_name'] == replier.user_name
+    assert replier.user_name == 'replier'
+
+
 def test_the_replier_is_not_notified_of_their_own_top_level_reply(app, db_session, redis_lock_only_double):
     """The `new_reply.user_id != notify_id` guard's False side: the replier
     subscribed to their own post (a plausible case -- someone subscribes,
@@ -2420,6 +2611,32 @@ def test_a_parent_subscriber_is_notified_of_a_reply(app, db_session, redis_lock_
         'author_id': new_reply.user_id,
         'author_user_name': replier.ap_id,
     }
+
+
+def test_a_reply_notification_names_an_ap_id_less_author_by_user_name(app, db_session,
+                                                                     redis_lock_only_double):
+    """The `else` arm of `'author_user_name': author.ap_id if author.ap_id
+    else author.user_name` in `notify_about_post_reply`'s `else` branch --
+    the SECOND of the two sites spelling that expression in this function.
+    Its twin in the parent_reply-is-None branch is pinned by
+    `test_a_top_level_notification_names_an_ap_id_less_author_by_user_name`;
+    the two branches are mutually exclusive, so reverting one site leaves
+    the other test green, which is what makes the two pins independent
+    rather than redundant.
+    """
+    community, post, replier = _seed_scenario()
+    replier.ap_id = None
+    db.session.commit()
+    parent = _seed_chain_comment(post, post.author, 'parent')
+    subscriber = make_user(None, 'subscriber', local=True)
+    make_notification_subscription(subscriber, parent.id, NOTIF_REPLY)
+    new_reply = _seed_chain_comment(post, replier, 'child', parent=parent)
+
+    notify_about_post_reply(parent, new_reply)
+
+    notification = Notification.query.filter_by(user_id=subscriber.id).one()
+    assert notification.targets['author_user_name'] == replier.user_name
+    assert replier.user_name == 'replier'
 
 
 def test_the_replier_is_not_notified_of_their_own_reply_to_a_comment(app, db_session, redis_lock_only_double):
