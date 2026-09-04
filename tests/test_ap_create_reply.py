@@ -25,7 +25,7 @@ import pytest
 
 from app import db
 from app.activitypub.util import create_post_reply, notify_about_post_reply
-from app.constants import NOTIF_MENTION, NOTIF_POST, NOTIF_REPLY
+from app.constants import MICROBLOG_APPS, NOTIF_MENTION, NOTIF_POST, NOTIF_REPLY
 from app.models import ActivityPubLog, Language, Notification, PostReply, User, UserFlair
 from app.utils import utcnow
 from tests.factories import (make_community, make_instance, make_instance_block,
@@ -741,9 +741,12 @@ def _use_a_non_microblog_instance(replier):
     lutn in local_users_to_notify:` loop) the moment any Mention is actually
     collected. That branch's last query -- `db.session.execute(text('SELECT
     user_id FROM "post_reply" WHERE id IN :ids'), {'ids': ids})` -- binds
-    `ids` as a Python tuple; every reply built in this module is a top-level
-    reply (`post_reply.path == [0, post_reply.id]`), so that tuple is always
-    empty, and psycopg2 raises a syntax error on `IN ()` -- confirmed
+    `ids` as a Python tuple; every reply built by a test that calls this
+    helper is a top-level reply (`post_reply.path == [0, post_reply.id]`), so
+    for those the tuple is always empty -- see the de-duplication section at
+    the end of this module for how `path` is built, and for the tests that
+    seed a deeper chain instead so that the tuple is not empty. On an empty
+    tuple psycopg2 raises a syntax error on `IN ()` -- confirmed
     directly against this suite's own Postgres container:
     `cur.execute('SELECT 1 WHERE 1 IN %s', ((),))` raises `syntax error at
     or near ")"`. That raise happens inside `create_post_reply`'s own
@@ -1254,3 +1257,428 @@ def test_a_falsy_flair_value_leaves_an_existing_flair_unchanged(app, db_session,
     rows = UserFlair.query.filter_by(user_id=replier.id, community_id=community.id).all()
     assert len(rows) == 1
     assert rows[0].flair == 'bronze'
+
+
+# --- The four Mention de-duplication rules -------------------------------
+#
+# All four sit inside `create_post_reply`'s `for lutn in
+# local_users_to_notify:` loop, behind one gate quoted from
+# app/activitypub/util.py:
+#
+#     if post_reply.instance.software == 'mbin' or post_reply.instance.software in MICROBLOG_APPS:
+#
+# `MICROBLOG_APPS` is `["mastodon", "misskey", "akkoma", "iceshrimp",
+# "pleroma", "fedibird"]` (app/constants.py) and `make_instance`
+# (tests/factories.py) defaults `software='mastodon'`, so `_seed_scenario`
+# lands ON the gated path by default. The Task 4/5 tests above call
+# `_use_a_non_microblog_instance` to get OFF it; every test below
+# deliberately does not, and asserts the software value it is relying on.
+#
+# The rules, in the order they run, quoted from the source:
+#
+#   1. `if recipient.id == post.user_id: continue`
+#   2. a Notification for the recipient with `notif_type == NOTIF_MENTION`,
+#      `subtype == "post_mention"` and
+#      `Notification.targets.op("->>")("post_id").cast(Integer) == post_reply.post_id`
+#   3. a Notification for the recipient with `notif_type == NOTIF_MENTION`,
+#      `subtype == "comment_mention"` and
+#      `Notification.targets.op("->>")("comment_id").cast(Integer).in_(ids)`
+#   4. `SELECT user_id FROM "post_reply" WHERE id IN :ids` containing
+#      `recipient.id`
+#
+# Rules 2 and 3 cast a JSON field to Integer, so the seeded `targets` below
+# store `post.id` / `parent.id` as ints -- which is what production's own
+# writers store (`'post_id': post.id` in app/models.py's post_mention block,
+# `'comment_id': post_reply.id` in this function's own notification block).
+#
+# `ids` is built once, between rules 2 and 3, and reused by rule 4:
+#
+#     ids = []
+#     for element in post_reply.path:
+#         if element == 0 or element == post_reply.id:
+#             continue
+#         ids.append(element)
+#
+# In THIS copy, rule 3's query and its `continue` sit OUTSIDE that
+# `for element` loop -- so rule 3 works. That is the same spelling
+# `update_post_reply_from_activity` carries after sub-project 14's Fix F;
+# the two blocks were read side by side before these tests were written and
+# are identical except for D243, which the update copy has fixed
+# (`ids = tuple(ids)` followed by `if ids:`) and this copy has not.
+#
+# The shape of `post_reply.path`. `PostReply.new` (app/models.py) ends with
+#
+#     if in_reply_to and in_reply_to.path:
+#         reply.path = in_reply_to.path[:]
+#         reply.path.append(reply.id)
+#         ...
+#     else:
+#         reply.path = [0, reply.id]
+#
+# so a top-level reply gets `[0, reply.id]`, whose `ids` is EMPTY. An empty
+# `ids` is D243: `ids = tuple(ids)` then `WHERE id IN :ids` renders `IN ()`,
+# which Postgres rejects, and this function's tail `except Exception as ex`
+# swallows the crash into a `None` return and zero Notifications -- so a
+# suppression test on an empty `ids` would pass because of the crash, not
+# because of its rule. `make_post_reply` (tests/factories.py) sets neither
+# `path` nor `parent_id`, and a parent whose `path` is None takes the `else`
+# branch above too, giving the CHILD `[0, child.id]` and an empty `ids` all
+# over again. `_seed_chain_comment` below therefore sets `path` explicitly,
+# and every test that needs a rule other than the crash to decide the outcome
+# replies to one of those comments rather than to the post.
+
+
+def _seed_chain_comment(post, author, slug, parent=None):
+    """A PostReply in `post`'s comment chain with the columns
+    `create_post_reply` and `PostReply.new` actually read set explicitly.
+
+    `ap_id` carries 'comment' because `find_reply_parent` tests
+    `if 'comment' in in_reply_to:` before it tests for 'post'.
+
+    `path` is the load-bearing one, for the reason set out in the block
+    comment above: `make_post_reply` leaves it None, and `PostReply.new`
+    copies a parent's path only `if in_reply_to and in_reply_to.path`.
+    A root comment here gets `[0, self.id]`; a child gets its parent's path
+    with its own id appended, which is exactly what `PostReply.new` builds.
+    """
+    reply = make_post_reply(post, author)
+    reply.ap_id = f'https://{PEER}/comment/{slug}'
+    reply.parent_id = parent.id if parent is not None else None
+    reply.path = [0, reply.id] if parent is None else list(parent.path) + [reply.id]
+    reply.depth = len(reply.path) - 2
+    reply.root_id = reply.path[1]
+    db.session.commit()
+    return reply
+
+
+def test_a_microblog_mention_no_rule_suppresses_is_delivered(app, db_session, redis_lock_only_double):
+    """The control for the four suppression tests below.
+
+    Same fixture shape they use -- the gated (microblog) path, a Mention of a
+    local user, a reply to an existing comment so `ids` is non-empty -- with
+    none of the four rules' state seeded. It produces a Notification, which
+    is what makes the four "zero Notifications" assertions below mean
+    something: without it they would be negative against a path that never
+    delivers anything under this fixture at all.
+
+    Also records the two facts the rest of the section rests on: the
+    instance's software really is inside `MICROBLOG_APPS`, and a reply to a
+    comment whose `path` is `[0, parent.id]` gets `[0, parent.id, reply.id]`,
+    whose `ids` is `[parent.id]`.
+    """
+    community, post, replier = _seed_scenario()
+    parent = _seed_chain_comment(post, post.author, 'parent')
+    recipient = _seed_local_recipient('localuser')
+    assert replier.instance.software == 'mastodon'
+    document = _reply_doc(content='hello',
+                          tag=[_mention('localuser'), {'name': 'decoy'}])
+
+    reply = _create(community, post, replier, document=document,
+                    in_reply_to=parent.ap_id)
+
+    assert reply is not None
+    assert reply.path == [0, parent.id, reply.id]
+    notification = Notification.query.filter_by(user_id=recipient.id).one()
+    assert notification.notif_type == NOTIF_MENTION
+    assert notification.subtype == 'comment_mention'
+    assert notification.targets['comment_id'] == reply.id
+
+
+def test_a_microblog_mention_of_the_post_author_is_suppressed(app, db_session, redis_lock_only_double):
+    """Rule 1: `if recipient.id == post.user_id: continue`.
+
+    The recipient is made the POST's author while the parent comment keeps
+    its remote author, so the Mention still survives the collection phase's
+    `if profile_id != reply_parent.author.ap_profile_id` (whose `reply_parent`
+    is the parent comment here, not the post) and reaches the loop.
+
+    Replies to a comment rather than to the post so `ids` is `[parent.id]`.
+    That is not what rule 1 keys on -- it routes around D243, so that a
+    mutant dropping rule 1 falls through rules 2, 3 and 4 to the delivery
+    block instead of into the swallowed `IN ()` crash, which would produce
+    the same zero Notifications and leave the mutant alive.
+    """
+    community, post, replier = _seed_scenario()
+    parent = _seed_chain_comment(post, post.author, 'parent')
+    recipient = _seed_local_recipient('localuser')
+    post.user_id = recipient.id
+    db.session.commit()
+    document = _reply_doc(content='hello',
+                          tag=[_mention('localuser'), {'name': 'decoy'}])
+
+    reply = _create(community, post, replier, document=document,
+                    in_reply_to=parent.ap_id)
+
+    assert reply is not None
+    assert reply.path == [0, parent.id, reply.id]
+    assert Notification.query.filter_by(user_id=recipient.id).count() == 0
+
+
+def test_a_microblog_mention_mirroring_a_post_mention_is_suppressed(app, db_session, redis_lock_only_double):
+    """Rule 2: an existing `post_mention` Notification for this recipient
+    whose `targets->>'post_id'`, cast to Integer, equals `post_reply.post_id`.
+
+    `post_id` is stored as an int, matching what app/models.py's post_mention
+    block stores (`'post_id': post.id`); the production filter casts the
+    `->>` text back to Integer, so a mismatched type here would silently miss
+    and the test would pass for the wrong reason.
+
+    Replies to a comment so `ids` is non-empty, routing around D243 for the
+    same reason rule 1's test does: with rule 2 dropped, the fall-through has
+    to reach the delivery block, not the crash.
+    """
+    community, post, replier = _seed_scenario()
+    parent = _seed_chain_comment(post, post.author, 'parent')
+    recipient = _seed_local_recipient('localuser')
+    existing = Notification(user_id=recipient.id, author_id=replier.id,
+                            title='You have been mentioned in a post',
+                            url=f'/post/{post.id}',
+                            notif_type=NOTIF_MENTION, subtype='post_mention',
+                            targets={'gen': '0', 'post_id': post.id})
+    db.session.add(existing)
+    db.session.commit()
+    document = _reply_doc(content='hello',
+                          tag=[_mention('localuser'), {'name': 'decoy'}])
+
+    reply = _create(community, post, replier, document=document,
+                    in_reply_to=parent.ap_id)
+
+    assert reply is not None
+    rows = Notification.query.filter_by(user_id=recipient.id).all()
+    assert len(rows) == 1
+    assert rows[0].subtype == 'post_mention'
+    assert rows[0].targets['post_id'] == post.id
+
+
+def test_a_microblog_mention_mirroring_a_comment_mention_is_suppressed(app, db_session, redis_lock_only_double):
+    """Rule 3: an existing `comment_mention` Notification for this recipient
+    whose `targets->>'comment_id'`, cast to Integer, is `.in_(ids)`.
+
+    `ids` here is `[parent.id]` -- the new reply's path is
+    `[0, parent.id, reply.id]` and the loop building `ids` drops `0` and
+    `post_reply.id`. The seeded Notification names `parent.id`, so it is
+    inside `ids`; `comment_id` is stored as an int to match the cast, the
+    same way rule 2's `post_id` is.
+
+    This is the one rule whose own fixture already makes `ids` non-empty --
+    an empty `ids` would render rule 3's filter as `.in_([])`, which matches
+    nothing, so there would be no rule to test. No separate routing around
+    D243 is needed or added here: with rule 3 dropped, `ids` is still
+    `[parent.id]` and rule 4's query is still well-formed.
+    """
+    community, post, replier = _seed_scenario()
+    parent = _seed_chain_comment(post, post.author, 'parent')
+    recipient = _seed_local_recipient('localuser')
+    existing = Notification(user_id=recipient.id, author_id=replier.id,
+                            title=f'You have been mentioned in comment {parent.id}',
+                            url=f'/comment/{parent.id}',
+                            notif_type=NOTIF_MENTION, subtype='comment_mention',
+                            targets={'gen': '0', 'post_id': post.id,
+                                     'comment_id': parent.id})
+    db.session.add(existing)
+    db.session.commit()
+    document = _reply_doc(content='hello',
+                          tag=[_mention('localuser'), {'name': 'decoy'}])
+
+    reply = _create(community, post, replier, document=document,
+                    in_reply_to=parent.ap_id)
+
+    assert reply is not None
+    assert reply.path == [0, parent.id, reply.id]
+    rows = Notification.query.filter_by(user_id=recipient.id).all()
+    assert len(rows) == 1
+    assert rows[0].targets['comment_id'] == parent.id
+
+
+def test_a_microblog_mention_of_an_earlier_commenter_in_the_chain_is_suppressed(app, db_session, redis_lock_only_double):
+    """Rule 4: `SELECT user_id FROM "post_reply" WHERE id IN :ids` returning
+    the recipient.
+
+    Needs a chain two comments deep. The recipient authors the ROOT comment;
+    a remote user authors the comment actually being replied to. Both are
+    reasons: if the recipient authored the immediate parent instead, the
+    collection phase's `if profile_id != reply_parent.author.ap_profile_id`
+    would drop the Mention before the loop ever ran, and the test would pass
+    without rule 4 existing.
+
+    `ids` is `[root.id, parent.id]` -- the new reply's path is
+    `[0, root.id, parent.id, reply.id]` -- so `root.id` is in the tuple and
+    its `user_id` is the recipient's. No routing around D243 is needed: this
+    rule's own fixture is what makes `ids` non-empty, and an empty `ids` is
+    exactly the state in which the rule cannot run at all.
+    """
+    community, post, replier = _seed_scenario()
+    recipient = _seed_local_recipient('localuser')
+    root = _seed_chain_comment(post, recipient, 'root')
+    parent = _seed_chain_comment(post, post.author, 'parent', parent=root)
+    document = _reply_doc(content='hello',
+                          tag=[_mention('localuser'), {'name': 'decoy'}])
+
+    reply = _create(community, post, replier, document=document,
+                    in_reply_to=parent.ap_id)
+
+    assert reply is not None
+    assert reply.path == [0, root.id, parent.id, reply.id]
+    assert root.user_id == recipient.id
+    assert Notification.query.filter_by(user_id=recipient.id).count() == 0
+
+
+def test_the_mbin_arm_of_the_gate_reaches_the_rules(app, db_session, redis_lock_only_double):
+    """The gate's other arm: `post_reply.instance.software == 'mbin'`.
+
+    'mbin' is NOT one of `MICROBLOG_APPS`' six entries (asserted below), so
+    that literal comparison is the only way an mbin instance reaches these
+    rules -- every other test in this section arrives through the
+    `in MICROBLOG_APPS` arm with `make_instance`'s default 'mastodon'.
+
+    Uses rule 1's state to show the arm reaching a rule rather than merely
+    being evaluated, and replies to a comment for the same D243 reason rule
+    1's own test does.
+    """
+    community, post, replier = _seed_scenario()
+    parent = _seed_chain_comment(post, post.author, 'parent')
+    recipient = _seed_local_recipient('localuser')
+    post.user_id = recipient.id
+    replier.instance.software = 'mbin'
+    db.session.commit()
+    assert 'mbin' not in MICROBLOG_APPS
+    document = _reply_doc(content='hello',
+                          tag=[_mention('localuser'), {'name': 'decoy'}])
+
+    reply = _create(community, post, replier, document=document,
+                    in_reply_to=parent.ap_id)
+
+    assert reply is not None
+    assert Notification.query.filter_by(user_id=recipient.id).count() == 0
+
+
+def test_a_post_mention_naming_another_post_does_not_suppress(app, db_session, redis_lock_only_double):
+    """Rule 2's near miss: the recipient has a `post_mention`, but for a
+    different post, so
+    `Notification.targets.op("->>")("post_id").cast(Integer) == post_reply.post_id`
+    is False and the Mention is delivered.
+
+    Without this, rule 2's test alone cannot distinguish the real filter from
+    one that suppresses on the mere existence of any `post_mention` for the
+    recipient.
+
+    A second decoy rides along: a `post_mention` naming THIS post but
+    belonging to a different local user, which the filter's
+    `Notification.user_id == recipient.id` conjunct must exclude.
+    """
+    community, post, replier = _seed_scenario()
+    other_post = make_post(community, post.author, ap_id=f'https://{PEER}/post/2')
+    parent = _seed_chain_comment(post, post.author, 'parent')
+    recipient = _seed_local_recipient('localuser')
+    bystander = _seed_local_recipient('bystander')
+    unrelated = Notification(user_id=recipient.id, author_id=replier.id,
+                             title='You have been mentioned in a post',
+                             url=f'/post/{other_post.id}',
+                             notif_type=NOTIF_MENTION, subtype='post_mention',
+                             targets={'gen': '0', 'post_id': other_post.id})
+    someone_elses = Notification(user_id=bystander.id, author_id=replier.id,
+                                 title='You have been mentioned in a post',
+                                 url=f'/post/{post.id}',
+                                 notif_type=NOTIF_MENTION, subtype='post_mention',
+                                 targets={'gen': '0', 'post_id': post.id})
+    db.session.add(unrelated)
+    db.session.add(someone_elses)
+    db.session.commit()
+    document = _reply_doc(content='hello',
+                          tag=[_mention('localuser'), {'name': 'decoy'}])
+
+    reply = _create(community, post, replier, document=document,
+                    in_reply_to=parent.ap_id)
+
+    assert reply is not None
+    delivered = Notification.query.filter_by(user_id=recipient.id,
+                                             subtype='comment_mention').one()
+    assert delivered.targets['comment_id'] == reply.id
+
+
+def test_a_comment_mention_outside_the_chain_does_not_suppress(app, db_session, redis_lock_only_double):
+    """Rule 3's near miss: the recipient has a `comment_mention`, but it names
+    a sibling comment that is not an ancestor of this reply, so its
+    `comment_id` is not `.in_(ids)` and the Mention is delivered.
+
+    The sibling is a root comment of its own (`path == [0, sibling.id]`)
+    while the reply's `ids` is `[parent.id]`, so the two never overlap. The
+    seeded row deliberately carries this post's `post_id`, which also makes
+    it a near miss for rule 2's `subtype == "post_mention"` filter.
+
+    A second decoy rides along: a `comment_mention` that DOES name
+    `parent.id` -- inside `ids` -- but belongs to a different local user,
+    which the filter's `Notification.user_id == recipient.id` conjunct must
+    exclude.
+    """
+    community, post, replier = _seed_scenario()
+    parent = _seed_chain_comment(post, post.author, 'parent')
+    sibling = _seed_chain_comment(post, post.author, 'sibling')
+    recipient = _seed_local_recipient('localuser')
+    bystander = _seed_local_recipient('bystander')
+    unrelated = Notification(user_id=recipient.id, author_id=replier.id,
+                             title=f'You have been mentioned in comment {sibling.id}',
+                             url=f'/comment/{sibling.id}',
+                             notif_type=NOTIF_MENTION, subtype='comment_mention',
+                             targets={'gen': '0', 'post_id': post.id,
+                                      'comment_id': sibling.id})
+    someone_elses = Notification(user_id=bystander.id, author_id=replier.id,
+                                 title=f'You have been mentioned in comment {parent.id}',
+                                 url=f'/comment/{parent.id}',
+                                 notif_type=NOTIF_MENTION, subtype='comment_mention',
+                                 targets={'gen': '0', 'post_id': post.id,
+                                          'comment_id': parent.id})
+    db.session.add(unrelated)
+    db.session.add(someone_elses)
+    db.session.commit()
+    document = _reply_doc(content='hello',
+                          tag=[_mention('localuser'), {'name': 'decoy'}])
+
+    reply = _create(community, post, replier, document=document,
+                    in_reply_to=parent.ap_id)
+
+    assert reply is not None
+    assert reply.path == [0, parent.id, reply.id]
+    assert sibling.path == [0, sibling.id]
+    delivered = Notification.query.filter_by(user_id=recipient.id,
+                                             subtype='comment_mention').all()
+    assert sorted(n.targets['comment_id'] for n in delivered) == sorted([sibling.id, reply.id])
+
+
+def test_a_top_level_microblog_mention_is_lost_to_the_empty_id_tuple(app, db_session, redis_lock_only_double):
+    """D243, pinned as CURRENT behaviour, not endorsed.
+
+    A top-level reply's path is `[0, reply.id]`, so `ids` is empty; rule 4
+    then runs `ids = tuple(ids)` and
+    `db.session.execute(text('SELECT user_id FROM "post_reply" WHERE id IN :ids'), {'ids': ids})`,
+    which psycopg2 renders as `IN ()`. Postgres rejects that, and
+    `create_post_reply`'s tail `except Exception as ex: log_incoming_ap(...);
+    return None` swallows it -- so a caller sees None and the mentioned user
+    gets nothing, even though the PostReply row was already committed inside
+    `PostReply.new`.
+
+    The assertions below name that split state: the reply row IS persisted,
+    the function returned None, and no Notification exists. Task 9 fixes the
+    defect (the update path's `if ids:` guard is the shape of the fix) and
+    this pin inverts: the reply will be returned and the Notification will be
+    created, exactly as `test_a_microblog_mention_no_rule_suppresses_is_delivered`
+    already sees for a nested reply.
+
+    The `db.session.rollback()` is not decoration: the psycopg2 error leaves
+    the transaction aborted, so every later statement in it fails with
+    InFailedSqlTransaction until it is rolled back. `PostReply.new` committed
+    the reply before the crash, so the row survives the rollback.
+    """
+    community, post, replier = _seed_scenario()
+    recipient = _seed_local_recipient('localuser')
+    assert replier.instance.software == 'mastodon'
+    document = _reply_doc(content='hello',
+                          tag=[_mention('localuser'), {'name': 'decoy'}])
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is None
+    db.session.rollback()
+    persisted = PostReply.query.filter_by(ap_id=f'https://{PEER}/comment/1').one()
+    assert persisted.path == [0, persisted.id]
+    assert Notification.query.filter_by(user_id=recipient.id).count() == 0
