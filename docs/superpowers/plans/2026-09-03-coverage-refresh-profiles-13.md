@@ -965,7 +965,7 @@ Add `from app.activitypub import util as ap_util` to the imports, and request `m
 - [ ] **Step 3: Run and commit**
 
 Run: `./run_tests.sh tests/test_ap_refresh_profiles.py -q`
-Expected: 35 passed.
+Expected: 36 passed. (Task 7's fix round added a third feed crash pin for the ungated `ap_following_url` fetch, so the running total gained one there.)
 
 ```bash
 git add tests/test_ap_refresh_profiles.py
@@ -1026,7 +1026,7 @@ def test_no_followers_url_means_no_followers_fetch(app, db_session, http_mock):
 - [ ] **Step 2: Run and commit**
 
 Run: `./run_tests.sh tests/test_ap_refresh_profiles.py -q`
-Expected: 37 passed, plus one per feed-side equivalent you added.
+Expected: 38 passed, plus one per feed-side equivalent you added.
 
 ```bash
 git add tests/test_ap_refresh_profiles.py
