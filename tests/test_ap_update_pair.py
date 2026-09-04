@@ -26,7 +26,7 @@ from app import db
 from app.activitypub.util import (update_post_from_activity,
                                   update_post_reply_from_activity)
 from app.constants import NOTIF_MENTION
-from app.models import Notification, PostReply, User
+from app.models import Language, Notification, PostReply, User
 from app.utils import utcnow
 from tests.factories import (make_community, make_instance, make_post,
                              make_post_reply, make_site, make_user)
@@ -234,3 +234,132 @@ def test_a_reply_source_missing_media_type_leaves_the_html_body(app, db_session,
     ))
 
     assert reply.body == 'from html'
+
+
+def test_a_reply_language_is_applied(app, db_session, redis_lock_only_double):
+    """`find_language_or_create` is called with the document's identifier and
+    name, and the returned row's id lands on the reply.
+
+    Both English and German are seeded and COMMITTED before the call, so
+    German already has a real, flushed id when `find_language_or_create` finds
+    it -- the app factory sets `autoflush=False` (see this module's
+    docstring), so a language created fresh inside the function under test
+    would still have `id is None` at the moment `reply.language_id = language.id`
+    reads it, and the assignment would silently write NULL. Pre-seeding avoids
+    exercising that unrelated flush-timing quirk and isolates the guard this
+    test is about.
+
+    The reply is seeded with a real, non-NULL `language_id` (English) first --
+    not left at the factory's default `None` -- so "applied" is distinguishable
+    from "was already non-NULL": the assertion checks the id actually became
+    the German row's id, not merely that it changed from NULL to something.
+    """
+    reply = _seed_reply()
+    english = Language(code='en', name='English')
+    german = Language(code='de', name='German')
+    db.session.add(english)
+    db.session.add(german)
+    db.session.commit()
+    reply.language_id = english.id
+    db.session.commit()
+    seeded = reply.language_id
+
+    update_post_reply_from_activity(reply, _update(
+        language={'identifier': 'de', 'name': 'German'},
+    ))
+
+    assert reply.language_id == german.id
+    assert reply.language_id != seeded
+
+
+def test_a_reply_language_that_is_not_a_dict_is_ignored(app, db_session, redis_lock_only_double):
+    """The `isinstance(..., dict)` conjunct. A peer sending `language` as a
+    bare string must not reach the `['identifier']` subscript behind it.
+
+    The reply is seeded with a real, non-NULL `language_id` (English) first,
+    so "the guard skipped the arm" is distinguishable from "the arm never had
+    anything to write" -- asserting equality against a seeded `None` would
+    hold whether or not the guard fired.
+    """
+    reply = _seed_reply()
+    english = Language(code='en', name='English')
+    db.session.add(english)
+    db.session.commit()
+    reply.language_id = english.id
+    db.session.commit()
+    seeded = reply.language_id
+
+    update_post_reply_from_activity(reply, _update(language='de'))
+
+    assert reply.language_id == seeded
+
+
+def test_a_reply_distinguished_flag_is_applied(app, db_session, redis_lock_only_double):
+    """`distinguished` is copied verbatim. Seeded False first -- the column's
+    own default -- so the document's True is the only thing that could have
+    set it.
+    """
+    reply = _seed_reply()
+    reply.distinguished = False
+    db.session.commit()
+
+    update_post_reply_from_activity(reply, _update(distinguished=True))
+
+    assert reply.distinguished is True
+
+
+def test_a_reply_distinguished_flag_is_applied_when_false(app, db_session, redis_lock_only_double):
+    """The contrary seed. Without this sibling, the gate could be replaced by
+    `reply.distinguished = True` and the suite would stay green.
+    """
+    reply = _seed_reply()
+    reply.distinguished = True
+    db.session.commit()
+
+    update_post_reply_from_activity(reply, _update(distinguished=False))
+
+    assert reply.distinguished is False
+
+
+def test_a_reply_replies_enabled_flag_is_applied(app, db_session, redis_lock_only_double):
+    """`repliesEnabled` -> `replies_enabled`, the one renamed key in this
+    function. Seeded to the opposite of what the document sends.
+    """
+    reply = _seed_reply()
+    reply.replies_enabled = True
+    db.session.commit()
+
+    update_post_reply_from_activity(reply, _update(repliesEnabled=False))
+
+    assert reply.replies_enabled is False
+
+
+def test_a_reply_updated_timestamp_is_parsed(app, db_session, redis_lock_only_double):
+    """`ap_updated` comes from the document's `updated` when it parses.
+    Asserting the parsed VALUE, not merely that it is set -- `utcnow()` is
+    what the fallback would give, so "is not None" would pass either way.
+    """
+    reply = _seed_reply()
+
+    update_post_reply_from_activity(reply, _update(
+        content='x', updated='2020-01-02T03:04:05+00:00',
+    ))
+
+    assert reply.ap_updated.year == 2020
+    assert reply.ap_updated.month == 1
+
+
+def test_a_reply_unparseable_updated_falls_back_to_now(app, db_session, redis_lock_only_double):
+    """The `except ValueError` arm. `datetime.fromisoformat` raises on a
+    string it cannot read, and the handler substitutes `utcnow()`.
+
+    Asserting the year is the CURRENT year rather than 2020 is what
+    distinguishes the fallback from the parse.
+    """
+    reply = _seed_reply()
+
+    update_post_reply_from_activity(reply, _update(
+        content='x', updated='not a timestamp',
+    ))
+
+    assert reply.ap_updated.year == utcnow().year
