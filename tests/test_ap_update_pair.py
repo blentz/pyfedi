@@ -363,3 +363,127 @@ def test_a_reply_unparseable_updated_falls_back_to_now(app, db_session, redis_lo
     ))
 
     assert reply.ap_updated.year == utcnow().year
+
+
+def test_a_reply_single_attachment_dict_is_appended(app, db_session, redis_lock_only_double):
+    """The `isinstance(..., dict)` arm: a lone attachment object is wrapped
+    into a one-element list rather than iterated as a dict's keys (which
+    would loop over the strings `'url'` and `'name'`, not the attachment
+    itself).
+
+    Also exercises the `'name' in attachment` gate and its use as alt text --
+    see the mutation table for why this test turns out to be that gate's
+    killer too.
+    """
+    reply = _seed_reply()
+
+    update_post_reply_from_activity(reply, _update(
+        content='body text',
+        attachment={'url': 'https://cdn.example/a.png', 'name': 'alt words'},
+    ))
+
+    assert '![alt words](https://cdn.example/a.png)' in reply.body
+
+
+def test_a_reply_attachment_list_is_appended_in_order(app, db_session, redis_lock_only_double):
+    """The `isinstance(..., list)` arm, with two entries so the loop runs more
+    than once and order is observable.
+    """
+    reply = _seed_reply()
+
+    update_post_reply_from_activity(reply, _update(
+        content='body text',
+        attachment=[{'url': 'https://cdn.example/1.png'},
+                    {'url': 'https://cdn.example/2.png'}],
+    ))
+
+    assert reply.body.index('1.png') < reply.body.index('2.png')
+
+
+def test_a_reply_attachment_url_wins_over_href(app, db_session, redis_lock_only_double):
+    """Both keys are read and `url` is read second (`href` first, then `url`
+    overwrites it -- confirmed against the current source), so the two
+    values differ here, which is what makes the precedence observable --
+    equal values would pass whichever won.
+    """
+    reply = _seed_reply()
+
+    update_post_reply_from_activity(reply, _update(
+        content='body text',
+        attachment=[{'href': 'https://cdn.example/href.png',
+                     'url': 'https://cdn.example/url.png'}],
+    ))
+
+    assert 'url.png' in reply.body
+    assert 'href.png' not in reply.body
+
+
+def test_a_reply_attachment_href_is_used_when_there_is_no_url(app, db_session, redis_lock_only_double):
+    """The `href` half on its own. Without this test the `'href' in
+    attachment` conjunct can be deleted with the suite green, because the
+    precedence test above supplies both keys and would still pass (`url`
+    would simply stay unset by a route that never reads it).
+    """
+    reply = _seed_reply()
+
+    update_post_reply_from_activity(reply, _update(
+        content='body text',
+        attachment=[{'href': 'https://cdn.example/href.png'}],
+    ))
+
+    assert 'href.png' in reply.body
+
+
+def test_a_reply_attachment_with_no_url_appends_nothing(app, db_session, redis_lock_only_double):
+    """The `if url:` gate's normal (false) side. An attachment carrying only
+    a `name` contributes no markdown at all.
+
+    The body is asserted to equal exactly what the content arm produced, so
+    an empty `![alt]()` would fail rather than pass unnoticed.
+    """
+    reply = _seed_reply()
+
+    update_post_reply_from_activity(reply, _update(
+        content='body text',
+        attachment=[{'name': 'alt only'}],
+    ))
+
+    assert reply.body == 'body text'
+
+
+def test_a_reply_attachment_actually_regenerates_body_html(app, db_session, redis_lock_only_double):
+    """The `if attachment_list:` gate's true side. A non-empty list must
+    cause `body_html` to be re-derived (via `markdown_to_html`) from the
+    attachment-appended `body`, not merely leave `body` updated while
+    `body_html` still reflects only the content arm's `allowlist_html` pass.
+
+    Without a test that inspects `body_html` after a non-empty attachment
+    list, the regeneration call itself is unproven: every other test in this
+    block asserts only on `body`, which would look identical whether or not
+    `reply.body_html = markdown_to_html(reply.body)` ever ran.
+    """
+    reply = _seed_reply()
+
+    update_post_reply_from_activity(reply, _update(
+        content='body text',
+        attachment=[{'url': 'https://cdn.example/a.png', 'name': 'alt words'}],
+    ))
+
+    assert '<img' in reply.body_html
+    assert 'https://cdn.example/a.png' in reply.body_html
+
+
+def test_an_empty_attachment_list_does_not_regenerate_the_html(app, db_session, redis_lock_only_double):
+    """`if attachment_list:` guards the `body_html` regeneration. With an
+    empty list the html must remain what the content arm allowlisted.
+
+    Seeded through the html arm rather than the markdown arm so the two
+    spellings differ and the assertion can tell them apart.
+    """
+    reply = _seed_reply()
+
+    update_post_reply_from_activity(reply, _update(
+        content='<p>body text</p>', attachment=[],
+    ))
+
+    assert reply.body_html == '<p>body text</p>'
