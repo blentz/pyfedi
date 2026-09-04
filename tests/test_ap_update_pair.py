@@ -1206,25 +1206,76 @@ def test_a_post_source_that_is_not_markdown_falls_through_to_the_next_arm(app, d
 
 
 def test_a_post_source_that_is_not_a_dict_falls_through_to_the_wrap(app, db_session, redis_lock_only_double):
-    """The source guard's `isinstance(..., dict)` conjunct.
+    """The source guard's normal skip path for a string `source`: it falls
+    past the `source` arm and, with no object-level `mediaType` either, lands
+    in the `else` wrap-and-allowlist arm.
 
-    The reply function's analogous guard has a fourth conjunct,
-    `'mediaType' in request_json['object']['source']`, which is why a string
-    `source` there proves nothing about `isinstance` (`'mediaType' in
-    'a string'` is a harmless substring test). This function's guard has NO
-    such conjunct -- past `isinstance` it goes straight to the subscript
-    `request_json['object']['source']['mediaType']` -- so a string `source`
-    already distinguishes the two: with `isinstance` in place (production)
-    the guard short-circuits to `else` before that subscript ever runs; with
-    it removed, `'not a dict'['mediaType']` raises `TypeError` (string
-    indices must be integers), not a graceful `False`. So this one fixture
-    proves the conjunct on its own -- no `source=None` companion test is
-    needed the way the reply suite needed one.
+    This does NOT prove the `isinstance(..., dict)` conjunct is load-bearing.
+    Now that this guard carries the same `'mediaType' in
+    request_json['object']['source']` conjunct the reply guard has, removing
+    `isinstance` leaves `'mediaType' in 'not a dict'`, and `in` against a
+    string is a substring test rather than a membership error -- it is simply
+    `False`, so the guard still short-circuits to `else` and this assertion
+    still holds with or without the conjunct. See
+    test_a_post_none_source_does_not_leak_past_the_dict_check for the fixture
+    that actually kills that mutant, the same pairing the reply suite uses.
     """
     post = _seed_post()
 
     update_post_from_activity(post, _update(
         content='<p>from html</p>', source='not a dict', type='Note',
+    ))
+
+    assert post.body == 'from html'
+
+
+def test_a_post_source_with_no_media_type_is_skipped(app, db_session, redis_lock_only_double):
+    """A peer sending `source` as an object with `content` but no `mediaType`
+    used to raise `KeyError` out of this function. The reply function checked
+    membership first; this one now does too.
+
+    Asserts the content arm still ran and fell to a later branch, not merely
+    that nothing raised -- a guard that abandoned the whole Update would pass
+    a bare "no exception" test. `body` holding the html-derived text, and the
+    title the document sent, both prove the rest of the Update applied.
+    """
+    post = _seed_post()
+    post.body = 'seeded body'
+    db.session.commit()
+
+    update_post_from_activity(post, _update(
+        name='a new title',
+        content='<p>from html</p>',
+        source={'content': 'from markdown'},
+        type='Note',
+    ))
+
+    assert post.body == 'from html'
+    assert post.title == 'a new title'
+
+
+def test_a_post_none_source_does_not_leak_past_the_dict_check(app, db_session, redis_lock_only_double):
+    """The source guard's `isinstance(..., dict)` conjunct, proven by a
+    fixture the guard's own `'mediaType' in ...` conjunct cannot
+    coincidentally absorb.
+
+    A string `source` does not prove it: `'mediaType' in 'not a dict'` is a
+    substring test that just returns `False`, so with `isinstance` removed
+    the guard still short-circuits to the same place. `None` has no such
+    escape hatch -- `'mediaType' in None` raises `TypeError` rather than
+    returning `False` -- so the mutant crashes on this input while the
+    unmutated guard short-circuits normally, `isinstance(None, dict)` being
+    simply `False`.
+
+    This is the reply suite's `test_a_reply_none_source_does_not_leak_past_
+    the_dict_check` fixture, needed here for the first time: before the
+    membership conjunct was added to this function, a string `source` reached
+    `'not a dict'['mediaType']` and raised `TypeError` on its own.
+    """
+    post = _seed_post()
+
+    update_post_from_activity(post, _update(
+        content='<p>from html</p>', source=None, type='Note',
     ))
 
     assert post.body == 'from html'

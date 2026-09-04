@@ -3131,6 +3131,7 @@ def update_post_from_activity(post: Post, request_json: dict):
         if 'content' in request_json['object'] and request_json['object']['content'] is not None:
             # prefer Markdown in 'source' in provided
             if 'source' in request_json['object'] and isinstance(request_json['object']['source'], dict) and \
+                    'mediaType' in request_json['object']['source'] and \
                     request_json['object']['source']['mediaType'] == 'text/markdown':
                 post.body = request_json['object']['source']['content']
                 post.body_html = markdown_to_html(post.body)
