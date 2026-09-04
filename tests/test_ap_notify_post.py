@@ -33,6 +33,8 @@ sub-projects 14 and 15 needed.
 on and assert the message EXACTLY -- a substring can match a different guard's
 row.
 """
+import json
+
 import pytest
 
 from app import db
@@ -1626,3 +1628,302 @@ def test_a_feed_subscriber_who_blocked_the_instance_is_skipped_for_every_feed(ap
     assert second_notifications[0].notif_type == NOTIF_FEED
     assert second_notifications[0].targets['feed_id'] == feed_two.id
     assert second_notifications[0].targets['feed_name'] == 'Second Feed'
+
+
+# ---------------------------------------------------------------------------
+# The six conditional expressions -- the arms no coverage number can see
+# ---------------------------------------------------------------------------
+#
+# tests/README.md fact 87: coverage.py emits NO arc for a conditional
+# expression, so a region at 100% statements and 100% branches can still hide
+# an unexercised arm behind every `x if y else z` in it. The six below were
+# enumerated by reading the three functions, whose extents come from an
+# UNFILTERED `^def ` scan of app/activitypub/util.py -- `create_post` at
+# :2777 to the next def, `notify_about_post` at :2796, `notify_about_post_task`
+# at :2804, and the def after it, `notify_about_post_reply`, at :2939:
+#
+#   :2778  saved_json = request_json if store_ap_json else None
+#   :2831  community.ap_id if community.ap_id else community.name   (NOTIF_USER)
+#   :2833  author.ap_id if author.ap_id else author.user_name       (NOTIF_USER)
+#   :2855  community.ap_id if community.ap_id else community.name   (NOTIF_COMMUNITY)
+#   :2884  community.ap_id if community.ap_id else community.name   (NOTIF_TOPIC)
+#   :2918  community.ap_id if community.ap_id else community.name   (NOTIF_FEED)
+#
+# `notify_about_post` (:2796-2800) contains none. Six, matching the plan's
+# count.
+#
+# The four tests above that assert `targets['community_name']` are the four
+# arms' happy paths, and each of them assigns `community.ap_id` deliberately;
+# every post above takes its author from `make_user`'s default remote shape,
+# which sets `ap_id`. So all five `.ap_id` ternaries already have their IF-side
+# pinned, and it is their ELSE sides that are new here, one test each.
+# `saved_json`'s if-side is exercised by the two `create_post` tests above but
+# its VALUE is asserted by neither, so that one gets both arms in a single test.
+
+
+def test_store_ap_json_decides_whether_the_log_row_carries_the_activity(app, db_session, ap_log):
+    """`create_post`'s only conditional expression, its first line:
+
+        saved_json = request_json if store_ap_json else None
+
+    (app/activitypub/util.py:2778). It is a pure data ternary -- neither arm
+    changes control flow -- and its value reaches stored state through
+    `log_incoming_ap`'s
+
+        if saved_json:
+            activity_log.activity_json = json.dumps(saved_json)
+
+    (app/activitypub/util.py:4577-4578), the only writer of that column on this
+    path.
+
+    Both arms are pinned in ONE test, by contrast, because neither is
+    assertable alone. `activity_json = db.Column(db.Text)`
+    (app/models.py:3692) declares no default, so `is None` on a single row
+    restates the unwritten value and would pass with `log_incoming_ap`'s write
+    deleted outright. The row from the `store_ap_json=True` call is the
+    contrary baseline that makes the None on the second row mean "this call
+    chose the else-arm".
+
+    Both calls go through the `local_only` guard, so both log rows are the same
+    guard's -- asserted, so a future divergence in which guard fires cannot be
+    read as a difference in `saved_json`. Neither call reaches `Post.new`, so
+    the seeded post is still the whole Post population.
+
+    The stored side is compared after `json.loads`, not as a string.
+    app/activitypub/util.py:18 is `from flask import current_app, request, g,
+    url_for, json`, so the `json.dumps` above is Flask's, which sorts keys --
+    MEASURED: the first spelling of this assertion compared against
+    `json.dumps(document)` from the standard library and failed on key order
+    alone. Round-tripping asserts what the column is for, the activity, and
+    leaves the serialiser's key ordering unpinned by a test that is not about
+    it.
+    """
+    community, seeded_post, author = _seed_scenario(local_only=True)
+    document = _post_doc(name='a federated post')
+
+    stored = create_post(store_ap_json=True, community=community,
+                         request_json=document, user=author)
+    not_stored = create_post(store_ap_json=False, community=community,
+                             request_json=document, user=author)
+
+    assert stored is None
+    assert not_stored is None
+    assert Post.query.count() == 1
+    logs = ActivityPubLog.query.order_by(ActivityPubLog.id).all()
+    assert len(logs) == 2
+    assert [log.exception_message for log in logs] == [
+        'Community is local only, post discarded',
+        'Community is local only, post discarded']
+    assert json.loads(logs[0].activity_json) == document
+    assert logs[1].activity_json is None
+
+
+def test_a_community_with_no_ap_id_is_named_by_its_name_in_the_user_arm(app, db_session):
+    """The else-arm of
+
+        'community_name': community.ap_id if community.ap_id else community.name,
+
+    (app/activitypub/util.py:2831), the NOTIF_USER arm's copy.
+
+    `make_community` (tests/factories.py:122-151) sets `ap_profile_id`,
+    `ap_public_url`, `ap_followers_url` and `ap_domain` but never `ap_id`, and
+    `ap_id = db.Column(db.String(255), index=True)` (app/models.py:594) declares
+    no default, so a community straight out of the factory takes this arm. The
+    four arms' happy-path tests above each assign `community.ap_id` precisely
+    to escape it; this one does not, and the `assert community.ap_id is None`
+    below states that as a precondition rather than leaving it to the factory's
+    continued silence.
+
+    `name` is 'microblogs', `make_community`'s default, and the if-side value
+    the tests above use is `f'microblogs@{PEER}'` -- different strings, so the
+    two arms are distinguishable in either direction.
+
+    `author_user_name` is asserted alongside, at its IF-side value. The two
+    ternaries sit in the same dict two lines apart, and asserting both shows
+    they resolved DIFFERENTLY on the same call -- which no single-entry
+    assertion can show, and which is what rules out a mutation that made both
+    read the same attribute.
+
+    No id-valued entry of the dict is asserted here, so the primary-key
+    collision Task 3 measured -- `_seed_scenario`'s Community and Post both
+    take id 1 under tests/conftest.py's `RESTART IDENTITY` -- cannot make any
+    assertion below vacuous. Nothing is arranged against it for that reason.
+    """
+    community, post, author = _seed_scenario()
+    assert community.ap_id is None
+    assert community.name == 'microblogs'
+    subscriber = make_user(_peer_instance(), 'subscriber', local=True)
+    _subscribe(subscriber, author.id, NOTIF_USER)
+    db.session.commit()
+
+    notify_about_post_task(post.id)
+
+    notifications = _notifications_for(subscriber)
+    assert len(notifications) == 1
+    assert notifications[0].notif_type == NOTIF_USER
+    assert notifications[0].targets['community_name'] == 'microblogs'
+    assert notifications[0].targets['author_user_name'] == f'author@{PEER}'
+
+
+def test_a_local_author_is_named_by_their_user_name(app, db_session):
+    """The else-arm of
+
+        'author_user_name': author.ap_id if author.ap_id else author.user_name}
+
+    (app/activitypub/util.py:2833), the file's only author ternary -- the
+    NOTIF_USER arm is the only one of the four whose `targets` dict carries
+    `author_user_name` at all.
+
+    `make_user`'s local shape is what produces it:
+    `ap_id=None if local else f'{name}@{instance.domain}'`
+    (tests/factories.py:58), and `ap_id = db.Column(db.String(255), index=True)`
+    (app/models.py:1066) declares no default. Every post above takes its author
+    from the default remote shape, so all three `author_user_name` assertions
+    above -- in `test_a_subscriber_to_the_author_is_notified`, in
+    `test_a_subscriber_already_notified_by_the_user_arm_is_not_notified_again`
+    and in the test immediately preceding this one -- expect
+    `f'author@{PEER}'` and record the IF-side. This one seeds a LOCAL author
+    and gives it the post.
+
+    A local author is ordinary state on this path: the arm notifies the
+    followers of whoever posted, and PieFed's own users post into their own
+    communities. The author is still hung off the peer Instance, because
+    `make_post` copies `instance_id=user.instance_id` onto the Post
+    (tests/factories.py) and the arm's last conjunct compares
+    `post.instance_id` against the recipient's blocked instances -- nothing
+    here blocks any instance, so the instance is immaterial and is left where
+    the rest of the file puts it.
+
+    `community.ap_id` IS set here, unlike the test above, so exactly one of the
+    dict's two ternaries flips between the two tests. `community_name` is
+    asserted at its if-side value to show that.
+    """
+    community, seeded_post, seeded_author = _seed_scenario()
+    community.ap_id = f'microblogs@{PEER}'
+    instance = _peer_instance()
+    author = make_user(instance, 'local_author', local=True)
+    assert author.ap_id is None
+    post = make_post(community, author, ap_id=f'https://{PEER}/post/2')
+    subscriber = make_user(instance, 'subscriber', local=True)
+    _subscribe(subscriber, author.id, NOTIF_USER)
+    db.session.commit()
+
+    notify_about_post_task(post.id)
+
+    notifications = _notifications_for(subscriber)
+    assert len(notifications) == 1
+    assert notifications[0].notif_type == NOTIF_USER
+    assert notifications[0].targets['author_user_name'] == 'local_author'
+    assert notifications[0].targets['community_name'] == f'microblogs@{PEER}'
+
+
+def test_a_community_with_no_ap_id_is_named_by_its_name_in_the_community_arm(app, db_session):
+    """The else-arm of
+
+        'community_name': community.ap_id if community.ap_id else community.name,
+
+    (app/activitypub/util.py:2855), the NOTIF_COMMUNITY arm's copy. It is a
+    separate expression on a separate line from the NOTIF_USER arm's at :2831,
+    so a mutation of one leaves the other intact and each needs its own test.
+
+    `notif_type` is asserted at `NOTIF_COMMUNITY` so the row is attributable to
+    this arm rather than to a sibling: the subscriber's only subscription names
+    the community id with type `NOTIF_COMMUNITY`, and
+    `notification_subscribers` filters on both columns, but the assertion says
+    so on stored state instead of by reasoning about the fixture.
+
+    Only a name is asserted, so this test arranges nothing against the
+    Community/Post primary-key collision `_seed_scenario` produces; that
+    collision can only make an id-valued assertion vacuous, and there is none
+    here.
+    """
+    community, post, author = _seed_scenario()
+    assert community.ap_id is None
+    assert community.name == 'microblogs'
+    subscriber = make_user(_peer_instance(), 'subscriber', local=True)
+    _subscribe(subscriber, community.id, NOTIF_COMMUNITY)
+    db.session.commit()
+
+    notify_about_post_task(post.id)
+
+    notifications = _notifications_for(subscriber)
+    assert len(notifications) == 1
+    assert notifications[0].notif_type == NOTIF_COMMUNITY
+    assert notifications[0].targets['community_name'] == 'microblogs'
+
+
+def test_a_community_with_no_ap_id_is_named_by_its_name_in_the_topic_arm(app, db_session):
+    """The else-arm of
+
+        'community_name': community.ap_id if community.ap_id else community.name,
+
+    (app/activitypub/util.py:2884), the NOTIF_TOPIC arm's copy -- again a
+    separate expression on a separate line from the two above.
+
+    `_seed_topic` puts the Topic at its reserved id 9 and attaches the
+    community to it; the subscription names the TOPIC's id, so nothing here can
+    be notified by the NOTIF_COMMUNITY arm instead, and `notif_type` is
+    asserted at `NOTIF_TOPIC` to say that on stored state. `topic_name` is
+    asserted alongside `community_name` because it is the entry that tells this
+    arm's dict apart from the community arm's.
+
+    The topic's id, 9, is distinct from the Community's and the Post's shared
+    id of 1, but no id-valued entry of the dict is asserted here, so that
+    distinctness is `_seed_topic`'s invariant rather than something this test
+    depends on.
+    """
+    community, post, author = _seed_scenario()
+    assert community.ap_id is None
+    assert community.name == 'microblogs'
+    topic = _seed_topic(community)
+    subscriber = make_user(_peer_instance(), 'subscriber', local=True)
+    _subscribe(subscriber, topic.id, NOTIF_TOPIC)
+    db.session.commit()
+
+    notify_about_post_task(post.id)
+
+    notifications = _notifications_for(subscriber)
+    assert len(notifications) == 1
+    assert notifications[0].notif_type == NOTIF_TOPIC
+    assert notifications[0].targets['community_name'] == 'microblogs'
+    assert notifications[0].targets['topic_name'] == 'News'
+
+
+def test_a_community_with_no_ap_id_is_named_by_its_name_in_the_feed_arm(app, db_session):
+    """The else-arm of
+
+        'community_name': community.ap_id if community.ap_id else community.name,
+
+    (app/activitypub/util.py:2918), the NOTIF_FEED arm's copy and the last of
+    the four.
+
+    `_seed_feed` builds the Feed and the `FeedItem` that puts the community in
+    it, which is what
+    `.filter(FeedItem.community_id == post.community_id)`
+    (app/activitypub/util.py:2902) joins through. Feed id 8 is one of the three
+    ids the feed tests above use (7, 8 and 10); 9 is `_seed_topic`'s reserved
+    id and no feed takes it. Only one feed is seeded here, so there is no
+    second feed id for a mutation to confuse this one with, and no id-valued
+    entry is asserted in any case -- `feed_name` is, because it is this arm's
+    discriminator from the other three, alongside `notif_type` at `NOTIF_FEED`.
+
+    This test does not depend on where the arm's `notifications_sent_to.add`
+    sits: it has a single recipient, a single feed and a single arm producing a
+    row, so the dedup set is never consulted after the add.
+    """
+    community, post, author = _seed_scenario()
+    assert community.ap_id is None
+    assert community.name == 'microblogs'
+    instance = _peer_instance()
+    subscriber = make_user(instance, 'subscriber', local=True)
+    feed = _seed_feed(community, instance, name='afeed', feed_id=8, title='A Feed')
+    _subscribe(subscriber, feed.id, NOTIF_FEED)
+    db.session.commit()
+
+    notify_about_post_task(post.id)
+
+    notifications = _notifications_for(subscriber)
+    assert len(notifications) == 1
+    assert notifications[0].notif_type == NOTIF_FEED
+    assert notifications[0].targets['community_name'] == 'microblogs'
+    assert notifications[0].targets['feed_name'] == 'A Feed'
