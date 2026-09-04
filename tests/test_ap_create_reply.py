@@ -867,16 +867,19 @@ def _use_a_non_microblog_instance(replier):
     guard, commit "fix: skip the ancestor lookup when a create reply has no
     ancestors"), so that reason is gone.
 
-    WHICH CALLERS STILL NEED IT, measured rather than assumed. Neutering
-    this helper to a no-op leaves every test in the module green, so no
-    test's OUTCOME depends on it any more. One test's MUTATION KILL still
-    does: `test_the_self_mention_exclusion_produces_no_notification` seeds
-    the post's author as the mentioned local user, so on the microblog side
+    WHICH CALLERS STILL NEED IT, measured rather than assumed. There are ten
+    call sites. Neutering this helper to a no-op fails exactly ONE of them --
+    `test_a_non_microblog_mention_of_the_post_author_is_delivered`, whose
+    whole subject is the gate's False side, so the helper is that test's
+    fixture rather than a workaround. No other test's OUTCOME depends on it.
+    One further test's MUTATION KILL still does:
+    `test_the_self_mention_exclusion_produces_no_notification` seeds the
+    post's author as the mentioned local user, so on the microblog side
     rule 1 (`if recipient.id == post.user_id: continue`) would suppress the
     Notification a dropped `!=` conjunct is supposed to produce -- verified
     by running that mutant with the helper neutered, where it survives, and
-    with the helper restored, where it dies. The remaining callers seed a
-    recipient who is neither the post's author nor an ancestor's, so no rule
+    with the helper restored, where it dies. The remaining eight callers seed
+    a recipient who is neither the post's author nor an ancestor's, so no rule
     fires either way; they keep the call because it costs nothing and keeps
     the whole section on one side of a gate that is Task 6's subject, not
     theirs.
@@ -1094,11 +1097,22 @@ def test_the_self_mention_exclusion_produces_no_notification(app, db_session, re
     can never match a 'test.piefed.local' href. `post.author` is reassigned
     to a freshly-seeded local user for this test only.
 
-    Needs `_use_a_non_microblog_instance` for the same reason as the other
-    Mention-guard tests: a dropped `!=` comparison would still append the
-    profile id and reach the notify loop, and the unrelated microblog-mirror
-    defect would otherwise swallow the difference into the same
-    zero-Notification outcome.
+    Needs `_use_a_non_microblog_instance`, and NOT for the reason the other
+    Mention-guard tests give -- this is the one caller in the module whose
+    mutation kill still depends on the helper, and the reason is RULE 1, not
+    D243. With the `!=` comparison forced true, `postauthor`'s profile id is
+    appended, the recipient lookup resolves it, and on the microblog side of
+    the gate `if recipient.id == post.user_id: continue` suppresses the very
+    Notification this test's assertion is looking for -- because this fixture
+    makes the mentioned local user the post's author. Rule 1 sits ahead of
+    rule 4, so D243 was never on this fixture's path even before Task 9
+    guarded it; an earlier version of this docstring claimed it was, and that
+    claim was wrong when it was written as well as after the fix.
+
+    Measured, not reasoned: with the helper neutered to a no-op the forced-true
+    mutant SURVIVES with the module green, and with the helper restored it
+    dies, failing this test alone. See `_use_a_non_microblog_instance`'s own
+    docstring, which records the same measurement and names this test.
     """
     community, post, replier = _seed_scenario()
     _use_a_non_microblog_instance(replier)
