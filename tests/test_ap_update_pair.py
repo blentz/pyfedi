@@ -1993,7 +1993,7 @@ def test_an_unchanged_post_language_is_not_reassigned(app, db_session, redis_loc
     guard's write is skipped.
 
     That write being skipped has no observable through `post.language_id`
-    alone: assigning `post.language_id = new_language.id` here would write the
+    alone: assigning `post.language = new_language` here would write the
     identical value already stored, so the id is exactly the same whether the
     guard runs or is mutated into `if new_language:` (unconditional). Proving
     "the write was skipped" therefore needs a SEPARATE observable, not a
