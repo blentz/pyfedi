@@ -160,3 +160,44 @@ def test_refreshing_a_user_applies_the_peers_document(app, db_session, http_mock
     db.session.refresh(user)
     assert user.user_name == 'wakko'
     assert user.title == 'Wakko Warner'
+
+
+def test_refreshing_an_unknown_user_id_does_nothing(app, db_session, http_mock):
+    """First conjunct: `user` is None when the id resolves to no row.
+
+    No route is registered, so `block_outbound_http` would raise if the task
+    fetched anything -- the absence of a request is asserted by the absence of
+    a failure, which is why this test registers nothing.
+    """
+    _remote_user()
+
+    refresh_user_profile_task(999999)
+
+
+def test_refreshing_a_user_with_no_instance_does_nothing(app, db_session, http_mock):
+    """Second conjunct: `user.instance_id`. NO FACTORY produces a NULL
+    instance_id, so it is set explicitly here -- a test resting on the factory
+    would never reach this branch.
+
+    This conjunct is the one `refresh_community_profile_task` and
+    `refresh_feed_profile_task` LACK, which is what makes them crash on the
+    same row. Their pins are in Tasks 5 and 7.
+    """
+    user = _remote_user()
+    user.instance_id = None
+    db.session.commit()
+
+    refresh_user_profile_task(user.id)
+
+
+def test_refreshing_a_user_on_a_dormant_instance_does_nothing(app, db_session, http_mock):
+    """Third conjunct: `user.instance.online()`, which is
+    `not (dormant or gone_forever)` (app/models.py). `dormant` is set
+    explicitly -- it defaults to False, so a test resting on the default
+    would assert the wrong side of the branch.
+    """
+    user = _remote_user()
+    user.instance.dormant = True
+    db.session.commit()
+
+    refresh_user_profile_task(user.id)
