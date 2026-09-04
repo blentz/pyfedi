@@ -306,7 +306,7 @@ def test_notify_about_post_dispatches_inline_only_under_debug(app, db_session, m
 
 
 # ---------------------------------------------------------------------------
-# notify_about_post_task -- the NOTIF_USER arm
+# notify_about_post_task -- helpers shared by all four notification arms
 # ---------------------------------------------------------------------------
 
 def _notifications_for(user):
@@ -344,6 +344,10 @@ def _peer_instance():
     """
     return Instance.query.filter_by(domain=PEER).one()
 
+
+# ---------------------------------------------------------------------------
+# notify_about_post_task -- the NOTIF_USER arm
+# ---------------------------------------------------------------------------
 
 def test_a_subscriber_to_the_author_is_notified(app, db_session):
     """The NOTIF_USER arm's happy path:
