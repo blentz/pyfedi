@@ -2453,6 +2453,29 @@ effect the branch produced -- the row it deleted, the counter it moved, the
 modlog entry it wrote -- and if a branch's *only* observable is the log row,
 say so and get a ruling rather than writing the vacuous assertion.
 
+**Corollary, from sub-project 15, which is the ruling for that last case:
+turning the flag ON is a legitimate fixture, and it obliges you to assert the
+EXACT message.** `create_post_reply` has seven head guards that each do nothing
+but log and `return None`, so each is indistinguishable from the others *and
+from a deleted guard* until the flag is on. A session-scoped `app` fixture
+(`tests/conftest.py:72-73`) means the fixture must set
+`app.config['LOG_ACTIVITYPUB_TO_DB'] = True`, yield, and **restore it** -- a
+leaked `True` changes behaviour for every later test in the process, surfacing
+as an unrelated test writing unexpected `ActivityPubLog` rows. **And then a
+substring assertion gives back the exact ambiguity the fixture was bought to
+remove.** Two mutants survived a brief's own `'... in log.exception_message'`
+assertions and were killed only by tightening to equality, for two different
+reasons worth knowing apart: **(a)** two guards' messages shared a substring
+and deleting the outer one let the *inner* one fire and write its own row
+("Unable to find parent post/comment" and "Could not find parent post" both
+contain "parent post"); **(b)** a callee raised an exception whose message the
+function's own tail handler logged, near-identical to the head guard's
+("Replier blocked" from `PostReply.new` against the guard's "Post author
+blocked replier"). In both, a substring match **passed on the wrong row**.
+Assert `log.exception_message == '<the exact string>'`, and check the message
+is unique in the file before relying on it. (Fact 56's guard has since moved to
+`app/activitypub/util.py:4573`, inside `log_incoming_ap` at `:4569-4587`.)
+
 **57. Assigning an undeclared attribute to a SQLAlchemy model instance is
 silent in BOTH directions -- it is never persisted and it never raises.** It
 sets an ordinary Python attribute on the instance, the surrounding `commit()`
@@ -2907,6 +2930,119 @@ check. Run both.** Neither is hypothetical -- both happened in sub-project 14.
   not 1, switch to line-addressed patching. Sub-project 14's tooling aborted on
   its own count assertion *before* the write, which is the whole point of
   checking first rather than reading the diff afterwards.
+
+**81. When a function contains an UNFIXED CRASH inside a broad handler, that
+crash is a downstream route to every "nothing happened" assertion in the
+function -- and the routing around it must be PER TEST, never blanket.** This
+is fact 73's family arriving from the opposite direction: 73 is about a later
+step *producing* the observable you asserted on; this is about an exception
+handler *converting* an unrelated failure into the same observable. In
+sub-project 15, `create_post_reply` carried D243's `ProgrammingError` inside a
+tail `except Exception as ex: log_incoming_ap(...); return None`, so any
+negative test whose fixture happened to reach that query passed with **zero
+notifications** for a reason that had nothing to do with the guard it was
+written against. The remedy is a helper that steers the fixture off the crash
+path -- here `_use_a_non_microblog_instance`, which skips the gate the query
+sits behind. **Applying it to every negative test would have destroyed the
+information.** Instead each test was classified: a test whose guard, if
+deleted, would leave the recipient list **empty** never reaches the crash and
+must NOT be routed; a test whose guard, if deleted, would **populate** the list
+and reach the notify loop must be. Four needed it, five did not, and the
+reviewer checked each individually. **Two consequences to plan for.** First, a
+routing helper is a claim -- "this test needs it, and for this reason" -- and
+the claim goes stale the moment the crash is fixed: after the fix, the helper
+was **measured** redundant in nine of its ten callers, and the measurement went
+into its docstring so a later slice can retire the rest rather than re-deriving
+it. Second, when the crash *is* fixed, every mutant that was dying **through**
+it comes back to life (fact 74) -- so fix the crash and re-run the guard's
+mutations in the same commit.
+
+**82. A CORRECTION DOES NOT CORRECT ITS COPIES. After correcting a claim, grep
+for the specific ENTITIES the correction names and read what they say.** Two
+sub-projects running have shipped a corrected claim with a live copy of the
+falsehood left behind, and the shape was identical both times: the author did
+the measurement, wrote the correct reason into the *helper's* docstring 250
+lines from where the wrong one lived, and did not propagate it back to the test
+the measurement was **about**. Its own diagnosis is the general one: *"the place
+I learned the truth became the place I wrote it, and writing it there felt like
+discharging the finding."* Fact 70 says grep the identifier rather than the
+description; this is the step after that, and it is mechanical: **a correction
+that names a test, a helper, a defect number or a column is pointing at the
+places most likely to still hold the old claim** -- so grep for those names, not
+for the wording of the claim you just fixed. The corrected helper docstring in
+sub-project 15 even *named* the contradicting test, and the contradiction
+survived anyway. Related failure caught in the same round: a docstring
+generalised a measurement run of "1 failed, 67 passed" into "every test in the
+module green", **past the 1**, while writing the correction to a different
+measurement error.
+
+**83. "Grep the file for the twin" is NECESSARY BUT NOT SUFFICIENT -- the twin
+must also WORK. Check the register for whether the sibling you are about to
+copy is itself a known defect.** Sub-project 14's rule was: before registering
+a defect for want of a correct spelling, grep the file for the twin, because a
+mirrored pair is not the only place a sibling can live. Sub-project 15 found
+the limit. Its Mention loop had **no** de-duplication check where the twin had
+one, so the grep succeeded and the fix looked mechanical -- but the twin's
+check was **already registered as a defect** (it is defeated by
+`autoflush=False`, so it dedupes across calls and not within one document,
+which is exactly the case the missing check was about). Copying it would have
+imported a known-broken guard **and let the slice claim a fix that fixes
+nothing**, which is worse than the honest registration, because a closed entry
+stops anyone looking. The check costs one grep of the findings register for the
+sibling's file and line. **A twin that is already a D-entry is not a model.**
+
+**84. A SOURCE READ OF A GUARD IS NOT COMPLETE WITHOUT THE SESSION SETTINGS IT
+RUNS UNDER.** `app/__init__.py:81` constructs
+`SQLAlchemy(session_options={"autoflush": False}, ...)`, and that single word
+decides whether a whole class of guard works. A reviewer in sub-project 15 read
+a de-duplication check -- `Notification.query.filter(user_id == ..., url ==
+...).first()` followed by `if not existing_notification:` -- concluded it was
+sound, and wrote that "default SQLAlchemy autoflush would make it catch
+same-call duplicates too". The premise is false in this app: the first
+iteration's pending `db.session.add` is never flushed, so the second
+iteration's query cannot see it and the check does not dedupe within one
+document at all. **The reviewer was right about what the code says and wrong
+about what the app configures.** This is the same root cause as facts 58 and
+64, arriving for the first time in a **review** rather than in production code,
+which is why it earns its own line: any ORM read-after-write inside one request
+-- a uniqueness check, an existence check, a count -- must be evaluated
+against `autoflush=False` before it is called correct, and any claim that such
+a guard works is a claim about the session configuration and not only about the
+SQL.
+
+**85. A docstring explaining why a fixture is SAFE is itself a claim about
+production -- write it from tracing what a MISS would do, not from the shape of
+the code.** Sub-project 15 shipped one that had **both halves** inverted. It
+said a Postgres `Integer` cast meant "a mismatched type here would silently
+miss and the test would pass for the wrong reason". In fact `->>` returns text
+for a JSON number *and* for a JSON string, so `{'post_id': '5'}` casts to `5`
+and matches -- there is no silent miss; and had it missed, the suppression rule
+would not have fired, the reply would have reached delivery, and the test's own
+`assert len(rows) == 1` would have seen **two** rows and **failed loudly**. The
+author's diagnosis is the reusable part: it was written *"from the shape of the
+code -- a cast implies a type matters -- rather than from tracing what a miss
+would do."* **"Would pass for the wrong reason" is the most load-bearing
+sentence a test docstring can contain**, because it is the sentence that tells
+the next reader not to strengthen the test. Never write it without following
+the miss to an observable. Fact 77's remedy applies here too: a quoted code
+block can be audited mechanically and a sentence like this one cannot.
+
+**86. For a TWO-CONJUNCT filter, write one negative PER CONJUNCT, each holding
+the other conjunct TRUE. A positive test alone cannot kill either.** Concretely,
+for `.where(A).where(B)`: test 1 is the positive; test 2 holds **A true and B
+false**; test 3 holds **B true and A false**. Each of 2 and 3 fails for a
+distinct reason, so dropping either conjunct is killed by exactly one named
+test. A single positive cannot distinguish a dropped-conjunct mutant from
+correct code, and a single negative that falsifies **both** conjunct kills
+neither attributably -- it is fact 69's problem in a filter chain rather than in
+a guard sequence. Sub-project 15 applied this to a mark-read `UPDATE` whose
+`.where()` chain matched a user **and** a target comment id: the "different
+comment" and "different user" tests are the orthogonal pair. This is the third
+distinct form the campaign has recorded of *a positive test alone cannot prove
+a guard* -- the others being fact 72 (a naturally-False path cannot kill a
+forced-False mutant) and fact 68 (`if True:` proves the site, not the clause).
+The recipe generalises to N conjuncts as N negatives, and the count is a
+**floor**, not an estimate to be trimmed (fact 55's corollary).
 
 ## Known noise
 
