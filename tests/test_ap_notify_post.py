@@ -797,3 +797,348 @@ def test_the_notified_community_subscribers_unread_counter_is_incremented(app, d
     db.session.refresh(subscriber)
     assert subscriber.unread_notifications == 8
     assert len(_notifications_for(subscriber)) == 1
+
+
+# ---------------------------------------------------------------------------
+# notify_about_post_task -- the NOTIF_TOPIC arm
+# ---------------------------------------------------------------------------
+
+def _seed_topic(community, name='news'):
+    """A Topic, attached to `community`, at an id nothing else in this file reaches.
+
+    tests/factories.py has no Topic factory -- nothing in it names the class --
+    so this seeds by hand the two columns the arm's `targets` dict reads,
+
+        machine_name = db.Column(db.String(50), index=True)
+        name = db.Column(db.String(50))
+
+    (app/models.py:528-529), and sets the foreign key the arm looks the topic
+    up through, `topic_id = db.Column(db.Integer, db.ForeignKey('topic.id'),
+    index=True)` (app/models.py:582).
+
+    The two columns are given DIFFERENT strings -- 'news' and 'News' -- because
+    the dict reads both, as `'topic_name': topic.name` and
+    `'topic_machine_name': topic.machine_name`
+    (app/activitypub/util.py:2885-2886). Equal strings would make a swap of
+    those two entries invisible.
+
+    The explicit `id` is the point of the helper. tests/conftest.py truncates
+    every table with `RESTART IDENTITY`, so each sequence restarts at 1 in each
+    test, and `_seed_scenario` gives its Community primary key 1 and its Post
+    primary key 1 -- a Topic left to its own sequence collides with both. The
+    entity id is this arm's ONLY discriminator from its three siblings: it
+    calls `notification_subscribers(post.community.topic_id, NOTIF_TOPIC)`
+    (app/activitypub/util.py:2869) where the arm above calls
+    `notification_subscribers(post.community_id, NOTIF_COMMUNITY)`
+    (app/activitypub/util.py:2846) and the arm above that
+    `notification_subscribers(post.user_id, NOTIF_USER)`
+    (app/activitypub/util.py:2821). A topic sharing the community's id would
+    leave the substitution of one entity id for another alive in every test
+    here. 9 is past every id these tests reach -- at most four users, two
+    posts, one community -- and the happy path asserts that distinctness rather
+    than trusting this sentence.
+    """
+    topic = Topic(id=9, machine_name=name, name=name.title())
+    db.session.add(topic)
+    db.session.commit()
+    community.topic_id = topic.id
+    db.session.commit()
+    return topic
+
+
+def test_a_subscriber_to_the_communitys_topic_is_notified(app, db_session):
+    """The NOTIF_TOPIC arm's happy path, quoted whole from
+    app/activitypub/util.py:2869-2880:
+
+        topic_send_notifs_to = notification_subscribers(post.community.topic_id, NOTIF_TOPIC)
+        if post.community.topic_id:
+            topic = session.query(Topic).get(post.community.topic_id)
+        for notify_id in topic_send_notifs_to:
+            blocked_senders = blocked_users(notify_id)
+            blocked_comms = blocked_communities(notify_id)
+            blocked_ints = blocked_or_banned_instances(notify_id)
+            if notify_id != post.user_id and \\
+                    notify_id not in notifications_sent_to and \\
+                    post.user_id not in blocked_senders and \\
+                    post.community_id not in blocked_comms and \\
+                    post.instance_id not in blocked_ints:
+
+    Three per-recipient block lookups, where the two arms above have two each:
+    NOTIF_USER omits `blocked_users` and NOTIF_COMMUNITY omits
+    `blocked_communities`. This arm calls all three.
+
+    The subscription's entity_id is the TOPIC's id. The community is attached
+    to the topic and the subscriber to the topic, never to the community, so
+    nothing here can be notified by the NOTIF_COMMUNITY arm instead.
+
+    Its `targets` dict, quoted whole from app/activitypub/util.py:2881-2887:
+
+        targets_data = {'gen': '0',
+                        'post_id': post.id,
+                        'post_title': post.title,
+                        'community_name': community.ap_id if community.ap_id else community.name,
+                        'topic_name': topic.name,
+                        'topic_machine_name': topic.machine_name,
+                        'author_id': post.user_id}
+
+    `topic_name` and `topic_machine_name` are what tell this arm's stored state
+    apart from the other three; `author_id` it shares with the NOTIF_USER arm,
+    which additionally carries `author_user_name`.
+
+    **The ids in this arm's scope are made pairwise distinct**, and the
+    `len({...}) == 5` below fails loudly if factory ordering ever changes.
+    `_seed_scenario` gives its Community and its Post the same primary key, 1,
+    and its author user id 2; a Topic left to its own sequence would be 1 as
+    well, and a second Post would be 2. So this test seeds its own author
+    BEFORE its own post -- which puts the author at 3 and leaves the post at 2
+    -- takes the topic id from `_seed_topic`, and seeds its subscriber last, at
+    4. Both id-valued entries of the dict, `post_id` and `author_id`, are then
+    distinguishable from each other and from `post.community_id`,
+    `post.community.topic_id` and `notify_id`.
+
+    `community.ap_id` is set for the reason Tasks 2 and 3 record against their
+    own happy paths: `community.ap_id if community.ap_id else community.name`
+    is a ternary and `make_community` sets `ap_profile_id` but never `ap_id`,
+    so left alone the ternary takes its else-arm and a swap of its arms is
+    invisible.
+
+    `notif_type` is asserted against `NOTIF_TOPIC`, which is `2`
+    (app/constants.py:54), while the column's declared default is
+    `NOTIF_DEFAULT`, `999` (app/models.py:3736) -- contrary to the default, not
+    a restatement of it. `subtype` has no declared default at all
+    (`subtype = db.Column(db.String(50), index=True)`, app/models.py:3737).
+
+    The unread counter is asserted here rather than in a test of its own, which
+    is where the two arms above put theirs. This arm's copy of
+
+        user = session.query(User).get(notify_id)
+        user.unread_notifications += 1
+
+    (app/activitypub/util.py:2894-2895) would otherwise go unasserted: the six
+    tests this arm gets are all spoken for by its five conjuncts and its third
+    block lookup. `User.unread_notifications` is `db.Column(db.Integer,
+    default=0)` (app/models.py:1023) and `make_user` never sets it, so it is
+    seeded to 7 first -- asserting 8 afterwards cannot be satisfied by the
+    column's default, and `+= 1` is distinguished from an assignment of a
+    constant.
+    """
+    community, seeded_post, seeded_author = _seed_scenario()
+    community.ap_id = f'microblogs@{PEER}'
+    topic = _seed_topic(community)
+    instance = _peer_instance()
+    author = make_user(instance, 'topic_author')
+    post = make_post(community, author, ap_id=f'https://{PEER}/post/2')
+    subscriber = make_user(instance, 'subscriber', local=True)
+    subscriber.unread_notifications = 7
+    _subscribe(subscriber, topic.id, NOTIF_TOPIC)
+    db.session.commit()
+    assert len({community.id, post.id, author.id, subscriber.id, topic.id}) == 5
+
+    notify_about_post_task(post.id)
+
+    notifications = _notifications_for(subscriber)
+    assert len(notifications) == 1
+    notification = notifications[0]
+    assert notification.notif_type == NOTIF_TOPIC
+    assert notification.subtype == 'new_post_in_followed_topic'
+    assert notification.url == f'/post/{post.id}'
+    assert notification.title == 'a post'
+    assert notification.author_id == author.id
+    assert notification.targets == {'gen': '0',
+                                    'post_id': post.id,
+                                    'post_title': 'a post',
+                                    'community_name': f'microblogs@{PEER}',
+                                    'topic_name': 'News',
+                                    'topic_machine_name': 'news',
+                                    'author_id': author.id}
+    db.session.refresh(subscriber)
+    assert subscriber.unread_notifications == 8
+
+
+def test_the_author_is_not_notified_even_when_subscribed_to_their_communitys_topic(app, db_session):
+    """`notify_id != post.user_id`, this arm's first conjunct.
+
+    The row is one production writes. `topic_notification`
+    (app/topic/routes.py:291) is the only route that creates a NOTIF_TOPIC
+    subscription:
+
+        new_notification = NotificationSubscription(name=topic.name, user_id=current_user.id, entity_id=topic.id,
+                                                    type=NOTIF_TOPIC)
+
+    (app/topic/routes.py:301-302) -- reached for any logged-in user with no
+    subscription to that topic yet, comparing the subscriber against nobody. So
+    an author who follows a topic and then posts into one of its communities is
+    ordinary state, and this conjunct is a live filter here rather than a
+    defensive guard.
+
+    A second subscriber to the same topic IS notified in the same run, so the
+    author's empty result says "this run created nothing for the author" rather
+    than "this run created nothing at all".
+    """
+    community, post, author = _seed_scenario()
+    topic = _seed_topic(community)
+    subscriber = make_user(_peer_instance(), 'subscriber', local=True)
+    _subscribe(author, topic.id, NOTIF_TOPIC)
+    _subscribe(subscriber, topic.id, NOTIF_TOPIC)
+    db.session.commit()
+
+    notify_about_post_task(post.id)
+
+    assert _notifications_for(author) == []
+    assert len(_notifications_for(subscriber)) == 1
+
+
+def test_a_subscriber_already_notified_by_the_community_arm_is_not_notified_again(app, db_session):
+    """`notify_id not in notifications_sent_to`, this arm's second conjunct.
+
+    `notifications_sent_to = set()` is initialised once above all four arms and
+    each arm ends its body with `notifications_sent_to.add(notify_id)`. The
+    arms run in file order: `# NOTIF_USER` at app/activitypub/util.py:2820,
+    `# NOTIF_COMMUNITY` at :2845, `# NOTIF_TOPIC` at :2868, `# NOTIF_FEED` at
+    :2899. The filler used here is the IMMEDIATELY PRECEDING arm,
+    NOTIF_COMMUNITY; Task 3 killed the same conjunct in that arm using the one
+    before it, NOTIF_USER, and in the NOTIF_USER arm itself the conjunct is
+    unkillable, because nothing writes to the set between its initialisation
+    and that arm's loop.
+
+    `dual` is subscribed BOTH to the community (NOTIF_COMMUNITY) and to the
+    topic (NOTIF_TOPIC). The community arm wins because it runs first, so
+    `dual` gets exactly ONE row and its `targets` is that arm's shape: a
+    `community_id` entry and no `topic_name`.
+
+    `topic_only`, subscribed to the topic alone, is notified in the same run
+    and IS given a NOTIF_TOPIC row. Without it, a mutant that stopped the topic
+    arm firing altogether would still leave `dual` holding exactly one row and
+    pass.
+    """
+    community, post, author = _seed_scenario()
+    topic = _seed_topic(community)
+    instance = _peer_instance()
+    dual = make_user(instance, 'dual_subscriber', local=True)
+    topic_only = make_user(instance, 'topic_subscriber', local=True)
+    _subscribe(dual, community.id, NOTIF_COMMUNITY)
+    _subscribe(dual, topic.id, NOTIF_TOPIC)
+    _subscribe(topic_only, topic.id, NOTIF_TOPIC)
+    db.session.commit()
+
+    notify_about_post_task(post.id)
+
+    dual_notifications = _notifications_for(dual)
+    assert len(dual_notifications) == 1
+    assert dual_notifications[0].notif_type == NOTIF_COMMUNITY
+    assert dual_notifications[0].subtype == 'new_post_in_followed_community'
+    assert 'topic_name' not in dual_notifications[0].targets
+    assert 'community_id' in dual_notifications[0].targets
+
+    control_notifications = _notifications_for(topic_only)
+    assert len(control_notifications) == 1
+    assert control_notifications[0].notif_type == NOTIF_TOPIC
+    assert control_notifications[0].subtype == 'new_post_in_followed_topic'
+
+
+def test_a_topic_subscriber_who_blocked_the_author_is_not_notified(app, db_session):
+    """`post.user_id not in blocked_senders`, where
+
+        blocked_senders = blocked_users(notify_id)
+
+    is
+
+        blocks = db.session.query(UserBlock).filter_by(blocker_id=user_id)
+        return [block.blocked_id for block in blocks]
+
+    (app/utils.py:1746-1747) -- the recipient is the BLOCKER and the post's
+    author is the BLOCKED, which is the order `make_user_block(blocker,
+    blocked)` writes.
+
+    A second subscriber who blocked nobody is notified in the same run, so
+    "no rows for the blocker" is distinguishable from "no rows at all".
+    """
+    community, post, author = _seed_scenario()
+    topic = _seed_topic(community)
+    instance = _peer_instance()
+    blocker = make_user(instance, 'author_blocker', local=True)
+    subscriber = make_user(instance, 'subscriber', local=True)
+    _subscribe(blocker, topic.id, NOTIF_TOPIC)
+    _subscribe(subscriber, topic.id, NOTIF_TOPIC)
+    make_user_block(blocker, author)
+    db.session.commit()
+
+    notify_about_post_task(post.id)
+
+    assert _notifications_for(blocker) == []
+    assert len(_notifications_for(subscriber)) == 1
+
+
+def test_a_topic_subscriber_who_blocked_the_community_is_not_notified(app, db_session):
+    """`post.community_id not in blocked_comms`, where
+
+        blocked_comms = blocked_communities(notify_id)
+
+    is
+
+        blocks = db.session.query(CommunityBlock).filter_by(user_id=user_id)
+        return [block.community_id for block in blocks]
+
+    (app/utils.py:1722-1723).
+
+    This is the third block lookup, the one that makes this arm's set of three
+    a superset of either arm above: NOTIF_USER computes `blocked_communities`
+    and `blocked_or_banned_instances`, NOTIF_COMMUNITY computes `blocked_users`
+    and `blocked_or_banned_instances`, and this arm computes all three, at
+    app/activitypub/util.py:2873-2875.
+
+    Following a topic while blocking one community inside it is the pairing
+    that makes this filter matter: the recipient subscribes to the topic, not
+    to the community, so nothing but this conjunct can keep the post out.
+
+    A second subscriber who blocked nothing is notified in the same run.
+    """
+    community, post, author = _seed_scenario()
+    topic = _seed_topic(community)
+    instance = _peer_instance()
+    blocker = make_user(instance, 'community_blocker', local=True)
+    subscriber = make_user(instance, 'subscriber', local=True)
+    _subscribe(blocker, topic.id, NOTIF_TOPIC)
+    _subscribe(subscriber, topic.id, NOTIF_TOPIC)
+    make_community_block(blocker, community)
+    db.session.commit()
+
+    notify_about_post_task(post.id)
+
+    assert _notifications_for(blocker) == []
+    assert len(_notifications_for(subscriber)) == 1
+
+
+def test_a_topic_subscriber_who_blocked_the_instance_is_not_notified(app, db_session):
+    """`post.instance_id not in blocked_ints`, where
+
+        blocked_ints = blocked_or_banned_instances(notify_id)
+
+    is
+
+        blocks = db.session.query(InstanceBlock).filter_by(user_id=user_id)
+        return [block.instance_id for block in blocks] + banned_instances(user_id)
+
+    (app/utils.py:1730-1731). This test exercises the `InstanceBlock` half,
+    which is what `make_instance_block` writes.
+
+    The instance compared is `post.instance_id`, and `make_post` sets
+    `instance_id=user.instance_id` -- the author's instance, PEER -- so PEER is
+    the instance the blocker has to block.
+
+    A second subscriber who blocked nothing is notified in the same run.
+    """
+    community, post, author = _seed_scenario()
+    topic = _seed_topic(community)
+    instance = _peer_instance()
+    blocker = make_user(instance, 'instance_blocker', local=True)
+    subscriber = make_user(instance, 'subscriber', local=True)
+    _subscribe(blocker, topic.id, NOTIF_TOPIC)
+    _subscribe(subscriber, topic.id, NOTIF_TOPIC)
+    make_instance_block(blocker, instance)
+    db.session.commit()
+
+    notify_about_post_task(post.id)
+
+    assert _notifications_for(blocker) == []
+    assert len(_notifications_for(subscriber)) == 1
