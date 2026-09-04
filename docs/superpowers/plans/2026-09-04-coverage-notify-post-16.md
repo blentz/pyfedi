@@ -644,3 +644,7 @@ announce_id)`, `notify_about_post` takes `(post)`, and
    got it backwards would send an implementer chasing a fixture for a check
    that is not there. Sub-project 15's plan was wrong about a guard count and
    cost a whole extra task; this states the doubt up front.
+
+---
+
+> **ANNOTATION, 2026-09-04, appended after this document's last original line; nothing above is revised.** The `NOTIF_FEED` defect this plan describes as present at `:403-406` and `:479-483` was **fixed** on 2026-09-04 by commit `0489dc1d`, and Task 7 did **not** invert Task 5's pin as `:479-483` anticipates: the defect turned out to be latent rather than live — no conjunct of that arm's guard is feed-dependent — so no pin could distinguish the two spellings, and an equivalence argument plus a 70-mutation re-run against both code versions took that gate's place (Ruling J). Read **D275** in `docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md` for what production does now; this document is left unrevised on purpose, because it is the record of what was planned and its being wrong about the defect's liveness is the evidence for that ruling.

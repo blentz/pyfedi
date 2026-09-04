@@ -320,3 +320,7 @@ edited**, and the file's marked-correction convention is untouched.
    unguarded-peer-input family index is added without altering any existing
    entry.
 9. Full suite green.
+
+---
+
+> **ANNOTATION, 2026-09-04, appended after this document's last original line; nothing above is revised.** The `NOTIF_FEED` defect this spec describes as present at `:165` and `:312` was **fixed** on 2026-09-04 by commit `0489dc1d`, and the "pinned … then fixed with a witnessed pre-fix failure" gate at `:312` was **not** what proved it: the defect turned out to be latent rather than live, so no pin could distinguish the two spellings and an equivalence argument plus a 70-mutation re-run against both code versions took that gate's place (Ruling J). Read **D275** in `docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md` for what production does now; this document is left unrevised on purpose, because it is the record of what was specified and its being wrong about the defect's liveness is the evidence for that ruling.
