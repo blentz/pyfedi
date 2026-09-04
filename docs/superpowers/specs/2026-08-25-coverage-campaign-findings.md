@@ -5391,9 +5391,17 @@ registered a defect whose sibling was already registered. This is a navigation
 aid and nothing else: **no entry below is renumbered, moved or edited**, and no
 D number is taken by it.
 
-**Three disagreements with the plan that commissioned it, and one with the
-first draft of this index -- which is the more instructive of the two, because
-an index that asserts completeness is only as good as the sweep behind it.**
+**Three disagreements -- two with the plan that commissioned it, and one with
+the first draft of this index, which is the more instructive of the two sources,
+because an index that asserts completeness is only as good as the sweep behind
+it.** (**Corrected in place**, and the correction belongs in the record rather
+than in silence: this lead-in read "Three disagreements with the plan that
+commissioned it, and one with the first draft", which under the natural parse
+claims four and under the charitable one attaches the wrong number to the wrong
+source. **It is a prose count contradicted by its own enumeration -- in the
+paragraph whose first item catches the plan doing exactly that**, two sentences
+below. Nothing derived from it changes: the enumeration, the table and every
+count elsewhere were right.)
 (1) The plan called the family **thirteen** entries and then enumerated
 **fourteen** -- D236, D238, D245, D246, D247, D255-D259, D264, D270-D272 is
 5 + 5 + 1 + 3. The prose count was wrong, not the enumeration. (2) **D273 is a
@@ -5512,9 +5520,20 @@ from `reply.path`, a local column, not from the peer document; **D239** and
 **D260** (unflushed `Language.id`) write NULL and explicitly raise nothing;
 **D251** is traced and recorded as a benign skip, "neither a crash nor silent
 corruption", and D259 and D264 each already say so; **D263** is a *handler* that
-swallows crashes rather than a read that causes one; and **D241, D242, D244,
+swallows crashes rather than a read that causes one; **D241, D242, D244,
 D248, D249, D250, D252-D254, D262, D265-D269** describe asymmetries,
-convergence questions and dead code with no exception between them. It is **not**
+convergence questions and dead code with no exception between them; and
+**D274-D282**, this sub-project's own nine, are in scope because they are
+`notify_about_post_task` and `create_post` and are rejected one by one --
+**D274**'s `TypeError` is a crash but the NULL it reads comes from a *database
+column a migration left unfilled*, not from a peer document, which is D240's
+distinction on a different source; **D275** is a misplaced `add` with no read in
+it; **D276-D279** are filter-set, transaction and locking asymmetries that raise
+nothing; and **D280-D282** are a reachability verdict, two equivalent mutants and
+an observation about an import. **The list is now arithmetically checkable, which
+is the point of writing it out:** 17 members + 30 rejections = 47 = D236 through
+D282 inclusive, every entry in the declared scope accounted for exactly once. It
+is **not**
 a complete count over the register as a whole: the shape predates the family's
 name by a dozen sub-projects -- `find_community`'s `a['type']`/`a['id']` walk
 (**D28**), its unguarded `type` read and `.startswith` on a non-string
@@ -5523,6 +5542,27 @@ name by a dozen sub-projects -- `find_community`'s `a['type']`/`a['id']` walk
 mistake in other units, all fixed. **A future task widening this index to the
 whole register should say so in its heading, because "the family" as D255 named
 it is a path, not a mistake.**
+
+**And one relative closer than any of those five, which a function-scoped sweep
+structurally cannot see: D35.** `PostReply.new` reads `request_json['type']`
+unguarded and raises `KeyError('type')` -- the family's shape exactly -- and it
+is reached *through* `create_post_reply`, one of the five functions this sweep
+scopes to. It is out on two independent grounds, and the second is the one worth
+carrying. **(a)** Its entry's function column names `create_resolved_object` and
+`resolve_remote_post_from_search`, so a sweep keyed on the function column cannot
+reach it: **the crash is in a callee, and a function-scoped sweep sees functions,
+not call trees.** **(b)** Its own cell says "`create_post_reply` swallows it, and
+the resolver returns None", so it fails the membership test's *"raises out of the
+function"* clause -- and that clause is doing real work across this family rather
+than being a formality. D264's crash is raised **above** `create_post_reply`'s
+tail `try` (`:2700`) and propagates; D243's is **inside** it and is swallowed into
+a `None` return (**D263**); D35's is swallowed the same way. **So there is a
+sub-family of unguarded peer reads whose crash the tail handler converts into
+silence, and the loud ones are the only ones anyone was ever going to notice** --
+D261's cell makes precisely that contrast between two crashes in one function.
+D35 was fixed on 2026-08-29. **A task widening this index should widen it on both
+axes at once: past the function column into callees, and past "raises out of" into
+"raises at all".**
 
 **One candidate this index does NOT claim, stated as a question rather than a
 finding.** `create_post` reads `id = request_json['id']` at
