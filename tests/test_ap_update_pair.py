@@ -273,16 +273,12 @@ def test_a_reply_source_missing_media_type_leaves_the_html_body(app, db_session,
 
 def test_a_reply_language_is_applied(app, db_session, redis_lock_only_double):
     """`find_language_or_create` is called with the document's identifier and
-    name, and the returned row's id lands on the reply.
+    name, and the returned row lands on the reply.
 
-    Both English and German are seeded and COMMITTED before the call, so
-    German already has a real, flushed id when `find_language_or_create` finds
-    it -- the app factory sets `autoflush=False` (see this module's
-    docstring), so a language created fresh inside the function under test
-    would still have `id is None` at the moment `reply.language_id = language.id`
-    reads it, and the assignment would silently write NULL. Pre-seeding avoids
-    exercising that unrelated flush-timing quirk and isolates the guard this
-    test is about.
+    Both English and German are seeded and COMMITTED before the call, so this
+    test exercises `find_language_or_create`'s "already exists" branch and
+    nothing else. Its create branch has its own test --
+    test_a_reply_language_new_to_this_instance_is_created_and_applied.
 
     The reply is seeded with a real, non-NULL `language_id` (English) first --
     not left at the factory's default `None` -- so "applied" is distinguishable
@@ -305,6 +301,38 @@ def test_a_reply_language_is_applied(app, db_session, redis_lock_only_double):
 
     assert reply.language_id == german.id
     assert reply.language_id != seeded
+
+
+def test_a_reply_language_new_to_this_instance_is_created_and_applied(app, db_session, redis_lock_only_double):
+    """`find_language_or_create`'s CREATE branch, reached from the reply
+    function.
+
+    The branch does `session.add(new_language)` and returns the row without
+    flushing it, and the app factory sets `autoflush=False` (see this module's
+    docstring), so the returned object's `id` is still `None` when the caller
+    reads it. The reply function assigns through the relationship --
+    `reply.language = language` -- which lets SQLAlchemy resolve the id at
+    flush time, so the reply ends up carrying the new row's real id rather
+    than NULL.
+
+    The reply is seeded with a real, non-NULL `language_id` (English) first,
+    so a regression that wrote NULL here would be a visible change rather than
+    a no-op against a column that was already NULL.
+    """
+    reply = _seed_reply()
+    english = Language(code='en', name='English')
+    db.session.add(english)
+    db.session.commit()
+    reply.language_id = english.id
+    db.session.commit()
+
+    update_post_reply_from_activity(reply, _update(
+        language={'identifier': 'ja', 'name': 'Japanese'},
+    ))
+
+    created = db.session.query(Language).filter_by(code='ja').one()
+    assert created.id is not None
+    assert reply.language_id == created.id
 
 
 def test_a_reply_language_that_is_not_a_dict_is_ignored(app, db_session, redis_lock_only_double):
@@ -1698,19 +1726,14 @@ def test_an_nsfl_key_is_applied(app, db_session, redis_lock_only_double):
 
 def test_a_post_language_dict_is_applied(app, db_session, redis_lock_only_double):
     """The `language` arm, the one both functions share: `find_language_or_create`
-    is called with the document's identifier and name, and the returned row's
-    id lands on the post.
+    is called with the document's identifier and name, and the returned row
+    lands on the post.
 
-    Both English and German are seeded and COMMITTED before the call, so
-    German already has a real, flushed id when `find_language_or_create` finds
-    it -- the app factory sets `autoflush=False` (see this module's
-    docstring), so a language created fresh inside the function under test
-    would still have `id is None` at the moment `post.language_id =
-    new_language.id` reads it, and the comparison
-    `new_language.id != old_language_id` would then compare `None` against the
-    stored id. Pre-seeding and committing avoids exercising that unrelated
-    defect (Task 10's Fix D) and isolates the guard this test is about -- see
-    this file's module docstring for the mirrored reply-side note.
+    Both English and German are seeded and COMMITTED before the call, so this
+    test exercises `find_language_or_create`'s "already exists" branch and the
+    guard's `new_language.id != old_language_id` disjunct, and nothing else.
+    The create branch has its own test --
+    test_a_post_language_new_to_this_instance_is_created_and_applied.
 
     The post is seeded with a real, non-NULL `language_id` (English) first --
     not left at the factory's default `None` -- so "applied" is distinguishable
@@ -1733,6 +1756,39 @@ def test_a_post_language_dict_is_applied(app, db_session, redis_lock_only_double
 
     assert post.language_id == german.id
     assert post.language_id != seeded
+
+
+def test_a_post_language_new_to_this_instance_is_created_and_applied(app, db_session, redis_lock_only_double):
+    """`find_language_or_create`'s CREATE branch, reached from the post
+    function, on a post that has NO language yet.
+
+    This is the case the post guard cannot see through ids alone. The create
+    branch returns an unflushed row (`session.add` with no flush, and the app
+    factory's `autoflush=False` -- see this module's docstring), so
+    `new_language.id` is `None`; a post with no language has
+    `old_language_id` `None` too, and `None != None` is False. Reading the
+    unflushed id therefore did not merely write NULL here, it skipped the
+    assignment entirely and dropped the language on the floor.
+
+    The guard now asks `new_language.id is None or new_language.id !=
+    old_language_id` and assigns through the relationship
+    (`post.language = new_language`), so a freshly created row is always
+    applied and SQLAlchemy resolves its id at flush.
+
+    `post.language_id` is asserted equal to the created row's real id, not
+    merely non-NULL, so "the right row was attached" is distinguishable from
+    "something was written".
+    """
+    post = _seed_post()
+    assert post.language_id is None
+
+    update_post_from_activity(post, _update(
+        name='t', content='x', language={'identifier': 'ja', 'name': 'Japanese'}, type='Note',
+    ))
+
+    created = db.session.query(Language).filter_by(code='ja').one()
+    assert created.id is not None
+    assert post.language_id == created.id
 
 
 def test_a_post_content_map_supplies_the_language(app, db_session, redis_lock_only_double):
@@ -1816,8 +1872,9 @@ def test_a_post_language_dict_wins_over_content_map(app, db_session, redis_lock_
     checks the post landed on the German row's id, not merely that some
     language was assigned.
 
-    German is seeded and committed beforehand for the same
-    `autoflush=False`/Fix-D reason the tests above give. French is
+    German is seeded and committed beforehand so that, like the tests above,
+    this one exercises `find_language_or_create`'s "already exists" branch and
+    leaves its create branch to the test written for it. French is
     deliberately NOT seeded: if the `elif` mutated to an unconditional second
     check (or the `language` arm were skipped), `find_language('fr')` would
     look up a row that does not exist and return `None`, which would surface
@@ -1870,15 +1927,17 @@ def test_a_post_language_that_is_not_a_dict_is_ignored(app, db_session, redis_lo
 
 
 def test_an_unchanged_post_language_is_not_reassigned(app, db_session, redis_lock_only_double):
-    """THE SECOND ASYMMETRY. `if new_language and (new_language.id !=
-    old_language_id)` -- the post path assigns only on a change; the reply
-    path assigns unconditionally.
+    """THE SECOND ASYMMETRY. `if new_language and (new_language.id is None or
+    new_language.id != old_language_id)` -- the post path assigns only on a
+    change (or on a row so new it has no id yet); the reply path assigns
+    unconditionally.
 
     The post is seeded with German already assigned (committed, with a real
-    id, for the same Fix-D reason as the tests above), and the document also
-    names German. `find_language_or_create` takes its "already exists" branch
-    and returns the SAME row, so `new_language.id != old_language_id` is
-    False and the guard's write is skipped.
+    id, so the guard's `is None` disjunct is False and its `!=` disjunct is
+    the one under test), and the document also names German.
+    `find_language_or_create` takes its "already exists" branch and returns
+    the SAME row, so `new_language.id != old_language_id` is False and the
+    guard's write is skipped.
 
     That write being skipped has no observable through `post.language_id`
     alone: assigning `post.language_id = new_language.id` here would write the
@@ -1890,14 +1949,14 @@ def test_an_unchanged_post_language_is_not_reassigned(app, db_session, redis_loc
     create`'s create branch (the arm this scenario must NOT reach) would add
     a second one of. If `find_language_or_create` were called with a code
     that did not already exist, the create branch would build a new
-    `Language(code=code, name=name)`, `session.add()` it (without flushing --
-    the app factory's `autoflush=False`, see the module docstring and Task 2's
-    note above) and return it unflushed; that path is not exercised here
-    because `de` already exists, so the row count made possible by that branch
-    is the second observable this test relies on to distinguish "skipped
-    assignment" from "reassigned to the same value" -- see this test's own
-    report note on why the `!=` conjunct itself is not killable through either
-    observable.
+    `Language(code=code, name=name)`, `session.add()` it and return it without
+    flushing (see
+    test_a_post_language_new_to_this_instance_is_created_and_applied, which
+    covers that branch); that path is not exercised here because `de` already
+    exists, so the row count made possible by that branch is the second
+    observable this test relies on to distinguish "skipped assignment" from
+    "reassigned to the same value" -- see this test's own report note on why
+    the `!=` disjunct itself is not killable through either observable.
     """
     post = _seed_post()
     german = Language(code='de', name='German')
