@@ -645,23 +645,35 @@ def test_a_community_with_no_instance_is_skipped(app, db_session, http_mock):
     assert community.title == 'Before'
 
 
-def test_a_malformed_community_document_crashes(app, db_session, http_mock):
-    """PINS A CRASH. DO NOT FIX -- Task 10 does.
-
-    `refresh_community_profile_task` calls `actor_data.json()` unguarded,
-    where `refresh_user_profile_task` wraps it in `try/except JSONDecodeError`,
-    increments `instance.failures` and returns. So a peer that answers 200 with
-    a non-JSON body raises out of this task and is merely counted for the user
-    task -- and it is the peer that chooses the body.
+def test_a_malformed_community_document_counts_an_instance_failure(
+        app, db_session, http_mock):
+    """`refresh_community_profile_task` now wraps `actor_data.json()` in
+    `try/except JSONDecodeError`, increments `instance.failures` and returns,
+    exactly as `refresh_user_profile_task` always has. Until it did, a peer
+    that answered 200 with a non-JSON body raised `json.JSONDecodeError` out
+    of this task -- and it is the peer that chooses the body.
 
     `test_a_malformed_actor_document_counts_an_instance_failure` is the
-    control showing the handled shape.
+    control showing the same shape for the user task.
+
+    `failures` is seeded to 5 for the reason given there: it defaults to 0, so
+    an assertion of `1` against a default of `0` cannot tell an increment from
+    an assignment. The seeded title is asserted alongside it so that a fix
+    which counted the failure but then applied a half-decoded document would
+    still fail.
     """
     community = _remote_community()
+    community.instance.failures = 5
+    community.title = 'Before'
+    db.session.commit()
     _serve(http_mock, community.ap_public_url, text='<html>not json</html>')
 
-    with pytest.raises(json.JSONDecodeError, match='Expecting value'):
-        refresh_community_profile_task(community.id, None)
+    refresh_community_profile_task(community.id, None)
+
+    db.session.refresh(community)
+    db.session.refresh(community.instance)
+    assert community.instance.failures == 6
+    assert community.title == 'Before'
 
 
 def test_the_moderators_url_is_taken_from_attributed_to(app, db_session, http_mock):
@@ -1078,17 +1090,29 @@ def test_a_feed_with_no_instance_is_skipped(app, db_session, http_mock):
     assert feed.title == 'Before'
 
 
-def test_a_malformed_feed_document_crashes(app, db_session, http_mock):
-    """PINS A CRASH. DO NOT FIX -- Task 10 does.
+def test_a_malformed_feed_document_counts_an_instance_failure(
+        app, db_session, http_mock):
+    """`actor_data.json()` is now guarded in `refresh_feed_profile_task` too,
+    with the same `try/except JSONDecodeError` -> count -> return that the
+    user task has and the community task gained alongside this one. Until it
+    was, a non-JSON 200 raised `json.JSONDecodeError` out of the task.
 
-    `actor_data.json()` unguarded, exactly as in the community task. The user
-    task's handler is the control.
+    `failures` is seeded to 5 so the assertion distinguishes an increment from
+    an assignment, and the seeded title is asserted so a fix that counted the
+    failure but carried on refreshing would still fail.
     """
     feed = _remote_feed()
+    feed.instance.failures = 5
+    feed.title = 'Before'
+    db.session.commit()
     _serve(http_mock, feed.ap_public_url, text='<html>not json</html>')
 
-    with pytest.raises(json.JSONDecodeError, match='Expecting value'):
-        refresh_feed_profile_task(feed.id)
+    refresh_feed_profile_task(feed.id)
+
+    db.session.refresh(feed)
+    db.session.refresh(feed.instance)
+    assert feed.instance.failures == 6
+    assert feed.title == 'Before'
 
 
 def test_a_feed_with_no_following_url_crashes(app, db_session, http_mock):
