@@ -2640,6 +2640,18 @@ discriminator left**. Nothing regressed -- those conjuncts were already unpinned
 -- but the cheap input no longer works, and someone who tries `{}`, sees it
 survive and concludes the clause is dead would be wrong.
 
+Related, and the reason this file has no separate fact for it: **a leading
+truthiness conjunct of a guard like these is sole-killable only by CRASH, and
+that is a legitimate kill rather than a gap to paper over.** No JSON value is
+both falsy and carrying the keys the rest of the guard reads, because a falsy
+dict is necessarily empty -- so there is no input that satisfies the remaining
+conjuncts while falsifying the first, and no assertion-kill can exist. That is
+**fact 44's rule in a different syntactic position** (44 states it for a
+crash-to-404 inversion): label which shape the kill is and prove the
+impossibility from the value domain rather than reporting a weak result. The
+proof is the part that must be written down -- "it only crashes" is a finding
+only once you have shown no non-crashing input exists.
+
 **69. When two guards sit in sequence, the pin for the OUTER one must serve a
 payload the INNER one accepts.** Otherwise both mutations die by the same
 exception and the two guards become indistinguishable: you have one test that
