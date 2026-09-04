@@ -3098,10 +3098,13 @@ def update_post_reply_from_activity(reply: PostReply, request_json: dict):
                                             continue
 
                                     # ignore Mentions generated because a local user authored a comment further up in the comment chain
+                                    # a top-level comment has no ancestors, and psycopg2 renders an empty tuple as an
+                                    # invalid `IN ()`, so skip the lookup rather than ask it about nobody
                                     ids = tuple(ids)
-                                    user_ids = db.session.execute(text('SELECT user_id FROM "post_reply" WHERE id IN :ids'), {'ids': ids}).scalars()
-                                    if recipient.id in user_ids:
-                                        continue
+                                    if ids:
+                                        user_ids = db.session.execute(text('SELECT user_id FROM "post_reply" WHERE id IN :ids'), {'ids': ids}).scalars()
+                                        if recipient.id in user_ids:
+                                            continue
 
                                 blocked_senders = blocked_users(recipient.id)
                                 if reply.user_id not in blocked_senders:
