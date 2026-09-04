@@ -1154,16 +1154,22 @@ def refresh_feed_profile_task(feed_id):
                     # also make sure we have all the feeditems from the /following collection
                     if feed.ap_following_url:
                         res = get_request(feed.ap_following_url)
-                        following_collection = res.json()
+                        if res.status_code == 200:
+                            try:
+                                following_collection = res.json()
+                            except JSONDecodeError:
+                                res.close()
+                                return
+                            res.close()
 
-                        # for each of those get the communities and make feeditems
-                        for fci in following_collection['items']:
-                            community_ap_id = fci
-                            community = find_actor_or_create(community_ap_id, community_only=True)
-                            if community and isinstance(community, Community):
-                                feed_item = FeedItem(feed_id=feed.id, community_id=community.id)
-                                session.add(feed_item)
-                                session.commit()
+                            # for each of those get the communities and make feeditems
+                            for fci in following_collection['items']:
+                                community_ap_id = fci
+                                community = find_actor_or_create(community_ap_id, community_only=True)
+                                if community and isinstance(community, Community):
+                                    feed_item = FeedItem(feed_id=feed.id, community_id=community.id)
+                                    session.add(feed_item)
+                                    session.commit()
 
     except Exception:
         session.rollback()

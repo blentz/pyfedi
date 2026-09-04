@@ -22,8 +22,8 @@ from app.activitypub import util as ap_util
 from app.activitypub.util import (refresh_community_profile_task,
                                   refresh_feed_profile_task,
                                   refresh_user_profile_task)
-from app.models import (Community, CommunityMember, Feed, FeedMember, Instance, Post,
-                        User, utcnow)
+from app.models import (Community, CommunityMember, Feed, FeedItem, FeedMember, Instance,
+                        Post, User, utcnow)
 from tests.factories import (make_community, make_feed, make_feed_member, make_instance,
                              make_local_feed, make_post, make_user, seed_community_owner,
                              seed_signing_site)
@@ -72,6 +72,35 @@ def _remote_feed(name='news'):
     feed.ap_followers_url = None
     db.session.commit()
     return feed
+
+
+def _following_community(name='memes'):
+    """A community the feed task's following loop can resolve WITHOUT a fetch.
+
+    The loop calls `find_actor_or_create(fci, community_only=True)`, which
+    resolves on `Community.ap_profile_id` -- NOT `ap_public_url` and NOT
+    `ap_id`. The chain is `find_actor_by_url` -> `find_remote_actor`
+    (app/activitypub/actor.py), which lowercases the url first and routes it to
+    the Community query on seeing `/c/` (and no `/p/`) in the path.
+    `make_community(name, host=PEER)` produces exactly that shape.
+
+    `ap_fetched_at` MUST be set. A resolved actor is handed straight to
+    `schedule_actor_refresh`, which re-refreshes anything fetched over a day
+    ago OR NEVER, and `make_community` leaves the column NULL. That refresh is
+    an outbound request, so a community seeded without this line fails on
+    `block_outbound_http` for a reason that has nothing to do with the loop.
+    `test_a_feed_owners_url_is_fetched_and_recorded` sets it on its owner for
+    the same reason.
+
+    `seed_community_owner` is deliberately NOT called here: it is not
+    idempotent (`Instance.domain` is unique) and every caller has already run
+    it via `_remote_feed()`. `make_community`'s hardcoded `instance_id=1` /
+    `user_id=1` are satisfied by that earlier call.
+    """
+    community = make_community(name, host=PEER)
+    community.ap_fetched_at = utcnow()
+    db.session.commit()
+    return community
 
 
 def _person_document(name='wakko', fields=None):
@@ -1156,6 +1185,84 @@ def test_a_feed_with_no_following_url_is_skipped(app, db_session, http_mock):
     db.session.refresh(feed)
     assert feed.title == 'News, refreshed'
     assert feed.public_key == '-----BEGIN PUBLIC KEY-----refreshed'
+
+
+def test_a_non_200_following_response_creates_no_feed_items(app, db_session, http_mock):
+    """`if res.status_code == 200:` around the following-collection body --
+    the check all five sibling collection fetches make and this one did not.
+    A peer answering 502 at its `/following` used to have its body decoded and
+    acted on regardless.
+
+    THE 502 BODY IS A VALID, ACTIONABLE COLLECTION, and that is the whole
+    design of this test. Serving garbage at 502 would make dropping the status
+    check kill this test by `JSONDecodeError` -- the same way dropping the
+    DECODE guard kills
+    `test_a_malformed_following_collection_creates_no_feed_items` -- and the
+    two guards would then be indistinguishable under mutation. With a decodable
+    body naming a resolvable community, dropping the status check instead
+    CREATES a `FeedItem`, and the count assertion below flips. Two guards, two
+    different kills.
+
+    502 rather than 404 because a peer's collection endpoint failing is the
+    realistic shape; nothing in the task branches on which non-200 it is.
+
+    The title is asserted alongside the count because this guard must skip only
+    the collection: the actor document was fetched and applied before it, and a
+    fix that abandoned the refresh would also create no feed items.
+    """
+    feed = _remote_feed()
+    feed.ap_following_url = f'https://{PEER}/f/news/following'
+    feed.title = 'Before'
+    db.session.commit()
+    community = _following_community()
+    _serve(http_mock, feed.ap_public_url, _feed_document())
+    _serve(http_mock, feed.ap_following_url,
+           {'items': [community.ap_profile_id]}, status=502)
+
+    refresh_feed_profile_task(feed.id)
+
+    db.session.refresh(feed)
+    assert feed.title == 'News, refreshed'
+    assert db.session.query(FeedItem).filter_by(feed_id=feed.id).count() == 0
+
+
+def test_a_malformed_following_collection_creates_no_feed_items(
+        app, db_session, http_mock):
+    """`try/except JSONDecodeError` around the following collection's
+    `.json()`. A peer answering 200 with a non-JSON body used to raise
+    `json.JSONDecodeError` straight out of the task, past
+    `except Exception: session.rollback(); raise` -- and past a refresh that
+    had already been committed.
+
+    THE PLAIN-RETURN SPELLING IS DELIBERATE, not the `instance.failures += 1`
+    of Fix B. `Instance.failures` tracks whether an instance is answering at
+    all, and by the time this fetch runs the SAME instance has already served
+    a well-formed actor document, been decoded and been applied. Counting a
+    failure here would report an instance as unhealthy on the evidence of one
+    malformed sub-collection. `resolve_remote_post`'s object fetch
+    (app/activitypub/util.py) is the file's existing plain-return decode guard
+    and is the shape matched.
+
+    `failures` is therefore SEEDED TO 5 AND ASSERTED STILL 5. That is the
+    assertion that pins the choice: it fails if anyone converts this guard to
+    the counting spelling, and it is not the vacuous `== 0` that the column
+    default would give.
+    """
+    feed = _remote_feed()
+    feed.ap_following_url = f'https://{PEER}/f/news/following'
+    feed.title = 'Before'
+    feed.instance.failures = 5
+    db.session.commit()
+    _serve(http_mock, feed.ap_public_url, _feed_document())
+    _serve(http_mock, feed.ap_following_url, text='<html>not json</html>')
+
+    refresh_feed_profile_task(feed.id)
+
+    db.session.refresh(feed)
+    db.session.refresh(feed.instance)
+    assert feed.title == 'News, refreshed'
+    assert db.session.query(FeedItem).filter_by(feed_id=feed.id).count() == 0
+    assert feed.instance.failures == 5
 
 
 def test_a_feed_owners_url_is_fetched_and_recorded(app, db_session, http_mock):
