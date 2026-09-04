@@ -38,8 +38,8 @@ from app.constants import NOTIF_MENTION
 from app.models import Language, Notification, PostReply, User
 from app.utils import utcnow
 from tests.factories import (make_community, make_instance, make_post,
-                             make_post_reply, make_site, make_user,
-                             make_user_block)
+                             make_post_flair, make_post_reply, make_site,
+                             make_user, make_user_block)
 
 PEER = 'peer.example'
 
@@ -1836,3 +1836,378 @@ def test_an_unchanged_post_language_is_not_reassigned(app, db_session, redis_loc
 
     assert post.language_id == first
     assert db.session.query(Language).filter_by(code='de').count() == 1
+
+
+def test_a_post_hashtag_is_attached(app, db_session, redis_lock_only_double):
+    """The `Hashtag` arm through `find_hashtag_or_create`. The tag list is
+    cleared first, so asserting the new tag is present also proves the clear
+    did not remove it afterwards.
+    """
+    post = _seed_post()
+
+    update_post_from_activity(post, _update(
+        name='t', content='x', tag=[{'type': 'Hashtag', 'name': '#topic'}], type='Note',
+    ))
+
+    assert any('topic' in t.name.lower() for t in post.tags)
+
+
+def test_a_hashtag_matching_the_community_name_is_ignored(app, db_session, redis_lock_only_double):
+    """Lemmy adds the community slug as a hashtag on every post, and the
+    comparison against `post.community.name` drops it.
+
+    The community name is read from `post.community.name` itself rather than
+    hardcoded, so this test does not depend on `make_community`'s default.
+    """
+    post = _seed_post()
+
+    update_post_from_activity(post, _update(
+        name='t', content='x',
+        tag=[{'type': 'Hashtag', 'name': '#' + post.community.name}],
+        type='Note',
+    ))
+
+    assert len(list(post.tags)) == 0
+
+
+def test_a_mention_tag_is_not_treated_as_a_hashtag(app, db_session, redis_lock_only_double):
+    """The `json_tag['type'] == 'Hashtag'` comparison, proven by a tag entry
+    that never carries a `name` key at all: a Mention. If this comparison
+    matched any type, the Hashtag arm's `json_tag['name']` subscript would
+    KeyError on a tag shaped like this one.
+    """
+    post = _seed_post()
+
+    update_post_from_activity(post, _update(name='t', content='x', tag=[_mention()], type='Note'))
+
+    assert len(list(post.tags)) == 0
+
+
+def test_a_post_with_no_tag_key_leaves_existing_tags_untouched(app, db_session, redis_lock_only_double):
+    """The `'tag' in request_json['object']` conjunct. Without it, an Update
+    that omits `tag` entirely must not reach `post.tags.clear()` -- proved by
+    attaching a hashtag through one call, then sending a second Update with no
+    `tag` key at all and checking it survives.
+    """
+    post = _seed_post()
+    update_post_from_activity(post, _update(
+        name='t', content='x', tag=[{'type': 'Hashtag', 'name': '#topic'}], type='Note',
+    ))
+    seeded_names = {t.name for t in post.tags}
+    assert seeded_names
+
+    update_post_from_activity(post, _update(name='t2', content='x', type='Note'))
+
+    assert {t.name for t in post.tags} == seeded_names
+
+
+def test_a_post_tag_that_is_not_a_list_leaves_existing_tags_untouched(app, db_session, redis_lock_only_double):
+    """The `isinstance(request_json['object']['tag'], list)` conjunct. `tag`
+    present but not a list must not reach `post.tags.clear()` or the loop --
+    proved the same way as the conjunct above, with `tag` present as a bare
+    int instead of absent.
+    """
+    post = _seed_post()
+    update_post_from_activity(post, _update(
+        name='t', content='x', tag=[{'type': 'Hashtag', 'name': '#topic'}], type='Note',
+    ))
+    seeded_names = {t.name for t in post.tags}
+    assert seeded_names
+
+    update_post_from_activity(post, _update(name='t2', content='x', tag=42, type='Note'))
+
+    assert {t.name for t in post.tags} == seeded_names
+
+
+def test_a_post_mention_of_a_local_user_notifies_them(app, db_session, redis_lock_only_double):
+    """The post path's Mention arm. Unlike the reply path there is NO
+    de-duplication block and no `len(tag) > 1` gate, so a lone Mention
+    notifies -- which is the pair's asymmetry, pinned here from the side that
+    allows it.
+    """
+    post = _seed_post()
+    recipient = _seed_local_recipient()
+
+    update_post_from_activity(post, _update(name='t', content='x', tag=[_mention()], type='Note'))
+
+    notification = db.session.query(Notification).filter_by(
+        user_id=recipient.id, notif_type=NOTIF_MENTION).one()
+    assert notification.subtype == 'post_mention'
+    assert notification.url.endswith(f'/post/{post.id}')
+
+
+def test_a_post_mention_increments_the_recipients_unread_count(app, db_session, redis_lock_only_double):
+    """Seeded to 3, asserted 4 -- "incremented", not "set to 1"."""
+    post = _seed_post()
+    recipient = _seed_local_recipient()
+    recipient.unread_notifications = 3
+    db.session.commit()
+
+    update_post_from_activity(post, _update(name='t', content='x', tag=[_mention()], type='Note'))
+
+    assert recipient.unread_notifications == 4
+
+
+def test_a_second_post_mention_does_not_duplicate_the_notification(app, db_session, redis_lock_only_double):
+    """`existing_notification` on the post side."""
+    post = _seed_post()
+    recipient = _seed_local_recipient()
+    document = _update(name='t', content='x', tag=[_mention()], type='Note')
+
+    update_post_from_activity(post, document)
+    update_post_from_activity(post, document)
+
+    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 1
+
+
+def test_a_post_tag_of_another_type_is_not_treated_as_a_mention(app, db_session, redis_lock_only_double):
+    """The `json_tag['type'] == 'Mention'` comparison. A tag entry with a
+    `type` key and an `href` that would resolve to the recipient, but whose
+    type is not `'Mention'`, must not notify.
+    """
+    post = _seed_post()
+    recipient = _seed_local_recipient()
+
+    update_post_from_activity(post, _update(
+        name='t', content='x',
+        tag=[{'type': 'Emoji', 'href': f'https://test.piefed.local/u/{recipient.user_name}'}],
+        type='Note',
+    ))
+
+    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
+
+
+def test_a_post_mention_with_no_href_notifies_nobody(app, db_session, redis_lock_only_double):
+    """`profile_id = json_tag['href'] if 'href' in json_tag else None`, then
+    `if profile_id and ...`. A Mention with no href yields None and stops.
+    """
+    post = _seed_post()
+    recipient = _seed_local_recipient()
+
+    update_post_from_activity(post, _update(name='t', content='x', tag=[{'type': 'Mention'}], type='Note'))
+
+    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
+
+
+def test_a_post_mention_with_a_non_string_href_notifies_nobody(app, db_session, redis_lock_only_double):
+    """The `isinstance(profile_id, str)` conjunct of `if profile_id and
+    isinstance(profile_id, str) and profile_id.startswith(...)`. `profile_id`
+    truthy alone is not enough -- a non-string href (here, an int, which is
+    truthy) must not reach `.startswith(...)`, which would raise
+    `AttributeError` on an int if this conjunct were dropped.
+    """
+    post = _seed_post()
+    recipient = _seed_local_recipient()
+
+    update_post_from_activity(post, _update(
+        name='t', content='x', tag=[{'type': 'Mention', 'href': 1}], type='Note',
+    ))
+
+    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
+
+
+def test_a_post_mention_with_a_case_mismatched_host_notifies_nobody(app, db_session, redis_lock_only_double):
+    """The `profile_id.startswith('https://' + SERVER_NAME)` conjunct itself,
+    as distinct from the recipient lookup that follows it. A href whose host
+    differs from SERVER_NAME only by case fails this case-sensitive
+    `startswith` before any lowering happens (`profile_id.lower()` only runs
+    INSIDE the guard, once it has already passed).
+
+    A same-host-but-wrong-case href is what makes this conjunct's effect
+    observable: a foreign-host href would find no matching local recipient
+    regardless of whether this conjunct ran, so it would not distinguish this
+    guard from its absence. Here, lower-casing the mixed-case href (what the
+    guard's own next line would do if it were reached) reproduces the
+    recipient's `ap_profile_id` exactly -- so if `startswith` were bypassed,
+    this Mention WOULD resolve and notify.
+    """
+    post = _seed_post()
+    recipient = _seed_local_recipient()
+
+    update_post_from_activity(post, _update(
+        name='t', content='x',
+        tag=[{'type': 'Mention', 'href': 'https://Test.Piefed.Local/u/localuser'}],
+        type='Note',
+    ))
+
+    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
+
+
+def test_a_post_mention_of_an_unregistered_local_name_notifies_nobody(app, db_session, redis_lock_only_double):
+    """The `if recipient:` existence check that follows
+    `User.query.filter_by(ap_profile_id=profile_id, ap_id=None).first()`.
+
+    The href is on THIS server -- so `startswith('https://' + SERVER_NAME)`
+    passes and the case-mismatch test's guard is not what stops it -- but
+    names a local user who does not exist. A different local user IS seeded,
+    so the lookup is against a populated table rather than an empty one.
+
+    Dropping `if recipient:` makes the next line evaluate `None.id` through
+    `blocked_users(recipient.id)`, so the mutant raises AttributeError rather
+    than reproducing this no-notification outcome.
+    """
+    post = _seed_post()
+    existing = _seed_local_recipient()
+
+    update_post_from_activity(post, _update(
+        name='t', content='x', tag=[_mention(name='nobody')], type='Note',
+    ))
+
+    assert db.session.query(Notification).count() == 0
+    assert existing.unread_notifications == 0
+
+
+def test_a_post_mention_of_a_blocked_sender_is_suppressed(app, db_session, redis_lock_only_double):
+    """`blocked_users(recipient.id)` -- a recipient who has blocked the
+    post's author gets no notification.
+
+    `make_user_block(blocker, blocked)` inserts `UserBlock(blocker_id=blocker.id,
+    blocked_id=blocked.id)`, and `blocked_users(user_id)` filters `UserBlock`
+    on `blocker_id == user_id` and returns the `blocked_id`s. Production
+    checks `if post.user_id not in blocked_senders` where `blocked_senders =
+    blocked_users(recipient.id)`, so the recipient must be the BLOCKER and
+    the post's author the BLOCKED.
+    """
+    post = _seed_post()
+    recipient = _seed_local_recipient()
+    author = db.session.query(User).get(post.user_id)
+    make_user_block(recipient, author)
+
+    update_post_from_activity(post, _update(name='t', content='x', tag=[_mention()], type='Note'))
+
+    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
+
+
+def test_a_non_community_tag_is_not_treated_as_flair(app, db_session, redis_lock_only_double):
+    """The `json_tag['type'] == 'lemmy:CommunityTag'` comparison. A tag entry
+    of a different type, even one carrying a `display_name` and `id` that
+    would satisfy `find_flair_or_create` if it were collected, must not be
+    gathered into `flair_tags` -- and on a plain lemmy instance, where neither
+    of the flair-application gate's other two disjuncts is open, that keeps
+    the gate closed and no flair is created at all.
+    """
+    post = _seed_post()
+
+    update_post_from_activity(post, _update(
+        name='t', content='x',
+        tag=[{'type': 'Something', 'display_name': 'Ignored',
+              'id': f'https://{PEER}/flair/ignored'}],
+        type='Note',
+    ))
+
+    assert len(list(post.flair)) == 0
+
+
+def test_a_community_tag_becomes_flair(app, db_session, redis_lock_only_double):
+    """`lemmy:CommunityTag` entries are collected and applied through
+    `find_flair_or_create` once the loop ends.
+
+    `find_flair_or_create` (app/activitypub/util.py) reads `display_name` or
+    `preferredUsername` for the flair's text -- NOT `name` -- so the tag is
+    shaped to carry `display_name`, matching what the function actually
+    reads rather than what an untested guess would supply.
+    """
+    post = _seed_post()
+
+    update_post_from_activity(post, _update(
+        name='t', content='x',
+        tag=[{'type': 'lemmy:CommunityTag', 'display_name': 'News',
+              'id': f'https://{PEER}/flair/news'}],
+        type='Note',
+    ))
+
+    assert len(list(post.flair)) == 1
+
+
+def test_a_piefed_instance_clears_flair_with_no_flair_tags(app, db_session, redis_lock_only_double):
+    """The gate's second disjunct: with no `lemmy:CommunityTag` entries at
+    all, flair is still cleared when the posting instance is piefed.
+
+    Seeded WITH a flair first, through `make_post_flair` (tests/factories.py)
+    -- which builds a `CommunityFlair` scoped to the post's community via
+    `make_community_flair` and attaches it through `post.flair.append`, then
+    commits -- so "cleared" is distinguishable from "there was never any".
+    """
+    post = _seed_post(software='piefed')
+    make_post_flair(post)
+
+    update_post_from_activity(post, _update(name='t', content='x', tag=[], type='Note'))
+
+    assert len(list(post.flair)) == 0
+
+
+def test_a_pylova_instance_clears_flair_with_no_flair_tags(app, db_session, redis_lock_only_double):
+    """The gate's third disjunct, `software == 'pylova'`, on its own. Without
+    a test naming 'pylova' explicitly, this disjunct can be deleted with the
+    suite green -- the piefed test above does not exercise it, and the lemmy
+    test below only proves it is not ALREADY true for an unrelated software
+    string, not that 'pylova' itself opens the gate.
+
+    Same seeding as the piefed test, opposite software string.
+    """
+    post = _seed_post(software='pylova')
+    make_post_flair(post)
+
+    update_post_from_activity(post, _update(name='t', content='x', tag=[], type='Note'))
+
+    assert len(list(post.flair)) == 0
+
+
+def test_a_lemmy_instance_keeps_flair_when_no_flair_tags_arrive(app, db_session, redis_lock_only_double):
+    """The gate's False side, and the reason it exists: a Lemmy Update
+    carrying no flair tags must NOT clear flair this instance already holds,
+    because Lemmy does not send flair at all.
+
+    Same seeding as the two tests above, opposite software, opposite
+    assertion -- and because all three disjuncts are False here, this is also
+    what proves none of them has been mutated to an unconditional True: a
+    mutant forcing any one of `len(flair_tags) > 0`, `software == 'piefed'`
+    or `software == 'pylova'` to always-True would open the gate on THIS
+    fixture and clear the seeded flair, failing this assertion.
+    """
+    post = _seed_post(software='lemmy')
+    make_post_flair(post)
+
+    update_post_from_activity(post, _update(name='t', content='x', tag=[], type='Note'))
+
+    assert len(list(post.flair)) == 1
+
+
+def test_comments_enabled_defaults_to_true_when_absent(app, db_session, redis_lock_only_double):
+    """The ternary's else. Seeded False so the default's True is observable
+    -- the column's own default would make this vacuous.
+    """
+    post = _seed_post()
+    post.comments_enabled = False
+    db.session.commit()
+
+    update_post_from_activity(post, _update(name='t', content='x', type='Note'))
+
+    assert post.comments_enabled is True
+
+
+def test_comments_enabled_is_applied_when_present(app, db_session, redis_lock_only_double):
+    """The ternary's if-branch: a document that DOES carry `commentsEnabled`
+    has that value copied verbatim, not the default. Seeded True so the
+    document's False is observable -- without this test the `'commentsEnabled'
+    in request_json['object']` conjunct could be deleted (always falling to
+    the `else True`) with the suite green.
+    """
+    post = _seed_post()
+    post.comments_enabled = True
+    db.session.commit()
+
+    update_post_from_activity(post, _update(name='t', content='x', commentsEnabled=False, type='Note'))
+
+    assert post.comments_enabled is False
+
+
+def test_a_post_unparseable_updated_falls_back_to_now(app, db_session, redis_lock_only_double):
+    """The post side's `except ValueError`, mirroring the reply's."""
+    post = _seed_post()
+
+    update_post_from_activity(post, _update(
+        name='t', content='x', updated='not a timestamp', type='Note',
+    ))
+
+    assert post.ap_updated.year == utcnow().year
