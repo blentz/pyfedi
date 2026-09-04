@@ -629,8 +629,16 @@ def test_a_second_reply_mention_does_not_duplicate_the_notification(app, db_sess
     """`existing_notification` -- the same comment mentioning the same user
     twice produces one row, not two.
 
-    Two Updates rather than two tags in one document, because the block breaks
-    out per tag and the second Update is the realistic shape.
+    Two Updates rather than two tags in one document, and the original reason
+    given here -- "the block breaks out per tag" -- was wrong: the mention loop
+    contains no `break`, so both tags are processed. The real reason is that
+    `existing_notification` cannot see a notification added earlier in the SAME
+    call. The app factory constructs SQLAlchemy with
+    `session_options={"autoflush": False}` (app/__init__.py), so the first
+    tag's `db.session.add(notification)` is still pending and unflushed when
+    the second tag runs that query, and a document carrying the same Mention
+    twice produces TWO rows -- confirmed by running it. Only a second Update,
+    after the first has committed, exercises the check this test is named for.
     """
     reply = _seed_reply()
     recipient = _seed_local_recipient()
@@ -784,11 +792,13 @@ def _seed_notification(recipient, subtype, targets, url):
     """A pre-existing Notification row for the de-duplication queries to find.
 
     `url` is passed explicitly because production's own later
-    `existing_notification` check matches on url alone. A seeded row carrying
-    the url of the reply under test would suppress the notification through
-    THAT check instead of through the de-duplication rule the test is aiming
-    at, so each caller gives its seeded row a url belonging to a different
-    object.
+    `existing_notification` check filters on `user_id` and `url` only -- not on
+    `notif_type`, `subtype` or `targets`. Every row this helper seeds is for
+    the recipient under test, so the url is the sole column that keeps that
+    check from matching: a seeded row carrying the url of the reply under test
+    would suppress the notification through THAT check instead of through the
+    de-duplication rule the test is aiming at. Each caller therefore gives its
+    seeded row a url belonging to a different object.
     """
     notification = Notification(user_id=recipient.id, title='seeded', url=url,
                                 notif_type=NOTIF_MENTION, subtype=subtype,
@@ -1051,10 +1061,21 @@ def test_a_top_level_microblog_reply_mention_raises_on_its_empty_id_list(app, db
     whole Update handler dies with a ProgrammingError before the notification
     is reached.
 
-    This is not a rare shape: it is every top-level Mastodon/mbin comment that
-    mentions a local user. The session is left unusable by the failed
-    statement, so the assertion that nothing was written needs a rollback
-    first.
+    Reaching that line needs all of: an UPDATE (this function is the edit path
+    only -- creates go through the other copy of this block, at
+    app/activitypub/util.py:2705-2736, whose loop is written correctly); a
+    `tag` list of length greater than one, since a lone Mention never enters
+    the block at all (test_a_lone_reply_mention_is_ignored pins that); a
+    mentioned local user who is NOT the post's author, because for a top-level
+    reply `reply_parent` is `reply.post` and the self-mention exclusion catches
+    that case first; and no pre-existing `post_mention` notification for that
+    recipient and post, which rule 2 would have caught. So the accurate scope
+    is every EDIT of a top-level microblog comment carrying two or more tags
+    that Mentions a local user other than the post's author. Narrower than
+    "every top-level microblog comment", but not exotic.
+
+    The session is left unusable by the failed statement, so the assertion that
+    nothing was written needs a rollback first.
     """
     reply = _seed_reply(software='mastodon')
     reply.path = [0, reply.id]
