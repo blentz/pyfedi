@@ -375,21 +375,44 @@ def test_a_non_200_actor_response_applies_nothing(app, db_session, http_mock):
 
 
 def test_a_changed_indexable_flag_rewrites_the_users_posts(app, db_session, http_mock):
-    """`new_indexable != user.indexable` runs raw SQL over every post the user
-    has. The document omits `indexable`, which the task reads as True.
+    """`if new_indexable != user.indexable:` runs
+    `UPDATE "post" SET indexable = :indexable WHERE user_id = :user_id` over
+    every post the user has. The document omits `indexable`, which the task
+    reads as True, and the user is seeded False so the branch is entered.
 
-    A post is seeded with `indexable=False` so the UPDATE has something to
-    change, and the assertion is on the POST row rather than the user -- the
-    user's own column is not what this branch writes.
+    A POST IS SEEDED WITH `indexable=False` AND THE ASSERTION IS ON THE POST
+    ROW. That is the only assertion that can kill this branch. `user.indexable
+    = new_indexable` is assigned UNCONDITIONALLY forty lines further down the
+    task, outside this `if`, so `user.indexable` reads True after the refresh
+    whether the branch ran or not -- asserting it alone left the whole block
+    deletable with the suite green, and the raw UPDATE running against zero
+    rows meant nothing observed it either. The user column is asserted too,
+    but only as a guard on the seeding: it says the document was applied at
+    all, and it is the post row that says this branch was what applied it.
+
+    `Post.indexable` defaults to True (`app/models.py:1731`), so the seeded
+    post's False is set explicitly after `make_post` -- a post left at the
+    default would read True after the refresh either way.
+
+    `make_post` needs a community and an author. The author is the refreshed
+    user itself, because the UPDATE filters on `user_id`; a post by anyone
+    else would not be touched by a working branch.
     """
     user = _remote_user()
     user.indexable = False
+    db.session.commit()
+    community = make_community('memes', host=PEER)
+    db.session.commit()
+    post = make_post(community, user, f'https://{PEER}/p/indexed')
+    post.indexable = False
     db.session.commit()
     _serve(http_mock, user.ap_public_url, _person_document())
 
     refresh_user_profile_task(user.id)
 
     db.session.refresh(user)
+    db.session.refresh(post)
+    assert post.indexable is True
     assert user.indexable is True
 
 
@@ -754,8 +777,15 @@ def test_the_moderators_url_is_taken_from_attributed_to(app, db_session, http_mo
 
 def test_a_typeless_moderators_document_is_skipped(app, db_session, http_mock):
     """`'type' in mods_data`, checked before `mods_data['type']` is read --
-    the same missing conjunct as the followers guard above, in the same
-    function, with the correct featured guard sitting between them.
+    the same missing conjunct as the followers guard, in the same function.
+
+    THE ORDER IS MODERATORS, THEN FOLLOWERS, THEN FEATURED, and this is the
+    FIRST of the three: the moderators guard is `app/activitypub/util.py:947`,
+    the followers guard `:984`, and the correct featured guard `:993`, which
+    sits BELOW both rather than between them. `test_a_typeless_followers_
+    document_is_skipped` states the same relationship from the middle guard's
+    side ("the featured guard nine lines below this one", 993 - 984 = 9) and
+    is the model this docstring now follows.
 
     THE DOCUMENT DIFFERS FROM `test_the_moderators_url_is_taken_from_attributed_to`'s
     IN EXACTLY ONE KEY: `type` is absent and the same usable `orderedItems`
@@ -1158,20 +1188,64 @@ def test_refreshing_a_feed_applies_the_peers_document(app, db_session, http_mock
     assert feed.title == 'News, refreshed'
 
 
-def test_refreshing_a_local_feed_does_nothing(app, db_session, http_mock):
+def test_refreshing_a_local_feed_does_nothing(
+        app, db_session, no_real_sleeping, monkeypatch):
     """`not feed.is_local()` -- the third conjunct, which NEITHER sibling has.
-    A local feed returns before fetching anything, so no route is registered
-    and `block_outbound_http` would raise if it fetched anyway. The absence of
-    a request is what this test proves.
+
+    THE OBSERVABLE IS A SPY ON `get_request`, NOT `block_outbound_http`, and
+    the difference is the whole point of this test. `make_local_feed` builds a
+    feed whose host is `test.piefed.local`, and `is_invalid_get_request_uri`
+    (app/utils.py) rejects any host ending in `.local` -- so `get_request`
+    raises `httpx.HTTPError` from its own first line, BEFORE httpx is
+    reached and therefore before respx or `block_outbound_http` can see
+    anything. Drop `and not feed.is_local()` and the task takes the
+    `except httpx.HTTPError:` retry path, sleeps, gets the same
+    validator rejection again, and returns quietly. Outbound-HTTP blocking
+    cannot distinguish the guard firing from the guard gone, which is exactly
+    how this test previously passed with no assertions at all while its
+    conjunct survived deletion. Spying on `ap_util.get_request` sees the
+    attempt regardless of whether it ever becomes a request -- the same
+    pattern the three user-guard tests above use, and for the same class of
+    reason.
+
+    The spy returns a real `httpx.Response` so a dropped conjunct runs the
+    task to completion and the kill lands on the assertions here rather than
+    on an incidental crash. `_feed_document()` carries a `name` and a
+    `publicKey` and no `attributedTo`/`moderators`, and `make_local_feed`
+    leaves `ap_following_url` NULL, so the mutant fetches the actor document
+    once, applies it, and stops -- overwriting the seeded title and the NULL
+    public key, which the two column assertions below catch.
+
+    `no_real_sleeping` is belt-and-braces. With the spy installed the retry
+    path is unreachable (the spy never raises), but if the patch target ever
+    moves off `ap_util.get_request` the mutant falls straight back onto the
+    real `get_request`, the `.local` rejection, and a 3-to-10-second real
+    sleep. The fixture keeps that failure fast instead of slow.
 
     `make_local_feed` gives a local feed directly; using it rather than
     mutating a remote one keeps the fixture honest about what it represents.
+    It leaves `ap_id` NULL, which satisfies `Feed.is_local()`'s first
+    disjunct (`app/models.py:4237-4238`).
     """
     seed_community_owner(PEER)
     feed = make_local_feed('localnews')
+    feed.title = 'Before'
     db.session.commit()
+    calls = []
+
+    def _spy(*a, **kw):
+        calls.append(a)
+        return httpx.Response(200, json=_feed_document())
+
+    monkeypatch.setattr(ap_util, 'get_request', _spy)
 
     refresh_feed_profile_task(feed.id)
+
+    db.session.refresh(feed)
+    assert calls == []
+    assert feed.title == 'Before'
+    assert feed.public_key is None
+    assert feed.ap_fetched_at is None
 
 
 def test_a_feed_with_no_instance_is_skipped(app, db_session, http_mock):
@@ -1311,9 +1385,15 @@ def test_a_malformed_following_collection_creates_no_feed_items(
     all, and by the time this fetch runs the SAME instance has already served
     a well-formed actor document, been decoded and been applied. Counting a
     failure here would report an instance as unhealthy on the evidence of one
-    malformed sub-collection. `resolve_remote_post`'s object fetch
-    (app/activitypub/util.py) is the file's existing plain-return decode guard
-    and is the shape matched.
+    malformed sub-collection. `verify_object_from_source`
+    (app/activitypub/util.py, `def` at `:4458`) holds the file's existing
+    plain-return decode guards -- two of them, one on the unsigned object
+    fetch and one on the signed retry, each `except JSONDecodeError:
+    object_request.close(); return ...` with no `failures` increment -- and
+    that is the shape matched. NOT `resolve_remote_post`, which an earlier
+    revision of this docstring named: that function contains no
+    `JSONDecodeError` handler at all, and the register's D216 was corrected
+    for the same misattribution.
 
     `failures` is therefore SEEDED TO 5 AND ASSERTED STILL 5. That is the
     assertion that pins the choice: it fails if anyone converts this guard to
@@ -1339,9 +1419,15 @@ def test_a_malformed_following_collection_creates_no_feed_items(
 
 def test_a_feed_owners_url_is_fetched_and_recorded(app, db_session, http_mock):
     """The feed task's equivalent of the community followers pair above, for
-    the one feed-side collection that is genuinely gated: `ap_moderators_url`
-    guards a fetch of the feed's owners, exactly as `community.ap_moderators_url`
-    guards the community's moderators fetch. Unlike the community task's
+    the first of the feed task's TWO gated collections: `feed.ap_moderators_url`
+    (`app/activitypub/util.py:1115`) guards a fetch of the feed's owners,
+    exactly as `community.ap_moderators_url` guards the community's moderators
+    fetch. `feed.ap_following_url` (`:1155`) is the other, gated by this
+    slice's own Fix C and pinned by
+    `test_a_feed_with_no_following_url_is_skipped` -- an earlier revision of
+    this docstring called the owners fetch "the one feed-side collection that
+    is genuinely gated", which was written before that fix landed and was
+    already stale when it did. Unlike the community task's
     moderators fetch -- already covered by
     `test_the_moderators_url_is_taken_from_attributed_to` and its kbin
     sibling -- no existing test in this file drives the feed's owners fetch at
@@ -1450,8 +1536,18 @@ def test_no_feed_owners_url_means_no_owners_fetch(app, db_session, http_mock):
 def test_a_failed_community_fetch_is_retried_once(
         app, db_session, http_mock, no_real_sleeping):
     """The community task's retry, whose inner catch is `except Exception:`
-    where the user task's is a bare `except:`. Both reach the retry; the
-    difference is what happens when the RETRY fails, which the next test pins.
+    where the user task's is `except httpx.HTTPError:`. Both reach the retry;
+    the difference is what happens when the RETRY fails, which the next test
+    pins -- `except Exception:` swallows a non-httpx retry failure that the
+    user task's narrower catch would let propagate.
+
+    THE USER TASK'S BARE `except:` IS NOT THIS HANDLER. It is a sibling
+    handler on the OUTER `try` -- the one guarding the `signed_get_request`
+    fallback, pinned by
+    `test_a_user_fetch_failing_outside_httpx_falls_back_to_a_signed_get` --
+    and it has no counterpart in either sibling task. An earlier revision of
+    this docstring identified it as the user task's retry catch; the
+    register's D220 has always had it right.
     """
     community = _remote_community()
     http_mock.get(community.ap_public_url).mock(side_effect=[
@@ -1632,16 +1728,28 @@ def test_a_feed_fetch_failing_outside_httpx_propagates(
 
 
 def test_a_following_collection_entry_becomes_a_feed_item(app, db_session, http_mock):
-    """THE LAST STATEMENT-COVERAGE GAP IN THIS SUB-PROJECT. Every feed test
-    before this one served `{'items': []}` to get past the following fetch, so
-    the loop body -- resolve the entry, build a `FeedItem`, commit -- had never
-    executed.
+    """THE FOLLOWING LOOP'S BODY, which no earlier test reached: every feed
+    test before this one served `{'items': []}` to get past the following
+    fetch, so the loop body -- resolve the entry, build a `FeedItem`, commit
+    -- had never executed.
+
+    NOT "the last statement-coverage gap in this sub-project", which an
+    earlier revision of this docstring claimed. It was false when written and
+    is measurably false now: 124 statements across the three tasks are still
+    uncovered, most of them in the document-application bodies (icon, image,
+    description, language), and the residual is registered as D235 with the
+    per-function breakdown.
 
     ENTRIES ARE BARE STRINGS HERE. `community_ap_id = fci` takes the item
-    itself, where the community task's moderators loop a few hundred lines up
-    unwraps objects first (`if isinstance(actor, dict): actor = actor['id']`)
-    and the featured collection is read as `item['id']`. Three collections in
-    the same slice, three different entry shapes assumed. A dict entry would
+    itself, where the community task's moderators handling unwraps objects
+    (`if isinstance(actor, dict): actor = actor['id']`,
+    `app/activitypub/util.py:967-968`) and the featured collection is read as
+    `item['id']`. Note the unwrap is in the moderators REMOVAL loop, not the
+    membership loop above it -- the membership loop (`:948-950`) passes the
+    raw entry to `find_actor_or_create` exactly as this one does, so the two
+    moderators loops disagree with each other about entry shape. Three
+    collections in the same slice, three different entry shapes assumed. A
+    dict entry would
     in fact survive here, because `find_actor_or_create` unwraps one itself --
     but only by accident of that helper, not because this loop handles it, so
     the string form is what is pinned.
@@ -1714,8 +1822,10 @@ def test_a_following_collection_with_no_items_key_is_skipped(app, db_session, ht
     could be `None` (a body of JSON `null`) or an object with no `items`, and
     either raised out of the task.
 
-    WHAT IS *NOT* ADDED HERE: a `type` check. The three sibling guards test
-    `<data>['type'] == '<Collection kind>'`, but this loop never has, and
+    WHAT IS *NOT* ADDED HERE: a `type` check. The FOUR sibling guards test
+    `<data>['type'] == '<Collection kind>'` -- moderators
+    (`app/activitypub/util.py:947`), followers (`:984`), featured (`:993`) and
+    the feed's own owners (`:1121`) -- but this loop never has, and
     every existing feed test in this file serves `{'items': []}` with NO
     `type` key -- adding one would break them and would refuse documents the
     task accepts today. The matched conjunct is the membership half only:
