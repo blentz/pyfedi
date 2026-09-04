@@ -3060,7 +3060,7 @@ def update_post_reply_from_activity(reply: PostReply, request_json: dict):
 
         try:
             reply.ap_updated = datetime.fromisoformat(request_json['object']['updated']) if 'updated' in request_json['object'] else utcnow()
-        except ValueError:
+        except (ValueError, TypeError):
             reply.ap_updated = utcnow()
 
         # Check for Mentions of local users (that weren't in the original)
@@ -3266,7 +3266,7 @@ def update_post_from_activity(post: Post, request_json: dict):
         post.comments_enabled = request_json['object']['commentsEnabled'] if 'commentsEnabled' in request_json['object'] else True
         try:
             post.ap_updated = datetime.fromisoformat(request_json['object']['updated']) if 'updated' in request_json['object'] else utcnow()
-        except ValueError:
+        except (ValueError, TypeError):
             post.ap_updated = utcnow()
         post.edited_at = utcnow()
 
