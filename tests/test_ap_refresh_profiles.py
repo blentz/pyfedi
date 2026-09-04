@@ -251,3 +251,73 @@ def test_refreshing_a_user_on_a_dormant_instance_does_nothing(app, db_session, m
     refresh_user_profile_task(user.id)
 
     assert calls == []
+
+
+def test_a_failed_fetch_is_retried_once(app, db_session, http_mock, no_real_sleeping):
+    """`except httpx.HTTPError:` -> `time.sleep(randint(3, 10))` -> one retry.
+
+    `no_real_sleeping` is REQUIRED: without it this test sleeps for up to ten
+    real seconds. The task sleeps inline in the worker rather than deferring to
+    the broker, which is registered as a finding rather than fixed here.
+
+    respx serves a failure then a success from one route by giving `side_effect`
+    a list, so the retry is the second call rather than a second route -- one
+    route, two responses, which is also what `assert_all_called=True` expects.
+    """
+    user = _remote_user()
+    http_mock.get(user.ap_public_url).mock(side_effect=[
+        httpx.ConnectError('boom'),
+        httpx.Response(200, json=_person_document(fields={'name': 'Retried'})),
+    ])
+
+    refresh_user_profile_task(user.id)
+
+    db.session.refresh(user)
+    assert user.title == 'Retried'
+
+
+def test_a_malformed_actor_document_counts_an_instance_failure(
+        app, db_session, http_mock):
+    """PINS THE CORRECT BEHAVIOUR, which is the control for two defects.
+
+    `refresh_user_profile_task` wraps `actor_data.json()` in
+    `try/except JSONDecodeError`, increments `user.instance.failures` and
+    returns. `refresh_community_profile_task` and `refresh_feed_profile_task`
+    call `.json()` unguarded and raise instead -- pinned in Tasks 5 and 7 and
+    fixed in Task 10.
+
+    `failures` is seeded to 5 because it defaults to 0: an assertion of `1`
+    against a default of `0` cannot tell an increment from an assignment, and
+    an assertion of "not 0" cannot tell it from any other write.
+
+    `user.title` is asserted as `None`, not `None or ''`: `User.title` is a
+    plain `db.Column(db.String(256))` with no default, and `make_user` never
+    sets it, so a factory-built user's `title` is `None` until something
+    applies a document -- which this test proves did not happen.
+    """
+    user = _remote_user()
+    user.instance.failures = 5
+    db.session.commit()
+    _serve(http_mock, user.ap_public_url, text='<html>not json</html>')
+
+    refresh_user_profile_task(user.id)
+
+    db.session.refresh(user.instance)
+    assert user.instance.failures == 6
+    assert user.title is None
+
+
+def test_a_non_200_actor_response_applies_nothing(app, db_session, http_mock):
+    """`if actor_data.status_code == 200:` -- a 404 from the peer leaves the
+    row untouched. The title is asserted unchanged rather than the absence of
+    an exception, because the task returns normally either way.
+    """
+    user = _remote_user()
+    user.title = 'Before'
+    db.session.commit()
+    _serve(http_mock, user.ap_public_url, _person_document(), status=404)
+
+    refresh_user_profile_task(user.id)
+
+    db.session.refresh(user)
+    assert user.title == 'Before'
