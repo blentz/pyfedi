@@ -752,6 +752,42 @@ def test_the_moderators_url_is_taken_from_attributed_to(app, db_session, http_mo
     assert membership.is_moderator is True
 
 
+def test_a_typeless_moderators_document_is_skipped(app, db_session, http_mock):
+    """`'type' in mods_data`, checked before `mods_data['type']` is read --
+    the same missing conjunct as the followers guard above, in the same
+    function, with the correct featured guard sitting between them.
+
+    THE DOCUMENT DIFFERS FROM `test_the_moderators_url_is_taken_from_attributed_to`'s
+    IN EXACTLY ONE KEY: `type` is absent and the same usable `orderedItems`
+    list remains. Well-formed JSON at 200, so the status check and decode both
+    pass and only this conjunct can stop it.
+
+    The observable is that NO `CommunityMember` row exists. That is what
+    separates this from a vacuous "nothing raised": with the guard removed the
+    identical document creates a moderator membership, exactly as the
+    happy-path test above proves it does when `type` is present. `mod` is
+    seeded and resolvable for that reason -- an unresolvable entry would make
+    the count zero either way.
+
+    The title is asserted too: this guard must skip only the collection.
+    """
+    community = _remote_community()
+    mod = make_user(community.instance, 'fauxmod')
+    mod.ap_fetched_at = utcnow()
+    community.title = 'Before'
+    db.session.commit()
+    mods_url = f'https://{PEER}/c/memes/moderators'
+    _serve(http_mock, mods_url, {'orderedItems': [mod.ap_profile_id]})
+
+    refresh_community_profile_task(
+        community.id, _group_document(fields={'attributedTo': mods_url}))
+
+    db.session.refresh(community)
+    assert community.title == 'Memes, refreshed'
+    assert db.session.query(CommunityMember).filter_by(
+        community_id=community.id).count() == 0
+
+
 def test_the_moderators_url_falls_back_to_the_kbin_spelling(app, db_session, http_mock):
     """`elif 'moderators' in activity_json:` -- kbin's spelling. Reached only
     when `attributedTo` is absent or not a string, so the document carries
@@ -831,6 +867,40 @@ def test_a_followers_url_is_fetched_and_counted(app, db_session, http_mock):
 
     db.session.refresh(community)
     assert community.total_subscriptions_count == 42
+
+
+def test_a_typeless_followers_document_is_skipped(app, db_session, http_mock):
+    """`'type' in followers_data`, checked before `followers_data['type']` is
+    read. The featured guard nine lines below this one has always checked
+    membership first; this guard did not, so a peer answering with a JSON
+    object carrying no `type` raised `KeyError: 'type'` out of the task.
+
+    THE DOCUMENT DIFFERS FROM THE HAPPY PATH IN EXACTLY ONE KEY. It is
+    well-formed JSON at status 200 carrying a usable `totalItems`, so the
+    status check and the decode above it both pass and only this guard can
+    stop it. A malformed or non-200 body would die at one of those instead and
+    prove nothing about this conjunct -- the same trap the following-collection
+    pins had to avoid.
+
+    `total_subscriptions_count` is SEEDED TO 7, a non-default value (the column
+    default is 0), and asserted unchanged: `totalItems` is 42 in the served
+    document, so a guard that stopped firing would write 42 over it. The title
+    is asserted alongside because this guard must skip the collection only --
+    the actor document was applied before it and must stay applied.
+    """
+    community = _remote_community()
+    followers_url = f'https://{PEER}/c/memes/followers'
+    community.ap_followers_url = followers_url
+    community.total_subscriptions_count = 7
+    community.title = 'Before'
+    db.session.commit()
+    _serve(http_mock, followers_url, {'totalItems': 42})
+
+    refresh_community_profile_task(community.id, _group_document())
+
+    db.session.refresh(community)
+    assert community.title == 'Memes, refreshed'
+    assert community.total_subscriptions_count == 7
 
 
 def test_no_followers_url_means_no_followers_fetch(app, db_session, http_mock):
@@ -1308,6 +1378,46 @@ def test_a_feed_owners_url_is_fetched_and_recorded(app, db_session, http_mock):
     assert membership.is_owner is True
 
 
+def test_a_typeless_owners_document_is_skipped(app, db_session, http_mock):
+    """`'type' in owners_data`, checked before `owners_data['type']` is read.
+
+    A FOURTH SITE, NOT IN ROUND 2'S BRIEF, which named the community
+    moderators guard, the community followers guard and the following loop.
+    `refresh_feed_profile_task`'s owners guard is character-for-character the
+    community moderators guard with `owners_data` for `mods_data`, and carries
+    the identical defect. Fixing three of four would have left exactly the
+    one-clause-several-sites gap this campaign keeps hitting, so it is fixed
+    and pinned with the rest.
+
+    The document differs from `test_a_feed_owners_url_is_fetched_and_recorded`'s
+    in exactly one key -- `type` absent, the same usable `orderedItems`
+    remaining -- and is well-formed JSON at 200, so only this conjunct can
+    stop it.
+
+    `ap_following_url` is set and served empty for the usual reason (see
+    `test_refreshing_a_feed_applies_the_peers_document`): this is an ordinary
+    remote feed, and the following collection is not what is under test.
+    """
+    feed = _remote_feed()
+    feed.ap_following_url = f'https://{PEER}/f/news/following'
+    feed.title = 'Before'
+    db.session.commit()
+    owner = make_user(feed.instance, 'fauxowner')
+    owner.ap_fetched_at = utcnow()
+    db.session.commit()
+    owners_url = f'https://{PEER}/f/news/owners'
+    _serve(http_mock, feed.ap_public_url,
+           _feed_document(fields={'attributedTo': owners_url}))
+    _serve(http_mock, owners_url, {'orderedItems': [owner.ap_profile_id]})
+    _serve(http_mock, feed.ap_following_url, {'items': []})
+
+    refresh_feed_profile_task(feed.id)
+
+    db.session.refresh(feed)
+    assert feed.title == 'News, refreshed'
+    assert db.session.query(FeedMember).filter_by(feed_id=feed.id).count() == 0
+
+
 def test_no_feed_owners_url_means_no_owners_fetch(app, db_session, http_mock):
     """The absent side. No route is registered for the owners collection, and
     `block_outbound_http` raises if the task fetches one anyway. An existing
@@ -1596,3 +1706,44 @@ def test_a_following_entry_that_resolves_to_nothing_is_skipped(app, db_session, 
 
     assert db.session.query(FeedItem).count() == 1
     assert db.session.query(FeedItem).one().community_id == community.id
+
+
+def test_a_following_collection_with_no_items_key_is_skipped(app, db_session, http_mock):
+    """`'items' in following_collection`, checked before the loop subscripts
+    it. The following loop had no guard of any kind: `following_collection`
+    could be `None` (a body of JSON `null`) or an object with no `items`, and
+    either raised out of the task.
+
+    WHAT IS *NOT* ADDED HERE: a `type` check. The three sibling guards test
+    `<data>['type'] == '<Collection kind>'`, but this loop never has, and
+    every existing feed test in this file serves `{'items': []}` with NO
+    `type` key -- adding one would break them and would refuse documents the
+    task accepts today. The matched conjunct is the membership half only:
+    `following_collection and 'items' in following_collection`, which is the
+    featured guard's shape minus the type comparison the code never made.
+
+    WHAT NOW TAKES THE SKIP PATH INSTEAD OF CRASHING: an empty collection
+    serialised without the key -- `{"type": "Collection", "totalItems": 0}` is
+    the common ActivityPub spelling -- a paged collection that offers `first`
+    instead of inline items, and a collection using `orderedItems` (which this
+    loop has never read). All three are ordinary peer output, not malformed
+    JSON.
+
+    THE DOCUMENT IS TRUTHY AND LACKS ONLY `items`. `{}` would be stopped by
+    the `following_collection and` conjunct instead, conflating the two halves
+    of the new guard; a truthy object isolates the membership check.
+    """
+    feed = _remote_feed()
+    feed.ap_following_url = f'https://{PEER}/f/news/following'
+    feed.title = 'Before'
+    db.session.commit()
+    _serve(http_mock, feed.ap_public_url, _feed_document())
+    _serve(http_mock, feed.ap_following_url,
+           {'type': 'Collection', 'totalItems': 0})
+
+    refresh_feed_profile_task(feed.id)
+
+    db.session.refresh(feed)
+    assert feed.title == 'News, refreshed'
+    assert feed.public_key == '-----BEGIN PUBLIC KEY-----refreshed'
+    assert db.session.query(FeedItem).count() == 0
