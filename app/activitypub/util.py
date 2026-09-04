@@ -944,7 +944,7 @@ def refresh_community_profile_task(community_id, activity_json):
                         if mods_request.status_code == 200:
                             mods_data = mods_request.json()
                             mods_request.close()
-                            if mods_data and mods_data['type'] == 'OrderedCollection' and 'orderedItems' in mods_data:
+                            if mods_data and 'type' in mods_data and mods_data['type'] == 'OrderedCollection' and 'orderedItems' in mods_data:
                                 for actor in mods_data['orderedItems']:
                                     time.sleep(0.5)
                                     user = find_actor_or_create(actor)
@@ -981,7 +981,7 @@ def refresh_community_profile_task(community_id, activity_json):
                         if followers_request.status_code == 200:
                             followers_data = followers_request.json()
                             followers_request.close()
-                            if followers_data and followers_data['type'] == 'Collection' and 'totalItems' in followers_data:
+                            if followers_data and 'type' in followers_data and followers_data['type'] == 'Collection' and 'totalItems' in followers_data:
                                 community.total_subscriptions_count = followers_data['totalItems']
                                 session.commit()
 
@@ -1118,7 +1118,7 @@ def refresh_feed_profile_task(feed_id):
                         if owners_request.status_code == 200:
                             owners_data = owners_request.json()
                             owners_request.close()
-                            if owners_data and owners_data['type'] == 'OrderedCollection' and 'orderedItems' in owners_data:
+                            if owners_data and 'type' in owners_data and owners_data['type'] == 'OrderedCollection' and 'orderedItems' in owners_data:
                                 for actor in owners_data['orderedItems']:
                                     time.sleep(0.5)
                                     user = find_actor_or_create(actor)
@@ -1163,13 +1163,14 @@ def refresh_feed_profile_task(feed_id):
                             res.close()
 
                             # for each of those get the communities and make feeditems
-                            for fci in following_collection['items']:
-                                community_ap_id = fci
-                                community = find_actor_or_create(community_ap_id, community_only=True)
-                                if community and isinstance(community, Community):
-                                    feed_item = FeedItem(feed_id=feed.id, community_id=community.id)
-                                    session.add(feed_item)
-                                    session.commit()
+                            if following_collection and 'items' in following_collection:
+                                for fci in following_collection['items']:
+                                    community_ap_id = fci
+                                    community = find_actor_or_create(community_ap_id, community_only=True)
+                                    if community and isinstance(community, Community):
+                                        feed_item = FeedItem(feed_id=feed.id, community_id=community.id)
+                                        session.add(feed_item)
+                                        session.commit()
 
     except Exception:
         session.rollback()
