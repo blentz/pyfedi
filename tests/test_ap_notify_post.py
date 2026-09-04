@@ -27,7 +27,8 @@ from app.activitypub.util import (create_post, notify_about_post,
                                   notify_about_post_task)
 from app.constants import (NOTIF_COMMUNITY, NOTIF_FEED, NOTIF_TOPIC,
                            NOTIF_USER)
-from app.models import ActivityPubLog, Notification, Post, Topic, User
+from app.models import (ActivityPubLog, Instance, Notification, Post, Topic,
+                        User)
 from app.utils import utcnow
 from tests.factories import (make_community, make_community_block, make_domain,
                              make_feed, make_feed_item, make_instance,
@@ -289,3 +290,218 @@ def test_notify_about_post_dispatches_inline_only_under_debug(app, db_session, m
     else:
         assert recorder.delayed == [((post.id,), {})]
         assert recorder.inline == []
+
+
+# ---------------------------------------------------------------------------
+# notify_about_post_task -- the NOTIF_USER arm
+# ---------------------------------------------------------------------------
+
+def _notifications_for(user):
+    """Every Notification row for one recipient, freshly read.
+
+    `notify_about_post_task` commits on `get_task_session()`, which does not
+    expire objects held by `db.session`, so a query is the reliable read --
+    an attribute on a stale ORM instance is not.
+    """
+    return db.session.query(Notification).filter_by(user_id=user.id).all()
+
+
+def _peer_instance():
+    """The Instance row `_seed_scenario` seeds for PEER.
+
+    `_seed_scenario` does not return it, but everything below needs it: it is
+    the instance `make_user` hangs a recipient off, and it is the one
+    `make_post` copies onto `Post.instance_id` (`instance_id=user.instance_id`
+    in tests/factories.py), which is the id the arm's instance filter compares
+    against.
+    """
+    return Instance.query.filter_by(domain=PEER).one()
+
+
+def test_a_subscriber_to_the_author_is_notified(app, db_session):
+    """The NOTIF_USER arm's happy path:
+
+        user_send_notifs_to = notification_subscribers(post.user_id, NOTIF_USER)
+        for notify_id in user_send_notifs_to:
+            blocked_comms = blocked_communities(notify_id)
+            blocked_ints = blocked_or_banned_instances(notify_id)
+            if notify_id != post.user_id and notify_id not in notifications_sent_to and \\
+                    post.community_id not in blocked_comms and \\
+                    post.instance_id not in blocked_ints:
+
+    `notification_subscribers(entity_id, entity_type)` is a raw
+    `SELECT user_id FROM "notification_subscription" WHERE entity_id = :entity_id
+    AND type = :type` (app/utils.py), so the subscription below has to name the
+    AUTHOR's user id as its entity_id -- this arm keys on the author, not on
+    the community.
+
+    `notif_type` is asserted against `NOTIF_USER`, which is `0`
+    (app/constants.py:52), while the column's declared default is
+    `NOTIF_DEFAULT`, `999` (`notif_type = db.Column(db.Integer,
+    default=NOTIF_DEFAULT, index=True)`, app/models.py) -- so the assertion is
+    contrary to the default rather than a restatement of it.
+
+    `community.ap_id` is set here on purpose. Both `targets_data` entries that
+    carry a name are ternaries --
+    `community.ap_id if community.ap_id else community.name` and
+    `author.ap_id if author.ap_id else author.user_name` -- and `make_community`
+    sets `ap_profile_id` but never `ap_id`, so left alone the community ternary
+    would take its else-arm and a swap of the two arms would be invisible. With
+    `ap_id` set to a value that differs from `name`, both ternaries resolve to
+    their truthy arm and both arms are distinguishable. (`make_user` already
+    gives a non-local user `ap_id=f'{name}@{instance.domain}'`, so the author
+    half needed nothing.)
+    """
+    community, post, author = _seed_scenario()
+    community.ap_id = f'microblogs@{PEER}'
+    subscriber = make_user(_peer_instance(), 'subscriber', local=True)
+    _subscribe(subscriber, author.id, NOTIF_USER)
+    db.session.commit()
+
+    notify_about_post_task(post.id)
+
+    notifications = _notifications_for(subscriber)
+    assert len(notifications) == 1
+    notification = notifications[0]
+    assert notification.notif_type == NOTIF_USER
+    assert notification.subtype == 'new_post_from_followed_user'
+    assert notification.url == f'/post/{post.id}'
+    assert notification.title == 'a post'
+    assert notification.author_id == author.id
+    assert notification.targets == {'gen': '0',
+                                    'post_id': post.id,
+                                    'post_title': 'a post',
+                                    'community_name': f'microblogs@{PEER}',
+                                    'author_id': author.id,
+                                    'author_user_name': f'author@{PEER}'}
+
+
+def test_the_author_is_not_notified_even_when_subscribed_to_themselves(app, db_session):
+    """`notify_id != post.user_id`, the arm's first conjunct.
+
+    A second, unrelated subscriber is seeded and IS notified, so the author's
+    empty result says "this run created nothing for the author" rather than
+    "this run created nothing at all" -- without it a mutant that stopped the
+    whole arm from firing would pass this test.
+
+    A self-subscription is a row the schema holds without complaint:
+    `class NotificationSubscription` (app/models.py) declares `type`,
+    `entity_id` and `user_id` as plain indexed columns and no unique
+    constraint over them. The only production writer of a NOTIF_USER
+    subscription, `subscribe_user` (app/shared/user.py:88 -- the sole
+    implementation for both SRC_WEB and SRC_API), nonetheless refuses one:
+
+        if person.id == user_id:
+            msg = 'Target must be a another user.'
+
+    so on this path the conjunct is a defensive guard rather than a filter the
+    subscribe route can feed. It is still a real discriminator on stored state:
+    the row is insertable, and it is the same conjunct the three sibling arms
+    carry, where an author subscribed to their own community, topic or feed is
+    entirely ordinary.
+    """
+    community, post, author = _seed_scenario()
+    subscriber = make_user(_peer_instance(), 'subscriber', local=True)
+    _subscribe(author, author.id, NOTIF_USER)
+    _subscribe(subscriber, author.id, NOTIF_USER)
+    db.session.commit()
+
+    notify_about_post_task(post.id)
+
+    assert _notifications_for(author) == []
+    assert len(_notifications_for(subscriber)) == 1
+
+
+def test_a_subscriber_who_blocked_the_community_is_not_notified(app, db_session):
+    """`post.community_id not in blocked_comms`, where
+
+        blocked_comms = blocked_communities(notify_id)
+
+    reads `CommunityBlock` rows filtered on `user_id` and returns
+    `community_id` (app/utils.py) -- which is what `make_community_block`
+    writes. Note the comparison is against `post.community_id`, so the block
+    that matters is the recipient's block of the community the post landed in.
+
+    As above, a second subscriber who blocked nothing is notified in the same
+    run, so "no rows for the blocker" is distinguishable from "no rows at all".
+    """
+    community, post, author = _seed_scenario()
+    instance = _peer_instance()
+    blocker = make_user(instance, 'community_blocker', local=True)
+    subscriber = make_user(instance, 'subscriber', local=True)
+    _subscribe(blocker, author.id, NOTIF_USER)
+    _subscribe(subscriber, author.id, NOTIF_USER)
+    make_community_block(blocker, community)
+    db.session.commit()
+
+    notify_about_post_task(post.id)
+
+    assert _notifications_for(blocker) == []
+    assert len(_notifications_for(subscriber)) == 1
+
+
+def test_a_subscriber_who_blocked_the_instance_is_not_notified(app, db_session):
+    """`post.instance_id not in blocked_ints`, where
+
+        blocked_ints = blocked_or_banned_instances(notify_id)
+
+    is `[block.instance_id for block in blocks] + banned_instances(user_id)`
+    over `InstanceBlock` rows filtered on `user_id` (app/utils.py). This test
+    exercises the `InstanceBlock` half, which is what `make_instance_block`
+    writes.
+
+    The instance compared is `post.instance_id`, and `make_post` sets
+    `instance_id=user.instance_id` -- the author's instance, PEER -- so PEER is
+    the instance the blocker has to block.
+
+    As above, a second subscriber who blocked nothing is notified in the same
+    run.
+    """
+    community, post, author = _seed_scenario()
+    instance = _peer_instance()
+    blocker = make_user(instance, 'instance_blocker', local=True)
+    subscriber = make_user(instance, 'subscriber', local=True)
+    _subscribe(blocker, author.id, NOTIF_USER)
+    _subscribe(subscriber, author.id, NOTIF_USER)
+    make_instance_block(blocker, instance)
+    db.session.commit()
+
+    notify_about_post_task(post.id)
+
+    assert _notifications_for(blocker) == []
+    assert len(_notifications_for(subscriber)) == 1
+
+
+def test_the_notified_subscribers_unread_counter_is_incremented(app, db_session):
+    """The two lines after the `session.add(new_notification)`:
+
+        user = session.query(User).get(notify_id)
+        user.unread_notifications += 1
+
+    `User.unread_notifications` is `db.Column(db.Integer, default=0)`
+    (app/models.py:1023) and `make_user` never sets it, so the counter is
+    seeded to 7 first: asserting 8 afterwards cannot be satisfied by the
+    column's default, and `+= 1` is distinguished from an assignment of a
+    constant.
+
+    The `db.session.refresh` forces the re-read, but -- MEASURED, by deleting
+    the line and re-running -- it is not what makes this test pass here: the
+    task's commit is on `get_task_session()`'s own Session and does not expire
+    anything held by `db.session`, yet the `db.session.commit()` in the arrange
+    block above already did, and SQLAlchemy re-loads an expired attribute on
+    next access. The refresh is kept so the assertion does not depend on
+    nothing between that commit and the assert having touched -- and so
+    un-expired -- the attribute. `_notifications_for`'s query is the same
+    precaution for the rows.
+    """
+    community, post, author = _seed_scenario()
+    subscriber = make_user(_peer_instance(), 'subscriber', local=True)
+    subscriber.unread_notifications = 7
+    _subscribe(subscriber, author.id, NOTIF_USER)
+    db.session.commit()
+
+    notify_about_post_task(post.id)
+
+    db.session.refresh(subscriber)
+    assert subscriber.unread_notifications == 8
+    assert len(_notifications_for(subscriber)) == 1
