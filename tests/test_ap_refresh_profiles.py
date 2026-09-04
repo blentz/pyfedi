@@ -1747,3 +1747,48 @@ def test_a_following_collection_with_no_items_key_is_skipped(app, db_session, ht
     assert feed.title == 'News, refreshed'
     assert feed.public_key == '-----BEGIN PUBLIC KEY-----refreshed'
     assert db.session.query(FeedItem).count() == 0
+
+
+def test_a_null_following_collection_is_skipped(app, db_session, http_mock):
+    """The FIRST conjunct of `if following_collection and 'items' in
+    following_collection:` -- `following_collection` itself must be truthy.
+    Mirrors `test_a_null_featured_document_does_nothing`, which pins the same
+    conjunct in the featured guard.
+
+    A body of JSON `null` decodes to `None`. `None` is falsy, so the guard
+    short-circuits here without evaluating the membership check after it and
+    without raising; delete THIS conjunct alone and `'items' in None` runs
+    next, raising `TypeError` (a `None` is not a container). So this test
+    kills its mutant by crash, where
+    `test_a_following_collection_with_no_items_key_is_skipped` kills the
+    SECOND conjunct by `KeyError`. Two conjuncts, two attributable kills.
+
+    THIS TEST EXISTS BECAUSE FIX E SHIPPED WITHOUT IT. Round 2 mutated the
+    whole guard to `if True:`, which deletes both conjuncts at once and so
+    proves the site rather than either conjunct. Deleting `following_collection
+    and` on its own left the entire suite green: every other feed test serves a
+    truthy dict, and `text='null'` appeared exactly once in this file, at the
+    featured guard. A fix that ADDS a conjunct needs a mutation that deletes
+    THAT conjunct alone.
+
+    Note `null` is well-formed JSON, so it passes the status check and the
+    decode guard above and only this conjunct can stop it -- the same
+    isolation requirement every Fix D and Fix E pin had to meet.
+
+    The feed's own columns are asserted alongside the absent `FeedItem`
+    because this guard must skip only the collection: `null` at the following
+    URL must not cost the feed its refresh.
+    """
+    feed = _remote_feed()
+    feed.ap_following_url = f'https://{PEER}/f/news/following'
+    feed.title = 'Before'
+    db.session.commit()
+    _serve(http_mock, feed.ap_public_url, _feed_document())
+    _serve(http_mock, feed.ap_following_url, text='null')
+
+    refresh_feed_profile_task(feed.id)
+
+    db.session.refresh(feed)
+    assert feed.title == 'News, refreshed'
+    assert feed.public_key == '-----BEGIN PUBLIC KEY-----refreshed'
+    assert db.session.query(FeedItem).count() == 0
