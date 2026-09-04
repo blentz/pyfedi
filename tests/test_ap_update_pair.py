@@ -172,14 +172,65 @@ def test_a_reply_source_that_is_not_markdown_leaves_the_html_body(app, db_sessio
 
 
 def test_a_reply_source_that_is_not_a_dict_leaves_the_html_body(app, db_session, redis_lock_only_double):
-    """The `isinstance(..., dict)` conjunct. A peer sending `source` as a
-    string must not reach the `['mediaType']` subscript behind it.
+    """The guard's normal skip path for a string `source`: it falls to the
+    `else` and keeps the html-derived body.
+
+    This does NOT prove the `isinstance(..., dict)` conjunct is load-bearing.
+    With that conjunct removed, the next check becomes `'mediaType' in
+    'not a dict'`, and `in` against a string is a substring test rather than
+    a membership error -- `'mediaType' in 'not a dict'` is simply `False`, so
+    the guard still short-circuits to `else` and this assertion still holds
+    with or without the conjunct. See
+    test_a_reply_none_source_does_not_leak_past_the_dict_check for the
+    fixture that actually kills that mutant.
     """
     reply = _seed_reply()
 
     update_post_reply_from_activity(reply, _update(
         content='<p>from html</p>',
         source='not a dict',
+    ))
+
+    assert reply.body == 'from html'
+
+
+def test_a_reply_none_source_does_not_leak_past_the_dict_check(app, db_session, redis_lock_only_double):
+    """The `isinstance(..., dict)` conjunct, proven by a fixture the guard's
+    own downstream `in` check cannot coincidentally absorb.
+
+    A string `source` does not prove this conjunct: `'mediaType' in
+    'not a dict'` is a substring test that just returns `False`, so the guard
+    short-circuits to the same place whether or not `isinstance` is checked
+    first. `None` does not have that escape hatch -- `'mediaType' in None`
+    raises `TypeError` rather than returning `False` -- so with the
+    `isinstance` conjunct removed, this input crashes instead of quietly
+    reproducing the guarded behaviour. With the conjunct in place (the
+    production code, unmutated), `isinstance(None, dict)` is simply `False`
+    and the guard short-circuits normally, same as the string case: this
+    assertion holds either way when the guard is intact, and only the mutant
+    diverges.
+    """
+    reply = _seed_reply()
+
+    update_post_reply_from_activity(reply, _update(
+        content='<p>from html</p>',
+        source=None,
+    ))
+
+    assert reply.body == 'from html'
+
+
+def test_a_reply_source_missing_media_type_leaves_the_html_body(app, db_session, redis_lock_only_double):
+    """The `'mediaType' in ...` conjunct. A `source` that is a dict and
+    carries `content` but no `mediaType` key must fall to the `else` and keep
+    the html-derived body, rather than reaching the `['mediaType']`
+    subscript that a peer omitting the key would otherwise crash on.
+    """
+    reply = _seed_reply()
+
+    update_post_reply_from_activity(reply, _update(
+        content='<p>from html</p>',
+        source={'content': 'from markdown'},
     ))
 
     assert reply.body == 'from html'
