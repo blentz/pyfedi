@@ -23,10 +23,10 @@ from app.activitypub import util as ap_util
 from app.activitypub.util import (refresh_community_profile_task,
                                   refresh_feed_profile_task,
                                   refresh_user_profile_task)
-from app.models import (Community, CommunityMember, Feed, FeedMember, Instance, User,
-                        utcnow)
+from app.models import (Community, CommunityMember, Feed, FeedMember, Instance, Post,
+                        User, utcnow)
 from tests.factories import (make_community, make_feed, make_feed_member, make_instance,
-                             make_local_feed, make_user, seed_community_owner,
+                             make_local_feed, make_post, make_user, seed_community_owner,
                              seed_signing_site)
 
 PEER = 'peer.example'
@@ -792,6 +792,212 @@ def test_no_followers_url_means_no_followers_fetch(app, db_session, http_mock):
 
     db.session.refresh(community)
     assert community.total_subscriptions_count == 7
+
+
+def test_a_featured_url_is_fetched_and_restickied(app, db_session, http_mock):
+    """The featured collection is fetched only when `ap_featured_url` is set,
+    exactly like the followers gate above. This test also carries the whole
+    item walk in one pass: a stale sticky post that the collection does NOT
+    name is un-stickied by the `UPDATE post SET sticky = false` line, a
+    non-sticky post the collection DOES name is stickied, and a third
+    collection entry naming no post PyFedi has ever heard of takes the
+    `if post:` False branch without raising -- covering both arms of the
+    walk in one test.
+
+    `ap_featured_url` is seeded directly on the community rather than via the
+    document's `featured` key -- `_group_document()` carries no such key by
+    default (verified by reading it), and direct seeding mirrors the shape
+    `test_a_followers_url_is_fetched_and_counted` already uses for
+    `ap_followers_url`. Either approach reaches the same gate; this one
+    keeps the document identical to the rest of this file's happy-path calls.
+
+    `stale_sticky.sticky is False` is the load-bearing assertion: it is the
+    only thing that distinguishes "the UPDATE actually ran" from "nothing
+    happened, and the collection's own resticky merely left `newly_featured`
+    alone."
+    """
+    community = _remote_community()
+    featured_url = f'https://{PEER}/c/memes/featured'
+    community.ap_featured_url = featured_url
+    db.session.commit()
+    poster = make_user(community.instance, 'poster')
+    db.session.commit()
+    stale_sticky = make_post(community, poster, f'https://{PEER}/p/stale')
+    stale_sticky.sticky = True
+    newly_featured = make_post(community, poster, f'https://{PEER}/p/new')
+    newly_featured.sticky = False
+    db.session.commit()
+    _serve(http_mock, featured_url, {
+        'type': 'OrderedCollection',
+        'orderedItems': [
+            {'id': newly_featured.ap_id},
+            {'id': f'https://{PEER}/p/unknown'},
+        ],
+    })
+
+    refresh_community_profile_task(community.id, _group_document())
+
+    db.session.refresh(stale_sticky)
+    db.session.refresh(newly_featured)
+    assert stale_sticky.sticky is False
+    assert newly_featured.sticky is True
+
+
+def test_no_featured_url_means_no_featured_fetch(app, db_session, http_mock):
+    """The absent side. No route is registered for the featured collection,
+    and `block_outbound_http` raises if the task fetches one -- so this test
+    proves the guard short-circuits. A pre-existing sticky post is seeded
+    first so "still sticky" is distinguishable from "no post was ever
+    stickied to begin with."
+    """
+    community = _remote_community()
+    poster = make_user(community.instance, 'poster')
+    db.session.commit()
+    post = make_post(community, poster, f'https://{PEER}/p/stale')
+    post.sticky = True
+    db.session.commit()
+
+    refresh_community_profile_task(community.id, _group_document())
+
+    db.session.refresh(post)
+    assert post.sticky is True
+
+
+def test_a_non_200_featured_response_does_nothing(app, db_session, http_mock):
+    """`if featured_request.status_code == 200:` -- the second gate, after the
+    URL check. A non-200 response leaves the sticky post untouched, the same
+    contrast as the URL-absent test above, and the route IS registered and
+    IS called (satisfying `assert_all_called=True`) -- it is the status code,
+    not the absence of a request, that stops the task here.
+    """
+    community = _remote_community()
+    featured_url = f'https://{PEER}/c/memes/featured'
+    community.ap_featured_url = featured_url
+    db.session.commit()
+    poster = make_user(community.instance, 'poster')
+    db.session.commit()
+    post = make_post(community, poster, f'https://{PEER}/p/stale')
+    post.sticky = True
+    db.session.commit()
+    _serve(http_mock, featured_url,
+           {'type': 'OrderedCollection', 'orderedItems': []}, status=500)
+
+    refresh_community_profile_task(community.id, _group_document())
+
+    db.session.refresh(post)
+    assert post.sticky is True
+
+
+def test_a_null_featured_document_does_nothing(app, db_session, http_mock):
+    """The first conjunct of `if featured_data and 'type' in featured_data and
+    featured_data['type'] == 'OrderedCollection' and 'orderedItems' in
+    featured_data:` -- `featured_data` itself must be truthy. A body of JSON
+    `null` decodes to `None`, which is falsy, so the guard short-circuits
+    here without evaluating any of the three checks after it, and without
+    raising. That silence is what sets this conjunct's kill apart from the
+    two by-crash ones below it in a different way than the third: removing
+    THIS conjunct lets `'type' in None` execute next, which raises
+    `TypeError` (a `None` is not a subscriptable/iterable container) instead
+    of returning quietly -- so this test kills its mutant by crash, same
+    mechanism as the second and fourth conjuncts, not by an assertion flip.
+    """
+    community = _remote_community()
+    featured_url = f'https://{PEER}/c/memes/featured'
+    community.ap_featured_url = featured_url
+    db.session.commit()
+    poster = make_user(community.instance, 'poster')
+    db.session.commit()
+    post = make_post(community, poster, f'https://{PEER}/p/stale')
+    post.sticky = True
+    db.session.commit()
+    _serve(http_mock, featured_url, text='null')
+
+    refresh_community_profile_task(community.id, _group_document())
+
+    db.session.refresh(post)
+    assert post.sticky is True
+
+
+def test_a_typeless_featured_document_does_nothing(app, db_session, http_mock):
+    """The second conjunct: `'type' in featured_data`. The document is a
+    non-empty, truthy dict (satisfying the first conjunct) that carries no
+    `type` key at all, so this is the only conjunct the short-circuit stops
+    at. Removing it lets the next conjunct, `featured_data['type']`, run
+    straight into a `KeyError('type')` -- this test kills that mutant by
+    crash, not by a changed assertion.
+    """
+    community = _remote_community()
+    featured_url = f'https://{PEER}/c/memes/featured'
+    community.ap_featured_url = featured_url
+    db.session.commit()
+    poster = make_user(community.instance, 'poster')
+    db.session.commit()
+    post = make_post(community, poster, f'https://{PEER}/p/stale')
+    post.sticky = True
+    db.session.commit()
+    _serve(http_mock, featured_url, {'orderedItems': []})
+
+    refresh_community_profile_task(community.id, _group_document())
+
+    db.session.refresh(post)
+    assert post.sticky is True
+
+
+def test_a_wrong_typed_featured_document_does_nothing(app, db_session, http_mock):
+    """The third conjunct: `featured_data['type'] == 'OrderedCollection'`.
+    Both `type` and `orderedItems` are present here, so `type` holding
+    anything other than `'OrderedCollection'` is what the short-circuit
+    stops on, and only that. This is the one conjunct of the four whose
+    removal does NOT crash: drop it and the guard reads `featured_data and
+    'type' in featured_data and 'orderedItems' in featured_data`, which this
+    document satisfies, so the mutant falls through into the UPDATE and
+    re-stickies from `orderedItems` (empty here, so the seeded post simply
+    goes non-sticky and stays that way). That flip -- not an exception --
+    is what kills this mutant, the "drops through and restickies" case
+    the other three conjuncts don't share.
+    """
+    community = _remote_community()
+    featured_url = f'https://{PEER}/c/memes/featured'
+    community.ap_featured_url = featured_url
+    db.session.commit()
+    poster = make_user(community.instance, 'poster')
+    db.session.commit()
+    post = make_post(community, poster, f'https://{PEER}/p/stale')
+    post.sticky = True
+    db.session.commit()
+    _serve(http_mock, featured_url,
+           {'type': 'Collection', 'orderedItems': []})
+
+    refresh_community_profile_task(community.id, _group_document())
+
+    db.session.refresh(post)
+    assert post.sticky is True
+
+
+def test_an_itemless_featured_document_does_nothing(app, db_session, http_mock):
+    """The fourth conjunct: `'orderedItems' in featured_data`. `type` is
+    correctly `'OrderedCollection'` here, so the missing `orderedItems` key
+    is the only false conjunct the short-circuit stops at. Removing it lets
+    the guard pass with no `orderedItems` key present at all: the mutant
+    runs the UPDATE (un-stickying the seeded post) and then crashes on
+    `featured_data['orderedItems']` in the `for` loop -- killed by crash,
+    the same mechanism as the first and second conjuncts.
+    """
+    community = _remote_community()
+    featured_url = f'https://{PEER}/c/memes/featured'
+    community.ap_featured_url = featured_url
+    db.session.commit()
+    poster = make_user(community.instance, 'poster')
+    db.session.commit()
+    post = make_post(community, poster, f'https://{PEER}/p/stale')
+    post.sticky = True
+    db.session.commit()
+    _serve(http_mock, featured_url, {'type': 'OrderedCollection'})
+
+    refresh_community_profile_task(community.id, _group_document())
+
+    db.session.refresh(post)
+    assert post.sticky is True
 
 
 def test_refreshing_a_feed_applies_the_peers_document(app, db_session, http_mock):
