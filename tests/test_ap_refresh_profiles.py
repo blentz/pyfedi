@@ -13,6 +13,8 @@ actor re-fetch that file scopes out, for all three tasks.
 `is_invalid_get_request_uri()` before respx ever sees the request, so a
 `.local` fixture fails for a reason unrelated to the code under test.
 """
+import json
+
 import httpx
 import pytest
 
@@ -582,3 +584,71 @@ def test_an_image_sets_the_users_cover(app, db_session, http_mock):
     db.session.refresh(user)
     assert user.cover_id is not None
     assert user.cover.source_url == f'https://{PEER}/cover.png'
+
+
+def test_refreshing_a_community_applies_a_fetched_document(app, db_session, http_mock):
+    """The fetch path: `activity_json` is falsy, so the task fetches."""
+    community = _remote_community()
+    _serve(http_mock, community.ap_public_url, _group_document())
+
+    refresh_community_profile_task(community.id, None)
+
+    db.session.refresh(community)
+    assert community.title == 'Memes, refreshed'
+
+
+def test_refreshing_a_community_applies_a_supplied_document(app, db_session, http_mock):
+    """The no-fetch path. `refresh_community_profile_task` is the ONLY one of
+    the three that takes `activity_json`; the user and feed tasks take an id
+    alone and always fetch. That asymmetry is registered, not fixed.
+
+    No route is registered, and `block_outbound_http` would raise if the task
+    fetched anyway -- so the absence of a request is what this test proves.
+    """
+    community = _remote_community()
+
+    refresh_community_profile_task(community.id, _group_document())
+
+    db.session.refresh(community)
+    assert community.title == 'Memes, refreshed'
+
+
+def test_a_community_with_no_instance_crashes(app, db_session, http_mock):
+    """PINS A CRASH. DO NOT FIX -- Task 10 does.
+
+    `refresh_community_profile_task` opens
+    `if community and community.instance.online():` with NO `instance_id`
+    check, where `refresh_user_profile_task` guards
+    `user and user.instance_id and user.instance.online()`. `instance_id` is a
+    nullable FK (app/models.py), so a NULL one makes `community.instance` None
+    and `.online()` raises.
+
+    Two of the three tasks get this wrong and one gets it right, which is what
+    makes it an oversight rather than a choice. The feed task's twin pin is in
+    Task 7.
+    """
+    community = _remote_community()
+    community.instance_id = None
+    db.session.commit()
+
+    with pytest.raises(AttributeError, match="'NoneType' object has no attribute 'online'"):
+        refresh_community_profile_task(community.id, _group_document())
+
+
+def test_a_malformed_community_document_crashes(app, db_session, http_mock):
+    """PINS A CRASH. DO NOT FIX -- Task 10 does.
+
+    `refresh_community_profile_task` calls `actor_data.json()` unguarded,
+    where `refresh_user_profile_task` wraps it in `try/except JSONDecodeError`,
+    increments `instance.failures` and returns. So a peer that answers 200 with
+    a non-JSON body raises out of this task and is merely counted for the user
+    task -- and it is the peer that chooses the body.
+
+    `test_a_malformed_actor_document_counts_an_instance_failure` is the
+    control showing the handled shape.
+    """
+    community = _remote_community()
+    _serve(http_mock, community.ap_public_url, text='<html>not json</html>')
+
+    with pytest.raises(json.JSONDecodeError, match='Expecting value'):
+        refresh_community_profile_task(community.id, None)
