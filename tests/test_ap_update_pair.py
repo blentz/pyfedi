@@ -19,12 +19,12 @@ next attribute access re-loads them. No explicit refresh is needed here, and
 tests that would need one elsewhere say so.
 
 Unlike the reply function, `update_post_from_activity` reads
-`request_json['object']['type']` unconditionally, right after the content and
-title handling, to route Video/Question/Event objects -- so every post test
-in this file passes `type='Note'` through `_update(...)` to reach the plain
-Article/Note path, even tests that exist only to cover the content arm. This
-is an object-level key inside `fields`, not one of the envelope-level
-`type`/`actor`/`id` keys `_update` deliberately omits below.
+`request_json['object']['type']` unconditionally, later in the function, to
+route Video/Question/Event objects -- so every post test in this file passes
+`type='Note'` through `_update(...)` to reach the plain Article/Note path,
+even tests that exist only to cover the content arm. This is an object-level
+key inside `fields`, not one of the envelope-level `type`/`actor`/`id` keys
+`_update` deliberately omits below.
 """
 import contextlib
 
