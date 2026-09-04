@@ -143,8 +143,15 @@ def test_refreshing_a_user_applies_the_peers_document(app, db_session, http_mock
     exception. The task commits the refreshed profile before doing anything
     else, so "nothing raised" would not distinguish a working apply from one
     that abandoned the document.
+
+    `_remote_user`'s default name matches the document's `preferredUsername`
+    ('wakko' on both sides), so `user.user_name` is seeded to a contrary
+    value ('stale') before the call -- without that, the assertion would
+    pass against a no-op just as readily as against a genuine apply.
     """
     user = _remote_user()
+    user.user_name = 'stale'
+    db.session.commit()
     _serve(http_mock, user.ap_public_url,
            _person_document(fields={'name': 'Wakko Warner'}))
 
