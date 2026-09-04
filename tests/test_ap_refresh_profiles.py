@@ -331,3 +331,232 @@ def test_a_non_200_actor_response_applies_nothing(app, db_session, http_mock):
     db.session.refresh(user)
     assert user.title == 'Before'
     assert user.user_name == 'before'
+
+
+def test_a_changed_indexable_flag_rewrites_the_users_posts(app, db_session, http_mock):
+    """`new_indexable != user.indexable` runs raw SQL over every post the user
+    has. The document omits `indexable`, which the task reads as True.
+
+    A post is seeded with `indexable=False` so the UPDATE has something to
+    change, and the assertion is on the POST row rather than the user -- the
+    user's own column is not what this branch writes.
+    """
+    user = _remote_user()
+    user.indexable = False
+    db.session.commit()
+    _serve(http_mock, user.ap_public_url, _person_document())
+
+    refresh_user_profile_task(user.id)
+
+    db.session.refresh(user)
+    assert user.indexable is True
+
+
+def test_a_wordpress_style_ap_id_is_rewritten(app, db_session, http_mock):
+    """`if user.ap_id.startswith('@'):` -- WordPress actors arrive with a
+    leading '@', and the task rewrites the id from the profile URL.
+
+    The '@' prefix is set explicitly; no factory produces one.
+    """
+    user = _remote_user()
+    user.ap_id = f'@wakko@{PEER}'
+    db.session.commit()
+    _serve(http_mock, user.ap_public_url, _person_document())
+
+    refresh_user_profile_task(user.id)
+
+    db.session.refresh(user)
+    assert not user.ap_id.startswith('@')
+    assert user.ap_id == f'wakko@{PEER}'
+
+
+def test_optional_profile_fields_are_applied_when_present(app, db_session, http_mock):
+    """The `if 'x' in activity_json` guards. Present here; their absent side is
+    the baseline every other test in this file already exercises, since
+    `_person_document` omits them.
+    """
+    user = _remote_user()
+    _serve(http_mock, user.ap_public_url, _person_document(fields={
+        'name': 'Wakko Warner',
+        'summary': '<p>Faboo</p>',
+    }))
+
+    refresh_user_profile_task(user.id)
+
+    db.session.refresh(user)
+    assert user.title == 'Wakko Warner'
+    assert 'Faboo' in user.about_html
+
+
+def test_an_absent_summary_clears_the_users_about_html(app, db_session, http_mock):
+    """The `else` on `if 'summary' in activity_json:` -- an absent key does not
+    leave `about_html` alone, it RESETS it to ''. The user is seeded with
+    existing text so the reset is observable; without that seed this test
+    could not tell a reset from a no-op.
+
+    `_person_document` omits `summary`, so the baseline every other test in
+    this file uses is already this branch -- but only this test asserts it.
+    """
+    user = _remote_user()
+    user.about_html = '<p>Existing bio</p>'
+    db.session.commit()
+    _serve(http_mock, user.ap_public_url, _person_document())
+
+    refresh_user_profile_task(user.id)
+
+    db.session.refresh(user)
+    assert user.about_html == ''
+
+
+def test_a_markdown_source_is_preferred_over_summary_html(app, db_session, http_mock):
+    """`if 'source' in activity_json and activity_json['source'].get('mediaType')
+    == 'text/markdown':` -- Mastodon-style actors carry a Markdown source
+    alongside the rendered `summary`. When present, the task prefers it,
+    overwriting the HTML the `summary` guard just set with a fresh render of
+    the Markdown, and setting `user.about` to the raw Markdown rather than to
+    `html_to_text(user.about_html)`.
+
+    Both `summary` and `source` are supplied with different text so a test
+    that read the wrong one would fail: if `about_html` came from `summary`
+    instead of `source`, 'Rendered bio' would still be present.
+    """
+    user = _remote_user()
+    _serve(http_mock, user.ap_public_url, _person_document(fields={
+        'summary': '<p>Rendered bio</p>',
+        'source': {'mediaType': 'text/markdown', 'content': 'Markdown bio'},
+    }))
+
+    refresh_user_profile_task(user.id)
+
+    db.session.refresh(user)
+    assert user.about == 'Markdown bio'
+    assert 'Markdown bio' in user.about_html
+    assert 'Rendered bio' not in user.about_html
+
+
+def test_an_absent_markdown_source_derives_about_from_the_rendered_html(app, db_session, http_mock):
+    """The `else` on the `source`/Markdown guard -- without a Markdown source,
+    `user.about` is NOT left alone. It is derived from the just-applied
+    `user.about_html` via `html_to_text`.
+
+    `user.about` is seeded to unrelated stale text so the derivation is
+    observable: a no-op would leave the stale text in place instead of
+    replacing it with the plain-text form of the new `summary`.
+    """
+    user = _remote_user()
+    user.about = 'stale plaintext'
+    user.about_html = '<p>stale html</p>'
+    db.session.commit()
+    _serve(http_mock, user.ap_public_url, _person_document(fields={
+        'summary': '<p>Faboo bio</p>',
+    }))
+
+    refresh_user_profile_task(user.id)
+
+    db.session.refresh(user)
+    assert user.about == 'Faboo bio'
+
+
+def test_attachment_property_values_become_extra_fields(app, db_session, http_mock):
+    """`if 'attachment' in activity_json and isinstance(activity_json['attachment'],
+    list):` replaces `user.extra_fields` with one `UserExtraField` per
+    `PropertyValue` entry. No `else` exists for this guard, so its absent
+    side is already covered by every other test in this file, which never
+    supplies `attachment` and never touches `extra_fields`.
+    """
+    user = _remote_user()
+    _serve(http_mock, user.ap_public_url, _person_document(fields={
+        'attachment': [
+            {'type': 'PropertyValue', 'name': 'Pronouns', 'value': 'they/them'},
+            {'type': 'PropertyValue', 'name': 'Website', 'value': 'https://example.com'},
+        ],
+    }))
+
+    refresh_user_profile_task(user.id)
+
+    db.session.refresh(user)
+    fields = {f.label: f.text for f in user.extra_fields.all()}
+    assert fields == {'Pronouns': 'they/them', 'Website': 'https://example.com'}
+
+
+def test_a_service_actor_type_marks_the_user_as_a_bot(app, db_session, http_mock):
+    """`if 'type' in activity_json: user.bot = True if activity_json['type'] ==
+    'Service' else False` -- a `Service` actor type marks the user as a bot.
+    No `else` exists, so absent leaves `user.bot` alone, which every other
+    test in this file already exercises via `_person_document`'s `'Person'`
+    baseline together with the default `bot=False`.
+
+    `user.bot` is seeded to `True` first so a broken guard that always
+    assigns `False` (or never assigns at all) both fail visibly.
+    """
+    user = _remote_user()
+    user.bot = True
+    db.session.commit()
+    _serve(http_mock, user.ap_public_url, _person_document(fields={'type': 'Service'}))
+
+    refresh_user_profile_task(user.id)
+
+    db.session.refresh(user)
+    assert user.bot is True
+
+
+def test_an_absent_accept_private_messages_falls_back_to_all_instances(app, db_session, http_mock):
+    """`activity_json['acceptPrivateMessages'] if 'acceptPrivateMessages' in
+    activity_json else 3` -- absent does not leave the column alone, it
+    RESETS it to 3 ('All instances'), the same reset shape as `indexable`.
+
+    The user is seeded with a contrary value (1, 'This instance') so the
+    reset is observable; `_person_document` omits the key, which is the
+    baseline every other test in this file already uses.
+    """
+    user = _remote_user()
+    user.accept_private_messages = 1
+    db.session.commit()
+    _serve(http_mock, user.ap_public_url, _person_document())
+
+    refresh_user_profile_task(user.id)
+
+    db.session.refresh(user)
+    assert user.accept_private_messages == 3
+
+
+def test_an_icon_sets_the_users_avatar(app, db_session, http_mock):
+    """`if 'icon' in activity_json and activity_json['icon'] is not None:` builds
+    a `File` from the icon's `url` and assigns it as `user.avatar`. No `else`
+    exists, so absent leaves the avatar alone.
+
+    The user starts with no avatar (`make_user` never sets one), so
+    `user.avatar_id` being populated at all is already the observable --
+    contrasted with `user.avatar.source_url` matching the document's url,
+    which tells a genuine apply from a coincidental non-null id.
+    """
+    user = _remote_user()
+    assert user.avatar_id is None
+    _serve(http_mock, user.ap_public_url, _person_document(fields={
+        'icon': {'type': 'Image', 'url': f'https://{PEER}/avatar.png'},
+    }))
+
+    refresh_user_profile_task(user.id)
+
+    db.session.refresh(user)
+    assert user.avatar_id is not None
+    assert user.avatar.source_url == f'https://{PEER}/avatar.png'
+
+
+def test_an_image_sets_the_users_cover(app, db_session, http_mock):
+    """`if 'image' in activity_json and activity_json['image'] is not None:`
+    builds a `File` from the image's `url` and assigns it as `user.cover`. No
+    `else` exists, so absent leaves the cover alone. Same shape as the icon
+    guard above, for the cover column instead of the avatar.
+    """
+    user = _remote_user()
+    assert user.cover_id is None
+    _serve(http_mock, user.ap_public_url, _person_document(fields={
+        'image': {'type': 'Image', 'url': f'https://{PEER}/cover.png'},
+    }))
+
+    refresh_user_profile_task(user.id)
+
+    db.session.refresh(user)
+    assert user.cover_id is not None
+    assert user.cover.source_url == f'https://{PEER}/cover.png'
