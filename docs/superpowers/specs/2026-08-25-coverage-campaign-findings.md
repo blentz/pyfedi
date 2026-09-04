@@ -1390,7 +1390,46 @@ says which numbers are taken. So there is one now, and it is this file:
   its corrected form; D210 is `Post.post_reply_count_recalculate`, a
   never-called method writing the same class of undeclared attribute D201
   fixed. D211 and D212 are test-suite findings, not production defects.
-  **Next free number: D213.**
+  D213-D231 sub-project 13 (the three mirrored actor-refresh Celery tasks in
+  `app/activitypub/util.py` -- `refresh_user_profile_task`,
+  `refresh_community_profile_task`, `refresh_feed_profile_task` -- see that
+  section for the tables). **Five are fixed**, in five commits under that
+  sub-project's own bounded authorisation, and every one of them was a
+  remotely-triggerable crash a peer could provoke: D213 is the missing
+  `instance_id` conjunct that made a NULL-instance community or feed raise
+  `AttributeError` where the user task's guard has always been right
+  (`1ba9f0a2`); D214 is the unguarded `.json()` on the actor document in the
+  same two tasks, which also gains them the instance failure-counting the user
+  task already did (`84be0559`); D215 is the feed task fetching
+  `ap_following_url` with no check that it was set, four of five collection
+  fetches gated and this one not (`4cd0042c`); D216 is that same fetch checking
+  neither status code nor decode where five sibling fetches check status
+  (`ce849451`); D217 is four collection guards subscripting `['type']` or
+  `['items']` on a peer-controlled document with no membership check, the
+  featured guard nine lines away being the correct spelling (`5113324a`).
+  D218-D228 are registered but not fixed. D218 and D219 are two whole
+  **families** of the same class, catalogued with verified line numbers as the
+  spec for a follow-on slice: the actor documents' own required keys
+  (`preferredUsername`, `name`, `publicKey`) read unguarded at six sites, and
+  the list-entry subscripts, empty-list indexing and three mirrored-pair
+  asymmetries. **The line between fixing and registering is the rule worth
+  reusing**: a defect is fixed under a bounded authorisation when the correct
+  spelling already exists in the file and the fix is mechanical, and registered
+  when it would require choosing new behaviour for a case the codebase has never
+  handled. D220 is the user task's bare `except:` -- which is also what made one
+  of its own guard's conjuncts untestable; D221, D222 and D223 are the
+  signed-GET fallback, the `is_local()` check and the `activity_json` parameter
+  each existing in exactly one of the three copies; D224, D225 and D226 are
+  three inline worker costs, the `randint(3, 10)` retry sleep, the
+  `time.sleep(0.5)` per collection entry, and `find_actor_or_create`'s
+  `create_if_not_found=True` fan-out; D227 is the user task fetching nothing
+  beyond its actor document, which is what explains the shape of every other
+  entry; D228 is a deliberate, flagged asymmetry D217's own fix introduced.
+  D229-D231 are test-suite findings, not production defects, and D229 is the
+  most reusable thing in the slice: mutating a whole guard to `if True:` is a
+  site-level proof, not a conjunct-level one, and the gap is self-concealing
+  because the site-level mutant does die.
+  **Next free number: D232.**
   If you take it, say so here in the change that takes it.
 
 Two entries in the reports were deliberately **not** counted as defects, and are
@@ -3917,10 +3956,10 @@ which was tests, docstrings, comments and this register only.
 | D165 | `resolve_remote_handle` (`app/activitypub/routes.py:466-491`) | **Not fixed -- two of its own three guards are uncovered, despite this sub-project's report describing them as pinned.** `tests/test_remote_handle_resolution.py`'s four tests cover only the anonymous-caller guard (`:484-485`) and the exception-to-404 path (`:490-491`). The `'@' not in actor` guard (`:482-483`) is unreached: all four tests request `/u/wakko@mastodon.cloud`, a handle that always contains `@`. The AP-Accept guard (`:486-487`) is also unreached: `test_activitypub_request_does_not_resolve` sends the AP-Accept header but never authenticates, so it returns at the anonymous-caller guard (`:484-485`) before line `:486` is ever asked to branch true -- deleting the AP-Accept guard entirely would leave that test's `assert calls == []` green. Two cheap closures: the AP-Accept guard needs a test that logs in via `session_transaction()` **before** its first request (harness fact 37, `tests/README.md` -- a test cannot authenticate after an earlier request in the same test, because Flask-Login caches the loaded user on the app-context-scoped `g` for the life of the session-scoped `app` fixture) and then sends the AP-Accept header; the `'@' not in actor` guard needs one of Task 10's guard tests (`test_a_deleted_user_profile_is_not_served`, `test_a_banned_user_profile_is_not_served`) to stop stubbing `resolve_remote_handle` to `None` via `_double_the_renderers` and instead let it run for real against a bare (no `@`) actor name -- safe, because a bare name returns `None` at the first guard and never reaches `search_for_user`. | not fixed, registered only | reading-level plus measured: `scratch_full_cov.json`'s `app/activitypub/routes.py` entry lists `483` and `487` in `missing_lines` and `[482, 483]`/`[486, 487]` in `missing_branches`; `tests/test_remote_handle_resolution.py`'s four tests read directly, confirming all four target a handle containing `@` and that the AP-Accept test never authenticates |
 | D166 | webfinger's User lookup (`app/activitypub/routes.py:117-120`) vs. `user_profile`'s local lookup (`:376`) | **Not fixed -- a fourth lookup asymmetry, on a column D158 did not name.** Webfinger matches `func.lower(User.user_name) == actor` **or** `func.lower(User.alt_user_name) == actor` (`:117-120`). `user_profile`'s bare-username local lookup matches only `func.lower(User.user_name) == actor.lower()` (`:376`) -- `alt_user_name` plays no part. So a user reachable by their alt name via webfinger 404s at `/u/<altname>`, the same class of cross-endpoint disagreement D158 registers for the `deleted`/`banned` guards, but on a different column entirely; `alt_user_name` appeared nowhere in this register before this entry. | not fixed, registered only | reading-level: `app/activitypub/routes.py:117-120` and `:376` read directly, side by side; no test in this sub-project or `tests/test_actor_profiles.py` drives a user with a distinct `alt_user_name` through both endpoints to observe the divergence, so this is derived from reading, not measured |
 
-**Next free number: D213.** D165 and D166 were taken by this fix wave;
-D167-D186 were taken by sub-project 10, D187-D199 by sub-project 11 and
-D200-D212 by sub-project 12 -- see the three sections immediately below. If you
-take D213, say so here in the change that takes it.
+**Next free number: D232.** D165 and D166 were taken by this fix wave;
+D167-D186 were taken by sub-project 10, D187-D199 by sub-project 11, D200-D212
+by sub-project 12 and D213-D231 by sub-project 13 -- see the four sections
+immediately below. If you take D232, say so here in the change that takes it.
 
 ## Sub-project 10: the nine ActivityPub collection endpoints
 
@@ -4313,6 +4352,210 @@ the function; `make_community` hardcodes `instance_id=1`, so a fixture meant to
 satisfy one clause of a guard can silently satisfy a second; and
 `Community.has_poster(user)` falls back to counting replies, so "has posted
 there" includes "has only replied there".
+
+## Sub-project 13: the three mirrored actor-refresh tasks
+
+`docs/superpowers/specs/2026-09-03-coverage-refresh-profiles-13-design.md` and
+`docs/superpowers/plans/2026-09-03-coverage-refresh-profiles-13.md` (design and
+plan; the per-task briefs and reports live in the gitignored workspace
+`.superpowers/sdd/2026-09-03-coverage-refresh-profiles-13/`, not committed), on
+branch `blentz`. Eleven tasks brought three Celery tasks in
+`app/activitypub/util.py` under test -- `refresh_user_profile_task`
+(`:654-773`), `refresh_community_profile_task` (`:783-1010`) and
+`refresh_feed_profile_task` (`:1020-1179`) -- and fixed **five** defects in five
+commits (`1ba9f0a2`, `84be0559`, `4cd0042c`, `ce849451`, `5113324a`) under this
+sub-project's own bounded, explicit authorisation; this task (11) closes the
+sub-project out with the findings register, the test-harness log, and the
+coverage floor. `app/activitypub/util.py` measures **61.8397% blended**
+(1847/2872 statements, 916/1596 branches; 1025 statements and 192 branch arcs
+still missing) after this sub-project, up from 55.1080%. Full suite after this
+sub-project: **3423 passed, 3 skipped, 6 subtests passed**, in 212.23s. Tests
+live in `tests/test_ap_refresh_profiles.py` (58 test functions, none
+parametrized). The coverage figure above is the controller's single
+authoritative module-level measurement, taken after Task 10's last fix round on
+a freshly torn-down stack; **no per-function residual breakdown was re-measured
+at Task 11**, so this section claims the module figure and not "zero uncovered
+statements" for any individual function.
+
+**The spec's headline prediction was not met, and the near-miss is a trap worth
+naming.** The spec said the blended figure would move from 55.1080% "toward
+**64%**". It reached **61.8397%**. The number 64 does appear in the final
+measurement -- as the *statement* figure, 64.3106% -- and that is a coincidence
+of two different metrics, not the prediction landing. Anyone reading the two
+documents side by side will see "64" in both and should not conclude the target
+was hit: **it was missed by about 2.2 blended points**, and the reason is the
+ordinary one from sub-projects 11 and 12 -- the spec's 310-uncovered-statement
+budget assumed every statement in the three functions was uncovered and reachable
+by this file alone, and some of it is neither.
+
+Like 5c through 12 before it, this sub-project carried a **narrow, explicitly
+authorised exception** to the campaign's report-don't-fix rule. Unusually, it
+was exercised five times rather than once, and **the exception widened twice
+during the slice on rulings recorded in the ledger**: the spec authorised two
+crash fixes, Task 7's tests provoked a third crash of the same class that the
+spec's up-front reading had missed (Fix C), the Task 10 reviewer found a fourth
+(Fix D), and the controller found a fifth while reading Fix D's diff (Fix E).
+`git diff --stat app/` is non-empty for exactly those five commits, totalling
+under 60 production lines; every other task's `git diff --stat app/` is empty.
+
+**Where fixing stopped, and the rule that stopped it.** Fix E was not the last
+defect of its class -- two whole *families* of the same shape remain, catalogued
+below as D218 and D219 with line numbers verified against source. The line the
+controller drew, and it is a rule this campaign can reuse: **a defect is fixed
+under a bounded authorisation when the correct spelling already exists in the
+file and the fix is mechanical; it is registered when the fix would require
+choosing new behaviour for a case the codebase has never handled.** Fixes A
+through E all met the first test -- each copied a sibling guard nine to fifty
+lines away in the same function. D218 does not: deciding what a refresh should
+*do* when a peer omits `preferredUsername` or `publicKey` -- skip the actor,
+apply it partially, count an instance failure -- is a design decision, not a
+guard. `activity_json['name']` is the borderline case, since its own guarded
+sibling sits on the very next line, and it goes with its family rather than being
+fixed alone. The countervailing weight was stated too: five fixes had landed, the
+slice still owed a coverage run and a final review, and a sixth widening risked
+the slice never closing. **Cost if wrong: two families of remotely-triggerable
+`KeyError`s stay in the tree one slice longer, fully documented, against a slice
+that never lands.**
+
+The slice exists because these three functions are one function written three
+times, and -- as in sub-projects 8 through 12 -- the defects live in what the
+copies do **differently**. That is not a rhetorical framing: **every one of the
+five fixes was justified by a majority vote among siblings**, and in four of the
+five the majority was two-of-three or four-of-five with the correct spelling
+already present. The one place the majority pointed the other way is registered
+rather than fixed (D219's three-against-one image branch), because there the
+minority spelling is the *user* task's and correcting it would change what a
+Mastodon-shaped `image` key does.
+
+**Three of the plan's and briefs' claims were falsified, and each falsification
+is worth more than the claim was.**
+
+1. **A brief predicted Fixes A and B would shift `util.py:669` and `:674`**, the
+   two bare-`except:` lines that three test docstrings hardcoded, and told Task
+   10 to audit them by name. Wrong: all five fixes landed *below* `:674`, so the
+   numbers never moved. The implementer converted those citations to content
+   anyway, which is the right outcome from a wrong prediction -- see the
+   register's own standing rule that line numbers here are dated records, not
+   maintained pointers.
+2. **A brief named the wrong column for the followers count.** It guessed
+   `subscriptions_count`; the code writes `community.total_subscriptions_count`
+   (`:985`), and `subscriptions_count` is never touched on this path. The plan's
+   own self-review had flagged that name as a guess to be replaced rather than
+   shipped, and Task 9's implementer read the source instead of transcribing.
+3. **A fix round's brief named three call sites for Fix E; there are four.**
+   `refresh_feed_profile_task`'s owners guard (`:1121`) is character-for-character
+   the community moderators guard (`:947`) with one identifier changed, and
+   carries the identical defect. Fixing the three the brief named would have
+   produced exactly the one-clause-several-sites gap this campaign keeps hitting
+   -- and the controller's own brief would have caused it. The majority signal
+   for Fix E is therefore one-of-**four** right, not one of three.
+
+A fourth item is bookkeeping rather than a defect, but it is the **fifth** count
+slip in this campaign and the cause was identical every time: a task legitimately
+grows after its expected-test count is written, and every later count stays
+internally consistent while being wrong by the same constant. It happened twice
+here (Task 4's implementer added seven tests beyond its brief's four; Task 7's
+fix round added a pin). The remedy the fourth slip identified was applied at the
+fifth: correct the plan *before* generating the next brief, because generation is
+what freezes a stale number.
+
+### 1. Five defects fixed, test-first with mutation-proved tests -- D213-D217
+
+Each was pinned by a test asserting the *crash* first, the pin then inverted to
+assert the fixed behaviour, and each fix mutation-proved at every call site
+separately. All five are **remotely triggerable by any peer being refreshed
+from**, which is why they were fixed rather than registered.
+
+| # | function | defect | status | evidence |
+|---|---|---|---|---|
+| D213 | `refresh_community_profile_task` (`app/activitypub/util.py:789`) and `refresh_feed_profile_task` (`:1026`), against `refresh_user_profile_task` (`:660`) | **FIXED, commit `1ba9f0a2`. Refreshing a community or a feed whose actor row had a NULL `instance_id` raised `AttributeError` out of the task.** `Community.instance` and `Feed.instance` are backrefs off a nullable FK, so a NULL `instance_id` makes the attribute `None` and `None.online()` raises. The user task's guard reads `if user and user.instance_id and user.instance.online():` and has always carried the `instance_id` conjunct; its two copies read `if community and community.instance.online():` and `if feed and feed.instance.online() and not feed.is_local():` and did not. **Two of three wrong, one right, with the right one 130 and 370 lines above the wrong ones in the same file** -- which is the whole justification for the fix: the correct spelling was already in the file and the change is mechanical. The fix inserts the conjunct in the position the user task has it. | **fixed**, commit `1ba9f0a2` | measured: `test_a_community_with_no_instance_is_skipped` and `test_a_feed_with_no_instance_is_skipped` (`tests/test_ap_refresh_profiles.py`), each originally written as a `pytest.raises(AttributeError, match=...)` pin narrowed to the verbatim message `'NoneType' object has no attribute 'online'` -- obtained by forcing a match mismatch so pytest printed the real text, not reconstructed from the `match=` fragment -- then inverted in place. The escape was traced by reading each function end to end rather than assumed: the only `except` blocks between the guard and the crash are `except httpx.HTTPError` around the *fetch* calls, and the sole catch-all is `except Exception: session.rollback(); raise` (`:1006-1008`, `:1175-1177`) which **re-raises**. Mutation: removing the conjunct at one site with the other intact gives `1 failed, 46 passed` naming that site's test, twice, so the two call sites are independently killed |
+| D214 | `refresh_community_profile_task` (`:800-805`) and `refresh_feed_profile_task` (`:1036-1041`), against `refresh_user_profile_task` (`:677-683`) | **FIXED, commit `84be0559`. A peer serving a non-JSON body at its actor URL raised `json.JSONDecodeError` straight out of a community or feed refresh.** The user task wraps `activity_json = actor_data.json()` in `try: ... except JSONDecodeError: user.instance.failures += 1; session.commit(); return`; its two copies called `.json()` bare. Same two-of-three-wrong shape as D213 and the same remote trigger -- the peer chooses the response body. **The fix gains more than crash-safety: it gives the community and feed paths the instance failure-counting the user path already did**, so a peer that starts serving garbage now accrues failures on all three paths instead of one, which is what the instance-health machinery reads. | **fixed**, commit `84be0559` | measured: `test_a_malformed_community_document_counts_an_instance_failure` and `test_a_malformed_feed_document_counts_an_instance_failure`, pins narrowed to `json.JSONDecodeError` matching `Expecting value` and inverted. **Both assert `failures == 6` against a seeded 5**, deliberately, so an increment is distinguishable from an assignment -- the shape established by the user task's own control test, `test_a_malformed_actor_document_counts_an_instance_failure`. Mutation: removing one `try/except` with the other intact gives `1 failed, 46 passed` naming that site's test, twice, with a grep between mutations confirming exactly one of the two `instance.failures += 1` lines was present |
+| D215 | `refresh_feed_profile_task`'s following-collection fetch (`:1155-1156`) | **FIXED, commit `4cd0042c`. The feed task fetched `feed.ap_following_url` with no check that it was set, so refreshing a feed whose peer had never sent a `following` key raised `httpx.HTTPError: HTTPError: invalid uri`.** The column has no default; `get_request` rejects the empty host `furl(None)` produces, at `app/utils.py:131-134` via `is_invalid_get_request_uri`. **Found by Task 7's tests rather than by the spec's up-front reading** -- the implementer transcribed a happy-path test literally and watched it crash -- which is what the tests are for, and is the reason this sub-project's fix count is five rather than the two the spec authorised. The controller then enumerated every collection fetch in the trio: `:941` `if community.ap_moderators_url:`, `:979` `if community.ap_followers_url:`, `:988` `if community.ap_featured_url:` and `:1115` `if feed.ap_moderators_url:` are all gated; this one alone was not. **Four of five gated, one not.** The fix re-indents the fetch, its status check and the feed-item loop under `if feed.ap_following_url:`, so the gate captures exactly the fetch and nothing above it. | **fixed**, commit `4cd0042c` | measured: `test_a_feed_with_no_following_url_is_skipped`, written first as `test_a_feed_with_no_following_url_crashes` against a **fresh** run of the null column rather than the earlier accidental failure -- the two could have differed -- then inverted. The controller also asked whether a *fourth* ungated `get_request` existed further down the feed task before authorising one fix of two; it does not, and the remaining fetches are inside `find_actor_or_create`, out of scope. Mutation: one call site, one kill |
+| D216 | `refresh_feed_profile_task`'s following-collection fetch (`:1157-1163`), against its five sibling collection fetches | **FIXED, commit `ce849451`. Inside D215's new gate, `res = get_request(...)` then `res.json()` checked no status code and guarded no decode, so a peer returning 500 or a non-JSON body at its following collection raised straight out of the task.** Every sibling collection fetch in the trio checks status -- `:944`, `:981`, `:990`, `:1118` -- and so does the following-collection fetch elsewhere in the same file, in `actor_json_to_model` (`:1574`). **Five sibling fetches right, one wrong, in the function this slice owns.** Same class as D214 and the same remote trigger. **The decode guard deliberately does not copy D214's spelling**: none of the five siblings has a decode guard at all, so there was no sibling to copy, and the fix matches `resolve_remote_post_from_search`'s `try/except JSONDecodeError: object_request.close(); return` (`:4499-4503`) instead. The stated reason, which the controller accepted: by the time this fetch runs, the **same instance** has already served, decoded and applied a well-formed actor document, so counting an instance failure here would mark a demonstrably healthy instance as failing. | **fixed**, commit `ce849451` | measured: `test_a_non_200_following_response_creates_no_feed_items` and `test_a_malformed_following_collection_creates_no_feed_items`. The choice not to count a failure is **pinned rather than left as an unexercised preference**: `failures` is seeded to 5 and asserted still 5. **The non-200 pin's body is deliberately valid JSON naming a resolvable community** -- garbage at 502 would have made both mutations die by `JSONDecodeError` and rendered the two guards indistinguishable. As written, dropping the status check creates a `FeedItem` and flips a count while dropping the decode guard raises, so two guards give two different kills, each leaving the other test passing. The same round also closed the last statement-coverage gap in the loop body, which had never run with a non-empty collection (`test_a_following_collection_entry_becomes_a_feed_item`, `test_a_following_entry_that_resolves_to_nothing_is_skipped`) |
+| D217 | Four collection guards: `refresh_community_profile_task`'s moderators (`:947`) and followers (`:984`), `refresh_feed_profile_task`'s owners (`:1121`) and its following loop (`:1166-1167`) -- against the featured guard (`:993`) | **FIXED, commit `5113324a`. Four guards subscripted a peer-controlled JSON document without first checking the key was there, so a peer returning an object with no `type` key -- or, for the following loop, no `items` key -- raised `KeyError` out of the task.** The featured guard is the correct spelling and reads `if featured_data and 'type' in featured_data and featured_data['type'] == 'OrderedCollection' and 'orderedItems' in featured_data:`. Its three near-neighbours dropped the `'type' in` membership check, and the following loop subscripted `following_collection['items']` with no check at all. **One of four right, and the right one sits nine lines below two of the wrong ones in the same function** -- the same majority signal that justified D213, D214 and D215. Treated as one defect at four sites, one commit, four separate mutation kills, matching how D213 and D214 were treated. **The brief named three sites; the implementer found the fourth** (the feed owners guard, character-identical to the community moderators guard with one identifier changed) and reported it rather than shipping the gap. | **fixed**, commit `5113324a` (with the missing conjunct pin added in `979ef950`, see D229) | measured: `test_a_typeless_moderators_document_is_skipped`, `test_a_typeless_followers_document_is_skipped`, `test_a_typeless_owners_document_is_skipped` and `test_a_following_collection_with_no_items_key_is_skipped`, four distinct sole kills. Shielded-conjunct check done and **negative**: deleting each guard's leading truthiness conjunct still crashes on `'type' in None` with a `TypeError`, which is how the featured guard's own null test already kills it. Diff read by the controller: four sites each gaining `and 'type' in <data>` in the featured guard's position, plus `if following_collection and 'items' in ...` around the loop; minimal, uniform, no drive-by |
+
+### 2. Two families registered, not fixed -- D218-D219
+
+These are the spec for a follow-on slice. They are registered rather than fixed
+under the rule stated at the head of this section, and both were catalogued with
+line numbers **verified against source at this commit** by the implementer who
+found them, precisely so the next slice does not have to re-derive them.
+
+| # | function | defect | status | evidence |
+|---|---|---|---|---|
+| D218 | All three tasks' required-key reads: `refresh_user_profile_task` (`app/activitypub/util.py:697`, `:722`), `refresh_community_profile_task` (`:819`, `:832`), `refresh_feed_profile_task` (`:1054`, `:1057`) | **Not fixed -- the actor document's own "required" keys are read unguarded in all three tasks, so a peer omitting any of them raises `KeyError` out of the refresh.** Six sites, two keys: `activity_json['preferredUsername']` (`:697`), `activity_json['name']` (`:819`, `:1054`), and `activity_json['publicKey']['publicKeyPem']` (`:722`, `:832`, `:1057`). ActivityPub requires none of these of a `Person`, `Group` or `Feed`, and the trigger is entirely peer-controlled. **This is an oversight rather than a deliberate strictness**, and the file says so itself: `user.title` on the line *immediately after* `:697` is guarded by `if 'name' in activity_json:` (`:698`), so the same document is treated as untrustworthy one line later. Not fixed because the correct spelling does **not** already exist in the file: deciding what a refresh should do when a peer omits `preferredUsername` or `publicKey` -- skip the actor entirely, apply the rest of the document, count an instance failure -- is choosing new behaviour for a case this codebase has never handled, which is a design change and not a guard. `activity_json['name']` is the borderline member, since a guarded sibling *is* adjacent, and it is kept with its family rather than fixed alone. | not fixed, registered only | reading-level, verified against source at this commit by the Task 10 implementer and re-verified at Task 11. Not covered by any test: every document `_person_document`, `_group_document` and `_feed_document` produce carries all three keys, deliberately, because the slice's brief was the crash paths it was authorised to fix |
+| D219 | List-entry subscripts, empty-list indexing and three mirrored-pair asymmetries across all three tasks | **Not fixed -- the same unguarded-subscript class as D217, in the *entries* of documents rather than their envelopes, plus three places where the three copies disagree with each other.** Five groups, all verified against source at this commit. **(a) Entry subscripts with no membership check:** `field_data['type']`, `field_data['value']`, `field_data['name']` (`:715-718`), `ap_language['identifier']` and `ap_language['name']` (`:889`), `item['id']` (`:998`), `actor['id']` (`:969`) -- each a `KeyError` on a peer-supplied list entry. **(b) `IndexError` on an empty list:** `activity_json['icon'][-1]` at `:733`, `:860` and `:1081`, and `activity_json['image'][0]` at `:755`, `:875` and `:1096` -- six sites where `isinstance(..., list)` is checked and emptiness is not, so `icon: []` raises before the `'url' in` test can run. **(c) The feed owners loop does not unwrap dict entries where the community moderators loop does:** `:1144-1145` reads `for actor in owners_data['orderedItems']: if actor.lower() ...` where `:967-969` first does `if isinstance(actor, dict): actor = actor['id']`. So an owners collection of objects -- the shape Lemmy sends and the shape the *sibling* loop was written to accept -- raises `AttributeError` on `dict.lower`. **(d) The user task's `image` branch omits the `'url' in` check that the community's (`:873`), the feed's (`:1094`) and the user's own `icon` branch (`:731`) all make:** `:746-753` tests `isinstance(activity_json['image'], dict)` and then reads `activity_json['image']['url']` three times (`:747`, `:749`, `:750`). **Three of four right, and here the minority spelling is the user task's** -- which is why this one is registered even though the majority is clear: adding the check changes what a Mastodon-shaped `image` key does on the user path, and that is behaviour, not a guard. **(e) Entry-shape asymmetry across the four collections**, recorded because it is what makes a single fix impossible: the following collection takes bare strings, moderators and owners take string-or-object, and featured requires `item['id']`. A uniform entry-validation helper would have to reconcile three different contracts. Not fixed for D218's reason -- every member needs a decision about what to do with the malformed entry, not just a guard. | not fixed, registered only | reading-level: every line above read directly at this commit. Not covered -- the suite's document helpers produce well-formed entries throughout, and the four `..._typeless_...` tests added by D217 pin the *envelope* guards, not the entries |
+
+### 3. Nine items registered, not fixed -- D220-D228
+
+| # | function | defect | status | evidence |
+|---|---|---|---|---|
+| D220 | `refresh_user_profile_task`'s fetch handler (`app/activitypub/util.py:669` and `:674`), against `refresh_community_profile_task` (`:797`) and `refresh_feed_profile_task` (`:1033`) | **Not fixed -- the user task uses a bare `except:` where its two siblings use `except Exception:`, so it catches `KeyboardInterrupt` and `SystemExit` and a worker shutdown mid-refresh is swallowed into the signed-GET fallback.** Two sites, one nested inside the other: `:669` catches anything the `except httpx.HTTPError` above it missed and falls through to `signed_get_request`; `:674` catches anything *that* raises and returns silently. A Celery worker being terminated during an actor refresh therefore does not propagate -- it attempts a signed GET and then returns as though the refresh had completed normally. **The same code is also what made a production guard untestable through the fixture**, which is the connection worth registering rather than the two findings separately: Task 2 found the third conjunct of `:660` (`user.instance.online()`) unkillable because respx's `AllMockedAssertionError` is not an `httpx.HTTPError`, so it reached `:669`, the signed GET then failed too, and `:674` returned -- the guard firing and not firing produced the identical observable. **The defect and the obstacle to testing it are the same code.** Not fixed because narrowing an exception handler changes what a running worker does with a signal, which is a behaviour change on a federated path rather than a repair, and because the two siblings' `except Exception:` is not obviously the intended spelling either -- one of them (`:797`, `:1033`) is itself broader than the `except httpx.HTTPError` it shadows in the user task (`:667`). | not fixed, registered only | measured, indirectly and by two routes. `test_a_user_fetch_failing_outside_httpx_falls_back_to_a_signed_get` reaches `:669` by patching `ap_util.get_request` to raise `RuntimeError` -- not an `httpx.HTTPError`, so `except httpx.HTTPError` misses it and the bare `except:` catches it -- and records the `signed_get_request` call. Its two siblings, `test_a_community_fetch_failing_outside_httpx_propagates` and `test_a_feed_fetch_failing_outside_httpx_propagates`, assert the **opposite** outcome on the same stimulus, which is what pins the asymmetry as behaviour rather than as reading. That test must **not** request `http_mock`: `get_request` never runs, so `assert_all_called` would fail on any registered route. The unkillable-conjunct half was verified by the controller directly against `:661-675` |
+| D221 | `refresh_user_profile_task` (`:669-675`) against `refresh_community_profile_task` (`:791-798`) and `refresh_feed_profile_task` (`:1027-1034`) | **Not fixed -- only the user task has a `signed_get_request` fallback, so a peer that requires HTTP signatures on actor fetches is refreshable for users and not for communities or feeds.** The user task, on any non-`httpx` error, loads `Site` id 1 and re-fetches with the instance actor's private key (`:670-673`); the community and feed tasks have no equivalent and simply `return` (`:798`) or propagate. On a signature-requiring peer the consequence is silent and permanent: a community's or feed's `ap_fetched_at` never advances, its title, description, icon, moderator list and follower count freeze at whatever was first ingested, and nothing surfaces the failure. Not fixed because adding an authenticated fetch to two federated code paths is a feature, not a guard -- it needs its own decision about whether a community refresh should present the instance actor at all. | not fixed, registered only | measured as a pinned three-way asymmetry by the same trio of tests named in D220's evidence: one asserts the fallback happens, two assert the identical stimulus propagates instead. Line ranges read directly at this commit |
+| D222 | `refresh_feed_profile_task`'s guard (`:1026`) against `refresh_user_profile_task` (`:660`) and `refresh_community_profile_task` (`:789`) | **Not fixed -- only the feed task refuses to refresh a *local* actor.** Its guard ends `and not feed.is_local()`; the user and community guards have no such conjunct. `Feed.is_local()` (`app/models.py:4237-4238`) is `self.ap_id is None or self.profile_id().startswith(SERVER_URL)`. A local user or community reaching either sibling task would have its `ap_public_url` fetched over HTTP from this server's own address and its columns overwritten from the response. **The callers were enumerated before this entry was written, and they do not make the asymmetry harmless -- but they do explain the community half of it.** `schedule_actor_refresh` (`app/activitypub/actor.py:134-147`) tests `not actor.is_local()` at `:136` before dispatching any of the three, and it is the **only** caller of `refresh_user_profile`. It is not the only caller of `refresh_community_profile`: the inbox's `Group`/`Update` arm calls it at `app/activitypub/routes.py:1277`, and that call site **deliberately admits local communities** -- its guard is `if community.is_local() and not community.is_moderator(user):` (`app/activitypub/routes.py:1274`), so a *remote moderator of a local community* sending an `Update` is exactly the case it exists to serve. **Adding the feed's conjunct to the community task would break that path**, so the honest reading is that the community task's omission is correct and the finding narrows to the user task, whose sole caller already guards it and where the conjunct would therefore be redundant rather than load-bearing. Not fixed for that reason: what looked like two tasks missing a guard is one deliberate difference, one redundancy, and no established defect -- and the repair that would make the three copies agree is as likely to be *removing* the feed's conjunct as adding two. **Registered because the reading cost real effort and the next reader should not have to repeat it**, and because the shape -- one of three copies defending itself while the other two rely on their callers -- is where this campaign's history (D208, and this register's standing note on corrections landing in one of two copies) says things go wrong. | not fixed, registered only; the community half is explained rather than open | measured on the feed side: `test_refreshing_a_local_feed_does_nothing` seeds a genuinely local feed via `make_local_feed`, which leaves `ap_id = None` and so satisfies `is_local()`'s first disjunct (`app/models.py:4237-4238`). No equivalent test exists for the other two, because there is no branch there to reach. **Every caller of all three tasks enumerated by grep at this commit**: `app/activitypub/actor.py:143`, `:145`, `:147` and `app/activitypub/routes.py:1277`, plus the three `current_app.debug` wrappers themselves |
+| D223 | `refresh_community_profile_task`'s signature (`app/activitypub/util.py:784`) against `refresh_user_profile_task` (`:655`) and `refresh_feed_profile_task` (`:1021`) | **Not fixed -- only the community task accepts an `activity_json` parameter, so only it can be driven from a document the caller already holds.** `refresh_community_profile_task(community_id, activity_json)` skips the whole fetch-and-retry block when the caller passes a document (`:790`, `if not activity_json:`); the user and feed tasks take an id alone and always fetch. The consequence is a real efficiency and correctness asymmetry on the inbox path, and it has a live call site: the `Group`/`Update` arm passes the received document straight through (`app/activitypub/routes.py:1277`), so that community is refreshed with **zero** outbound requests, while the identical situation for a `Person` or a `Feed` costs an outbound fetch that may return a *different* document than the one just received. Not fixed because widening two task signatures changes their call contract across the codebase and, for the user task, would also have to decide what happens to the `signed_get_request` fallback that only exists to serve the fetch it would be skipping. | not fixed, registered only | measured: `test_refreshing_a_community_applies_a_supplied_document` registers **no** `http_mock` route at all and still applies the document, which under `assert_all_called=True` is a positive assertion that no fetch happened; `test_refreshing_a_community_applies_a_fetched_document` is its fetching control. The two sibling signatures read at this commit |
+| D224 | All three tasks' retry sleeps (`:664`, `:794`, `:1030`) | **Not fixed -- all three tasks sleep `randint(3, 10)` seconds *inline in the Celery worker* rather than deferring the retry to the broker.** Every failed actor fetch therefore parks a worker process for up to ten seconds doing nothing, and the parking is proportional to how badly a peer is behaving: an instance that has gone away costs three to ten worker-seconds per actor refreshed against it, and these tasks are scheduled per actor by `schedule_actor_refresh`. Celery's own `self.retry(countdown=...)` releases the worker; `time.sleep` does not. Not fixed because converting to a broker retry changes the task's signature (it must be bound), its idempotency requirements and its failure accounting all at once, and because the same `time.sleep(randint(3, 10))` pattern appears elsewhere in this file -- fixing three sites would leave the file more mixed, not less. | not fixed, registered only | reading-level: all three sites read at this commit. The suite neutralises them with a `no_real_sleeping` fixture, which is itself the evidence that the sleep is real and inline -- `test_a_failed_fetch_is_retried_once` and its two siblings would otherwise cost up to thirty seconds |
+| D225 | The membership loops in `refresh_community_profile_task` (`:948-949`) and `refresh_feed_profile_task` (`:1122-1123`) | **Not fixed -- `time.sleep(0.5)` runs once per collection entry, inline in the worker, inside both membership loops.** The sleep is the first statement of each loop body, before `find_actor_or_create`, so the cost is paid for every entry whether or not the actor turns out to be resolvable or already known. A community advertising two hundred moderators parks a worker for a hundred seconds on the sleeps alone. The peer chooses the length of the collection, so the cost is peer-controlled. Not fixed because the sleep is presumably a deliberate rate-limit against the peer being refreshed from, and replacing it needs a real rate-limiting decision -- per-host, per-task, or none -- rather than deletion. **Compounds with D226**, which is the other per-entry cost in the same loops. | not fixed, registered only | reading-level: both sites read at this commit, and both are inside the loop body rather than around it. Neutralised in the suite by the same `no_real_sleeping` fixture; no test asserts the sleep |
+| D226 | `find_actor_or_create` call sites inside the collection loops (`:950`, `:1124`, `:1169`), against its default at `:280` | **Not fixed -- `find_actor_or_create`'s `create_if_not_found` defaults to `True`, so every unresolvable entry in a peer-supplied collection triggers an inline outbound fetch: one per entry, and the peer chooses the entries.** The signature is `def find_actor_or_create(actor: str, create_if_not_found=True, community_only=False, feed_only=False, ...)` (`:280`); none of the three call sites in these tasks passes `create_if_not_found=False`. So a moderators, owners or following collection listing a hundred actor URLs this instance has never seen produces a hundred `create_actor_from_remote` fetches, in sequence, in the worker, on top of D225's fifty seconds of sleeping -- **a peer-controlled fan-out**, and the strongest of the three performance findings here because the peer controls both the count and the destinations. Not fixed because passing `create_if_not_found=False` would change what a refresh *does* -- moderators and owners that this instance has not met would silently stop being recorded -- which is exactly the design decision the register/fix line excludes. | not fixed, registered only | measured, from the side that had to work around it: the D217 pin for the following loop's False arm had to use the ActivityStreams Public URI rather than a merely-absent community URL, because an absent one reaches `create_actor_from_remote` and fetches. Signature and all three call sites read at this commit. Cross-reference `tests/README.md`'s fact on actor lookups fetching, which this finding produced |
+| D227 | `refresh_user_profile_task` (`:654-773`) against `refresh_community_profile_task` (`:783-1010`) and `refresh_feed_profile_task` (`:1020-1179`) | **Not fixed, and registered as the structural shape of the whole slice: the user task fetches nothing at all beyond its actor document.** The community task fetches up to three further collections (moderators `:942`, followers `:980`, featured `:989`); the feed task fetches up to two (owners `:1116`, following `:1156`). The user task's work ends when the `Person` document is applied. That is why the user task has no D215 (no gate to omit), no D216 (no second fetch to check) and only one site in D217's four. It is registered rather than counted as a defect on either side, because the asymmetry may simply reflect that nothing in this codebase reads a remote user's own collections -- but it is the fact that explains the shape of every other entry here, and it means **the user task is not the template it otherwise looks like**: it is right about the guard (D213), right about the decode (D214) and right about the failure count, and it is simply never exercised on the code paths where its two copies go wrong. | not fixed, registered only | reading-level, confirmed by Task 9 while covering the opt-in collection fetches: every `get_request` in the three functions enumerated, five of them in the community and feed tasks and one in the user task |
+| D228 | `refresh_feed_profile_task`'s following loop guard (`:1166`) against its three siblings (`:947`, `:984`, `:1121`, `:993`) | **Not fixed -- a deliberate, flagged asymmetry introduced by D217's own fix: the following loop's guard took the membership half and no type check, so it is now weaker than its three siblings.** It reads `if following_collection and 'items' in following_collection:` where the other four read `... and 'type' in <data> and <data>['type'] == '<Collection kind>' and '<items key>' in <data>`. Two reasons, both recorded rather than settled. The implementer's: every feed test in the suite serves `{'items': []}` with no `type` key and the loop has never made a type check, so adding one would break six tests and make the task refuse documents it accepts today -- inside a commit whose stated job is stopping a crash. The reviewer's, sought as a second opinion and better: in the three sibling guards `type` is **load-bearing for dispatch** -- `Collection` says read `totalItems`, `OrderedCollection` says read `orderedItems` -- whereas the following loop reads one key and then validates every entry individually through `find_actor_or_create` plus an `isinstance` check, so a hostile `{"type": "Person", "items": [...]}` buys an attacker nothing that `{"items": [...]}` does not. A type check there would add rejection, not safety. **The loop is now more permissive than its siblings, which is the safe direction for a crash fix.** Registered so the next reader meets the reasoning rather than the inconsistency. | not fixed, registered as a live decision | measured: `test_a_following_collection_with_no_items_key_is_skipped` and `test_a_null_following_collection_is_skipped` pin both halves of the guard as written. The four sibling guards read at this commit |
+
+### 4. Three test-suite findings, not production defects -- D229-D231
+
+Recorded so nobody re-files any as a production defect, and because all three
+are mutation-testing failure modes that reading the production code cannot
+reveal. **D229 is the most valuable thing this sub-project found and it is not
+PyFedi-specific.**
+
+| # | function | defect | status | evidence |
+|---|---|---|---|---|
+| D229 | D217's new leading conjunct at `app/activitypub/util.py:1166` -- a **test-suite** finding | **Not a production defect. A fix that ADDS a conjunct must be mutation-proved by deleting THAT CONJUNCT ALONE; mutating the whole guard to `if True:` is a site-level proof, not a conjunct-level one -- and the gap is SELF-CONCEALING.** D217's mutation table recorded a green kill for the following-loop site, produced by replacing the whole guard with `if True:`. That answers "does anything depend on this *line*?" when the fix raises "does anything depend on this *clause*?" Deleting only `following_collection and` survived the entire file: **57 passed, zero failures**, because every feed test served a truthy dict and no test served JSON `null` at a following URL (`text='null'` appeared exactly once in the file, at the featured guard). A production behaviour a commit message advertised, with zero coverage. It is worse than a plain gap because **the site-level mutant does die**, so the table shows a kill and the missing proof leaves no trace -- nothing in the artefacts contradicts itself. Caught by the fix-round reviewer as a MUST-FIX, confirmed by re-running the narrower mutation before fixing, and closed by `test_a_null_following_collection_is_skipped` (`979ef950`). Round 2's mutation table was corrected in place with the error stated rather than quietly replaced. | closed by a test in the same sub-project | measured, both before and after: the conjunct-only mutation gave `57 passed, 0 failed` before the pin and a sole kill after. `git diff app/activitypub/util.py` verified empty after every mutation. Now `tests/README.md` fact 68 |
+| D230 | D217's leading truthiness conjuncts at `:947`, `:984` and `:1121` -- a **test-suite** finding | **Not a production defect. D217's fix narrowed the discriminator set at its three sibling sites, so a later attempt to pin those conjuncts must serve JSON `null` and not `{}`.** Before the fix, deleting `mods_data and` (or its followers/owners twins) and serving an empty object raised `KeyError` on `{}['type']` and would have killed. After it, `'type' in {}` is merely `False` and the guard skips, so the empty-dict document no longer distinguishes the mutant -- **`null` is the only discriminator left.** Established by measurement, not by reasoning: deleting the truthiness conjunct at all three sites at once gives `58 passed, zero failures`, so none was killed *before* D217's fix either. **Nothing regressed** -- the conjuncts were already unpinned -- but the cheap way to pin them has been taken away, and the next slice to try `{}` and see it survive would have no way to tell this from a real gap. The general shape: **a defensive fix can silently shrink the set of inputs that kill a neighbouring mutant, without weakening any assertion and without failing anything.** | recorded, not closed -- the three conjuncts remain unpinned | measured: the three-at-once mutation run, and the pre-fix/post-fix behaviours of `{}` at each site derived from the guard text at this commit. Distinct from D229, which was a new site with a new conjunct; these are pre-existing sites whose kill inputs changed |
+| D231 | The `session.rollback()` in all three tasks' outer handlers (`:770`, `:1007`, `:1176`) -- a **test-suite** finding | **Not a production defect, and recorded because the first explanation offered for it was too narrow.** The `session.rollback()` beside each `raise` is *covered* by the tests that reach the handler but is **not killable**: deleting it fails nothing. The Task 10 report argued that nothing uncommitted is pending at the only reachable raise point, which is true and narrower than the truth. The reviewer found the stronger reason: raise-after-dirty-write points **do** exist in all three functions, but `get_task_session()` (`app/utils.py:3673-3675`) returns an independent `Session(bind=db.engine)` and the `finally: session.close()` (`:772-773`, `:1009-1010`, `:1178-1179`) discards any open transaction on **every** path -- so deleting the rollback changes no persisted state anywhere, not merely on the path a test can reach. Both docstrings say so rather than papering over it. **The point worth carrying: "no test can kill this" and "no input can kill this" are different claims, and only the second justifies leaving a statement unpinned.** | recorded; the statements are covered, and the non-killability is explained rather than papered over | measured: Task 10's Step 13 found the outer handler in the community and feed tasks had been reached **only** by the five crash pins, so inverting them left `:1006-1008` and `:1175-1177` uncovered; `test_a_community_fetch_failing_outside_httpx_propagates` and `test_a_feed_fetch_failing_outside_httpx_propagates` re-cover it, one kill each. `get_task_session` and all three `finally` blocks read at this commit |
+
+### 5. Three items deliberately NOT counted as defects
+
+Recorded so nobody re-files them. Each was examined against source in this
+sub-project and each has an explanation that survives reading.
+
+- **`actor_data.close()` sits *inside* the `try` in `refresh_user_profile_task`
+  (`:679`) and *after* it in the two handlers D214 added (`:806`, `:1042`).**
+  The controller flagged it while reading the fix diff and the reviewer
+  re-derived rather than accepted the judgement: on the decode-error path
+  **neither** spelling closes -- the user task's `close()` is skipped by the
+  exception, the new one by the `return` -- and `get_request` uses a
+  non-streamed `httpx.get` whose body is fully read before it returns, so
+  `close()` releases nothing `.json()` has not already released. The new shape
+  is marginally the better one because its `try` covers less.
+- **The `[deleted]` title normalisation in `refresh_user_profile_task`
+  (`:726-727`) is not gated by an `in activity_json` check.** It reads
+  `if user.title and user.title.strip().lower() == '[deleted]': user.title = ''`
+  -- the *stored* value, not the document's -- so a refresh whose document
+  carries no `name` key can still clear a title. That is coherent as a
+  normalisation of the resulting value regardless of where it came from, and it
+  is recorded only because it does **not** fit the optional-field branch-pair
+  shape the rest of Task 4 covered, so a reader enumerating that block will find
+  one branch that does not match its neighbours.
+- **The community and feed tasks' second retry catch is `except Exception:`
+  (`:797`, `:1033`) where the user task's is `except httpx.HTTPError:`
+  (`:667`).** Genuinely broader, and it interacts with D220 -- but a broader
+  catch on a *retry* that ends in `return` is defensible in a way the bare
+  `except:` that ends in a *fallback fetch* is not, and lumping the two together
+  would have made D220's entry claim more than it can support.
+
+**Eight shapes worth carrying forward from this sub-project's rulings, now in
+`tests/README.md` as facts 63-70:** a Celery task here is tested by calling it
+directly, because production's own `current_app.debug` branch does the same;
+`get_task_session()` leaves `autoflush` at SQLAlchemy's default `True` where
+`db.session` is configured `autoflush=False`; a task committing on that session
+leaves the test's own object stale, so `db.session.refresh()` **is** load-bearing
+across sessions even though fact 58 shows it is a no-op within one;
+`seed_community_owner` is not idempotent, because `Instance.domain` is unique;
+an actor lookup inside the code under test fetches in two different ways, and
+both need heading off; a fix that adds a conjunct must be mutation-proved by
+deleting that conjunct alone; when two guards sit in sequence the pin for the
+outer one must serve a payload the inner one accepts; and grep the mechanism's
+identifier, not only the words used to describe it.
 
 ## Ratchet gotchas
 

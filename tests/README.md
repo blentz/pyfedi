@@ -2532,6 +2532,138 @@ post_reply_count`. It gates the ban and unban notifications in `ban_user` and
 neither a post nor a reply in that community -- seeding a reply and no post
 produces a true that reads like a false.
 
+**63. A Celery task in this codebase is tested by CALLING IT DIRECTLY, and that
+is production's own behaviour rather than a testing contrivance.** Every
+`@celery.task` in `app/activitypub/util.py` has a plain-function caller beside
+it that branches on `current_app.debug` -- `refresh_user_profile`
+(`app/activitypub/util.py:647-651`) calls `refresh_user_profile_task(user_id)`
+inline when debug is true and `.apply_async(...)` otherwise, and
+`refresh_community_profile` (`:776-780`) and `refresh_feed_profile`
+(`:1013-1017`) do the same. On top of that the `app` fixture puts Celery in
+eager mode (see "Eager Celery makes outbound federation happen inline"), so `.delay()` and
+`.apply_async()` also run inline and propagate. So `refresh_user_profile_task(user.id)`
+in a test body is the production path, not a shortcut around one. Two
+consequences: **do not build a `.delay()` harness for a task in this file**, and
+do not write a test whose only claim is that the DEBUG branch was taken -- under
+eager Celery both arms behave identically, and recording *which* call was made
+is the only honest way to pin that branch (the sub-project 3 note on
+`resolve_remote_post_from_search` says the same thing from the other side).
+Generalises item 1 of "The inbox-dispatch harness", which established the same
+property for `process_inbox_request`.
+
+**64. `get_task_session()` leaves `autoflush` at SQLAlchemy's default `True`,
+where `db.session` in this app is configured `autoflush=False`.** The helper is
+two lines -- `return Session(bind=db.engine)` (`app/utils.py:3673-3675`) -- and
+passes no `session_options`, while `app/__init__.py:81` constructs
+`SQLAlchemy(session_options={"autoflush": False}, ...)`. So the session a task
+does its work through flushes pending changes before every query, and the
+session the test seeds its fixtures through does not. **The two sessions do not
+behave the same way**, and a mental model built on one is wrong about the other:
+inside the task, a half-built object can reach the database on the next `SELECT`
+and trip a NOT NULL or unique constraint at a line that contains no `commit()`;
+in the test, it cannot. When a task raises an `IntegrityError` from a line that
+looks like a read, this is why. Note that `patch_db_session` (`app/utils.py:3679`)
+makes `db.session` *become* the task session inside the task's `with` block when
+there is no request context, so code that reaches for `db.session` while a task
+is running gets the autoflush-`True` one -- see fact 3 in the inbox-dispatch
+section for the request-context half of that asymmetry.
+
+**65. When a task commits on its OWN `get_task_session()`, a row the test is
+holding from `db.session` is stale, and `db.session.refresh(obj)` IS
+load-bearing.** This is the complement to fact 58, not a contradiction of it,
+and the difference is which session did the committing. Fact 58's case is one
+session: the function under test commits on `db.session`, `expire_on_commit` is
+`True`, so the test's objects are already expired and an added `refresh()` is a
+redundant SELECT. This case is two sessions: the task commits on an independent
+`Session(bind=db.engine)`, which expires **its** identity map and knows nothing
+about the test's, so the test's object keeps whatever it was loaded with and the
+assertion reads a pre-call value. Measured rather than assumed at the start of
+sub-project 13 -- without `db.session.refresh(user)`, `user.title` reads back
+`None` after a refresh task that demonstrably wrote it. **Ask which session
+committed before deciding whether the refresh is a no-op**, and write the
+docstring accordingly: calling it load-bearing is a claim about the session
+arrangement, and that claim is true here and false in fact 58's case.
+
+**66. `seed_community_owner` is NOT idempotent -- calling it twice for one
+domain raises `IntegrityError`.** It unconditionally calls `make_instance(domain)`
+(`tests/factories.py:274`) and `Instance.domain` is `unique=True`
+(`app/models.py:86`). The trap is indirect, because the second call is usually
+hidden inside a helper: a test-local `_remote_user()` that seeds its own peer
+will collide with the `_remote_community()` that already seeded it, and the
+failure surfaces as a constraint violation in fixture setup rather than as
+anything to do with the code under test. **A test needing a SECOND actor on a
+peer some other helper already created must use `make_user(<row>.instance, name)`
+against the existing `Instance` row**, not reach for the seeding helper again.
+The same applies to any helper built on `seed_community_owner`.
+
+**67. An actor lookup inside the code under test can make an outbound fetch, in
+two different ways, and both have to be headed off.** (a) **A seeded actor row
+with a NULL or stale `ap_fetched_at` triggers a nested refresh.**
+`find_actor_or_create` calls `schedule_actor_refresh`
+(`app/activitypub/actor.py:134-147`), which fires `refresh_user_profile` /
+`refresh_community_profile` / `refresh_feed_profile` when `ap_fetched_at is
+None or ap_fetched_at < utcnow() - timedelta(days=1)` -- and under eager Celery
+that whole refresh task runs **inline, inside your test, against no mock**.
+Stamp `ap_fetched_at = utcnow()` on any actor row the path will look up; that is
+what `resolvable_remote_author` exists to do, and a hand-rolled fixture has to
+do it by hand. (b) **`create_if_not_found` defaults to `True`**
+(`app/activitypub/util.py:280`), so an actor URL that resolves to *no* row at
+all reaches `create_actor_from_remote` and fetches. A test that wants the
+"unresolvable" arm therefore cannot just pass a URL it never seeded -- pass one
+that resolves to a row of the wrong type instead. Sub-project 13's following-loop
+false-arm test uses the ActivityStreams Public URI for exactly this reason. Both
+arms surface the same way if you miss them: an unmatched request from
+`block_outbound_http`, or an `assert_all_called` failure, at a line that mentions
+no HTTP.
+
+**68. A fix that ADDS a conjunct must be mutation-proved by deleting THAT
+CONJUNCT ALONE. Mutating the whole guard to `if True:` proves the site, not the
+clause -- and the gap is self-concealing.** Sub-project 13 added
+`following_collection and 'items' in following_collection` around a loop and
+recorded a green kill for it; the mutation had been `if True:`, which deletes
+both conjuncts at once. Deleting only `following_collection and` survived the
+entire file (**57 passed, zero failures**), because every test served a truthy
+dict and none served JSON `null`. `if True:` answers "does anything depend on
+this *line*?" when the fix raises "does anything depend on this *clause*?" It is
+worse than a plain missing test because **the site-level mutant does die**, so
+the table shows a kill and nothing in the artefacts contradicts itself -- there
+is no trace of the missing proof to find later. The rule: **one mutation per
+clause the fix introduces**, named in the table as the clause and not as the
+line.
+
+A corollary from the same fix, worth knowing before you try to pin a truthiness
+conjunct: **adding a membership check can shrink the set of inputs that kill its
+neighbour.** Before the fix, deleting a guard's leading `data and` and serving
+`{}` raised `KeyError` on `{}['type']` and would have killed. After it,
+`'type' in {}` is merely `False` and the guard skips, so **`null` is the only
+discriminator left**. Nothing regressed -- those conjuncts were already unpinned
+-- but the cheap input no longer works, and someone who tries `{}`, sees it
+survive and concludes the clause is dead would be wrong.
+
+**69. When two guards sit in sequence, the pin for the OUTER one must serve a
+payload the INNER one accepts.** Otherwise both mutations die by the same
+exception and the two guards become indistinguishable: you have one test that
+kills two mutants for one reason, which attributes nothing. Sub-project 13 hit
+this on a status check followed by a JSON-decode guard. The non-200 pin's body
+is **deliberately valid JSON naming a resolvable community**; garbage at 502
+would have made dropping *either* guard die by `JSONDecodeError`. As written,
+dropping the status check creates a row and flips a count while dropping the
+decode guard raises -- two guards, two different kills, each leaving the other
+test passing. The general form: **the outer pin's payload must be innocuous to
+everything downstream of the guard it targets**, so the only thing the mutation
+changes is whether the guard fired.
+
+**70. Grep the mechanism's IDENTIFIER, not the words used to describe it.** A
+docstring-and-comment audit at the end of sub-project 13 grepped the crash
+vocabulary its own briefs had used ("crash", "ungated", "workaround") and found
+three sites; a fourth existed and was missed. Grepping the **column name** the
+workaround actually sets -- `ap_following_url` -- found it immediately: a test
+that set the column with no explanation at all, which is precisely the site an
+audit exists to catch, and precisely the one that matches no descriptive word.
+The same applies to stale citations, renamed pins and inverted tests: search for
+the symbol, the column, the URL, the old test name -- something the code must
+contain -- rather than for how you would describe it in prose.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
