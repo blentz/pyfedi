@@ -23,7 +23,7 @@ from app.activitypub import util as ap_util
 from app.activitypub.util import (refresh_community_profile_task,
                                   refresh_feed_profile_task,
                                   refresh_user_profile_task)
-from app.models import Community, Feed, Instance, User
+from app.models import Community, CommunityMember, Feed, Instance, User, utcnow
 from tests.factories import (make_community, make_feed, make_instance, make_user,
                              seed_community_owner)
 
@@ -652,3 +652,97 @@ def test_a_malformed_community_document_crashes(app, db_session, http_mock):
 
     with pytest.raises(json.JSONDecodeError, match='Expecting value'):
         refresh_community_profile_task(community.id, None)
+
+
+def test_the_moderators_url_is_taken_from_attributed_to(app, db_session, http_mock):
+    """`if 'attributedTo' in activity_json and isinstance(..., str):` -- the
+    lemmy and mbin spelling.
+
+    DEVIATION FROM THE BRIEF: the brief's assertion (`community.title ==
+    'Memes, refreshed'`) only proves the task completed, not that `mods_url`
+    was used for anything. Reading the task shows it does more with
+    `ap_moderators_url`: after the community fields are committed, it fetches
+    that URL and, for every actor in the `OrderedCollection`'s
+    `orderedItems`, calls `find_actor_or_create` and upserts a
+    `CommunityMember` row with `is_moderator=True` (app/activitypub/util.py).
+    So this test serves that collection with one member and asserts the
+    resulting `CommunityMember` row instead of the title.
+
+    The member is a pre-existing remote user with `ap_fetched_at` set fresh:
+    `find_actor_or_create` then resolves it via `find_remote_actor` (a DB
+    lookup by `ap_profile_id`) rather than creating it, and
+    `schedule_actor_refresh` sees a recently-fetched actor and does not
+    itself queue a nested refresh -- which runs eagerly under this suite's
+    Celery config and would otherwise need its own HTTP mock for the
+    member's own actor document.
+    """
+    community = _remote_community()
+    mod = make_user(community.instance, 'fauxmod')
+    mod.ap_fetched_at = utcnow()
+    db.session.commit()
+    mods_url = f'https://{PEER}/c/memes/moderators'
+    _serve(http_mock, mods_url,
+           {'type': 'OrderedCollection', 'orderedItems': [mod.ap_profile_id]})
+
+    refresh_community_profile_task(
+        community.id, _group_document(fields={'attributedTo': mods_url}))
+
+    membership = db.session.query(CommunityMember).filter_by(
+        community_id=community.id, user_id=mod.id).first()
+    assert membership is not None
+    assert membership.is_moderator is True
+
+
+def test_the_moderators_url_falls_back_to_the_kbin_spelling(app, db_session, http_mock):
+    """`elif 'moderators' in activity_json:` -- kbin's spelling. Reached only
+    when `attributedTo` is absent or not a string, so the document carries
+    `moderators` alone.
+
+    Same deviation and reasoning as
+    `test_the_moderators_url_is_taken_from_attributed_to` above: the
+    `CommunityMember` row is the observable, not the title.
+    """
+    community = _remote_community()
+    mod = make_user(community.instance, 'otherfauxmod')
+    mod.ap_fetched_at = utcnow()
+    db.session.commit()
+    mods_url = f'https://{PEER}/c/memes/moderators'
+    _serve(http_mock, mods_url,
+           {'type': 'OrderedCollection', 'orderedItems': [mod.ap_profile_id]})
+
+    refresh_community_profile_task(
+        community.id, _group_document(fields={'moderators': mods_url}))
+
+    membership = db.session.query(CommunityMember).filter_by(
+        community_id=community.id, user_id=mod.id).first()
+    assert membership is not None
+    assert membership.is_moderator is True
+
+
+def test_the_sensitive_flag_sets_nsfw(app, db_session, http_mock):
+    """`community.nsfw = activity_json['sensitive'] if 'sensitive' in ... else False`
+    -- note the else, which means an absent key RESETS nsfw rather than
+    leaving it. The community is seeded nsfw=True so the reset is observable,
+    and its twin below asserts the set.
+    """
+    community = _remote_community()
+    community.nsfw = True
+    db.session.commit()
+
+    refresh_community_profile_task(community.id, _group_document())
+
+    db.session.refresh(community)
+    assert community.nsfw is False
+
+
+def test_a_sensitive_document_sets_nsfw(app, db_session, http_mock):
+    """The truthy side of the same expression."""
+    community = _remote_community()
+    community.nsfw = False
+    db.session.commit()
+
+    refresh_community_profile_task(
+        community.id, _group_document(fields={'sensitive': True}))
+
+    db.session.refresh(community)
+    assert community.nsfw is True
