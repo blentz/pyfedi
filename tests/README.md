@@ -2423,6 +2423,21 @@ implementer who finds the stated count off by one should report the discrepancy
 rather than invent a test to reach it, which is the failure this fact exists to
 prevent. Compare fact 49, which is the same class for counts embedded in prose.
 
+**Corollary, added by sub-project 14, which exercised it six times in nine
+tasks: an expected test count is an ESTIMATE, never a reason to ship an unproven
+conjunct.** The failure above is a count that is too high; this is the same fact
+in the other direction. Sub-project 14's Task 1 found two conjuncts its brief's
+six tests could not kill and declined to add tests, because the brief said "6
+tests added" and "verbatim". That deference is backwards -- **the count is
+DERIVED from the requirement, so letting it override the requirement inverts
+them** -- and once the norm was stated, six of the nine remaining test tasks
+exceeded their brief's estimate for the same reason, each time closing a guard
+the brief's own count would have left unproven (Task 3 by one, Task 4 by five,
+Task 6 by six, Task 7 by five, Task 8 by one, Task 9 by twelve). The rule an
+implementer needs: **add the tests, and report the discrepancy in the same
+breath**; a plan that states deltas rather than running totals lets a task grow
+without invalidating anything downstream.
+
 **56. `log_incoming_ap` writes NOTHING unless `LOG_ACTIVITYPUB_TO_DB` is set,
 and it is off in every test run.** The function
 (`app/activitypub/util.py:4534`) guards its whole body with `if
@@ -2848,6 +2863,50 @@ race** -- and in a fix wave, that is a regression you will believe, because you
 just changed production code. The cost of `--down` is real (fact 29: it replays
 ~269 migrations), which is exactly why the rule is "before it is believed"
 rather than "before every run".
+
+**79. A test file NEED NOT self-contain its kills -- a kill verified in a
+sibling file is real coverage -- but the reliance must be DISCLOSED at the point
+of reliance.** Sub-project 14 found a mutant it could not kill from its own
+file: forcing `link != ''` False deletes a `post.url` write that nothing in
+`tests/test_ap_update_pair.py` observes, while
+`tests/test_unparseable_url_ingress.py::test_an_ordinary_microblog_link_is_still_stored`
+does kill it (that file's `federated_post.url` starts `None`, so the missing
+write fails its assertion). The implementer declined to duplicate the other
+file's ground and documented the split; the reviewer read the other test,
+confirmed the kill, and accepted it. **Ruled at that sub-project's final review:
+no, and duplicating would be the worse option** -- this campaign has repeatedly
+forbidden reproducing another file's ground precisely because duplicate tests
+**rot independently**, and two copies of one pin diverge silently the first time
+either subject changes. What the reliance costs, and what must therefore be paid
+explicitly: the guard's own test docstring has to **name the file and the test
+that kills it**, so a reader auditing the guard is not misled into thinking it
+is unproven. A mutation-table entry reading "survives in this file" with no
+pointer is the failure; "survives here, killed by `<file>::<test>`, not
+duplicated per the brief" is the disclosure. The residual risk is real and
+accepted: the kill lives one file away from the guard it proves, findable only
+by following the pointer.
+
+**80. A mutation round can damage the tree in two ways, and each has a cheap
+check. Run both.** Neither is hypothetical -- both happened in sub-project 14.
+
+- **The window between apply and restore leaves production code BROKEN, so an
+  agent killed inside it leaves a silently mutated tree.** A Task 1 fix round
+  was terminated at a session boundary between applying a mutant and reverting
+  it, leaving `'mediaType' in request_json['object']['source'] and` replaced by
+  `True and` in `app/activitypub/util.py`. Nothing in the process detected it;
+  the controller found it only by running `git status` during recovery, and the
+  next agent would otherwise have built on a mutated file. **Every resume from a
+  stopped or interrupted implementer begins with `git diff -- app/` before
+  anything else**, and every task that runs mutations asserts that diff is empty
+  at commit time as well as after each cycle.
+- **A string-replace mutation on a NON-UNIQUE string patches the wrong site, or
+  several.** `if 'type' in json_tag and json_tag['type'] == 'Mention':` occurs
+  **three** times in `app/activitypub/util.py`, two of them outside the function
+  under test, so a naive replace would have mutated all three and attributed the
+  result to one. **Assert the occurrence count before replacing**; when it is
+  not 1, switch to line-addressed patching. Sub-project 14's tooling aborted on
+  its own count assertion *before* the write, which is the whole point of
+  checking first rather than reading the diff afterwards.
 
 ## Known noise
 
