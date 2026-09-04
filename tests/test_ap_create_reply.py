@@ -1835,3 +1835,197 @@ def test_no_subscribers_creates_no_notification_for_the_reply(app, db_session, r
     notify_about_post_reply(None, new_reply)
 
     assert Notification.query.count() == before
+
+
+# --- notify_about_post_reply: the parent_reply-is-not-None branch ---------
+#
+# A reply to a comment rather than to a post. `_seed_chain_comment` builds the
+# genuine parent-child `path` this branch needs (see its own docstring) --
+# unlike a bare `make_post_reply`, whose `path` is None.
+#
+# This branch does three things the top-level branch does not:
+#
+# 1. It marks existing Notifications about `parent_reply` read for the new
+#    reply's author, via a two-conjunct UPDATE: `Notification.user_id ==
+#    new_reply.user_id` AND `Notification.targets['comment_id'].as_string()
+#    == str(parent_reply.id)`. Each conjunct gets its own negative test below,
+#    because reaching the True side of an AND cannot kill a mutant that drops
+#    either conjunct on its own -- only a row that satisfies one conjunct and
+#    not the other, and stays unread, can.
+#
+# 2. It RECOUNTS `new_reply.user_id`'s `unread_notifications` from the
+#    database (`Notification.query.filter_by(user_id=user.id,
+#    read=False).count()`) rather than incrementing it, the way the
+#    top-level branch does. A seed that agrees with the true count cannot
+#    distinguish a recount from an increment, so the test below seeds a
+#    deliberately wrong baseline.
+#
+# 3. It notifies `parent_reply`'s subscribers -- `notification_subscribers(
+#    parent_reply.id, NOTIF_REPLY)` -- under the same `new_reply.user_id !=
+#    notify_id` shape of guard the top-level branch uses for its own
+#    subscribers, so both sides get their own test for the same reason set
+#    out above that section's header comment.
+
+
+def test_the_parents_notification_is_marked_read_for_the_new_replys_author(app, db_session, redis_lock_only_double):
+    """The branch's opening UPDATE, read from source: `Notification.user_id
+    == new_reply.user_id` (the new reply's author -- not `parent_reply`'s own
+    author) AND `Notification.targets['comment_id'].as_string() ==
+    str(parent_reply.id)`.
+
+    Seeds an unread Notification for `author` whose `targets['comment_id']`
+    names `parent`'s id -- the shape a notification that once told `author`
+    about `parent` would carry -- and asserts it becomes read.
+    """
+    community, post, replier = _seed_scenario()
+    parent = _seed_chain_comment(post, post.author, 'parent')
+    author = make_user(None, 'author', local=True)
+    new_reply = _seed_chain_comment(post, author, 'child', parent=parent)
+    notif = Notification(user_id=author.id, author_id=replier.id,
+                         title='a notification about the parent comment',
+                         url=f'/comment/{parent.id}',
+                         notif_type=NOTIF_REPLY, subtype='new_reply_on_followed_comment',
+                         targets={'gen': '0', 'comment_id': parent.id})
+    db.session.add(notif)
+    db.session.commit()
+
+    notify_about_post_reply(parent, new_reply)
+
+    assert Notification.query.get(notif.id).read is True
+
+
+def test_a_notification_about_a_different_comment_is_left_unread(app, db_session, redis_lock_only_double):
+    """The `targets['comment_id']` conjunct, isolated: a Notification for
+    `author` (the matching user) that names some OTHER comment stays unread.
+    Proves the comparison itself gates the update, not merely the user_id
+    filter -- a mutant that drops this conjunct would mark this row read too.
+    """
+    community, post, replier = _seed_scenario()
+    parent = _seed_chain_comment(post, post.author, 'parent')
+    other = _seed_chain_comment(post, post.author, 'other')
+    author = make_user(None, 'author', local=True)
+    new_reply = _seed_chain_comment(post, author, 'child', parent=parent)
+    notif = Notification(user_id=author.id, author_id=replier.id,
+                         title='a notification about a different comment',
+                         url=f'/comment/{other.id}',
+                         notif_type=NOTIF_REPLY, subtype='new_reply_on_followed_comment',
+                         targets={'gen': '0', 'comment_id': other.id})
+    db.session.add(notif)
+    db.session.commit()
+
+    notify_about_post_reply(parent, new_reply)
+
+    assert Notification.query.get(notif.id).read is False
+
+
+def test_a_matching_notification_for_a_different_user_is_left_unread(app, db_session, redis_lock_only_double):
+    """The `user_id` conjunct, isolated: a Notification naming `parent`'s id
+    (the matching comment) but belonging to a DIFFERENT user stays unread.
+    Proves the update is scoped to `new_reply.user_id`, not to every
+    notification about `parent` regardless of owner -- a mutant that drops
+    this conjunct would mark this row read too.
+    """
+    community, post, replier = _seed_scenario()
+    parent = _seed_chain_comment(post, post.author, 'parent')
+    author = make_user(None, 'author', local=True)
+    bystander = make_user(None, 'bystander', local=True)
+    new_reply = _seed_chain_comment(post, author, 'child', parent=parent)
+    notif = Notification(user_id=bystander.id, author_id=replier.id,
+                         title='a notification about the parent for someone else',
+                         url=f'/comment/{parent.id}',
+                         notif_type=NOTIF_REPLY, subtype='new_reply_on_followed_comment',
+                         targets={'gen': '0', 'comment_id': parent.id})
+    db.session.add(notif)
+    db.session.commit()
+
+    notify_about_post_reply(parent, new_reply)
+
+    assert Notification.query.get(notif.id).read is False
+
+
+def test_the_authors_unread_total_is_recounted_not_incremented(app, db_session, redis_lock_only_double):
+    """The reply branch RECOUNTS `unread_notifications` from the database
+    where the top-level branch increments it.
+
+    The seeded counter is deliberately wrong -- 9 against a real unread count
+    of 1 -- because an increment would give 10 and a recount gives the true
+    figure. A seed that agreed with the truth could not tell them apart.
+
+    The one unread Notification names a comment OTHER than `parent` (`other`),
+    so the branch's own mark-read step -- proven separately above -- does not
+    touch it, and it survives to be the sole row the recount finds. `author`
+    is excluded from the subscriber loop by its own `new_reply.user_id !=
+    notify_id` guard (no subscription is seeded for `parent` here anyway), so
+    no new Notification for `author` is created after the mark-read step.
+    """
+    community, post, replier = _seed_scenario()
+    parent = _seed_chain_comment(post, post.author, 'parent')
+    other = _seed_chain_comment(post, post.author, 'other')
+    author = make_user(None, 'author', local=True)
+    new_reply = _seed_chain_comment(post, author, 'child', parent=parent)
+    unrelated = Notification(user_id=author.id, author_id=replier.id,
+                             title='an unrelated unread notification',
+                             url=f'/comment/{other.id}',
+                             notif_type=NOTIF_REPLY, subtype='new_reply_on_followed_comment',
+                             targets={'gen': '0', 'comment_id': other.id})
+    db.session.add(unrelated)
+    db.session.commit()
+    author.unread_notifications = 9
+    db.session.commit()
+
+    notify_about_post_reply(parent, new_reply)
+
+    assert author.unread_notifications == Notification.query.filter_by(
+        user_id=author.id, read=False).count()
+    assert author.unread_notifications != 10
+    assert author.unread_notifications == 1
+
+
+def test_a_parent_subscriber_is_notified_of_a_reply(app, db_session, redis_lock_only_double):
+    """The branch's subscriber fan-out: `notification_subscribers(parent_reply.id,
+    NOTIF_REPLY)`, with fields read straight from source -- `notif_type` is
+    the NOTIF_REPLY passed in, `subtype` is the literal
+    'new_reply_on_followed_comment', `url` is built from the post id and
+    `new_reply.parent_id` (which is `parent`'s id, since `_seed_chain_comment`
+    sets it), and `targets` carries `parent`'s post id and body plus the new
+    reply's id, body, author id and `author_user_name` (the replier's
+    `ap_id`, set because `_seed_scenario`'s replier is remote).
+    """
+    community, post, replier = _seed_scenario()
+    parent = _seed_chain_comment(post, post.author, 'parent')
+    subscriber = make_user(None, 'subscriber', local=True)
+    make_notification_subscription(subscriber, parent.id, NOTIF_REPLY)
+    new_reply = _seed_chain_comment(post, replier, 'child', parent=parent)
+
+    notify_about_post_reply(parent, new_reply)
+
+    notification = Notification.query.filter_by(user_id=subscriber.id).one()
+    assert notification.notif_type == NOTIF_REPLY
+    assert notification.subtype == 'new_reply_on_followed_comment'
+    assert notification.url == f'/post/{post.id}/comment/{new_reply.parent_id}#comment_{new_reply.id}'
+    assert notification.targets == {
+        'gen': '0',
+        'post_id': parent.post.id,
+        'parent_comment_id': new_reply.parent_id,
+        'parent_reply_body': parent.body,
+        'comment_id': new_reply.id,
+        'comment_body': new_reply.body,
+        'author_id': new_reply.user_id,
+        'author_user_name': replier.ap_id,
+    }
+
+
+def test_the_replier_is_not_notified_of_their_own_reply_to_a_comment(app, db_session, redis_lock_only_double):
+    """The `new_reply.user_id != notify_id` guard's False side: the replier
+    subscribed to `parent` (a plausible case -- someone subscribes to a
+    comment, then later replies to it themselves) gets no Notification for
+    their own reply even though `notification_subscribers` returns their id.
+    """
+    community, post, replier = _seed_scenario()
+    parent = _seed_chain_comment(post, post.author, 'parent')
+    make_notification_subscription(replier, parent.id, NOTIF_REPLY)
+    new_reply = _seed_chain_comment(post, replier, 'child', parent=parent)
+
+    notify_about_post_reply(parent, new_reply)
+
+    assert Notification.query.filter_by(user_id=replier.id).count() == 0
