@@ -550,7 +550,7 @@ def test_an_absent_summary_clears_the_users_about_html(app, db_session, http_moc
 - [ ] **Step 4: Run and commit**
 
 Run: `./run_tests.sh tests/test_ap_refresh_profiles.py -q`
-Expected: 11 passed, plus one per additional optional field you covered.
+Expected: 11 passed, plus one per additional optional field you covered. (Seven extra fields were covered and a later fix round added a sibling, so the running total leaving this task is **19**, and every count below reflects that.)
 
 ```bash
 git add tests/test_ap_refresh_profiles.py
@@ -654,7 +654,7 @@ def test_a_malformed_community_document_crashes(app, db_session, http_mock):
 - [ ] **Step 4: Run and commit**
 
 Run: `./run_tests.sh tests/test_ap_refresh_profiles.py -q`
-Expected: 15 passed.
+Expected: 23 passed.
 
 ```bash
 git add tests/test_ap_refresh_profiles.py
@@ -745,7 +745,7 @@ def test_a_sensitive_document_sets_nsfw(app, db_session, http_mock):
 - [ ] **Step 3: Run and commit**
 
 Run: `./run_tests.sh tests/test_ap_refresh_profiles.py -q`
-Expected: 19 passed.
+Expected: 27 passed.
 
 ```bash
 git add tests/test_ap_refresh_profiles.py
@@ -839,7 +839,7 @@ def test_a_malformed_feed_document_crashes(app, db_session, http_mock):
 - [ ] **Step 4: Run and commit**
 
 Run: `./run_tests.sh tests/test_ap_refresh_profiles.py -q`
-Expected: 23 passed.
+Expected: 31 passed.
 
 ```bash
 git add tests/test_ap_refresh_profiles.py
@@ -965,7 +965,7 @@ Add `from app.activitypub import util as ap_util` to the imports, and request `m
 - [ ] **Step 3: Run and commit**
 
 Run: `./run_tests.sh tests/test_ap_refresh_profiles.py -q`
-Expected: 27 passed.
+Expected: 35 passed.
 
 ```bash
 git add tests/test_ap_refresh_profiles.py
@@ -1026,7 +1026,7 @@ def test_no_followers_url_means_no_followers_fetch(app, db_session, http_mock):
 - [ ] **Step 2: Run and commit**
 
 Run: `./run_tests.sh tests/test_ap_refresh_profiles.py -q`
-Expected: 29 passed, plus one per feed-side equivalent you added.
+Expected: 37 passed, plus one per feed-side equivalent you added.
 
 ```bash
 git add tests/test_ap_refresh_profiles.py
