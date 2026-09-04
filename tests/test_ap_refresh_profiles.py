@@ -382,7 +382,7 @@ def test_a_changed_indexable_flag_rewrites_the_users_posts(app, db_session, http
 
     A POST IS SEEDED WITH `indexable=False` AND THE ASSERTION IS ON THE POST
     ROW. That is the only assertion that can kill this branch. `user.indexable
-    = new_indexable` is assigned UNCONDITIONALLY forty lines further down the
+    = new_indexable` is assigned UNCONDITIONALLY further down the
     task, outside this `if`, so `user.indexable` reads True after the refresh
     whether the branch ran or not -- asserting it alone left the whole block
     deletable with the suite green, and the raw UPDATE running against zero
