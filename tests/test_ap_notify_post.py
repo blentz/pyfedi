@@ -2,9 +2,11 @@
 post-side create and notify path, and the mirror of the reply notification
 fan-out sub-project 15 covered to zero.
 
-Entry is a direct call. `notify_about_post_task` takes a post id; the `app`
-fixture puts celery in eager mode, so calling the undecorated function is the
-path a worker runs.
+Entry is a direct call. `notify_about_post_task` takes a post id and is
+`@celery.task`-decorated (app/activitypub/util.py:2803-2804), so the imported
+name is a Task object whose `__call__` runs the body; the tests below invoke it
+directly rather than through `.delay()`. The `app` fixture puts celery in eager
+mode, which makes the two routes equivalent in this suite anyway.
 
 `notify_about_post_task` runs on `get_task_session()`, whose autoflush is at
 SQLAlchemy's default True, unlike `db.session`, which the app factory
@@ -77,10 +79,11 @@ def _post_doc(**fields):
     matter.
 
     Two departures from the brief's draft of this helper, both to stop a test
-    passing for the wrong reason, and both matching what the sibling
-    `_reply_doc` in tests/test_ap_create_reply.py already does:
+    passing for the wrong reason:
 
-    `to` defaults to Public. `create_post`'s visibility guard runs before
+    `to` defaults to Public -- the same departure, for the same reason, that
+    the sibling `_reply_doc` in tests/test_ap_create_reply.py records against
+    its own brief's draft. `create_post`'s visibility guard runs before
     `Post.new` is reached, and `activitypub_visibility` classifies an object
     with no addressing at all as 'direct' -- its last line is a bare
     `return 'direct'`. The brief's draft set no addressing, so every test
@@ -89,7 +92,10 @@ def _post_doc(**fields):
     through `**fields`.
 
     The object's `id` is `/post/2`, not the `/post/1` `_seed_scenario` gives
-    the row it seeds. `Post.new` writes `ap_id=request_json['object']['id']`,
+    the row it seeds. This one has no sibling precedent -- `_reply_doc`'s
+    `/comment/1` is the id of the reply its tests CREATE, and that file's
+    `_seed_scenario` seeds no `PostReply` at all, so there was no collision
+    there to avoid. `Post.new` writes `ap_id=request_json['object']['id']`,
     and `Post.ap_id` is unique, so reusing the seeded row's id would send any
     successful create down `Post.new`'s
     `except IntegrityError: ... return Post.query.filter_by(ap_id=...).one()`
@@ -213,9 +219,18 @@ def test_a_post_on_an_admin_blocked_domain_is_swallowed_by_the_tail_except(app, 
     `except (httpx.HTTPError, httpx.InvalidURL)` does NOT catch respx's
     unmatched-request error, so without the route below the tail handler logs
     "RESPX: <Request('HEAD', ...)> not mocked!" instead of the `Post.new`
-    exception -- measured, as the first run of this test did exactly that. A
-    non-image Content-Type is served so the url is classified
-    `POST_TYPE_LINK`, which is the branch that goes on to resolve the domain.
+    exception -- measured, as the first run of this test did exactly that.
+    That is the whole of why `http_mock` is here.
+
+    The Content-Type served is NOT load-bearing for reaching the raise.
+    `domain = domain_from_url(post.url)` (app/models.py:2060) is a SIBLING of
+    the entire `if is_image_url(...)` / `elif` / `else:` classification chain
+    (`:2011`, `:2029`, `:2031`, `:2040`, `:2050`), all of it inside
+    `if post.url:` (`:2008`), so every post type reaches the domain lookup and
+    the raise. A non-image type is served only to keep the run out of the
+    `POST_TYPE_IMAGE` arm, which would `db.session.add(image)` (`:2027`) a
+    `File` row that nothing here wants and the tail handler's own commit would
+    then persist.
     """
     community, seeded_post, author = _seed_scenario()
     http_mock.head('https://blocked.example/article').respond(
