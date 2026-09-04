@@ -145,6 +145,31 @@ def test_a_reply_blockquote_content_is_not_wrapped(app, db_session, redis_lock_o
     assert reply.body_html.startswith('<blockquote>')
 
 
+def test_a_reply_with_null_content_keeps_its_body(app, db_session, redis_lock_only_double):
+    """A peer sending `content` as an explicit `null` used to raise
+    `AttributeError` here, on the `content.startswith('<p>')` call that opens
+    the arm. The post function guards `content is not None`; this one now
+    does too.
+
+    The seeded `body` and `body_html` are asserted unchanged, which is what
+    distinguishes "the guard skipped the arm" from "the arm ran and wrote
+    None". `distinguished` is sent alongside and asserted, so a guard that
+    abandoned the whole Update rather than just the content arm would not
+    pass this test either.
+    """
+    reply = _seed_reply()
+    reply.body = 'seeded body'
+    reply.body_html = '<p>seeded body html</p>'
+    reply.distinguished = False
+    db.session.commit()
+
+    update_post_reply_from_activity(reply, _update(content=None, distinguished=True))
+
+    assert reply.body == 'seeded body'
+    assert reply.body_html == '<p>seeded body html</p>'
+    assert reply.distinguished is True
+
+
 def test_a_reply_markdown_source_overwrites_the_html_derived_body(app, db_session, redis_lock_only_double):
     """`source` with `mediaType: text/markdown` wins: `body` becomes the
     markdown and `body_html` is re-derived from it, overwriting the value the
@@ -1406,9 +1431,10 @@ def test_a_post_blockquote_content_is_not_wrapped(app, db_session, redis_lock_on
 
 
 def test_a_post_with_null_content_keeps_its_body(app, db_session, redis_lock_only_double):
-    """THE ASYMMETRY, on the side that gets it right. This function guards
-    `request_json['object']['content'] is not None`; the reply function does
-    not, and Task 10 fixes that.
+    """This function's `request_json['object']['content'] is not None`
+    conjunct. It used to be the side of the pair that got this right; the
+    reply function now carries the same conjunct, pinned by
+    test_a_reply_with_null_content_keeps_its_body.
 
     The seeded body is asserted unchanged, which is what distinguishes "the
     guard skipped the arm" from "the arm ran and wrote None". A mutant that
