@@ -985,6 +985,183 @@ def test_the_self_mention_exclusion_produces_no_notification(app, db_session, re
     assert Notification.query.count() == 0
 
 
+# --- Notification resolution and delivery -----------------------------------
+#
+# The tests above prove `local_users_to_notify` gets populated (or not).
+# Everything below is the loop that CONSUMES it (app/activitypub/util.py,
+# `for lutn in local_users_to_notify:`, nested inside the `try` that wraps
+# `PostReply.new`): resolving each profile id to a local `User`, the
+# blocked-sender check, the `Notification` row itself, the unread counter,
+# and the `force_locale(get_recipient_language(...))` wrapper.
+#
+# Immediately after the recipient lookup sits `if post_reply.instance.
+# software == 'mbin' or post_reply.instance.software in MICROBLOG_APPS:`,
+# gating four Mention-suppression rules (MICROBLOG_APPS, app/constants.py:
+# mastodon, misskey, akkoma, iceshrimp, pleroma, fedibird -- so every value
+# in that list, plus the literal 'mbin', reaches the gated rules; anything
+# else, e.g. 'lemmy' or 'piefed', does not). Those four rules, and that gate
+# condition itself, are out of scope here -- Task 6's job. Every test below
+# that reaches past the recipient lookup calls `_use_a_non_microblog_instance`
+# so it lands on the 'lemmy' side of that gate, both to stay off Task 6's
+# rules and to route around D243 (see that helper's docstring): the gated
+# block's last query renders `IN ()` for a top-level reply's always-empty
+# `ids`, which Postgres rejects, and this function's own tail `except
+# Exception as ex: log_incoming_ap(...); return None` swallows that crash --
+# producing zero Notifications for a reason that has nothing to do with
+# whatever guard a test is actually aimed at.
+
+
+def test_a_delivered_mention_notification_carries_the_expected_fields(app, db_session, redis_lock_only_double):
+    """The `Notification(...)` construction itself (app/activitypub/util.py,
+    inside `for lutn in local_users_to_notify:`), checked field by field:
+    `user_id` is the RESOLVED recipient (not the replier, not the mentioned
+    post's author), `notif_type` and `subtype` are the Mention-specific
+    constants, and `url` is built from the new reply's own id.
+    """
+    community, post, replier = _seed_scenario()
+    _use_a_non_microblog_instance(replier)
+    recipient = _seed_local_recipient('localuser')
+    document = _reply_doc(content='hello',
+                          tag=[_mention('localuser'), {'name': 'decoy'}])
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    notification = Notification.query.one()
+    assert notification.user_id == recipient.id
+    assert notification.notif_type == NOTIF_MENTION
+    assert notification.subtype == 'comment_mention'
+    assert notification.url == f"{app.config['SERVER_URL']}/comment/{reply.id}"
+
+
+def test_the_unread_counter_increments_rather_than_resets(app, db_session, redis_lock_only_double):
+    """`recipient.unread_notifications += 1` (app/activitypub/util.py).
+    Seeded to a non-default **3** so a mutant that instead SETS the counter
+    to 1 -- indistinguishable from a correct increment at the usual zero
+    baseline -- is caught: `assert == 4` fails against a set-to-1 mutant's 1,
+    where `assert == 1` would not have.
+    """
+    community, post, replier = _seed_scenario()
+    _use_a_non_microblog_instance(replier)
+    recipient = _seed_local_recipient('localuser')
+    recipient.unread_notifications = 3
+    db.session.commit()
+    document = _reply_doc(content='hello',
+                          tag=[_mention('localuser'), {'name': 'decoy'}])
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    refreshed = User.query.get(recipient.id)
+    assert refreshed.unread_notifications == 4
+
+
+def test_a_recipient_that_does_not_resolve_produces_no_notification(app, db_session, redis_lock_only_double):
+    """`recipient = db.session.query(User).filter_by(ap_profile_id=lutn,
+    ap_id=None).first(); if not recipient: continue`. This Mention's href
+    clears every collection guard above (right host, right case, `Mention`
+    type, not the reply's own author) so `local_users_to_notify` is
+    genuinely non-empty here -- but no `User` row carries that profile id at
+    all (no call to `_seed_local_recipient`), so it is THIS lookup that
+    turns up empty, not an upstream collection guard.
+
+    `if post_reply.instance.software == 'mbin' or ...` sits AFTER `if not
+    recipient: continue` in the source, so this test never reaches it and,
+    unlike the tests below, needs no `_use_a_non_microblog_instance`: D243
+    is structurally unreachable when the loop body never gets past the
+    recipient lookup.
+    """
+    community, post, replier = _seed_scenario()
+    document = _reply_doc(content='hello',
+                          tag=[_mention('nobody'), {'name': 'decoy'}])
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    assert Notification.query.count() == 0
+
+
+def test_a_recipient_blocked_by_the_sender_gets_no_notification(app, db_session, redis_lock_only_double):
+    """`blocked_senders = blocked_users(recipient.id); if post_reply.user_id
+    not in blocked_senders:`. `blocked_users(user_id)` (app/utils.py) reads
+    `UserBlock.filter_by(blocker_id=user_id)` -- the ids that `user_id` has
+    BLOCKED. So `blocked_senders` here is who the RECIPIENT has blocked, and
+    the guard suppresses only when the REPLIER (`post_reply.user_id`) is in
+    THAT list -- the recipient blocking the sender, not the reverse. Built
+    with `make_user_block(recipient, replier)` (tests/factories.py:
+    `UserBlock(blocker_id=blocker.id, blocked_id=blocked.id)`, the same
+    direction `blocked_users` reads), the direction read off the source
+    rather than assumed.
+
+    Needs `_use_a_non_microblog_instance` for the same reason the collection
+    guards earlier in this module do: without it, D243 crashes before this
+    guard is ever reached, and the resulting zero Notifications would look
+    identical to a correct suppression -- masking whatever this guard
+    actually did.
+    """
+    community, post, replier = _seed_scenario()
+    _use_a_non_microblog_instance(replier)
+    recipient = _seed_local_recipient('localuser')
+    make_user_block(recipient, replier)
+    document = _reply_doc(content='hello',
+                          tag=[_mention('localuser'), {'name': 'decoy'}])
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    assert Notification.query.count() == 0
+    refreshed = User.query.get(recipient.id)
+    assert refreshed.unread_notifications == 0
+
+
+def test_the_recipient_language_wrapper_is_reached(app, db_session, redis_lock_only_double, monkeypatch):
+    """`with force_locale(get_recipient_language(recipient.id)):` (app/
+    activitypub/util.py). Both names are imported directly into
+    `app.activitypub.util`'s own namespace (confirmed by reading its import
+    block: `from app.utils import ..., get_recipient_language, ...` and
+    `from flask_babel import _, force_locale, gettext`), so both are
+    replaced with spies here rather than exercised for a translated string:
+    this checkout ships no compiled `.mo` catalogs at all (`app/translations/
+    */LC_MESSAGES` is empty for every language directory, confirmed with
+    `find`), so `gettext` has no catalog to translate INTO and a locale-based
+    string-content assertion would not be testing anything real.
+
+    The spies instead pin the call site's own behaviour: `get_recipient_
+    language` is invoked with the RECIPIENT's id (not the replier's, not the
+    post author's), and `force_locale` is entered with exactly the value
+    that call returned, before the `Notification` row is built.
+    """
+    community, post, replier = _seed_scenario()
+    _use_a_non_microblog_instance(replier)
+    recipient = _seed_local_recipient('localuser')
+    document = _reply_doc(content='hello',
+                          tag=[_mention('localuser'), {'name': 'decoy'}])
+
+    language_calls = []
+
+    def fake_get_recipient_language(user_id):
+        language_calls.append(user_id)
+        return 'ca'
+
+    entered_locales = []
+
+    @contextlib.contextmanager
+    def fake_force_locale(locale):
+        entered_locales.append(locale)
+        yield
+
+    monkeypatch.setattr('app.activitypub.util.get_recipient_language', fake_get_recipient_language)
+    monkeypatch.setattr('app.activitypub.util.force_locale', fake_force_locale)
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    assert language_calls == [recipient.id]
+    assert entered_locales == ['ca']
+    notification = Notification.query.one()
+    assert notification.subtype == 'comment_mention'
+
+
 # --- User flair ------------------------------------------------------------
 #
 # `request_json['object']['flair']` (Lemmy-style user flair on a comment),
