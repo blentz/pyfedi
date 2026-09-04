@@ -25,7 +25,7 @@ from app.activitypub.util import (refresh_community_profile_task,
                                   refresh_user_profile_task)
 from app.models import Community, CommunityMember, Feed, Instance, User, utcnow
 from tests.factories import (make_community, make_feed, make_instance, make_local_feed,
-                             make_user, seed_community_owner)
+                             make_user, seed_community_owner, seed_signing_site)
 
 PEER = 'peer.example'
 
@@ -845,3 +845,104 @@ def test_a_feed_with_no_following_url_crashes(app, db_session, http_mock):
 
     with pytest.raises(httpx.HTTPError, match='invalid uri'):
         refresh_feed_profile_task(feed.id)
+
+
+def test_a_failed_community_fetch_is_retried_once(
+        app, db_session, http_mock, no_real_sleeping):
+    """The community task's retry, whose inner catch is `except Exception:`
+    where the user task's is a bare `except:`. Both reach the retry; the
+    difference is what happens when the RETRY fails, which the next test pins.
+    """
+    community = _remote_community()
+    http_mock.get(community.ap_public_url).mock(side_effect=[
+        httpx.ConnectError('boom'),
+        httpx.Response(200, json=_group_document()),
+    ])
+
+    refresh_community_profile_task(community.id, None)
+
+    db.session.refresh(community)
+    assert community.title == 'Memes, refreshed'
+
+
+def test_a_community_whose_retry_also_fails_returns_quietly(
+        app, db_session, http_mock, no_real_sleeping):
+    """`except Exception: return` on the retry. The community keeps its
+    pre-refresh title, which is the observable -- the task returns normally,
+    so "nothing raised" would not distinguish this from a successful refresh.
+    """
+    community = _remote_community()
+    community.title = 'Before'
+    db.session.commit()
+    http_mock.get(community.ap_public_url).mock(side_effect=[
+        httpx.ConnectError('boom'),
+        httpx.ConnectError('boom again'),
+    ])
+
+    refresh_community_profile_task(community.id, None)
+
+    db.session.refresh(community)
+    assert community.title == 'Before'
+
+
+def test_a_failed_feed_fetch_is_retried_once(
+        app, db_session, http_mock, no_real_sleeping):
+    """The feed task's retry, identical in shape to the community task's.
+
+    Deviation from the brief: as in `test_refreshing_a_feed_applies_the_peers_document`
+    above, `refresh_feed_profile_task` unconditionally fetches
+    `feed.ap_following_url` after applying the document, with no guard. The
+    brief's version of this test does not set that column, which would crash
+    on `get_request(None)` before reaching this test's own assertion.
+    `ap_following_url` is set and mocked to an empty collection here so the
+    retry path is what's under test, not the ungated tail pinned separately by
+    `test_a_feed_with_no_following_url_crashes`.
+    """
+    feed = _remote_feed()
+    feed.ap_following_url = f'https://{PEER}/f/news/following'
+    db.session.commit()
+    http_mock.get(feed.ap_public_url).mock(side_effect=[
+        httpx.ConnectError('boom'),
+        httpx.Response(200, json=_feed_document()),
+    ])
+    _serve(http_mock, feed.ap_following_url, {'items': []})
+
+    refresh_feed_profile_task(feed.id)
+
+    db.session.refresh(feed)
+    assert feed.title == 'News, refreshed'
+
+
+def test_a_user_fetch_failing_outside_httpx_falls_back_to_a_signed_get(
+        app, db_session, http_mock, no_real_sleeping, monkeypatch):
+    """PINS AN ASYMMETRY. `refresh_user_profile_task` has a THIRD path its
+    siblings lack: a bare `except:` that retries with `signed_get_request`
+    against the site's private key. A peer requiring HTTP signatures to serve
+    its actor document is therefore refreshable for users and not for
+    communities or feeds.
+
+    The bare `except:` is what makes this path reachable from a non-httpx
+    error, and it is registered rather than fixed: a bare except also catches
+    KeyboardInterrupt and SystemExit, so changing it changes which failures
+    retry and which propagate.
+    """
+    site = seed_signing_site()
+    user = _remote_user()
+    calls = []
+
+    def exploding_get_request(uri, params=None, headers=None):
+        raise RuntimeError('not an httpx error')
+
+    def fake_signed_get(uri, private_key, key_id, **kwargs):
+        calls.append((uri, private_key))
+        return httpx.Response(200, json=_person_document(fields={'name': 'Signed'}))
+
+    monkeypatch.setattr(ap_util, 'get_request', exploding_get_request)
+    monkeypatch.setattr(ap_util, 'signed_get_request', fake_signed_get)
+
+    refresh_user_profile_task(user.id)
+
+    db.session.refresh(user)
+    assert calls and calls[0][0] == user.ap_public_url
+    assert calls[0][1] == site.private_key
+    assert user.title == 'Signed'
