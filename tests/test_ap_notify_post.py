@@ -654,7 +654,9 @@ def test_a_subscriber_already_notified_by_the_user_arm_is_not_notified_again(app
     """`notify_id not in notifications_sent_to`, this arm's second conjunct.
 
     `notifications_sent_to = set()` is initialised once, above all four arms,
-    and each arm ends its body with `notifications_sent_to.add(notify_id)`. The
+    and each arm ends the body of its `if` with
+    `notifications_sent_to.add(notify_id)` -- at app/activitypub/util.py:2843,
+    :2866, :2897 and :2931, the last of those put there by Task 7. The
     arms run in file order NOTIF_USER, NOTIF_COMMUNITY, NOTIF_TOPIC,
     NOTIF_FEED -- read from source, where the `# NOTIF_USER` comment precedes
     `# NOTIF_COMMUNITY`, which precedes `# NOTIF_TOPIC`, which precedes
@@ -1006,7 +1008,9 @@ def test_a_subscriber_already_notified_by_the_community_arm_is_not_notified_agai
     """`notify_id not in notifications_sent_to`, this arm's second conjunct.
 
     `notifications_sent_to = set()` is initialised once above all four arms and
-    each arm ends its body with `notifications_sent_to.add(notify_id)`. The
+    each arm ends the body of its `if` with
+    `notifications_sent_to.add(notify_id)` -- at app/activitypub/util.py:2843,
+    :2866, :2897 and :2931, the last of those put there by Task 7. The
     arms run in file order: `# NOTIF_USER` at app/activitypub/util.py:2820,
     `# NOTIF_COMMUNITY` at :2845, `# NOTIF_TOPIC` at :2868, `# NOTIF_FEED` at
     :2899. The filler used here is the IMMEDIATELY PRECEDING arm,
@@ -1519,8 +1523,8 @@ def test_a_feed_subscriber_who_blocked_the_community_is_not_notified(app, db_ses
 
 def test_a_feed_subscriber_who_blocked_the_instance_is_skipped_for_every_feed(app, db_session):
     """`post.instance_id not in blocked_ints`, this arm's fifth conjunct
-    (app/activitypub/util.py:2914) -- and the pin on the arm's misplaced
-    `notifications_sent_to.add`.
+    (app/activitypub/util.py:2914) -- and the pin on the arm's
+    `notifications_sent_to.add`, which Task 7 moved inside the `if`.
 
         blocked_ints = blocked_or_banned_instances(notify_id)
 
@@ -1535,45 +1539,49 @@ def test_a_feed_subscriber_who_blocked_the_instance_is_skipped_for_every_feed(ap
     the author's instance, PEER -- so PEER is the instance the blocker has to
     block.
 
-    **This test sits over a known defect, and Task 7 changes the code under
-    it.** What the assertion below observes is behaviour INVARIANT to that
-    defect, not behaviour specific to it -- the next paragraph proves that, and
-    it is the reason the test is neither inverted nor deleted when the fix
-    lands. In the three arms above,
-    `notifications_sent_to.add(notify_id)` is the last statement of the `if`
-    body: at app/activitypub/util.py:2843, :2866 and :2897 it is indented 20
-    spaces, one level in from the `if` that governs it at :2825, :2850 and
-    :2876, each indented 16. In this arm the same statement is at :2931,
-    indented 20 -- the SAME indentation as its own `if` at :2910 -- so it is not
-    in the `if` body at all but the last statement of
-    `for notify_id in feed_send_notifs_to:` (:2906), and it runs for every
-    subscriber the arm looked at, notified or filtered. `blocker` is therefore
+    **Task 7 changed the code under this test, and the assertion below did not
+    change with it.** What that assertion observes is behaviour INVARIANT to
+    the change, not behaviour specific to either spelling -- the next paragraph
+    proves that, and it is the reason the test was neither inverted nor deleted
+    when the fix landed. `notifications_sent_to.add(notify_id)` is now the
+    last statement of the `if` body in all four arms: at
+    app/activitypub/util.py:2843, :2866 and :2897 it is indented 20 spaces, one
+    level in from the `if` that governs it at :2825, :2850 and :2876, each
+    indented 16; in this arm it is at :2931, indented 24, one level in from its
+    own `if` at :2910, indented 20. This arm sits one level deeper than the
+    other three throughout because its subscriber loop is itself nested inside
+    `for feed in community_feeds:` (:2904). Before Task 7, :2931 was indented
+    20 -- the SAME indentation as its own `if` -- so it was not in the `if`
+    body at all but the last statement of
+    `for notify_id in feed_send_notifs_to:` (:2906), and it ran for every
+    subscriber the arm looked at, notified or filtered. `blocker` was therefore
     added to `notifications_sent_to` while whichever of the two feeds the query
-    returned first is being processed, even though the instance block kept them
-    out of it, and the remaining feed rejects them on
-    `notify_id not in notifications_sent_to` (:2911) rather than on the instance
-    block.
+    returned first was being processed, even though the instance block had kept
+    them out of it, and the remaining feed rejected them on
+    `notify_id not in notifications_sent_to` (:2911) rather than on the
+    instance block.
 
-    **The assertion below does not change when Task 7 moves that `add` inside
-    the `if`**, and this docstring says so rather than promising an inversion
-    that will not happen. Every conjunct of the guard at :2910-2914 is constant
-    across iterations of `for feed in community_feeds:` (:2904) -- `notify_id`,
-    `post.user_id`, `post.community_id`, `post.instance_id` and the three
-    per-recipient block lists at :2907-2909 are all computed without reference
-    to `feed` -- and the one conjunct that can change value,
+    **The assertion below is identical on both sides of that fix**, and this
+    docstring says so rather than claiming an inversion that never happened.
+    Every conjunct of the guard at :2910-2914 is constant across iterations of
+    `for feed in community_feeds:` (:2904) -- `notify_id`, `post.user_id`,
+    `post.community_id`, `post.instance_id` and the three per-recipient block
+    lists at :2907-2909 are all computed without reference to `feed` -- and the
+    one conjunct that can change value,
     `notify_id not in notifications_sent_to`, can only go from true to false.
-    So a recipient the guard rejects at one feed is rejected at every later feed
-    by the same conjunct that rejected them first, on either side of the `if`;
-    and NOTIF_FEED is the last arm, its `except Exception:` following at :2932,
-    so nothing downstream reads the set either. The `add` itself is live -- put
-    it on neither side and `dual_feed` below collects two rows -- but the EXTRA
-    executions the misplacement buys, the ones for recipients the guard
-    rejected, change no output of the function as it stands. What this test pins
-    is the OBSERVABLE contract -- filtered out of one feed, notified by none --
-    which is what a reader would expect to break if the fix were made wrongly,
-    and which Task 7 has to keep green. Task 7's gate is not an inverted
-    assertion here but a re-run of this arm's mutation table after the fix,
-    confirming that no mutant this task killed comes back unkilled.
+    So a recipient the guard rejects at one feed is rejected at every later
+    feed by the same conjunct that rejected them first, on either side of the
+    `if`; and NOTIF_FEED is the last arm, its `except Exception:` following at
+    :2932, so nothing downstream reads the set either. The `add` itself is live
+    -- put it on neither side and `dual_feed` below collects two rows -- but
+    the EXTRA executions the old placement bought, the ones for recipients the
+    guard rejected, changed no output of the function. What this test pins is
+    the OBSERVABLE contract -- filtered out of one feed, notified by none --
+    which is what a reader would expect to break if the fix had been made
+    wrongly, and which stayed green across it. Task 7's gate was not an
+    inverted assertion here but a re-run of the accumulated mutation tables
+    after the fix, which confirmed that no mutant any earlier task killed came
+    back unkilled.
 
     Two controls run alongside, and both are load-bearing:
 

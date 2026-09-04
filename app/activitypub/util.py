@@ -2928,7 +2928,7 @@ def notify_about_post_task(post_id):
                         user = session.query(User).get(notify_id)
                         user.unread_notifications += 1
                         session.commit()
-                    notifications_sent_to.add(notify_id)
+                        notifications_sent_to.add(notify_id)
     except Exception:
         session.rollback()
         raise
