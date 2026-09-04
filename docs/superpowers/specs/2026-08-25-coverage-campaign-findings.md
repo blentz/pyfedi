@@ -5549,8 +5549,13 @@ fourteen and omitted D273, and that the index's own first draft then omitted
 D237 and D261 until its review caught them. If you take D283, say so here in the change that
 takes it.
 
-**Six shapes carried forward into `tests/README.md`, five as new facts 88-93
-and one as a widening of an existing fact.** The new facts: a **reviewer's**
+**Nine shapes carried forward into `tests/README.md`, seven as new facts 88-94
+and two as widenings of existing facts.** (**This sentence is corrected in place
+from "Six shapes … five as new facts 88-93 and one as a widening", which was
+wrong twice the day it was written: 88-93 is six numbers, not five, and there
+were two widenings, not one.** A miscount in a summary of a change the same
+commit made -- the arithmetic that is easiest to skip is the arithmetic about
+your own work.) The new facts: a **reviewer's**
 citations fail as often as an implementer's, and a correction receives less
 scrutiny precisely because it carries more authority (88); `RESTART IDENTITY`
 makes two entities share a primary key, so an id-valued assertion can be
@@ -5563,7 +5568,16 @@ attributable to the arm that wrote it (91); and Flask's `json` shadows the
 stdlib's in `app/activitypub/util.py`, so that module's `json.dumps` sorts keys
 (92). Fact 93 records Ruling J's instrument: **a provably behaviour-preserving
 fix cannot be proved by a failing test, and what replaces that gate is the
-accumulated mutation table re-run against both versions.** The widenings:
+accumulated mutation table re-run against both versions.** Fact **94** was added
+by this sub-project's own register round, on Ruling O, after a review found that
+the family index in subsection 5 had missed two members: **to enumerate a set,
+apply its membership test to every candidate; walking the cross-references its
+known members make to each other returns a subset and looks like an answer.**
+Its two pieces of evidence are the index's first draft, which walked citations
+and missed D237 and D261 **although D258 was already listed and names D237 as
+its own precedent**, and Task 6's reviewer, which reached the same conclusion
+from the other side by re-deriving the ternary enumeration with an AST walk over
+every node rather than a grep. The widenings:
 **fact 75 gains a sixth cause, scoped explicitly to STATEMENTS where its first
 five are scoped to clauses** -- a statement whose only observable effect is
 performed unconditionally by code that runs after it on every path, proved by

@@ -3257,6 +3257,44 @@ copying**: three sibling arms put the statement at indent 20, and copying 20
 into the fourth arm would have reproduced the bug, because the invariant was
 "the last statement of the `if` body" and that arm sits one level deeper.
 
+**94. To enumerate a SET, apply its membership test to every candidate. Walking
+the cross-references its known members make to each other returns a SUBSET, and
+it looks like an answer.** Any enumeration you are about to call complete -- the
+members of a defect family, the conditional expressions in a region, the call
+sites of a helper, the tests that pin a guard -- has two available methods, and
+only one of them can be complete. **Sub-project 16 got this wrong and right in
+the same slice, which is why it is a fact and not an anecdote.**
+
+- **Wrong.** The first draft of the unguarded-peer-input family index was built
+  by following the references the entries make to one another -- D255's naming
+  sentence, D259's "of the D236 family", D264's "extends the family". That finds
+  every member that *cites* the family and misses every member that predates the
+  name or never mentions it, which is how it missed **D237** and **D261**. **The
+  sharp part: D258 was already in the index and its own cell names D237 as its
+  precedent** -- so the omission was derivable from a row the draft had already
+  listed, and the citation-walk missed it anyway. A method that fails on data it
+  already contains is not a method that got unlucky.
+- **Right.** Task 6's reviewer re-derived the conditional-expression enumeration
+  with an AST walk over every `IfExp` node rather than a textual
+  `' if .* else '` grep (fact 87(c)), for the same reason stated the other way
+  round: **a grep finds what it is shaped to find**, and a ternary in an f-string
+  or an argument default is not shaped like the grep.
+
+The operational rule: **state the membership test first, then apply it to a
+candidate set you enumerated by some property the candidates cannot opt out of**
+-- every `IfExp` node, every register row whose function is in scope, every call
+site of the symbol -- and record the candidates you *rejected* with the reason,
+so the next sweep does not re-open them. This is not fact 70 (grep the
+identifier, not the description): you can grep for the perfect identifier and
+still be walking a subset, because a member that never mentions the family
+contains no identifier to find. Nor is it fact 82 (a correction does not correct
+its copies), which is about propagating a truth you already have. **This one is
+about how you decided what to look at at all**, and the tell that you are in it
+is a completeness claim -- "every", "the family spans N", "all the call sites".
+If a count is going into prose, say which property bounded the candidate set,
+and bound the claim to that scope explicitly rather than letting "every" read as
+"every, anywhere".
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
