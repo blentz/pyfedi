@@ -615,26 +615,34 @@ def test_refreshing_a_community_applies_a_supplied_document(app, db_session, htt
     assert community.title == 'Memes, refreshed'
 
 
-def test_a_community_with_no_instance_crashes(app, db_session, http_mock):
-    """PINS A CRASH. DO NOT FIX -- Task 10 does.
+def test_a_community_with_no_instance_is_skipped(app, db_session, http_mock):
+    """`refresh_community_profile_task` now guards `community.instance_id`
+    before dereferencing `community.instance`, in the position
+    `refresh_user_profile_task` has always had it:
+    `user and user.instance_id and user.instance.online()`.
 
-    `refresh_community_profile_task` opens
-    `if community and community.instance.online():` with NO `instance_id`
-    check, where `refresh_user_profile_task` guards
-    `user and user.instance_id and user.instance.online()`. `instance_id` is a
-    nullable FK (app/models.py), so a NULL one makes `community.instance` None
-    and `.online()` raises.
+    `instance_id` is a nullable FK (app/models.py), so a NULL one makes
+    `community.instance` None. Until this guard was added,
+    `community.instance.online()` raised
+    `AttributeError: 'NoneType' object has no attribute 'online'`; the
+    community is now left untouched instead.
 
-    Two of the three tasks get this wrong and one gets it right, which is what
-    makes it an oversight rather than a choice. The feed task's twin pin is in
-    Task 7.
+    THE SEEDED TITLE IS THE OBSERVABLE, NOT "nothing raised". A bare
+    "the call returned" cannot tell a guard that fired for the right reason
+    from one that abandoned the document for the wrong one. The supplied
+    `_group_document()` carries `name: 'Memes, refreshed'`, which the task
+    would write over `'Before'` if it ran, so the assertion below fails if
+    the guard stops firing AND the task somehow survives the NULL.
     """
     community = _remote_community()
     community.instance_id = None
+    community.title = 'Before'
     db.session.commit()
 
-    with pytest.raises(AttributeError, match="'NoneType' object has no attribute 'online'"):
-        refresh_community_profile_task(community.id, _group_document())
+    refresh_community_profile_task(community.id, _group_document())
+
+    db.session.refresh(community)
+    assert community.title == 'Before'
 
 
 def test_a_malformed_community_document_crashes(app, db_session, http_mock):
@@ -1047,20 +1055,27 @@ def test_refreshing_a_local_feed_does_nothing(app, db_session, http_mock):
     refresh_feed_profile_task(feed.id)
 
 
-def test_a_feed_with_no_instance_crashes(app, db_session, http_mock):
-    """PINS A CRASH. DO NOT FIX -- Task 10 does.
+def test_a_feed_with_no_instance_is_skipped(app, db_session, http_mock):
+    """`refresh_feed_profile_task` now guards `feed.instance_id` before
+    dereferencing `feed.instance`, the same fix as the community task's and
+    in the same position the user task has always had it. Until it was added,
+    `feed.instance.online()` on a NULL FK raised
+    `AttributeError: 'NoneType' object has no attribute 'online'`.
 
-    `refresh_feed_profile_task` opens
-    `if feed and feed.instance.online() and not feed.is_local():` with no
-    `instance_id` check. Same defect as the community task's, same cause, and
-    the user task's guard is the shape both should have.
+    THE SEEDED TITLE IS THE OBSERVABLE, NOT "nothing raised": the feed task
+    always fetches, and `_feed_document()` would set the title to
+    `'News, refreshed'`, so `'Before'` surviving proves the task stopped at
+    the guard rather than merely finishing.
     """
     feed = _remote_feed()
     feed.instance_id = None
+    feed.title = 'Before'
     db.session.commit()
 
-    with pytest.raises(AttributeError, match="'NoneType' object has no attribute 'online'"):
-        refresh_feed_profile_task(feed.id)
+    refresh_feed_profile_task(feed.id)
+
+    db.session.refresh(feed)
+    assert feed.title == 'Before'
 
 
 def test_a_malformed_feed_document_crashes(app, db_session, http_mock):
