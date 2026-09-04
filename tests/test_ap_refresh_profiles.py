@@ -309,15 +309,25 @@ def test_a_malformed_actor_document_counts_an_instance_failure(
 
 def test_a_non_200_actor_response_applies_nothing(app, db_session, http_mock):
     """`if actor_data.status_code == 200:` -- a 404 from the peer leaves the
-    row untouched. The title is asserted unchanged rather than the absence of
-    an exception, because the task returns normally either way.
+    row untouched.
+
+    THE DOCUMENT MUST CARRY VALUES THE TASK WOULD OTHERWISE APPLY, or this
+    test cannot fail. `_person_document()`'s baseline has no `name` key, and
+    `user.title` is assigned only `if 'name' in activity_json`
+    (app/activitypub/util.py), so a document without one leaves the title
+    alone whether the status guard fired or not. `name` and a differing
+    `preferredUsername` are supplied here so that a broken guard would
+    overwrite both seeded values and fail the two assertions below.
     """
     user = _remote_user()
     user.title = 'Before'
+    user.user_name = 'before'
     db.session.commit()
-    _serve(http_mock, user.ap_public_url, _person_document(), status=404)
+    _serve(http_mock, user.ap_public_url,
+           _person_document(fields={'name': 'After'}), status=404)
 
     refresh_user_profile_task(user.id)
 
     db.session.refresh(user)
     assert user.title == 'Before'
+    assert user.user_name == 'before'
