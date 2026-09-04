@@ -89,6 +89,22 @@ old is a record, and records do not. That is the whole test: fix a stale line
 number when the entry claims the number is current; leave it alone when the
 entry is simply dated.
 
+**A citation carries TWO claims and needs TWO checks — added 2026-09-04, earned
+twice.** "*Code* inside *function* (`:N`)" asserts a line range **and** a
+function attribution, and they fail independently. Sub-project 13 shipped two
+false attributions whose line numbers were correct, and the check that had been
+added covered only the range. Sub-project 14 then found a false attribution in
+its own working ledger — the create-path twin of D240 was "relocated" from
+`create_post_reply` to `notify_about_post_reply`, and the pattern occurs nowhere
+in the latter (see D243's marked correction). **Apply the check to corrections
+with MORE care than to originals, not less.** That is the sharper half of the
+lesson: a correction carries more authority than the thing it corrects, so it
+attracts less scrutiny — the sub-project 14 one survived a reviewer, a fix round
+and a task boundary purely because it was labelled a correction. The mechanical
+form of the check is cheap: `grep` for a string the code must contain, then walk
+the module's `ast` to map the hit to its enclosing `def`, and compare **both**
+results against what the entry says.
+
 ## Harness properties you must know before writing tests
 
 ### Eager Celery runs federation inline, and failures are swallowed
@@ -1445,8 +1461,8 @@ says which numbers are taken. So there is one now, and it is this file:
   source different from how the review described them, and both corrections
   are recorded in the entries rather than applied silently**; that is the same
   discipline D209 records for a falsified spec claim.
-  **Next free number: D251.** D232-D235 were taken by sub-project 13's final
-  fix wave; D236-D250 by sub-project 14, whose section is the last in this
+  **Next free number: D252.** D232-D235 were taken by sub-project 13's final
+  fix wave; D236-D251 by sub-project 14, whose section is the last in this
   file.
   If you take it, say so here in the change that takes it.
 
@@ -3974,13 +3990,13 @@ which was tests, docstrings, comments and this register only.
 | D165 | `resolve_remote_handle` (`app/activitypub/routes.py:466-491`) | **Not fixed -- two of its own three guards are uncovered, despite this sub-project's report describing them as pinned.** `tests/test_remote_handle_resolution.py`'s four tests cover only the anonymous-caller guard (`:484-485`) and the exception-to-404 path (`:490-491`). The `'@' not in actor` guard (`:482-483`) is unreached: all four tests request `/u/wakko@mastodon.cloud`, a handle that always contains `@`. The AP-Accept guard (`:486-487`) is also unreached: `test_activitypub_request_does_not_resolve` sends the AP-Accept header but never authenticates, so it returns at the anonymous-caller guard (`:484-485`) before line `:486` is ever asked to branch true -- deleting the AP-Accept guard entirely would leave that test's `assert calls == []` green. Two cheap closures: the AP-Accept guard needs a test that logs in via `session_transaction()` **before** its first request (harness fact 37, `tests/README.md` -- a test cannot authenticate after an earlier request in the same test, because Flask-Login caches the loaded user on the app-context-scoped `g` for the life of the session-scoped `app` fixture) and then sends the AP-Accept header; the `'@' not in actor` guard needs one of Task 10's guard tests (`test_a_deleted_user_profile_is_not_served`, `test_a_banned_user_profile_is_not_served`) to stop stubbing `resolve_remote_handle` to `None` via `_double_the_renderers` and instead let it run for real against a bare (no `@`) actor name -- safe, because a bare name returns `None` at the first guard and never reaches `search_for_user`. | not fixed, registered only | reading-level plus measured: `scratch_full_cov.json`'s `app/activitypub/routes.py` entry lists `483` and `487` in `missing_lines` and `[482, 483]`/`[486, 487]` in `missing_branches`; `tests/test_remote_handle_resolution.py`'s four tests read directly, confirming all four target a handle containing `@` and that the AP-Accept test never authenticates |
 | D166 | webfinger's User lookup (`app/activitypub/routes.py:117-120`) vs. `user_profile`'s local lookup (`:376`) | **Not fixed -- a fourth lookup asymmetry, on a column D158 did not name.** Webfinger matches `func.lower(User.user_name) == actor` **or** `func.lower(User.alt_user_name) == actor` (`:117-120`). `user_profile`'s bare-username local lookup matches only `func.lower(User.user_name) == actor.lower()` (`:376`) -- `alt_user_name` plays no part. So a user reachable by their alt name via webfinger 404s at `/u/<altname>`, the same class of cross-endpoint disagreement D158 registers for the `deleted`/`banned` guards, but on a different column entirely; `alt_user_name` appeared nowhere in this register before this entry. | not fixed, registered only | reading-level: `app/activitypub/routes.py:117-120` and `:376` read directly, side by side; no test in this sub-project or `tests/test_actor_profiles.py` drives a user with a distinct `alt_user_name` through both endpoints to observe the divergence, so this is derived from reading, not measured |
 
-**Next free number: D251.** D165 and D166 were taken by this fix wave;
+**Next free number: D252.** D165 and D166 were taken by this fix wave;
 D167-D186 were taken by sub-project 10, D187-D199 by sub-project 11, D200-D212
-by sub-project 12, D213-D235 by sub-project 13 and D236-D250 by sub-project 14
+by sub-project 12, D213-D235 by sub-project 13 and D236-D251 by sub-project 14
 -- see the five sections immediately below; D232-D235 were taken by
 sub-project 13's final fix wave and live in subsection 6 of its section, and
 D232 and D219(c) were closed by sub-project 14's Task 11 and updated in place
-there rather than renumbered. If you take D251, say so here in the change that
+there rather than renumbered. If you take D252, say so here in the change that
 takes it.
 
 ## Sub-project 10: the nine ActivityPub collection endpoints
@@ -4745,13 +4761,25 @@ D245 in particular **gates every test sub-project 15 will write**.
 | D249 | The two locks -- `update_post_reply_from_activity` (`app/activitypub/util.py:3010`) and `update_post_from_activity` (`:3138`) | **Not fixed -- the two locks differ by 6x and 10x with no stated reason.** The reply takes `redis_client.lock(f"lock:post_reply:{reply.id}", timeout=10, blocking_timeout=6)`; the post takes `redis_client.lock(f"lock:post:{post.id}", timeout=60, blocking_timeout=60)`. A slow `Update` on a reply gives up where the same work on a post waits, and the reply function is the one whose Mention block issues up to three extra queries per tag. Registered rather than fixed because nothing in the file says which number is the intended one, and picking either changes production timing behaviour under contention -- the clearest possible case of "choosing new behaviour for a case the codebase has never handled". **Cost if wrong: an undocumented 10x difference in give-up time survives, documented.** | not fixed, registered only | reading-level, named in the spec's asymmetry table while scoping and verified against source at this commit; note that `redis_double` cannot exercise it -- fakeredis has no Lua, so `Lock.release()` raises on `__exit__`, and this file uses a lock double instead |
 | D250 | `update_post_from_activity`'s language guard (`app/activitypub/util.py:3206`), against `update_post_reply_from_activity`'s unconditional assignment (`:3028`) | **Not fixed -- D239's fix DEEPENED the pair's language asymmetry rather than resolving it, and this entry exists so that is on the record rather than discovered later.** The reply side assigns unconditionally inside its `language` dict guard; the post side now reads `if new_language and (new_language.id is None or new_language.id != old_language_id):` -- three ways to be wrong where it previously had two. All three are mutation-covered (D2, D3, D4 in the Task 10b table), so the code is proved; the point is structural. Registered rather than converged because the post side's "assign only on a change" rule is real behaviour the reply side does not have, and deciding which half is right is a design question. **If the two halves of this pair are ever converged, this is the asymmetry to decide about first. Cost if wrong: nothing today -- this is a signpost, not a live defect.** | not fixed, registered only | flagged by the Task 10b implementer in its own concerns and verified against source at this commit; `test_an_unchanged_post_language_is_not_reassigned` remains a documented non-killer, since making the guard unconditional writes the identical value |
 
-**Next free number: D251.** D236-D250 were taken by sub-project 14. D232 and
+### 3. One coverage gap registered, not pinned -- D251
+
+Added at commit `9fd6b93c`'s fix round, disposing an item Task 3's review
+deferred to this sub-project's final review. It is not a defect and not a
+production change; it is a decision nobody has made, recorded so the next slice
+does not re-derive it.
+
+| # | function | defect | status | evidence |
+|---|---|---|---|---|
+| D251 | `update_post_reply_from_activity`'s attachment block (`app/activitypub/util.py:3039-3056`) | **Not fixed and deliberately NOT pinned -- a SCALAR `attachment` matches neither `isinstance(..., dict)` nor `isinstance(..., list)`, so it is silently discarded.** A peer sending `"attachment": "https://example/img.png"` -- or any bare string, number or boolean -- leaves `attachment_list` at `[]` (`:3040`), the `for attachment in attachment_list:` loop (`:3045`) runs zero times and the `if attachment_list:` regeneration gate (`:3055`) no-ops, so the reply's `body` and `body_html` are unchanged and nothing is raised. Traced by Task 3's reviewer, not inferred. **Not a defect**: it is a benign skip, neither a crash nor silent corruption, which is why it is a coverage gap rather than a register entry of the D236 family. **Not pinned, ruled at the final review**: a test could only assert *nothing happened*, which is the weakest assertion shape this campaign accepts, and pinning it would **freeze behaviour nobody has decided** -- whether a scalar `attachment` *should* be accepted (coerced to a one-element list, as some peers would expect) is a question for whoever owns that contract, not a guard this slice can prove. The post function has no attachment handling in its scoped region, so there is no sibling to vote. **Cost if wrong: a benign no-op stays untested, documented.** | not fixed, not pinned, registered only | reading-level, traced by the Task 3 reviewer and verified against source at this commit; the `dict` and `list` arms are each pinned by their own tests (`test_a_reply_single_attachment_dict_is_appended`, `test_a_reply_attachment_list_is_appended_in_order`), and `test_an_empty_attachment_list_does_not_regenerate_the_html` covers the empty-list path the scalar case collapses into |
+
+**Next free number: D252.** D236-D251 were taken by sub-project 14. D232 and
 D219(c) were **not** renumbered -- they are sub-project 13's entries, closed by
 this sub-project's Task 11 and updated in place in sub-project 13's own section.
-If you take D251, say so here in the change that takes it.
+If you take D252, say so here in the change that takes it.
 
-**Eight shapes worth carrying forward from this sub-project's rulings, now in
-`tests/README.md` as facts 71-78:** `in` against a string is a substring test,
+**Ten shapes worth carrying forward from this sub-project's rulings, now in
+`tests/README.md` as facts 71-80 plus a corollary appended to fact 55:** `in`
+against a string is a substring test,
 so a "wrong type" fixture chosen as a string sails through a downstream
 membership conjunct; a test reaching a guard's False side naturally cannot kill
 a mutant that forces it False; three ways a later step in the same run masks
@@ -4761,9 +4789,31 @@ causes of an unkillable clause, now including unreachable data and tautology; a
 "missing header" defect must be pinned by asserting the intended **value** on
 the **recorded** request, because the HTTP client supplies its own `*/*`; a
 quoted code block is the one docstring claim that can be audited mechanically;
-and the suite produces **shifting** false failures on a stale stack, so any
+the suite produces **shifting** false failures on a stale stack, so any
 surprising failure gets `./run_tests.sh --down` and a re-run before it is
-believed.
+believed; **a kill verified in a SIBLING FILE is real coverage, provided the
+guard's own test discloses where it lives** (fact 79, the campaign's answer to
+the standing question Task 7 raised -- see below); and two ways a mutation round
+damages the tree, with the check for each (fact 80). The corollary on fact 55
+records the count norm this sub-project exercised six times: **an expected test
+count is an estimate, never a reason to ship an unproven conjunct.**
+
+**The standing question Task 7 raised is answered, and the answer is NO: a test
+file need not self-contain its kills.** Task 7 found a mutant -- forcing
+`link != ''` False, which deletes the `post.url` write -- that nothing in
+`tests/test_ap_update_pair.py` kills, and that
+`tests/test_unparseable_url_ingress.py::test_an_ordinary_microblog_link_is_still_stored`
+does kill. The implementer declined to duplicate that file's ground and
+documented the split; the reviewer verified the cross-file kill by reading the
+other test and accepted it. **Ruled at the final review: a kill verified in a
+sibling file is real coverage, and this campaign has repeatedly forbidden
+duplicating another file's ground precisely because duplicate tests rot
+independently.** What the reliance requires is **disclosure at the point of
+reliance** -- the docstring of the guard's own test must name the file and test
+that kills it, so a reader is not misled into thinking the guard is unproven.
+Task 7 did exactly that, which is why it was accepted rather than merely
+tolerated. **Cost if wrong: a mutant's kill lives one file away from the guard
+it proves, findable only by following a docstring pointer.**
 
 **Five false docstrings shipped in this sub-project and were caught by later
 tasks** -- "the block breaks out per tag", "matches on url alone", a wrong
