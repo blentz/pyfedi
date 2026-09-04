@@ -1173,8 +1173,12 @@ def test_a_top_level_microblog_reply_mention_skips_the_ancestor_lookup(app, db_s
 
     Reaching that line needs all of: an UPDATE (this function is the edit path
     only -- creates go through the other copy of this block, in
-    `notify_about_post_reply`'s Mention loop, whose rule-4 query is reached the
-    same way); a `tag` list of length greater than one, since a lone Mention
+    `create_post_reply`'s Mention loop, whose rule-4 query is reached the same
+    way and is still UNGUARDED, registered as D243. `grep -n 'IN :ids'` returns
+    exactly two lines in `app/activitypub/util.py`, one in each of those two
+    functions, and `notify_about_post_reply` -- which an earlier version of
+    this docstring named -- contains neither the query nor any Mention loop);
+    a `tag` list of length greater than one, since a lone Mention
     never enters the block at all (test_a_lone_reply_mention_is_ignored pins
     that); a mentioned local user who is NOT the post's author, because for a
     top-level reply `reply_parent` is `reply.post` and the self-mention
@@ -1857,10 +1861,17 @@ def test_a_post_content_map_supplies_the_language(app, db_session, redis_lock_on
     code the database does not already carry, and `if new_language and ...`
     would then simply skip the assignment. So the code used here must already
     exist as a `Language` row: this test seeds and commits one itself (`de`,
-    consulted from the reply-side pattern above and from `app/cli.py`'s
-    `flask db init-language` seed list, which the production database is
-    populated from -- neither `tests/conftest.py` nor the factories seed the
-    `Language` table, so nothing here relies on either).
+    consulted from the reply-side pattern above and from the "Initial
+    languages" block inside `app/cli.py`'s `init_db`, registered as the
+    `flask init-db` command, which is what populates a production database's
+    `Language` table -- neither `tests/conftest.py` nor the factories seed it,
+    so nothing here relies on either). There is no `flask db init-language`
+    command; an earlier version of this docstring cited one. `app/cli.py`'s
+    other `def init` is `flask translate init <lang>`, which runs `pybabel`
+    and has nothing to do with the `Language` table. Note the seed block
+    spells `de` as `Deutsch` where this test spells it `German` -- immaterial,
+    because `find_language` matches on `code`, and because this test supplies
+    its own row rather than relying on the seed.
 
     The post is seeded with a real, non-NULL `language_id` (English) first, so
     "supplied by contentMap" is distinguishable from "was already non-NULL".
