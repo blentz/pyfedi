@@ -2762,6 +2762,19 @@ separate puzzles until you see the shape.
   matching local recipient **either way**, so deleting the guard changes nothing
   observable. The killer is a **case-mismatched HOST on the same server**: it
   lowers to an exact match, so bypassing the guard produces a real notification.
+  **The same shape reaches one step further out: a CALLEE that re-checks the
+  guard's own condition.** `create_post_reply`'s parent-comment block guards
+  are followed by `PostReply.new`, which runs
+  `notification_target.author.has_blocked_user(...)` again -- so if the fixture
+  lets `notification_target` resolve to the same author the guard names, the
+  callee produces the identical refusal and the mutant lives. Sub-project 15
+  killed it with a **distinct third author**: `notification_target` is the
+  `post` whenever the parent comment is itself top-level, and giving the post
+  and the parent comment different, unblocked-vs-blocked authors leaves the
+  callee nothing to re-catch. The rule generalises: **when a mutation deletes a
+  guard, read what the guard's callees check, not only what the rest of the
+  function does** -- a duplicated check downstream is invisible in the diff and
+  fatal to the kill.
 - **A later normalisation converges the value.** An assertion on a value that a
   later idempotent step would produce anyway cannot kill the arm that produced
   it early. A `text/html` content arm and the `else` arm both end up wrapping
@@ -2814,11 +2827,22 @@ ordinary fixture gaps.
    `isinstance(profile_id, str)` and `profile_id.startswith('https://...')`,
    `profile_id` cannot be falsy, because the only falsy string is `''` and
    `''.startswith(<non-empty>)` is always `False`. Not fixable.
-4. **Tautology** -- a guard whose body writes exactly what the guard's own False
-   condition asserts is already there. `if new_language.id != old_language_id:
-   post.language_id = new_language.id` cannot be killed by forcing it to fire,
-   because firing it writes back the value already present. Not subsumption and
-   not a fixture gap: **no test can ever kill it and none should be written.**
+4. **Tautology** -- a guard that cannot discriminate, in either of two shapes.
+   **(a) The body writes what the guard's own False condition asserts is
+   already there.** `if new_language.id != old_language_id: post.language_id =
+   new_language.id` cannot be killed by forcing it to fire, because firing it
+   writes back the value already present. **(b) The condition is falsified by
+   an invariant established BEFORE the guard runs -- by a caller, or by an
+   enclosing guard -- so its True branch is dead code.** `if post_id is None:`
+   inside `if post_id or parent_comment_id or root_id:` in
+   `create_post_reply`: `find_reply_parent` never sets `parent_comment_id` or
+   `root_id` without setting `post_id` in the same statement group, so the
+   enclosing gate admits nothing the inner guard can catch (D265). Shape (b) is
+   proved against **every branch of whatever establishes the invariant**, not
+   against a sample -- and note it is not cause 5: the value is not one the
+   column cannot hold, it is one this call site cannot deliver. Neither shape
+   is subsumption and neither is a fixture gap: **no test can ever kill it and
+   none should be written.**
 5. **Unreachable data** -- a value the column **cannot hold**. Distinct from
    causes 1 and 2 because no fixture could close it. `element == 0` in a
    `reply.path` skip became unkillable once the surrounding empty-`IN` crash was
@@ -3043,6 +3067,32 @@ a guard* -- the others being fact 72 (a naturally-False path cannot kill a
 forced-False mutant) and fact 68 (`if True:` proves the site, not the clause).
 The recipe generalises to N conjuncts as N negatives, and the count is a
 **floor**, not an estimate to be trimmed (fact 55's corollary).
+
+**87. COVERAGE.PY EMITS NO ARC FOR A CONDITIONAL EXPRESSION, so neither the
+statement figure nor the branch figure can see an unexercised ternary arm.
+Enumerate ternaries by READING the region -- the report will never list one.**
+`a if c else b` is one statement on one line: both arms execute that line, so
+the line is covered whichever arm ran, and no branch arc is recorded for the
+choice. A region can sit at 100% statements and 100% branches with an
+unexercised arm behind every ternary in it, and the "no guard survives a
+dropped conjunct" criterion is therefore **not measurable by coverage for
+ternaries at all**. Sub-project 15's whole-branch review found **six** such
+arms in a region whose measured figures had already been signed off, all six
+reachable with one fixture line each. Two practical notes. **(a) The
+interesting arm is often the one the FACTORIES never produce**, not the one the
+production data never produces: five of the six were `else` arms, but
+`community.ap_id if community.ap_id else community.name` was untested on its
+**`if`** side, because `make_community` (tests/factories.py) never sets `ap_id`
+-- fact 33 wearing a different hat. **(b) Sort the ternaries into guards and
+cosmetics before writing anything.** `language_id = language.id if language
+else None` is a real guard: `find_language` returns `None` on a miss, so
+dropping `if language` raises `AttributeError` out of the function. Three
+sibling `author.ap_id if author.ap_id else author.user_name` expressions are
+display-name fallbacks whose mutants merely store a null. Both kinds want a
+test; only the first is a defect risk, and saying which is which is what keeps
+the six from reading as busywork. Mutation-prove each arm **individually** --
+identical expressions at several sites need one test apiece, and the proof is
+that reverting one site kills exactly one test.
 
 ## Known noise
 
