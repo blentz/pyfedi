@@ -1072,7 +1072,9 @@ def test_refreshing_a_feed_applies_the_peers_document(app, db_session, http_mock
     driving the gate's PRESENT side is what makes this the happy path rather
     than a second copy of `test_a_feed_with_no_following_url_is_skipped`,
     which drives the absent side. The collection is served empty so the
-    feed-item loop stays out of a test about applying the actor document.
+    feed-item loop stays out of a test about applying the actor document; that
+    loop is covered by `test_a_following_collection_entry_becomes_a_feed_item`
+    and `test_a_following_entry_that_resolves_to_nothing_is_skipped`.
     """
     feed = _remote_feed()
     feed.ap_following_url = f'https://{PEER}/f/news/following'
@@ -1517,3 +1519,80 @@ def test_a_feed_fetch_failing_outside_httpx_propagates(
 
     db.session.refresh(feed)
     assert feed.title == 'Before'
+
+
+def test_a_following_collection_entry_becomes_a_feed_item(app, db_session, http_mock):
+    """THE LAST STATEMENT-COVERAGE GAP IN THIS SUB-PROJECT. Every feed test
+    before this one served `{'items': []}` to get past the following fetch, so
+    the loop body -- resolve the entry, build a `FeedItem`, commit -- had never
+    executed.
+
+    ENTRIES ARE BARE STRINGS HERE. `community_ap_id = fci` takes the item
+    itself, where the community task's moderators loop a few hundred lines up
+    unwraps objects first (`if isinstance(actor, dict): actor = actor['id']`)
+    and the featured collection is read as `item['id']`. Three collections in
+    the same slice, three different entry shapes assumed. A dict entry would
+    in fact survive here, because `find_actor_or_create` unwraps one itself --
+    but only by accident of that helper, not because this loop handles it, so
+    the string form is what is pinned.
+
+    `_following_community()` explains why the entry resolves with no outbound
+    request; `block_outbound_http` would raise otherwise, and no route is
+    registered for the community.
+
+    The assertion is on the persisted `FeedItem` row and BOTH its foreign
+    keys. `.one()` rather than `.first()` so a loop that created two rows for
+    one entry fails here rather than passing on the first.
+    """
+    feed = _remote_feed()
+    feed.ap_following_url = f'https://{PEER}/f/news/following'
+    db.session.commit()
+    community = _following_community()
+    _serve(http_mock, feed.ap_public_url, _feed_document())
+    _serve(http_mock, feed.ap_following_url,
+           {'items': [community.ap_profile_id]})
+
+    refresh_feed_profile_task(feed.id)
+
+    feed_item = db.session.query(FeedItem).one()
+    assert feed_item.feed_id == feed.id
+    assert feed_item.community_id == community.id
+
+
+def test_a_following_entry_that_resolves_to_nothing_is_skipped(app, db_session, http_mock):
+    """The False arm of `if community and isinstance(community, Community):`.
+
+    The collection carries TWO entries, one unresolvable and one resolvable,
+    and the resolvable one is LAST. A lone bad entry would prove only that
+    nothing was created; this ordering also proves the loop CONTINUED past the
+    bad one rather than aborting, which is the difference between a skip and a
+    silent truncation of the feed.
+
+    The unresolvable entry is the ActivityStreams Public URI, which
+    `validate_remote_actor` (app/activitypub/actor.py) refuses by exact match
+    on its very first line, so `find_actor_or_create` returns None having
+    touched neither the database nor the network. That matters: the obvious
+    alternative -- a community URL that simply is not in the database --
+    reaches `create_actor_from_remote` instead, because the loop calls
+    `find_actor_or_create` with `create_if_not_found` at its default of True,
+    and that FETCHES. `block_outbound_http` would raise and the test would be
+    measuring the fixture rather than the guard. Public is also a shape a real
+    peer can emit into a collection.
+
+    Removing the guard makes `community.id` a `None.id` and kills this test by
+    `AttributeError`; keeping it but dropping the `continue`-equivalent skip
+    would create a second row and fail the count.
+    """
+    feed = _remote_feed()
+    feed.ap_following_url = f'https://{PEER}/f/news/following'
+    db.session.commit()
+    community = _following_community()
+    _serve(http_mock, feed.ap_public_url, _feed_document())
+    _serve(http_mock, feed.ap_following_url,
+           {'items': ['https://www.w3.org/ns/activitystreams#Public',
+                      community.ap_profile_id]})
+
+    refresh_feed_profile_task(feed.id)
+
+    assert db.session.query(FeedItem).count() == 1
+    assert db.session.query(FeedItem).one().community_id == community.id
