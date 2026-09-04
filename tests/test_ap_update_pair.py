@@ -1960,6 +1960,50 @@ def test_a_mention_tag_is_not_treated_as_a_hashtag(app, db_session, redis_lock_o
     assert len(list(post.tags)) == 0
 
 
+def test_a_post_tag_entry_with_no_type_key_is_skipped(app, db_session, redis_lock_only_double):
+    """A peer sending a tag object with no `type` key used to raise
+    `KeyError` out of this function: the `Hashtag` and `lemmy:CommunityTag`
+    comparisons in this loop read `json_tag['type']` directly. Both now check
+    membership first, as the `Mention` comparison below them always did.
+
+    One defect, three comparisons, one fixture that reaches all three:
+
+    * The typeless entry is placed FIRST and a real `Hashtag` entry SECOND,
+      so the surviving hashtag proves the loop skipped the bad entry and
+      carried on rather than abandoning the tag block. Exact-length equality
+      on `post.tags` proves the typeless entry contributed nothing itself.
+    * The post is seeded with a flair and sits on a lemmy instance, so with
+      no `lemmy:CommunityTag` entries collected the flair-application gate
+      stays shut and the seeded flair survives -- non-vacuous, since a
+      cleared flair is distinguishable from one that was never there.
+    * The typeless entry carries an `href` resolving to a local user, so if
+      the `'type' in json_tag` conjunct on the `Mention` comparison were
+      dropped the loop would reach `json_tag['type'] == 'Mention'` and
+      KeyError. That conjunct was unkillable before this fix -- the two
+      unguarded subscripts above it meant the key provably existed by the
+      time it ran -- and this is the fixture that kills it.
+
+    `title` is asserted so a guard that abandoned the whole Update, not just
+    the tag loop, would not pass either.
+    """
+    post = _seed_post(software='lemmy')
+    make_post_flair(post)
+    recipient = _seed_local_recipient()
+
+    update_post_from_activity(post, _update(
+        name='a new title', content='x',
+        tag=[{'href': f'https://test.piefed.local/u/{recipient.user_name}'},
+             {'type': 'Hashtag', 'name': '#topic'}],
+        type='Note',
+    ))
+
+    assert len(list(post.tags)) == 1
+    assert 'topic' in list(post.tags)[0].name.lower()
+    assert len(list(post.flair)) == 1
+    assert post.title == 'a new title'
+    assert db.session.query(Notification).filter_by(user_id=recipient.id).count() == 0
+
+
 def test_a_post_with_no_tag_key_leaves_existing_tags_untouched(app, db_session, redis_lock_only_double):
     """The `'tag' in request_json['object']` conjunct. Without it, an Update
     that omits `tag` entirely must not reach `post.tags.clear()` -- proved by
