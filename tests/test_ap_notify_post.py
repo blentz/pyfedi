@@ -1942,3 +1942,144 @@ def test_a_community_with_no_ap_id_is_named_by_its_name_in_the_feed_arm(app, db_
     assert notifications[0].notif_type == NOTIF_FEED
     assert notifications[0].targets['community_name'] == 'microblogs'
     assert notifications[0].targets['feed_name'] == 'A Feed'
+
+
+# ---------------------------------------------------------------------------
+# notify_about_post_task -- the tail except, and the partial fan-out
+# ---------------------------------------------------------------------------
+
+def test_a_null_unread_counter_mid_fan_out_rolls_back_only_the_failing_recipient(app, db_session):
+    """The task's tail handler, reached by a real data state rather than a mock:
+
+        except Exception:
+            session.rollback()
+            raise
+
+    (app/activitypub/util.py:2932-2934 -- three lines quoted, three lines cited.)
+
+    REACHABILITY. The route this task was pointed at first -- a
+    `NotificationSubscription` whose user has since been deleted, so that
+    `session.query(User).get(notify_id)` returns None and the next line raises
+    AttributeError -- is CLOSED, twice over, and neither closure is a fixture
+    gap. `NotificationSubscription.user_id` is
+    `db.Column(db.Integer, db.ForeignKey('user.id'), index=True)`
+    (app/models.py:3776) with no `ondelete`, and the constraint really is in the
+    schema this suite runs against -- read back from the test database as
+    `"notification_subscription_user_id_fkey" FOREIGN KEY (user_id) REFERENCES
+    "user"(id)` -- so PostgreSQL refuses to delete a `user` row that a
+    subscription still points at, rather than orphaning it. There is no
+    relationship declared between the two models in either direction, so no ORM
+    cascade exists either; what does the work instead is an explicit
+    `db.session.query(NotificationSubscription).filter(
+    NotificationSubscription.user_id == self.id).delete()` in
+    `User.delete_dependencies` (app/models.py:1490), at app/models.py:1535. The
+    application's own deletion path therefore removes the subscription first, and
+    the orphan state is unreachable by ordinary deletion.
+
+    The route used instead needs no injection either -- it is a row state the
+    schema produces on its own. `unread_notifications` was added to `user` as
+    `batch_op.add_column(sa.Column('unread_notifications', sa.Integer(),
+    nullable=True))` (migrations/versions/cae2e31293e8_notifications.py:40): no
+    server default and no backfill, so every `user` row that predated that
+    migration was left holding NULL, and nothing since fills them in -- the
+    column name appears in exactly one migration file. The model's `default=0`
+    (app/models.py:1023) is a Python-side INSERT default and does not reach rows
+    the ORM did not insert. On such a row the arm's
+
+        user = session.query(User).get(notify_id)
+        user.unread_notifications += 1
+
+    (app/activitypub/util.py:2863-2864 -- two lines quoted, two lines cited)
+    raises `TypeError: unsupported operand type(s) for +=: 'NoneType' and 'int'`.
+
+    Assigning None reaches the column as a real NULL rather than being replaced
+    by that Python-side default, because `make_user` ends in
+    `db.session.commit()` (tests/factories.py:64): the row is already INSERTed by
+    the time the assignment is made, so the assignment is an UPDATE and no INSERT
+    default is consulted. MEASURED both ways -- this test was first written with
+    an explicit `UPDATE "user" SET unread_notifications = NULL`, which produces
+    the same TypeError and the same persisted split, so the shorter spelling was
+    kept.
+
+    THE PARTIAL FAN-OUT is why this handler is worth covering. The four arms run
+    in file order and each commits per recipient INSIDE its own loop (the four
+    `session.commit()` calls are at :2842, :2865, :2896 and :2930), so a
+    recipient notified by an earlier arm is already durable when a later arm
+    raises: `session.rollback()` discards only the failing iteration's
+    uncommitted work. `notified` is subscribed to the author, so the NOTIF_USER
+    arm (:2821-2843) notifies and commits them; `broken` is subscribed to the
+    community, so the NOTIF_COMMUNITY arm (:2846-2866) reaches them next and dies
+    there. Arm order is what makes the split deterministic --
+    `notification_subscribers` is a raw SELECT with no ORDER BY (app/utils.py:2936-2939),
+    so two recipients inside ONE arm would have no guaranteed order.
+
+    The zero-rows assertion for `broken` is not vacuous, and `pytest.raises` is
+    the interlock that makes it so. Four statements in this function could raise
+    that TypeError -- the four copies of `user.unread_notifications += 1`, at
+    :2841, :2864, :2895 and :2929 -- but only :2864 can raise it in THIS run:
+    :2841 runs against `notified`, whose counter is the integer 7, and :2895 and
+    :2929 are never reached, both because their arms find no subscriber (this
+    community has no topic and belongs to no feed) and because the run has
+    already died at :2864. And :2864 stands two lines after
+    `session.add(new_notification)` at :2862, so any run that raises it had
+    already added `broken`'s Notification to the session. That row existed inside
+    the transaction; none exists after it. A mutant that skipped `broken`
+    entirely would leave the same zero rows -- but would not raise, and the
+    `pytest.raises` fails it.
+
+    `Notification.query.count()` is asserted alongside the per-user reads so that
+    "one survivor" means one row exists in the table, not merely one row for that
+    user. The baseline count of 0 is asserted before the call for the same
+    reason. The three user ids are guarded pairwise distinct: tests/conftest.py
+    truncates with RESTART IDENTITY, so ids restart at 1 in every test and an
+    id-valued assertion can otherwise pass against the wrong row.
+
+    `notified`'s counter is seeded to 7 so that asserting 8 is contrary to the
+    column's declared default; `broken`'s is asserted still NULL, which is
+    contrary both to that default of 0 and to the 1 a completed increment would
+    have left -- it says the increment never landed for the failing recipient.
+
+    MEASURED, on the handler's three statements. Deleting `raise` kills this test
+    (`Failed: DID NOT RAISE TypeError`), and replacing `session.rollback()` with
+    `session.commit()` kills it too (`broken`'s Notification survives the raise).
+    Deleting `session.rollback()` outright kills nothing, and no test can: the
+    `finally: session.close()` two lines below (:2935-2936) ends the transaction
+    by itself. `Session.close()` expunges and closes every SessionTransaction,
+    which closes the DBAPI transaction and returns the connection to the pool,
+    whose reset-on-return is a ROLLBACK (SQLAlchemy 2.0.52). Nothing after the
+    exception commits the failing iteration's work on any path, so that mutant is
+    equivalent rather than a fixture gap -- and deleting `session.close()` too
+    does not expose it: the leaked session then sits `idle in transaction`
+    holding the uncommitted INSERT's locks, the `db_session` teardown's TRUNCATE
+    blocks on them forever, and the rows still never become visible. What this
+    test pins is therefore the rollback's SEMANTICS (the failing iteration's work
+    must not survive) and the `raise`, not the presence of the call.
+    """
+    community, post, author = _seed_scenario()
+    instance = _peer_instance()
+    notified = make_user(instance, 'notified', local=True)
+    notified.unread_notifications = 7
+    broken = make_user(instance, 'broken', local=True)
+    broken.unread_notifications = None
+    _subscribe(notified, author.id, NOTIF_USER)
+    _subscribe(broken, community.id, NOTIF_COMMUNITY)
+    db.session.commit()
+    assert len({author.id, notified.id, broken.id}) == 3
+    assert Notification.query.count() == 0
+
+    with pytest.raises(TypeError) as excinfo:
+        notify_about_post_task(post.id)
+
+    assert "'NoneType' and 'int'" in str(excinfo.value)
+
+    survivors = _notifications_for(notified)
+    assert len(survivors) == 1
+    assert survivors[0].notif_type == NOTIF_USER
+    assert survivors[0].subtype == 'new_post_from_followed_user'
+    assert survivors[0].author_id == author.id
+    assert _notifications_for(broken) == []
+    assert Notification.query.count() == 1
+    db.session.refresh(notified)
+    db.session.refresh(broken)
+    assert notified.unread_notifications == 8
+    assert broken.unread_notifications is None
