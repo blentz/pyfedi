@@ -373,9 +373,10 @@ def test_a_source_with_a_non_markdown_media_type_leaves_the_html_body(app, db_se
 def test_a_reply_with_null_content_is_created_with_an_empty_body(app, db_session, redis_lock_only_double):
     """A peer sending `content` as an explicit `null` used to raise
     `AttributeError` on the `content.startswith('<p>')` call that opens the
-    arm -- and, unlike the crash D243 produces, that raise was NOT swallowed:
-    the content block sits ABOVE this function's `try`/`except Exception`, so
-    it propagated out of `create_post_reply` to its caller.
+    arm -- and, unlike the crash D243 produced before Task 9 guarded it, that
+    raise was NOT swallowed: the content block sits ABOVE this function's
+    `try`/`except Exception`, so it propagated out of `create_post_reply` to
+    its caller.
 
     `update_post_reply_from_activity` guards
     `request_json['object']['content'] is not None`; this function now carries
@@ -452,11 +453,23 @@ def _make_language(code, name):
     and commits the `Language` row itself, so `find_language_or_create`'s
     "already exists" branch (`existing_language = Language.query.filter(
     Language.code == code).first()`, returned directly) runs instead --
-    that row has a real, committed id. This is a workaround for a defect
-    Task 9 fixes, not ordinary setup: left to itself, the create branch
-    would hand back an unflushed, id-less `Language`, and
-    `PostReply.language_id` would be set to `None` regardless of which
-    `code`/`name` the document carried.
+    that row has a real, committed id. This is a workaround for a LIVE
+    defect, not ordinary setup: left to itself, the create branch hands back
+    an unflushed, id-less `Language`, and `PostReply.language_id` is set to
+    `None` regardless of which `code`/`name` the document carried.
+
+    Task 9 was briefed to fix that defect and DECLINED, registering it as
+    D260 instead; `test_an_unseeded_language_is_created_but_not_applied`
+    below pins the live behaviour. The reason is that the repair
+    sub-project 14 used on the same read in both update functions --
+    assigning through the relationship, `reply.language = language`, and
+    letting SQLAlchemy resolve the id at flush -- has no spelling here:
+    `create_post_reply` has no ORM instance at that point, because the value
+    is an `int` passed as `PostReply.new(..., language_id=..., ...)` and
+    `PostReply.new` (app/models.py) forwards it straight into the
+    `PostReply(...)` constructor. Every alternative repair chooses new
+    behaviour rather than copying an existing one, which is what this
+    campaign's fix rule forbids. Task 9's report carries the full reasoning.
     """
     language = Language(code=code, name=name)
     db.session.add(language)
@@ -477,6 +490,45 @@ def test_a_language_dict_is_applied(app, db_session, redis_lock_only_double):
     reply = _create(community, post, replier, document=document)
 
     assert reply.language_id == spanish.id
+
+
+def test_an_unseeded_language_is_created_but_not_applied(app, db_session, redis_lock_only_double):
+    """D260, pinned as CURRENT behaviour, not endorsed -- the other branch of
+    `find_language_or_create`, which every other test in this section avoids
+    (see `_make_language`'s docstring for why, and for why Task 9 declined to
+    fix it).
+
+    With no `Language` row for the document's code, `find_language_or_create`
+    takes its `else`: `db.session.add(Language(...))` and returns the row
+    with no flush. `app/__init__.py` builds the session with
+    `autoflush=False`, so `language.id` is still `None` when
+    `create_post_reply` reads it into `language_id`, and the reply is
+    created carrying no language at all.
+
+    Both halves are asserted because either alone would be ambiguous: a
+    `Language` row DOES appear (`PostReply.new`'s own `session.commit()`
+    flushes the pending add, which is why the id exists by the time the test
+    reads it), and the reply's `language_id` is `None` anyway. Asserting only
+    the `None` could not tell "the row was never created" from "the row was
+    created and the id was read too early"; asserting only the row's
+    existence would say nothing about the reply.
+
+    Measured, not inferred: run against this suite's Postgres before Task 9
+    declined the fix, the created row's id was 1 and the persisted reply's
+    `language_id` was `None`.
+    """
+    community, post, replier = _seed_scenario()
+    assert Language.query.filter_by(code='xh').first() is None
+    document = _reply_doc(content='hello',
+                          language={'identifier': 'xh', 'name': 'Xhosa'})
+
+    reply = _create(community, post, replier, document=document)
+
+    assert reply is not None
+    created = Language.query.filter_by(code='xh').one()
+    assert created.id is not None
+    persisted = PostReply.query.filter_by(ap_id=f'https://{PEER}/comment/1').one()
+    assert persisted.language_id is None
 
 
 def test_a_non_dict_language_is_ignored_in_favour_of_content_map(app, db_session, redis_lock_only_double):
@@ -797,29 +849,37 @@ def _use_a_non_microblog_instance(replier):
 
     `make_instance` (tests/factories.py) defaults `software='mastodon'`,
     which IS in `MICROBLOG_APPS` (app/constants.py) -- so by default every
-    reply built by `_seed_scenario` trips `create_post_reply`'s mbin/
+    reply built by `_seed_scenario` enters `create_post_reply`'s mbin/
     microblog mirroring branch (app/activitypub/util.py, inside the `for
     lutn in local_users_to_notify:` loop) the moment any Mention is actually
-    collected. That branch's last query -- `db.session.execute(text('SELECT
-    user_id FROM "post_reply" WHERE id IN :ids'), {'ids': ids})` -- binds
-    `ids` as a Python tuple; every reply built by a test that calls this
-    helper is a top-level reply (`post_reply.path == [0, post_reply.id]`), so
-    for those the tuple is always empty -- see the de-duplication section at
-    the end of this module for how `path` is built, and for the tests that
-    seed a deeper chain instead so that the tuple is not empty. On an empty
-    tuple psycopg2 raises a syntax error on `IN ()` -- confirmed
-    directly against this suite's own Postgres container:
-    `cur.execute('SELECT 1 WHERE 1 IN %s', ((),))` raises `syntax error at
-    or near ")"`. That raise happens inside `create_post_reply`'s own
-    `try`/`except Exception`, so it is swallowed into a `None` return --
-    silently discarding the very `Notification` a test needs to observe,
-    for a reason that has nothing to do with whatever guard the test is
-    actually aimed at.
+    collected. Setting `software = 'lemmy'` keeps the reply on the
+    non-microblog side of that gate, so none of the branch's four
+    suppression rules can be the reason a Notification is or is not there
+    and the outcome is attributable to the guard a test is aimed at.
 
-    Fixing that defect is out of scope for a test-only task; every test
-    below that needs a REAL Notification to be created routes around it by
-    calling this first, the same way `_seed_scenario`'s own docstring routes
-    around `make_community`'s hardcoded ids.
+    WHAT THIS HELPER USED TO BE FOR, AND NO LONGER IS. Through Task 8 the
+    branch also carried D243: its last query bound `ids` as a Python tuple,
+    which is empty for a top-level reply (`path == [0, post_reply.id]`),
+    psycopg2 rendered `IN ()`, Postgres rejected it, and the function's tail
+    `except Exception` swallowed the crash into a `None` return -- so this
+    helper was ALSO routing around a crash that silently discarded the very
+    Notification a test needed to observe. Task 9 fixed D243 (the `if ids:`
+    guard, commit "fix: skip the ancestor lookup when a create reply has no
+    ancestors"), so that reason is gone.
+
+    WHICH CALLERS STILL NEED IT, measured rather than assumed. Neutering
+    this helper to a no-op leaves every test in the module green, so no
+    test's OUTCOME depends on it any more. One test's MUTATION KILL still
+    does: `test_the_self_mention_exclusion_produces_no_notification` seeds
+    the post's author as the mentioned local user, so on the microblog side
+    rule 1 (`if recipient.id == post.user_id: continue`) would suppress the
+    Notification a dropped `!=` conjunct is supposed to produce -- verified
+    by running that mutant with the helper neutered, where it survives, and
+    with the helper restored, where it dies. The remaining callers seed a
+    recipient who is neither the post's author nor an ancestor's, so no rule
+    fires either way; they keep the call because it costs nothing and keeps
+    the whole section on one side of a gate that is Task 6's subject, not
+    theirs.
     """
     replier.instance.software = 'lemmy'
     db.session.commit()
@@ -864,12 +924,16 @@ def test_the_tag_length_gate_skips_a_lone_mention(app, db_session, redis_lock_on
     because the tag list has exactly one entry. Nothing here argues that is
     the right behaviour; it only pins what the code does today.
 
-    Needs `_use_a_non_microblog_instance`: with this conjunct forced true, a
-    lone, otherwise-valid Mention WOULD reach the notify loop and create a
-    real Notification, and only steering the instance off 'mastodon' lets
-    that difference surface instead of being masked by the unrelated
-    microblog-mirror defect (see that helper's docstring) -- which also ends
-    in zero Notifications, for a reason unrelated to this guard.
+    Calls `_use_a_non_microblog_instance` to keep the reply off the
+    microblog side of the gate, so that with this conjunct forced true the
+    lone Mention reaches the notify loop and creates a real Notification
+    without any of the four suppression rules having a say. Until Task 9
+    fixed D243 the call was strictly necessary, because the gated branch
+    crashed on an empty `ids` and returned zero Notifications for a reason
+    unrelated to this guard; it is now a defence against those rules rather
+    than against a crash, and the recipient seeded here is neither the post's
+    author nor an ancestor's, so none of them would in fact fire. See the
+    helper's docstring for the measurement.
     """
     community, post, replier = _seed_scenario()
     _use_a_non_microblog_instance(replier)
@@ -917,10 +981,11 @@ def test_a_same_host_case_mismatched_href_produces_no_notification(app, db_sessi
     forced to always pass would find that recipient and create a real
     Notification, which the assertion below would catch.
 
-    Needs `_use_a_non_microblog_instance` for the same reason as the length
-    gate test above: without it, a guard forced to always pass would still
-    end in zero Notifications via the unrelated microblog-mirror defect,
-    masking the kill.
+    Calls `_use_a_non_microblog_instance` for the same reason as the length
+    gate test above, and with the same caveat: the call was load-bearing
+    against D243's crash until Task 9 fixed it, and is now only keeping the
+    four suppression rules out of the picture -- none of which would fire on
+    this fixture anyway.
     """
     community, post, replier = _seed_scenario()
     _use_a_non_microblog_instance(replier)
@@ -974,10 +1039,10 @@ def test_a_non_mention_tag_type_is_not_treated_as_a_mention(app, db_session, red
     if the equality comparison were dropped -- proving this specific
     conjunct, not merely that some unrelated non-Mention tag is ignored.
 
-    Needs `_use_a_non_microblog_instance` for the same reason as the other
-    Mention-guard tests above: a dropped equality still reaches the notify
-    loop, and the unrelated microblog-mirror defect would otherwise swallow
-    the difference into the same zero-Notification outcome.
+    Calls `_use_a_non_microblog_instance` for the same reason as the other
+    Mention-guard tests above, and with the same caveat: it was load-bearing
+    against D243's crash until Task 9 fixed it, and now only keeps the four
+    suppression rules out of the picture.
     """
     community, post, replier = _seed_scenario()
     _use_a_non_microblog_instance(replier)
@@ -1066,13 +1131,14 @@ def test_the_self_mention_exclusion_produces_no_notification(app, db_session, re
 # else, e.g. 'lemmy' or 'piefed', does not). Those four rules, and that gate
 # condition itself, are out of scope here -- Task 6's job. Every test below
 # that reaches past the recipient lookup calls `_use_a_non_microblog_instance`
-# so it lands on the 'lemmy' side of that gate, both to stay off Task 6's
-# rules and to route around D243 (see that helper's docstring): the gated
-# block's last query renders `IN ()` for a top-level reply's always-empty
-# `ids`, which Postgres rejects, and this function's own tail `except
-# Exception as ex: log_incoming_ap(...); return None` swallows that crash --
-# producing zero Notifications for a reason that has nothing to do with
-# whatever guard a test is actually aimed at.
+# so it lands on the 'lemmy' side of that gate and stays off Task 6's rules.
+# When these tests were written the call did double duty, routing around
+# D243 as well: the gated block's last query rendered `IN ()` for a top-level
+# reply's always-empty `ids`, Postgres rejected it, and this function's own
+# tail `except Exception as ex: log_incoming_ap(...); return None` swallowed
+# the crash into zero Notifications for a reason unrelated to any guard.
+# Task 9 fixed D243, so only the first reason survives; the helper's own
+# docstring records which single test's mutation kill still depends on it.
 
 
 def test_a_delivered_mention_notification_carries_the_expected_fields(app, db_session, redis_lock_only_double):
@@ -1131,9 +1197,10 @@ def test_a_recipient_that_does_not_resolve_produces_no_notification(app, db_sess
 
     `if post_reply.instance.software == 'mbin' or ...` sits AFTER `if not
     recipient: continue` in the source, so this test never reaches it and,
-    unlike the tests below, needs no `_use_a_non_microblog_instance`: D243
-    is structurally unreachable when the loop body never gets past the
-    recipient lookup.
+    unlike the tests below, needs no `_use_a_non_microblog_instance`: the
+    whole gated block -- including D243's query, in the versions of this file
+    written before Task 9 guarded it -- is structurally unreachable when the
+    loop body never gets past the recipient lookup.
     """
     community, post, replier = _seed_scenario()
     document = _reply_doc(content='hello',
@@ -1157,11 +1224,13 @@ def test_a_recipient_blocked_by_the_sender_gets_no_notification(app, db_session,
     direction `blocked_users` reads), the direction read off the source
     rather than assumed.
 
-    Needs `_use_a_non_microblog_instance` for the same reason the collection
-    guards earlier in this module do: without it, D243 crashes before this
-    guard is ever reached, and the resulting zero Notifications would look
-    identical to a correct suppression -- masking whatever this guard
-    actually did.
+    Calls `_use_a_non_microblog_instance` for the same reason the collection
+    guards earlier in this module do, and with the same caveat: until Task 9
+    guarded D243 the call was load-bearing, because the gated block crashed
+    before this guard was ever reached and the resulting zero Notifications
+    were indistinguishable from a correct suppression. With the guard in
+    place it only keeps the four suppression rules out of the picture, and
+    none of them fires on this fixture.
     """
     community, post, replier = _seed_scenario()
     _use_a_non_microblog_instance(replier)
@@ -1364,8 +1433,9 @@ def test_a_falsy_flair_value_leaves_an_existing_flair_unchanged(app, db_session,
 # `for element` loop -- so rule 3 works. That is the same spelling
 # `update_post_reply_from_activity` carries after sub-project 14's Fix F;
 # the two blocks were read side by side before these tests were written and
-# are identical except for D243, which the update copy has fixed
-# (`ids = tuple(ids)` followed by `if ids:`) and this copy has not.
+# were identical except for D243, which the update copy had fixed
+# (`ids = tuple(ids)` followed by `if ids:`) and this copy had not. Task 9
+# copied that guard across, so the two blocks now agree on rule 4 as well.
 #
 # The shape of `post_reply.path`. `PostReply.new` (app/models.py) ends with
 #
@@ -1377,16 +1447,35 @@ def test_a_falsy_flair_value_leaves_an_existing_flair_unchanged(app, db_session,
 #         reply.path = [0, reply.id]
 #
 # so a top-level reply gets `[0, reply.id]`, whose `ids` is EMPTY. An empty
-# `ids` is D243: `ids = tuple(ids)` then `WHERE id IN :ids` renders `IN ()`,
-# which Postgres rejects, and this function's tail `except Exception as ex`
-# swallows the crash into a `None` return and zero Notifications -- so a
-# suppression test on an empty `ids` would pass because of the crash, not
-# because of its rule. `make_post_reply` (tests/factories.py) sets neither
-# `path` nor `parent_id`, and a parent whose `path` is None takes the `else`
-# branch above too, giving the CHILD `[0, child.id]` and an empty `ids` all
-# over again. `_seed_chain_comment` below therefore sets `path` explicitly,
-# and every test that needs a rule other than the crash to decide the outcome
-# replies to one of those comments rather than to the post.
+# `ids` was D243: `ids = tuple(ids)` then `WHERE id IN :ids` rendered
+# `IN ()`, which Postgres rejects, and this function's tail `except Exception
+# as ex` swallowed the crash into a `None` return and zero Notifications --
+# so a suppression test on an empty `ids` passed because of the crash, not
+# because of its rule. Task 9's `if ids:` guard ended that: an empty `ids`
+# now skips rule 4 and the reply is returned as normal, which is what
+# `test_a_top_level_microblog_mention_skips_the_ancestor_lookup` pins.
+#
+# An empty `ids` is still not a fixture any rule-specific test wants,
+# because with it rules 3 and 4 are both no-ops and cannot decide anything.
+# `make_post_reply` (tests/factories.py) sets neither `path` nor `parent_id`,
+# and a parent whose `path` is None takes the `else` branch above too, giving
+# the CHILD `[0, child.id]` and an empty `ids` all over again.
+# `_seed_chain_comment` below therefore sets `path` explicitly, and every
+# test that needs rule 3 or rule 4 to decide the outcome replies to one of
+# those comments rather than to the post.
+#
+# TWO VACATED DISJUNCTS. The skip loop's `element == 0` and
+# `element == post_reply.id` were killable ONLY through D243's crash --
+# dropping either made `ids` non-empty for a top-level reply, which removed
+# the crash and so failed Task 6's crash pin. With the guard in place neither
+# changes any observable outcome: `IN (0)` and `.in_([0])` match nothing
+# because `post_reply.id` starts at 1, and `IN (post_reply.id)` returns the
+# remote replier's `user_id`, which the recipient lookup's `ap_id=None`
+# conjunct guarantees is never the recipient's. Both were re-run after the
+# fix and both survive. Killing either would need a `PostReply` with id 0, or
+# a `Notification` naming the new reply before it exists -- states production
+# cannot reach, so no test was invented for them. Sub-project 14 recorded the
+# identical vacancy for D240 in the update-path twin.
 
 
 def _seed_chain_comment(post, author, slug, parent=None):
@@ -1453,11 +1542,16 @@ def test_a_microblog_mention_of_the_post_author_is_suppressed(app, db_session, r
     `if profile_id != reply_parent.author.ap_profile_id` (whose `reply_parent`
     is the parent comment here, not the post) and reaches the loop.
 
-    Replies to a comment rather than to the post so `ids` is `[parent.id]`.
-    That is not what rule 1 keys on -- it routes around D243, so that a
-    mutant dropping rule 1 falls through rules 2, 3 and 4 to the delivery
-    block instead of into the swallowed `IN ()` crash, which would produce
-    the same zero Notifications and leave the mutant alive.
+    Replying to a comment rather than to the post is what makes that work,
+    and it is still load-bearing after Task 9's D243 fix even though the
+    reason has changed. It was originally chosen to route around the crash:
+    a top-level reply's `ids` was empty, so a mutant dropping rule 1 fell
+    into the swallowed `IN ()` crash instead of the delivery block and
+    produced the same zero Notifications, staying alive. With the guard that
+    is no longer true -- but on a top-level reply `reply_parent` IS the post,
+    so the collection phase's `if profile_id != reply_parent.author.
+    ap_profile_id` would drop this Mention before the loop ever ran, and the
+    mutant would survive again for a different reason.
     """
     community, post, replier = _seed_scenario()
     parent = _seed_chain_comment(post, post.author, 'parent')
@@ -1490,9 +1584,13 @@ def test_a_microblog_mention_mirroring_a_post_mention_is_suppressed(app, db_sess
     Mention would be delivered, and `len(rows) == 1` below would see two
     rows and fail.)
 
-    Replies to a comment so `ids` is non-empty, routing around D243 for the
-    same reason rule 1's test does: with rule 2 dropped, the fall-through has
-    to reach the delivery block, not the crash.
+    Replies to a comment so `ids` is non-empty. That was routing around
+    D243: before Task 9's guard, a rule-2-dropped mutant on a top-level reply
+    fell into the swallowed `IN ()` crash rather than the delivery block and
+    stayed alive. The guard makes the choice unnecessary here -- unlike rule
+    1's test, this fixture's recipient is not the post's author, so a
+    top-level reply would collect the Mention and deliver it -- and the
+    nested shape is kept only to match the rest of the section.
     """
     community, post, replier = _seed_scenario()
     parent = _seed_chain_comment(post, post.author, 'parent')
@@ -1530,8 +1628,9 @@ def test_a_microblog_mention_mirroring_a_comment_mention_is_suppressed(app, db_s
     This is the one rule whose own fixture already makes `ids` non-empty --
     an empty `ids` would render rule 3's filter as `.in_([])`, which matches
     nothing, so there would be no rule to test. No separate routing around
-    D243 is needed or added here: with rule 3 dropped, `ids` is still
-    `[parent.id]` and rule 4's query is still well-formed.
+    D243 was needed or added here even before Task 9 guarded it: with rule 3
+    dropped, `ids` is still `[parent.id]` and rule 4's query was already
+    well-formed.
     """
     community, post, replier = _seed_scenario()
     parent = _seed_chain_comment(post, post.author, 'parent')
@@ -1570,9 +1669,11 @@ def test_a_microblog_mention_of_an_earlier_commenter_in_the_chain_is_suppressed(
 
     `ids` is `[root.id, parent.id]` -- the new reply's path is
     `[0, root.id, parent.id, reply.id]` -- so `root.id` is in the tuple and
-    its `user_id` is the recipient's. No routing around D243 is needed: this
-    rule's own fixture is what makes `ids` non-empty, and an empty `ids` is
-    exactly the state in which the rule cannot run at all.
+    its `user_id` is the recipient's. No routing around D243 was needed even
+    before Task 9 guarded it: this rule's own fixture is what makes `ids`
+    non-empty, and an empty `ids` is exactly the state in which the rule
+    cannot run at all -- before the guard because it crashed, after it
+    because the guard skips it.
     """
     community, post, replier = _seed_scenario()
     recipient = _seed_local_recipient('localuser')
@@ -1599,8 +1700,10 @@ def test_the_mbin_arm_of_the_gate_reaches_the_rules(app, db_session, redis_lock_
     `in MICROBLOG_APPS` arm with `make_instance`'s default 'mastodon'.
 
     Uses rule 1's state to show the arm reaching a rule rather than merely
-    being evaluated, and replies to a comment for the same D243 reason rule
-    1's own test does.
+    being evaluated, and replies to a comment for the same reason rule 1's
+    own test does: this fixture makes the recipient the post's author, so on
+    a top-level reply the collection phase would drop the Mention before the
+    gate was ever reached.
     """
     community, post, replier = _seed_scenario()
     parent = _seed_chain_comment(post, post.author, 'parent')
@@ -1807,10 +1910,13 @@ def test_a_top_level_microblog_mention_skips_the_ancestor_lookup(app, db_session
 #
 # Called directly here, not through `create_post_reply`: its two arguments
 # are rows (a PostReply-or-None and a PostReply), and driving it end-to-end
-# would make every assertion depend on everything upstream, including D243's
-# swallowed crash (see the block comment above `_seed_chain_comment`), which
-# produces zero Notifications for a reason unrelated to any guard in this
-# function.
+# would make every assertion depend on everything upstream -- every head
+# guard, the whole Mention block, and `create_post_reply`'s tail
+# `except Exception as ex`, which turns any raise from any of them into the
+# same `None` return and the same zero Notifications. When these tests were
+# written that tail was actively swallowing D243 (see the block comment
+# above `_seed_chain_comment`); Task 9 guarded D243, but the tail is still
+# there and the argument for calling this function directly is unchanged.
 #
 # `notification_subscribers(entity_id, entity_type)` (app/utils.py) is a
 # plain read: `SELECT user_id FROM "notification_subscription" WHERE

@@ -1174,10 +1174,12 @@ def test_a_top_level_microblog_reply_mention_skips_the_ancestor_lookup(app, db_s
     Reaching that line needs all of: an UPDATE (this function is the edit path
     only -- creates go through the other copy of this block, in
     `create_post_reply`'s Mention loop, whose rule-4 query is reached the same
-    way and is still UNGUARDED, registered as D243. `grep -n 'IN :ids'` returns
-    exactly two lines in `app/activitypub/util.py`, one in each of those two
-    functions, and `notify_about_post_reply` -- which an earlier version of
-    this docstring named -- contains neither the query nor any Mention loop);
+    way and was still UNGUARDED when this test was written, registered as
+    D243 and since fixed by sub-project 15's Task 9 with this same guard.
+    `grep -n 'IN :ids'` returns exactly two lines in
+    `app/activitypub/util.py`, one in each of those two functions, and
+    `notify_about_post_reply` -- which an earlier version of this docstring
+    named -- contains neither the query nor any Mention loop);
     a `tag` list of length greater than one, since a lone Mention
     never enters the block at all (test_a_lone_reply_mention_is_ignored pins
     that); a mentioned local user who is NOT the post's author, because for a
