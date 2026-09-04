@@ -1026,7 +1026,7 @@ def test_no_followers_url_means_no_followers_fetch(app, db_session, http_mock):
 - [ ] **Step 2: Run and commit**
 
 Run: `./run_tests.sh tests/test_ap_refresh_profiles.py -q`
-Expected: 38 passed, plus one per feed-side equivalent you added.
+Expected: 40 passed -- the community followers pair plus a feed owners pair. A fix round then covered the featured-collection block, which this task's text omitted, taking the running total leaving this task to **47**.
 
 ```bash
 git add tests/test_ap_refresh_profiles.py
