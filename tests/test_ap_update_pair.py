@@ -169,6 +169,38 @@ def test_a_reply_with_null_content_keeps_its_body(app, db_session, redis_lock_on
     assert reply.distinguished is True
 
 
+def test_a_reply_missing_content_key_leaves_the_body_untouched(app, db_session, redis_lock_only_double):
+    """The outer guard's `'content' in request_json['object']` conjunct -- the
+    reply-side twin of test_a_post_missing_content_key_leaves_the_body_untouched,
+    and written for the same reason.
+
+    test_a_reply_with_null_content_keeps_its_body supplies `content` as an
+    explicit `None`, which the `is not None` conjunct catches; this one omits
+    the key altogether. A mutant that drops the membership conjunct, leaving
+    only `... is not None`, evaluates `request_json['object']['content']`
+    unconditionally and raises `KeyError` on this fixture. Without this test
+    that mutant still dies, but incidentally, in the six other tests here whose
+    document omits `content` while exercising the language, distinguished and
+    repliesEnabled arms -- so no single failure names the conjunct.
+
+    Both `body` and `body_html` are asserted, since the whole content block
+    must be skipped, and `distinguished` is sent alongside and asserted so a
+    mutant that abandoned the entire Update rather than just the content arm
+    would not pass either.
+    """
+    reply = _seed_reply()
+    reply.body = 'seeded body'
+    reply.body_html = '<p>seeded body html</p>'
+    reply.distinguished = False
+    db.session.commit()
+
+    update_post_reply_from_activity(reply, _update(distinguished=True))
+
+    assert reply.body == 'seeded body'
+    assert reply.body_html == '<p>seeded body html</p>'
+    assert reply.distinguished is True
+
+
 def test_a_reply_markdown_source_overwrites_the_html_derived_body(app, db_session, redis_lock_only_double):
     """`source` with `mediaType: text/markdown` wins: `body` becomes the
     markdown and `body_html` is re-derived from it, overwriting the value the
