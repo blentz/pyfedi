@@ -1652,8 +1652,9 @@ def test_a_feed_subscriber_who_blocked_the_instance_is_skipped_for_every_feed(ap
 # `notify_about_post` (:2796-2800) contains none. Six, matching the plan's
 # count.
 #
-# The four tests above that assert `targets['community_name']` are the four
-# arms' happy paths, and each of them assigns `community.ap_id` deliberately;
+# The four tests above whose whole-dict `targets` assertion carries a
+# `community_name` key are the four arms' happy paths -- none of them subscripts
+# the dict -- and each of them assigns `community.ap_id` deliberately;
 # every post above takes its author from `make_user`'s default remote shape,
 # which sets `ap_id`. So all five `.ap_id` ternaries already have their IF-side
 # pinned, and it is their ELSE sides that are new here, one test each.
@@ -1898,11 +1899,17 @@ def test_a_community_with_no_ap_id_is_named_by_its_name_in_the_feed_arm(app, db_
     the four.
 
     `_seed_feed` builds the Feed and the `FeedItem` that puts the community in
-    it, which is what
-    `.filter(FeedItem.community_id == post.community_id)`
-    (app/activitypub/util.py:2902) joins through. Feed id 8 is one of the three
-    ids the feed tests above use (7, 8 and 10); 9 is `_seed_topic`'s reserved
-    id and no feed takes it. Only one feed is seeded here, so there is no
+    it, which is what this arm's own lookup joins through:
+
+        community_feeds = session.query(Feed).join(FeedItem, FeedItem.feed_id == Feed.id).filter(
+            FeedItem.community_id == post.community_id).all()
+
+    (app/activitypub/util.py:2901-2902 -- the call opens on :2901 and only the
+    filter's argument and the `.all()` are on :2902; two lines quoted, two
+    lines cited).
+
+    Feed id 8 is one of the three ids the feed tests above use (7, 8 and 10);
+    9 is `_seed_topic`'s reserved id and no feed takes it. Only one feed is seeded here, so there is no
     second feed id for a mutation to confuse this one with, and no id-valued
     entry is asserted in any case -- `feed_name` is, because it is this arm's
     discriminator from the other three, alongside `notif_type` at `NOTIF_FEED`.
