@@ -24,8 +24,8 @@ from app.activitypub.util import (refresh_community_profile_task,
                                   refresh_feed_profile_task,
                                   refresh_user_profile_task)
 from app.models import Community, CommunityMember, Feed, Instance, User, utcnow
-from tests.factories import (make_community, make_feed, make_instance, make_user,
-                             seed_community_owner)
+from tests.factories import (make_community, make_feed, make_instance, make_local_feed,
+                             make_user, seed_community_owner)
 
 PEER = 'peer.example'
 
@@ -746,3 +746,77 @@ def test_a_sensitive_document_sets_nsfw(app, db_session, http_mock):
 
     db.session.refresh(community)
     assert community.nsfw is True
+
+
+def test_refreshing_a_feed_applies_the_peers_document(app, db_session, http_mock):
+    """`refresh_feed_profile_task` always fetches -- it takes a feed id alone,
+    with no `activity_json` parameter, unlike the community task.
+
+    Deviation from the brief: after applying the actor document,
+    `refresh_feed_profile_task` unconditionally calls
+    `get_request(feed.ap_following_url)` with no guard and no try/except --
+    unlike the owners fetch a few lines above it, which is gated on
+    `feed.ap_moderators_url` being set. `_remote_feed()` leaves
+    `ap_following_url` at its column default of `None`, and
+    `get_request(None)` raises `httpx.HTTPError` (via
+    `is_invalid_get_request_uri`) before respx ever sees a request -- so the
+    brief's test as written crashes before reaching its own assertion.
+    `ap_following_url` is set and mocked to an empty collection here so the
+    task's unconditional tail does not turn this happy-path test into an
+    unrelated failure.
+    """
+    feed = _remote_feed()
+    feed.ap_following_url = f'https://{PEER}/f/news/following'
+    db.session.commit()
+    _serve(http_mock, feed.ap_public_url, _feed_document())
+    _serve(http_mock, feed.ap_following_url, {'items': []})
+
+    refresh_feed_profile_task(feed.id)
+
+    db.session.refresh(feed)
+    assert feed.title == 'News, refreshed'
+
+
+def test_refreshing_a_local_feed_does_nothing(app, db_session, http_mock):
+    """`not feed.is_local()` -- the third conjunct, which NEITHER sibling has.
+    A local feed returns before fetching anything, so no route is registered
+    and `block_outbound_http` would raise if it fetched anyway. The absence of
+    a request is what this test proves.
+
+    `make_local_feed` gives a local feed directly; using it rather than
+    mutating a remote one keeps the fixture honest about what it represents.
+    """
+    seed_community_owner(PEER)
+    feed = make_local_feed('localnews')
+    db.session.commit()
+
+    refresh_feed_profile_task(feed.id)
+
+
+def test_a_feed_with_no_instance_crashes(app, db_session, http_mock):
+    """PINS A CRASH. DO NOT FIX -- Task 10 does.
+
+    `refresh_feed_profile_task` opens
+    `if feed and feed.instance.online() and not feed.is_local():` with no
+    `instance_id` check. Same defect as the community task's, same cause, and
+    the user task's guard is the shape both should have.
+    """
+    feed = _remote_feed()
+    feed.instance_id = None
+    db.session.commit()
+
+    with pytest.raises(AttributeError, match="'NoneType' object has no attribute 'online'"):
+        refresh_feed_profile_task(feed.id)
+
+
+def test_a_malformed_feed_document_crashes(app, db_session, http_mock):
+    """PINS A CRASH. DO NOT FIX -- Task 10 does.
+
+    `actor_data.json()` unguarded, exactly as in the community task. The user
+    task's handler is the control.
+    """
+    feed = _remote_feed()
+    _serve(http_mock, feed.ap_public_url, text='<html>not json</html>')
+
+    with pytest.raises(json.JSONDecodeError, match='Expecting value'):
+        refresh_feed_profile_task(feed.id)
