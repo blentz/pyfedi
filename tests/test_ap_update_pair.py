@@ -1122,12 +1122,17 @@ def test_a_microblog_reply_mention_of_an_ancestor_comments_author_is_suppressed(
     authored a comment further up in the comment chain":
 
         ids = tuple(ids)
-        user_ids = db.session.execute(text('SELECT user_id FROM "post_reply" WHERE id IN :ids'), {'ids': ids}).scalars()
-        if recipient.id in user_ids:
-            continue
+        if ids:
+            user_ids = db.session.execute(text('SELECT user_id FROM "post_reply" WHERE id IN :ids'), {'ids': ids}).scalars()
+            if recipient.id in user_ids:
+                continue
 
     `ids` is what the rule-3 loop accumulated: every entry of `reply.path`
-    except the leading 0 and the reply's own id -- that is, its ancestors.
+    except the leading 0 and the reply's own id -- that is, its ancestors. This
+    test's chain has two of them, so the `if ids:` guard is unconditionally
+    true here and the rule runs in full; the guard exists for the top-level
+    case, where there are no ancestors at all, and is covered by
+    test_a_top_level_microblog_reply_mention_skips_the_ancestor_lookup.
 
     A three-comment chain, with the OLDEST comment reassigned to the local
     recipient. Depth three is required: in a two-comment chain the only
