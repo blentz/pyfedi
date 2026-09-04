@@ -832,11 +832,23 @@ def _seed_topic(community, name='news'):
     `notification_subscribers(post.community_id, NOTIF_COMMUNITY)`
     (app/activitypub/util.py:2846) and the arm above that
     `notification_subscribers(post.user_id, NOTIF_USER)`
-    (app/activitypub/util.py:2821). A topic sharing the community's id would
-    leave the substitution of one entity id for another alive in every test
-    here. 9 is past every id these tests reach -- at most four users, two
-    posts, one community -- and the happy path asserts that distinctness rather
-    than trusting this sentence.
+    (app/activitypub/util.py:2821). A topic sharing the community's id -- or,
+    since the NOTIF_FEED arm below, a feed's -- would leave the substitution of
+    one entity id for another alive in every test here.
+
+    9 is this helper's reserved id and nothing else in the file may take it.
+    The invariant to hold is NOT a census of the ids the file reaches, which
+    every task appending to it falsifies again; it is that no test asserts on an
+    entity id equal to another entity id in its own scope. This sentence is not
+    what enforces that: each test turning on an entity id asserts the
+    distinctness itself, `assert len({community.id, topic.id, feed.id}) == 3` in
+    `test_a_subscriber_already_notified_by_the_topic_arm_is_not_notified_again`
+    and the wider `len({...})` guards in the two arms' happy paths.
+
+    Call this helper ONCE per test. `Topic(id=9, ...)` inserts an explicit
+    primary key, which does not advance `topic_id_seq`, so a second Topic left
+    to the sequence takes id 1 -- the Community's -- and reintroduces exactly
+    the collision this helper exists to avoid.
     """
     topic = Topic(id=9, machine_name=name, name=name.title())
     db.session.add(topic)
@@ -1166,6 +1178,11 @@ def _seed_feed(community, instance, name, feed_id, title):
     the key is reassigned after its insert and before any `FeedItem` or
     `NotificationSubscription` names it; nothing points at the row yet, so the
     UPDATE has no dependants.
+
+    The tests below pass 7, 8 and 10. **9 is `_seed_topic`'s reserved id and no
+    feed takes it**, so a later test that seeds a Topic and a Feed together
+    cannot have its entity-id distinctness guard satisfied by accident -- topic
+    id against feed id is the substitution mutation M13 exists to catch.
 
     **`title` different from `name`.** `make_feed` passes one string to both
     columns (`Feed(name=name, title=name, ...)`, tests/factories.py:176), but
@@ -1516,8 +1533,11 @@ def test_a_feed_subscriber_who_blocked_the_instance_is_skipped_for_every_feed(ap
     the author's instance, PEER -- so PEER is the instance the blocker has to
     block.
 
-    **This test asserts the behaviour of a known defect on purpose, and Task 7
-    is the task that changes the code under it.** In the three arms above,
+    **This test sits over a known defect, and Task 7 changes the code under
+    it.** What the assertion below observes is behaviour INVARIANT to that
+    defect, not behaviour specific to it -- the next paragraph proves that, and
+    it is the reason the test is neither inverted nor deleted when the fix
+    lands. In the three arms above,
     `notifications_sent_to.add(notify_id)` is the last statement of the `if`
     body: at app/activitypub/util.py:2843, :2866 and :2897 it is indented 20
     spaces, one level in from the `if` that governs it at :2825, :2850 and
@@ -1549,7 +1569,9 @@ def test_a_feed_subscriber_who_blocked_the_instance_is_skipped_for_every_feed(ap
     rejected, change no output of the function as it stands. What this test pins
     is the OBSERVABLE contract -- filtered out of one feed, notified by none --
     which is what a reader would expect to break if the fix were made wrongly,
-    and which Task 7 has to keep green.
+    and which Task 7 has to keep green. Task 7's gate is not an inverted
+    assertion here but a re-run of this arm's mutation table after the fix,
+    confirming that no mutant this task killed comes back unkilled.
 
     Two controls run alongside, and both are load-bearing:
 
@@ -1578,7 +1600,7 @@ def test_a_feed_subscriber_who_blocked_the_instance_is_skipped_for_every_feed(ap
     second_only = make_user(instance, 'second_feed_subscriber', local=True)
     feed_one = _seed_feed(community, instance, name='firstfeed', feed_id=8,
                           title='First Feed')
-    feed_two = _seed_feed(community, instance, name='secondfeed', feed_id=9,
+    feed_two = _seed_feed(community, instance, name='secondfeed', feed_id=10,
                           title='Second Feed')
     _subscribe(blocker, feed_one.id, NOTIF_FEED)
     _subscribe(blocker, feed_two.id, NOTIF_FEED)
