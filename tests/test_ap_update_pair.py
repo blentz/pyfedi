@@ -459,6 +459,23 @@ def test_a_reply_unparseable_updated_falls_back_to_now(app, db_session, redis_lo
     assert reply.ap_updated.year == utcnow().year
 
 
+def test_a_reply_non_string_updated_falls_back_to_now(app, db_session, redis_lock_only_double):
+    """D257's other arm: a NON-STRING `updated` -- an integer is enough --
+    makes `datetime.fromisoformat` raise `TypeError`, not `ValueError`, so
+    `except ValueError` alone lets it escape. The `except` clause right below
+    the call already states the intended behaviour for an unparseable
+    `updated`: fall back to `utcnow()`, exactly what the ValueError sibling
+    above asserts for its own case.
+    """
+    reply = _seed_reply()
+
+    update_post_reply_from_activity(reply, _update(
+        content='x', updated=123,
+    ))
+
+    assert reply.ap_updated.year == utcnow().year
+
+
 def test_a_reply_single_attachment_dict_is_appended(app, db_session, redis_lock_only_double):
     """The `isinstance(..., dict)` arm: a lone attachment object is wrapped
     into a one-element list rather than iterated as a dict's keys (which
@@ -2476,6 +2493,23 @@ def test_a_post_unparseable_updated_falls_back_to_now(app, db_session, redis_loc
 
     update_post_from_activity(post, _update(
         name='t', content='x', updated='not a timestamp', type='Note',
+    ))
+
+    assert post.ap_updated.year == utcnow().year
+
+
+def test_a_post_non_string_updated_falls_back_to_now(app, db_session, redis_lock_only_double):
+    """D257's other arm, mirroring the reply's
+    `test_a_reply_non_string_updated_falls_back_to_now`: a NON-STRING
+    `updated` -- an integer is enough -- makes `datetime.fromisoformat` raise
+    `TypeError`, not `ValueError`, so `except ValueError` alone lets it
+    escape. The `except` clause right below the call already states the
+    intended behaviour: fall back to `utcnow()`.
+    """
+    post = _seed_post()
+
+    update_post_from_activity(post, _update(
+        name='t', content='x', updated=123, type='Note',
     ))
 
     assert post.ap_updated.year == utcnow().year
