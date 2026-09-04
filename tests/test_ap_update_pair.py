@@ -444,8 +444,15 @@ def test_a_reply_updated_timestamp_is_parsed(app, db_session, redis_lock_only_do
 
 
 def test_a_reply_unparseable_updated_falls_back_to_now(app, db_session, redis_lock_only_double):
-    """The `except ValueError` arm. `datetime.fromisoformat` raises on a
-    string it cannot read, and the handler substitutes `utcnow()`.
+    """The `ValueError` arm of `except (ValueError, TypeError):`.
+    `datetime.fromisoformat` raises `ValueError` on a string it cannot read,
+    and the handler substitutes `utcnow()`.
+
+    The clause read `except ValueError:` when this test was written and was
+    widened by commit `fad7af91` (closing D257); this test predates that and
+    passed before and after it, because a malformed STRING was always
+    handled. Its `TypeError` sibling is
+    `test_a_reply_non_string_updated_falls_back_to_now` below.
 
     Asserting the year is the CURRENT year rather than 2020 is what
     distinguishes the fallback from the parse.
@@ -461,11 +468,21 @@ def test_a_reply_unparseable_updated_falls_back_to_now(app, db_session, redis_lo
 
 def test_a_reply_non_string_updated_falls_back_to_now(app, db_session, redis_lock_only_double):
     """D257's other arm: a NON-STRING `updated` -- an integer is enough --
-    makes `datetime.fromisoformat` raise `TypeError`, not `ValueError`, so
-    `except ValueError` alone lets it escape. The `except` clause right below
-    the call already states the intended behaviour for an unparseable
-    `updated`: fall back to `utcnow()`, exactly what the ValueError sibling
-    above asserts for its own case.
+    makes `datetime.fromisoformat` raise `TypeError`, not `ValueError`.
+
+    WRITTEN AGAINST THE PRE-FIX CODE, AND THE CODE HAS SINCE CHANGED. The
+    clause used to read `except ValueError:`, which let a `TypeError` escape
+    and lose the whole `Update`; commit `fad7af91` widened it to `except
+    (ValueError, TypeError):`, which is the spelling in source now -- so
+    grepping for `except ValueError` finds nothing. This test failed before
+    that commit with `TypeError: fromisoformat: argument must be str` and is
+    its mutation proof: reverting THIS site's clause to `except ValueError:`
+    kills this test and leaves the post-side pin green.
+
+    The handler already stated the intended behaviour for an unparseable
+    `updated` -- fall back to `utcnow()`, exactly what the `ValueError`
+    sibling above asserts for its own case -- which is why the fix was a
+    widening rather than a behaviour choice.
     """
     reply = _seed_reply()
 
@@ -2488,7 +2505,11 @@ def test_a_post_updated_timestamp_is_parsed(app, db_session, redis_lock_only_dou
 
 
 def test_a_post_unparseable_updated_falls_back_to_now(app, db_session, redis_lock_only_double):
-    """The post side's `except ValueError`, mirroring the reply's."""
+    """The post side's `ValueError` arm of `except (ValueError, TypeError):`,
+    mirroring the reply's. The clause read `except ValueError:` when this test
+    was written and was widened by commit `fad7af91`; a malformed STRING was
+    handled before and after, so this test is unaffected by that change.
+    """
     post = _seed_post()
 
     update_post_from_activity(post, _update(
@@ -2502,9 +2523,18 @@ def test_a_post_non_string_updated_falls_back_to_now(app, db_session, redis_lock
     """D257's other arm, mirroring the reply's
     `test_a_reply_non_string_updated_falls_back_to_now`: a NON-STRING
     `updated` -- an integer is enough -- makes `datetime.fromisoformat` raise
-    `TypeError`, not `ValueError`, so `except ValueError` alone lets it
-    escape. The `except` clause right below the call already states the
-    intended behaviour: fall back to `utcnow()`.
+    `TypeError`, not `ValueError`.
+
+    WRITTEN AGAINST THE PRE-FIX CODE, AND THE CODE HAS SINCE CHANGED. The
+    clause used to read `except ValueError:`, which let a `TypeError` escape;
+    commit `fad7af91` widened it to `except (ValueError, TypeError):` at both
+    sites of the pair, so `except ValueError` no longer appears in source at
+    all. This test failed before that commit and is the POST site's
+    independent mutation proof: reverting only this site's clause kills only
+    this test.
+
+    The handler already stated the intended behaviour: fall back to
+    `utcnow()`.
     """
     post = _seed_post()
 
