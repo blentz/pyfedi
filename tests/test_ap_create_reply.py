@@ -662,6 +662,193 @@ def test_a_reply_from_a_blocked_instance_is_refused(app, db_session, redis_lock_
     assert log.exception_message == 'Post author blocked replier'
 
 
+# --- the parent COMMENT's guards ----------------------------------------
+#
+# Two guards distinct from the post-author ones above: `if
+# parent_comment.author.has_blocked_user(user.id) or
+# parent_comment.author.has_blocked_instance(user.instance_id):` and `if not
+# parent_comment.replies_enabled:`. Both run only inside `if
+# parent_comment_id:`, which needs `in_reply_to` to resolve to a genuine
+# PostReply -- `_seed_chain_comment` (below, in the mention section) builds
+# one with `path`/`root_id` set the way `find_reply_parent` and `PostReply.new`
+# expect, and its `ap_id` carries 'comment' so `find_reply_parent`'s `if
+# 'comment' in in_reply_to:` hint fires.
+#
+# The parent comment's author is a THIRD user, distinct from `post`'s author
+# -- not `post.author` as the mention-suppression tests upstream use for
+# convenience. Using `post.author` here would leave `post.author.has_blocked_user`
+# (the guard read at line ~2628 in app/activitypub/util.py) blocked too,
+# since it is the same row, so a mutant that deleted this guard would still
+# be caught by that LATER, different guard, and would still log a message --
+# just the wrong one. The exact-message assertion below would still catch
+# that particular mutant, but with a distinct third author the test also
+# proves the reply would otherwise have gone through (nothing else stops it),
+# which is the stronger claim.
+
+
+def test_a_reply_to_a_comment_whose_author_has_blocked_the_replier_is_refused(app, db_session, redis_lock_only_double,
+                                                                              ap_log):
+    """The parent comment's author-blocked guard -- `has_blocked_user` half.
+
+    Same direction as `has_blocked_user` read for the post-author guard:
+    `self` is the blocker, so the parent comment's author blocking the
+    replier is `make_user_block(parent.author, replier)`.
+
+    Unlike the post-author guard's `has_blocked_user` test, `PostReply.new`'s
+    downstream `notification_target.author.has_blocked_user(...)` check
+    (app/models.py ~3030) does NOT reproduce this: `notification_target` is
+    `post` whenever the parent comment being replied to is itself top-level
+    (`in_reply_to.parent_id is None`, read at app/models.py ~3025-3028), and
+    `_seed_chain_comment` with no `parent=` builds exactly that. `post`'s
+    author is a different user from the parent comment's author here, and is
+    not blocked, so a mutant that deletes this guard would let
+    `PostReply.new` run to completion and actually create a reply -- there is
+    no duplicate downstream check to mask the deletion. The exact-message
+    assertion is kept anyway, for the same reason every other guard test here
+    keeps it: several guards produce the identical `None` / zero-rows
+    observable, and only the message tells them apart.
+    """
+    community, post, replier = _seed_scenario()
+    parent_author = make_user(replier.instance, 'parent_author')
+    parent = _seed_chain_comment(post, parent_author, 'parent')
+    make_user_block(parent.author, replier)
+
+    result = _create(community, post, replier, in_reply_to=parent.ap_id)
+
+    assert result is None
+    assert PostReply.query.filter(PostReply.id != parent.id).count() == 0
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Parent comment author blocked replier'
+
+
+def test_a_reply_to_a_comment_whose_author_has_blocked_the_repliers_instance_is_refused(app, db_session,
+                                                                                        redis_lock_only_double, ap_log):
+    """The parent comment's author-blocked guard -- `has_blocked_instance`
+    half. The guard's `or` has two operands, and a test that only ever
+    blocks the USER (above) cannot prove the INSTANCE half still matters --
+    the same reasoning `test_a_reply_from_a_blocked_instance_is_refused`
+    gives for the post-author guard's twin operand.
+
+    `make_instance_block(user, instance)` sets `InstanceBlock(user_id=user.id,
+    instance_id=instance.id)`, so the parent comment's author blocking the
+    replier's instance is `make_instance_block(parent.author,
+    replier.instance)`. As with the `has_blocked_user` half above,
+    `PostReply.new` has no downstream instance-block check on
+    `parent.author` to independently reproduce the same outcome (its check
+    is scoped to `notification_target`, which resolves to `post` here, not
+    `parent`), so this is a real kill of this guard's own site, not a
+    duplicate of a later one.
+    """
+    community, post, replier = _seed_scenario()
+    parent_author = make_user(replier.instance, 'parent_author')
+    parent = _seed_chain_comment(post, parent_author, 'parent')
+    make_instance_block(parent.author, replier.instance)
+
+    result = _create(community, post, replier, in_reply_to=parent.ap_id)
+
+    assert result is None
+    assert PostReply.query.filter(PostReply.id != parent.id).count() == 0
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Parent comment author blocked replier'
+
+
+def test_a_reply_to_a_locked_comment_is_refused(app, db_session, redis_lock_only_double, ap_log):
+    """`if not parent_comment.replies_enabled:` -- a distinct guard from the
+    author-blocked one above (different attribute, different message), gated
+    on the same `if parent_comment_id:` branch.
+
+    `replies_enabled` defaults `True` (app/models.py, `PostReply.replies_enabled
+    = db.Column(db.Boolean, default=True)`), so `_seed_chain_comment`'s
+    default needs no override -- this test sets it `False` explicitly instead.
+    """
+    community, post, replier = _seed_scenario()
+    parent = _seed_chain_comment(post, post.author, 'parent')
+    parent.replies_enabled = False
+    db.session.commit()
+
+    result = _create(community, post, replier, in_reply_to=parent.ap_id)
+
+    assert result is None
+    assert PostReply.query.filter(PostReply.id != parent.id).count() == 0
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Parent comment is locked'
+
+
+# --- the inner `if post_id is None:` guard: unreachable ------------------
+#
+# `find_reply_parent` (app/activitypub/util.py:1987-2017) sets `post_id =
+# parent_comment.post_id` in BOTH places it sets `parent_comment_id` -- the
+# 'comment' hint branch and the no-hint fallback -- and never sets
+# `parent_comment_id` without also setting `post_id` in the same statement
+# group. It also never sets `root_id` except alongside `parent_comment_id`,
+# in those same two places. So, reading `create_post_reply`'s
+# `if post_id or parent_comment_id or root_id:` (the only way into this
+# function's body) together with `find_reply_parent`'s invariant:
+#
+#   - if `parent_comment_id` is truthy, `post_id` is truthy too (same
+#     assignment group) -- so `if parent_comment_id:` inside this block
+#     always finds `post_id` already set, and the inner `if post_id is
+#     None:` guard immediately below it cannot fire.
+#   - if `parent_comment_id` is falsy, the outer `if` could only have been
+#     entered on `post_id` or `root_id`. `root_id` is falsy whenever
+#     `parent_comment_id` is (they are set together), so `post_id` must be
+#     the truthy one -- and the `else: parent_comment = None` branch is
+#     taken, again leaving `post_id` set when the inner guard is reached.
+#
+# In neither path can the inner guard's condition be True. This is not a
+# fixture gap or a data constraint -- it is a TAUTOLOGY: `find_reply_parent`'s
+# own control flow guarantees `post_id is None` is false at every point
+# `create_post_reply` can reach that check, independent of what row data is
+# seeded. No test was written for it, and none should be forced by faking a
+# `post_id=None` / `parent_comment_id=<truthy>` return from
+# `find_reply_parent` -- that state does not occur in production. (This
+# guard is not dead code in the sense of being unreachable from the
+# function's entry -- `if parent_comment_id:` without `else` would put
+# `post_id` at risk if `find_reply_parent`'s invariant ever changed -- but as
+# the source stands today, its True branch is unreachable.)
+
+
+def test_the_tail_exception_handler_pins_a_postreply_new_validation_error(app, db_session, redis_lock_only_double,
+                                                                          ap_log):
+    """`except Exception as ex: log_incoming_ap(id, APLOG_CREATE, APLOG_FAILURE,
+    saved_json, str(ex)); return None` -- `create_post_reply`'s tail handler.
+
+    This pins CURRENT BEHAVIOUR, not an endorsement of it. Reading
+    `PostReply.new` (app/models.py:2967-3051), the handler's `except
+    Exception` is wide enough to catch every `PostReplyValidationError` it
+    can raise -- 'Comments are disabled on this post', 'Banned from
+    commenting', 'Blocked phrase in comment', 'Replier blocked', 'Duplicate
+    reply', 'Gif comment ignored', 'Low quality reply' -- and, being a bare
+    `Exception`, anything else `PostReply.new` or the Mention/flair code
+    above it happens to raise, including bugs. That breadth is registered
+    here as a FINDING (an over-wide except that turns arbitrary production
+    exceptions into a silent `None` with only a log row to show for it), not
+    something this test asserts is correct design. It is pinned through a
+    REAL validation error rather than an injected artificial exception,
+    because 'Comments are disabled on this post' is an actual production
+    path a remote reply can hit (a post's `comments_enabled` is toggled
+    False by its author or a mod), not a fixture invented to force the
+    `except` block to run.
+
+    `post.comments_enabled` defaults `True` (app/models.py:1717); this test
+    sets it `False` so `PostReply.new`'s FIRST check
+    (`if not post.comments_enabled: raise PostReplyValidationError(_('Comments
+    are disabled on this post'))`, app/models.py:2977-2978) fires before any
+    of the other guards it could equally have raised through, keeping the
+    test independent of the rest of `PostReply.new`'s body.
+    """
+    community, post, replier = _seed_scenario()
+    post.comments_enabled = False
+    db.session.commit()
+
+    result = _create(community, post, replier)
+
+    assert result is None
+    assert PostReply.query.count() == 0
+    log = ActivityPubLog.query.one()
+    assert log.exception_message == 'Comments are disabled on this post'
+
+
 # --- attachment loop ---------------------------------------------------
 #
 # Structurally identical to the loop sub-project 14 covered in
