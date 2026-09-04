@@ -2813,10 +2813,16 @@ re-run all of them and restore the kills the fix vacated, in the same commit
 that vacated them. Sub-project 14 did, adding the `source=None` companion the
 sibling suite already carried.
 
-**75. The FIVE catalogued causes of an unkillable clause. Name which one you
-have and prove it; never invent a test to fake a kill.** Causes 4 and 5 were
-added by sub-project 14 and are the two that most often get mis-filed as
-ordinary fixture gaps.
+**75. The five catalogued causes of an unkillable CLAUSE, and one of an
+unkillable STATEMENT. Name which one you have and prove it; never invent a test
+to fake a kill.** Causes 4 and 5 were added by sub-project 14 and are the two
+that most often get mis-filed as ordinary fixture gaps. **Causes 1-5 are all
+causes of an unkillable *clause*; cause 6, added by sub-project 16, is the
+statement-level case, and the reason it is numbered separately rather than
+folded into 4(a) is that force-fitting a statement into a clause taxonomy is
+what produces a mis-filed survivor.** Read the scope of the item before you
+claim it: if the mutant you are explaining deleted or narrowed a whole
+statement rather than dropping a conjunct, 1-5 do not apply to it.
 
 1. **The factory always produces the matching value** (fact 33) -- the clause is
    fine, the fixture cannot vary what it tests. Fixable.
@@ -2850,8 +2856,29 @@ ordinary fixture gaps.
    starts at 1, so inserting a `PostReply` with id 0 to force the kill
    fabricates a state production cannot reach -- a fake kill, and the reviewer
    said so before the implementer was tempted.
+6. **Redundant statement** -- **the only cause on this list that is not about a
+   clause.** The mutated statement's only observable effect is performed
+   unconditionally by code that runs after it on every path, typically a
+   `finally`. Prove it by **naming the code that repeats the effect and showing
+   that no path between the two observes the difference** -- not by counting
+   failures. `session.rollback()` in `notify_about_post_task`'s tail handler
+   (`app/activitypub/util.py:2933`) can be deleted and nothing fails, because
+   `finally: session.close()` (`:2935-2936`) ends the transaction on the
+   exception path whether or not the rollback ran, so no persisted state ever
+   differs (D281; D231 records the identical shape at three sites in the three
+   actor-refresh tasks, registered by sub-project 13, and that pair of
+   independent instances is why this is a cause rather than an anecdote). The same cause covers a
+   narrowed handler: `except Exception:` -> `except ValueError:` on the same
+   block also survives, because the exception propagates either way and
+   `finally` still ends the transaction -- **the breadth of a handler whose body
+   is observably a no-op is unpinnable for exactly the reason its body is.**
+   Corroboration can be indirect and still count: deleting `session.close()` as
+   well does not expose the rollback -- the run **hangs** on the locks the
+   uncommitted INSERT holds -- and that is the same proof, because the rows are
+   still never committed by anyone. Not fixable, and no test should be written
+   for it.
 
-**Crash-only killability is a sixth thing that looks like this list but is not
+**Crash-only killability is another thing that looks like this list but is not
 on it**: fact 68's third note describes a clause no *assertion* can kill because
 no input satisfies the remaining conjuncts while falsifying it. That is a shape
 of kill, not a cause of survival -- the mutant does die, by exception. Label
@@ -3092,7 +3119,143 @@ display-name fallbacks whose mutants merely store a null. Both kinds want a
 test; only the first is a defect risk, and saying which is which is what keeps
 the six from reading as busywork. Mutation-prove each arm **individually** --
 identical expressions at several sites need one test apiece, and the proof is
-that reverting one site kills exactly one test.
+that reverting one site kills exactly one test. **(c) An AST WALK beats a grep
+for the enumeration itself**, added by sub-project 16 after a reviewer used one
+to re-derive an implementer's list independently: `ast.parse` the module, take
+every `IfExp` inside the `FunctionDef` nodes you care about, and read each
+function's extent off `end_lineno` rather than off "the next `def`". A textual
+`' if .* else '` grep misses a ternary inside an f-string, a dict literal, a
+comprehension or an argument default, and a seventh untested ternary is exactly
+the failure this fact exists to prevent -- one that neither coverage nor a
+mutation table would show. Both methods agreed there; agreement between two
+methods is the result worth recording, because a single method's silence is not
+evidence.
+
+**88. A REVIEWER'S citations fail as often as an implementer's, and a
+correction gets LESS scrutiny precisely because it carries more authority.**
+Three times in one sub-project a review's own findings carried wrong line
+numbers: **three of the four in a single round** -- a docstring sentence cited
+one line past where it began, a fixture cited at a blank line some seventy
+lines above the seeding, and a bold sentence cited at the docstring's first
+line instead of its own (test-file addresses, deliberately not reproduced here,
+because an intra-file line number does not survive the next append) -- and one
+in a later round that placed a **production** line at
+`app/activitypub/util.py:2935` when it was, and still is, at `:2931`. **The
+implementer caught every one**, and sub-project 15
+saw the same shape. The asymmetry is the point: a review finding arrives framed
+as "you got this wrong", which invites agreement rather than verification, so
+the citation inside it is the least-checked claim in the exchange. **Hold a
+reviewer's citations to the standard you hold an implementer's: read the cited
+line back from source before you edit anything, and if it is wrong say so in the
+fix report rather than silently editing the right line.** The corollary for a
+reviewer: a finding whose line number is wrong is still usually a real finding,
+so state the *content* you read as well as the address you read it at -- the
+content survives an off-by-one and the address does not.
+
+**89. `TRUNCATE ... RESTART IDENTITY` makes two entities share a primary key, so
+an id-valued assertion can be SILENTLY VACUOUS with the whole file green.**
+`tests/conftest.py:143` truncates with `RESTART IDENTITY`, so every sequence
+restarts at 1 in every test. A helper that seeds one `Community` and then one
+`Post` gives **both** primary key 1, and an assertion like `targets ==
+{..., 'post_id': post.id, 'community_id': community.id}` cannot tell the two
+apart. Measured, not reasoned: mutating production's `'community_id':
+post.community_id` to `post.id` left **fifteen of fifteen tests passing**.
+**Coverage cannot see this, a mutation score computed only over guards cannot
+see it, and a green suite is what it looks like.** Two remedies, and use both:
+seed the entities so the ids are **pairwise distinct** (seed a second row of one
+type, or assign an explicit primary key -- an explicit id fabricates no state
+production cannot reach), and carry an explicit `assert len({a.id, b.id, ...})
+== n` in the test so the arrangement fails loudly if a factory's ordering ever
+changes. **Prove the guard is load-bearing before trusting it**: re-run the
+substitution mutation with the ids collided and confirm it survives, and with
+them distinct and confirm it dies. Note that assigning an explicit primary key
+does **not** advance the sequence, so a later unseeded row of the same type
+takes id 1 and reintroduces the collision -- reserve ids in a helper's docstring
+and say which are taken.
+
+**90. A task that commits INSIDE its recipient loop leaves durable partial
+state that no rollback removes -- and that state is assertable, so assert it.**
+`notify_about_post_task` (`app/activitypub/util.py:2804`) calls
+`session.commit()` per recipient at `:2842`, `:2865`, `:2896` and `:2930`,
+inside each of its four arms' loops, while its single tail handler
+(`:2932-2934`) rolls back and re-raises. So a mid-fan-out exception leaves every
+earlier recipient's row **committed** and only the failing iteration discarded.
+For a test author this cuts both ways. **It is a hazard**: a "nothing happened"
+assertion is wrong for such a function, because something did happen and it is
+still there after the raise. **And it is an opportunity**: the split is exactly
+what pins the handler, which is otherwise very hard to reach. Assert it in
+three parts -- the surviving recipient's row **and** its counter, the failing
+recipient's absence, **and a whole-table count with a contrary baseline taken
+before the call**, since "one row for this user" and "one row in the table" are
+different claims and only the second excludes a mutant that skipped the failing
+recipient entirely. Arm ORDER is what makes the split deterministic: two
+recipients inside one arm are not ordered, because `notification_subscribers`
+(`app/utils.py:2936-2939`) is a raw `SELECT` with no `ORDER BY`. Interlock the
+zero-rows half with `pytest.raises`, so a run that never reached the failure
+cannot pass by leaving the same zero rows.
+
+**91. FOUR near-identical guard chains in sequence make fact 72's hazard the
+DOMINANT one, not an edge case -- and a stored discriminator is what makes a
+row attributable to the arm that wrote it.** `notify_about_post_task` has four
+arms whose guards share text almost exactly: `if notify_id != post.user_id and
+notify_id not in notifications_sent_to and \` occurs **twice** in the file,
+`post.community_id not in blocked_comms` **three** times, `post.instance_id not
+in blocked_ints` **four** times. Three consequences, all learned the hard way
+here. **(a) Mutate by LINE, never by string** -- a `sed 's/old/new/'` over such
+a file silently mutates a sibling arm, and the kill you record is then
+attributed to the wrong conjunct. **(b) Mutate each conjunct by forcing it
+TRUE, not False.** Forcing True tests the conjunct's exclusion power and is
+killed by the one test that seeds the state it exists to exclude; forcing False
+runs into fact 72, and with four near-identical chains that trap is the normal
+case rather than the exception. **(c) Record which named test kills each
+conjunct and whether the kill is SOLE or multi.** With four arms able to produce
+a `Notification` for the same recipient, "one row exists" proves nothing about
+which arm made it -- what proves it is a **stored discriminator**: this
+function's `targets` dict differs per arm (`community_id` only in the community
+arm, `topic_name` only in the topic arm, `feed_id` only in the feed arm)
+alongside `notif_type` and `subtype`. Assert the discriminator, not just the
+count, and a cross-arm de-duplication test then says *which* arm won rather than
+merely that one did. A sole-kill column in the mutation table is what lets a
+reviewer check all of this without re-running anything.
+
+**92. Flask's `json` SHADOWS the standard library's inside
+`app/activitypub/util.py`, so that module's `json.dumps` sorts keys.**
+`app/activitypub/util.py:18` is `from flask import current_app, request, g,
+url_for, json`, and the binding is module-wide. The consequence a test author
+meets: `log_incoming_ap` writes `ActivityPubLog.activity_json` with the Flask
+`json.dumps`, so an assertion comparing that column against a `json.dumps(...)`
+built with the **stdlib** `json` in a test module fails on key ordering alone,
+with a diff that reads like a content mismatch. It produced sub-project 16's
+only genuine RED. **Assert `json.loads(column) == document`**, which pins what
+the column is for and leaves ordering -- which no test here is about --
+unpinned. Generalise the habit, not the instance: before asserting on a string
+some other module produced, read that module's imports for what its serialiser
+actually is.
+
+**93. A provably BEHAVIOUR-PRESERVING fix cannot be proved by a mutation that
+fails a named test, and the instrument that replaces that gate is the
+accumulated mutation table re-run against BOTH versions.** The campaign's
+standing rule is that every production fix is proved by a mutation failing a
+named test. That rule exists to stop unfounded behaviour changes, and it is
+unsatisfiable by construction when the change is behaviour-preserving: if no
+observable differs, no test can fail. **Do not manufacture a test that appears
+to fail for the stated reason while actually failing for another, and do not
+conclude the fix must therefore be wrong** -- an equivalence argument derived
+from source is a *stronger* claim than a failing test, not a weaker one. What
+takes the gate's place: (1) state the equivalence argument from source, naming
+the load-bearing fact; (2) apply the fix; (3) re-run **every** mutation from
+every accumulated table against the pre-fix and the post-fix file with the
+**same** test file, and compare the full tuple `(passed, failed, sorted failing
+test names, exception kinds)` rather than "did something fail"; (4) confirm that
+the mutation which deletes the moved statement still dies, so the fix did not
+turn a live statement into dead code. Sub-project 16 ran 70 x 2 with zero
+divergence. Two practical notes. **A behaviour-preserving edit has a non-empty
+expected diff, so "is `git diff -- app/` empty?" is not the hygiene check any
+more** -- save the intended diff before the first mutation and compare against
+it. And **match the INVARIANT, not the literal text of the sibling you are
+copying**: three sibling arms put the statement at indent 20, and copying 20
+into the fourth arm would have reproduced the bug, because the invariant was
+"the last statement of the `if` body" and that arm sits one level deeper.
 
 ## Known noise
 
