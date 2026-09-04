@@ -9,10 +9,23 @@ directly rather than through `.delay()`. The `app` fixture puts celery in eager
 mode, which makes the two routes equivalent in this suite anyway.
 
 `notify_about_post_task` runs on `get_task_session()`, whose autoflush is at
-SQLAlchemy's default True, unlike `db.session`, which the app factory
-configures `autoflush=False`. The task commits on its own session, so a test
-holding a row from `db.session` needs `db.session.refresh()` to see what the
-task wrote. That is the opposite of what sub-projects 14 and 15 needed.
+SQLAlchemy's default True, unlike `db.session`, which is constructed
+`SQLAlchemy(session_options={"autoflush": False}, engine_options={...})` at
+app/__init__.py:81 -- module level, not inside `create_app` (app/__init__.py:129).
+
+The task commits on its own session, which does NOT expire the instances
+`db.session` holds. Whether a test therefore has to re-read is conditional, and
+the condition is easy to get backwards. `expire_on_commit` is absent from those
+`session_options`, so it is at SQLAlchemy's default True: any
+`db.session.commit()` of the test's own -- and every factory in tests/factories.py
+ends in one -- expires every instance in `db.session`, and an expired attribute
+re-loads on next access. So a plain attribute read usually already sees what the
+task wrote. It goes stale only when something between that commit and the
+assertion re-loaded the instance and so un-expired it -- and calling the task
+does exactly that to any row the task itself touches. Prefer a fresh query
+(`_notifications_for`) or an explicit `db.session.refresh()` rather than
+depending on which of those happened; that much is the opposite of what
+sub-projects 14 and 15 needed.
 
 `log_incoming_ap` writes an `ActivityPubLog` row only when
 `LOG_ACTIVITYPUB_TO_DB` is true, and config.py defaults it False. Every
@@ -297,13 +310,27 @@ def test_notify_about_post_dispatches_inline_only_under_debug(app, db_session, m
 # ---------------------------------------------------------------------------
 
 def _notifications_for(user):
-    """Every Notification row for one recipient, freshly read.
+    """Every Notification row for one recipient, freshly read, oldest first.
 
     `notify_about_post_task` commits on `get_task_session()`, which does not
     expire objects held by `db.session`, so a query is the reliable read --
     an attribute on a stale ORM instance is not.
+
+    The `order_by` is a deliberate departure from the brief's printed draft,
+    which ended `.filter_by(user_id=user.id).all()`. Unordered is harmless for
+    the NOTIF_USER tests below, which each read a single row, but this helper is
+    the interface the three later arm tasks consume, and the kills they owe for
+    `notify_id not in notifications_sent_to` need ONE recipient subscribed to
+    TWO entities -- two rows for one user, indexed positionally. PostgreSQL
+    gives no ordering guarantee for a SELECT without ORDER BY, so
+    `notifications[0]` would be a coin toss there. `Notification.id` is the
+    autoincrement primary key (app/models.py:3729), so ordering by it is
+    insertion order, which is the order the four arms run in.
     """
-    return db.session.query(Notification).filter_by(user_id=user.id).all()
+    return (db.session.query(Notification)
+            .filter_by(user_id=user.id)
+            .order_by(Notification.id)
+            .all())
 
 
 def _peer_instance():
@@ -388,7 +415,7 @@ def test_the_author_is_not_notified_even_when_subscribed_to_themselves(app, db_s
     `class NotificationSubscription` (app/models.py) declares `type`,
     `entity_id` and `user_id` as plain indexed columns and no unique
     constraint over them. The only production writer of a NOTIF_USER
-    subscription, `subscribe_user` (app/shared/user.py:88 -- the sole
+    subscription, `subscribe_user` (app/shared/user.py:89 -- the sole
     implementation for both SRC_WEB and SRC_API), nonetheless refuses one:
 
         if person.id == user_id:
