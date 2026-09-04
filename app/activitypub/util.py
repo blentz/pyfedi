@@ -3005,7 +3005,7 @@ def notify_about_post_reply(parent_reply: Union[PostReply, None], new_reply: Pos
 def update_post_reply_from_activity(reply: PostReply, request_json: dict):
     from app import redis_client
     with redis_client.lock(f"lock:post_reply:{reply.id}", timeout=10, blocking_timeout=6):
-        if 'content' in request_json['object']:   # Kbin, Mastodon, etc provide their posts as html
+        if 'content' in request_json['object'] and request_json['object']['content'] is not None:   # Kbin, Mastodon, etc provide their posts as html
             if not (request_json['object']['content'].startswith('<p>') or request_json['object']['content'].startswith('<blockquote>')):
                 request_json['object']['content'] = '<p>' + request_json['object']['content'] + '</p>'
             reply.body_html = allowlist_html(request_json['object']['content'])
