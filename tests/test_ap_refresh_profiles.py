@@ -1533,6 +1533,65 @@ def test_no_feed_owners_url_means_no_owners_fetch(app, db_session, http_mock):
     assert db.session.query(FeedMember).filter_by(feed_id=feed.id).count() == 1
 
 
+def test_object_shaped_owners_entries_are_unwrapped_before_comparison(
+        app, db_session, http_mock):
+    """OBJECT ENTRIES IN THE OWNERS COLLECTION -- D219(c).
+
+    `refresh_feed_profile_task` reads `orderedItems` twice: a membership loop
+    that hands each entry to `find_actor_or_create`, and a removal loop below
+    it that compares each entry with `actor.lower()`. The two disagree about
+    entry shape. `find_actor_or_create` opens with
+    `if isinstance(actor, dict): actor = actor['id']`, so the membership loop
+    accepts an object entry -- by the helper's doing, not its own -- while the
+    removal loop's `.lower()` raises `AttributeError: 'dict' object has no
+    attribute 'lower'` on the same entry, out of the task through its
+    `except Exception: session.rollback(); raise`.
+
+    THE CORRECT SPELLING WAS ALREADY IN THIS FILE, in the loop this one was
+    copied from: `refresh_community_profile_task`'s moderators REMOVAL loop
+    unwraps inline (`if isinstance(actor, dict): actor = actor['id']`) before
+    its own `actor.lower()`. Its membership loop above it does not, for the
+    same reason the feed's does not -- the helper covers it. So of the four
+    loops the two tasks run over these collections, the feed's removal loop
+    was the only one an object entry could not survive.
+
+    `{'type': 'Person', 'id': ...}` is what Lemmy sends in an
+    `OrderedCollection` of actors, and it is the shape the sibling loop was
+    written to accept.
+
+    TWO MEMBERSHIPS, ONE IN THE COLLECTION AND ONE NOT, so the removal loop
+    has to do more than not crash. `stale` is seeded as an owner and left out
+    of the served collection, so the pin fails if the unwrap is dropped
+    (`AttributeError`), and equally if the loop is made to swallow the
+    mismatch and remove nobody, or to remove everybody. Without a seeded
+    `FeedMember` the removal loop would have nothing to iterate.
+
+    No following collection is involved: `make_feed` leaves
+    `ap_following_url` NULL and Task 10's gate skips that fetch, so the task
+    ends after the owners pass.
+    """
+    feed = _remote_feed()
+    owner = make_user(feed.instance, 'fauxowner')
+    owner.ap_fetched_at = utcnow()
+    stale = make_user(feed.instance, 'staleowner')
+    db.session.commit()
+    make_feed_member(stale, feed, is_owner=True)
+    owners_url = f'https://{PEER}/f/news/owners'
+    _serve(http_mock, feed.ap_public_url,
+           _feed_document(fields={'attributedTo': owners_url}))
+    _serve(http_mock, owners_url,
+           {'type': 'OrderedCollection',
+            'orderedItems': [{'type': 'Person', 'id': owner.ap_profile_id}]})
+
+    refresh_feed_profile_task(feed.id)
+
+    kept = db.session.query(FeedMember).filter_by(
+        feed_id=feed.id, user_id=owner.id).one()
+    assert kept.is_owner is True
+    assert db.session.query(FeedMember).filter_by(
+        feed_id=feed.id, user_id=stale.id).count() == 0
+
+
 def test_a_failed_community_fetch_is_retried_once(
         app, db_session, http_mock, no_real_sleeping):
     """The community task's retry, whose inner catch is `except Exception:`
