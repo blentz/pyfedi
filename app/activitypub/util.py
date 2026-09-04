@@ -797,7 +797,12 @@ def refresh_community_profile_task(community_id, activity_json):
                         except Exception:
                             return
                     if actor_data.status_code == 200:
-                        activity_json = actor_data.json()
+                        try:
+                            activity_json = actor_data.json()
+                        except JSONDecodeError:
+                            community.instance.failures += 1
+                            session.commit()
+                            return
                         actor_data.close()
 
                 if activity_json:
@@ -1028,7 +1033,12 @@ def refresh_feed_profile_task(feed_id):
                     except Exception:
                         return
                 if actor_data.status_code == 200:
-                    activity_json = actor_data.json()
+                    try:
+                        activity_json = actor_data.json()
+                    except JSONDecodeError:
+                        feed.instance.failures += 1
+                        session.commit()
+                        return
                     actor_data.close()
 
                     if 'attributedTo' in activity_json and isinstance(activity_json['attributedTo'], str):  # lemmy, mbin, and our feeds
