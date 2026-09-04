@@ -1902,3 +1902,53 @@ def test_a_null_following_collection_is_skipped(app, db_session, http_mock):
     assert feed.title == 'News, refreshed'
     assert feed.public_key == '-----BEGIN PUBLIC KEY-----refreshed'
     assert db.session.query(FeedItem).count() == 0
+
+
+def test_the_following_collection_fetch_asks_for_activity_json(app, db_session, http_mock):
+    """The `Accept` header on the following-collection fetch -- D232.
+
+    `get_request` (`app/utils.py:131-139`) builds a headers dict holding only
+    a `User-Agent` when its `headers` argument is None, so a call site that
+    passes nothing expresses no content preference at all and a peer that
+    content-negotiates is free to answer an ActivityPub URL with HTML. The
+    other three `get_request` calls in `refresh_feed_profile_task` -- the
+    actor fetch, its retry, and the owners-collection fetch -- each pass
+    `headers={'Accept': 'application/activity+json'}`.
+
+    WHAT THE PEER SAW BEFORE THE FIX WAS `*/*`, not nothing: httpx's own
+    client defaults supply an `Accept` when the caller sets none, and `*/*`
+    is the one header value that positively invites a content-negotiating
+    peer to send its HTML representation. So the assertion is an equality
+    against the intended value rather than a presence check -- a presence
+    check would have passed unfixed.
+
+    THE ASSERTION IS ON THE RECORDED REQUEST, NOT ON THE OUTCOME, and it has
+    to be. respx serves whatever the route was given no matter what the
+    request asked for, so a test that checked only the resulting `FeedItem`
+    rows would pass identically with and without the header. `_serve` returns
+    the route it registers, and respx records every matched call on that
+    route, so what the task actually sent is readable directly.
+
+    WHY THE MISSING HEADER IS WORSE THAN IT LOOKS: the following fetch's
+    `except JSONDecodeError: res.close(); return` guard means a peer that
+    answers with HTML no longer raises out of the task. It returns instead,
+    leaving the feed's `FeedItem` set unsynced with no exception, no log line
+    and no `instance.failures` increment -- pinned as correct handling of a
+    malformed body by `test_a_malformed_following_collection_creates_no_feed_items`,
+    and turned into a silent functional failure only because this one call
+    site asked for nothing in particular.
+    """
+    feed = _remote_feed()
+    feed.ap_following_url = f'https://{PEER}/f/news/following'
+    db.session.commit()
+    community = _following_community()
+    _serve(http_mock, feed.ap_public_url, _feed_document())
+    following_route = _serve(http_mock, feed.ap_following_url,
+                             {'items': [community.ap_profile_id]})
+
+    refresh_feed_profile_task(feed.id)
+
+    assert following_route.call_count == 1
+    sent = following_route.calls.last.request
+    assert sent.headers['accept'] == 'application/activity+json'
+    assert db.session.query(FeedItem).one().community_id == community.id

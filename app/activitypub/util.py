@@ -1153,7 +1153,8 @@ def refresh_feed_profile_task(feed_id):
 
                     # also make sure we have all the feeditems from the /following collection
                     if feed.ap_following_url:
-                        res = get_request(feed.ap_following_url)
+                        res = get_request(feed.ap_following_url,
+                                          headers={'Accept': 'application/activity+json'})
                         if res.status_code == 200:
                             try:
                                 following_collection = res.json()
