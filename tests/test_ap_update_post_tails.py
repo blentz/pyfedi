@@ -70,11 +70,14 @@ import pytest
 
 from app import db
 from app.activitypub.util import update_post_from_activity
-from app.constants import (POST_TYPE_ARTICLE, POST_TYPE_EVENT, POST_TYPE_IMAGE,
-                           POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_VIDEO)
-from app.models import Event, File, PollChoice, PollChoiceVote
+from app.constants import (NOTIF_REPORT, POST_TYPE_ARTICLE, POST_TYPE_EVENT,
+                           POST_TYPE_IMAGE, POST_TYPE_LINK, POST_TYPE_POLL,
+                           POST_TYPE_VIDEO, ROLE_ADMIN)
+from app.models import (Event, File, Notification, PollChoice, PollChoiceVote,
+                        Post, Role, User)
 from app.utils import set_setting, utcnow
-from tests.factories import (make_community, make_instance, make_poll,
+from tests.factories import (make_community, make_community_member,
+                             make_domain, make_instance, make_poll,
                              make_poll_choice, make_post, make_site, make_user)
 
 PEER = 'peer.example'
@@ -2799,3 +2802,693 @@ class TestUrlChangeYoutubeFixup:
         assert post.url == YOUTUBE_IMAGE_EMBED_URL
         assert post.type == POST_TYPE_IMAGE
         assert db.session.get(File, post.image_id).source_url == YOUTUBE_IMAGE_URL
+
+
+# ---------------------------------------------------------------------------
+# THE SUSPICIOUS-DOMAIN CLUSTER STARTS HERE, and it is the last one in this
+# file. It picks up exactly where the url-change cluster above stops: that one
+# owns `:3472-3506`, this one owns `:3508-3567` -- the notification block a
+# changed url's DOMAIN can trigger, the two lines that reassign `post.domain`,
+# and the no-url `else` arm the whole Links section falls to when an Update
+# carries no attachment.
+#
+# It reuses `_seed_link_post`, `_taken`, `_linked_update`, `_attach_banner`,
+# SEEDED_URL, CHANGED_IMAGE_URL, EXISTING_IMAGE and UPDATE_NAME as they stand
+# rather than copying them. `_attach_banner` is reached back for from the
+# `Event` cluster, which the url-change cluster above already does and says so.
+# Names INTRODUCED below belong to this cluster alone.
+#
+# WHAT THE `else` ARM ALREADY HAD, and what is left. Two tests in
+# `TestAttachmentDispatchGuard` (above) already land on `:3550` incidentally and
+# assert `post.url is None` and `post.type == POST_TYPE_ARTICLE`. Neither
+# touches `:3565`'s `post.image_id = None` or either of the two
+# `calculate_cross_posts` calls, which is what `TestUrlClearedToArticle` below
+# is for. The comment at `:3552-3563` is a prior sub-project's fix carrying its
+# own reasoning; nothing here re-litigates it.
+#
+# `Site.admins()` NEEDS A ROLE ROW -- see `_make_admin` below for the proof and
+# for which of its two arms every fixture in this file takes.
+#
+# WHAT NO FIXTURE HERE MAY DO: seed `post.domain` on a post that will produce a
+# Notification. `:3517` and `:3535` both store `post.domain` -- the `Domain`
+# RELATIONSHIP OBJECT, not its name or its id -- into `Notification.targets`,
+# which is `db.Column(db.JSON)` (app/models.py:3738). For a post that already
+# has a domain the flush raises
+# `StatementError: (builtins.TypeError) Object of type Domain is not JSON
+# serializable`, measured directly against this harness. So the tests that
+# produce notifications leave `post.domain_id` NULL (`orig_post_domain` is then
+# a JSON null, which is what they assert), and the test that seeds a contrary
+# `post.domain` baseline -- TestSuspiciousDomainReassignment's first -- has both
+# notify flags off so no `Notification` is ever built. That is a production
+# defect, not a harness quirk, and it is reported rather than repaired: it is
+# not a mechanical fix, because no correct spelling of it exists in the tree.
+# All four sites carry the same expression (app/models.py:2075,
+# app/activitypub/util.py:3517 and :3535, app/shared/post.py:577), so there is
+# nothing to copy from and the choice between `post.domain.name` and
+# `post.domain_id` is a behaviour decision this slice does not own.
+# ---------------------------------------------------------------------------
+
+# A url on a domain that is NOT PEER, which is what makes `:3510`'s
+# `old_domain != new_domain` true. Every other url-change constant above is
+# deliberately on PEER to keep this block OUT of those tests; this cluster is
+# the one that wants it in.
+SUSPICIOUS_DOMAIN = 'suspicious.example'
+SUSPICIOUS_URL = f'https://{SUSPICIOUS_DOMAIN}/changed/article'
+
+# A peer-supplied `href` `urlparse` accepts and whose `.hostname` is None: the
+# only shape that reaches `:3510` with `new_domain` None, because
+# `domain_from_url` returns a row only under `if parsed_url and
+# parsed_url.hostname:` (app/utils.py:1583-1594) and None otherwise (`:1596`).
+# It is exactly the shape `:3463-3467`'s comment names as the case its own
+# parse guard does not cover -- "'https:///x' parses, .hostname is None" -- with
+# a path on it. HOSTLESS_PATH is what respx has to match on; see
+# `_hostless_head_fails`.
+HOSTLESS_URL = 'https:///changed/hostless'
+HOSTLESS_PATH = '/changed/hostless'
+
+# `targets_data['orig_post_body']` (`:3516`). Seeded because `make_post` sets no
+# body at all, so without it that key would assert None against None. The head
+# leaves it alone: `:3143` writes `post.body` only when the Update carries
+# `content`, and no Update built in this file does.
+SEEDED_BODY = 'the body the peer posted before this Update'
+
+# `Domain.post_count` is `default=0` (app/models.py:3456), so `:3543`'s
+# `+= 1` measured from an unseeded row would read back 1 -- a value a
+# never-incremented row could not produce, but only by one. Seeding it well
+# clear of both 0 and 1 makes the assertion name the increment rather than the
+# column's history.
+SEEDED_POST_COUNT = 7
+
+# `targets_data['post_id']` (`:3514`, and again at `:3532`) is `post.id`, and
+# every value a mutation could put there instead is a small id this fixture
+# also creates: `post.community_id` (1), `post.user_id` (2), `post.image_id`
+# (1), and the two `Domain` ids. tests/conftest.py:143 truncates with
+# `RESTART IDENTITY`, so those ids are the same in every test (harness fact 89)
+# and a post seeded in the obvious order would take id 1 and make the assertion
+# satisfiable by three of them. DECOY_POSTS is how many `Post` rows precede the
+# one under test -- `_seed_link_post`'s own, plus DECOY_POSTS - 1 more -- so it
+# takes id 5. Measured on the moderator test below, the fixture's ids come out
+# as post 5, community 1, author 2, `File` 1, `Domain` 1, moderator 3. Each test
+# that asserts on `targets` still guards explicitly rather than trusting that
+# arithmetic.
+DECOY_POSTS = 4
+
+# A `Role` id that is neither ROLE_ADMIN (4, app/constants.py:81) nor
+# ROLE_STAFF (3, app/constants.py:80). The role granted to user 1 in the
+# `User.id == 1` test exists only to satisfy `Site.admins()`'s INNER join, and
+# a privileged id would have let `Site.staff()` -- the same join narrowed to
+# `user_role.c.role_id == ROLE_STAFF`, with no id disjunct at all
+# (app/models.py:4002-4005) -- explain that test's row just as well as
+# `Site.admins()` does, so swapping one call for the other would have gone
+# unnoticed there. Measured: with ROLE_STAFF granted, `Site.admins()` ->
+# `Site.staff()` survived that test.
+ORDINARY_ROLE = 9
+
+
+def _seed_suspicious_post():
+    """`_seed_link_post`'s post, with a body and an id nothing else shares.
+
+    See DECOY_POSTS above for why the throwaway rows exist. They are inert to
+    everything this cluster measures: their `url` is NULL, so
+    `calculate_cross_posts`'s `Post.url == self.url` (app/models.py:2371) can
+    never match one, and they are in no one's `cross_posts` list.
+
+    `post.domain_id` is deliberately left NULL -- see the banner.
+    """
+    seed = _seed_link_post()
+    for n in range(DECOY_POSTS - 1):
+        make_post(seed.community, seed.author,
+                  ap_id=f'https://{PEER}/objects/decoy-{n}')
+    post = make_post(seed.community, seed.author,
+                     ap_id=f'https://{PEER}/objects/measured')
+    post.type = POST_TYPE_LINK
+    post.url = SEEDED_URL
+    post.body = SEEDED_BODY
+    db.session.commit()
+    return post
+
+
+def _suspicious_domain(notify_mods=False, notify_admins=False):
+    """The `Domain` row `:3468`'s `domain_from_url(new_url)` will find for
+    SUSPICIOUS_URL, with every column this cluster reads seeded explicitly.
+
+    `notify_mods`, `notify_admins` and `banned` are all `default=False` and
+    `post_count` is `default=0` (app/models.py:3456-3459). Both notify flags are
+    passed by every caller rather than defaulted, so the row states what its
+    test is about instead of inheriting it, and `post_count` is seeded contrary
+    per SEEDED_POST_COUNT.
+
+    `banned` is left False, which is the default: `:3469` returns early for a
+    banned domain and would keep every test here out of its own cluster. That
+    guard belongs to the block above this one, not to this one.
+    """
+    domain = make_domain(SUSPICIOUS_DOMAIN)
+    domain.notify_mods = notify_mods
+    domain.notify_admins = notify_admins
+    domain.post_count = SEEDED_POST_COUNT
+    db.session.commit()
+    return domain
+
+
+def _make_admin(user, role_id=ROLE_ADMIN):
+    """Make `user` an admin as `Site.admins()` (`:3529`) counts them.
+
+    WHICH ARM. `Site.admins()` (app/models.py:3995-4000) returns
+    `query(User).filter(User.id.in_(g.admin_ids))` when `g` carries
+    `admin_ids`, and otherwise
+    `query(User).filter_by(deleted=False, banned=False).join(user_role)
+     .filter(or_(user_role.c.role_id == ROLE_ADMIN, User.id == 1))`.
+    tests/conftest.py:137 clears `flask.g` before every test and nothing in this
+    file sets `admin_ids`, so **every test here takes the JOIN arm**. That is
+    the point of saying so: a fixture that stashed `g.admin_ids` would never
+    reach the query, and a test claiming to exercise the role path would be
+    proving nothing.
+
+    WHY A ROLE ROW IS REQUIRED EVEN FOR USER 1. `.join(user_role)` is an INNER
+    join, so a user with no row in that table is dropped before the `or_` is
+    evaluated -- `User.id == 1` cannot rescue a user the join has already
+    excluded. `make_user` (tests/factories.py:39-65) creates no roles, so
+    `_seed_post`'s user 1 is NOT an admin as seeded: `Site.admins()` returns
+    `[]` for that fixture. Measured directly against this harness, and it is
+    why every admin below is given a role explicitly.
+
+    WHICH DISJUNCT the row then satisfies is `role_id`'s job. ROLE_ADMIN (4,
+    app/constants.py:81) satisfies `user_role.c.role_id == ROLE_ADMIN` for any
+    user; any other id leaves `User.id == 1` as the only thing that can match,
+    which is what the ORDINARY_ROLE caller below is for. `Role` rows are shared
+    across calls so two admins can hold the same role without colliding on its
+    primary key. The shape mirrors tests/test_request_hooks.py:140.
+    """
+    role = db.session.get(Role, role_id)
+    if role is None:
+        role = Role(id=role_id, name=f'role-{role_id}', weight=0)
+        db.session.add(role)
+        db.session.commit()
+    user.roles.append(role)
+    db.session.commit()
+    return role
+
+
+def _make_moderator(post, name):
+    """A new `User` who moderates `post`'s community, as `:3520`'s
+    `post.community.moderators()` counts them.
+
+    `moderators()` (app/models.py:716-722) selects `CommunityMember` rows with
+    `is_owner` or `is_moderator` and `is_banned == False`; `make_community`
+    creates no membership rows at all, so a community has no moderators until
+    one is made here. It is `@cache.memoize`d, which is inert under
+    `CACHE_TYPE = 'NullCache'` (tests/conftest.py:68).
+    """
+    moderator = make_user(post.author.instance, name)
+    make_community_member(moderator, post.community, is_moderator=True)
+    return moderator
+
+
+def _hostless_head_fails(http_mock):
+    """Fail the HEAD `:3480` issues for HOSTLESS_URL the way a real transport
+    fails a url with no host.
+
+    Registering it is not optional and neither is failing it, and both halves
+    were measured against this harness:
+
+      - unrouted, respx raises `AllMockedAssertionError`, an `AssertionError`
+        that escapes `mime_type_using_head`'s
+        `except (httpx.HTTPError, httpx.InvalidURL)` (app/utils.py:345) and
+        kills the test on the escape rather than on its own assertion;
+      - answered with a RESPONSE, httpx's cookie handling then calls
+        `urllib.request.Request(str(response.request.url))`
+        (httpx/_models.py:1106, 1250) -- and httpx normalises a hostless url
+        down to its bare path, so that is
+        `urllib.request.Request('/changed/hostless')`, which raises
+        `ValueError: unknown url type`. Not an `httpx.HTTPError` and not an
+        `httpx.InvalidURL`, so the same handler misses it.
+
+    A transport-level failure is the third option and the faithful one.
+    Unmocked, httpx refuses a hostless url before any response exists -- also
+    measured: `httpx.Client().head('https:///changed/hostless')` raises
+    `httpx.UnsupportedProtocol`, and both it and the `httpx.ConnectError` used
+    here descend TransportError -> RequestError -> HTTPError, so
+    `mime_type_using_head` handles them identically. app/utils.py:345 catches
+    it, returns '', and `is_image_url` falls to extension sniffing
+    (app/utils.py:275-284), which answers False for this path.
+
+    The route matches on `path` alone because respx resolves a url pattern
+    against scheme, host and path together and there is no host to resolve.
+    """
+    http_mock.route(method='HEAD', path=HOSTLESS_PATH).mock(
+        side_effect=httpx.ConnectError('no host to connect to'))
+
+
+def _seed_cross_post(post, name, url, cross_posts=None):
+    """Another `Post` in `post`'s community linking to `url`.
+
+    `Post.cross_posts` is `MutableList.as_mutable(ARRAY(db.Integer))` with no
+    default (app/models.py:1745), so NULL is what a post that has never been
+    cross-post-scanned holds -- which is exactly the False side of `:3547` and
+    `:3566`. A caller passing `cross_posts` is seeding the True side.
+    """
+    partner = make_post(post.community, post.author,
+                        ap_id=f'https://{PEER}/objects/{name}')
+    partner.url = url
+    partner.cross_posts = cross_posts
+    db.session.commit()
+    return partner
+
+
+class TestSuspiciousDomainNotifications:
+    """`:3519-3542` -- the two notification loops under `:3510`.
+
+    Every test here changes the url from SEEDED_URL (on PEER) to SUSPICIOUS_URL,
+    which is the only thing that makes `:3510`'s `old_domain != new_domain`
+    true. `_taken` serves both routes that costs: the `image/jpeg` HEAD `:3480`
+    issues, and the 404 `:3504`'s ungated `make_image_sizes` walks into. That
+    puts the arm on `:3481-3482` rather than through `opengraph_parse`, which is
+    the shortest path to `:3508` and keeps these tests off machinery the cluster
+    above already owns.
+
+    `notify.author_id` is `1` at both `:3523` and `:3539` -- a literal, not
+    anything derived from the Update -- so every assertion on it is on that
+    literal. `Notification.author_id` has no column default (app/models.py:3734),
+    so 1 is not a value an unwritten row could hold.
+    """
+
+    def test_a_moderator_is_notified_when_the_new_domain_notifies_mods(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3519-3527`, with `:3528` False -- every column of the row `:3521`
+        builds, and the whole `targets` dict `:3513-3518` assembles.
+
+        `orig_post_title` is UPDATE_NAME and not `make_post`'s 'a post': `:3187`
+        writes the Update's title several hundred lines before `:3515` reads it
+        back, so "orig" here means "before the domain moved", not "before the
+        Update". Asserting the seeded title instead would have failed, and
+        asserting the dict without saying which value is which would have hidden
+        that.
+
+        A moderator exists AND is notified, so the `notify_admins` half is
+        provably out on its own merits rather than for want of an admin: user 1
+        is not one (see `_make_admin`), and `Site.admins()` returns `[]` here.
+        """
+        post = _seed_suspicious_post()
+        moderator = _make_moderator(post, 'the_moderator')
+        domain = _suspicious_domain(notify_mods=True)
+        _taken(http_mock, SUSPICIOUS_URL)
+
+        update_post_from_activity(post, _linked_update(SUSPICIOUS_URL))
+
+        db.session.expire_all()
+        # harness fact 89: `targets['post_id']` must not be satisfiable by any
+        # other id this fixture created.
+        others = {post.community_id, post.user_id, post.image_id, domain.id,
+                  moderator.id}
+        assert len(others | {post.id}) == len(others) + 1
+
+        rows = Notification.query.all()
+        assert len(rows) == 1
+        assert rows[0].user_id == moderator.id
+        assert rows[0].author_id == 1
+        assert rows[0].title == 'Suspicious content'
+        assert rows[0].url == post.ap_id
+        assert rows[0].notif_type == NOTIF_REPORT
+        assert rows[0].subtype == 'post_from_suspicious_domain'
+        assert rows[0].targets == {'gen': '0',
+                                   'post_id': post.id,
+                                   'orig_post_title': UPDATE_NAME,
+                                   'orig_post_body': SEEDED_BODY,
+                                   'orig_post_domain': None}
+
+    def test_an_admin_holding_the_admin_role_is_notified(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3528-3542`, with `:3519` False -- the second `Notification` and the
+        second `targets_data`, which `:3531-3536` rebuilds identically inside
+        the loop.
+
+        The admin is NOT user 1 and NOT a moderator, so `Site.admins()` can only
+        have found it through `user_role.c.role_id == ROLE_ADMIN` -- the
+        disjunct the test below does not exercise. A moderator is seeded and
+        gets nothing, which is what makes `:3519`'s False side observable rather
+        than merely uncontradicted.
+        """
+        post = _seed_suspicious_post()
+        moderator = _make_moderator(post, 'the_moderator')
+        admin = make_user(post.author.instance, 'the_admin')
+        _make_admin(admin)
+        domain = _suspicious_domain(notify_admins=True)
+        _taken(http_mock, SUSPICIOUS_URL)
+
+        update_post_from_activity(post, _linked_update(SUSPICIOUS_URL))
+
+        db.session.expire_all()
+        others = {post.community_id, post.user_id, post.image_id, domain.id,
+                  moderator.id, admin.id}
+        assert len(others | {post.id}) == len(others) + 1
+
+        rows = Notification.query.all()
+        assert len(rows) == 1
+        assert rows[0].user_id == admin.id
+        assert rows[0].author_id == 1
+        assert rows[0].title == 'Suspicious content'
+        assert rows[0].url == post.ap_id
+        assert rows[0].notif_type == NOTIF_REPORT
+        assert rows[0].subtype == 'post_from_suspicious_domain'
+        assert rows[0].targets == {'gen': '0',
+                                   'post_id': post.id,
+                                   'orig_post_title': UPDATE_NAME,
+                                   'orig_post_body': SEEDED_BODY,
+                                   'orig_post_domain': None}
+
+    def test_user_one_is_notified_as_an_admin_without_holding_the_admin_role(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`Site.admins()`'s `User.id == 1` disjunct, reached from `:3529`.
+
+        `_seed_post`'s user 1 is the community owner, and the role granted here
+        is ORDINARY_ROLE -- neither ROLE_ADMIN nor ROLE_STAFF -- so the row
+        exists only to satisfy the INNER join and `User.id == 1` is the only
+        thing that can match it. Granting ROLE_ADMIN instead would have made
+        this test a duplicate of the one above while looking like a different
+        one; see ORDINARY_ROLE for why ROLE_STAFF was no good either.
+
+        A second user holding no role at all is seeded and gets nothing, which
+        is the other half of the same claim: admin-ness here is the role row
+        plus the id, not the id alone.
+        """
+        post = _seed_suspicious_post()
+        owner = db.session.get(User, 1)
+        _make_admin(owner, role_id=ORDINARY_ROLE)
+        bystander = make_user(post.author.instance, 'no_role_at_all')
+        _suspicious_domain(notify_admins=True)
+        _taken(http_mock, SUSPICIOUS_URL)
+
+        update_post_from_activity(post, _linked_update(SUSPICIOUS_URL))
+
+        db.session.expire_all()
+        assert len({owner.id, bystander.id}) == 2
+        rows = Notification.query.all()
+        assert len(rows) == 1
+        assert rows[0].user_id == owner.id
+        assert rows[0].subtype == 'post_from_suspicious_domain'
+        assert Notification.query.filter_by(user_id=bystander.id).count() == 0
+
+    def test_an_admin_who_also_moderates_the_community_is_notified_once(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3530`'s `if admin.id not in already_notified:`, which is the whole
+        reason `already_notified` (`:3512`, `:3527`) exists.
+
+        KEY SPACE, established from the models rather than assumed:
+        `already_notified` collects `community_member.user_id` (`:3527`) and is
+        tested against `admin.id` (`:3530`). `CommunityMember.user_id` is
+        `db.Column(db.Integer, db.ForeignKey('user.id'), primary_key=True)`
+        (app/models.py:3500) and `admin` is a `User` row returned by
+        `Site.admins()` (app/models.py:3995-4000), so both are `user.id` values.
+        Same key space, and the de-duplication is sound.
+
+        Two admins, and the second is what makes the de-duplication provable
+        rather than merely consistent with one row: without `:3530` the
+        moderator-admin would hold TWO notifications and the total would be
+        three, so a test with only the moderator-admin could not tell "skipped"
+        from "the admin loop never ran".
+        """
+        post = _seed_suspicious_post()
+        mod_admin = _make_moderator(post, 'moderator_and_admin')
+        _make_admin(mod_admin)
+        plain_admin = make_user(post.author.instance, 'admin_only')
+        _make_admin(plain_admin)
+        _suspicious_domain(notify_mods=True, notify_admins=True)
+        _taken(http_mock, SUSPICIOUS_URL)
+
+        update_post_from_activity(post, _linked_update(SUSPICIOUS_URL))
+
+        db.session.expire_all()
+        assert len({mod_admin.id, plain_admin.id}) == 2
+        assert Notification.query.filter_by(user_id=mod_admin.id).count() == 1
+        assert Notification.query.filter_by(user_id=plain_admin.id).count() == 1
+        assert Notification.query.count() == 2
+
+    def test_a_domain_that_notifies_nobody_still_takes_the_post(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3519` and `:3528` both False, with a moderator and an admin present
+        to be skipped.
+
+        `post.domain_id` moving from NULL to the new row is what makes the zero
+        notification count a finding rather than an absence: `:3544` is inside
+        the same block, so it proves `:3510` was true and both loops were
+        reached and declined. Forcing either guard true produces a row here.
+        """
+        post = _seed_suspicious_post()
+        moderator = _make_moderator(post, 'the_moderator')
+        admin = make_user(post.author.instance, 'the_admin')
+        _make_admin(admin)
+        domain = _suspicious_domain()
+        _taken(http_mock, SUSPICIOUS_URL)
+
+        update_post_from_activity(post, _linked_update(SUSPICIOUS_URL))
+
+        db.session.expire_all()
+        assert len({moderator.id, admin.id}) == 2
+        assert Notification.query.count() == 0
+        assert post.domain_id == domain.id
+
+
+class TestSuspiciousDomainReassignment:
+    """`:3543-3544`, and the two conjuncts of `:3510` that gate them."""
+
+    def test_the_new_domain_takes_the_post_and_counts_it(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3543`'s `new_domain.post_count += 1` and `:3544`'s
+        `post.domain = new_domain`, both against contrary baselines.
+
+        The post starts on the domain its OWN url is on, which is what a post
+        created through `Post.new` holds, so `post.domain_id` is not merely
+        NULL-to-something here. Both notify flags are off, and that is
+        load-bearing rather than incidental: `:3517` would put this seeded
+        `Domain` OBJECT into `Notification.targets`, a JSON column, and the
+        flush would raise. See the cluster banner.
+
+        The old domain's own `post_count` is asserted unchanged: `:3543`
+        increments the NEW row, and nothing in this block decrements the old
+        one -- a post moving domains leaves the count it left behind too high.
+        That is this function's behaviour as written and the assertion records
+        it rather than endorsing it.
+        """
+        post = _seed_suspicious_post()
+        new_domain = _suspicious_domain()
+        old_domain = make_domain(PEER)
+        old_domain.post_count = SEEDED_POST_COUNT
+        post.domain_id = old_domain.id
+        db.session.commit()
+        _taken(http_mock, SUSPICIOUS_URL)
+
+        update_post_from_activity(post, _linked_update(SUSPICIOUS_URL))
+
+        db.session.expire_all()
+        assert len({old_domain.id, new_domain.id}) == 2
+        assert post.domain_id == new_domain.id
+        assert new_domain.post_count == SEEDED_POST_COUNT + 1
+        assert old_domain.post_count == SEEDED_POST_COUNT
+
+    def test_a_url_change_inside_the_same_domain_leaves_the_block_out(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3510`'s `old_domain != new_domain`, False.
+
+        SEEDED_URL and CHANGED_IMAGE_URL are both on PEER, so `:3468` and
+        `:3509` resolve to the same `Domain` row and the comparison is between
+        an object and itself. `post.url` changes, so `:3472` is still true and
+        the whole arm above still runs -- this is the block's own gate being
+        measured, not the arm's.
+
+        The domain notifies mods and a moderator exists, so forcing this
+        conjunct true produces a `Notification` as well as moving `post_count`
+        off SEEDED_POST_COUNT. `post.domain_id` is left NULL for the reason the
+        banner gives, and that it STAYS NULL is the third witness.
+        """
+        post = _seed_suspicious_post()
+        moderator = _make_moderator(post, 'the_moderator')
+        domain = make_domain(PEER)
+        domain.notify_mods = True
+        domain.post_count = SEEDED_POST_COUNT
+        db.session.commit()
+        _taken(http_mock, CHANGED_IMAGE_URL)
+
+        update_post_from_activity(post, _linked_update(CHANGED_IMAGE_URL))
+
+        db.session.expire_all()
+        assert post.url == CHANGED_IMAGE_URL
+        assert Notification.query.filter_by(user_id=moderator.id).count() == 0
+        assert Notification.query.count() == 0
+        assert domain.post_count == SEEDED_POST_COUNT
+        assert post.domain_id is None
+
+    def test_a_hostless_new_url_leaves_the_block_out(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3510`'s leading `new_domain`, False -- the conjunct that stops
+        `:3519` dereferencing None.
+
+        HOSTLESS_URL has no host, so `domain_from_url` returns None
+        (app/utils.py:1583-1596) and `:3469`'s `if new_domain and` lets it
+        through. `old_domain` is a real `Domain` row, so the second conjunct is
+        TRUE and this one is the only thing keeping the block out -- deleting it
+        reaches `new_domain.notify_mods` at `:3519` and raises AttributeError,
+        which is a crash-kill and not an assertion-kill.
+
+        ONE ROUTE, and it fails rather than answers -- `_hostless_head_fails`
+        gives the two measurements behind that. Its '' sends `is_image_url` to
+        extension sniffing, which answers False for this path, so the arm takes
+        `:3486`'s `else`. `:3491`'s `opengraph_parse` then reaches
+        `get_request`, which refuses a hostless uri at app/utils.py:132-134 by
+        raising `httpx.HTTPError` BEFORE issuing anything, and
+        `opengraph_parse`'s `except Exception` (app/utils.py:3004-3007) turns
+        that into None -- so `:3492` is False, no `File` is built, `:3504` is
+        never reached, and no GET route is registered under
+        `assert_all_called=True`.
+
+        `post.type` cannot be the witness that the arm really ran: `:3499`
+        writes POST_TYPE_LINK, which is what `_seed_suspicious_post` already
+        holds. `post.url` carries that claim instead.
+        """
+        post = _seed_suspicious_post()
+        _make_moderator(post, 'the_moderator')
+        domain = make_domain(PEER)
+        domain.notify_mods = True
+        domain.notify_admins = True
+        domain.post_count = SEEDED_POST_COUNT
+        db.session.commit()
+        _hostless_head_fails(http_mock)
+
+        update_post_from_activity(post, _linked_update(HOSTLESS_URL))
+
+        db.session.expire_all()
+        assert post.url == HOSTLESS_URL
+        assert post.image_id is None
+        assert Notification.query.count() == 0
+        assert domain.post_count == SEEDED_POST_COUNT
+        assert post.domain_id is None
+
+
+class TestUrlChangeCrossPosts:
+    """`:3547-3548` -- `calculate_cross_posts(url_changed=True)` after the url
+    moved, and the `is not None` guard on it.
+
+    Both tests here stay on PEER (CHANGED_IMAGE_URL), which keeps the
+    suspicious-domain block above out and leaves the cross-post arm as the only
+    thing the assertions can be reading.
+    """
+
+    def test_a_changed_url_is_re_matched_against_the_other_posts(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3548` with `:3547` true, measured on three rows at once.
+
+        `calculate_cross_posts(url_changed=True)` (app/models.py:2346-2389) does
+        two separable things, and one partner per side is what separates them:
+        `:2350-2358` unlinks the post from the partners it was matched to under
+        the OLD url, and `:2371-2388` links it to the partners sharing the NEW
+        one. A single partner could be explained by either.
+
+        `old_partner` keeps SEEDED_URL and `new_partner` holds
+        CHANGED_IMAGE_URL, so which list each ends up in names which half ran.
+        """
+        post = _seed_suspicious_post()
+        old_partner = _seed_cross_post(post, 'old-partner', SEEDED_URL,
+                                       [post.id])
+        new_partner = _seed_cross_post(post, 'new-partner', CHANGED_IMAGE_URL)
+        post.cross_posts = [old_partner.id]
+        db.session.commit()
+        _taken(http_mock, CHANGED_IMAGE_URL)
+
+        update_post_from_activity(post, _linked_update(CHANGED_IMAGE_URL))
+
+        db.session.expire_all()
+        assert len({post.id, old_partner.id, new_partner.id}) == 3
+        assert post.cross_posts == [new_partner.id]
+        assert db.session.get(Post, old_partner.id).cross_posts == []
+        assert db.session.get(Post, new_partner.id).cross_posts == [post.id]
+
+    def test_a_post_that_has_never_been_matched_is_left_unmatched(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3547` False -- `post.cross_posts` NULL, which is what a post that
+        has never been scanned holds.
+
+        The kill is on `new_partner`, not on `post`: forcing `:3547` true calls
+        `calculate_cross_posts(url_changed=True)` with `self.cross_posts` None,
+        which skips the unlink at app/models.py:2350 (None is falsy) but still
+        runs the match at `:2371-2388` -- so `new_partner` would acquire
+        `[post.id]` and `post` would acquire `[new_partner.id]`. Both are
+        asserted, so this guard is killable in both directions.
+        """
+        post = _seed_suspicious_post()
+        new_partner = _seed_cross_post(post, 'new-partner', CHANGED_IMAGE_URL)
+        _taken(http_mock, CHANGED_IMAGE_URL)
+
+        update_post_from_activity(post, _linked_update(CHANGED_IMAGE_URL))
+
+        db.session.expire_all()
+        assert len({post.id, new_partner.id}) == 2
+        assert post.cross_posts is None
+        assert db.session.get(Post, new_partner.id).cross_posts is None
+
+
+class TestUrlClearedToArticle:
+    """`:3550-3567` -- the `else` the arm falls to when the Update carried no
+    url at all.
+
+    Every Update here is `_update(type='Page', name=UPDATE_NAME)` with no
+    `attachment` key, which fails `:3419`'s first conjunct and `:3448`'s, so
+    `new_url` is still the None `:3418` initialised it to. `:3472` is then true
+    because the post has a url and the Update does not.
+
+    No HTTP fixture in any of them: nothing on this side of the branch fetches
+    anything, and the session-scoped `block_outbound_http` router
+    (tests/conftest.py:214-216) raises on anything that escapes.
+    """
+
+    def test_an_update_with_no_url_clears_the_post_s_image(
+            self, app, db_session, redis_lock_only_double):
+        """`:3565`'s `post.image_id = None`, and the `File` row `:3570-3572`
+        then deletes.
+
+        `:3551`'s POST_TYPE_ARTICLE and `:3564`'s `post.url = None` are asserted
+        alongside it because they are the same statement group, but they are not
+        what this test adds: `TestAttachmentDispatchGuard` above already reaches
+        both. The image is the uncovered half. `_attach_banner` gives the post a
+        `File` to lose, which is also what puts `:3473-3475` on its true side,
+        and `old_db_entry_to_delete` is what carries the row's id to the DELETE
+        after the commit.
+        """
+        post = _seed_suspicious_post()
+        old_id = _attach_banner(post, EXISTING_IMAGE)
+
+        update_post_from_activity(post, _update(type='Page', name=UPDATE_NAME))
+
+        db.session.expire_all()
+        assert post.type == POST_TYPE_ARTICLE
+        assert post.url is None
+        assert post.image_id is None
+        assert File.query.filter_by(id=old_id).count() == 0
+        assert File.query.count() == 0
+
+    def test_a_post_that_loses_its_url_is_unmatched_from_its_cross_posts(
+            self, app, db_session, redis_lock_only_double):
+        """`:3567`'s `calculate_cross_posts(delete_only=True)`, with `:3566`
+        true.
+
+        `delete_only` is what makes this reachable at all: `:3564` has already
+        set `post.url` to None one line earlier, and
+        `calculate_cross_posts`'s own first line returns immediately for a
+        url-less post UNLESS `delete_only` is set (app/models.py:2347-2348).
+        The call then unlinks both directions at app/models.py:2350-2358 and
+        returns at `:2359-2360` before any re-matching.
+
+        Both sides are asserted. `post.cross_posts` becomes `[]` rather than
+        None -- `:2353` clears the list in place -- and the partner loses
+        `post.id` from its own.
+        """
+        post = _seed_suspicious_post()
+        partner = _seed_cross_post(post, 'partner', SEEDED_URL, [post.id])
+        post.cross_posts = [partner.id]
+        db.session.commit()
+
+        update_post_from_activity(post, _update(type='Page', name=UPDATE_NAME))
+
+        db.session.expire_all()
+        assert len({post.id, partner.id}) == 2
+        assert post.url is None
+        assert post.cross_posts == []
+        assert db.session.get(Post, partner.id).cross_posts == []
