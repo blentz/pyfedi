@@ -6039,10 +6039,22 @@ in D292's cell, which says the file does not exist. **The eight reproduces; the 
 the second finding.** This round first wrote "17 of 25", and the pair is not
 reproducible even though both halves are individually derivable: the **17** came
 from the `file:line` pattern, whose `[\w./]+` does not require a directory
-prefix and so also matched two bare-basename citations (`util.py:3517`,
-`shared/post.py:580-589`) that the other pattern excludes by construction, while
-the **25** was the *post-fix* section under the dir-prefixed pattern. A reviewer
-re-deriving it arrived at a third pair again. **A ratio whose numerator and
+prefix and so also matched **exactly two** bare-basename citations
+(`util.py:3517`, `shared/post.py:580-589`) that the other pattern excludes by
+construction -- 15 + 2 = 17 -- while the **25** was the *post-fix* section under
+the dir-prefixed pattern. A reviewer re-deriving it arrived at a third pair
+again. (**And the reconciliation was itself then challenged and re-measured,
+which is the fitting last word on a paragraph about counting.** A reviewer
+re-ran the loose pattern, got **18**, and named `17.md` as a third extra.
+Re-run here over the same revision rather than taken on trust: the pattern **as
+stated** gives **17**, with exactly the two extras above. The third appears only
+once the pattern's leading backtick anchor is dropped -- `[\w./]+` cannot cross
+a hyphen, so this section's own citation of
+`docs/superpowers/plans/2026-09-04-coverage-update-tails-17.md:97-101`
+truncates to a matchable `17.md:97-101`, and no backtick precedes it. **The count moved by one
+because one character left the pattern**, which is the rule's own point
+demonstrated on the rule. The operative figures -- 23 / 15 / 8 -- are untouched
+and have now been reproduced independently three times.) **A ratio whose numerator and
 denominator come from different patterns over different revisions is not a
 measurement**, and the correction is to state the pattern, state the revision,
 take both halves from one run, and lead with the figure the argument rests on
