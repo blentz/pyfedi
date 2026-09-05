@@ -949,3 +949,139 @@ def test_web_branch_leaves_event_data_none_for_a_non_event_type(db_session):
     edit_post(_web_form(), s.post, POST_TYPE_ARTICLE, SRC_WEB, user=s.user)
 
     assert Event.query.filter_by(post_id=s.post.id).first() is None
+
+
+# ---------------------------------------------------------------------------
+# The domain and notify block, :565-598 -- D292
+# ---------------------------------------------------------------------------
+
+
+def test_the_notify_dict_is_json_serialisable_and_the_edit_is_not_half_applied(
+        db_session, http_mock):
+    """D292, at the site the register calls the worst of its four.
+
+    Before the fix, :577 puts the Domain ORM object into `targets_data`, which
+    becomes `Notification.targets`, a db.JSON column. The flush raises
+    `TypeError: Object of type Domain is not JSON serializable`.
+
+    THE CONSEQUENCE IS WORSE THAN A CRASH, and the session boundaries inside
+    edit_post are what make it so:
+
+      :459  db.session.commit()      -- title/body/edited_at are already durable
+      :598  db.session.add(notify)   -- the poisoned row is pending, nothing raises
+      :606  db.session.add(file)
+      :607  db.session.commit()      -- HERE
+
+    (:588 is the moderator loop's `db.session.add(notify)`; this test reaches
+    the admin loop's copy at :598. See the amendment note below.)
+
+    MEASURED on the unfixed tree, this sub-project: after the StatementError and
+    a rollback, `post.title` is `'the new title'` and `post.edited_at` is set,
+    while `post.url` is still None, `post.image_id` is still None, and File and
+    Notification both have zero rows. The edit is HALF-APPLIED -- the caller sees
+    an exception, but the new title is already committed and the url the title
+    now describes was never stored. The File at :606 is *not* separately
+    orphaned: it is added in the same flush that raises, so it rolls back with
+    the notification. The durable damage is everything :459 committed.
+    `assert s.post.title == 'the new title'` below is the surviving witness of
+    that boundary on the fixed tree.
+
+    :459 runs only inside `if not from_scratch:` (:421), which is why this test
+    passes from_scratch=False and changes the url -- the same change that sets
+    url_changed at :436 and opens the :565 gate.
+
+    TWO ROUTES ARE REGISTERED. Pre-fix the run dies at :607 and only the HEAD
+    (from `is_image_url` at :601) is ever issued. On the FIXED tree :607 commits,
+    :608 sets post.image_id, and :616 make_image_sizes fetches the source url --
+    which is what the bodiless 404 on the GET absorbs. The GET is therefore
+    required for this test to pass, and http_mock's assert_all_called only has
+    to hold on the passing tree.
+
+    CONTROLLER AMENDMENT (this task runs before the D287 task): this domain is
+    seeded with notify_admins=True, not notify_mods=True. :582's
+    `community_member.is_local()` is still broken (AttributeError) while D287
+    is unfixed, so any moderator seeded on a notify_mods domain would die
+    there before ever reaching :577. The notification here arrives through the
+    ADMIN loop at :590-598; the moderator loop at :580-589 is still dead code
+    at this point in the sub-project.
+    """
+    s = _seed(domain_name='suspicious.example', notify_admins=True)
+    admin = make_user(s.instance, 'admin', local=True)
+    _make_admin(admin)
+
+    http_mock.head('https://suspicious.example/pic.png').respond(
+        200, headers={'Content-Type': 'image/png'})
+    http_mock.get('https://suspicious.example/pic.png').respond(404)
+
+    edit_post(_api_input(title='the new title',
+                         url='https://suspicious.example/pic.png'),
+              s.post, POST_TYPE_LINK, SRC_API, user=s.user, from_scratch=False)
+
+    db.session.expire(s.post)
+    assert s.post.title == 'the new title'
+
+    notification = Notification.query.filter_by(user_id=admin.id).one()
+    assert notification.targets['orig_post_domain'] == 'suspicious.example'
+    assert isinstance(notification.targets['orig_post_domain'], str)
+
+
+def test_the_notify_dict_carries_every_key_the_four_writers_share(db_session, http_mock):
+    """:573-579. The dict's SHAPE is the thing D292's arbitration protects:
+    `orig_post_domain` has four writers and zero readers, so the argument for
+    keeping the key is that the four stay comparable.
+
+    author_user_name at :578 is a conditional expression. coverage.py emits no
+    arc for one (tests/README.md fact 87), so 100% statements and 100% branches
+    can both hold while one arm has never run -- exactly D293's shape. This test
+    takes the ap_id arm; the next takes the user_name arm.
+
+    CONTROLLER AMENDMENT: seeded with notify_admins=True and an admin (not a
+    moderator) for the same reason as the test above -- :582 is still broken
+    while D287 is unfixed, so the notification here arrives through the ADMIN
+    loop at :590-598, never the moderator loop at :580-589.
+    """
+    s = _seed(domain_name='suspicious.example', notify_admins=True)
+    s.user.ap_id = 'editor@peer.example'
+    db.session.commit()
+    admin = make_user(s.instance, 'admin', local=True)
+    _make_admin(admin)
+
+    http_mock.head('https://suspicious.example/pic.png').respond(
+        200, headers={'Content-Type': 'image/png'})
+    http_mock.get('https://suspicious.example/pic.png').respond(404)
+
+    edit_post(_api_input(title='shaped', url='https://suspicious.example/pic.png'),
+              s.post, POST_TYPE_LINK, SRC_API, user=s.user, from_scratch=False)
+
+    targets = Notification.query.filter_by(user_id=admin.id).one().targets
+    assert set(targets) == {'gen', 'post_id', 'orig_post_title', 'orig_post_body',
+                            'orig_post_domain', 'author_user_name'}
+    assert targets['gen'] == '0'
+    assert targets['post_id'] == s.post.id
+    assert targets['orig_post_title'] == 'shaped'
+    assert targets['orig_post_domain'] == 'suspicious.example'
+    assert targets['author_user_name'] == 'editor@peer.example'
+
+
+def test_the_notify_dict_falls_back_to_user_name_when_there_is_no_ap_id(
+        db_session, http_mock):
+    """:578, the OTHER arm of the conditional expression. A local editor has
+    ap_id None (tests/factories.py make_user), which is the ordinary case.
+
+    CONTROLLER AMENDMENT: admin/notify_admins seeding, same reason as the two
+    tests above -- reaches :577 through the ADMIN loop at :590-598.
+    """
+    s = _seed(domain_name='suspicious.example', notify_admins=True)
+    assert s.user.ap_id is None
+    admin = make_user(s.instance, 'admin', local=True)
+    _make_admin(admin)
+
+    http_mock.head('https://suspicious.example/pic.png').respond(
+        200, headers={'Content-Type': 'image/png'})
+    http_mock.get('https://suspicious.example/pic.png').respond(404)
+
+    edit_post(_api_input(url='https://suspicious.example/pic.png'), s.post,
+              POST_TYPE_LINK, SRC_API, user=s.user, from_scratch=False)
+
+    targets = Notification.query.filter_by(user_id=admin.id).one().targets
+    assert targets['author_user_name'] == 'editor'
