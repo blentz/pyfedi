@@ -2736,6 +2736,27 @@ which is also fact 74's mechanism. Verify the claim in a bare interpreter --
 `'x' in 'abc'` versus `'x' in None` -- rather than reasoning about it; two
 agents in sub-project 14 did, and it is two lines.
 
+**Sub-project 17 supplied the worked instance this fact had been predicting,
+and the value of it is the SHAPE TABLE rather than the case.** The fix at
+`30a9dcec` added `'url' in request_json['object']['image']` in front of a
+nested subscript (`app/activitypub/util.py:3391`), copying the guarded twin 95
+lines below it (`:3487`). Measured shape by shape in a bare interpreter, not
+reasoned: a dict without `url` raises `KeyError` before and is handled after
+(**the repair**); `"image": ".../pic.png"` -- a string lacking the substring
+`url` -- crashed with `TypeError` before and is now **silently dropped**
+(**a widening**); `"image": [...]` the same (**a widening**); `"image":
+".../url.png"` -- a string that happens to *contain* `url` -- passes the guard
+and still raises `TypeError: string indices must be integers` (**unchanged**);
+`"image": null` or a number makes **the guard itself** raise `TypeError`
+(**unchanged**). **Two lessons. (a) A membership guard added in front of a
+subscript changes the outcome for exactly two of four non-dict shapes, and
+which two depends on whether the key name is a substring of the value** -- so
+"does adding this guard change behaviour?" has no answer short of enumerating
+the shapes. **(b) Both sites are still open for the non-dict case** -- the
+guard is only correct for dicts at `:3391` *and* at `:3487` -- so a
+membership-only repair closes the missing-key hole and leaves the type hole at
+every site it was copied to (D285). Write the widening down; do not deny it.
+
 **72. A test that reaches a guard's False side NATURALLY cannot kill a mutant
 that FORCES that guard False. The two are indistinguishable by construction.**
 Sub-project 14's `if attachment_list:` regeneration gate survived six tests
@@ -2813,16 +2834,36 @@ re-run all of them and restore the kills the fix vacated, in the same commit
 that vacated them. Sub-project 14 did, adding the `source=None` companion the
 sibling suite already carried.
 
-**75. The five catalogued causes of an unkillable CLAUSE, and one of an
-unkillable STATEMENT. Name which one you have and prove it; never invent a test
-to fake a kill.** Causes 4 and 5 were added by sub-project 14 and are the two
-that most often get mis-filed as ordinary fixture gaps. **Causes 1-5 are all
+**Two corollaries from sub-project 17, both found by review rather than by the
+implementer.** **(a) A regression spot-check must run THROUGH the test you
+changed.** Strengthening an assertion in one test and then re-running a mutant
+whose sole killer is a *different, untouched* test demonstrates nothing about
+the change: it re-proves a kill the change could not have affected. Pick a
+mutant whose sole kill runs through the modified test -- Task 1 re-ran the
+wrong one, was told, and re-ran the right one, which still died. **(b) The
+"same commit" clause is the half that slips.** Sub-project 17 landed a
+one-line guard fix and re-ran the mutations previously recorded against that
+guard **two commits later**, after a reviewer asked. The re-runs were clean and
+no kill had been vacated, so nothing was lost -- but the invariant this fact
+states was permanently unmet for that commit, and the only thing that caught it
+was a reviewer reading the fact. **If you change a guard, the list of
+mutations to re-run is derivable from the diff; derive it before you write the
+commit message, not after someone asks.**
+
+**75. The five catalogued causes of an unkillable CLAUSE, one of an unkillable
+STATEMENT, and one of an unkillable ARM OF A CONDITIONAL EXPRESSION. Name which
+one you have and prove it; never invent a test to fake a kill.** Causes 4 and 5
+were added by sub-project 14 and are the two that most often get mis-filed as
+ordinary fixture gaps. **The list is organised by SYNTACTIC UNIT, and reading
+the unit first is what keeps a survivor from being mis-filed: causes 1-5 are
 causes of an unkillable *clause*; cause 6, added by sub-project 16, is the
-statement-level case, and the reason it is numbered separately rather than
-folded into 4(a) is that force-fitting a statement into a clause taxonomy is
+statement-level case; cause 7, added by sub-project 17, is the
+expression-arm case. Each was numbered separately rather than folded into 4(a)
+for the same reason -- force-fitting one unit into another unit's taxonomy is
 what produces a mis-filed survivor.** Read the scope of the item before you
 claim it: if the mutant you are explaining deleted or narrowed a whole
-statement rather than dropping a conjunct, 1-5 do not apply to it.
+statement rather than dropping a conjunct, 1-5 do not apply to it; if it
+collapsed one arm of an `a if c else b`, neither 1-5 nor 6 do.
 
 1. **The factory always produces the matching value** (fact 33) -- the clause is
    fine, the fixture cannot vary what it tests. Fixable.
@@ -2877,6 +2918,36 @@ statement rather than dropping a conjunct, 1-5 do not apply to it.
    uncommitted INSERT holds -- and that is the same proof, because the rows are
    still never committed by anyone. Not fixable, and no test should be written
    for it.
+7. **Guarded callee** -- **the only cause on this list that is about an ARM OF A
+   CONDITIONAL EXPRESSION.** One arm of an `a if c else b` cannot be
+   distinguished from its sibling because the **callee inside the other arm
+   already performs the same guard** and returns the same value with no side
+   effect, so both arms compute one value for every input. `old_domain =
+   domain_from_url(old_url) if old_url else None`
+   (`app/activitypub/util.py:3509`) survives collapsing the `else` arm --
+   i.e. becoming a bare `domain_from_url(old_url)` -- because
+   `domain_from_url` opens `if not url: return None` (`app/utils.py:1562-1568`)
+   and nothing precedes that return. **Prove it by reading the callee's first
+   statements and showing the early return has no side effect**, which makes
+   this equivalent for *all inputs* rather than for all fixtures -- that
+   distinction is the whole reason it is not cause 1 or 2. Discriminate it from
+   the three it is nearest: it is **not 4(a)**, because there is no body and
+   nothing is written back; **not 4(b)**, because `old_url` genuinely can be
+   falsy and the arm is genuinely reached, so the ternary discriminates
+   *control* while failing to discriminate *value*; and **not 6**, because the
+   redundant work runs *instead of* the mutated arm rather than *after* it on
+   every path. **Not fixable, and no test should be written for it** -- but the
+   arm is still worth *covering*, because a later change to the callee's guard
+   would make the two arms diverge and only a test that exercises the falsy
+   input would notice. **Standing on one instance where cause 6 stood on two,
+   and recorded that way deliberately.** It is listed anyway because the
+   alternative on meeting this shape is force-fitting it into 4(a) or writing a
+   fake kill, which is exactly what this fact exists to prevent; a second
+   independent instance would settle it, and a demonstration that some
+   *existing* member of 1-6 already covers it would retire it. **Note where this
+   cause lives: fact 87 says coverage emits no arc for a ternary, so an unkilled
+   expression arm is invisible to both figures and is only ever found by an AST
+   enumeration followed by a mutation** -- which is how this one was found (D294).
 
 **Crash-only killability is another thing that looks like this list but is not
 on it**: fact 68's third note describes a clause no *assertion* can kill because
@@ -2981,6 +3052,26 @@ check. Run both.** Neither is hypothetical -- both happened in sub-project 14.
   not 1, switch to line-addressed patching. Sub-project 14's tooling aborted on
   its own count assertion *before* the write, which is the whole point of
   checking first rather than reading the diff afterwards.
+- **NEVER BATCH MUTATIONS. Apply one, run, restore, verify -- then the next.**
+  Sub-project 17 added this after the same task stalled **twice** with a live
+  mutation in the tree: the first stall left `for vote in votes:` rewritten to
+  `for vote in []:` in `app/activitypub/util.py`, alongside ~374 uncommitted
+  test lines, and the standing `git diff -- app/` check on resume is the only
+  thing that found either. The reason batching is the cause and not merely the
+  occasion: **a batch that dies partway leaves no record of which mutant is
+  applied**, so the recovering agent cannot tell an applied mutant from a
+  restored one without reading the diff and guessing, and cannot say which rows
+  of its own table were actually measured. One-at-a-time makes the tree's state
+  derivable at every instant.
+- **Once a fix lands mid-slice, "the tree is unmodified" stops meaning "the
+  diff against the slice's BASE is empty".** Sub-project 17 committed a
+  one-line production fix at its fifth task, after which
+  `git diff <BASE>.. -- app/` was permanently non-empty and useless as a
+  restore check. The check that survives a mid-slice fix is against **HEAD** --
+  `git diff -- app/`, or an `md5sum` of the file compared to
+  `git show HEAD:<path>`, which is what the remaining tasks used. State which
+  baseline your check uses; "app/ is clean" is ambiguous the moment a slice
+  lands code.
 
 **81. When a function contains an UNFIXED CRASH inside a broad handler, that
 crash is a downstream route to every "nothing happened" assertion in the
@@ -3338,6 +3429,112 @@ in the change rather than the lowest, because it is the one with no downstream
 reader. Distinct from fact 82 (a correction does not correct its copies), which
 is about propagating a truth you already hold; here the correction was false and
 the copies were the check that was skipped.
+
+**96. A CORRECTION THAT ONLY *DELETES* A FALSE CLAIM WILL BE RE-DERIVED. Land
+the REFUTATION in the artefact, not just the correction -- and land it in the
+artefact being corrected, not only in the report that found it.** Sub-project
+17 produced this twice in one task, which is why it is a fact rather than an
+anecdote. Task 1's self-review caught a docstring saying "the app factory's
+`autoflush=False`" -- `db = SQLAlchemy(session_options={"autoflush": False},
+...)` is at `app/__init__.py:81`, at **module scope**, and `create_app` does not
+start until `:129` -- and corrected it by deleting the phrase. The correction
+went into the task **report**. One fix round later, a fresh comment was written
+for the same mechanism, without the report or the module docstring in the
+writer's working set, and it **regenerated the identical wrong shorthand**.
+Nothing had copied it; nothing needed to. The natural phrasing for that
+mechanism *is* the wrong one, and a deletion leaves nothing on the page saying
+so.
+
+**This is the sibling of fact 82, not a restatement of it, and the difference
+is operational.** Fact 82 is about a claim with EXISTING copies: correct it,
+then grep for the copies. This is the case with **no copy at all** -- the
+correction had nowhere to propagate to, and the failure was that the next
+writer had no contradiction available. Fact 82's remedy (grep for copies) finds
+nothing here and reports success. **The remedy is different: write the
+correction as a refutation that names the wrong claim and says why it is
+wrong** -- "at module scope, *not* in the factory, which is why `create_app`
+cannot be where you look for it" -- so the sentence survives being read by
+someone who has never seen the error. A second occurrence in the same
+sub-project came at it from the adjacent angle: prose rewritten to repair a
+false test-attribution introduced a *new* false attribution of the same class,
+because the replacement was reasoned from a class's **name** rather than read
+off the call sites. The structural repair there was the same in kind -- the
+replacement enumeration now **quotes each call's argument list**, written while
+reading that call, so the evidence and the claim occupy the same lines and a
+future writer cannot regenerate the claim without also regenerating the quote.
+**The test for whether your correction is durable: could a writer who never saw
+the original error reproduce it from what is now on the page? If yes, you
+deleted a claim instead of refuting one.**
+
+**97. TO PIN A `commit()`, EXPIRE THE OBJECT FIRST.** `db.session.expire(obj)`
+before the assertions is the campaign's standard instrument for a test whose
+subject is *that a function persisted something*, and without it a deleted-commit
+mutant survives. **This is a third case alongside facts 58 and 65, not a
+restatement of either, and the discriminator is what the mutant did.** Fact 58:
+one session, the function commits on `db.session`, `expire_on_commit` is `True`,
+so the objects are already expired and an added `refresh()` is a redundant
+SELECT. Fact 65: two sessions, so the refresh IS load-bearing. **This case: one
+session, and the mutation DELETED the commit** -- so fact 58's premise is gone.
+The session was constructed with `autoflush=False` (`app/__init__.py:81`, module
+scope), so the test's read returns the writing session's **unflushed in-memory**
+attribute state and cannot distinguish committed from pending; the assertion
+passes and the mutant lives. `db.session.expire(obj)` discards that in-memory
+state and forces a re-SELECT, and the mutant then fails on the seeded value.
+**Measured, and it overturned a proposed taxonomy entry**: sub-project 17 first
+recorded such a survivor as a new class of "harness-invisible effect" and
+proposed it as a seventh cause for fact 75. A reviewer challenged the premise,
+the experiment was run, `expire()` killed it cleanly at `assert 7 == 6`, and the
+proposed cause was **withdrawn**. It was an ordinary fixture gap wearing a
+taxonomy's clothes. **The transferable half is the challenge, not the
+technique: before filing a survivor as unkillable, ask what state the assertion
+is actually reading.** Two notes. **(a)** It generalises to every assertion in
+this campaign that reads columns written by a function that commits on
+`db.session`, which is an unswept candidate across the earlier sub-projects'
+files. **(b)** It costs one line and no correctness when it was not needed, so
+add it whenever persistence is the subject -- but do not write a docstring
+calling it load-bearing without saying which mutant it kills, for fact 58's
+reason.
+
+**98. A STALE COUNT IN ONE ROW OF A MUTATION TABLE MEANS THE TABLE PREDATES
+SOMETHING. RE-SWEEP IT; DO NOT PATCH THE ROW.** A mutation table records
+`(mutant, kill kind, killers)` against **the file as it stood when the row was
+measured**. Adding a test mid-task invalidates every row measured before it,
+not only the rows someone noticed. Sub-project 17's Task 6 review named **two**
+rows with stale kill counts; the implementer re-swept all **35** against the
+final file rather than patching the two, and found **twelve** stale plus one
+status change -- a mutant recorded as a SOLE kill that a later test also kills,
+so it is MULTI. Totals were unaffected, which is the point: **the summary
+numbers can be right while most of the detail is stale, so "the totals still
+add up" is not evidence the rows do.** Patching the named rows would have left
+ten wrong ones behind and made the table look freshly checked. The
+status change matters more than the counts, because "sole kill" is a claim
+other prose leans on -- minimality arguments, "this test alone suffices",
+redundancy counts -- so when a re-sweep moves a row from sole to multi,
+**grep the report for every downstream claim resting on its soleness** before
+recording it. Cheapest prevention: measure the table **after** the last test is
+written, or state at the top of the table which test count it was measured
+against.
+
+**99. INSIDE A FILE YOU ARE EDITING, LOCATE THINGS BY ORDINAL POSITION, NOT BY
+ABSOLUTE LINE NUMBER.** "The third of the six classes below, between `X` and
+`Y`, and not the last" cannot go stale; ":3397" goes stale the moment anything
+above it grows, and a test file grows by construction -- every task in a
+coverage slice appends to it. Sub-project 17 adopted this in Task 7 after one
+locator in a committed banner went stale **twice** in the same slice, and the
+same slice parked a report-only locator table that had drifted **17-18 lines**
+because nobody re-derived it. **The two rules that follow from it.** **(a)
+Prefer a locator that names what a reader can count** -- ordinal position among
+named siblings, the enclosing class, the symbol name -- over one that names a
+coordinate. Names and ordinals survive insertion; coordinates do not. **(b)
+RE-DERIVE EVERY LINE NUMBER YOU COPY OUT OF A REPORT OR A REVIEW, without
+exception**, because a report is written against one commit and read against
+another, and a drifted pointer often lands on a line that still *reads* as if it
+belonged to the claim -- which is how it survives a check. Absolute line numbers
+into **production** source are still the right currency for a register entry,
+where the whole cell is dated and re-verified at a known commit; this fact is
+about pointers that live inside the moving file. And when you do read one,
+read it with a tool that prints the number -- `grep -n`, `awk` on `NR`,
+`cat -n` -- never by counting out of a bare `sed -n 'A,Bp'` (fact 95).
 
 ## Known noise
 
