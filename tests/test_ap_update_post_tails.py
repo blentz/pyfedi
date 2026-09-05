@@ -740,13 +740,34 @@ class TestQuestionEditPath:
     """`app/activitypub/util.py:3333-3351`, the "Edit, not a totals update" arm.
 
     It is reached when `total_vote_count == 0` -- which is a SUM at `:3331`,
-    over only the votes the three `continue`s let through, and not "every choice
-    is on zero votes". Four shapes reach it and this file sends all four: every
-    vote on zero; every vote malformed and skipped
-    (`TestQuestionVoteCountGuards`); a mix, one skipped and one counted at zero
-    (`test_a_vote_with_no_name_is_not_counted`); and well-formed non-zero totals
-    that CANCEL, which is how `test_the_edit_path_returns_before_the_totals_loop`
-    below sends -3 and 3. It then requires a `Poll` row (`:3335`) and an
+    over only the votes the three `continue`s let through, and NOT "every choice
+    is on zero votes". Four shapes in this file reach it. Each clause below was
+    written against the `_poll_update(...)` call it names, read at the call:
+
+      - every vote well-formed and on zero -- `_choice('Yes', 0), _choice('No', 0)`,
+        which is most of the class below and both `TestQuestionRouting` tests
+        that get this far;
+      - an EMPTY vote list, where the counting loop never runs at all --
+        `_poll_update(end_time=END_TIME)`, sent only by
+        `test_an_empty_vote_list_deletes_every_choice_and_recreates_none`. Not a
+        case of "every vote on zero": there are no votes;
+      - a MIX, one skipped vote alongside one well-formed zero. This is what
+        EACH of the three `TestQuestionVoteCountGuards` tests sends -- the
+        nameless `{'replies': {'totalItems': 5}}` with `_choice('Yes', 0)`,
+        `_choice('Yes')` with `_choice('No', 0)`, and
+        `{'name': 'Yes', 'replies': {'type': 'Collection'}}` with
+        `_choice('No', 0)`. All three, not one of them;
+      - well-formed non-zero totals that CANCEL, which is how
+        `test_the_edit_path_returns_before_the_totals_loop` below sends -3 and 3.
+
+    A fifth shape -- EVERY vote malformed -- is not sent anywhere in this file,
+    and half of it cannot be. Measured: an all-nameless list plus an `endTime`
+    raises `KeyError: 'name'` at `:3347`, because the recreate loop re-reads the
+    unfiltered list without the guard `:3324` applied. That is Task 4's defect.
+    The other half traverses fine -- an all-`{'name': ...}`-no-`replies` list
+    recreates its choices normally -- but no test here sends that either.
+
+    It then requires a `Poll` row (`:3335`) and an
     `endTime` (`:3336-3337`), writes `end_poll` and `mode`, and REPLACES the
     choice set outright:
 
