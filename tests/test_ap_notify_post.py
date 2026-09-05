@@ -384,10 +384,31 @@ def test_a_subscriber_to_the_author_is_notified(app, db_session):
     their truthy arm and both arms are distinguishable. (`make_user` already
     gives a non-local user `ap_id=f'{name}@{instance.domain}'`, so the author
     half needed nothing.)
+
+    THREE more posts are seeded and the task is run against the LAST of them,
+    so that no two of the ids this `targets` dict carries hold the same number.
+    `_seed_scenario` seeds one Community and then one Post, and
+    `TRUNCATE ... RESTART IDENTITY` (tests/conftest.py:142) restarts every
+    sequence at 1, so Community and Post both take primary key 1 while its two
+    users take 1 and 2 -- the silently-vacuous shape fact 89 in tests/README.md
+    records. ONE extra post is not enough in this arm, unlike in the
+    NOTIF_COMMUNITY arm's happy path below: `post.id` would then be 2, which is
+    the AUTHOR's id, and this dict carries `'author_id': post.user_id`
+    alongside `'post_id': post.id`. Post 4 is the first id nothing else the arm
+    can reach holds -- the subscriber is user 3 and the arm carries that id as
+    `notify_id`. MEASURED: with `_seed_scenario`'s single post, mutating
+    `'post_id': post.id` (app/activitypub/util.py:2829) to `post.community_id`
+    left all 34 tests in this file passing; with the fourth post that mutation
+    fails here. The `len({...}) == 4` below fails loudly if factory ordering
+    ever changes.
     """
-    community, post, author = _seed_scenario()
+    community, seeded_post, author = _seed_scenario()
     community.ap_id = f'microblogs@{PEER}'
+    make_post(community, author, ap_id=f'https://{PEER}/post/2')
+    make_post(community, author, ap_id=f'https://{PEER}/post/3')
+    post = make_post(community, author, ap_id=f'https://{PEER}/post/4')
     subscriber = make_user(_peer_instance(), 'subscriber', local=True)
+    assert len({community.id, post.id, author.id, subscriber.id}) == 4
     _subscribe(subscriber, author.id, NOTIF_USER)
     db.session.commit()
 
