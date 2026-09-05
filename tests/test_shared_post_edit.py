@@ -687,13 +687,21 @@ def test_web_branch_keeps_the_existing_url_for_an_image_edit(db_session, http_mo
     `http_mock`'s `assert_all_called=True`.
 
     Not in the brief: because :565's block never runs, `post.image_id` is
-    never set, and this function's federate step (:743) synchronously runs
-    `send_post`, which for a POST_TYPE_IMAGE post does
-    `post.image.source_url` (app/shared/tasks/pages.py:181) -- a crash on
-    `post.image is None` unrelated to what this test probes.
-    `community.local_only = True` makes :736 set `federate = False` first, so
-    the parsed url under test still lands but the unrelated federate crash
-    does not.
+    never set, and this test does not pass `from_scratch` as True, so it is
+    the `:743 elif federate:` arm that synchronously runs `task_selector`
+    (app/shared/post.py:739-743) -> `edit_post` (app/shared/tasks/pages.py:76)
+    -> `send_post` (:88), which for a POST_TYPE_IMAGE post does
+    `attachment.append({'type': 'Image', 'url': post.image.source_url, ...})`
+    (app/shared/tasks/pages.py:181, guarded only by `elif post.type ==
+    POST_TYPE_IMAGE` with no `image_id` check) -- a crash on `post.image is
+    None` unrelated to what this test probes. The outbox builder
+    (`post_to_activity`, app/activitypub/util.py:100) guards the same
+    dereference at :172 with `if post.image_id is not None:`; the two copies
+    of this logic disagree about whether a POST_TYPE_IMAGE post with no image
+    is safe to serialise, and that disagreement is exactly why this test needs
+    a workaround. `community.local_only = True` makes :736 set
+    `federate = False` first, so the parsed url under test still lands but the
+    unrelated federate crash does not.
     """
     s = _seed(url='https://example.com/pic.png')
     s.community.local_only = True
@@ -711,12 +719,21 @@ def test_web_branch_clears_the_url_for_an_image_created_from_scratch(db_session)
     :565 `if url and ...` and :601 both short-circuit on a falsy url.
 
     Not in the brief: with no url, `post.image_id` is never set, and this
-    function's federate step (:743) synchronously runs `send_post`, which for
-    a POST_TYPE_IMAGE post does `post.image.source_url`
-    (app/shared/tasks/pages.py:181) -- a crash on `post.image is None`
-    unrelated to what this test probes. `community.local_only = True` makes
-    :736 set `federate = False` first, so the parsed url under test still
-    lands but the unrelated federate crash does not.
+    test passes `from_scratch=True`, so it is the `:739-741 if from_scratch:
+    task_selector('make_post', ...)` arm (not `:743`'s `elif federate:`) that
+    synchronously runs `make_post` (app/shared/tasks/pages.py:63) ->
+    `send_post` (:67/:88), which for a POST_TYPE_IMAGE post does
+    `attachment.append({'type': 'Image', 'url': post.image.source_url, ...})`
+    (app/shared/tasks/pages.py:181, guarded only by `elif post.type ==
+    POST_TYPE_IMAGE` with no `image_id` check) -- a crash on `post.image is
+    None` unrelated to what this test probes. The outbox builder
+    (`post_to_activity`, app/activitypub/util.py:100) guards the same
+    dereference at :172 with `if post.image_id is not None:`; the two copies
+    of this logic disagree about whether a POST_TYPE_IMAGE post with no image
+    is safe to serialise, and that disagreement is exactly why this test needs
+    a workaround. `community.local_only = True` makes :736 set
+    `federate = False` first, so the parsed url under test still lands but the
+    unrelated federate crash does not.
     """
     s = _seed()
     s.community.local_only = True
@@ -853,12 +870,18 @@ def test_web_branch_leaves_the_poll_end_unset_when_finish_in_is_absent(db_sessio
     """:354, false arm. The guard tests the FIELD, so finish_in=None takes it.
 
     Not in the brief: with `finish_in=None`, `poll.end_poll` stays None, and
-    this function's federate step (:741/:743) synchronously runs the eager
-    Celery task, which for a POST_TYPE_POLL post does `ap_datetime(poll.end_poll)`
-    (app/activitypub/util.py:195) -- a crash on None unrelated to what this
-    test probes. `community.local_only = True` makes :736 set
-    `federate = False` first, so the parsing under test still runs but the
-    unrelated federate crash does not.
+    this function's federate step (:743) synchronously runs `task_selector`
+    (app/shared/post.py:739-743) -> `edit_post` (app/shared/tasks/pages.py:76)
+    -> `send_post` (:88), which for a POST_TYPE_POLL post does
+    `page['endTime'] = ap_datetime(poll.end_poll)` (app/shared/tasks/pages.py:224)
+    -- a crash on None unrelated to what this test probes (`ap_datetime` itself
+    is app/utils.py:2294, `date_time.isoformat() + '+00:00'` with no None
+    guard). `post_to_activity` (app/activitypub/util.py:195 does the same
+    `ap_datetime(poll.end_poll)`) is NOT on this path -- its only caller is the
+    outbox collection view at app/activitypub/routes.py:2033.
+    `community.local_only = True` makes :736 set `federate = False` first, so
+    the parsing under test still runs but the unrelated federate crash does
+    not.
     """
     s = _seed()
     s.community.local_only = True
