@@ -1565,6 +1565,60 @@ class TestEventBlock:
         assert File.query.filter_by(id=old_id).count() == 0
         assert File.query.count() == 0
 
+    def test_an_image_with_no_url_is_treated_as_no_image_at_all(
+            self, app, db_session, redis_lock_only_double):
+        """THE DEFECT `:3391` was fixed for. `:3391` tested `'image'` and `:3392`
+        then read the nested `['url']` unguarded, so a peer sending
+        `{"image": {}}` or `{"image": {"type": "Image"}}` -- an Event whose
+        banner the peer has removed, and a shape ActivityPub permits -- raised
+        `KeyError: 'url'` out of `update_post_from_activity` and abandoned the
+        Update, the thirteen Event fields `:3375-3387` had already written
+        included.
+
+        FIXED rather than registered, by this campaign's own test: the correct
+        spelling already existed 95 lines below, at `:3487`
+        (`'image' in request_json['object'] and 'url' in
+        request_json['object']['image']`), whose right-hand side `:3488` is
+        otherwise byte-identical to `:3392`. The repair is that second conjunct,
+        copied. No new behaviour is chosen either -- a urlless `image` falls to
+        `:3398`'s `else` and is treated as "no image", which is exactly how
+        `:3489`'s `else` treats the same shape.
+
+        THE RESIDUE, WHICH IS REGISTER MATERIAL AT BOTH SITES AND NOT AT `:3392`
+        ALONE. `:3487`'s guard is only correct when `image` is a dict, so
+        copying it closes the missing-key hole and leaves the non-dict hole open
+        at `:3391` and `:3487` together. Measured, not assumed -- `in` on a str
+        is a SUBSTRING test and does not raise, so the shapes differ from each
+        other:
+
+          - `"image": "https://p.example/pic.png"` -- the guard is a substring
+            test that answers False, so the banner is silently dropped;
+          - `"image": "https://p.example/url.png"` -- the same substring test
+            answers True, and the read raises
+            `TypeError: string indices must be integers, not 'str'`;
+          - `"image": ["https://p.example/pic.png"]` -- False, banner silently
+            dropped;
+          - `"image": null` or a number -- the GUARD itself raises
+            `TypeError: argument of type 'NoneType' is not a container or
+            iterable`, before either read.
+
+        Closing that needs an `isinstance(..., dict)` at two sites and a
+        decision about the list form (ActivityPub allows `image` to be an
+        array), which is new behaviour this codebase has never had. Registered.
+        """
+        post, _ = _seed_event_post()
+        old_id = _attach_banner(post, OLD_BANNER)
+
+        update_post_from_activity(post, _event_update(image={'type': 'Image'}))
+
+        db.session.expire_all()
+        assert post.image_id is None
+        assert File.query.filter_by(id=old_id).count() == 0
+        assert File.query.count() == 0
+        # The Update was applied rather than abandoned: pre-fix the KeyError
+        # raised after `:3375-3387` had written but before `:3400` committed.
+        assert _stored_event(post).timezone == 'Europe/Berlin'
+
     def test_the_banner_is_stored_when_remote_image_caching_is_off(
             self, app, db_session, redis_lock_only_double):
         """`:3396`'s False side: the `File` is created and attached, and
