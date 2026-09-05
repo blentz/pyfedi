@@ -2739,8 +2739,9 @@ agents in sub-project 14 did, and it is two lines.
 **Sub-project 17 supplied the worked instance this fact had been predicting,
 and the value of it is the SHAPE TABLE rather than the case.** The fix at
 `30a9dcec` added `'url' in request_json['object']['image']` in front of a
-nested subscript (`app/activitypub/util.py:3391`), copying the guarded twin 95
-lines below it (`:3487`). Measured shape by shape in a bare interpreter, not
+nested subscript (`app/activitypub/util.py:3391`), copying the guarded twin
+ninety-five lines below `:3392` (`:3487`). Measured shape by shape in a bare
+interpreter, not
 reasoned: a dict without `url` raises `KeyError` before and is handled after
 (**the repair**); `"image": ".../pic.png"` -- a string lacking the substring
 `url` -- crashed with `TypeError` before and is now **silently dropped**
@@ -3534,10 +3535,17 @@ into **production** source are still the right currency for a register entry,
 where the whole cell is dated and re-verified at a known commit; this fact is
 about pointers that live inside the moving file. And when you do read one,
 read it with a tool that prints the number -- `grep -n`, `awk` on `NR`,
-`cat -n` -- never by counting out of a bare `sed -n 'A,Bp'` (fact 95).
+`cat -n` -- never by counting out of a bare `sed -n 'A,Bp'` (fact 95). **Fact
+100 is this fact's outward-facing half**: 99 keeps a pointer valid inside the
+file you are editing; 100 verifies the pointers a record aims at other files.
 
-**(c) A CITATION SWEEP NEEDS TWO PASSES, AND THE ONE PEOPLE SKIP IS THE CHEAP
-ONE.** Verifying citations by extracting them with a `file:line` pattern and
+**100. A CITATION SWEEP NEEDS TWO PASSES, AND THE ONE PEOPLE SKIP IS THE CHEAP
+ONE.** (Carried here from fact 99, where it had been drafted as a third
+sub-rule; sub-project 17's final review split it out because verifying a
+record's outward pointers is a different activity from locating things inside a
+file you are editing, and a reader searching for "citation sweeps need two
+passes" would never look under a heading about ordinal locators.) Verifying
+citations by extracting them with a `file:line` pattern and
 checking each against source misses **every reference written without a line
 number** -- and a bare filename is the reference *most* likely to be invented,
 precisely because nothing forces the writer to open the file. Sub-project 17's
@@ -3549,6 +3557,20 @@ path against `git ls-files`.** Expect the second pass to flag deliberate
 negatives ("there is no such file") and read them rather than deleting them.
 This is fact 94's point wearing a tool: the sweep was applied to a candidate set
 the candidates could opt out of by omitting a colon.
+
+**A THIRD CLASS BOTH PASSES RESOLVE AND THE SWEEP STILL MISSES: a citation whose
+TARGET is a file the same change is editing.** It is correct when the sweep runs
+and stale when the commit lands, so scoping the sweep by path -- sub-project 17's
+Task 9 scoped its verification to `app/*.py` citations -- is what lets it
+through: that task's own README insertions moved fact 87 down **91** lines,
+from `:3098` at commit `b881cad5` to `:3189`, and left a `tests/README.md:3098`
+pointer in a committed test file landing mid-sentence in fact 81's tail instead.
+(**91** is re-derived here from both commits, not copied: the review that
+reported this said "+211 lines, all above it", where the file actually grew
+**260** lines of which **91** were above fact 87 -- fact 99(b) catching the very
+report that raised fact 99's own violation.) **Sweep every file the change touches, and rewrite a pointer INTO one of
+them as a name or an ordinal (fact 99) rather than re-verifying a coordinate you
+are about to invalidate again.**
 
 **What this cost, stated without a tally -- and the tally is deliberately
 absent.** In sub-project 17's register round the extraction pattern required a
