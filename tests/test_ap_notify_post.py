@@ -394,7 +394,8 @@ def test_a_subscriber_to_the_author_is_notified(app, db_session):
     NOTIF_COMMUNITY arm's happy path below: `post.id` would then be 2, which is
     the AUTHOR's id, and this dict carries `'author_id': post.user_id`
     alongside `'post_id': post.id`. Post 4 is the first id nothing else the arm
-    can reach holds -- the subscriber is user 3 and the arm carries that id as
+    can reach holds -- with ONE stated exception, `post.instance_id`, which the
+    guard below cannot make distinct and says so -- the subscriber is user 3 and the arm carries that id as
     `notify_id`. MEASURED: with `_seed_scenario`'s single post, mutating
     `'post_id': post.id` (app/activitypub/util.py:2829) to `post.community_id`
     left all 34 tests in this file passing; with the fourth post that mutation
@@ -408,6 +409,27 @@ def test_a_subscriber_to_the_author_is_notified(app, db_session):
     post = make_post(community, author, ap_id=f'https://{PEER}/post/4')
     subscriber = make_user(_peer_instance(), 'subscriber', local=True)
     assert len({community.id, post.id, author.id, subscriber.id}) == 4
+    # post.instance_id is a FIFTH id reachable from `post` and it is NOT
+    # distinct: it equals community.id by construction, so it cannot join the
+    # set above. MEASURED, not reasoned -- asserting
+    # len({..., post.instance_id}) == 5 fails `assert 4 == 5 / where
+    # 4 = len({1, 2, 3, 4})`. The cause is structural: _seed_scenario creates
+    # the PEER Instance first so it takes id 1, make_community hardcodes
+    # instance_id=1, and make_post copies the author's instance_id
+    # (tests/factories.py:337), which is that same instance. Separating them
+    # would mean restructuring _seed_scenario's id-occupation pattern, which
+    # every test in this file depends on.
+    #
+    # So the `'post_id': post.id` -> `post.instance_id` mutant is pinned by the
+    # line below rather than by the set above, and this is the property that
+    # actually kills it. Stated explicitly so the kill is not read as stronger
+    # than it is: it dies on post.id being 4, exactly as the `post.community_id`
+    # mutant does, not on an independently-witnessed id. MEASURED: applying
+    # that mutation to app/activitypub/util.py:2829 and running this file
+    # gives 1 failed / 33 passed, a SOLE kill by this test; app/ restored and
+    # md5-verified against HEAD afterwards.
+    assert post.instance_id == community.id
+    assert post.instance_id != post.id
     _subscribe(subscriber, author.id, NOTIF_USER)
     db.session.commit()
 
