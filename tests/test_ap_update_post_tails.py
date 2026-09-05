@@ -47,8 +47,8 @@ techniques exist in this suite and they are NOT interchangeable:
       tests/test_event_post_type_survives_update.py:161-164.
 
 Technique (2) only works for the Event tail: the setting gates the call at
-`app/activitypub/util.py:3388-3389` and nothing gates the one in the url-change
-arm at `:3496`, which runs whenever that arm builds an image. So this file
+`app/activitypub/util.py:3396-3397` and nothing gates the one in the url-change
+arm at `:3504`, which runs whenever that arm builds an image. So this file
 standardises on TECHNIQUE (1) -- it works at both call sites, and
 `assert_all_called=True` turns the registered 404 into positive evidence that
 the image path was entered. The `Video` cluster in this file never reaches
@@ -315,7 +315,7 @@ class TestVideoVoteCollections:
         """`db.session.commit()` / `return` at `app/activitypub/util.py:3308-3309`,
         "return now for PeerTube, otherwise rest of this function breaks the post".
 
-        The witness is the Links section's no-url `else` arm at `:3542-3559`.
+        The witness is the Links section's no-url `else` arm at `:3550-3567`.
         With no `attachment` in the Update and `post.type` not `POST_TYPE_EVENT`,
         `new_url` stays None, so `old_url != new_url` is true and that arm sets
         `post.type = POST_TYPE_ARTICLE` and `post.url = None`. It was chosen over
@@ -485,7 +485,8 @@ def _seed_poll(post, choices, mode='single'):
     against a block that never ran.
 
     `sort_order` counts from 1 to match what the Edit path writes at
-    `app/activitypub/util.py:3345-3349` (`i = 1`, incremented per vote).
+    `app/activitypub/util.py:3345-3351` (`i = 1`, incremented once per vote it
+    does not skip).
     """
     poll = make_poll(post, mode=mode)
     rows = []
@@ -500,9 +501,9 @@ def _seed_poll(post, choices, mode='single'):
 def _seed_link_witness(post):
     """Seed `post.url` and `post.type` contrary to what the Links section writes.
 
-    All four of the poll arm's `return`s -- `:3320`, `:3337`, `:3351` and
-    `:3360` -- leave `update_post_from_activity` before its Links section, whose
-    no-url `else` arm at `:3542-3559` sets `post.type = POST_TYPE_ARTICLE` and
+    All four of the poll arm's `return`s -- `:3320`, `:3337`, `:3353` and
+    `:3368` -- leave `update_post_from_activity` before its Links section, whose
+    no-url `else` arm at `:3550-3567` sets `post.type = POST_TYPE_ARTICLE` and
     `post.url = None` for any Update carrying no `attachment` on a post that is
     not an Event. A test whose only other witness is "the seeded poll rows are
     unchanged" needs this pair, or it passes just as happily against a poll arm
@@ -531,7 +532,7 @@ def _stored_sort_orders(post):
     query by the column under test would let a mutant that mis-numbers the rows
     be sorted back into the expected sequence. `PollChoice.id` is assigned by the
     sequence in insertion order, so id order is the order
-    `app/activitypub/util.py:3346-3348` added them in.
+    `app/activitypub/util.py:3346-3350` added them in.
     """
     rows = PollChoice.query.filter_by(post_id=post.id).order_by(PollChoice.id).all()
     return [(row.choice_text, row.sort_order) for row in rows]
@@ -574,7 +575,7 @@ class TestQuestionRouting:
     and which then requires both a `Poll` row (`:3335`) and an `endTime`
     (`:3336-3337`) before it gets that far. So the two tests below that assert
     `mode` send all-zero totals and an `endTime`; no test on the totals path can
-    assert `mode`, because the totals path (`:3353-3360`) never reads the
+    assert `mode`, because the totals path (`:3355-3368`) never reads the
     variable.
     """
 
@@ -737,11 +738,11 @@ class TestQuestionVoteCountGuards:
 
 
 class TestQuestionEditPath:
-    """`app/activitypub/util.py:3333-3351`, the "Edit, not a totals update" arm.
+    """`app/activitypub/util.py:3333-3353`, the "Edit, not a totals update" arm.
 
     It is reached when `total_vote_count == 0` -- which is a SUM at `:3331`,
     over only the votes the three `continue`s let through, and NOT "every choice
-    is on zero votes". Four shapes in this file reach it. Each clause below was
+    is on zero votes". Six shapes in this file reach it. Each clause below was
     written against the `_poll_update(...)` call it names, read at the call:
 
       - every vote well-formed and on zero -- `_choice('Yes', 0), _choice('No', 0)`,
@@ -751,21 +752,38 @@ class TestQuestionEditPath:
         `_poll_update(end_time=END_TIME)`, sent only by
         `test_an_empty_vote_list_deletes_every_choice_and_recreates_none`. Not a
         case of "every vote on zero": there are no votes;
-      - a MIX, one skipped vote alongside one well-formed zero. This is what
-        EACH of the three `TestQuestionVoteCountGuards` tests sends -- the
-        nameless `{'replies': {'totalItems': 5}}` with `_choice('Yes', 0)`,
+      - a MIX that stops at `:3337` for want of an `endTime`, one skipped vote
+        alongside one well-formed zero. This is what EACH of the three
+        `TestQuestionVoteCountGuards` tests sends -- the nameless
+        `{'replies': {'totalItems': 5}}` with `_choice('Yes', 0)`,
         `_choice('Yes')` with `_choice('No', 0)`, and
         `{'name': 'Yes', 'replies': {'type': 'Collection'}}` with
         `_choice('No', 0)`. All three, not one of them;
+      - a MIX that carries an `endTime` and so runs the whole arm --
+        `_choice('Yes', 0), {'replies': {'totalItems': 0}}, _choice('No', 0)`
+        with `end_time=END_TIME`, sent only by
+        `test_a_nameless_vote_is_skipped_and_the_rest_stay_contiguous` below;
+      - EVERY vote skipped by the counting loop but every vote NAMED --
+        `_choice('Yes'), _choice('No')` with `end_time=END_TIME`, sent only by
+        `test_votes_with_names_but_no_replies_are_still_recreated` below;
       - well-formed non-zero totals that CANCEL, which is how
         `test_the_edit_path_returns_before_the_totals_loop` below sends -3 and 3.
 
-    A fifth shape -- EVERY vote malformed -- is not sent anywhere in this file,
-    and half of it cannot be. Measured: an all-nameless list plus an `endTime`
-    raises `KeyError: 'name'` at `:3347`, because the recreate loop re-reads the
-    unfiltered list without the guard `:3324` applied. That is Task 4's defect.
-    The other half traverses fine -- an all-`{'name': ...}`-no-`replies` list
-    recreates its choices normally -- but no test here sends that either.
+    A seventh shape -- every vote NAMELESS -- is not sent anywhere in this file.
+    It is what exposed Task 4's defect: before the fix, an all-nameless list plus
+    an `endTime` raised `KeyError: 'name'` in the recreate loop, which re-read
+    the unfiltered list without the counting loop's `:3324` guard applied -- and
+    raised AFTER the two DELETEs below had run. The guard at `:3347-3348` is that
+    fix, and the fourth-listed shape above is the mixed version of it that IS
+    sent here.
+
+    WHY THAT GUARD TESTS `name` ALONE and not the counting loop's other two
+    conditions: the recreate loop reads nothing but `vote['name']`, so a vote
+    with a `name` and no `replies` supplies everything it needs -- and the
+    fifth-listed shape above, an entire list of them, is the ordinary Edit a peer
+    sends when it changes a poll's wording before anyone has voted. Copying all
+    three `continue`s here would empty that poll's choice set and put nothing
+    back.
 
     It then requires a `Poll` row (`:3335`) and an
     `endTime` (`:3336-3337`), writes `end_poll` and `mode`, and REPLACES the
@@ -775,8 +793,8 @@ class TestQuestionEditPath:
                            {'post_id': post.id})
         db.session.execute(text('DELETE FROM "poll_choice" WHERE post_id = :post_id'), {'post_id': post.id})
 
-    -- two raw statements at `:3341-3343`, followed by a loop at `:3345-3349`
-    that inserts one fresh `PollChoice` per vote.
+    -- two raw statements at `:3341-3343`, followed by a loop at `:3345-3351`
+    that inserts one fresh `PollChoice` per vote that carries a `name`.
 
     WHAT IS NOT HERE, because `TestQuestionRouting` above already has it:
     `poll.mode = mode` at `:3339` is asserted by that class's first two tests,
@@ -790,10 +808,10 @@ class TestQuestionEditPath:
 
     def test_the_seeded_choices_and_their_votes_are_deleted_and_replaced(
             self, app, db_session, redis_lock_only_double):
-        """The two DELETEs at `:3341-3343` and the recreate loop at `:3345-3349`.
+        """The two DELETEs at `:3341-3343` and the recreate loop at `:3345-3351`.
 
         THE POINT OF THE 'Old ...' NAMES. A test that only asserts the new rows
-        are present does not prove a DELETE ran: the loop at `:3345-3349` would
+        are present does not prove a DELETE ran: the loop at `:3345-3351` would
         produce that same rowset by insertion alone if the seeded rows had never
         existed. So the seeded rows carry `choice_text` values the Update does
         not mention, and the assertion is on the WHOLE stored set -- 'Old A' and
@@ -825,7 +843,7 @@ class TestQuestionEditPath:
 
     def test_an_empty_vote_list_deletes_every_choice_and_recreates_none(
             self, app, db_session, redis_lock_only_double):
-        """The DELETEs at `:3341-3343` with the loop at `:3345-3349` running zero
+        """The DELETEs at `:3341-3343` with the loop at `:3345-3351` running zero
         times.
 
         `'oneOf' in request_json['object']` at `:3314` is satisfied by an empty
@@ -861,7 +879,7 @@ class TestQuestionEditPath:
         """The false arm of `if poll:` at `:3335`.
 
         `Poll.query.filter_by(post_id=post.id).first()` at `:3334` returns None,
-        so control drops straight to the `return` at `:3351`.
+        so control drops straight to the `return` at `:3353`.
 
         `PollChoice` has no foreign key to `Poll` (app/models.py:3821 points at
         `post.id`), so choices can be -- and here are -- seeded without one. That
@@ -921,8 +939,8 @@ class TestQuestionEditPath:
         """`poll.end_poll = request_json['object']['endTime']` at `:3338`.
 
         The peer's string is assigned RAW. There is no `datetime.fromisoformat`
-        between it and the column, unlike the Event block below, whose `:3367`
-        and `:3368` read `startTime`/`endTime` through `datetime.fromisoformat`.
+        between it and the column, unlike the Event block below, whose `:3375`
+        and `:3376` read `startTime`/`endTime` through `datetime.fromisoformat`.
         What makes the raw assignment work at all is psycopg2 plus Postgres:
         the str is sent as a literal and the server casts it to the column's
         type on the way in.
@@ -940,7 +958,7 @@ class TestQuestionEditPath:
         non-UTC offset silently records a poll deadline wrong by that offset.
 
         This is NOT what the Event block below does with the same field.
-        `:3367-3368` read `startTime`/`endTime` through `datetime.fromisoformat`,
+        `:3375-3376` read `startTime`/`endTime` through `datetime.fromisoformat`,
         which yields an AWARE datetime; psycopg2 tags an aware datetime
         `::timestamptz`, and the assignment cast into a naive column then
         CONVERTS by the server's session TimeZone (`Etc/UTC` under this harness)
@@ -980,7 +998,7 @@ class TestQuestionEditPath:
 
     def test_choices_are_numbered_from_one_in_the_order_the_update_lists_them(
             self, app, db_session, redis_lock_only_double):
-        """`i = 1` at `:3345` and `i += 1` at `:3349`, which between them supply
+        """`i = 1` at `:3345` and `i += 1` at `:3351`, which between them supply
         `sort_order` to every row the loop inserts.
 
         Asserted as the full `(choice_text, sort_order)` set rather than as a row
@@ -1002,14 +1020,91 @@ class TestQuestionEditPath:
 
         assert _stored_sort_orders(post) == [('Yes', 1), ('No', 2), ('Maybe', 3)]
 
+    def test_a_nameless_vote_is_skipped_and_the_rest_stay_contiguous(
+            self, app, db_session, redis_lock_only_double):
+        """The `if not 'name' in vote: continue` guard at `:3347-3348`, and its
+        placement ABOVE `i += 1` at `:3351` rather than below it.
+
+        THE SHAPE. A nameless entry between two well-formed ones. The counting
+        loop's own `name` guard at `:3324-3325` drops it, and the two well-formed
+        votes carry 0, so `total_vote_count` stays 0 and `:3333` routes here.
+        Before Task 4's fix the recreate loop read `vote['name']` off the
+        unfiltered list and raised `KeyError: 'name'` -- after the two DELETEs at
+        `:3341-3343` had already run.
+
+        WHY THE NAMELESS ENTRY CARRIES `totalItems: 0`. So that this test is
+        about the recreate loop alone. A non-zero total there would make the
+        Update route to the totals path the moment the counting loop's `name`
+        guard at `:3324` was removed, and the test would be measuring that guard
+        instead of this one.
+
+        WHAT IS ASSERTED, and why it is `_stored_sort_orders` rather than
+        `_stored_choices`: a recreated row's `num_votes` is the column's
+        `default=0` (app/models.py:3824), so asserting it would be vacuous, while
+        `sort_order` is this test's subject. The seeded 'Old' row's absence is the
+        DELETE's witness. The guard's is TWO rows: a condition that never fires
+        makes `:3349` raise and the call never return, and one that always fires
+        leaves the table empty. And 1-2 rather than 1-3 is the
+        `continue`-before-`i += 1` placement's -- the ONLY assertion in this file
+        that distinguishes the two, since every other Edit-path test sends a list
+        with nothing in it to skip.
+
+        This test does NOT separate a `name`-only guard here from the counting
+        loop's full three-condition one: both admit the two well-formed votes.
+        The test below it sends the shape that does.
+        """
+        post = _seed_post()
+        _seed_poll(post, [('Old', 7)])
+
+        update_post_from_activity(post, _poll_update(_choice('Yes', 0),
+                                                     {'replies': {'totalItems': 0}},
+                                                     _choice('No', 0), end_time=END_TIME))
+
+        db.session.expire_all()
+
+        assert _stored_sort_orders(post) == [('Yes', 1), ('No', 2)]
+
+    def test_votes_with_names_but_no_replies_are_still_recreated(
+            self, app, db_session, redis_lock_only_double):
+        """That the guard at `:3347-3348` tests `name` ALONE.
+
+        NOT A DEFECT WITNESS. This shape traversed the unguarded recreate loop
+        perfectly well before Task 4's fix -- the loop reads `vote['name']` and
+        nothing else -- so this test passes on both sides of it. What it pins is
+        the fix's ONE degree of freedom: the counting loop's spelling twenty
+        lines up is three `continue`s, and copying all three here (rather than
+        only the first) would delete the poll's choice set and put nothing back
+        for exactly this Update.
+
+        AND EXACTLY THIS UPDATE IS THE COMMON ONE. Every vote carries a `name`
+        and none carries `replies`, which is what a peer sends when it edits a
+        poll's wording before anyone has voted; `:3324-3329` skips all of them,
+        `total_vote_count` stays 0, and `:3333` routes here. So the widened guard
+        would not be a conservative choice -- it would destroy the choice set on
+        the most ordinary Edit there is.
+
+        The seeded 'Old' row is the contrary baseline: an empty expected list
+        would be what a widened guard produced, and this expected list is what it
+        could not.
+        """
+        post = _seed_post()
+        _seed_poll(post, [('Old', 7)])
+
+        update_post_from_activity(post, _poll_update(_choice('Yes'), _choice('No'),
+                                                     end_time=END_TIME))
+
+        db.session.expire_all()
+
+        assert _stored_sort_orders(post) == [('Yes', 1), ('No', 2)]
+
     def test_the_edit_path_returns_before_the_totals_loop(self, app, db_session,
                                                           redis_lock_only_double):
-        """The `return` at `:3351`.
+        """The `return` at `:3353`.
 
         WHY THE TOTALS ARE -3 AND 3, and not the zeroes every other test here
-        sends. `:3351` does not guard the Links section the way the totals arm's
-        `:3360` does -- deleting it drops control into the totals loop at
-        `:3354-3357`, which commits at `:3358` and returns at `:3360`, still
+        sends. `:3353` does not guard the Links section the way the totals arm's
+        `:3368` does -- deleting it drops control into the totals loop at
+        `:3356-3365`, which commits at `:3366` and returns at `:3368`, still
         short of the Links section. So `post.url` survives either way, and an
         all-zero Update makes that loop a no-op that rewrites the same 0s. This
         was measured, not predicted: with `return` → `pass` applied, the
@@ -1020,12 +1115,12 @@ class TestQuestionEditPath:
         numbers the totals loop would WRITE. The Edit path recreates both rows at
         `PollChoice.num_votes`'s `default=0` (app/models.py:3824); the totals
         loop, if reached, would put -3 and 3 there instead. That is what makes
-        the two 0s below a claim about `:3351` rather than about the default --
+        the two 0s below a claim about `:3353` rather than about the default --
         and the seeded 7 and 11, on rows of the same names, are the contrary
         baseline for the recreation itself.
 
         `post.url` is asserted too, as the outer witness the rest of this file
-        uses: the Links section's no-url `else` at `:3542-3559` sets
+        uses: the Links section's no-url `else` at `:3550-3567` sets
         `post.type = POST_TYPE_ARTICLE` and `post.url = None`.
         """
         post = _seed_post()
@@ -1043,9 +1138,15 @@ class TestQuestionEditPath:
 
 
 class TestQuestionTotalsUpdate:
-    """`app/activitypub/util.py:3353-3360`, the "totals Update" arm: for each
+    """`app/activitypub/util.py:3355-3368`, the "totals Update" arm: for each
     vote, find the `PollChoice` with that `choice_text` and write the vote's
     `totalItems` onto it.
+
+    Its `continue`s at `:3357-3362` are a verbatim copy of the counting loop's at
+    `:3324-3329`, which is what they should be: this loop reads BOTH `name` and
+    `replies['totalItems']`, so it needs all three of the counting loop's
+    conditions -- unlike the Edit path's recreate loop, which reads only `name`
+    and takes only the first of them.
 
     Every seeded `num_votes` here is non-zero and differs from the total the
     Update carries for it, so no assertion below can be satisfied by the
@@ -1058,9 +1159,9 @@ class TestQuestionTotalsUpdate:
 
     def test_a_matching_choice_takes_the_new_total(self, app, db_session,
                                                    redis_lock_only_double):
-        """`choice.num_votes = vote['replies']['totalItems']` at `:3357`.
+        """`choice.num_votes = vote['replies']['totalItems']` at `:3365`.
 
-        Ruling E: the arm's `db.session.commit()` at `:3358` is the statement
+        Ruling E: the arm's `db.session.commit()` at `:3366` is the statement
         this test pins, so the session is expired before the assertion. Without
         that, `autoflush=False` means a commit mutated to `pass` still leaves
         the new value on the in-memory attribute and the assertion passes.
@@ -1074,12 +1175,12 @@ class TestQuestionTotalsUpdate:
 
         assert yes.num_votes == 3
         # The totals arm updates in place; it does not delete and re-create the
-        # way the Edit path at `:3341-3349` does.
+        # way the Edit path at `:3341-3351` does.
         assert _stored_choices(post) == [('Yes', 3)]
 
     def test_a_vote_naming_an_unknown_choice_is_ignored(self, app, db_session,
                                                         redis_lock_only_double):
-        """The false arm of `if choice:` at `:3356`.
+        """The false arm of `if choice:` at `:3364`.
 
         'Maybe' has no row, so `.first()` returns None and the vote is dropped;
         the 'Yes' vote in the same Update still lands, which is what separates
@@ -1096,7 +1197,7 @@ class TestQuestionTotalsUpdate:
 
     def test_two_choices_are_updated_in_one_update(self, app, db_session,
                                                    redis_lock_only_double):
-        """`for vote in votes:` at `:3354` running more than once.
+        """`for vote in votes:` at `:3356` running more than once.
 
         The four numbers in play -- seeds 7 and 11, targets 3 and 5 -- are
         pairwise distinct, so an arm that credited the wrong choice, or wrote
@@ -1113,13 +1214,13 @@ class TestQuestionTotalsUpdate:
 
     def test_the_totals_path_returns_before_the_links_section(self, app, db_session,
                                                               redis_lock_only_double):
-        """The `return` at `:3360`, under the comment "no URLs in Polls to worry
+        """The `return` at `:3368`, under the comment "no URLs in Polls to worry
         about, so return now".
 
         Same witness the `Video` cluster uses, here behind `_seed_link_witness`:
-        the Links section's no-url `else` arm at `:3542-3559`. This test differs
+        the Links section's no-url `else` arm at `:3550-3567`. This test differs
         from the ones above that also call it in that the poll rows change too,
-        so it pins `:3360` specifically -- the totals arm's own `return` -- and
+        so it pins `:3368` specifically -- the totals arm's own `return` -- and
         not merely "some `return` in the poll arm was reached".
         """
         post = _seed_post()
@@ -1134,3 +1235,56 @@ class TestQuestionTotalsUpdate:
         assert post.type == POST_TYPE_POLL
         # ... and the arm did run, so this is not a test of an untaken path.
         assert _stored_choices(post) == [('Yes', 3)]
+
+    def test_malformed_votes_are_skipped_and_their_siblings_still_land(
+            self, app, db_session, redis_lock_only_double):
+        """The three `continue`s the totals loop gained at `:3357-3362`, matching
+        the counting loop's at `:3324-3329`.
+
+        The loop reads `vote['name']` at `:3363` and
+        `vote['replies']['totalItems']` at `:3365`; before Task 4's fix it read
+        both unguarded, and the first malformed sibling raised out of the
+        function.
+
+        ONE TEST, THREE GUARDS, on purpose: each malformed entry below is the
+        sole thing that reverting one of the three `continue`s trips over, so
+        reverting any single one of them fails this test.
+
+          - `{'replies': {'totalItems': 0}}` -- no `name`, so without the first
+            guard `:3363` raises `KeyError: 'name'`;
+          - `_choice('No')` -- `name` but no `replies`, so without the second
+            guard `:3365` raises `KeyError: 'replies'`. It names a SEEDED choice
+            deliberately: with no matching row `if choice:` at `:3364` is False,
+            `:3365` is never reached, and the guard would be unobservable
+            through it;
+          - `{'name': 'Maybe', 'replies': {'type': 'Collection'}}` -- `replies`
+            without `totalItems`, so without the third guard `:3365` raises
+            `KeyError: 'totalItems'`. `replies` is a non-empty dict so that a
+            mutant reading it for truth rather than for the key still sees
+            something truthy. 'Maybe' is seeded for the same reason 'No' is.
+
+        Written inline rather than through `_choice` where the shape needs it:
+        `_choice` builds `replies` only together with `totalItems`, and always
+        writes `name`.
+
+        The two well-formed votes bracket the malformed ones, so the loop is
+        shown to run past each of them rather than to stop at the last one it
+        could reach. Their totals of 3 and 5 sum to the 8 that sends `:3333`
+        down this arm; the seeded 7, 11, 13 and 17 are pairwise distinct from
+        each other and from both targets, so the two rows that must NOT move are
+        asserted against values neither the default nor any arm here could have
+        written.
+        """
+        post = _seed_post()
+        _seed_poll(post, [('Yes', 7), ('No', 11), ('Maybe', 13), ('Later', 17)])
+
+        update_post_from_activity(post, _poll_update(
+            _choice('Yes', 3),
+            {'replies': {'totalItems': 0}},
+            _choice('No'),
+            {'name': 'Maybe', 'replies': {'type': 'Collection'}},
+            _choice('Later', 5)))
+
+        db.session.expire_all()
+
+        assert _stored_choices(post) == [('Yes', 3), ('No', 11), ('Maybe', 13), ('Later', 5)]

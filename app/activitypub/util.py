@@ -3344,6 +3344,8 @@ def update_post_from_activity(post: Post, request_json: dict):
 
                     i = 1
                     for vote in votes:
+                        if not 'name' in vote:
+                            continue
                         new_choice = PollChoice(post_id=post.id, choice_text=vote['name'], sort_order=i)
                         db.session.add(new_choice)
                         i += 1
@@ -3352,6 +3354,12 @@ def update_post_from_activity(post: Post, request_json: dict):
 
             # totals Update
             for vote in votes:
+                if not 'name' in vote:
+                    continue
+                if not 'replies' in vote:
+                    continue
+                if not 'totalItems' in vote['replies']:
+                    continue
                 choice = PollChoice.query.filter_by(post_id=post.id, choice_text=vote['name']).first()
                 if choice:
                     choice.num_votes = vote['replies']['totalItems']
