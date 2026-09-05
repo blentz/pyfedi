@@ -779,11 +779,14 @@ class TestQuestionEditPath:
 
     WHY THAT GUARD TESTS `name` ALONE and not the counting loop's other two
     conditions: the recreate loop reads nothing but `vote['name']`, so a vote
-    with a `name` and no `replies` supplies everything it needs -- and the
-    fifth-listed shape above, an entire list of them, is the ordinary Edit a peer
-    sends when it changes a poll's wording before anyone has voted. Copying all
-    three `continue`s here would empty that poll's choice set and put nothing
-    back.
+    with a `name` and no `replies` supplies everything it needs. Copying all
+    three `continue`s here would take the fifth-listed shape above -- an entire
+    list of such votes, which the counting loop skips in full and so routes to
+    this arm -- run both DELETEs, insert nothing, and COMMIT that at `:3352`. Not
+    a crash: an Update that silently empties the poll.
+    `test_votes_with_names_but_no_replies_are_still_recreated` is that case, and
+    its docstring records what is and is not claimed about how often a peer sends
+    it.
 
     It then requires a `Poll` row (`:3335`) and an
     `endTime` (`:3336-3337`), writes `end_poll` and `mode`, and REPLACES the
@@ -1076,12 +1079,22 @@ class TestQuestionEditPath:
         only the first) would delete the poll's choice set and put nothing back
         for exactly this Update.
 
-        AND EXACTLY THIS UPDATE IS THE COMMON ONE. Every vote carries a `name`
-        and none carries `replies`, which is what a peer sends when it edits a
-        poll's wording before anyone has voted; `:3324-3329` skips all of them,
-        `total_vote_count` stays 0, and `:3333` routes here. So the widened guard
-        would not be a conservative choice -- it would destroy the choice set on
-        the most ordinary Edit there is.
+        WHAT THE WIDENED GUARD WOULD DO, and why it is not the conservative
+        choice it looks like. Every vote here carries a `name` and none carries
+        `replies`, so `:3324-3329` skips all of them, `total_vote_count` stays 0,
+        and `:3333` routes to the Edit path -- which runs both DELETEs at
+        `:3341-3343`, and would then insert nothing and COMMIT that at `:3352`.
+        Not a crash: an Update that silently empties the poll.
+
+        No claim is made here about how often a peer sends this shape. PyFedi
+        itself does not: both of its outbound emitters, `app/activitypub/util.py:186-193`
+        and `app/shared/tasks/pages.py:228`, always write
+        `'replies': {'type': 'Collection', 'totalItems': N}` (with `N` forced to
+        0 when not an edit), so PyFedi's own poll Edit passes all three counting
+        guards and arrives as the first shape the class docstring lists. What is
+        established is only what is asserted below: this shape traverses the
+        recreate loop correctly today, and the widened guard would empty its
+        choice set. That is enough to settle which `continue` belongs here.
 
         The seeded 'Old' row is the contrary baseline: an empty expected list
         would be what a widened guard produced, and this expected list is what it
@@ -1253,15 +1266,19 @@ class TestQuestionTotalsUpdate:
           - `{'replies': {'totalItems': 0}}` -- no `name`, so without the first
             guard `:3363` raises `KeyError: 'name'`;
           - `_choice('No')` -- `name` but no `replies`, so without the second
-            guard `:3365` raises `KeyError: 'replies'`. It names a SEEDED choice
-            deliberately: with no matching row `if choice:` at `:3364` is False,
-            `:3365` is never reached, and the guard would be unobservable
-            through it;
+            guard the THIRD guard's own `vote['replies']` at `:3361` raises
+            `KeyError: 'replies'`. That line, not `:3365`: measured by reverting
+            the guard and reading the traceback, not reasoned about. Execution
+            never reaches `:3363`, so unlike 'Maybe' below this entry does NOT
+            need a matching row to be observable -- it is seeded for the
+            `('No', 11)` unchanged-row witness in the assertion instead;
           - `{'name': 'Maybe', 'replies': {'type': 'Collection'}}` -- `replies`
             without `totalItems`, so without the third guard `:3365` raises
             `KeyError: 'totalItems'`. `replies` is a non-empty dict so that a
             mutant reading it for truth rather than for the key still sees
-            something truthy. 'Maybe' is seeded for the same reason 'No' is.
+            something truthy. THIS one names a SEEDED choice deliberately:
+            `:3365` sits inside `if choice:` at `:3364`, so with no matching row
+            it would never be reached and the guard would be unobservable.
 
         Written inline rather than through `_choice` where the shape needs it:
         `_choice` builds `replies` only together with `totalItems`, and always
