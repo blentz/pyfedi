@@ -3541,56 +3541,63 @@ ONE.** Verifying citations by extracting them with a `file:line` pattern and
 checking each against source misses **every reference written without a line
 number** -- and a bare filename is the reference *most* likely to be invented,
 precisely because nothing forces the writer to open the file. Sub-project 17's
-register round did exactly this, and **its own first report of the numbers was
-wrong in a way worth more than the numbers** -- see below. So: **pass one
+register round did exactly this, and **its own attempts to SIZE the two
+sets then failed four times over, which is worth more than the sizes** -- see
+below. So: **pass one
 resolves every `file:line` against its content; pass two resolves every bare
 path against `git ls-files`.** Expect the second pass to flag deliberate
 negatives ("there is no such file") and read them rather than deleting them.
 This is fact 94's point wearing a tool: the sweep was applied to a candidate set
 the candidates could opt out of by omitting a colon.
 
-**The figures, re-derived from the file with the patterns that produced them,
-because a standing rule must not rest on a number nobody can reproduce.** Over
-the register section as originally shipped (commit `9bfb8227`), counting only
-directory-prefixed paths -- pattern
-`` `((?:app|tests|docs|migrations)/[\w./-]+\.(?:py|html|md|ini)) `` -- the
-section carries **23** distinct file references, of which the `file:line`
-pattern `` `([\w./]+\.(?:py|html|md|ini))[:`]?(\d+)(?:-(\d+))? `` catches
-**15**, leaving **8 bare-only paths that were never checked** -- and the
-non-existent test file was one of the eight.
+**What this cost, stated without a tally -- and the tally is deliberately
+absent.** In sub-project 17's register round the extraction pattern required a
+digit after the filename, so it never examined a single reference written
+**without** one; and one of the paths it never examined was
+`tests/test_ap_create_post.py`, **a file that does not exist**, cited in a
+register cell that shipped. That is the entire argument, and **no count is
+needed to carry it**: the skipped class was non-empty and contained a
+fabrication.
 
-**The eight is the load-bearing number and it reproduces; the ratio around it
-did not, and that is the second lesson.** That round first reported "17 of 25",
-and neither figure is reproducible as a pair: the **17** came from the
-`file:line` pattern, whose `[\w./]+` does **not** require a directory prefix and
-so also matched **exactly two** bare-basename citations (`util.py:3517`,
-`shared/post.py:580-589`) that the other pattern excludes by construction --
-15 + 2 = 17 -- while the **25** was the *post-fix* section counted under the
-dir-prefixed pattern.
+**A count WAS attempted, four times, and the disagreement is now this fact's
+most useful content.** Four agents ran patterns over the same bytes to size the
+two sets and produced **four different answers** -- "17 of 25", "16 of 24",
+"23 / 15 / 8" and "24 / 15 / 9". Each is internally defensible; none is endorsed
+here. They diverge on three axes, and **not one of the four reports stated any
+of them**:
 
-**The sharpest evidence for this rule arrived while that reconciliation was
-being checked, because it is the rule happening to the rule.** A reviewer
-re-ran the loose pattern and got **18**, with a third extra, `17.md`. Re-run
-here over the same revision, the pattern **as stated** gives **17** and exactly
-the two extras above; **the difference is one character.** `[\w./]+` cannot
-cross a hyphen, so in
-`` `docs/superpowers/plans/2026-09-04-coverage-update-tails-17.md:97-101` `` the
-class truncates and the tail `17.md:97-101` becomes matchable -- but only once
-the pattern's **leading backtick anchor is dropped**, since no backtick precedes
-`17.md`. With the anchor, 17; without it, 18. **Two people applying "the same"
-regex to the same bytes got different answers because one character left the
-pattern**, which is exactly why the pattern and not merely the number has to be
-written down. **The two artifacts are also different in kind, and both are worth
-expecting:** `util.py:3517` is a **human shorthand**, an abbreviation the writer
-chose, and no pattern change removes it; `17.md` is the **regex failing on a
-legitimate full path it could not traverse**, which a character class narrower
-than the paths in your repo will manufacture silently.
-**A ratio whose numerator and denominator come from different patterns over
-different commits is not a measurement, even when both halves are individually
-correct.** A reviewer re-deriving it got a third pair again. **So when a count
-goes into a rule: state the pattern, state the revision, and take both halves
-from the same run** -- and prefer the figure the argument actually rests on
-(here, the eight unchecked paths) over the ratio that merely dresses it.
+- **The pattern.** Whether the leading backtick anchor is present changes the
+  answer by one. `[\w./]+` cannot cross a hyphen, so a real path like
+  `docs/superpowers/plans/2026-09-04-coverage-update-tails-17.md:97-101`
+  truncates, and the tail `17.md:97-101` becomes matchable -- but only once the
+  anchor is gone, since no backtick precedes it. **One character of pattern, one
+  unit of answer.**
+- **The counting unit.** Raw matches, `(file, line)` tuples, or distinct
+  filenames are three different quantities. Only the distinct-filename grouping
+  reproduces the anchored/unanchored pair above.
+- **The revision.** The section grew between the first count and the last, so a
+  numerator from one commit with a denominator from another is not a ratio at
+  all.
+
+**KNOWN LIMITATION, recorded rather than iterated on. The absolute size of that
+section's reference set was never pinned, and this fact does not claim it.**
+Four careful attempts is sufficient evidence that the quantity was
+**underspecified** rather than that four people miscounted. **A worked example
+nobody can reproduce teaches the opposite of its lesson**, so the worked example
+here is the disagreement itself.
+
+**The operational rule, which none of the arithmetic touches.** When a count
+goes into a record, state **the pattern, the revision, and the counting unit**,
+and take every figure in a ratio from **one run**. And when the argument does
+not need the count -- this one did not -- **make the claim without it**: "the
+skipped class was non-empty and contained a fabricated path" is checkable
+forever, where "8 of 23" was not checkable for a week.
+
+**Two artifacts to expect, and they are different in kind.** `util.py:3517` is a
+**human shorthand**, an abbreviation a writer chose; no pattern change removes
+it. `17.md` is the **regex failing on a legitimate full path it could not
+traverse** -- a character class narrower than the paths in your repo
+manufactures those silently, and on the page they look exactly like shorthands.
 
 ## Known noise
 

@@ -6019,48 +6019,43 @@ ABOUT THE SWEEP RATHER THAN THE ERROR.** This section's register round verified
 its citations mechanically, by extracting them with a regex and checking each
 against source -- and it still shipped a reference to
 `tests/test_ap_create_post.py`, **a file that does not exist**, which the review
-caught. Re-run afterwards, the cause is exact and not a lapse of care: the
-extraction pattern required a **digit** after the filename, because it was built
-to harvest `file:line` citations, so it never saw a reference written **without**
-a line number. **Re-derived from the section as originally shipped (`9bfb8227`),
-with the patterns stated so the figures can be reproduced:** counting
-directory-prefixed paths -- `` `((?:app|tests|docs|migrations)/[\w./-]+\.(?:py|html|md|ini)) ``
--- the section carries **23** distinct file references, of which the `file:line`
-pattern `` `([\w./]+\.(?:py|html|md|ini))[:`]?(\d+)(?:-(\d+))? `` catches
-**15**, leaving **eight bare-only paths never checked**, the non-existent test
-file among them. **The generalisable half: a filename with no line number is
-the reference MOST likely to be invented, precisely because nothing forces the
-writer to open the file, and it is the one a `file:line` sweep structurally
-cannot see.** A citation sweep must therefore run **two** passes -- resolve every
-`file:line` against its content, and resolve every bare path against
-`git ls-files` -- and the second pass is the cheaper and the more often skipped.
-Re-run here over all 25: every one resolves except the single deliberate negative
-in D292's cell, which says the file does not exist. **The eight reproduces; the ratio first reported around it did not, and that is
-the second finding.** This round first wrote "17 of 25", and the pair is not
-reproducible even though both halves are individually derivable: the **17** came
-from the `file:line` pattern, whose `[\w./]+` does not require a directory
-prefix and so also matched **exactly two** bare-basename citations
-(`util.py:3517`, `shared/post.py:580-589`) that the other pattern excludes by
-construction -- 15 + 2 = 17 -- while the **25** was the *post-fix* section under
-the dir-prefixed pattern. A reviewer re-deriving it arrived at a third pair
-again. (**And the reconciliation was itself then challenged and re-measured,
-which is the fitting last word on a paragraph about counting.** A reviewer
-re-ran the loose pattern, got **18**, and named `17.md` as a third extra.
-Re-run here over the same revision rather than taken on trust: the pattern **as
-stated** gives **17**, with exactly the two extras above. The third appears only
-once the pattern's leading backtick anchor is dropped -- `[\w./]+` cannot cross
-a hyphen, so this section's own citation of
-`docs/superpowers/plans/2026-09-04-coverage-update-tails-17.md:97-101`
-truncates to a matchable `17.md:97-101`, and no backtick precedes it. **The count moved by one
-because one character left the pattern**, which is the rule's own point
-demonstrated on the rule. The operative figures -- 23 / 15 / 8 -- are untouched
-and have now been reproduced independently three times.) **A ratio whose numerator and
-denominator come from different patterns over different revisions is not a
-measurement**, and the correction is to state the pattern, state the revision,
-take both halves from one run, and lead with the figure the argument rests on
-rather than the ratio that dresses it. **This is fact 94 in miniature** -- the
-sweep was applied to a candidate set the candidates could opt out of by omitting
-a colon -- and both halves are now folded into fact 99(c).
+caught. The cause is exact and is not a lapse of care: the extraction pattern
+required a **digit** after the filename, because it was built to harvest
+`file:line` citations, so **it never examined a single reference written without
+a line number**. One of the references it never examined was the fabricated one.
+**That is the whole argument and it needs no count: the skipped class was
+non-empty and contained a fabrication.** The generalisable half is that a
+filename with no line number is the reference **most** likely to be invented,
+precisely because nothing forces the writer to open the file, and it is exactly
+the one a `file:line` sweep structurally cannot see. So a citation sweep runs
+**two** passes -- resolve every `file:line` against its content, resolve every
+bare path against `git ls-files` -- and the second is the cheaper and the more
+often skipped. Run here over this section, it flags one path: the deliberate
+negative in D292's cell, which says the file does not exist.
+
+**AND THE ATTEMPT TO PUT A NUMBER ON THAT IS THE MORE INSTRUCTIVE HALF, BECAUSE
+IT FAILED FOUR TIMES.** Four agents ran patterns over the same bytes to size the
+two sets and produced **four different answers** -- "17 of 25", "16 of 24",
+"23 / 15 / 8" and "24 / 15 / 9". Each is internally defensible; **none is
+endorsed here, and this section makes no claim about the absolute size of its
+own reference set.** They diverge on three axes that not one of the four reports
+stated: **the pattern** (whether the `file:line` form's leading backtick anchor
+is present -- `[\w./]+` cannot cross a hyphen, so this section's citation of
+`docs/superpowers/plans/2026-09-04-coverage-update-tails-17.md:97-101` truncates
+and the tail `17.md:97-101` becomes matchable, but only once the anchor is gone,
+which moves the count by exactly one); **the counting unit** (raw matches,
+`(file, line)` tuples, or distinct filenames are three different quantities);
+and **the revision** (the section grew between the first count and the last, so
+a numerator from one commit and a denominator from another is not a ratio).
+**Four careful attempts is evidence that the quantity was UNDERSPECIFIED, not
+that four people miscounted** -- and a worked example nobody can reproduce
+teaches the opposite of its lesson, so the disagreement itself is what went into
+fact 99(c) instead of a tally. **The rule that survives: state the pattern, the
+revision AND the counting unit, take every figure in a ratio from one run, and
+where the argument does not need a count, make the claim without one.** This is
+fact 94 in miniature -- the sweep was applied to a candidate set the candidates
+could opt out of by omitting a colon -- and it is recorded as a **known
+limitation** rather than iterated on further.
 
 **Two candidates were considered and DROPPED, recorded so they are not
 re-proposed.** **(1)** A proposed harness fact that fact 74's "same commit"
