@@ -3541,14 +3541,37 @@ ONE.** Verifying citations by extracting them with a `file:line` pattern and
 checking each against source misses **every reference written without a line
 number** -- and a bare filename is the reference *most* likely to be invented,
 precisely because nothing forces the writer to open the file. Sub-project 17's
-register round did exactly this: its extraction required a digit after the
-filename, caught **17** of the section's **25** file references, skipped all
-**eight** bare paths, and shipped a citation to a test file that does not exist,
-which its review caught. So: **pass one resolves every `file:line` against its
-content; pass two resolves every bare path against `git ls-files`.** Expect the
-second pass to flag deliberate negatives ("there is no such file") and read them
-rather than deleting them. This is fact 94's point wearing a tool: the sweep was
-applied to a candidate set the candidates could opt out of by omitting a colon.
+register round did exactly this, and **its own first report of the numbers was
+wrong in a way worth more than the numbers** -- see below. So: **pass one
+resolves every `file:line` against its content; pass two resolves every bare
+path against `git ls-files`.** Expect the second pass to flag deliberate
+negatives ("there is no such file") and read them rather than deleting them.
+This is fact 94's point wearing a tool: the sweep was applied to a candidate set
+the candidates could opt out of by omitting a colon.
+
+**The figures, re-derived from the file with the patterns that produced them,
+because a standing rule must not rest on a number nobody can reproduce.** Over
+the register section as originally shipped (commit `9bfb8227`), counting only
+directory-prefixed paths -- pattern
+`` `((?:app|tests|docs|migrations)/[\w./-]+\.(?:py|html|md|ini)) `` -- the
+section carries **23** distinct file references, of which the `file:line`
+pattern `` `([\w./]+\.(?:py|html|md|ini))[:`]?(\d+)(?:-(\d+))? `` catches
+**15**, leaving **8 bare-only paths that were never checked** -- and the
+non-existent test file was one of the eight.
+
+**The eight is the load-bearing number and it reproduces; the ratio around it
+did not, and that is the second lesson.** That round first reported "17 of 25",
+and neither figure is reproducible as a pair: the **17** came from the
+`file:line` pattern, whose `[\w./]+` does **not** require a directory prefix and
+so also matched two bare-basename citations (`util.py:3517`,
+`shared/post.py:580-589`) that the other pattern excludes by construction, while
+the **25** was the *post-fix* section counted under the dir-prefixed pattern.
+**A ratio whose numerator and denominator come from different patterns over
+different commits is not a measurement, even when both halves are individually
+correct.** A reviewer re-deriving it got a third pair again. **So when a count
+goes into a rule: state the pattern, state the revision, and take both halves
+from the same run** -- and prefer the figure the argument actually rests on
+(here, the eight unchecked paths) over the ratio that merely dresses it.
 
 ## Known noise
 

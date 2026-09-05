@@ -394,9 +394,11 @@ def test_a_subscriber_to_the_author_is_notified(app, db_session):
     NOTIF_COMMUNITY arm's happy path below: `post.id` would then be 2, which is
     the AUTHOR's id, and this dict carries `'author_id': post.user_id`
     alongside `'post_id': post.id`. Post 4 is the first id nothing else the arm
-    can reach holds -- with ONE stated exception, `post.instance_id`, which the
-    guard below cannot make distinct and says so -- the subscriber is user 3 and the arm carries that id as
-    `notify_id`. MEASURED: with `_seed_scenario`'s single post, mutating
+    can reach holds -- the subscriber is user 3 and the arm carries that id as
+    `notify_id`. (`post.instance_id` does not hold 4 either; it holds 1, which
+    is a different point and is about MUTUAL DISTINCTNESS rather than about
+    post 4's id being free. The guard below cannot bring it into the distinct
+    set and says why.) MEASURED: with `_seed_scenario`'s single post, mutating
     `'post_id': post.id` (app/activitypub/util.py:2829) to `post.community_id`
     left all 34 tests in this file passing; with the fourth post that mutation
     fails here. The `len({...}) == 4` below fails loudly if factory ordering
