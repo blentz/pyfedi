@@ -3563,9 +3563,28 @@ non-existent test file was one of the eight.
 did not, and that is the second lesson.** That round first reported "17 of 25",
 and neither figure is reproducible as a pair: the **17** came from the
 `file:line` pattern, whose `[\w./]+` does **not** require a directory prefix and
-so also matched two bare-basename citations (`util.py:3517`,
-`shared/post.py:580-589`) that the other pattern excludes by construction, while
-the **25** was the *post-fix* section counted under the dir-prefixed pattern.
+so also matched **exactly two** bare-basename citations (`util.py:3517`,
+`shared/post.py:580-589`) that the other pattern excludes by construction --
+15 + 2 = 17 -- while the **25** was the *post-fix* section counted under the
+dir-prefixed pattern.
+
+**The sharpest evidence for this rule arrived while that reconciliation was
+being checked, because it is the rule happening to the rule.** A reviewer
+re-ran the loose pattern and got **18**, with a third extra, `17.md`. Re-run
+here over the same revision, the pattern **as stated** gives **17** and exactly
+the two extras above; **the difference is one character.** `[\w./]+` cannot
+cross a hyphen, so in
+`` `docs/superpowers/plans/2026-09-04-coverage-update-tails-17.md:97-101` `` the
+class truncates and the tail `17.md:97-101` becomes matchable -- but only once
+the pattern's **leading backtick anchor is dropped**, since no backtick precedes
+`17.md`. With the anchor, 17; without it, 18. **Two people applying "the same"
+regex to the same bytes got different answers because one character left the
+pattern**, which is exactly why the pattern and not merely the number has to be
+written down. **The two artifacts are also different in kind, and both are worth
+expecting:** `util.py:3517` is a **human shorthand**, an abbreviation the writer
+chose, and no pattern change removes it; `17.md` is the **regex failing on a
+legitimate full path it could not traverse**, which a character class narrower
+than the paths in your repo will manufacture silently.
 **A ratio whose numerator and denominator come from different patterns over
 different commits is not a measurement, even when both halves are individually
 correct.** A reviewer re-deriving it got a third pair again. **So when a count
