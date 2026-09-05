@@ -1580,16 +1580,34 @@ class TestEventBlock:
         (`'image' in request_json['object'] and 'url' in
         request_json['object']['image']`), whose right-hand side `:3488` is
         otherwise byte-identical to `:3392`. The repair is that second conjunct,
-        copied. No new behaviour is chosen either -- a urlless `image` falls to
-        `:3398`'s `else` and is treated as "no image", which is exactly how
-        `:3489`'s `else` treats the same shape.
+        copied. For a DICT `image` no new behaviour is chosen: a urlless dict
+        falls to `:3398`'s `else` and is treated as "no image", which is exactly
+        how `:3489`'s `else` treats the same shape.
+
+        BUT THE FIX WIDENS BEHAVIOUR FOR TWO OF THE NON-DICT SHAPES, and saying
+        it does not would be false. For a `str` whose url lacks the substring
+        `url`, and for a list, the PRE-fix code reached `:3392` and raised
+        `TypeError`; POST-fix the added conjunct is False, control falls to
+        `:3398`'s `else`, and the banner is SILENTLY CLEARED. That is a
+        crash-to-silent-skip widening and tests/README.md:2731-2734 names this
+        exact second-order effect of adding a membership check in front of a
+        subscript. It is recorded, not denied. It remains defensible on the
+        uniformity ground this docstring argues -- `:3487` has always behaved
+        this way for those shapes, and README's own precedent accepted the same
+        justification for making a tag loop uniform -- but "no new behaviour"
+        is only true of the dict case.
 
         THE RESIDUE, WHICH IS REGISTER MATERIAL AT BOTH SITES AND NOT AT `:3392`
         ALONE. `:3487`'s guard is only correct when `image` is a dict, so
         copying it closes the missing-key hole and leaves the non-dict hole open
-        at `:3391` and `:3487` together. Measured, not assumed -- `in` on a str
-        is a SUBSTRING test and does not raise, so the shapes differ from each
-        other:
+        at `:3391` and `:3487` together. The table below is the POST-fix state
+        of both sites; where a row says "silently dropped" at `:3391` that
+        outcome is now CAUSED by this fix rather than pre-existing at that site,
+        which is the widening the paragraph above records. Measured, not assumed
+        -- `in` on a str is a SUBSTRING test and does not raise
+        (tests/README.md:2717-2735, fact 71, which already states this and at
+        :2731-2734 already predicts the widening), so the shapes differ from
+        each other:
 
           - `"image": "https://p.example/pic.png"` -- the guard is a substring
             test that answers False, so the banner is silently dropped;
@@ -1604,7 +1622,10 @@ class TestEventBlock:
 
         Closing that needs an `isinstance(..., dict)` at two sites and a
         decision about the list form (ActivityPub allows `image` to be an
-        array), which is new behaviour this codebase has never had. Registered.
+        array), which is new behaviour this codebase has never had. Registered
+        -- and registered as an EXTENSION of tests/README.md's fact 71
+        (:2717-2735), which already states the substring rule and already
+        predicts this widening, not as a new discovery.
         """
         post, _ = _seed_event_post()
         old_id = _attach_banner(post, OLD_BANNER)
@@ -1783,9 +1804,13 @@ def _taken(http_mock, url):
     404 for the GET, with NO body, technique (1) of this module's docstring.
     `make_image_sizes_async` stops at `:1759`'s
     `source_image_response.status_code == 200` and never parses anything, so
-    there is no body for a body to matter to -- the bare `except:` on that path
-    (`app/activitypub/util.py:1743-1746`) wraps the FETCH, which is the shape
-    tests/README.md:1071-1073 describes, not a `.json()`.
+    there is no body for a body to matter to. The bare `except:` on that path
+    (`app/activitypub/util.py:1743-1746`) wraps the FETCH, and the passage that
+    describes a bare `except: pass` around a fetch -- naming this very function
+    -- is tests/README.md:1090-1095. It is NOT :1071-1073: that passage says the
+    opposite of what a fetch-wrapping handler does ("the bare handlers wrap only
+    the `.json()` parse, not the fetch"), about `remote_object_to_json` and
+    `verify_object_from_source` rather than about this one.
 
     An empty body is also the side of tests/README.md:1085-1089 to be on rather
     than an exception to it. That passage is the Feed task's mirror image: two
