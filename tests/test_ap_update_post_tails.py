@@ -57,6 +57,7 @@ block itself creates no `File`. So no test here registers an image route; the
 guidance above is for the later tails.
 """
 import contextlib
+from datetime import datetime
 
 import httpx
 import pytest
@@ -64,7 +65,7 @@ import pytest
 from app import db
 from app.activitypub.util import update_post_from_activity
 from app.constants import POST_TYPE_POLL, POST_TYPE_VIDEO
-from app.models import PollChoice
+from app.models import PollChoice, PollChoiceVote
 from app.utils import utcnow
 from tests.factories import (make_community, make_instance, make_poll,
                              make_poll_choice, make_post, make_site, make_user)
@@ -414,6 +415,19 @@ class TestVideoVoteCollectionRetry:
 # here can confuse it with a seeded value.
 END_TIME = '2027-01-01T12:00:00+00:00'
 
+# What comes back out of `Poll.end_poll` after an Update carrying END_TIME, read
+# from a re-SELECT rather than off the in-memory attribute. Naive, because the
+# column is `db.DateTime` with no `timezone=True` (app/models.py:3782), so it is
+# `timestamp without time zone`: psycopg2 hands the peer's string to Postgres as
+# a literal and Postgres casts it, DISCARDING the offset rather than converting
+# by it. Measured, not assumed -- see TestQuestionEditPath's
+# `test_the_end_time_string_is_cast_by_postgres_to_a_naive_datetime`.
+END_TIME_STORED = datetime(2027, 1, 1, 12, 0)
+
+# A contrary baseline for `end_poll`, far enough from END_TIME_STORED that no
+# assertion below can be satisfied by the seeded value.
+SEEDED_END_TIME = datetime(2020, 6, 1, 9, 30)
+
 
 def _poll_update(*choices, end_time=None, mode_key='oneOf'):
     """A `Question` object carrying `choices` as its vote list.
@@ -499,6 +513,46 @@ def _stored_choices(post):
     """
     rows = PollChoice.query.filter_by(post_id=post.id).order_by(PollChoice.sort_order).all()
     return [(row.choice_text, row.num_votes) for row in rows]
+
+
+def _stored_sort_orders(post):
+    """`(choice_text, sort_order)` for `post`'s choices, in **id** order.
+
+    Deliberately not `order_by(PollChoice.sort_order)` the way `_stored_choices`
+    is: this helper's whole subject is the `sort_order` values, and ordering the
+    query by the column under test would let a mutant that mis-numbers the rows
+    be sorted back into the expected sequence. `PollChoice.id` is assigned by the
+    sequence in insertion order, so id order is the order
+    `app/activitypub/util.py:3346-3348` added them in.
+    """
+    rows = PollChoice.query.filter_by(post_id=post.id).order_by(PollChoice.id).all()
+    return [(row.choice_text, row.sort_order) for row in rows]
+
+
+def _seed_choice_vote(post, choice):
+    """One `PollChoiceVote` on `choice`, so the first `DELETE` has something to
+    delete.
+
+    Constructed here rather than through a factory because there is none:
+    `PollChoiceVote` does not appear anywhere in tests/factories.py.
+
+    The model is at app/models.py:3832-3836. Its primary key is the pair
+    `(choice_id, user_id)` (`:3833-3834`) and it carries `post_id` separately
+    (`:3835`) -- `post_id` is not optional here, because
+    `app/activitypub/util.py:3341-3342` is
+    `db.session.execute(text('DELETE FROM "poll_choice_vote" WHERE post_id = :post_id'), ...)`,
+    which matches on that column alone. A row seeded without it would survive
+    the first DELETE and then make the second one fail on the foreign key
+    instead, which is a different test than the one intended.
+
+    The voter is a third user: `_seed_post` seeds 'community_owner' and 'author'
+    to occupy ids 1 and 2, so this one is never user 1.
+    """
+    voter = make_user(post.instance, 'voter')
+    vote = PollChoiceVote(choice_id=choice.id, user_id=voter.id, post_id=post.id)
+    db.session.add(vote)
+    db.session.commit()
+    return vote
 
 
 class TestQuestionRouting:
@@ -672,6 +726,261 @@ class TestQuestionVoteCountGuards:
         db.session.expire_all()
         assert _stored_choices(post) == [('Yes', 7), ('No', 11)]
         assert post.url == f'https://{PEER}/post/1'
+
+
+class TestQuestionEditPath:
+    """`app/activitypub/util.py:3333-3351`, the "Edit, not a totals update" arm.
+
+    It is reached when `total_vote_count == 0` -- which, given the three
+    `continue`s above it, is either "every choice really is on zero votes" or
+    "every vote was malformed". It then requires a `Poll` row (`:3335`) and an
+    `endTime` (`:3336-3337`), writes `end_poll` and `mode`, and REPLACES the
+    choice set outright:
+
+        db.session.execute(text('DELETE FROM "poll_choice_vote" WHERE post_id = :post_id'),
+                           {'post_id': post.id})
+        db.session.execute(text('DELETE FROM "poll_choice" WHERE post_id = :post_id'), {'post_id': post.id})
+
+    -- two raw statements at `:3341-3343`, followed by a loop at `:3345-3349`
+    that inserts one fresh `PollChoice` per vote.
+
+    WHAT IS NOT HERE, because `TestQuestionRouting` above already has it:
+    `poll.mode = mode` at `:3339` is asserted by that class's first two tests,
+    which send all-zero totals and an `endTime` precisely so that this arm runs.
+    The tests below assert `mode` only where it is a "this arm did NOT run"
+    witness.
+
+    Both DELETEs match on `post_id`, not on the poll, so the rows a test seeds
+    have to carry `post_id` -- see `_seed_choice_vote`.
+    """
+
+    def test_the_seeded_choices_and_their_votes_are_deleted_and_replaced(
+            self, app, db_session, redis_lock_only_double):
+        """The two DELETEs at `:3341-3343` and the recreate loop at `:3345-3349`.
+
+        THE POINT OF THE 'Old ...' NAMES. A test that only asserts the new rows
+        are present does not prove a DELETE ran: the loop at `:3345-3349` would
+        produce that same rowset by insertion alone if the seeded rows had never
+        existed. So the seeded rows carry `choice_text` values the Update does
+        not mention, and the assertion is on the WHOLE stored set -- 'Old A' and
+        'Old B' being absent is the DELETE's only witness.
+
+        The ids are checked too, and are the sharper half of the proof: they say
+        the two 'Yes'/'No' rows are NEW rows rather than the seeded rows renamed
+        in place. `tests/conftest.py:143` truncates with `RESTART IDENTITY`, so
+        `PollChoice.id` restarts at 1 in every test and the two sets are small
+        enough to collide by accident; the `len(...) == 2` guards are there
+        because two equal ids on either side would make `isdisjoint` vacuous.
+        """
+        post = _seed_post()
+        _, rows = _seed_poll(post, [('Old A', 7), ('Old B', 11)])
+        _seed_choice_vote(post, rows[0])
+        seeded_ids = {row.id for row in rows}
+        assert len(seeded_ids) == 2
+
+        update_post_from_activity(post, _poll_update(_choice('Yes', 0), _choice('No', 0),
+                                                     end_time=END_TIME))
+
+        db.session.expire_all()
+
+        assert _stored_choices(post) == [('Yes', 0), ('No', 0)]
+        assert PollChoiceVote.query.count() == 0
+        recreated_ids = {row.id for row in PollChoice.query.filter_by(post_id=post.id).all()}
+        assert len(recreated_ids) == 2
+        assert seeded_ids.isdisjoint(recreated_ids)
+
+    def test_an_empty_vote_list_deletes_every_choice_and_recreates_none(
+            self, app, db_session, redis_lock_only_double):
+        """The DELETEs at `:3341-3343` with the loop at `:3345-3349` running zero
+        times.
+
+        `'oneOf' in request_json['object']` at `:3314` is satisfied by an empty
+        list, so `votes` binds to `[]`, the counting loop at `:3323-3331` never
+        runs, `total_vote_count` stays at the 0 `:3322` set, and this arm deletes
+        the choice set without putting anything back.
+
+        This is the DELETE proof with nothing to confuse it: there is no
+        recreate step whose insertions could be mistaken for survivors, so an
+        empty stored set can only be the DELETE at `:3343`.
+
+        `end_poll` is asserted alongside it so the test says WHICH arm emptied
+        the table. An empty set on its own is a claim about rows; `end_poll`
+        moving off the seeded 2020 date is a claim about `:3338`, and the two
+        together place the DELETE inside this arm rather than merely somewhere.
+        """
+        post = _seed_post()
+        poll, rows = _seed_poll(post, [('Old A', 7), ('Old B', 11)])
+        poll.end_poll = SEEDED_END_TIME
+        db.session.commit()
+        _seed_choice_vote(post, rows[1])
+
+        update_post_from_activity(post, _poll_update(end_time=END_TIME))
+
+        db.session.expire_all()
+
+        assert _stored_choices(post) == []
+        assert PollChoiceVote.query.count() == 0
+        assert poll.end_poll == END_TIME_STORED
+
+    def test_a_post_with_no_poll_row_writes_nothing(self, app, db_session,
+                                                    redis_lock_only_double):
+        """The false arm of `if poll:` at `:3335`.
+
+        `Poll.query.filter_by(post_id=post.id).first()` at `:3334` returns None,
+        so control drops straight to the `return` at `:3351`.
+
+        `PollChoice` has no foreign key to `Poll` (app/models.py:3821 points at
+        `post.id`), so choices can be -- and here are -- seeded without one. That
+        is what makes this test's "nothing was written" observable at all: the
+        two rows the DELETEs would have removed are still there.
+
+        Paired with `_seed_link_witness` because surviving choice rows are also
+        what an Update that never entered the poll arm would leave; only
+        `post.url` says a `return` INSIDE the arm was reached.
+        """
+        post = _seed_post()
+        _seed_link_witness(post)
+        make_poll_choice(post, 'Old A', sort_order=1).num_votes = 7
+        make_poll_choice(post, 'Old B', sort_order=2).num_votes = 11
+        db.session.commit()
+
+        update_post_from_activity(post, _poll_update(_choice('Yes', 0), _choice('No', 0),
+                                                     end_time=END_TIME))
+
+        db.session.expire_all()
+
+        assert _stored_choices(post) == [('Old A', 7), ('Old B', 11)]
+        assert post.url == f'https://{PEER}/post/1'
+
+    def test_an_update_with_no_end_time_returns_before_the_writes(
+            self, app, db_session, redis_lock_only_double):
+        """`if not 'endTime' in request_json['object']: return` at `:3336-3337`.
+
+        `TestQuestionVoteCountGuards` above leans on this return as its "nothing
+        was written" mechanism; this test is about the return itself, and so
+        asserts what those tests cannot. The poll is seeded 'multiple'
+        against an Update arriving under `oneOf`, so `mode` staying 'multiple'
+        says `:3339` was not reached; `end_poll` staying at the seeded 2020 date
+        says `:3338` was not reached either. The surviving `PollChoiceVote` says
+        the return is upstream of the DELETEs at `:3341-3343` and not merely
+        upstream of the recreate loop.
+        """
+        post = _seed_post()
+        _seed_link_witness(post)
+        poll, rows = _seed_poll(post, [('Old A', 7), ('Old B', 11)], mode='multiple')
+        poll.end_poll = SEEDED_END_TIME
+        db.session.commit()
+        _seed_choice_vote(post, rows[0])
+
+        update_post_from_activity(post, _poll_update(_choice('Yes', 0), _choice('No', 0)))
+
+        db.session.expire_all()
+
+        assert poll.mode == 'multiple'
+        assert poll.end_poll == SEEDED_END_TIME
+        assert _stored_choices(post) == [('Old A', 7), ('Old B', 11)]
+        assert PollChoiceVote.query.count() == 1
+        assert post.url == f'https://{PEER}/post/1'
+
+    def test_the_end_time_string_is_cast_by_postgres_to_a_naive_datetime(
+            self, app, db_session, redis_lock_only_double):
+        """`poll.end_poll = request_json['object']['endTime']` at `:3338`.
+
+        The peer's string is assigned RAW. There is no `datetime.fromisoformat`
+        between it and the column, unlike the Event block below, whose `:3367`
+        and `:3368` read `startTime`/`endTime` through `datetime.fromisoformat`.
+        What makes the raw assignment work at all is psycopg2 plus Postgres:
+        the str is sent as a literal and the server casts it to the column's
+        type on the way in.
+
+        WHAT ACTUALLY LANDS, measured by re-SELECT rather than reasoned about:
+        `datetime.datetime(2027, 1, 1, 12, 0)`, with `tzinfo` None. `Poll.end_poll`
+        is `db.Column(db.DateTime)` (app/models.py:3782) with no `timezone=True`,
+        i.e. `timestamp without time zone`, so END_TIME's `+00:00` is DISCARDED,
+        not converted. A separate probe sent `2027-01-01T12:00:00+05:00` and got
+        the same `datetime(2027, 1, 1, 12, 0)` back -- so a peer in a non-UTC
+        offset records a deadline off by that offset. That, and the
+        `sqlalchemy.exc.DataError` a malformed string raises out of the function
+        at commit time, are recorded as findings; neither is repaired here.
+
+        The seeded 2020 date is the contrary baseline: `end_poll` is nullable and
+        `make_poll` leaves it None, so asserting a value over None would be
+        weaker.
+        """
+        post = _seed_post()
+        poll, _ = _seed_poll(post, [('Old A', 7)])
+        poll.end_poll = SEEDED_END_TIME
+        db.session.commit()
+
+        update_post_from_activity(post, _poll_update(_choice('Yes', 0), end_time=END_TIME))
+
+        db.session.expire_all()
+
+        assert poll.end_poll == END_TIME_STORED
+        assert poll.end_poll.tzinfo is None
+
+    def test_choices_are_numbered_from_one_in_the_order_the_update_lists_them(
+            self, app, db_session, redis_lock_only_double):
+        """`i = 1` at `:3345` and `i += 1` at `:3349`, which between them supply
+        `sort_order` to every row the loop inserts.
+
+        Asserted as the full `(choice_text, sort_order)` set rather than as a row
+        count, because the count is what a mis-numbering mutant would leave
+        untouched. Three choices, so a numbering that started at 0, or that
+        failed to increment, or that ran backwards, all produce a different list.
+
+        The seeded 'Old' row is not in the expected list: it is deleted at
+        `:3343` and its `sort_order` of 1 is re-used by 'Yes', which is why the
+        assertion is on `choice_text` pairs and not on `sort_order` alone.
+        """
+        post = _seed_post()
+        _seed_poll(post, [('Old', 7)])
+
+        update_post_from_activity(post, _poll_update(_choice('Yes', 0), _choice('No', 0),
+                                                     _choice('Maybe', 0), end_time=END_TIME))
+
+        db.session.expire_all()
+
+        assert _stored_sort_orders(post) == [('Yes', 1), ('No', 2), ('Maybe', 3)]
+
+    def test_the_edit_path_returns_before_the_totals_loop(self, app, db_session,
+                                                          redis_lock_only_double):
+        """The `return` at `:3351`.
+
+        WHY THE TOTALS ARE -3 AND 3, and not the zeroes every other test here
+        sends. `:3351` does not guard the Links section the way the totals arm's
+        `:3360` does -- deleting it drops control into the totals loop at
+        `:3353-3357`, which commits at `:3358` and returns at `:3360`, still
+        short of the Links section. So `post.url` survives either way, and an
+        all-zero Update makes that loop a no-op that rewrites the same 0s. This
+        was measured, not predicted: with `return` → `pass` applied, the
+        all-zero version of this test PASSED and the mutant survived.
+
+        `:3331` accumulates `vote['replies']['totalItems']` with no sign check,
+        so -3 and 3 sum to the 0 that `:3333` routes on while still being
+        numbers the totals loop would WRITE. The Edit path recreates both rows at
+        `PollChoice.num_votes`'s `default=0` (app/models.py:3824); the totals
+        loop, if reached, would put -3 and 3 there instead. That is what makes
+        the two 0s below a claim about `:3351` rather than about the default --
+        and the seeded 7 and 11, on rows of the same names, are the contrary
+        baseline for the recreation itself.
+
+        `post.url` is asserted too, as the outer witness the rest of this file
+        uses: the Links section's no-url `else` at `:3542-3559` sets
+        `post.type = POST_TYPE_ARTICLE` and `post.url = None`.
+        """
+        post = _seed_post()
+        _seed_link_witness(post)
+        _seed_poll(post, [('Yes', 7), ('No', 11)])
+
+        update_post_from_activity(post, _poll_update(_choice('Yes', -3), _choice('No', 3),
+                                                     end_time=END_TIME))
+
+        db.session.expire_all()
+
+        assert _stored_choices(post) == [('Yes', 0), ('No', 0)]
+        assert post.url == f'https://{PEER}/post/1'
+        assert post.type == POST_TYPE_POLL
 
 
 class TestQuestionTotalsUpdate:
