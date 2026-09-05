@@ -3388,7 +3388,7 @@ def update_post_from_activity(post: Post, request_json: dict):
                 if post.image:
                     post.image.delete_from_disk()
                     old_db_entry_to_delete = post.image_id
-                if 'image' in request_json['object']:
+                if 'image' in request_json['object'] and 'url' in request_json['object']['image']:
                     image = File(source_url=request_json['object']['image']['url'])
                     db.session.add(image)
                     db.session.commit()
