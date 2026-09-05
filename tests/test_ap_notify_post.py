@@ -42,8 +42,7 @@ from app.activitypub.util import (create_post, notify_about_post,
                                   notify_about_post_task)
 from app.constants import (NOTIF_COMMUNITY, NOTIF_FEED, NOTIF_TOPIC,
                            NOTIF_USER)
-from app.models import (ActivityPubLog, Instance, Notification, Post, Topic,
-                        User)
+from app.models import ActivityPubLog, Instance, Notification, Post, Topic
 from app.utils import utcnow
 from tests.factories import (make_community, make_community_block, make_domain,
                              make_feed, make_feed_item, make_instance,
@@ -646,11 +645,14 @@ def test_the_author_is_not_notified_even_when_subscribed_to_their_own_community(
     Unlike the NOTIF_USER arm's copy of this conjunct -- whose only production
     writer, `subscribe_user` (app/shared/user.py:89), refuses a
     self-subscription with `if person.id == user_id: msg = 'Target must be a
-    another user.'` -- the NOTIF_COMMUNITY writer imposes no such rule.
-    `subscribe_community` (app/shared/community.py:394) reaches its
-    `NotificationSubscription(... type=NOTIF_COMMUNITY)` for any `user_id` that
-    is not already subscribed and is not in `communities_banned_from(user_id)`;
-    nothing there compares the subscriber against anyone. So an author
+    another user.'` -- NOTIF_COMMUNITY has TWO production writers and neither
+    imposes such a rule. `subscribe_community` (app/shared/community.py:394)
+    reaches its `NotificationSubscription(... type=NOTIF_COMMUNITY)`
+    (:429-431) for any `user_id` that is not already subscribed and is not in
+    `communities_banned_from(user_id)`; nothing there compares the subscriber
+    against anyone. The other is the `migrate_community_notifs` CLI command
+    (app/cli.py:1757-1759), which builds the row from a `CommunityMember`'s
+    `user_id` and `community_id` and compares nothing at all. So an author
     subscribed to a community they then post in is a row production creates,
     and this conjunct is a live filter here rather than the defensive guard it
     is in the arm above.
@@ -677,15 +679,15 @@ def test_a_subscriber_already_notified_by_the_user_arm_is_not_notified_again(app
     `notifications_sent_to = set()` is initialised once, above all four arms,
     and each arm ends the body of its `if` with
     `notifications_sent_to.add(notify_id)` -- at app/activitypub/util.py:2843,
-    :2866, :2897 and :2931, the last of those put there by Task 7. The
-    arms run in file order NOTIF_USER, NOTIF_COMMUNITY, NOTIF_TOPIC,
-    NOTIF_FEED -- read from source, where the `# NOTIF_USER` comment precedes
-    `# NOTIF_COMMUNITY`, which precedes `# NOTIF_TOPIC`, which precedes
-    `# NOTIF_FEED`, all four inside the one `with patch_db_session(session):`
-    block. So by the time this arm evaluates the conjunct the set can be
-    non-empty, which is exactly what the NOTIF_USER arm's identical conjunct
-    could not be: it runs first, and nothing writes to the set between
-    `notifications_sent_to = set()` and its own loop.
+    :2866, :2897 and :2931, the last of those put there by commit `0489dc1d`
+    (register entry D275). The arms run in file order NOTIF_USER,
+    NOTIF_COMMUNITY, NOTIF_TOPIC, NOTIF_FEED -- read from source, where the
+    `# NOTIF_USER` comment precedes `# NOTIF_COMMUNITY`, which precedes
+    `# NOTIF_TOPIC`, which precedes `# NOTIF_FEED`, all four inside the one
+    `with patch_db_session(session):` block. So by the time this arm evaluates
+    the conjunct the set can be non-empty, which is exactly what the NOTIF_USER
+    arm's identical conjunct could not be: it runs first, and nothing writes to
+    the set between `notifications_sent_to = set()` and its own loop.
 
     `dual` is subscribed BOTH to the author (NOTIF_USER) and to the community
     (NOTIF_COMMUNITY). The user arm wins because it runs first, so `dual` gets
@@ -731,7 +733,7 @@ def test_a_community_subscriber_who_blocked_the_author_is_not_notified(app, db_s
         blocks = db.session.query(UserBlock).filter_by(blocker_id=user_id)
         return [block.blocked_id for block in blocks]
 
-    (app/utils.py:1743-1747) -- so the recipient is the BLOCKER and the post's
+    (app/utils.py:1746-1747) -- so the recipient is the BLOCKER and the post's
     author is the BLOCKED, which is the order `make_user_block(blocker,
     blocked)` writes.
 
@@ -767,7 +769,7 @@ def test_a_community_subscriber_who_blocked_the_instance_is_not_notified(app, db
         blocked_ints = blocked_or_banned_instances(notify_id)
 
     is `[block.instance_id for block in blocks] + banned_instances(user_id)`
-    over `InstanceBlock` rows filtered on `user_id` (app/utils.py:1727-1731).
+    over `InstanceBlock` rows filtered on `user_id` (app/utils.py:1730-1731).
     This test exercises the `InstanceBlock` half, which is what
     `make_instance_block` writes.
 
@@ -1031,14 +1033,14 @@ def test_a_subscriber_already_notified_by_the_community_arm_is_not_notified_agai
     `notifications_sent_to = set()` is initialised once above all four arms and
     each arm ends the body of its `if` with
     `notifications_sent_to.add(notify_id)` -- at app/activitypub/util.py:2843,
-    :2866, :2897 and :2931, the last of those put there by Task 7. The
-    arms run in file order: `# NOTIF_USER` at app/activitypub/util.py:2820,
-    `# NOTIF_COMMUNITY` at :2845, `# NOTIF_TOPIC` at :2868, `# NOTIF_FEED` at
-    :2899. The filler used here is the IMMEDIATELY PRECEDING arm,
-    NOTIF_COMMUNITY; Task 3 killed the same conjunct in that arm using the one
-    before it, NOTIF_USER, and in the NOTIF_USER arm itself the conjunct is
-    unkillable, because nothing writes to the set between its initialisation
-    and that arm's loop.
+    :2866, :2897 and :2931, the last of those put there by commit `0489dc1d`
+    (register entry D275). The arms run in file order: `# NOTIF_USER` at
+    app/activitypub/util.py:2820, `# NOTIF_COMMUNITY` at :2845,
+    `# NOTIF_TOPIC` at :2868, `# NOTIF_FEED` at :2899. The filler used here is
+    the IMMEDIATELY PRECEDING arm, NOTIF_COMMUNITY; the NOTIF_COMMUNITY arm's
+    own copy of this conjunct is killed with the arm before IT, NOTIF_USER,
+    and in the NOTIF_USER arm itself the conjunct is unkillable, because
+    nothing writes to the set between its initialisation and that arm's loop.
 
     `dual` is subscribed BOTH to the community (NOTIF_COMMUNITY) and to the
     topic (NOTIF_TOPIC). The community arm wins because it runs first, so
@@ -1200,11 +1202,12 @@ def _seed_feed(community, instance, name, feed_id, title):
     dict carries `'feed_id': feed.id` (app/activitypub/util.py:2919), and its
     guard reads `post.community_id` (app/activitypub/util.py:2913), so a feed
     left on the sequence would make a substitution of the community id for the
-    feed id invisible -- the failure Task 3 hit on `targets['community_id']`
-    and Task 4 headed off for the Topic. `make_feed` has no `id` parameter, so
-    the key is reassigned after its insert and before any `FeedItem` or
-    `NotificationSubscription` names it; nothing points at the row yet, so the
-    UPDATE has no dependants.
+    feed id invisible -- the silently-vacuous shape fact 89 in tests/README.md
+    records, met first on `targets['community_id']` in the NOTIF_COMMUNITY arm
+    and headed off in the same way for the Topic. `make_feed` has no `id`
+    parameter, so the key is reassigned after its insert and before any
+    `FeedItem` or `NotificationSubscription` names it; nothing points at the
+    row yet, so the UPDATE has no dependants.
 
     The tests below pass 7, 8 and 10. **9 is `_seed_topic`'s reserved id and no
     feed takes it**, so a later test that seeds a Topic and a Feed together
@@ -1320,9 +1323,9 @@ def test_a_subscriber_to_a_feed_containing_the_community_is_notified(app, db_ses
     (`subtype = db.Column(db.String(50), index=True)`, app/models.py:3737).
 
     The unread counter is asserted here rather than in a test of its own, for
-    the reason Task 4 declared for the arm above: the brief allots six tests
-    and all six are spoken for by the five conjuncts, the dedup set and the pin,
-    so this arm's copy of
+    the reason recorded against the arm above: six tests are allotted to this
+    arm and all six are spoken for by the five conjuncts, the dedup set and the
+    pin, so this arm's copy of
 
         user = session.query(User).get(notify_id)
         user.unread_notifications += 1
@@ -1545,7 +1548,8 @@ def test_a_feed_subscriber_who_blocked_the_community_is_not_notified(app, db_ses
 def test_a_feed_subscriber_who_blocked_the_instance_is_skipped_for_every_feed(app, db_session):
     """`post.instance_id not in blocked_ints`, this arm's fifth conjunct
     (app/activitypub/util.py:2914) -- and the pin on the arm's
-    `notifications_sent_to.add`, which Task 7 moved inside the `if`.
+    `notifications_sent_to.add`, which commit `0489dc1d` (register entry D275)
+    moved inside the `if`.
 
         blocked_ints = blocked_or_banned_instances(notify_id)
 
@@ -1560,8 +1564,9 @@ def test_a_feed_subscriber_who_blocked_the_instance_is_skipped_for_every_feed(ap
     the author's instance, PEER -- so PEER is the instance the blocker has to
     block.
 
-    **Task 7 changed the code under this test, and the assertion below did not
-    change with it.** What that assertion observes is behaviour INVARIANT to
+    **Commit `0489dc1d` -- this sub-project's one production change, register
+    entry D275 -- changed the code under this test, and the assertion below did
+    not change with it.** What that assertion observes is behaviour INVARIANT to
     the change, not behaviour specific to either spelling -- the next paragraph
     proves that, and it is the reason the test was neither inverted nor deleted
     when the fix landed. `notifications_sent_to.add(notify_id)` is now the
@@ -1571,7 +1576,7 @@ def test_a_feed_subscriber_who_blocked_the_instance_is_skipped_for_every_feed(ap
     indented 16; in this arm it is at :2931, indented 24, one level in from its
     own `if` at :2910, indented 20. This arm sits one level deeper than the
     other three throughout because its subscriber loop is itself nested inside
-    `for feed in community_feeds:` (:2904). Before Task 7, :2931 was indented
+    `for feed in community_feeds:` (:2904). Before `0489dc1d`, :2931 was indented
     20 -- the SAME indentation as its own `if` -- so it was not in the `if`
     body at all but the last statement of
     `for notify_id in feed_send_notifs_to:` (:2906), and it ran for every
@@ -1599,7 +1604,7 @@ def test_a_feed_subscriber_who_blocked_the_instance_is_skipped_for_every_feed(ap
     guard rejected, changed no output of the function. What this test pins is
     the OBSERVABLE contract -- filtered out of one feed, notified by none --
     which is what a reader would expect to break if the fix had been made
-    wrongly, and which stayed green across it. Task 7's gate was not an
+    wrongly, and which stayed green across it. The gate on that fix was not an
     inverted assertion here but a re-run of the accumulated mutation tables
     after the fix, which confirmed that no mutant any earlier task killed came
     back unkilled.
@@ -1616,7 +1621,7 @@ def test_a_feed_subscriber_who_blocked_the_instance_is_skipped_for_every_feed(ap
     PostgreSQL guarantees no order over `community_feeds`.
 
     `second_only` is subscribed to the second feed alone, so their single row
-    can only have come from the second iteration of that outer loop, and its
+    can only have come from the iteration that processed `feed_two`, and its
     `targets['feed_id']` names `feed_two` whatever order the query returned.
 
     Together the two controls make `blocker`'s empty result mean "this run
@@ -1775,9 +1780,10 @@ def test_a_community_with_no_ap_id_is_named_by_its_name_in_the_user_arm(app, db_
     read the same attribute.
 
     No id-valued entry of the dict is asserted here, so the primary-key
-    collision Task 3 measured -- `_seed_scenario`'s Community and Post both
-    take id 1 under tests/conftest.py's `RESTART IDENTITY` -- cannot make any
-    assertion below vacuous. Nothing is arranged against it for that reason.
+    collision fact 89 in tests/README.md records -- `_seed_scenario`'s
+    Community and Post both take id 1 under tests/conftest.py's
+    `RESTART IDENTITY` -- cannot make any assertion below vacuous. Nothing is
+    arranged against it for that reason.
     """
     community, post, author = _seed_scenario()
     assert community.ap_id is None
