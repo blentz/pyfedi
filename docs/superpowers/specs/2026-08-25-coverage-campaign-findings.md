@@ -5973,7 +5973,8 @@ block of numbers. Say which property bounded your candidate set, not which range
 it happened to occupy.
 
 **Eight shapes carried forward into `tests/README.md`, four as new facts 96-99
-and four as widenings of existing facts.** The new facts: a correction that only
+-- now five, 96-100, after the final review split fact 100 out of 99; see the
+counting note below -- and four as widenings of existing facts.** The new facts: a correction that only
 **deletes** a false claim will be re-derived, because a deletion leaves nothing
 on the page saying why the natural phrasing is wrong -- land the refutation in
 the artefact being corrected, not only in the report that found it (**96**, the
