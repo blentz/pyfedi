@@ -41,7 +41,9 @@ techniques exist in this suite and they are NOT interchangeable:
 
   (1) register the image's source_url in `http_mock` and serve a 404, so
       `make_image_sizes_async` stops at its `get_request` (whose bare `except:`
-      swallows the failure -- tests/README.md:1091). Precedent:
+      swallows the failure -- tests/README.md's "Bare `except:` and mutation
+      resistance" section, THIRD bullet, which names this very function).
+      Precedent:
       tests/test_ap_actor_json_person.py:904-905.
   (2) `set_setting('cache_remote_images_locally', False)`. Precedent:
       tests/test_event_post_type_survives_update.py:161-164.
@@ -273,7 +275,8 @@ class TestVideoVoteCollections:
         the parser rejects would make the status guard untestable: the bare
         `except:` at `app/activitypub/util.py:3291-3293` would set `object` to
         None and produce this same outcome with the status check removed.
-        tests/README.md:1085-1089 records that exact trap.
+        tests/README.md's "Bare `except:` and mutation resistance" section
+        records that exact trap in its SECOND bullet.
         """
         post = _seed_post()
         _seed_vote_baseline(post)
@@ -1480,7 +1483,8 @@ class TestEventBlock:
         falsify `:3396` at all: the guard's body has no effect a row assertion
         can see, so `http_mock`'s `assert_all_called=True` turning "the
         registered route was never fetched" into a red run is the whole signal
-        (tests/README.md:1090-1099).
+        (tests/README.md, "Bare `except:` and mutation resistance", THIRD
+        bullet).
       - `test_the_banner_is_stored_when_remote_image_caching_is_off` uses
         technique (2), because exercising the guard's False side is precisely
         what it is for and no route can be registered on a path that fetches
@@ -1580,7 +1584,7 @@ class TestEventBlock:
         included.
 
         FIXED rather than registered, by this campaign's own test: the correct
-        spelling already existed 95 lines below, at `:3487`
+        spelling already existed ninety-five lines below `:3392`, at `:3487`
         (`'image' in request_json['object'] and 'url' in
         request_json['object']['image']`), whose right-hand side `:3488` is
         otherwise byte-identical to `:3392`. The repair is that second conjunct,
@@ -1593,9 +1597,10 @@ class TestEventBlock:
         `url`, and for a list, the PRE-fix code reached `:3392` and raised
         `TypeError`; POST-fix the added conjunct is False, control falls to
         `:3398`'s `else`, and the banner is SILENTLY CLEARED. That is a
-        crash-to-silent-skip widening and tests/README.md:2731-2734 names this
-        exact second-order effect of adding a membership check in front of a
-        subscript. It is recorded, not denied. It remains defensible on the
+        crash-to-silent-skip widening, and tests/README.md fact 71 -- in its
+        paragraph beginning "The other direction is worse because it appears
+        later" -- names this exact second-order effect of adding a membership
+        check in front of a subscript. It is recorded, not denied. It remains defensible on the
         uniformity ground this docstring argues -- `:3487` has always behaved
         this way for those shapes, and README's own precedent accepted the same
         justification for making a tag loop uniform -- but "no new behaviour"
@@ -1609,9 +1614,9 @@ class TestEventBlock:
         outcome is now CAUSED by this fix rather than pre-existing at that site,
         which is the widening the paragraph above records. Measured, not assumed
         -- `in` on a str is a SUBSTRING test and does not raise
-        (tests/README.md:2717-2735, fact 71, which already states this and at
-        :2731-2734 already predicts the widening), so the shapes differ from
-        each other:
+        (tests/README.md fact 71, which already states this and, in the same
+        paragraph named above, already predicts the widening), so the shapes
+        differ from each other:
 
           - `"image": "https://p.example/pic.png"` -- the guard is a substring
             test that answers False, so the banner is silently dropped;
@@ -1811,17 +1816,19 @@ def _taken(http_mock, url):
     there is no body for a body to matter to. The bare `except:` on that path
     (`app/activitypub/util.py:1743-1746`) wraps the FETCH, and the passage that
     describes a bare `except: pass` around a fetch -- naming this very function
-    -- is tests/README.md:1090-1095. It is NOT :1071-1073: that passage says the
-    opposite of what a fetch-wrapping handler does ("the bare handlers wrap only
-    the `.json()` parse, not the fetch"), about `remote_object_to_json` and
-    `verify_object_from_source` rather than about this one.
+    -- is the THIRD bullet of tests/README.md's "Bare `except:` and mutation
+    resistance" section. It is NOT that section's FIRST bullet: that passage
+    says the opposite of what a fetch-wrapping handler does ("the bare handlers
+    wrap only the `.json()` parse, not the fetch"), about `remote_object_to_json`
+    and `verify_object_from_source` rather than about this one.
 
-    An empty body is also the side of tests/README.md:1085-1089 to be on rather
-    than an exception to it. That passage is the Feed task's mirror image: two
+    An empty body is also the side of that section's SECOND bullet to be on
+    rather than an exception to it. That passage is the Feed task's mirror image: two
     status-code guards mutated to `True` SURVIVED precisely because the helpers
     served JSON on non-200 responses, and serving a plain-text body on any
     non-200 killed both. Serving JSON here would be repeating the mistake, not
-    avoiding it. (`:272` above cites the same passage for the opposite need --
+    avoiding it. (`test_a_non_200_vote_collection_is_ignored` above cites the
+    same passage for the opposite need --
     that is the `Video` cluster's `.json()`-inside-a-bare-`except:` case, where
     a parseable body is what makes the status guard killable. The two cases are
     not in tension: what the body must be depends on whether a parse follows the
@@ -2946,7 +2953,10 @@ DECOY_POSTS = 4
 # `User.id == 1` test exists only to satisfy `Site.admins()`'s INNER join, and
 # a privileged id would have let `Site.staff()` -- the same join narrowed to
 # `user_role.c.role_id == ROLE_STAFF`, with no id disjunct at all
-# (app/models.py:4002-4005) -- explain that test's row just as well as
+# (app/models.py:4003-4005; `:4002` is its `@staticmethod`, and the sibling
+# `Site.admins()` is cited from its `def` at `:3995` rather than from its own
+# decorator at `:3994`, so the two now use one convention) -- explain that
+# test's row just as well as
 # `Site.admins()` does, so swapping one call for the other would have gone
 # unnoticed there. Measured: with ROLE_STAFF granted, `Site.admins()` ->
 # `Site.staff()` survived that test.
@@ -3719,9 +3729,11 @@ class TestUrlClearedToArticle:
 # THE CONDITIONAL-EXPRESSION CLUSTER STARTS HERE, and it is the last one in this
 # file. Unlike every cluster above it, it owns no contiguous region: it owns
 # three scattered LINES -- `:3418`, `:3460` and `:3509` -- and it exists because
-# coverage cannot see them. tests/README.md:3098 (fact 87): coverage.py emits no
-# arc for a conditional expression, so a region at 100% statements AND 100%
-# branches can still hide an unexercised arm behind every `x if y else z`.
+# coverage cannot see them. tests/README.md, fact 87 in the numbered facts list
+# -- cited by NUMBER and not by line, because that file grows above any
+# coordinate into it (facts 99 and 100): coverage.py emits no arc for a
+# conditional expression, so a region at 100% statements AND 100% branches can
+# still hide an unexercised arm behind every `x if y else z`.
 #
 # THE ENUMERATION IS AN AST WALK, not a grep -- fact 87(c). `ast.parse` on
 # app/activitypub/util.py, the `FunctionDef` named `update_post_from_activity`
@@ -3974,10 +3986,10 @@ class TestUrllessPostGainsADomain:
 
         Both notify flags are off, and NOT because of the cluster banner's
         serialisation rule -- that rule does not bite here. `_seed_suspicious_post`
-        leaves `post.domain_id` NULL (its docstring, `:2973`) and `:3544`'s
+        leaves `post.domain_id` NULL (its own docstring says so) and `:3544`'s
         `post.domain = new_domain` runs AFTER the dict at `:3513-3518`, so
         `post.domain` is still None at `:3517` and `orig_post_domain` would
-        serialise as a JSON null exactly as the banner says at `:2860-2861`.
+        serialise as a JSON null exactly as this cluster's banner says.
         A notifying domain would have worked.
 
         The flags are off because the subject is `:3509`'s else arm feeding
