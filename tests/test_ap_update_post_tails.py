@@ -2087,3 +2087,710 @@ class TestAttachmentDispatchIsNotFedNonLists:
         db.session.expire_all()
         assert post.url == DOCUMENT_URL
         assert post.type == POST_TYPE_IMAGE
+
+
+# ---------------------------------------------------------------------------
+# THE URL-CHANGE CLUSTER STARTS HERE, and it is the one cluster in this file
+# that deliberately reaches BACKWARDS for names. `app/activitypub/util.py:3472`
+# is `if old_url != new_url:` and the arm under it (`:3472-3506`) is what the
+# attachment dispatch above FEEDS: the dispatch decides `new_url`, this arm
+# decides what the post becomes. Its documents therefore have to be attachment
+# documents, so `_seed_link_post`, `_taken`, `SEEDED_URL`, `UNTAKEN_URL` and
+# `UPDATE_NAME` are used here as they stand rather than copied, and
+# `_attach_banner` is reached back for from the `Event` cluster -- the only name
+# taken from further than the previous banner, and taken because the
+# alternative was a byte-for-byte duplicate of a helper whose whole body is two
+# INSERTs and a commit. Names INTRODUCED below belong to this cluster alone.
+# ---------------------------------------------------------------------------
+
+# The four url shapes this arm classifies. All on PEER, and for the reason the
+# attachment cluster's SEEDED_URL comment gives: `:3509`'s `old_domain` and
+# `:3468`'s `new_domain` then resolve to the same `Domain` row, `:3510`'s
+# `new_domain and old_domain != new_domain` is False, and the banned-domain
+# notification block at `:3511-3544` stays out. The YOUTUBE_* constants further
+# down are the deliberate exception -- they have to leave PEER, and
+# `TestUrlChangeYoutubeFixup`'s docstring says what that admits and why it is
+# harmless.
+CHANGED_IMAGE_URL = f'https://{PEER}/changed/photo'
+CHANGED_LINK_URL = f'https://{PEER}/changed/article'
+
+# `is_video_hosting_site` (app/utils.py:316-329) answers True for any url
+# containing 'videos/watch' -- its PeerTube rule -- so this one is a video
+# hosting site WITHOUT leaving PEER for youtube.com, which would have made
+# `old_domain != new_domain` true and dragged in the notification block above.
+# `is_video_url` is False for it: that helper reads only the path's extension
+# (app/utils.py:294-313). So `:3496`'s FIRST disjunct is the only one true.
+CHANGED_VIDEO_SITE_URL = f'https://{PEER}/videos/watch/9f2'
+
+# The mirror image: '.mp4' is one of `is_video_url`'s two extensions and
+# 'videos/watch' is absent, so `:3496`'s SECOND disjunct is the only one true.
+CHANGED_VIDEO_FILE_URL = f'https://{PEER}/changed/clip.mp4'
+
+# The three thumbnail sources, one per route into `image`: `:3488`'s
+# `object['image']['url']`, `:3493`'s `og:image`, and `:3493`'s `og:image:url`.
+# Pairwise distinct, so a `File.source_url` assertion names which line built the
+# row and no two routes can be confused for each other.
+OBJECT_IMAGE_URL = f'https://{PEER}/changed/from-object-image.png'
+OG_IMAGE_URL = f'https://{PEER}/changed/from-og-image.png'
+OG_IMAGE_URL_TAG_URL = f'https://{PEER}/changed/from-og-image-url.png'
+
+# `:3494` rejects a filename starting with '/'. A site-relative og:image is the
+# shape that line exists for, and it is what a real page most often carries.
+OG_RELATIVE_IMAGE = '/changed/relative.png'
+
+# `:3495` passes `opengraph.get('og:title')` through `shorten_string(..., 295)`.
+# Short enough to come back unchanged (app/utils.py:1611-1613 returns the input
+# when `len(input_str) <= max_length`), so the assertion is on this string and
+# not on a truncation this cluster does not own.
+OG_TITLE = 'the page the peer linked to'
+
+# `:3485`'s alt text, and the caption on the entry the walk actually took --
+# which `:3484-3485` must NOT read, because they subscript `[0]`.
+ATTACHMENT_ALT = 'a caption the peer supplied'
+UNTAKEN_ALT = 'the caption on the entry the url came from'
+
+# THE ONE SHAPE FOR WHICH `fixup_url` DOES NOT RETURN `(url, url)`, and
+# therefore the only one that can catch `:3478`, `:3482` or `:3491` using the
+# wrong one of the three strings `:3477` leaves in scope -- `new_url`, which is
+# what the dispatch chose, and the `thumbnail_url` and `embed_url` it unpacks.
+# `fixup_url` (app/utils.py:3363-3399) rewrites a youtube url into a
+# `https://youtu.be/<id>`
+# THUMBNAIL url and a `https://www.youtube.com/watch?v=<id>` EMBED url, and
+# appends `&start=<t>` to the embed when the shared url carried `t`. A peer
+# sharing a timestamped youtube link is what that rewrite is for.
+YOUTUBE_WATCH_URL = 'https://www.youtube.com/watch?v=abc123&t=90'
+YOUTUBE_THUMBNAIL_URL = 'https://youtu.be/abc123'
+YOUTUBE_EMBED_URL = 'https://www.youtube.com/watch?v=abc123&start=90'
+
+# The same rewrite reached from the IMAGE branch instead. The path is not
+# '/watch', so `fixup_url` falls to `video_id = path[1:]` (app/utils.py:3384)
+# and treats the filename as the id -- which leaves `new_url`, `thumbnail_url`
+# ('https://youtu.be/photo.png') and `embed_url` all different from each other.
+YOUTUBE_IMAGE_URL = 'https://www.youtube.com/photo.png'
+YOUTUBE_IMAGE_EMBED_URL = 'https://www.youtube.com/watch?v=photo.png'
+
+# The `File` a post already has before the Update. Its source_url differs from
+# every url above because ids cannot tell two rows apart here:
+# tests/conftest.py:143 truncates with RESTART IDENTITY, so `File.id` restarts
+# at 1 in every test (harness fact 89, the same reason `_attach_banner` takes
+# its source_url from the caller).
+EXISTING_IMAGE = f'https://{PEER}/changed/already-here.png'
+
+
+def _seed_image_typed_post():
+    """`_seed_link_post`'s post, re-typed POST_TYPE_IMAGE.
+
+    Every test below that asserts `post.type == POST_TYPE_LINK` -- `:3499`'s
+    write -- needs a baseline that is none of three things: not POST_TYPE_LINK,
+    which `_seed_link_post` leaves and which would make the assertion read back
+    its own seed; not POST_TYPE_ARTICLE, which is `Post.type`'s declared default
+    (app/models.py:1715); and not POST_TYPE_EVENT, which `:3418` would take as a
+    reason to initialise `new_url` from `post.url` instead of None.
+    POST_TYPE_IMAGE is what is left, and it is also a value `:3499` can be
+    caught writing over.
+    """
+    post = _seed_link_post()
+    post.type = POST_TYPE_IMAGE
+    db.session.commit()
+    return post
+
+
+def _linked_update(url, **extra):
+    """An Update whose attachment is a single `Link` pointing at `url`.
+
+    The `Link`/`href` arm at `:3425-3431` is the shortest route from a document
+    to a chosen `new_url`, and which arm supplied it is settled by the
+    attachment cluster above; these tests need only that `new_url` arrives.
+    `extra` carries the `image` key the `object['image']['url']` tests add.
+    """
+    fields = {'type': 'Page', 'name': UPDATE_NAME,
+              'attachment': [{'type': 'Link', 'href': url}]}
+    fields.update(extra)
+    return _update(**fields)
+
+
+def _not_an_image(http_mock, url, content_type='text/html'):
+    """Answer `url`'s HEAD with a Content-Type that is not an image's, putting
+    the arm on `:3486`'s `else`.
+
+    `:3480`'s `is_image_url(new_url)` calls `mime_type_using_head`
+    (app/utils.py:270, 333), which issues `httpx_client.head(url)`; a
+    Content-Type it can parse sends `is_image_url` down its header branch
+    (app/utils.py:271-273), which never looks at the path. That is what lets
+    CHANGED_VIDEO_FILE_URL keep its real '.mp4' without the extension branch at
+    app/utils.py:283-284 having to be trusted not to mistake it for an image.
+
+    Registering the route is not optional. respx raises
+    `AllMockedAssertionError` for a request no route matched, and that is an
+    `AssertionError`, not an `httpx.HTTPError` -- so `mime_type_using_head`'s
+    `except (httpx.HTTPError, httpx.InvalidURL)` would not swallow it and the
+    test would die on the escape rather than on its own assertion.
+    """
+    http_mock.head(url).respond(200, headers={'Content-Type': content_type})
+
+
+def _thumbnail_is_fetched(http_mock, url):
+    """The GET that `:3504`'s `make_image_sizes` walks into for the `File` this
+    arm just built, answered with a bodiless 404.
+
+    Technique (1) of this module's docstring, and this cluster is the one the
+    docstring says technique (2) cannot serve: `:3504` carries no
+    `get_setting('cache_remote_images_locally', True)` of its own -- verified
+    against current source, where the only gated call is the Event block's at
+    `:3396-3397` -- so turning that setting off leaves this call running.
+
+    `_taken` above is this same 404 bundled with an IMAGE HEAD, which is what an
+    `is_image_url`-true url needs. This is the half a non-image url needs alone,
+    because its `File.source_url` is the thumbnail rather than `new_url`.
+    """
+    http_mock.get(url).respond(404)
+
+
+def _opengraph_page(http_mock, url, **tags):
+    """Serve `url` as an HTML page carrying `tags` as opengraph <meta> elements.
+
+    `:3491`'s `opengraph_parse` (app/utils.py:2997-3007) delegates to
+    `parse_page` (app/utils.py:3165-3225), which GETs the page and requires BOTH
+    a 200 (app/utils.py:3195-3196) and 'text/html' in the Content-Type
+    (app/utils.py:3198-3199) before it parses; either missing makes it return
+    False. So the header here is load-bearing rather than decoration, and
+    `_unreadable_page` below is the same helper with the 200 withheld.
+
+    A keyword cannot carry a ':', so each tag is named with '_' and translated:
+    `og_image_url=...` becomes `<meta property="og:image:url" ...>`.
+    """
+    meta = ''.join(f'<meta property="{name.replace("_", ":")}" content="{value}">'
+                   for name, value in tags.items())
+    http_mock.get(url).respond(200, headers={'Content-Type': 'text/html'},
+                               text=f'<html><head>{meta}</head><body></body></html>')
+
+
+def _unreadable_page(http_mock, url):
+    """Serve `url` as a 404, so `parse_page` returns False at
+    app/utils.py:3195-3196 and `:3492`'s leading `if opengraph` is False.
+
+    False rather than None, and the difference matters to the mutation: forcing
+    `:3492`'s first conjunct true reaches `False.get('og:image', '')` and raises
+    `AttributeError`, which is a crash-kill and not an assertion-kill.
+    """
+    http_mock.get(url).respond(404)
+
+
+class TestUrlChangeGate:
+    """`:3472`'s `if old_url != new_url:` -- the gate on the whole arm."""
+
+    def test_an_update_that_repeats_the_current_url_leaves_the_image_alone(
+            self, app, db_session, redis_lock_only_double):
+        """The dispatch hands back the url the post already has, so the arm is
+        skipped entirely.
+
+        The witness is the `File`, not `post.url`: `post.url` is the one thing
+        both sides of this gate agree on and would read SEEDED_URL either way.
+        The seeded row can only survive if `:3473-3475` never ran -- forcing
+        `:3472` true deletes it from disk, records its id in
+        `old_db_entry_to_delete`, and then reaches `:3480`'s
+        `is_image_url(SEEDED_URL)`, whose HEAD no route here serves.
+
+        No HTTP fixture for exactly that reason: with the arm skipped nothing is
+        fetched, and the session-scoped `block_outbound_http` router
+        (tests/conftest.py:214-216) raises on anything that escapes.
+        """
+        post = _seed_link_post()
+        old_id = _attach_banner(post, EXISTING_IMAGE)
+
+        update_post_from_activity(post, _attachment_update(
+            {'type': 'Document', 'url': SEEDED_URL}))
+
+        db.session.expire_all()
+        assert post.url == SEEDED_URL
+        assert post.image_id == old_id
+        assert File.query.count() == 1
+        assert db.session.get(File, old_id).source_url == EXISTING_IMAGE
+
+
+class TestUrlChangeImageUrl:
+    """`:3480-3485` -- `is_image_url(new_url)` true: POST_TYPE_IMAGE, a `File`
+    built from the url itself, and alt text taken from the FIRST attachment.
+
+    `_taken` (attachment cluster, above) registers both routes these tests need:
+    the image HEAD `:3480` issues, and the 404 `:3504`'s `make_image_sizes`
+    walks into.
+    """
+
+    def test_an_image_url_takes_the_first_attachment_s_name_as_alt_text(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3483-3485` with all three conjuncts true.
+
+        Two attachments, and the second is what makes the `[0]` in `:3484-3485`
+        provable rather than merely present. The second pass at `:3443-3446` has
+        no `break`, so the LAST `Image` in the list is the one that supplies
+        `new_url` -- which is why the url taken is entry [1]'s while the alt text
+        asserted is entry [0]'s. A mutant that read the walked attachment
+        instead of `[0]` would write UNTAKEN_ALT and fail here.
+
+        UNTAKEN_URL, on entry [0], is registered nowhere: it is overwritten by
+        entry [1] before `:3477` ever sees it, so a run that took it instead
+        fails on the unmatched HEAD as well as on the two assertions.
+        """
+        post = _seed_link_post()
+        _taken(http_mock, CHANGED_IMAGE_URL)
+
+        update_post_from_activity(post, _attachment_update(
+            {'type': 'Image', 'url': UNTAKEN_URL, 'name': ATTACHMENT_ALT},
+            {'type': 'Image', 'url': CHANGED_IMAGE_URL, 'name': UNTAKEN_ALT}))
+
+        db.session.expire_all()
+        assert post.url == CHANGED_IMAGE_URL
+        assert post.type == POST_TYPE_IMAGE
+        image = db.session.get(File, post.image_id)
+        assert image.source_url == CHANGED_IMAGE_URL
+        assert image.alt_text == ATTACHMENT_ALT
+
+    def test_an_attachment_whose_name_is_null_leaves_the_alt_text_unset(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3484`'s third conjunct, `...[0]['name'] is not None`, on the peer
+        document it exists for.
+
+        WHAT THIS TEST CANNOT DO, stated rather than papered over. The assertion
+        `image.alt_text is None` is not one a contrary baseline can be seeded
+        for: the row is CREATED by the code under test at `:3482` and
+        `File.alt_text` is a plain nullable column with no default
+        (app/models.py:372). Dropping the conjunct is an EQUIVALENT mutation for
+        the same reason -- `image.alt_text = None` writes back the None the
+        fresh `File` already holds, which is tests/README.md fact 75's cause
+        4(a), "the body writes what the guard's own False condition asserts is
+        already there". So this test is NOT claimed as that conjunct's killer;
+        the mutation table records it unkillable and no test is invented to fake
+        one. What it does establish on row state is that a null `name` leaves
+        the rest of the arm intact: the type and the `File` are still what
+        `:3481-3482` wrote.
+        """
+        post = _seed_link_post()
+        _taken(http_mock, CHANGED_IMAGE_URL)
+
+        update_post_from_activity(post, _attachment_update(
+            {'type': 'Image', 'url': CHANGED_IMAGE_URL, 'name': None}))
+
+        db.session.expire_all()
+        assert post.type == POST_TYPE_IMAGE
+        image = db.session.get(File, post.image_id)
+        assert image.source_url == CHANGED_IMAGE_URL
+        assert image.alt_text is None
+
+
+class TestUrlChangeObjectImage:
+    """`:3487-3488` -- the non-image url whose thumbnail the peer supplied in
+    `object['image']['url']` -- and the `else` at `:3489` that falls through to
+    opengraph when it did not.
+    """
+
+    def test_the_object_s_own_image_url_becomes_the_thumbnail(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3487` with both conjuncts true.
+
+        Three assertions for three separate decisions: `post.url` is `:3478`'s,
+        `post.type` is `:3499`'s POST_TYPE_LINK, and `File.source_url` is
+        `:3488`'s -- which is NOT `post.url`, so a mutant that built the `File`
+        from `new_url` the way `:3482` does fails on the third.
+
+        Two routes, and the absent third is half the assertion: no GET is served
+        for CHANGED_LINK_URL, so a run that fell through to `:3491`'s
+        `opengraph_parse` would find nothing to parse. It would not crash there
+        -- `opengraph_parse` catches Exception and returns None
+        (app/utils.py:3006-3007), which is why the kill is the `File` assertion
+        plus the OBJECT_IMAGE_URL 404 going uncalled, and not a raise.
+        """
+        post = _seed_image_typed_post()
+        _not_an_image(http_mock, CHANGED_LINK_URL)
+        _thumbnail_is_fetched(http_mock, OBJECT_IMAGE_URL)
+
+        update_post_from_activity(post, _linked_update(
+            CHANGED_LINK_URL, image={'url': OBJECT_IMAGE_URL}))
+
+        db.session.expire_all()
+        assert post.url == CHANGED_LINK_URL
+        assert post.type == POST_TYPE_LINK
+        assert db.session.get(File, post.image_id).source_url == OBJECT_IMAGE_URL
+
+    def test_an_object_image_with_no_url_falls_through_to_opengraph(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3487`'s SECOND conjunct alone, on `{"image": {"type": "Image"}}` --
+        the same urlless-dict shape `:3391` was fixed to tolerate.
+
+        Forcing that conjunct true here raises `KeyError: 'url'` at `:3488`,
+        which is the crash the guard prevents and the reason this shape gets a
+        test of its own rather than being folded into the opengraph cluster
+        below. The `File` that does get built comes from `og:image`, so the
+        assertion names the line that won.
+
+        THE RESIDUE AT `:3487` IS NOT CLOSED HERE and is not this cluster's to
+        close: `'url' in request_json['object']['image']` is a SUBSTRING test
+        when `image` is a str and raises when it is None, so the guard is only
+        correct for a dict. That hole is open at `:3391` and `:3487` jointly and
+        is registered as such; the full shape table is in
+        `TestEventBlock::test_an_image_with_no_url_is_treated_as_no_image_at_all`
+        and the substring mechanism is tests/README.md fact 71.
+        """
+        post = _seed_image_typed_post()
+        _not_an_image(http_mock, CHANGED_LINK_URL)
+        _opengraph_page(http_mock, CHANGED_LINK_URL,
+                        og_title=OG_TITLE, og_image=OG_IMAGE_URL)
+        _thumbnail_is_fetched(http_mock, OG_IMAGE_URL)
+
+        update_post_from_activity(post, _linked_update(
+            CHANGED_LINK_URL, image={'type': 'Image'}))
+
+        db.session.expire_all()
+        assert post.type == POST_TYPE_LINK
+        assert db.session.get(File, post.image_id).source_url == OG_IMAGE_URL
+
+
+class TestUrlChangeOpengraphFallback:
+    """`:3491-3495` -- "Let's see if we can do better than the source instance
+    did!", the block that fetches the linked page itself and reads its
+    opengraph tags.
+
+    THE PRECEDENCE, read off `:3493` rather than assumed. That line is
+    `filename = opengraph.get('og:image') or opengraph.get('og:image:url')`:
+    `og:image` WINS, and `og:image:url` is reached only when `og:image` is
+    absent or empty. `test_og_image_wins_over_og_image_url` serves both and
+    asserts which one the `File` was built from, so the order is pinned by a
+    test and not only by this paragraph.
+
+    `opengraph_parse` is a network call -- app/utils.py:3005 delegates to
+    `parse_page`, which GETs the page at app/utils.py:3193 -- so every test here
+    serves it through `http_mock`. The page fetched is CHANGED_LINK_URL itself:
+    `thumbnail_url` is `fixup_url`'s FIRST return value (`:3477`), and for a
+    non-youtube url `fixup_url` returns `(url, url)` unchanged
+    (app/utils.py:3312, 3365-3366).
+
+    THE THREE TESTS THAT BUILD NO IMAGE ALL SEED ONE FIRST. `:3505-3506`'s
+    `else: old_db_entry_to_delete = None` is the only observable difference
+    between "no thumbnail was found" and "a thumbnail was found and lost", and
+    it is observable only on a post that HAD a `File`: `:3473-3475` records that
+    row's id for deletion, `:3506` un-records it, and `:3570-3572` therefore
+    leaves it alone. On a post with no image there is nothing for those lines to
+    disagree about and `post.image_id is None` would merely be the column's own
+    NULL.
+    """
+
+    def test_og_image_wins_over_og_image_url(self, app, db_session, http_mock,
+                                             redis_lock_only_double):
+        """`:3493`'s `or`, with BOTH operands present and different.
+
+        OG_IMAGE_URL_TAG_URL is registered nowhere, so a mutant that swapped the
+        operands fails twice over: on the `File.source_url` assertion, and on
+        the OG_IMAGE_URL 404 route going uncalled under
+        `assert_all_called=True`.
+
+        `alt_text` is asserted as well, because `:3495` builds it in the same
+        expression that consumes `filename` -- it is `og:title` and not
+        `og:image:alt`, which the page does not carry and which `parse_page`
+        would have collected had it been asked for.
+        """
+        post = _seed_image_typed_post()
+        _not_an_image(http_mock, CHANGED_LINK_URL)
+        _opengraph_page(http_mock, CHANGED_LINK_URL, og_title=OG_TITLE,
+                        og_image=OG_IMAGE_URL,
+                        og_image_url=OG_IMAGE_URL_TAG_URL)
+        _thumbnail_is_fetched(http_mock, OG_IMAGE_URL)
+
+        update_post_from_activity(post, _linked_update(CHANGED_LINK_URL))
+
+        db.session.expire_all()
+        assert post.url == CHANGED_LINK_URL
+        assert post.type == POST_TYPE_LINK
+        image = db.session.get(File, post.image_id)
+        assert image.source_url == OG_IMAGE_URL
+        assert image.alt_text == OG_TITLE
+
+    def test_og_image_url_is_taken_when_og_image_is_absent(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3492`'s second disjunct and `:3493`'s right-hand operand.
+
+        The page carries `og:image:url` and no `og:image`, so
+        `opengraph.get('og:image', '') != ''` is False and the block is admitted
+        by the second test alone. Deleting that second disjunct leaves `:3492`
+        False and no `File` is built at all, which the assertion below catches.
+        """
+        post = _seed_image_typed_post()
+        _not_an_image(http_mock, CHANGED_LINK_URL)
+        _opengraph_page(http_mock, CHANGED_LINK_URL, og_title=OG_TITLE,
+                        og_image_url=OG_IMAGE_URL_TAG_URL)
+        _thumbnail_is_fetched(http_mock, OG_IMAGE_URL_TAG_URL)
+
+        update_post_from_activity(post, _linked_update(CHANGED_LINK_URL))
+
+        db.session.expire_all()
+        assert post.type == POST_TYPE_LINK
+        assert db.session.get(File, post.image_id).source_url == OG_IMAGE_URL_TAG_URL
+
+    def test_an_og_image_that_is_a_bare_path_is_rejected(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3494`'s `if not filename.startswith('/')`.
+
+        A site-relative `og:image` is admitted by `:3492` -- it is a non-empty
+        string -- and rejected one line later, so this is the only route through
+        `:3491-3495` that reaches `:3493` and still builds nothing. Forcing
+        `:3494` true creates `File(source_url='/changed/relative.png')` and
+        attaches it, which both assertions below catch; the fetch that follows
+        it does not, because `get_request` refuses a hostless uri
+        (app/utils.py:5499-5501) by raising `httpx.HTTPError` straight into
+        `make_image_sizes_async`'s bare `except:` (`:1743-1746`).
+
+        No 404 route is registered here, and under `assert_all_called=True` that
+        is deliberate: on the unmutated path nothing is fetched for the image.
+        """
+        post = _seed_image_typed_post()
+        old_id = _attach_banner(post, EXISTING_IMAGE)
+        _not_an_image(http_mock, CHANGED_LINK_URL)
+        _opengraph_page(http_mock, CHANGED_LINK_URL, og_title=OG_TITLE,
+                        og_image=OG_RELATIVE_IMAGE)
+
+        update_post_from_activity(post, _linked_update(CHANGED_LINK_URL))
+
+        db.session.expire_all()
+        assert post.type == POST_TYPE_LINK
+        assert post.image_id == old_id
+        assert File.query.count() == 1
+        assert db.session.get(File, old_id).source_url == EXISTING_IMAGE
+
+    def test_a_page_carrying_no_og_image_leaves_the_existing_image_row_alone(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3492`'s two `!= ''` tests, both False, on a page that parsed fine.
+
+        `parse_page` returns a NON-empty dict here -- it found `og:title` --
+        so `:3492`'s leading `if opengraph` is True and the pair of emptiness
+        tests is what rejects the page. That is what separates this test from
+        `test_a_page_that_cannot_be_read_...` below, where the leading conjunct
+        is the one that does the rejecting.
+
+        Forcing either `!= ''` test true reaches `:3493`, where
+        `opengraph.get('og:image') or opengraph.get('og:image:url')` is None and
+        `:3494`'s `filename.startswith` raises `AttributeError`.
+        """
+        post = _seed_image_typed_post()
+        old_id = _attach_banner(post, EXISTING_IMAGE)
+        _not_an_image(http_mock, CHANGED_LINK_URL)
+        _opengraph_page(http_mock, CHANGED_LINK_URL, og_title=OG_TITLE)
+
+        update_post_from_activity(post, _linked_update(CHANGED_LINK_URL))
+
+        db.session.expire_all()
+        assert post.type == POST_TYPE_LINK
+        assert post.image_id == old_id
+        assert File.query.count() == 1
+        assert db.session.get(File, old_id).source_url == EXISTING_IMAGE
+
+    def test_a_page_that_cannot_be_read_leaves_the_existing_image_row_alone(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3492`'s leading `if opengraph`, on the falsy value the real helper
+        returns.
+
+        `parse_page` returns the literal `False` for a non-200
+        (app/utils.py:3195-3196) and `opengraph_parse` passes it straight back,
+        so forcing this conjunct true reaches `False.get('og:image', '')` and
+        raises `AttributeError: 'bool' object has no attribute 'get'`. A
+        crash-kill, and one the `except Exception` in `opengraph_parse` cannot
+        absorb -- that handler wraps the `parse_page` CALL at
+        app/utils.py:3005-3007 and has already returned by the time `:3492`
+        runs.
+        """
+        post = _seed_image_typed_post()
+        old_id = _attach_banner(post, EXISTING_IMAGE)
+        _not_an_image(http_mock, CHANGED_LINK_URL)
+        _unreadable_page(http_mock, CHANGED_LINK_URL)
+
+        update_post_from_activity(post, _linked_update(CHANGED_LINK_URL))
+
+        db.session.expire_all()
+        assert post.type == POST_TYPE_LINK
+        assert post.image_id == old_id
+        assert File.query.count() == 1
+        assert db.session.get(File, old_id).source_url == EXISTING_IMAGE
+
+
+class TestUrlChangeTypeClassification:
+    """`:3496-3499` -- POST_TYPE_VIDEO for a video hosting site or a video url,
+    POST_TYPE_LINK otherwise.
+
+    Both tests carry an `object['image']['url']` so the arm takes `:3487-3488`
+    and never reaches opengraph: the classification at `:3496` is downstream of
+    which thumbnail was found and independent of it, so serving a page here
+    would add a fetch that measures nothing. The POST_TYPE_LINK side of `:3498`
+    is asserted by every test in the two clusters above.
+    """
+
+    def test_a_video_hosting_site_url_becomes_a_video_post(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3496`'s FIRST disjunct, `is_video_hosting_site(embed_url)`.
+
+        Note the argument: `:3496` passes `embed_url`, `fixup_url`'s SECOND
+        return value, and `new_url` to `is_video_url` beside it. For a
+        non-youtube url those are the same string (app/utils.py:3312,
+        3365-3366), so this test cannot tell the two apart and does not claim
+        to; what it pins is that a 'videos/watch' url reaches POST_TYPE_VIDEO.
+        The seeded type is POST_TYPE_LINK, which is exactly what `:3499` would
+        have written, so the assertion cannot be satisfied by the wrong arm.
+        """
+        post = _seed_link_post()
+        _not_an_image(http_mock, CHANGED_VIDEO_SITE_URL)
+        _thumbnail_is_fetched(http_mock, OBJECT_IMAGE_URL)
+
+        update_post_from_activity(post, _linked_update(
+            CHANGED_VIDEO_SITE_URL, image={'url': OBJECT_IMAGE_URL}))
+
+        db.session.expire_all()
+        assert post.url == CHANGED_VIDEO_SITE_URL
+        assert post.type == POST_TYPE_VIDEO
+
+    def test_a_video_file_url_becomes_a_video_post(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3496`'s SECOND disjunct, `is_video_url(new_url)`.
+
+        '.mp4' with no 'videos/watch' anywhere in it, so
+        `is_video_hosting_site` is False and only the right-hand call can admit
+        this. The HEAD is answered 'video/mp4' rather than 'text/html': it is
+        what a real server sends for this url, and it keeps `is_image_url` on
+        its header branch so the '.mp4' never reaches the extension sniffing at
+        app/utils.py:283-284.
+        """
+        post = _seed_link_post()
+        _not_an_image(http_mock, CHANGED_VIDEO_FILE_URL, content_type='video/mp4')
+        _thumbnail_is_fetched(http_mock, OBJECT_IMAGE_URL)
+
+        update_post_from_activity(post, _linked_update(
+            CHANGED_VIDEO_FILE_URL, image={'url': OBJECT_IMAGE_URL}))
+
+        db.session.expire_all()
+        assert post.url == CHANGED_VIDEO_FILE_URL
+        assert post.type == POST_TYPE_VIDEO
+
+
+class TestUrlChangeOldImage:
+    """`:3473-3475` and `:3500-3504` -- the old `File` is dropped and the new
+    one takes its place.
+
+    The `else` at `:3505-3506` is covered by the three seeded-image tests in
+    `TestUrlChangeOpengraphFallback`; this is the arm where
+    `old_db_entry_to_delete` survives to `:3570-3572` and the row really goes.
+    """
+
+    def test_the_old_image_row_is_deleted_when_a_new_thumbnail_replaces_it(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3475` recording the old id and `:3571` spending it.
+
+        The two rows are told apart by `source_url`, never by id:
+        tests/conftest.py:143 truncates with RESTART IDENTITY, so the seeded row
+        is id 1 in every run and the new one id 2, and an assertion reading ids
+        alone would be measuring the sequence. `assert len({old_id, new_id})
+        == 2` is the explicit guard that the pair is distinct before anything is
+        concluded from it (harness fact 89).
+
+        Deleting `:3473-3475` leaves both rows behind and `File.query.count()`
+        reads 2. Forcing `:3473` true on a post with no image is a separate
+        mutation, killed by `None.delete_from_disk()` in the tests above that
+        seed none.
+        """
+        post = _seed_image_typed_post()
+        old_id = _attach_banner(post, EXISTING_IMAGE)
+        _not_an_image(http_mock, CHANGED_LINK_URL)
+        _thumbnail_is_fetched(http_mock, OBJECT_IMAGE_URL)
+
+        update_post_from_activity(post, _linked_update(
+            CHANGED_LINK_URL, image={'url': OBJECT_IMAGE_URL}))
+
+        db.session.expire_all()
+        new_id = post.image_id
+        assert new_id is not None
+        assert len({old_id, new_id}) == 2
+        assert db.session.get(File, new_id).source_url == OBJECT_IMAGE_URL
+        assert File.query.filter_by(id=old_id).count() == 0
+        assert File.query.count() == 1
+
+
+class TestUrlChangeYoutubeFixup:
+    """`:3477`'s `thumbnail_url, embed_url = fixup_url(new_url)`, and the three
+    later lines that each pick one of the three strings it leaves behind.
+
+    WHY THIS CLASS EXISTS AT ALL. Everywhere else in this file `fixup_url`
+    returns `(url, url)` -- app/utils.py:3312 initialises both to `url` and
+    app/utils.py:3365-3366 returns them untouched for any host outside
+    `youtube_domains` -- so `new_url`, `thumbnail_url` and `embed_url` are the
+    same string and `:3478`'s `post.url = embed_url`, `:3482`'s
+    `File(source_url=new_url)` and `:3491`'s `opengraph_parse(thumbnail_url)`
+    cannot be caught reading each other's variable. A youtube url is the only
+    shape that separates them; without these two tests three real mutations
+    survive with nothing but a shrug to explain them.
+
+    These are also the only two tests in this file whose url leaves PEER, so
+    they are the only two where `:3510`'s `new_domain and old_domain !=
+    new_domain` is True and the block at `:3511-3544` runs. It runs harmlessly:
+    `Domain.notify_mods` and `Domain.notify_admins` are both `default=False`
+    (app/models.py:3458-3459) on the row `domain_from_url` creates
+    (app/utils.py:1590-1593), so neither notification loop is entered and only
+    `:3543-3544`'s `post_count += 1` and `post.domain = new_domain` happen.
+    Covering that block is Task 7's, not a claim made here.
+    """
+
+    def test_a_timestamped_youtube_link_is_stored_as_its_embed_url(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3478` storing `embed_url`, and `:3491` fetching `thumbnail_url`.
+
+        Three different strings, and each assertion names a different one:
+
+          - `post.url` is YOUTUBE_EMBED_URL, which is neither what the peer sent
+            nor what the opengraph page was fetched from, so `post.url =
+            new_url` and `post.url = thumbnail_url` both fail here;
+          - the opengraph page is registered at YOUTUBE_THUMBNAIL_URL and
+            nowhere else, so `opengraph_parse(new_url)` or
+            `opengraph_parse(embed_url)` finds no route. That failure does not
+            raise -- `opengraph_parse` catches Exception and returns None
+            (app/utils.py:3006-3007) -- so the kill is the `File` assertion plus
+            the youtu.be route going uncalled under `assert_all_called=True`;
+          - `post.type` is POST_TYPE_VIDEO, from `:3496`'s
+            `is_video_hosting_site(embed_url)`.
+
+        The HEAD is on YOUTUBE_WATCH_URL, not on either rewrite: `:3480` passes
+        `new_url` to `is_image_url`, which is the peer's own string.
+        """
+        post = _seed_link_post()
+        _not_an_image(http_mock, YOUTUBE_WATCH_URL)
+        _opengraph_page(http_mock, YOUTUBE_THUMBNAIL_URL,
+                        og_title=OG_TITLE, og_image=OG_IMAGE_URL)
+        _thumbnail_is_fetched(http_mock, OG_IMAGE_URL)
+
+        update_post_from_activity(post, _linked_update(YOUTUBE_WATCH_URL))
+
+        db.session.expire_all()
+        assert post.url == YOUTUBE_EMBED_URL
+        assert post.type == POST_TYPE_VIDEO
+        assert db.session.get(File, post.image_id).source_url == OG_IMAGE_URL
+
+    def test_an_image_on_a_youtube_domain_is_stored_from_the_url_the_peer_sent(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3482`'s `File(source_url=new_url)`, on the only document that can
+        tell `new_url` from `thumbnail_url` inside the image branch.
+
+        `fixup_url` rewrites any youtube-domain url, `/photo.png` included, so
+        `post.url` becomes YOUTUBE_IMAGE_EMBED_URL while the `File` keeps the
+        url the peer actually sent. `File(source_url=thumbnail_url)` would store
+        'https://youtu.be/photo.png' and fail twice: on the assertion, and on
+        `_taken`'s 404 -- registered against YOUTUBE_IMAGE_URL because that is
+        what `:3504`'s `make_image_sizes` fetches -- going uncalled.
+
+        Contrived as a peer document and said so plainly: an image served from
+        youtube.com is not what youtube.com serves. But nothing rejects it on
+        the way in (a `Link` attachment's `href` is whatever the peer wrote),
+        the mutation it kills is real, and the alternative was recording a
+        killable survivor as if it were unkillable.
+        """
+        post = _seed_link_post()
+        _taken(http_mock, YOUTUBE_IMAGE_URL)
+
+        update_post_from_activity(post, _linked_update(YOUTUBE_IMAGE_URL))
+
+        db.session.expire_all()
+        assert post.url == YOUTUBE_IMAGE_EMBED_URL
+        assert post.type == POST_TYPE_IMAGE
+        assert db.session.get(File, post.image_id).source_url == YOUTUBE_IMAGE_URL
