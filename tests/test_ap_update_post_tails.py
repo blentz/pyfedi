@@ -67,6 +67,7 @@ from datetime import datetime
 
 import httpx
 import pytest
+from sqlalchemy.exc import StatementError
 
 from app import db
 from app.activitypub.util import update_post_from_activity
@@ -2829,23 +2830,50 @@ class TestUrlChangeYoutubeFixup:
 # `Site.admins()` NEEDS A ROLE ROW -- see `_make_admin` below for the proof and
 # for which of its two arms every fixture in this file takes.
 #
+# `TestBannedNewDomain` at the end covers `:3469-3471`, which is NOT part of
+# this cluster and not part of the one above it either -- the url-change cluster
+# owns `:3472-3506` and this one `:3508-3567`, so the banned-domain early return
+# fell between two briefs and was uncovered everywhere in the suite. It is
+# covered here on a controller ruling because it is adjacent and the fixtures
+# for it are already in this file. What was NOT uncovered, and is worth saying
+# so no one re-covers it: `:3461`, both arms of `:3462` and `:3468` are all
+# executed today -- every url test in the two clusters above runs them, and
+# `TestUrlClearedToArticle` takes `:3462`'s False arm.
+#
 # WHAT NO FIXTURE HERE MAY DO: seed `post.domain` on a post that will produce a
 # Notification. `:3517` and `:3535` both store `post.domain` -- the `Domain`
-# RELATIONSHIP OBJECT, not its name or its id -- into `Notification.targets`,
-# which is `db.Column(db.JSON)` (app/models.py:3738). For a post that already
-# has a domain the flush raises
+# RELATIONSHIP OBJECT (app/models.py:1765), not its name or its id -- into
+# `Notification.targets`, which is `db.Column(db.JSON)` (app/models.py:3738).
+# For a post that already has a domain the flush raises
 # `StatementError: (builtins.TypeError) Object of type Domain is not JSON
 # serializable`, measured directly against this harness. So the tests that
 # produce notifications leave `post.domain_id` NULL (`orig_post_domain` is then
 # a JSON null, which is what they assert), and the test that seeds a contrary
 # `post.domain` baseline -- TestSuspiciousDomainReassignment's first -- has both
-# notify flags off so no `Notification` is ever built. That is a production
-# defect, not a harness quirk, and it is reported rather than repaired: it is
-# not a mechanical fix, because no correct spelling of it exists in the tree.
-# All four sites carry the same expression (app/models.py:2075,
-# app/activitypub/util.py:3517 and :3535, app/shared/post.py:577), so there is
-# nothing to copy from and the choice between `post.domain.name` and
-# `post.domain_id` is a behaviour decision this slice does not own.
+# notify flags off so no `Notification` is ever built.
+# `TestSuspiciousDomainTargetsSerialisation` below pins the crash itself.
+#
+# It is a production defect, registered rather than repaired, and the reason is
+# NOT that no correct spelling exists in the tree: app/models.py:2087 already
+# writes a narrower `targets_data` (`{'gen': '0', 'post_id': post.id}`) for its
+# own admin loop, so a precedent for dropping the key does exist. The decisive
+# reason is that NOTHING READS IT. `grep -rn orig_post_domain` over app/ and the
+# templates finds the four writers and no reader; every consumer of
+# `Notification.targets` -- app/api/alpha/utils/user.py:705-812,
+# app/activitypub/util.py:2972, app/api/alpha/utils/private_message.py:170 --
+# reads `post_id`, `comment_id`, `community_id` or `message_id` and never this
+# key. With no consumer to arbitrate, choosing between `post.domain.name`,
+# `post.domain_id` and dropping the key is a pure behaviour decision spanning
+# three files in two subsystems, which this slice does not own.
+#
+# REACHABILITY IS NOT UNIFORM across the four writers, and the report's register
+# entry has the detail. In one line each: app/shared/post.py:577 is the worst
+# (`post.domain = domain` at `:570` runs BEFORE the dict, so `edit_post` crashes
+# for EVERY local post edited onto a notifying domain); `:3517`/`:3535` here are
+# peer-reachable but conditional (`post.domain = new_domain` is at `:3544`,
+# AFTER the dict, so only a post that already had a domain crashes); and
+# app/models.py:2075 is latent (`post.domain` is not assigned until `:2100`, so
+# a fresh post serialises None).
 # ---------------------------------------------------------------------------
 
 # A url on a domain that is NOT PEER, which is what makes `:3510`'s
@@ -2908,10 +2936,19 @@ ORDINARY_ROLE = 9
 def _seed_suspicious_post():
     """`_seed_link_post`'s post, with a body and an id nothing else shares.
 
-    See DECOY_POSTS above for why the throwaway rows exist. They are inert to
-    everything this cluster measures: their `url` is NULL, so
-    `calculate_cross_posts`'s `Post.url == self.url` (app/models.py:2371) can
-    never match one, and they are in no one's `cross_posts` list.
+    See DECOY_POSTS above for why rows precede the one under test. FOUR do, and
+    they are not all the same shape: the three created by the loop below have
+    `url` NULL, while the fourth is `_seed_link_post`'s own post, which carries
+    SEEDED_URL -- the same url the measured post starts on.
+
+    All four are still inert to everything this cluster measures, but for two
+    different reasons. The NULL-url three can never match
+    `calculate_cross_posts`'s `Post.url == self.url` (app/models.py:2371), since
+    `self.url` is a non-empty string at every call site here. The SEEDED_URL one
+    could match a query for SEEDED_URL, and no call reaching `:2371` ever issues
+    one: `:3548` runs after `:3478` has already moved `post.url` to the new url,
+    and `:3567` passes `delete_only=True`, which returns at app/models.py:2359
+    before `:2371`. None of the four is in any post's `cross_posts` list.
 
     `post.domain_id` is deliberately left NULL -- see the banner.
     """
@@ -2928,23 +2965,24 @@ def _seed_suspicious_post():
     return post
 
 
-def _suspicious_domain(notify_mods=False, notify_admins=False):
+def _suspicious_domain(notify_mods=False, notify_admins=False, banned=False):
     """The `Domain` row `:3468`'s `domain_from_url(new_url)` will find for
     SUSPICIOUS_URL, with every column this cluster reads seeded explicitly.
 
     `notify_mods`, `notify_admins` and `banned` are all `default=False` and
-    `post_count` is `default=0` (app/models.py:3456-3459). Both notify flags are
+    `post_count` is `default=0` (app/models.py:3456-3459). The notify flags are
     passed by every caller rather than defaulted, so the row states what its
     test is about instead of inheriting it, and `post_count` is seeded contrary
     per SEEDED_POST_COUNT.
 
-    `banned` is left False, which is the default: `:3469` returns early for a
-    banned domain and would keep every test here out of its own cluster. That
-    guard belongs to the block above this one, not to this one.
+    `banned` defaults False because `:3469` returns before the whole url-change
+    arm for a banned domain, so every test but `TestBannedNewDomain`'s needs it
+    off to reach its own subject at all.
     """
     domain = make_domain(SUSPICIOUS_DOMAIN)
     domain.notify_mods = notify_mods
     domain.notify_admins = notify_admins
+    domain.banned = banned
     domain.post_count = SEEDED_POST_COUNT
     db.session.commit()
     return domain
@@ -2953,11 +2991,14 @@ def _suspicious_domain(notify_mods=False, notify_admins=False):
 def _make_admin(user, role_id=ROLE_ADMIN):
     """Make `user` an admin as `Site.admins()` (`:3529`) counts them.
 
-    WHICH ARM. `Site.admins()` (app/models.py:3995-4000) returns
-    `query(User).filter(User.id.in_(g.admin_ids))` when `g` carries
-    `admin_ids`, and otherwise
-    `query(User).filter_by(deleted=False, banned=False).join(user_role)
-     .filter(or_(user_role.c.role_id == ROLE_ADMIN, User.id == 1))`.
+    WHICH ARM. `Site.admins()` (app/models.py:3995-4000) is, verbatim:
+
+        if hasattr(g, 'admin_ids'):
+            return db.session.query(User).filter(User.id.in_(tuple(g.admin_ids))).all()
+        else:
+            return db.session.query(User).filter_by(deleted=False, banned=False).join(user_role).filter(
+                                          or_(user_role.c.role_id == ROLE_ADMIN, User.id == 1)).order_by(User.id).all()
+
     tests/conftest.py:137 clears `flask.g` before every test and nothing in this
     file sets `admin_ids`, so **every test here takes the JOIN arm**. That is
     the point of saying so: a fixture that stashed `g.admin_ids` would never
@@ -2986,7 +3027,6 @@ def _make_admin(user, role_id=ROLE_ADMIN):
         db.session.commit()
     user.roles.append(role)
     db.session.commit()
-    return role
 
 
 def _make_moderator(post, name):
@@ -3246,6 +3286,166 @@ class TestSuspiciousDomainNotifications:
         assert len({moderator.id, admin.id}) == 2
         assert Notification.query.count() == 0
         assert post.domain_id == domain.id
+
+
+class TestSuspiciousDomainTargetsSerialisation:
+    """A REGISTERED DEFECT, asserted on purpose. `:3517` and `:3535` put
+    `post.domain` -- the `Domain` RELATIONSHIP OBJECT (app/models.py:1765), not
+    its name or its id -- into `Notification.targets`, which is
+    `db.Column(db.JSON)` (app/models.py:3738). For a post that already has a
+    domain the flush cannot serialise it and the whole Update is lost.
+
+    THIS TEST ASSERTS A BUG. It is a pin, not an endorsement: it exists so the
+    crash is known behaviour with a name rather than a surprise, and so that
+    whoever repairs the defect has to come here and change it. See the cluster
+    banner for the register entry it belongs to, and the report's register entry
+    for the reachability of the four writers -- app/shared/post.py:577 is the
+    worst of them, because `post.domain = domain` at `:570` runs BEFORE the dict
+    at `:573`, so `edit_post` crashes for every local post edited onto a
+    notifying domain rather than only for one that already had a domain.
+
+    It is also what makes `:3517` and `:3535` pinnable at all. Without it the
+    mutation `post.domain` -> `post.domain_id` survives everything: every other
+    test here leaves `post.domain_id` NULL (it must -- that is this defect), so
+    both spellings serialise to JSON null and no assertion can tell them apart.
+    Under the mutant this test's `pytest.raises` gets no exception and fails.
+    """
+
+    def test_the_moderator_row_cannot_be_serialised_for_a_post_with_a_domain(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3517`. The post starts on the domain its own url is on -- what every remote
+        link post built by `Post.new` holds (`app/models.py:2100`) -- and moves
+        to a domain that notifies mods.
+
+        THE BLAST RADIUS is what the assertions are for, and it is a half-applied
+        Update rather than a discarded one. `:3502`'s
+        `db.session.add(image); db.session.commit()` is not scoped to the image:
+        it flushes everything pending on the session, so the head's title write
+        (`:3187`), `:3478`'s `post.url` and `:3481`'s `post.type` are all
+        COMMITTED before the notification block is ever entered. The raise then
+        comes from `:3569`, and the rollback takes only what was written after
+        `:3502` -- `:3503`'s `post.image`, `:3543`'s `post_count` and `:3544`'s
+        `post.domain`, plus the `Notification` itself.
+
+        What the peer is left with is a post carrying the new url and the new
+        type, no image (`post.image_id` NULL) but an ORPHANED `File` row that
+        `:3502` committed, its domain still pointing at the old row, and nobody
+        notified. Every one of those is asserted below, and the split was
+        measured rather than reasoned: the first draft of this test asserted the
+        url had rolled back and was wrong.
+        """
+        post = _seed_suspicious_post()
+        _make_moderator(post, 'the_moderator')
+        new_domain = _suspicious_domain(notify_mods=True)
+        old_domain = make_domain(PEER)
+        post.domain_id = old_domain.id
+        db.session.commit()
+        _taken(http_mock, SUSPICIOUS_URL)
+
+        with pytest.raises(StatementError) as raised:
+            update_post_from_activity(post, _linked_update(SUSPICIOUS_URL))
+
+        assert 'Object of type Domain is not JSON serializable' in str(raised.value)
+        db.session.rollback()
+        assert len({old_domain.id, new_domain.id}) == 2
+        assert Notification.query.count() == 0
+        # committed by `:3502`, before the block that raises
+        assert post.title == UPDATE_NAME
+        assert post.url == SUSPICIOUS_URL
+        assert post.type == POST_TYPE_IMAGE
+        # written after `:3502`, and lost with the rollback
+        assert post.domain_id == old_domain.id
+        assert new_domain.post_count == SEEDED_POST_COUNT
+        assert post.image_id is None
+        # the orphan `:3502` left behind
+        assert File.query.count() == 1
+        assert File.query.first().source_url == SUSPICIOUS_URL
+
+
+    def test_the_admin_row_cannot_be_serialised_for_a_post_with_a_domain(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3535`, the SECOND copy of the same expression, in the dict `:3531`
+        rebuilds inside the admin loop.
+
+        Not a duplicate of the test above, and measured rather than assumed:
+        that one has `notify_mods` on and never enters the admin loop, so
+        mutating `:3535` to `post.domain_id` SURVIVED it. `notify_mods` is off
+        here and an admin is seeded, so `:3535` is the only writer that runs and
+        the raise can only have come from it. Two writers, two pins.
+
+        The blast radius is the test above's and is not re-asserted; only the
+        raise and the two rows it costs are.
+        """
+        post = _seed_suspicious_post()
+        admin = make_user(post.author.instance, 'the_admin')
+        _make_admin(admin)
+        _suspicious_domain(notify_admins=True)
+        old_domain = make_domain(PEER)
+        post.domain_id = old_domain.id
+        db.session.commit()
+        _taken(http_mock, SUSPICIOUS_URL)
+
+        with pytest.raises(StatementError) as raised:
+            update_post_from_activity(post, _linked_update(SUSPICIOUS_URL))
+
+        assert 'Object of type Domain is not JSON serializable' in str(raised.value)
+        db.session.rollback()
+        assert Notification.query.count() == 0
+        assert post.domain_id == old_domain.id
+
+
+class TestBannedNewDomain:
+    """`:3469-3471` -- the banned-domain early return, which is uncovered
+    everywhere in the suite and sits immediately above this cluster.
+
+    Not in Task 7's brief and covered here on a controller ruling: it is
+    adjacent to `:3510`'s domain work, this cluster already has the `Domain`
+    fixtures for it, and it is a real guard on peer-supplied input that no test
+    anywhere reaches -- no file importing `update_post_from_activity` sets
+    `Domain.banned`, and tests/test_unparseable_url_ingress.py's banned-domain
+    tests are form validation on a different path.
+    """
+
+    def test_a_banned_new_domain_stops_the_update_before_the_url_changes(
+            self, app, db_session, redis_lock_only_double):
+        """`:3469`'s `new_domain.banned` true: commit what the head wrote, then
+        return before `:3472`'s arm.
+
+        BOTH HALVES of `:3470-3471` are asserted, and they pull in opposite
+        directions, which is the point:
+
+          - `post.title` IS the Update's, because `:3470` commits the head's
+            write at `:3187` before returning. Deleting that commit loses it --
+            nothing else on this path commits, since `:3471` returns from inside
+            the lock and `:3569` is never reached;
+          - `post.url` is NOT the Update's, because `:3471` returns before
+            `:3472`. So the peer's title lands and the peer's banned link does
+            not, which is what "reject change to url if new domain is banned"
+            means.
+
+        `notify_mods` is on and a moderator exists, so the notification block is
+        provably out rather than merely unreachable for want of a recipient, and
+        `post_count` is seeded contrary so `:3543` cannot have run either.
+
+        NO HTTP FIXTURE, and forcing `:3469` False is what proves it is needed:
+        the arm below then reaches `:3480`'s `is_image_url(SUSPICIOUS_URL)`,
+        whose HEAD no route here serves, so that mutant dies on respx rather
+        than on an assertion -- a crash-kill.
+        """
+        post = _seed_suspicious_post()
+        moderator = _make_moderator(post, 'the_moderator')
+        domain = _suspicious_domain(notify_mods=True, banned=True)
+
+        update_post_from_activity(post, _linked_update(SUSPICIOUS_URL))
+
+        db.session.expire_all()
+        assert len({post.id, moderator.id, domain.id}) == 3
+        assert post.title == UPDATE_NAME
+        assert post.url == SEEDED_URL
+        assert post.type == POST_TYPE_LINK
+        assert post.domain_id is None
+        assert domain.post_count == SEEDED_POST_COUNT
+        assert Notification.query.count() == 0
 
 
 class TestSuspiciousDomainReassignment:
