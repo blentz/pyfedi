@@ -3536,6 +3536,20 @@ about pointers that live inside the moving file. And when you do read one,
 read it with a tool that prints the number -- `grep -n`, `awk` on `NR`,
 `cat -n` -- never by counting out of a bare `sed -n 'A,Bp'` (fact 95).
 
+**(c) A CITATION SWEEP NEEDS TWO PASSES, AND THE ONE PEOPLE SKIP IS THE CHEAP
+ONE.** Verifying citations by extracting them with a `file:line` pattern and
+checking each against source misses **every reference written without a line
+number** -- and a bare filename is the reference *most* likely to be invented,
+precisely because nothing forces the writer to open the file. Sub-project 17's
+register round did exactly this: its extraction required a digit after the
+filename, caught **17** of the section's **25** file references, skipped all
+**eight** bare paths, and shipped a citation to a test file that does not exist,
+which its review caught. So: **pass one resolves every `file:line` against its
+content; pass two resolves every bare path against `git ls-files`.** Expect the
+second pass to flag deliberate negatives ("there is no such file") and read them
+rather than deleting them. This is fact 94's point wearing a tool: the sweep was
+applied to a candidate set the candidates could opt out of by omitting a colon.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
