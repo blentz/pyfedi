@@ -70,13 +70,6 @@ from tests.factories import (make_community, make_instance, make_post,
 
 PEER = 'peer.example'
 
-# Video-cluster only, not shared harness: the two collection URLs the PeerTube
-# arm fetches. Left here with the module constants rather than moved under the
-# class, because a name used inside a test method has to be module-level anyway
-# and splitting the constants across the file would be worse than labelling them.
-LIKES_URL = f'https://{PEER}/videos/1/likes'
-DISLIKES_URL = f'https://{PEER}/videos/1/dislikes'
-
 
 class _RedisLockOnlyDouble:
     """`app.redis_client` stand-in covering only `.lock(...)` as a context
@@ -143,10 +136,21 @@ def _update(**fields):
     return {'object': fields}
 
 
-def _seed_vote_baseline(post):
-    """Video-cluster only, not shared harness.
+# ---------------------------------------------------------------------------
+# THE `type == 'Video'` CLUSTER STARTS HERE. The shared harness is everything
+# above this line and nothing below it; a later cluster opens its own banner.
+# The two constants and the helper that follow are module-level only because a
+# test method's globals are its module's -- which is equally true of anything
+# placed up with the shared harness, so scope cannot tell a reader who owns a
+# name and position has to.
+# ---------------------------------------------------------------------------
 
-    Seed values contrary to every column the Video block writes.
+LIKES_URL = f'https://{PEER}/videos/1/likes'
+DISLIKES_URL = f'https://{PEER}/videos/1/dislikes'
+
+
+def _seed_vote_baseline(post):
+    """Seed values contrary to every column the Video block writes.
 
     `Post.up_votes`, `down_votes` and `score` are declared `default=0`, and
     `ranking` / `ranking_scaled` `default=0.0` (app/models.py's Post). Asserting
@@ -194,11 +198,13 @@ class TestVideoVoteCollections:
         # Discard any unflushed attribute state and force a re-SELECT, so the
         # assertions below read the committed row rather than pending values on
         # the object the function just wrote to. This is what pins the block's
-        # `db.session.commit()` at `app/activitypub/util.py:3308`: the app
-        # factory's `autoflush=False` (`app/__init__.py:81`) means that without
-        # the commit nothing reaches the row at all, so `expire` re-reads the
-        # seeded baseline and every assertion below fails. Without this line the
-        # commit can be deleted with the whole file still green.
+        # `db.session.commit()` at `app/activitypub/util.py:3308`:
+        # `app/__init__.py:81` builds `SQLAlchemy(session_options={"autoflush":
+        # False}, ...)` at module scope -- not in `create_app`, which starts at
+        # `app/__init__.py:129` -- so without that commit nothing reaches the
+        # row at all, `expire` re-reads the seeded baseline, and every assertion
+        # below fails. Without this line the commit can be deleted with the
+        # whole file still green.
         db.session.expire(post)
 
         assert post.up_votes == 6
