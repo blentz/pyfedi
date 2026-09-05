@@ -2830,7 +2830,10 @@ class TestUrlChangeYoutubeFixup:
 # `Site.admins()` NEEDS A ROLE ROW -- see `_make_admin` below for the proof and
 # for which of its two arms every fixture in this file takes.
 #
-# `TestBannedNewDomain` at the end covers `:3469-3471`, which is NOT part of
+# `TestBannedNewDomain` -- third of the six classes below, between
+# `TestSuspiciousDomainTargetsSerialisation` and
+# `TestSuspiciousDomainReassignment`, and NOT last -- covers `:3469-3471`,
+# which is NOT part of
 # this cluster and not part of the one above it either -- the url-change cluster
 # owns `:3472-3506` and this one `:3508-3567`, so the banned-domain early return
 # fell between two briefs and was uncovered everywhere in the suite. It is
@@ -2840,8 +2843,12 @@ class TestUrlChangeYoutubeFixup:
 # executed today -- every url test in the two clusters above runs them, and
 # `TestUrlClearedToArticle` takes `:3462`'s False arm.
 #
-# WHAT NO FIXTURE HERE MAY DO: seed `post.domain` on a post that will produce a
-# Notification. `:3517` and `:3535` both store `post.domain` -- the `Domain`
+# WHAT NO FIXTURE HERE MAY DO, EXCEPT THE TWO PINS THAT EXIST TO DO IT: seed
+# `post.domain` on a post that will produce a Notification.
+# `TestSuspiciousDomainTargetsSerialisation` breaks this rule deliberately and
+# is the only thing here allowed to; every other fixture must obey it or it
+# will not reach its own subject.
+# `:3517` and `:3535` both store `post.domain` -- the `Domain`
 # RELATIONSHIP OBJECT (app/models.py:1765), not its name or its id -- into
 # `Notification.targets`, which is `db.Column(db.JSON)` (app/models.py:3738).
 # For a post that already has a domain the flush raises
@@ -2867,13 +2874,23 @@ class TestUrlChangeYoutubeFixup:
 # three files in two subsystems, which this slice does not own.
 #
 # REACHABILITY IS NOT UNIFORM across the four writers, and the report's register
-# entry has the detail. In one line each: app/shared/post.py:577 is the worst
-# (`post.domain = domain` at `:570` runs BEFORE the dict, so `edit_post` crashes
-# for EVERY local post edited onto a notifying domain); `:3517`/`:3535` here are
-# peer-reachable but conditional (`post.domain = new_domain` is at `:3544`,
-# AFTER the dict, so only a post that already had a domain crashes); and
-# app/models.py:2075 is latent (`post.domain` is not assigned until `:2100`, so
-# a fresh post serialises None).
+# entry has the detail. In one line each:
+#
+#   - app/shared/post.py:577 is the worst, but NOT because it crashes for every
+#     local edit. `post.domain = domain` at `:570` runs BEFORE the dict, so the
+#     crash is not conditional on the post having HAD a domain -- that half is
+#     load-bearing. What it does need is a RECIPIENT, and only one of the two
+#     loops can supply one: `:590-598`'s admin loop reaches `:577`'s dict with
+#     any admin present, while `:580-589`'s mod loop cannot reach it at all
+#     (see the note in the report -- `:582` raises before the Notification is
+#     built, for its own separate reason). `:568-569` also raises for a BANNED
+#     domain before the dict is built, so it is the notifying-domain case that
+#     crashes and not the banned one;
+#   - `:3517`/`:3535` here are peer-reachable but conditional
+#     (`post.domain = new_domain` is at `:3544`, AFTER the dict, so only a post
+#     that already had a domain crashes);
+#   - app/models.py:2075 is latent (`post.domain` is not assigned until `:2100`,
+#     so a fresh post serialises None).
 # ---------------------------------------------------------------------------
 
 # A url on a domain that is NOT PEER, which is what makes `:3510`'s
@@ -3301,8 +3318,9 @@ class TestSuspiciousDomainTargetsSerialisation:
     banner for the register entry it belongs to, and the report's register entry
     for the reachability of the four writers -- app/shared/post.py:577 is the
     worst of them, because `post.domain = domain` at `:570` runs BEFORE the dict
-    at `:573`, so `edit_post` crashes for every local post edited onto a
-    notifying domain rather than only for one that already had a domain.
+    at `:573`, so `edit_post` does not need the post to have HAD a domain the
+    way this function does. It does still need a recipient, and only its admin
+    loop can supply one; the report says why.
 
     It is also what makes `:3517` and `:3535` pinnable at all. Without it the
     mutation `post.domain` -> `post.domain_id` survives everything: every other
