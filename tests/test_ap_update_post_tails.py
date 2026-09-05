@@ -2236,8 +2236,13 @@ def _thumbnail_is_fetched(http_mock, url):
     Technique (1) of this module's docstring, and this cluster is the one the
     docstring says technique (2) cannot serve: `:3504` carries no
     `get_setting('cache_remote_images_locally', True)` of its own -- verified
-    against current source, where the only gated call is the Event block's at
-    `:3396-3397` -- so turning that setting off leaves this call running.
+    against current source, where the only gated call INSIDE
+    `update_post_from_activity` is the Event block's at `:3396-3397` -- so
+    turning that setting off leaves this call running. Scoped to this function
+    deliberately: file-wide the same setting also gates `:764`, `:766`, `:1303`
+    and `:1305`, while `:937`, `:939`, `:1111`, `:1113`, `:1497`, `:1499`,
+    `:1689` and `:1691` reach `make_image_sizes` without consulting it at all.
+    So "the only gated call" is true of this function and false of the file.
 
     `_taken` above is this same 404 bundled with an IMAGE HEAD, which is what an
     `is_image_url`-true url needs. This is the half a non-image url needs alone,
