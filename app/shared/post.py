@@ -574,7 +574,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
                             'post_id': post.id,
                             'orig_post_title': post.title,
                             'orig_post_body': post.body,
-                            'orig_post_domain': post.domain,
+                            'orig_post_domain': post.domain.name,
                             'author_user_name': user.ap_id if user.ap_id else user.user_name
                             }
             if domain.notify_mods:

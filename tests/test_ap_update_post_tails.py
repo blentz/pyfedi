@@ -2883,19 +2883,37 @@ class TestUrlChangeYoutubeFixup:
 # `post.domain_id` and dropping the key is a pure behaviour decision spanning
 # three files in two subsystems, which this slice does not own.
 #
+# THAT ARBITRATION HAS SINCE BEEN MADE, for one of the four sites only.
+# Sub-project 18 (2026-09-05-coverage-shared-post-edit-18, task 5) fixed
+# app/shared/post.py:577 to `post.domain.name` on three reasons: (1) the three
+# sibling keys -- `orig_post_title` (`:575`), `orig_post_body` (`:576`),
+# `author_user_name` (`:578`) -- are all human-readable display values, so
+# `domain_id` would be the only opaque integer in a dict of display strings;
+# (2) the key has four writers and zero readers, so dropping it changes the
+# dict's SHAPE, and shape is what a future reader compares the four writers
+# against; (3) `post.domain` is non-None at `:577`, so `.name` cannot raise
+# there. `:3517`, `:3535` and app/models.py:2075 are outside that sub-project's
+# scoped file and STAY REGISTERED, with the argument above now travelling with
+# them.
+#
 # REACHABILITY IS NOT UNIFORM across the four writers, and the report's register
 # entry has the detail. In one line each:
 #
-#   - app/shared/post.py:577 is the worst, but NOT because it crashes for every
+#   - app/shared/post.py:577 WAS the worst, and IS NOW FIXED -- sub-project 18
+#     (2026-09-05-coverage-shared-post-edit-18, task 5) changed it to
+#     `post.domain.name`, and tests/test_shared_post_edit.py pins it. The
+#     reachability argument that made it the worst is kept here because it is
+#     what ranked the four writers, and it still ranks the three that remain.
+#     It was the worst NOT because it crashes for every
 #     local edit. `post.domain = domain` at `:570` runs BEFORE the dict, so the
-#     crash is not conditional on the post having HAD a domain -- that half is
-#     load-bearing. What it does need is a RECIPIENT, and only one of the two
+#     crash was not conditional on the post having HAD a domain -- that half is
+#     load-bearing. What it did need is a RECIPIENT, and only one of the two
 #     loops can supply one: `:590-598`'s admin loop reaches `:577`'s dict with
 #     any admin present, while `:580-589`'s mod loop cannot reach it at all
 #     (see the note in the report -- `:582` raises before the Notification is
 #     built, for its own separate reason). `:568-569` also raises for a BANNED
-#     domain before the dict is built, so it is the notifying-domain case that
-#     crashes and not the banned one;
+#     domain before the dict is built, so it was the notifying-domain case that
+#     crashed and not the banned one;
 #   - `:3517`/`:3535` here are peer-reachable but conditional
 #     (`post.domain = new_domain` is at `:3544`, AFTER the dict, so only a post
 #     that already had a domain crashes);
@@ -3329,11 +3347,15 @@ class TestSuspiciousDomainTargetsSerialisation:
     crash is known behaviour with a name rather than a surprise, and so that
     whoever repairs the defect has to come here and change it. See the cluster
     banner for the register entry it belongs to, and the report's register entry
-    for the reachability of the four writers -- app/shared/post.py:577 is the
+    for the reachability of the four writers -- app/shared/post.py:577 WAS the
     worst of them, because `post.domain = domain` at `:570` runs BEFORE the dict
-    at `:573`, so `edit_post` does not need the post to have HAD a domain the
-    way this function does. It does still need a recipient, and only its admin
-    loop can supply one; the report says why.
+    at `:573`, so `edit_post` did not need the post to have HAD a domain the
+    way this function does. It did still need a recipient, and only its admin
+    loop can supply one; the report says why. That site IS NOW FIXED --
+    sub-project 18 (2026-09-05-coverage-shared-post-edit-18, task 5) made it
+    `post.domain.name` and pinned it in tests/test_shared_post_edit.py. The
+    reachability argument is kept because it is what ranked the four writers,
+    and `:3517`/`:3535` here are still two of the three that remain.
 
     It is also what makes `:3517` and `:3535` pinnable at all. Without it the
     mutation `post.domain` -> `post.domain_id` survives everything: every other
