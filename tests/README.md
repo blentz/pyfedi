@@ -3295,6 +3295,50 @@ If a count is going into prose, say which property bounded the candidate set,
 and bound the claim to that scope explicitly rather than letting "every" read as
 "every, anywhere".
 
+**95. A CORRECTION TRAVELLING UPWARD -- into a committed file, or into a record
+nobody downstream will re-open -- is the least-checked claim in the exchange,
+because its reader is checking the correction's CLAIM and not its CITATION.**
+Fact 88 names this authority asymmetry from the receiving side and tells you to
+hold a reviewer's citations to an implementer's standard. This is the same
+asymmetry travelling the other way, and **direction of travel is what decides
+whether it gets caught**. Sub-project 16 produced **five** citation errors.
+**Four were caught, and every one because the agent receiving it had the source
+open anyway**: three of the four line numbers in one task review's findings; a
+review placing a production line at `app/activitypub/util.py:2935` when it was,
+and still is, at `:2931` (those two are the ones fact 88 records); an off-by-two
+repeated out of a controller's brief into a reviewer's; and seven of the eight
+citations in one finding of the final whole-sub-project review. **The fifth
+reversed direction and reached a committed docstring.** A fix wave reported that
+a published harness fact cited `tests/conftest.py:143` where the TRUNCATE was at
+`:142`, and wrote `:142` into a test file. `:143` was right and the fact was
+right. **The evidence that should have stopped it was already on the page:
+three independent artefacts -- fact 89, another citation in this same file, and
+a register cell -- all said `:143` and agreed with each other.** A correction
+that disagrees with N agreeing prior citations needs N-fold verification, not
+less. And **nobody downstream had a reason to re-open `tests/conftest.py`**,
+which is precisely why this was the one that landed.
+
+**The proximate cause is mechanical, and it is worth more than the principle.**
+`sed -n 'A,Bp'` prints content with **no line numbers**, so mapping the first
+printed line to A is off by one the moment the range opens on a blank line --
+which is what happened. `grep -n ''`, `awk '{printf "%d\t%s\n", NR, $0}'` and
+`cat -n` print the number beside the line and cannot fail this way. The same
+session had used `grep -n` correctly on `app/utils.py` minutes earlier, so
+**this is a tooling hazard rather than a competence one, and the remedy is a
+rule about the tool, not about care: never attribute a line number to output
+that did not print one.**
+
+The operational rule, in three steps. **(1)** Before writing a correction to an
+existing citation, re-read the target with a tool that prints line numbers.
+**(2)** Grep for every other citation of the same fact and state in the
+correction whether they agree -- **agreement among prior citations is evidence
+against you, not background noise.** **(3)** If the correction is going into a
+committed file rather than into a report, treat it as the highest-scrutiny claim
+in the change rather than the lowest, because it is the one with no downstream
+reader. Distinct from fact 82 (a correction does not correct its copies), which
+is about propagating a truth you already hold; here the correction was false and
+the copies were the check that was skipped.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
