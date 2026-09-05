@@ -371,3 +371,236 @@ def test_api_branch_leaves_flair_empty_when_neither_key_is_present(db_session):
 
     db.session.expire(s.post)
     assert list(s.post.flair) == []
+
+
+# ---------------------------------------------------------------------------
+# SRC_API: event and poll parsing, :284-314
+# ---------------------------------------------------------------------------
+
+
+def test_api_event_start_string_is_parsed_and_stripped_of_its_offset(db_session):
+    """:288-290. `.replace(tzinfo=None)` AFTER fromisoformat means a peer
+    offset is DISCARDED rather than converted: 09:00+05:00 is stored as 09:00,
+    not as 04:00 UTC.
+
+    The federated copy does the opposite. `app/activitypub/util.py:3375-3376`
+    parses startTime/endTime with a bare `fromisoformat` and keeps the value
+    aware, so the two editors disagree about what a peer's event time means.
+    """
+    s = _seed()
+    edit_post(_api_input(event={'start': '2030-06-01T09:00:00+05:00',
+                                'end': '2030-06-01T10:00:00+05:00'}),
+              s.post, POST_TYPE_EVENT, SRC_API, user=s.user)
+
+    event = Event.query.filter_by(post_id=s.post.id).first()
+    assert event is not None
+    assert event.start == datetime(2030, 6, 1, 9, 0)
+    assert event.start.tzinfo is None
+
+
+def test_api_event_start_that_is_already_a_datetime_passes_through(db_session):
+    """:291-292, the isinstance false arm -- the self-assignment."""
+    s = _seed()
+    naive = datetime(2030, 6, 1, 9, 0)
+    edit_post(_api_input(event={'start': naive, 'end': datetime(2030, 6, 1, 10, 0)}),
+              s.post, POST_TYPE_EVENT, SRC_API, user=s.user)
+
+    event = Event.query.filter_by(post_id=s.post.id).first()
+    assert event.start == naive
+
+
+def test_api_event_end_is_skipped_when_the_key_is_absent(db_session):
+    """:293, first conjunct false.
+
+    Not in the brief: with `end` unset, `event.end` stays None, and this
+    function's own federate step (:743, unconditional on `from_scratch`)
+    synchronously runs `send_post`, which for a POST_TYPE_EVENT post does
+    `ap_datetime(event.end)` (app/shared/tasks/pages.py:233) -- a crash on
+    None unrelated to what this test probes. `community.local_only = True`
+    makes :736 set `federate = False` before that call, so the parsing under
+    test still runs but the unrelated federate crash does not.
+    """
+    s = _seed()
+    s.community.local_only = True
+    db.session.commit()
+    edit_post(_api_input(event={'start': '2030-06-01T09:00:00Z'}),
+              s.post, POST_TYPE_EVENT, SRC_API, user=s.user)
+
+    event = Event.query.filter_by(post_id=s.post.id).first()
+    assert event.start == datetime(2030, 6, 1, 9, 0)
+
+
+def test_api_event_end_is_skipped_when_the_value_is_falsy(db_session):
+    """:293, second conjunct false. Present-but-None is a different arm from
+    absent, and neither reaches :294.
+
+    `community.local_only = True` for the same reason as the sibling test
+    above: `event.end` is None here too, and would otherwise crash the
+    federate call at :743 on an unrelated line.
+    """
+    s = _seed()
+    s.community.local_only = True
+    db.session.commit()
+    edit_post(_api_input(event={'start': '2030-06-01T09:00:00Z', 'end': None}),
+              s.post, POST_TYPE_EVENT, SRC_API, user=s.user)
+
+    event = Event.query.filter_by(post_id=s.post.id).first()
+    assert event.start == datetime(2030, 6, 1, 9, 0)
+
+
+def test_api_event_end_that_is_already_a_datetime_passes_through(db_session):
+    """:296-297, the isinstance false arm for `end`."""
+    s = _seed()
+    naive = datetime(2030, 6, 1, 10, 0)
+    edit_post(_api_input(event={'start': '2030-06-01T09:00:00Z', 'end': naive}),
+              s.post, POST_TYPE_EVENT, SRC_API, user=s.user)
+
+    event = Event.query.filter_by(post_id=s.post.id).first()
+    assert event.end == naive
+
+
+def test_api_event_block_is_skipped_when_there_is_no_event_key(db_session):
+    """:285-286, false arm. `input.get('event', None)` is the API dict's only
+    `.get` -- the surrounding reads all subscript."""
+    s = _seed()
+    edit_post(_api_input(), s.post, POST_TYPE_ARTICLE, SRC_API, user=s.user)
+
+    assert Event.query.filter_by(post_id=s.post.id).first() is None
+
+
+def test_api_poll_defaults_every_field_when_only_choices_are_given(db_session):
+    """:303-307. All three `.get` defaults at once.
+
+    Not in the brief: with no `end_poll`, `poll.end_poll` stays None, and
+    this function's federate step (:743) synchronously runs `send_post`,
+    which for a POST_TYPE_POLL post does `ap_datetime(poll.end_poll)`
+    (app/shared/tasks/pages.py:224) -- a crash on None unrelated to what this
+    test probes. `community.local_only = True` makes :736 set
+    `federate = False` first, so the parsing under test still runs but the
+    unrelated federate crash does not.
+    """
+    s = _seed()
+    s.community.local_only = True
+    db.session.commit()
+    edit_post(_api_input(poll={'choices': [{'choice_text': 'yes', 'sort_order': 1},
+                                           {'choice_text': 'no', 'sort_order': 2}]}),
+              s.post, POST_TYPE_POLL, SRC_API, user=s.user)
+
+    poll = Poll.query.filter_by(post_id=s.post.id).first()
+    assert poll is not None
+    assert poll.mode == 'single'
+    assert poll.local_only is False
+    assert sorted(c.choice_text for c in
+                  PollChoice.query.filter_by(post_id=s.post.id).all()) == ['no', 'yes']
+
+
+def test_api_poll_takes_supplied_mode_and_local_only(db_session):
+    """:304-305, the non-default arms."""
+    s = _seed()
+    edit_post(_api_input(poll={'mode': 'multiple', 'local_only': True,
+                               'choices': [{'choice_text': 'a', 'sort_order': 1}]}),
+              s.post, POST_TYPE_POLL, SRC_API, user=s.user)
+
+    poll = Poll.query.filter_by(post_id=s.post.id).first()
+    assert poll.mode == 'multiple'
+    assert poll.local_only is True
+
+
+def test_api_poll_end_is_skipped_when_the_key_is_absent(db_session):
+    """:308, first conjunct false.
+
+    `community.local_only = True` for the reason documented on
+    `test_api_poll_defaults_every_field_when_only_choices_are_given` above:
+    `poll.end_poll` is None here too, and the federate call at :743 would
+    otherwise crash on an unrelated line.
+    """
+    s = _seed()
+    s.community.local_only = True
+    db.session.commit()
+    edit_post(_api_input(poll={'choices': [{'choice_text': 'a', 'sort_order': 1}]}),
+              s.post, POST_TYPE_POLL, SRC_API, user=s.user)
+
+    assert Poll.query.filter_by(post_id=s.post.id).first().end_poll is None
+
+
+def test_api_poll_end_is_skipped_when_the_value_is_falsy(db_session):
+    """:308, second conjunct false.
+
+    `community.local_only = True` for the same reason as the sibling test
+    above: `poll.end_poll` is None here too.
+    """
+    s = _seed()
+    s.community.local_only = True
+    db.session.commit()
+    edit_post(_api_input(poll={'end_poll': None,
+                               'choices': [{'choice_text': 'a', 'sort_order': 1}]}),
+              s.post, POST_TYPE_POLL, SRC_API, user=s.user)
+
+    assert Poll.query.filter_by(post_id=s.post.id).first().end_poll is None
+
+
+def test_api_poll_end_that_is_already_a_datetime_passes_through(db_session):
+    """:311-312, the isinstance false arm."""
+    s = _seed()
+    naive = datetime(2030, 6, 1, 12, 0)
+    edit_post(_api_input(poll={'end_poll': naive,
+                               'choices': [{'choice_text': 'a', 'sort_order': 1}]}),
+              s.post, POST_TYPE_POLL, SRC_API, user=s.user)
+
+    assert Poll.query.filter_by(post_id=s.post.id).first().end_poll == naive
+
+
+def test_api_poll_end_string_is_converted_to_utc_preserving_the_instant(db_session):
+    """:309-310. THE D297 PROBE, and the reason this cluster exists.
+
+    :310 is `datetime.fromisoformat(...replace('Z', '+00:00'))` with NO
+    `.replace(tzinfo=None)` -- unlike its two siblings at :290 and :295. So it
+    yields an AWARE datetime, and writes it into `Poll.end_poll`, which is
+    `db.Column(db.DateTime)` -- TIMESTAMP WITHOUT TIME ZONE (app/models.py:3782).
+
+    The federated copy does not parse at all: `app/activitypub/util.py:3338` is
+    `poll.end_poll = request_json['object']['endTime']`, the raw string (D290).
+
+    This test records what the write ACTUALLY does, measured, not argued.
+
+    MEASURED (D297): `2030-06-01T12:00:00+05:00` in, `2030-06-01 07:00:00`
+    (naive) out -- the brief's SECOND outcome, not its first. The driver did
+    not merely drop the offset and keep the wall-clock digits (which would
+    have stored hour 12, tzinfo None, the same lossy shape as :290/:295) --
+    it converted the aware value to UTC and only then dropped the tzinfo,
+    storing hour 7. So the local editor and the federated editor
+    (app/activitypub/util.py:3338, which stores the raw string unparsed) now
+    disagree about the *instant* a peer's poll ends, not merely about how
+    that instant is represented.
+
+    THE CONTRAST WITH EVENTS, same SRC_API branch, same input offset
+    (+05:00), same 3-hour gap between the two siblings' code and this one's:
+    `test_api_event_start_string_is_parsed_and_stripped_of_its_offset` feeds
+    `09:00:00+05:00` through :288-290 and gets back hour 9 -- the wall-clock
+    digits survive, the instant does not. This test feeds `12:00:00+05:00`
+    through :309-310 and gets back hour 7 -- the instant survives, the
+    wall-clock digits do not. The only code difference between the two sites
+    is that :290 ends in `.replace(tzinfo=None)` and :310 does not -- one
+    `.replace` call is the entire reason events and polls, edited through the
+    same function, disagree with each other about what a peer's aware
+    timestamp means, before either is compared against its own federated
+    twin.
+    """
+    s = _seed()
+    edit_post(_api_input(poll={'end_poll': '2030-06-01T12:00:00+05:00',
+                               'choices': [{'choice_text': 'a', 'sort_order': 1}]}),
+              s.post, POST_TYPE_POLL, SRC_API, user=s.user)
+
+    stored = Poll.query.filter_by(post_id=s.post.id).first().end_poll
+    assert stored.tzinfo is None, 'psycopg2 strips tzinfo on the way into a naive column'
+    assert stored == datetime(2030, 6, 1, 7, 0), (
+        'the driver converted 12:00+05:00 to its 07:00 UTC equivalent before '
+        'stripping tzinfo, rather than keeping the wall-clock digits 12:00')
+
+
+def test_api_poll_block_is_skipped_when_there_is_no_poll_key(db_session):
+    """:300-301, false arm."""
+    s = _seed()
+    edit_post(_api_input(), s.post, POST_TYPE_ARTICLE, SRC_API, user=s.user)
+
+    assert Poll.query.filter_by(post_id=s.post.id).first() is None
