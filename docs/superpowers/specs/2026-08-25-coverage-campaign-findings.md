@@ -1461,10 +1461,11 @@ says which numbers are taken. So there is one now, and it is this file:
   source different from how the review described them, and both corrections
   are recorded in the entries rather than applied silently**; that is the same
   discipline D209 records for a falsified spec claim.
-  **Next free number: D283.** D232-D235 were taken by sub-project 13's final
+  **Next free number: D284.** D232-D235 were taken by sub-project 13's final
   fix wave; D236-D251 by sub-project 14 and D252-D259 by that sub-project's own
   final fix wave; D260-D269 by sub-project 15 and D270-D273 by that
-  sub-project's own final fix wave; and D274-D282 by sub-project 16, whose
+  sub-project's own final fix wave; and D274-D282 by sub-project 16, with
+  **D283 by that sub-project's own final fix wave**, whose
   section is the last in this file.
   If you take it, say so here in the change that takes it.
 
@@ -3992,10 +3993,10 @@ which was tests, docstrings, comments and this register only.
 | D165 | `resolve_remote_handle` (`app/activitypub/routes.py:466-491`) | **Not fixed -- two of its own three guards are uncovered, despite this sub-project's report describing them as pinned.** `tests/test_remote_handle_resolution.py`'s four tests cover only the anonymous-caller guard (`:484-485`) and the exception-to-404 path (`:490-491`). The `'@' not in actor` guard (`:482-483`) is unreached: all four tests request `/u/wakko@mastodon.cloud`, a handle that always contains `@`. The AP-Accept guard (`:486-487`) is also unreached: `test_activitypub_request_does_not_resolve` sends the AP-Accept header but never authenticates, so it returns at the anonymous-caller guard (`:484-485`) before line `:486` is ever asked to branch true -- deleting the AP-Accept guard entirely would leave that test's `assert calls == []` green. Two cheap closures: the AP-Accept guard needs a test that logs in via `session_transaction()` **before** its first request (harness fact 37, `tests/README.md` -- a test cannot authenticate after an earlier request in the same test, because Flask-Login caches the loaded user on the app-context-scoped `g` for the life of the session-scoped `app` fixture) and then sends the AP-Accept header; the `'@' not in actor` guard needs one of Task 10's guard tests (`test_a_deleted_user_profile_is_not_served`, `test_a_banned_user_profile_is_not_served`) to stop stubbing `resolve_remote_handle` to `None` via `_double_the_renderers` and instead let it run for real against a bare (no `@`) actor name -- safe, because a bare name returns `None` at the first guard and never reaches `search_for_user`. | not fixed, registered only | reading-level plus measured: `scratch_full_cov.json`'s `app/activitypub/routes.py` entry lists `483` and `487` in `missing_lines` and `[482, 483]`/`[486, 487]` in `missing_branches`; `tests/test_remote_handle_resolution.py`'s four tests read directly, confirming all four target a handle containing `@` and that the AP-Accept test never authenticates |
 | D166 | webfinger's User lookup (`app/activitypub/routes.py:117-120`) vs. `user_profile`'s local lookup (`:376`) | **Not fixed -- a fourth lookup asymmetry, on a column D158 did not name.** Webfinger matches `func.lower(User.user_name) == actor` **or** `func.lower(User.alt_user_name) == actor` (`:117-120`). `user_profile`'s bare-username local lookup matches only `func.lower(User.user_name) == actor.lower()` (`:376`) -- `alt_user_name` plays no part. So a user reachable by their alt name via webfinger 404s at `/u/<altname>`, the same class of cross-endpoint disagreement D158 registers for the `deleted`/`banned` guards, but on a different column entirely; `alt_user_name` appeared nowhere in this register before this entry. | not fixed, registered only | reading-level: `app/activitypub/routes.py:117-120` and `:376` read directly, side by side; no test in this sub-project or `tests/test_actor_profiles.py` drives a user with a distinct `alt_user_name` through both endpoints to observe the divergence, so this is derived from reading, not measured |
 
-**Next free number: D283.** D165 and D166 were taken by this fix wave;
+**Next free number: D284.** D165 and D166 were taken by this fix wave;
 D167-D186 were taken by sub-project 10, D187-D199 by sub-project 11, D200-D212
 by sub-project 12, D213-D235 by sub-project 13, D236-D259 by sub-project 14,
-D260-D273 by sub-project 15 and D274-D282 by sub-project 16
+D260-D273 by sub-project 15 and D274-D283 by sub-project 16
 -- see the seven sections immediately below; D232-D235 were taken by
 sub-project 13's final fix wave and live in subsection 6 of its section,
 D252-D259 by sub-project 14's final fix wave and live in subsections 4 and 5 of
@@ -4007,8 +4008,10 @@ fixes and updated in place in sub-project 14's section the same way.
 **Sub-project 16 renumbered, moved and edited nothing**; its subsection 5 is an
 INDEX of the unguarded-peer-input family -- seventeen existing entries spanning
 sub-projects 14, 15 and their fix waves, listed with their sites read at that
-commit -- and it takes no number of its own. If you
-take D283, say so here in the change that takes it.
+commit -- and it takes no number of its own. **Its final fix wave took D283**
+and extended that index's rejection partition to D236-D283, again without
+renumbering, moving or editing any existing entry. If you
+take D284, say so here in the change that takes it.
 
 ## Sub-project 10: the nine ActivityPub collection endpoints
 
@@ -4861,7 +4864,7 @@ cross-reference is for.
 | D258 | `update_post_from_activity`'s title handling (`app/activitypub/util.py:3183-3188`) | **Not fixed -- `"name": null` raises `AttributeError: 'NoneType' object has no attribute 'upper'`, and the pair guards `content is not None` while guarding nothing on `name`.** `'name' in request_json['object']` (`:3161`) is a membership test that `{"name": null}` satisfies, so `new_title = None` (`:3162`); `old_title != new_title` is then True for any post that has a title, `post.title = new_title` sets the title to `None` **in memory first** (`:3184`), and `new_title.upper()` (`:3185`) raises. **The contrast with D237 is the finding.** Both functions were taught to check `request_json['object']['content'] is not None` (`:3011`, `:3140`) because peers send a null content -- and the null-check was never extended to the sibling field twenty lines below, which peers null for the same reason: a Mastodon status has no `name`, and a peer normalising its `Update` shape emits `"name": null` rather than omitting the key. **Post-only**: the reply function has no title. Not fixed because this wave is documentation-only, and because the repair carries a real choice: appending `and request_json['object']['name'] is not None` sends a null `name` down the `else` branch, which autogenerates a microblog title from the body and sets `post.microblog = True` -- a materially different post from the one the peer described, and a contract question rather than a guard. **Note the in-memory `post.title = None` at `:3184` before the raise.** There is no commit between the two inside this function, so this function persists nothing; whether it becomes visible depends on the caller's session handling, and there are four call sites (`app/activitypub/routes.py:1264`, `:2330`, `:2345`, `app/activitypub/util.py:4317`) plus `app/post/routes.py:2256`. **Cost if wrong: a null `name` loses an `Update`, with a possible nulled title depending on the caller.** | not fixed, registered only | reading-level plus interpreter-checked at this commit: `:3160-3181` read to establish that `new_title` takes the raw value with no coercion on either branch, `:3183-3188` read for the three `.upper()` calls, and the five call sites listed by grep; `None.upper()` confirmed to raise `AttributeError`. Not covered -- every `name` in `tests/test_ap_update_pair.py` is a string, and `test_a_post_with_no_name_autogenerates_a_microblog_title` **omits the key** rather than nulling it, which is the case that does not crash |
 | D259 | `update_post_reply_from_activity`'s attachment loop (`app/activitypub/util.py:3045-3054`) | **Not fixed -- a non-string SCALAR *entry* inside an `attachment` LIST raises `TypeError` at `if 'href' in attachment` (`:3047`).** `"attachment": [1]` passes the `isinstance(…, list)` arm (`:3043-3044`), so `attachment_list` is `[1]`, and `'href' in 1` raises `TypeError: argument of type 'int' is not iterable`; the same holds for `null`, a bool and a float. **A STRING entry does not crash** -- `'href' in "https://example/i.png"` is a *substring* test returning `False` (this slice's fact 71), so all three `in` checks miss, `url` stays `''`, and the entry is silently dropped. **D251 is a different case and this entry does not correct it.** D251 is a scalar at the **top level** of `attachment`, which matches neither `isinstance` arm (`:3041-3044`), leaves `attachment_list` at `[]` and never enters the loop; this is a scalar **entry inside a well-formed list**, which does enter it. One is a benign no-op, the other is a crash -- which is exactly why D251 is a coverage gap and this is a register entry of the D236 family. Not fixed because this wave is documentation-only and because the choice -- skip the entry, skip the loop, or accept a bare string entry as a url, which the substring behaviour currently *almost* does by accident -- is behaviour nothing in the file selects. The post function has no attachment handling in the scoped region, so there is still no sibling to vote (D251's reason, unchanged). **Cost if wrong: one wrongly-typed element in an otherwise valid `attachment` list loses the whole `Update`.** | not fixed, registered only | reading-level plus interpreter-checked at this commit: the two `isinstance` arms (`:3041-3044`) and the loop body (`:3045-3054`) read; `'href' in` confirmed to raise `TypeError` for `1`, `None`, `True` and `1.5`, and to return `False` without raising for a string. Not covered -- `test_a_reply_single_attachment_dict_is_appended`, `test_a_reply_attachment_list_is_appended_in_order` and the four other attachment tests supply dict entries only |
 
-**Next free number: D283.** D236-D251 were taken by sub-project 14's twelve
+**Next free number: D284.** D236-D251 were taken by sub-project 14's twelve
 tasks; **D252-D259 were taken by its final fix wave** -- D252-D254 discharging
 the three asymmetry-table rows that were pinned but never decided, D255-D259
 registering five peer-reachable crashes inside the scoped region that the
@@ -4880,12 +4883,15 @@ sub-project 16**, whose subsection 5 indexes the unguarded-peer-input family
 this section named -- seventeen entries, **eleven of them registered here**:
 D236, D237 and D238 in subsection 1, D245, D246 and D247 in subsection 2, and
 D255-D259 in the table immediately above -- without renumbering, moving or
-editing any of them.
+editing any of them. **D283 was then taken by that sub-project's final fix
+wave**, which added a third equivalent-mutant entry to the family index's
+rejection list and re-derived the partition to D236-D283 -- again editing no
+entry of this section.
 (The closing sentence of this note read "If you take D260" until sub-project 16
 updated it; that was a stale number left behind when the note's own header was
 advanced, not a record of anything that was once true, so it is corrected in
 place rather than appended to.)
-If you take D283, say so here in the change that takes it.
+If you take D284, say so here in the change that takes it.
 
 **Ten shapes worth carrying forward from this sub-project's rulings, now in
 `tests/README.md` as facts 71-80 plus a corollary appended to fact 55:** `in`
@@ -5149,7 +5155,7 @@ names across every function in the campaign's scope, not the entry's.**
 | D272 | `create_post_reply`'s `contentMap` fallback (`app/activitypub/util.py:2650-2651`), the **SECOND copy of D255**, which scopes itself "post-only" | **Not fixed -- `next(iter(request_json['object']['contentMap']))` raises `StopIteration` on an EMPTY `contentMap`.** `"contentMap": {}` satisfies both conjuncts of the guard on the line above (`:2650`) -- `'contentMap' in request_json['object']` **and** `isinstance(..., dict)` -- and `next(iter({}))` then raises, there being no default argument. `create_post_reply` is an ordinary function, not a generator, so the `StopIteration` propagates out unconverted. **The join this slice failed to make, and it is the reason this entry exists rather than an appended note.** D253's own **CORRECTION**, written by sub-project 15, quotes this exact line -- `language = find_language(next(iter(request_json['object']['contentMap'])))` at `:2644-2655` -- to prove the `contentMap` asymmetry is three-way rather than two-way; D253's body, five sentences earlier, calls the post copy "itself a live crash (**D255**, `StopIteration` on `"contentMap": {}`)". The slice wrote both sentences, about the same line, in the same cell, and did not notice that the copy it had just found carries the crash the cell had just named. **D255's "post-only" claim is CORRECTED by this entry as to the crash's scope and CONFIRMED as to its mechanism**: the reply *update* function still has no `contentMap` arm (D253), so "post-only" was true of the pair D255 was comparing and false of the file. (D255 cites the post site as `:3200-3201`; at this commit it reads `:3203-3204`, the same three-line shift, and **D255's numbers are left as written** for the reason given in D270.) Not fixed for D255's reason unchanged: `next(iter(…), None)` would hand `find_language(None)` a `None` code and thereby *decide* that an empty `contentMap` means "no language", which nothing in the file says -- and here that decision is visible, because `language_id = language.id if language else None` (`:2652`) would quietly persist a null language rather than raise. **Cost if wrong: a two-character peer document kills every reply `Create`, not only every post `Update`.** | not fixed, registered only | reading-level plus interpreter-checked at this commit: the guard at `:2650` and the subscript at `:2651` read; `next(iter({}))` confirmed to raise `StopIteration`; the tail `try` located at `:2700`, below the raise. Not covered -- `test_a_non_dict_content_map_is_ignored_in_favour_of_site_language_id` sends a **string**, which fails the `isinstance` conjunct, and all four dict-carrying `contentMap` tests send exactly one key; no test in the module sends an empty dict. The `else None` arm at `:2652` is now pinned by `test_a_content_map_naming_an_unknown_language_leaves_the_reply_unlanguaged`, which reaches `find_language` returning None by a MISS rather than by an empty map, and so does not reach this crash |
 | D273 | `create_post_reply`'s flair block (`app/activitypub/util.py:2691-2699`) -- **no precedent entry, and no sibling either: neither update function writes a `UserFlair`.** (`update_post_from_activity` does carry a block spelled "flair", `:3257-3264`, but it clears and rebuilds `post.flair` -- community post-flair tags resolved through `find_flair_or_create` -- which is a different entity from the per-user, per-community `UserFlair` row this block writes. Same word, different table; the two must not be compared.) | **Not fixed -- `request_json['object']['flair'].strip()` (`:2698`) raises `AttributeError` for a TRUTHY NON-STRING flair, and the sibling branch nine lines up assigns the same value with neither `.strip()` nor a type check.** The block's guard is `'flair' in request_json['object'] and request_json['object']['flair']` (`:2691`) -- membership plus truthiness, no type check -- so `"flair": 123`, `"flair": true` and `"flair": ["gold"]` all enter it. Which of the two branches runs is decided by whether a `UserFlair` row already exists for this user in this community (`:2692-2694`): the **create** branch strips (`:2698`) and the **update** branch assigns raw (`:2695`). Two consequences, and the second is the more interesting: **(1)** a truthy non-string crashes the whole `Create` when the user has no flair here yet and does not crash on `.strip()` when they do; **(2)** for an ordinary padded STRING, `"flair": "  gold  "` is stored as `gold` on first arrival and as `  gold  ` on every subsequent one -- **an asymmetry between two branches of a single `if`/`else`, which is a narrower thing than every other asymmetry in this register and is exactly why the pair-comparison method could not see it.** It has been recorded since Task 7, but only in the docstrings of `test_a_flair_on_a_user_with_none_creates_a_user_flair_row` and `test_a_flair_on_a_user_with_an_existing_flair_updates_it`, where each names the other's spelling to keep the two fixtures distinguishable -- a true observation, correctly attributed, with no register entry behind it. Not fixed because the two candidate repairs choose behaviour: stripping in both branches changes what a re-sent padded flair persists, and type-guarding the block decides whether a non-string flair is dropped or fails the whole `Create`, neither of which the file states. **Cost if wrong: a non-string flair loses an entire reply `Create` for first-time flair-setters only, and a padded flair means two different stored values depending on whether the sender has posted in that community before.** | not fixed, registered only | reading-level plus interpreter-checked at this commit: the guard at `:2691`, the branch split at `:2694`, the raw assignment at `:2695` and the stripped one at `:2698` read; `.strip()` confirmed to raise `AttributeError` for `123`, `True` and `['gold']`; the tail `try` located at `:2700`, below both branches. Not covered -- the four flair tests in `tests/test_ap_create_reply.py` send `'  gold  '`, `'gold'`, no key at all, and `''`; none sends a truthy non-string. The strip asymmetry itself IS pinned, by the padded value in the create test and the unpadded one in the update test -- **covered but unregistered**, sub-project 14's "a row covered by a test is not a row discharged" reaching a fourth case |
 
-**Next free number: D283.** D260-D269 were taken by sub-project 15 --
+**Next free number: D284.** D260-D269 were taken by sub-project 15 --
 D260 the declined fix, D261 the one defect fixed here, D262-D265 four
 registrations, and D266-D269 the four asymmetry-table rows that needed
 entries -- and **D270-D273 by its final fix wave**, four unregistered
@@ -5169,7 +5175,7 @@ were still exact, and only the update-path entries in sub-project 14's section
 had drifted, uniformly by the three lines this slice's own fixes inserted above
 them. **D261 is in the index as the third copy of D237's `"content": null`
 crash**, which is the same "a third copy of an already-registered defect" shape
-this section records for D270-D272 and is the reason the index exists. If you take D283, say so here in the change that takes it.
+this section records for D270-D272 and is the reason the index exists. **D283 was taken by sub-project 16's final fix wave**, which added it to that index's rejection list; none of this section's entries was touched by it. If you take D284, say so here in the change that takes it.
 
 **Six shapes worth carrying forward from this sub-project's rulings, now in
 `tests/README.md` as facts 81-86 plus a corollary appended to fact 56 -- and a
@@ -5523,16 +5529,28 @@ corruption", and D259 and D264 each already say so; **D263** is a *handler* that
 swallows crashes rather than a read that causes one; **D241, D242, D244,
 D248, D249, D250, D252-D254, D262, D265-D269** describe asymmetries,
 convergence questions and dead code with no exception between them; and
-**D274-D282**, this sub-project's own nine, are in scope because they are
+**D274-D283**, this sub-project's own ten, are in scope because they are
 `notify_about_post_task` and `create_post` and are rejected one by one --
 **D274**'s `TypeError` is a crash but the NULL it reads comes from a *database
 column a migration left unfilled*, not from a peer document, which is D240's
 distinction on a different source; **D275** is a misplaced `add` with no read in
 it; **D276-D279** are filter-set, transaction and locking asymmetries that raise
-nothing; and **D280-D282** are a reachability verdict, two equivalent mutants and
-an observation about an import. **The list is now arithmetically checkable, which
-is the point of writing it out:** 17 members + 30 rejections = 47 = D236 through
-D282 inclusive, every entry in the declared scope accounted for exactly once. It
+nothing; **D280-D282** are a reachability verdict, two equivalent mutants and
+an observation about an import; and **D283**, added by the final fix wave, is a
+third equivalent mutant -- an identity between two spellings of one integer,
+with no peer-supplied read in it at all. **The list is now arithmetically
+checkable, which is the point of writing it out:** 17 members + 31 rejections =
+48 = D236 through D283 inclusive, every entry in the declared scope accounted
+for exactly once. (**Extended in place by the final fix wave, which took D283,
+whose function -- `notify_about_post_task` -- is inside this index's declared
+scope; "D236 through D282 inclusive" would otherwise have become a false
+completeness claim the day D283 landed. The count was RE-DERIVED rather than
+incremented**: the seventeen members re-read off the table below, the
+thirty-one rejections off this paragraph, then checked against D236-D283 for
+overlap, gaps and out-of-range numbers -- none of the three, and the partition
+holds. **That re-derivation is fact 94 applied to this paragraph's own
+arithmetic**, which is where a completeness claim is likeliest to be
+incremented without being re-checked.) It
 is **not**
 a complete count over the register as a whole: the shape predates the family's
 name by a dozen sub-projects -- `find_community`'s `a['type']`/`a['id']` walk
@@ -5578,15 +5596,38 @@ two are the open question. **Recorded as a candidate with its reachability
 unresolved, because the alternative is a silent omission and this file's own
 rule is that a denial forecloses the search a question keeps open.**
 
-**Next free number: D283.** D274-D282 were taken by sub-project 16 -- D274 the
+### 6. Added by the final fix wave -- D283
+
+The whole-sub-project review found one Important defect in the tests: the
+`NOTIF_USER` arm's happy path asserted its whole `targets` dict, including
+`'post_id': post.id`, on a scenario where `_seed_scenario` gives Community and
+Post the same primary key -- so mutating `'post_id': post.id` to
+`post.community_id` left **all 34 tests passing**. That is fact 89's shape at a
+fourth site, and the three arms below it had each been retrofitted against it
+while this one, written before the discovery, had not. **The fix is a test
+change and takes no number.** What takes a number is what the sweep that
+proved the fix turned up beside it.
+
+| # | function | defect | status | evidence |
+|---|---|---|---|---|
+| D283 | `notify_about_post_task`'s `NOTIF_USER` arm, the `'author_id': post.user_id` entry of `targets_data` (`app/activitypub/util.py:2832`), against the `author` binding at `:2812` | **Not a defect -- a THIRD provable equivalent mutant in this function, and the first found by a sweep rather than met by accident.** Substituting `author.id` for `post.user_id` at `:2832` cannot be killed by any test, because `author` is bound twenty lines above as `author = session.query(User).get(post.user_id)` (`:2812`) and is never reassigned. Established by scanning the whole region rather than by not noticing a rebind: `awk 'NR>=2804 && NR<=2936 && /author/'` returns nine lines -- the comment at `:2811`, the binding at `:2812`, this dict's two keys (`:2832`, `:2833`), and five `author_id=` column keywords (`:2835`, `:2858`, `:2887`, `:2889`, `:2923`). **The only assignment is `:2812` and the only read of the local is `:2833`**; every other occurrence is a dict key or a column name that happens to contain the word. **The two expressions are therefore the same integer on every reachable path, and no arrangement of seeded primary keys can separate them**, which is the distinction that matters: the sibling substitutions in the same dict ARE killable and were made so, and this one is not killable by anything. **Why this is registered rather than left in a fix report.** It was found while discharging the final review's one Important finding -- that `targets['post_id']` was silently vacuous because `_seed_scenario` gives Community and Post the same primary key (fact 89) -- by sweeping **every** id-valued key in the arm against **every** other id in scope rather than only the one the review named. That sweep is 12 mutants over two keys: eleven are sole kills of `test_a_subscriber_to_the_author_is_notified` and the twelfth is this one. **A future slice mutating this arm will otherwise rediscover it from scratch and, worse, may read the survivor as a coverage gap and write a test that cannot exist.** That is the same service D280 performs for the topic lookup's unreachable branch and D281 for the tail handler's two statements. **The generalisable half: a local bound from an expression is not an independent id, and a `targets` dict that carries both is carrying one value twice.** `community` is bound the same way, once for the whole function, at `:2815` (`community = session.query(Community).get(post.community_id)`), so `'community_id': post.community_id` -> `community.id` at `:2856` -- the NOTIF_COMMUNITY arm's dict, the only `'community_id'` entry in the function -- **is predicted to be the same equivalent mutant, and is recorded here as unswept rather than as measured.** Note it is a *different* mutation from the one sub-project 16 measured on that key: `'community_id': post.community_id` -> `post.id` dies, and did the work of exposing fact 89. | not a defect, equivalence recorded | measured, not reasoned: 21 mutations applied by line address to `app/activitypub/util.py` and each run against the whole 34-test file -- six substitutions of `'post_id': post.id` (`:2829`), six of `'author_id': post.user_id` (`:2832`), three of `'post_title'` (`:2830`) and six over the two name-valued ternaries (`:2831`, `:2833`). **20 died -- 14 of them sole kills of `test_a_subscriber_to_the_author_is_notified` and 6 multi-kills across the four `community_name`/`author_user_name` tests -- and this one alone returned 34 passed.** `app/activitypub/util.py` restored and `git diff -- app/` confirmed empty after every one. The seeded ids that make the other eleven killable are `community.id 1`, `author.id 2`, `subscriber.id 3`, `post.id 4`, verified by temporarily asserting the tuple rather than reasoned from factory order |
+
+**Next free number: D284.** D274-D283 were taken by sub-project 16 -- D274 the
 NULL `unread_notifications` hazard, D275 the one defect fixed, D276-D279 four
-registrations and D280-D282 three findings that are not production defects.
+registrations, D280-D282 three findings that are not production defects, and
+**D283 the final fix wave's equivalent mutant, in subsection 6 above**.
 **No earlier entry was renumbered, moved or edited by this sub-project**, and
 the family index in subsection 5 above takes no number: it lists **seventeen**
 existing entries with their sites read at this commit, and records that the
 plan which commissioned it counted thirteen where its own enumeration held
 fourteen and omitted D273, and that the index's own first draft then omitted
-D237 and D261 until its review caught them. If you take D283, say so here in the change that
+D237 and D261 until its review caught them. **The final fix wave changed two
+things in that index and nothing else: it added D283 to the rejection list --
+D283's function, `notify_about_post_task`, is inside the index's declared
+scope, so leaving it out would have made the completeness claim false -- and
+re-derived the partition from 17 + 30 = 47 (D236-D282) to 17 + 31 = 48
+(D236-D283), checked for overlap, gaps and out-of-range numbers rather than
+incremented.** If you take D284, say so here in the change that
 takes it.
 
 **Nine shapes carried forward into `tests/README.md`, seven as new facts 88-94
@@ -5627,6 +5668,26 @@ reviewer used here: an **AST walk** (`ast.parse` -> `IfExp` inside the
 `FunctionDef` nodes, extents from `end_lineno`) finds ternaries hidden in dict
 literals, f-strings, comprehensions and argument defaults that a textual
 `' if .* else '` grep misses.
+
+**Appended by the final fix wave, not folded into the sentence above, which was
+true when written: a TENTH shape, fact 95, bringing the new facts to 88-95.**
+The fix wave produced one shape of its own, and it is about the fix wave's own
+failure mode rather than about the code: **a correction travelling UPWARD --
+into a committed file, or into a record nobody downstream will re-open -- is
+the least-checked claim in the exchange, because its reader is checking the
+correction's claim and not its citation.** Sub-project 16 produced five
+citation errors; the four that were caught were all caught by an agent who had
+the source open anyway, and the fifth was a correction of a cell that was
+RIGHT -- this fix wave reported fact 89's `tests/conftest.py:143` as an
+off-by-one and wrote `:142` into a test docstring, against three independent
+artefacts that cited `:143` and agreed with each other. Corrected at
+`9005a671`. **This is the sibling of fact 94, not a restatement of fact 88**:
+88 is about who is fallible and is written for the receiver of a review; 94 is
+about how a set is enumerated; 95 is about which direction of travel has no
+reader positioned to catch it. Its proximate cause is mechanical and is the
+transferable half -- **`sed -n 'A,Bp'` prints no line numbers, so mapping the
+first printed line to A is off by one whenever the range opens on a blank
+line**, where `grep -n ''`, `awk` with `NR` and `cat -n` cannot fail that way.
 
 ## Ratchet gotchas
 
