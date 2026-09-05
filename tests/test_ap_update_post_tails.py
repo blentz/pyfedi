@@ -51,10 +51,16 @@ Technique (2) only works for the Event tail: the setting gates the call at
 arm at `:3504`, which runs whenever that arm builds an image. So this file
 standardises on TECHNIQUE (1) -- it works at both call sites, and
 `assert_all_called=True` turns the registered 404 into positive evidence that
-the image path was entered. The `Video` cluster in this file never reaches
-either call site: it returns at `:3308-3309` before the Links section, and the
-block itself creates no `File`. So no test here registers an image route; the
-guidance above is for the later tails.
+the image path was entered. The `Video` cluster never reaches either call site:
+it returns at `:3308-3309` before the Links section, and the block itself
+creates no `File`. Nor does the `Question` cluster: its four returns at
+`:3320`, `:3337`, `:3353` and `:3368` all precede the `Event` block at `:3372`.
+
+Technique (2) appears exactly once, in
+`TestEventBlock::test_the_banner_is_stored_when_remote_image_caching_is_off`,
+and only because exercising `:3396` on its False side is what that test is for:
+no route can be registered on a path that fetches nothing. Every other image
+this file touches goes through technique (1). No third technique is introduced.
 """
 import contextlib
 from datetime import datetime
@@ -64,9 +70,10 @@ import pytest
 
 from app import db
 from app.activitypub.util import update_post_from_activity
-from app.constants import POST_TYPE_POLL, POST_TYPE_VIDEO
-from app.models import PollChoice, PollChoiceVote
-from app.utils import utcnow
+from app.constants import (POST_TYPE_ARTICLE, POST_TYPE_EVENT, POST_TYPE_IMAGE,
+                           POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_VIDEO)
+from app.models import Event, File, PollChoice, PollChoiceVote
+from app.utils import set_setting, utcnow
 from tests.factories import (make_community, make_instance, make_poll,
                              make_poll_choice, make_post, make_site, make_user)
 
@@ -1305,3 +1312,685 @@ class TestQuestionTotalsUpdate:
         db.session.expire_all()
 
         assert _stored_choices(post) == [('Yes', 3), ('No', 11), ('Maybe', 13), ('Later', 5)]
+
+
+# ---------------------------------------------------------------------------
+# THE `type == 'Event'` CLUSTER STARTS HERE. Everything from here down to the
+# next banner belongs to it; the `Question` cluster's names are the region
+# between the previous banner and this one and are not reached into here.
+# ---------------------------------------------------------------------------
+
+# The thirteen keys `app/activitypub/util.py:3375-3387` reads off
+# `request_json['object']`, one per line and every one of them UNGUARDED: there
+# is no `if ... in request_json['object']` anywhere between `:3374`'s `if event:`
+# and `:3388`, so a peer document that omits any single one raises `KeyError`
+# out of `update_post_from_activity`. Counted off the source rather than taken
+# from the plan, which is why the count is stated here: thirteen assignments,
+# thirteen subscripts, `:3375` through `:3387` inclusive.
+#
+# This module SUPPLIES all thirteen rather than repairing the block. Repair
+# would mean choosing, per key, what an absent key should leave behind -- the
+# column's current value, its declared default, or None -- and the codebase has
+# never handled the case, so it is registered rather than fixed.
+#
+# The values are pairwise distinct from `_seed_event_post`'s baseline below, so
+# no assertion on any one of them can be satisfied by the row that was already
+# there.
+EVENT_FIELDS = {
+    'startTime': '2031-03-04T18:30:00',
+    'endTime': '2031-03-04T21:45:00',
+    'timezone': 'Europe/Berlin',
+    'maximumAttendeeCapacity': 250,
+    'participantCount': 42,
+    'onlineLink': f'https://{PEER}/events/1/stream',
+    'joinMode': 'external',
+    'externalParticipationUrl': f'https://{PEER}/events/1/rsvp',
+    'anonymousParticipation': True,
+    'isOnline': True,
+    'buyTicketsLink': f'https://{PEER}/events/1/tickets',
+    'feeCurrency': 'EUR',
+    'feeAmount': 12.5,
+}
+
+# `:3375-3376` are `datetime.fromisoformat(...)`, so `Event.start` and
+# `Event.end` (`app/models.py:3841-3842`, both naive `db.DateTime`) receive
+# datetime objects rather than the peer's string. These strings carry no offset,
+# so what `fromisoformat` builds is already naive and Postgres stores it
+# unchanged. The offset-bearing case is `Poll.end_poll`'s territory and is
+# settled by `END_TIME_STORED` above; nothing here re-derives it.
+EVENT_START = datetime(2031, 3, 4, 18, 30)
+EVENT_END = datetime(2031, 3, 4, 21, 45)
+
+OLD_BANNER = f'https://{PEER}/banners/old.png'
+NEW_BANNER = f'https://{PEER}/banners/new.png'
+
+
+def _seed_event_post():
+    """An Event-typed `Post` with an `Event` row, returned as `(post, event)`.
+
+    There is no `Event` factory in tests/factories.py -- `make_post` is the only
+    Post-shaped one and it writes no related rows -- so the row is constructed
+    here. `Event.post_id` is the primary key (app/models.py:3840); there is no
+    surrogate id.
+
+    Every column `:3375-3387` writes is seeded to a value the Update cannot
+    produce, and to one the column's own declaration does not already hold:
+    `max_attendees` and `participant_count` are `default=0`
+    (app/models.py:3844-3845), `join_mode` is `default='free'` (`:3848`) so the
+    baseline is 'restricted' rather than 'free', and `event_fee_amount` is
+    `default=0` (`:3854`). `anonymous_participation` and `online` are
+    `default=False` (`:3850-3851`) and are seeded False on purpose: the Update
+    sets both True, so the assertion is against a value neither the default nor
+    the baseline holds, and seeding True would instead make the Update's own
+    write unobservable.
+
+    `post.type` is POST_TYPE_EVENT and `post.url` is None, which together make
+    `:3418`'s `new_url = old_url if post.type == POST_TYPE_EVENT else None`
+    initialise `new_url` to the None already in `post.url`. With no `attachment`
+    in the Update, `:3472`'s `old_url != new_url` is then False and the whole
+    url-change arm is skipped -- so an Event test measures the Event block alone
+    and reaches no network beyond what it registers itself.
+    """
+    post = _seed_post()
+    post.type = POST_TYPE_EVENT
+    post.url = None
+    event = Event(post_id=post.id,
+                  start=datetime(2020, 1, 2, 9, 0),
+                  end=datetime(2020, 1, 2, 10, 0),
+                  timezone='UTC',
+                  max_attendees=5,
+                  participant_count=3,
+                  online_link=f'https://{PEER}/events/0/stream',
+                  join_mode='restricted',
+                  external_participation_url=f'https://{PEER}/events/0/rsvp',
+                  anonymous_participation=False,
+                  online=False,
+                  buy_tickets_link=f'https://{PEER}/events/0/tickets',
+                  event_fee_currency='USD',
+                  event_fee_amount=3.0)
+    db.session.add(event)
+    db.session.commit()
+    return post, event
+
+
+def _event_update(**overrides):
+    """An `Event` object carrying all thirteen keys, plus anything `overrides`
+    adds (`image`, in the tests that have one).
+
+    `name` is here for the reason this module's docstring gives: without it the
+    head takes the `microblog_content_to_title` arm, which `make_post` leaves
+    `body_html=None` for and which would raise before the Event block is
+    reached.
+    """
+    fields = {'type': 'Event', 'name': 'an event'}
+    fields.update(EVENT_FIELDS)
+    fields.update(overrides)
+    return _update(**fields)
+
+
+def _attach_banner(post, source_url):
+    """Give `post` an existing banner and return the `File` row's id.
+
+    `source_url` is the caller's, never a default: the seeded banner and the one
+    an Update supplies must be distinguishable by a column, because their ids
+    cannot be relied on to differ across runs -- tests/conftest.py:143 truncates
+    with RESTART IDENTITY, so `File.id` restarts at 1 in every test.
+    """
+    banner = File(source_url=source_url)
+    db.session.add(banner)
+    db.session.commit()
+    post.image_id = banner.id
+    db.session.commit()
+    return banner.id
+
+
+def _stored_event(post):
+    """`post`'s `Event` row, re-SELECTed rather than read off the object
+    `_seed_event_post` returned."""
+    db.session.expire_all()
+    return Event.query.filter_by(post_id=post.id).one()
+
+
+class TestEventBlock:
+    """`if request_json['object']['type'] == 'Event':` at
+    `app/activitypub/util.py:3372` -- the block that copies a Mobilizon-shaped
+    Event's scheduling fields onto the `Event` row and replaces the post's
+    banner, then falls through to the Links section rather than returning the
+    way the `Video` and `Question` arms do.
+
+    THE IMAGE BOUNDARY IN THIS CLUSTER. `:3396-3397` is
+    `if get_setting('cache_remote_images_locally', True): make_image_sizes(...)`,
+    and this file's docstring records that under this harness `make_image_sizes`
+    executes rather than enqueues. Verified against current source, the Event
+    block's call is the GATED one and the url-change arm's call at `:3504` --
+    `make_image_sizes(image.id, 170, 512, 'posts')`, at the same indentation as
+    the `post.image = image` above it and under no condition of its own -- is
+    not. So technique (2), turning the setting off, is available HERE and
+    nowhere else in this function.
+
+    Both techniques appear below, each where it is the only one that can do the
+    job:
+
+      - `test_an_update_carrying_an_image_replaces_the_banner` uses technique
+        (1), the registered 404. It is the only test in this file that can
+        falsify `:3396` at all: the guard's body has no effect a row assertion
+        can see, so `http_mock`'s `assert_all_called=True` turning "the
+        registered route was never fetched" into a red run is the whole signal
+        (tests/README.md:1090-1099).
+      - `test_the_banner_is_stored_when_remote_image_caching_is_off` uses
+        technique (2), because exercising the guard's False side is precisely
+        what it is for and no route can be registered on a path that fetches
+        nothing.
+
+    No third technique is introduced, and the two are not mixed inside one test.
+    """
+
+    def test_every_event_field_takes_the_update_s_value(self, app, db_session,
+                                                        redis_lock_only_double):
+        """The thirteen assignments at `:3375-3387`, one assertion each.
+
+        No HTTP fixture: the Update carries no `image`, so `:3391` is False and
+        the block reaches neither `make_image_sizes` nor anything else that
+        fetches. The session-scoped `block_outbound_http` router
+        (tests/conftest.py:214-216) raises on any request that escapes anyway.
+        """
+        post, _ = _seed_event_post()
+
+        update_post_from_activity(post, _event_update())
+
+        event = _stored_event(post)
+        assert event.start == EVENT_START
+        assert event.end == EVENT_END
+        assert event.timezone == 'Europe/Berlin'
+        assert event.max_attendees == 250
+        assert event.participant_count == 42
+        assert event.online_link == f'https://{PEER}/events/1/stream'
+        assert event.join_mode == 'external'
+        assert event.external_participation_url == f'https://{PEER}/events/1/rsvp'
+        assert event.anonymous_participation is True
+        assert event.online is True
+        assert event.buy_tickets_link == f'https://{PEER}/events/1/tickets'
+        assert event.event_fee_currency == 'EUR'
+        assert event.event_fee_amount == 12.5
+
+    def test_an_update_carrying_an_image_replaces_the_banner(self, app, db_session,
+                                                             http_mock,
+                                                             redis_lock_only_double):
+        """`:3388-3397`: the existing banner is dropped, the Update's becomes the
+        post's, and the old `File` row is deleted by `:3570-3572`.
+
+        The two `File` rows are told apart by `source_url`, not by id: with
+        RESTART IDENTITY the seeded row is id 1 in every run and the new one is
+        id 2, and an assertion that read only the id would be measuring the
+        sequence. `assert len({old_id, new_id}) == 2` is the explicit guard that
+        the pair really is distinct before anything is concluded from it.
+
+        The registered 404 is technique (1) -- see this class's docstring. It is
+        what carries `:3396`: `make_image_sizes_async` wraps its `get_request`
+        in a bare `except:` (`app/activitypub/util.py:1743-1746`), so the fetch
+        leaves no trace a row assertion could read, and only
+        `assert_all_called=True` makes "the guard was skipped" visible.
+        """
+        post, _ = _seed_event_post()
+        old_id = _attach_banner(post, OLD_BANNER)
+        http_mock.get(NEW_BANNER).respond(404)
+
+        update_post_from_activity(post, _event_update(image={'url': NEW_BANNER}))
+
+        db.session.expire_all()
+        new_id = post.image_id
+        assert new_id is not None
+        assert len({old_id, new_id}) == 2
+        assert db.session.get(File, new_id).source_url == NEW_BANNER
+        # `:3390` recorded the old id in old_db_entry_to_delete and `:3571`
+        # deleted it. Asserting on the row rather than on the local.
+        assert File.query.filter_by(id=old_id).count() == 0
+        assert File.query.count() == 1
+
+    def test_an_update_with_no_image_clears_the_banner(self, app, db_session,
+                                                       redis_lock_only_double):
+        """`:3398-3399`'s `else: post.image_id = None`, and `:3388-3390` running
+        on the way there.
+
+        `post.image_id` is seeded non-None, so the assertion is not the column's
+        own NULL. No HTTP fixture: with no `image` key nothing is fetched.
+        """
+        post, _ = _seed_event_post()
+        old_id = _attach_banner(post, OLD_BANNER)
+
+        update_post_from_activity(post, _event_update())
+
+        db.session.expire_all()
+        assert post.image_id is None
+        assert File.query.filter_by(id=old_id).count() == 0
+        assert File.query.count() == 0
+
+    def test_the_banner_is_stored_when_remote_image_caching_is_off(
+            self, app, db_session, redis_lock_only_double):
+        """`:3396`'s False side: the `File` is created and attached, and
+        `make_image_sizes` is not called.
+
+        Technique (2), and the only test here that uses it -- see this class's
+        docstring. tests/test_event_post_type_survives_update.py:161-164 is the
+        precedent for the setting; tests/test_ap_actor_json_person.py:932-941 is
+        the precedent for the shape of what such a test may honestly claim.
+
+        What it does NOT assert is that no fetch happened. That absence is not
+        observable from here: `make_image_sizes_async`'s bare `except:` would
+        swallow the harness's own outbound block, so a mutant that ignored the
+        setting and fetched anyway would still leave these rows exactly as they
+        are. The assertions are on row state, which is the honest limit.
+        """
+        set_setting('cache_remote_images_locally', False)
+        post, _ = _seed_event_post()
+
+        update_post_from_activity(post, _event_update(image={'url': NEW_BANNER}))
+
+        db.session.expire_all()
+        assert post.image_id is not None
+        assert db.session.get(File, post.image_id).source_url == NEW_BANNER
+
+    def test_a_post_with_no_event_row_is_left_alone(self, app, db_session,
+                                                    redis_lock_only_double):
+        """`:3374`'s `if event:` taking its False side.
+
+        `Event.query.filter_by(post_id=post.id).first()` at `:3373` returns None
+        for a post that has no row, and everything from the thirteen assignments
+        through `:3400`'s commit is inside the guard. The witness is the banner:
+        the Update supplies an `image`, so a block that ran would have replaced
+        `post.image_id` and left two `File` rows behind. Neither happens.
+
+        No HTTP fixture, and that is itself part of the assertion under
+        `assert_all_called=True`: registering the banner route here would fail
+        the test, because nothing fetches it.
+        """
+        post = _seed_post()
+        post.type = POST_TYPE_EVENT
+        post.url = None
+        old_id = _attach_banner(post, OLD_BANNER)
+
+        update_post_from_activity(post, _event_update(image={'url': NEW_BANNER}))
+
+        db.session.expire_all()
+        assert Event.query.count() == 0
+        assert post.image_id == old_id
+        assert File.query.count() == 1
+        assert db.session.get(File, old_id).source_url == OLD_BANNER
+
+    def test_an_update_whose_type_is_not_event_leaves_the_event_row_alone(
+            self, app, db_session, redis_lock_only_double):
+        """`:3372`'s own condition taking its False side, on a post that DOES
+        have an `Event` row.
+
+        Distinct from the test above: there the row is missing, here the row is
+        present and the document's `type` is what keeps the block out. The
+        object deliberately carries none of the thirteen keys, which is what a
+        peer's non-Event Update actually looks like -- and it means forcing
+        `:3372` true raises `KeyError: 'startTime'` at `:3375` rather than
+        quietly writing, which is the unguarded-subscript finding this cluster
+        registers, executed.
+
+        `post.type` is still POST_TYPE_EVENT, so `:3418` initialises `new_url`
+        from `post.url` and the url-change arm stays out of it.
+        """
+        post, _ = _seed_event_post()
+
+        update_post_from_activity(post, _update(type='Page', name='an event'))
+
+        event = _stored_event(post)
+        assert event.start == datetime(2020, 1, 2, 9, 0)
+        assert event.timezone == 'UTC'
+        assert event.max_attendees == 5
+        assert event.join_mode == 'restricted'
+        assert event.event_fee_currency == 'USD'
+
+
+# ---------------------------------------------------------------------------
+# THE ATTACHMENT DISPATCH CLUSTER STARTS HERE. Everything from here down
+# belongs to it; the `Event` cluster's names are the region between the previous
+# banner and this one.
+# ---------------------------------------------------------------------------
+
+# A url the dispatch is asked to TAKE. Each arm gets its own, so an assertion on
+# `post.url` names which arm wrote it and no two arms can be confused.
+LINK_HREF_URL = f'https://{PEER}/attachments/link-href'
+LINK_URL_URL = f'https://{PEER}/attachments/link-url'
+DOCUMENT_URL = f'https://{PEER}/attachments/document'
+AUDIO_URL = f'https://{PEER}/attachments/audio'
+IMAGE_URL = f'https://{PEER}/attachments/image'
+
+# A url present in an attachment list that the dispatch must NOT take -- the
+# entry after a `break`, or the image a `Link` beats. No route is ever
+# registered for it, so a mutation that reached it fails on the unmocked request
+# as well as on the assertion.
+UNTAKEN_URL = f'https://{PEER}/attachments/never-taken'
+
+# What `post.url` holds before the Update. On PEER on purpose: `:3468` and
+# `:3509` both call `domain_from_url`, and equal domains make `:3510`'s
+# `old_domain != new_domain` False, which keeps the banned-domain notification
+# block (`:3511-3544`, `Site.admins()` and `post.community.moderators()`) out of
+# every test here. It is also not any of the urls above, so `:3472`'s
+# `old_url != new_url` is True whenever an arm takes one.
+SEEDED_URL = f'https://{PEER}/attachments/seeded'
+
+# The Update's `name`. Distinct from `make_post`'s 'a post' default and from
+# AUDIO_NAME, so the Audio arm's `post.title = attachment['name']` at `:3439`
+# and the head's own title write at `:3187` cannot be confused for each other.
+UPDATE_NAME = 'the updated title'
+AUDIO_NAME = 'the podcast episode'
+
+
+def _seed_link_post():
+    """A `Post` seeded contrary to everything the Links section writes.
+
+    `post.type` is POST_TYPE_LINK because `Post.type` is
+    `default=constants.POST_TYPE_ARTICLE` (app/models.py:1715): the two tests
+    below whose expected outcome IS POST_TYPE_ARTICLE would otherwise assert the
+    column's own default and pass against a function that never ran.
+
+    POST_TYPE_LINK rather than POST_TYPE_EVENT matters a second time: `:3418`
+    initialises `new_url` to `post.url` only for events, so a non-event seed is
+    what puts `new_url` at None and lets the dispatch below be the thing that
+    changes it.
+    """
+    post = _seed_post()
+    post.type = POST_TYPE_LINK
+    post.url = SEEDED_URL
+    db.session.commit()
+    return post
+
+
+def _attachment_update(*attachment):
+    """An Update whose `object` carries `attachment` as a list.
+
+    `type` is 'Page', which is what a Lemmy post Update actually carries and
+    which keeps the `Video`, `Question` and `Event` arms above out of the way.
+    """
+    return _update(type='Page', name=UPDATE_NAME, attachment=list(attachment))
+
+
+def _taken(http_mock, url):
+    """Register the two routes the url-change arm hits for a url the dispatch
+    took, and nothing else.
+
+    HEAD first: `:3480`'s `is_image_url(new_url)` calls `mime_type_using_head`
+    (app/utils.py:270, 333), which issues `httpx_client.head(url)`. Answering
+    `image/jpeg` sends `is_image_url` down its Content-Type branch
+    (app/utils.py:271-273) and makes the answer independent of the url's path,
+    so none of the constants above needs a file extension it would not really
+    have.
+
+    That True lands the arm on `:3481-3482`, which sets POST_TYPE_IMAGE and
+    builds `File(source_url=new_url)` -- so `post.type` is a second witness for
+    "this url was taken", and no `opengraph_parse` is reached (`:3491` is in the
+    else). `:3504`'s ungated `make_image_sizes` then fetches the File's
+    source_url, which is the GET.
+
+    404 for the GET, technique (1) of this module's docstring: it stops
+    `make_image_sizes_async` at `:1759`'s status check rather than at a parse,
+    so no body is needed and none is served -- tests/README.md:1085-1089's trap
+    is about a bare `except:` around a `.json()`, and this path has no parse to
+    feed. Precedent: tests/test_ap_actor_json_person.py:918.
+    """
+    http_mock.head(url).respond(200, headers={'Content-Type': 'image/jpeg'})
+    http_mock.get(url).respond(404)
+
+
+class TestAttachmentDispatchGuard:
+    """The four conjuncts of `:3419-3422`, the gate on the attachment walk.
+
+    Both tests here land on the no-url `else` at `:3550-3565`, so both assert
+    `post.url is None` and `post.type == POST_TYPE_ARTICLE` -- the pair
+    `_seed_link_post` seeds contrary values for.
+    """
+
+    def test_an_empty_attachment_list_is_not_walked(self, app, db_session,
+                                                    redis_lock_only_double):
+        """`len(request_json['object']['attachment']) > 0` at `:3421`.
+
+        An empty list satisfies the first two conjuncts and fails this one.
+        Forcing it true does not merely walk an empty list -- `:3422` then
+        evaluates `request_json['object']['attachment'][0]` and raises
+        IndexError, which is the whole reason the length test precedes the
+        subscript.
+        """
+        post = _seed_link_post()
+
+        update_post_from_activity(post, _attachment_update())
+
+        db.session.expire_all()
+        assert post.url is None
+        assert post.type == POST_TYPE_ARTICLE
+
+    def test_an_attachment_whose_first_entry_has_no_type_is_not_walked(
+            self, app, db_session, redis_lock_only_double):
+        """`'type' in request_json['object']['attachment'][0]` at `:3422`.
+
+        The entry carries a `url`, so the list is non-empty and well-formed
+        enough to pass the first three conjuncts; only the missing `type` stops
+        it. That the walk is skipped rather than entered is what keeps `:3425`'s
+        `attachment['type']` from raising -- the guard is checked on entry [0]
+        and relied on for every entry.
+        """
+        post = _seed_link_post()
+
+        update_post_from_activity(post, _attachment_update({'url': UNTAKEN_URL}))
+
+        db.session.expire_all()
+        assert post.url is None
+        assert post.type == POST_TYPE_ARTICLE
+
+
+class TestAttachmentDispatchArms:
+    """The walk at `:3424-3441` and the conditional second pass at `:3442-3446`.
+
+    Every test here changes `post.url`, which routes on into the url-change arm
+    at `:3472-3567`. The assertions stay on what the dispatch itself decided --
+    `post.url`, `post.type`, and for the Audio arm `post.title` -- and the image
+    and opengraph machinery that arm reaches is left to the task that owns it;
+    `_taken` above is only what keeps that machinery off the network.
+
+    Where a list has more than one entry, each extra entry is load-bearing:
+    a leading entry with a falsy or absent url falsifies that arm's
+    `if new_url: break`, and a trailing entry the walk must never reach
+    falsifies the `break` itself.
+    """
+
+    def test_a_link_attachment_takes_href_and_stops_the_walk(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3425-3431`, the `Link` arm's `href` branch.
+
+        Three entries, and none is decoration:
+
+          - `{'type': 'Link'}` has neither `href` nor `url`, so `:3426` and
+            `:3428` both fall through and `new_url` is still None at `:3430`.
+            Without that entry, `if new_url:` could be forced true with nothing
+            to show for it;
+          - the second entry is the one taken, by `href` (Lemmy < 0.19.4);
+          - the trailing `Document` is what the `break` at `:3431` prevents
+            being reached. Its url is registered nowhere, so a lost `break`
+            fails on the unmocked request as well as on the assertion.
+        """
+        post = _seed_link_post()
+        _taken(http_mock, LINK_HREF_URL)
+
+        update_post_from_activity(post, _attachment_update(
+            {'type': 'Link'},
+            {'type': 'Link', 'href': LINK_HREF_URL},
+            {'type': 'Document', 'url': UNTAKEN_URL}))
+
+        db.session.expire_all()
+        assert post.url == LINK_HREF_URL
+        assert post.type == POST_TYPE_IMAGE
+
+    def test_a_link_attachment_with_no_href_falls_back_to_url(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3428-3429`, the `Link` arm's `elif 'url' in attachment` (NodeBB).
+
+        The only test here that reaches that branch: every other `Link` entry in
+        this cluster carries `href`, which `:3426` takes first.
+        """
+        post = _seed_link_post()
+        _taken(http_mock, LINK_URL_URL)
+
+        update_post_from_activity(post, _attachment_update(
+            {'type': 'Link', 'url': LINK_URL_URL}))
+
+        db.session.expire_all()
+        assert post.url == LINK_URL_URL
+        assert post.type == POST_TYPE_IMAGE
+
+    def test_a_document_attachment_supplies_the_url_and_stops_the_walk(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3432-3435`, the `Document` arm (Mastodon).
+
+        The leading entry's `url` is `''` -- a peer-supplied value, not an
+        invented one, and the only shape that can falsify `:3434`'s
+        `if new_url:` for this arm, since `:3433` assigns unconditionally. The
+        trailing `Link` is what the `break` prevents being reached.
+        """
+        post = _seed_link_post()
+        _taken(http_mock, DOCUMENT_URL)
+
+        update_post_from_activity(post, _attachment_update(
+            {'type': 'Document', 'url': ''},
+            {'type': 'Document', 'url': DOCUMENT_URL},
+            {'type': 'Link', 'href': UNTAKEN_URL}))
+
+        db.session.expire_all()
+        assert post.url == DOCUMENT_URL
+        assert post.type == POST_TYPE_IMAGE
+
+    def test_an_audio_attachment_supplies_the_url_and_its_name_becomes_the_title(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3436-3441`, the `Audio` arm (WordPress podcast), including
+        `:3438-3439`'s `post.title = attachment['name']`.
+
+        The title is asserted against AUDIO_NAME, which is neither `make_post`'s
+        seeded 'a post' nor the UPDATE_NAME the head wrote at `:3187` a hundred
+        lines earlier -- so the assertion can only be satisfied by `:3439`.
+
+        Same three-entry shape as the `Document` test above and for the same two
+        reasons. The leading Audio also carries no `name`, so `:3438` is
+        exercised on its False side within this test as well.
+        """
+        post = _seed_link_post()
+        _taken(http_mock, AUDIO_URL)
+
+        update_post_from_activity(post, _attachment_update(
+            {'type': 'Audio', 'url': ''},
+            {'type': 'Audio', 'url': AUDIO_URL, 'name': AUDIO_NAME},
+            {'type': 'Link', 'href': UNTAKEN_URL}))
+
+        db.session.expire_all()
+        assert post.url == AUDIO_URL
+        assert post.title == AUDIO_NAME
+        assert post.type == POST_TYPE_IMAGE
+
+    def test_an_audio_attachment_with_no_name_leaves_the_title_alone(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3438`'s `if 'name' in attachment:` on a real WordPress-shaped entry
+        that has none.
+
+        The title asserted is UPDATE_NAME, what the head's `:3186-3187` wrote
+        over `make_post`'s 'a post'. Asserting the seeded 'a post' instead would
+        be asserting that the head did not run either.
+        """
+        post = _seed_link_post()
+        _taken(http_mock, AUDIO_URL)
+
+        update_post_from_activity(post, _attachment_update(
+            {'type': 'Audio', 'url': AUDIO_URL}))
+
+        db.session.expire_all()
+        assert post.url == AUDIO_URL
+        assert post.title == UPDATE_NAME
+
+    def test_an_image_only_attachment_list_reaches_the_second_pass(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`:3442-3446`, the second pass, and `:3443`'s `if not new_url:`
+        admitting it.
+
+        `Image` matches no arm of the first walk, so the walk completes with
+        `new_url` still None and the second pass is what supplies the url
+        (PixelFed, PieFed, Lemmy >= 0.19.4).
+
+        The leading `{'type': 'Link'}` is there for the second pass's own
+        `attachment['type'] == 'Image'` test at `:3445`: it is an entry that
+        reaches the second pass and is not an Image, and it carries no `url`, so
+        a mutation that stopped discriminating raises rather than passing. It
+        also leaves the first walk empty-handed without adding a second way for
+        `new_url` to be set.
+        """
+        post = _seed_link_post()
+        _taken(http_mock, IMAGE_URL)
+
+        update_post_from_activity(post, _attachment_update(
+            {'type': 'Link'},
+            {'type': 'Image', 'url': IMAGE_URL}))
+
+        db.session.expire_all()
+        assert post.url == IMAGE_URL
+        assert post.type == POST_TYPE_IMAGE
+
+    def test_a_list_with_both_an_image_and_a_link_takes_the_link(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """The point of the second pass being conditional -- `:3442`'s comment
+        says Mbin sends link posts with both, and the image is to be ignored.
+
+        The `Image` is first in the list, so the second pass would reach it if
+        `:3443` let the pass run at all; `:3430-3431` breaks out with the Link's
+        href before that.
+
+        `File.source_url` is asserted as well as `post.url`, because those are
+        two separate consequences of the same decision: `:3482` builds the File
+        from `new_url`, so an image that had been taken would be the row on disk
+        as well as the url on the post.
+        """
+        post = _seed_link_post()
+        _taken(http_mock, LINK_HREF_URL)
+
+        update_post_from_activity(post, _attachment_update(
+            {'type': 'Image', 'url': IMAGE_URL},
+            {'type': 'Link', 'href': LINK_HREF_URL}))
+
+        db.session.expire_all()
+        assert post.url == LINK_HREF_URL
+        assert File.query.filter_by(source_url=IMAGE_URL).count() == 0
+        assert db.session.get(File, post.image_id).source_url == LINK_HREF_URL
+
+
+class TestAttachmentDispatchIsNotFedNonLists:
+    """`isinstance(request_json['object']['attachment'], list)` at `:3420`.
+
+    Its own cluster because the falsifying document is the one shape the walk
+    was never written for, and because the assertion has to be borrowed: with
+    the list walk correctly skipped, the only thing left that touches
+    `post.url` is the dict arm at `:3448-3450`, so that is what the assertion
+    reads. Coverage of `:3448-3450` is a side effect here, not a claim -- the
+    test exists so that `:3420` has something to be wrong about.
+    """
+
+    def test_a_dict_attachment_is_not_walked_as_a_list(self, app, db_session,
+                                                       http_mock,
+                                                       redis_lock_only_double):
+        """A single dict, which is what Mastodon and a.gup.pe send and what
+        `:3448-3449`'s own comment names.
+
+        `isinstance(..., list)` is False, so the four-conjunct guard rejects it
+        before `:3421`'s `len(...)` -- which a dict would satisfy -- and before
+        `:3422`'s `[0]`, which on a dict is a lookup of the KEY `0` and raises
+        `KeyError: 0`. That crash is what makes this the only document in the
+        file that can falsify `:3420`; every other attachment here is a list,
+        for which the conjunct is true and forcing it true changes nothing.
+        """
+        post = _seed_link_post()
+        _taken(http_mock, DOCUMENT_URL)
+
+        update_post_from_activity(post, _update(
+            type='Page', name=UPDATE_NAME,
+            attachment={'type': 'Document', 'url': DOCUMENT_URL}))
+
+        db.session.expire_all()
+        assert post.url == DOCUMENT_URL
+        assert post.type == POST_TYPE_IMAGE
