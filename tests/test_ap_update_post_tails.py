@@ -1780,11 +1780,24 @@ def _taken(http_mock, url):
     else). `:3504`'s ungated `make_image_sizes` then fetches the File's
     source_url, which is the GET.
 
-    404 for the GET, technique (1) of this module's docstring: it stops
-    `make_image_sizes_async` at `:1759`'s status check rather than at a parse,
-    so no body is needed and none is served -- tests/README.md:1085-1089's trap
-    is about a bare `except:` around a `.json()`, and this path has no parse to
-    feed. Precedent: tests/test_ap_actor_json_person.py:918.
+    404 for the GET, with NO body, technique (1) of this module's docstring.
+    `make_image_sizes_async` stops at `:1759`'s
+    `source_image_response.status_code == 200` and never parses anything, so
+    there is no body for a body to matter to -- the bare `except:` on that path
+    (`app/activitypub/util.py:1743-1746`) wraps the FETCH, which is the shape
+    tests/README.md:1071-1073 describes, not a `.json()`.
+
+    An empty body is also the side of tests/README.md:1085-1089 to be on rather
+    than an exception to it. That passage is the Feed task's mirror image: two
+    status-code guards mutated to `True` SURVIVED precisely because the helpers
+    served JSON on non-200 responses, and serving a plain-text body on any
+    non-200 killed both. Serving JSON here would be repeating the mistake, not
+    avoiding it. (`:272` above cites the same passage for the opposite need --
+    that is the `Video` cluster's `.json()`-inside-a-bare-`except:` case, where
+    a parseable body is what makes the status guard killable. The two cases are
+    not in tension: what the body must be depends on whether a parse follows the
+    status check, and here none does.) Precedent for the bare 404:
+    tests/test_ap_actor_json_person.py:918.
     """
     http_mock.head(url).respond(200, headers={'Content-Type': 'image/jpeg'})
     http_mock.get(url).respond(404)
@@ -1793,7 +1806,8 @@ def _taken(http_mock, url):
 class TestAttachmentDispatchGuard:
     """The four conjuncts of `:3419-3422`, the gate on the attachment walk.
 
-    Both tests here land on the no-url `else` at `:3550-3565`, so both assert
+    Both tests here land on the no-url `else` at `:3550`, whose body runs
+    `:3551-3567`, so both assert
     `post.url is None` and `post.type == POST_TYPE_ARTICLE` -- the pair
     `_seed_link_post` seeds contrary values for.
     """
