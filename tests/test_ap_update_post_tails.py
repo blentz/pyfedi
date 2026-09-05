@@ -70,6 +70,10 @@ from tests.factories import (make_community, make_instance, make_post,
 
 PEER = 'peer.example'
 
+# Video-cluster only, not shared harness: the two collection URLs the PeerTube
+# arm fetches. Left here with the module constants rather than moved under the
+# class, because a name used inside a test method has to be module-level anyway
+# and splitting the constants across the file would be worse than labelling them.
 LIKES_URL = f'https://{PEER}/videos/1/likes'
 DISLIKES_URL = f'https://{PEER}/videos/1/dislikes'
 
@@ -88,8 +92,11 @@ class _RedisLockOnlyDouble:
     condition to get wrong, and a broken lock double fails every test in its own
     file loudly rather than passing while testing less. Promoting it would also
     have to leave the two existing copies in place, since neither of those files
-    is in this slice's scope -- three definitions plus an import path, which is
-    worse than three definitions.
+    is in this slice's scope, so it would not remove the duplication -- three
+    definitions plus an import path. It would at least establish a canonical
+    home for a fourth file to import, which is the real argument the other way;
+    it is outweighed here because the thing being duplicated has no condition to
+    get wrong, not because promotion is worthless.
     """
 
     def lock(self, *args, **kwargs):
@@ -107,6 +114,14 @@ def _seed_post(software='lemmy'):
     `make_community` hardcodes `instance_id=1` and `user_id=1`, so an instance
     and a user are seeded first to occupy those ids -- the same pattern
     tests/test_inbox_dispatch_votes.py documents.
+
+    `software` reaches `post.instance.software`, which the tag block's flair
+    guard reads -- `app/activitypub/util.py:3259` is
+    `if len(flair_tags) > 0 or (post.instance.software == 'piefed' or
+    post.instance.software == 'pylova'):`. It is 'lemmy' here rather than
+    `make_instance`'s 'mastodon' default so that this file matches
+    sub-project 14's helper; a later task that wants the software half of that
+    guard to fire has to pass 'piefed' or 'pylova'.
     """
     make_site()
     instance = make_instance(PEER, software=software)
@@ -129,7 +144,9 @@ def _update(**fields):
 
 
 def _seed_vote_baseline(post):
-    """Seed values contrary to every column the Video block writes.
+    """Video-cluster only, not shared harness.
+
+    Seed values contrary to every column the Video block writes.
 
     `Post.up_votes`, `down_votes` and `score` are declared `default=0`, and
     `ranking` / `ranking_scaled` `default=0.0` (app/models.py's Post). Asserting
@@ -173,6 +190,16 @@ class TestVideoVoteCollections:
 
         update_post_from_activity(post, _update(type='Video', name='a post',
                                                 likes=LIKES_URL, dislikes=DISLIKES_URL))
+
+        # Discard any unflushed attribute state and force a re-SELECT, so the
+        # assertions below read the committed row rather than pending values on
+        # the object the function just wrote to. This is what pins the block's
+        # `db.session.commit()` at `app/activitypub/util.py:3308`: the app
+        # factory's `autoflush=False` (`app/__init__.py:81`) means that without
+        # the commit nothing reaches the row at all, so `expire` re-reads the
+        # seeded baseline and every assertion below fails. Without this line the
+        # commit can be deleted with the whole file still green.
+        db.session.expire(post)
 
         assert post.up_votes == 6
         assert post.down_votes == 2
@@ -280,7 +307,7 @@ class TestVideoVoteCollections:
         """`db.session.commit()` / `return` at `app/activitypub/util.py:3308-3309`,
         "return now for PeerTube, otherwise rest of this function breaks the post".
 
-        The witness is the Links section's no-url `else` arm at `:3542-3557`.
+        The witness is the Links section's no-url `else` arm at `:3542-3559`.
         With no `attachment` in the Update and `post.type` not `POST_TYPE_EVENT`,
         `new_url` stays None, so `old_url != new_url` is true and that arm sets
         `post.type = POST_TYPE_ARTICLE` and `post.url = None`. It was chosen over
