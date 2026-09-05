@@ -2806,8 +2806,11 @@ class TestUrlChangeYoutubeFixup:
 
 
 # ---------------------------------------------------------------------------
-# THE SUSPICIOUS-DOMAIN CLUSTER STARTS HERE, and it is the last one in this
-# file. It picks up exactly where the url-change cluster above stops: that one
+# THE SUSPICIOUS-DOMAIN CLUSTER STARTS HERE. It is the last cluster that owns a
+# CONTIGUOUS REGION of the function; the conditional-expression cluster after it
+# owns three scattered lines and nothing else, and reaches back into this one for
+# four of its names. This one picks up exactly where the url-change cluster above
+# stops: that one
 # owns `:3472-3506`, this one owns `:3508-3567` -- the notification block a
 # changed url's DOMAIN can trigger, the two lines that reassign `post.domain`,
 # and the no-url `else` arm the whole Links section falls to when an Update
@@ -3710,3 +3713,269 @@ class TestUrlClearedToArticle:
         assert post.url is None
         assert post.cross_posts == []
         assert db.session.get(Post, partner.id).cross_posts == []
+
+
+# ---------------------------------------------------------------------------
+# THE CONDITIONAL-EXPRESSION CLUSTER STARTS HERE, and it is the last one in this
+# file. Unlike every cluster above it, it owns no contiguous region: it owns
+# three scattered LINES -- `:3418`, `:3460` and `:3509` -- and it exists because
+# coverage cannot see them. tests/README.md:3098 (fact 87): coverage.py emits no
+# arc for a conditional expression, so a region at 100% statements AND 100%
+# branches can still hide an unexercised arm behind every `x if y else z`.
+#
+# THE ENUMERATION IS AN AST WALK, not a grep -- fact 87(c). `ast.parse` on
+# app/activitypub/util.py, the `FunctionDef` named `update_post_from_activity`
+# located by name, its extent read off `lineno`/`end_lineno` as 3139-3572, and
+# every `ast.IfExp` under `ast.walk` of that node. Cross-checked against an
+# UNFILTERED `^def ` scan of the module (91 matches): the `def` at 3139 is the
+# function's own and the next one is `undo_vote` at 3575, so `end_lineno` and
+# "the next def" agree here. EIGHT `IfExp` nodes, against the plan's three:
+#
+#   :3183  post.url = link if url_is_parseable(link) else None
+#   :3232  profile_id = json_tag['href'] if 'href' in json_tag else None
+#   :3247  'author_user_name': author.ap_id if author.ap_id else author.user_name
+#   :3266  ... request_json['object']['commentsEnabled'] if ... else True
+#   :3268  ... datetime.fromisoformat(...['updated']) if ... else utcnow()
+#   :3418  new_url = old_url if post.type == POST_TYPE_EVENT else None
+#   :3460  new_url = old_url if post.type == POST_TYPE_EVENT else None
+#   :3509  old_domain = domain_from_url(old_url) if old_url else None
+#
+# The plan's three were right about the TAILS and the extra five are not a
+# disagreement with it: the first five all sit ABOVE `:3273`'s
+# `if request_json['object']['type'] == 'Video':`, which is where this file's
+# region starts -- they are in the shared head that sub-project 14's
+# tests/test_ap_update_pair.py owns and that this module's docstring says is not
+# measured here. They are enumerated anyway because the enumeration is of the
+# FUNCTION, and the task report carries what is and is not pinned for each of
+# them; nothing about them is asserted in this file.
+#
+# WHAT WAS ALREADY PINNED IN THIS FILE, measured before anything below was
+# written by collapsing each ternary to each arm in turn and running this file:
+#
+#   :3418 else-arm -- collapsing to `new_url = old_url` killed 8 tests across
+#                     four classes (TestAttachmentDispatchGuard,
+#                     TestAttachmentDispatchArms, TestUrlChangeImageUrl and
+#                     TestUrlClearedToArticle, two each; four of the eight also
+#                     error in teardown). Already pinned; no test added.
+#   :3418 if-arm   -- collapsing to `new_url = None` SURVIVED all 76, because
+#                     `_seed_event_post` leaves `post.url` at None and the two
+#                     arms then compute the same None. Covered below.
+#   :3460 both     -- both collapses SURVIVED all 76: no Update in this file
+#                     carried an attachment url `url_is_parseable` refuses, so
+#                     `:3451`'s guard was never true and the line never ran.
+#                     Both covered below.
+#   :3509 if-arm   -- collapsing to `old_domain = None` killed exactly
+#                     TestSuspiciousDomainReassignment's
+#                     `test_a_url_change_inside_the_same_domain_leaves_the_block_out`.
+#                     Already pinned; no test added.
+#   :3509 else-arm -- never executed: every test that reached `:3509` had a
+#                     non-empty `post.url`. Covered below, and see that test's
+#                     docstring for why its mutant is EQUIVALENT anyway.
+#
+# So four tests, not six. The two arms with a pre-existing killer get a citation
+# in the table above rather than a second test that would pin nothing new.
+#
+# NAMES REACHED BACK FOR, and this cluster reaches further back than any other:
+# `_seed_event_post` and `_event_update` from the `Event` cluster (`:3418` and
+# `:3460` both read `post.type == POST_TYPE_EVENT`, and that cluster owns the
+# only Event-shaped fixture); `_seed_link_post`, `_attachment_update`,
+# SEEDED_URL and UPDATE_NAME from the attachment cluster; `_seed_suspicious_post`,
+# `_suspicious_domain`, `_linked_update`, `_taken`, SUSPICIOUS_URL and
+# SEEDED_POST_COUNT from the suspicious-domain cluster. Copying any of them would
+# have been a duplicate of a fixture whose reasoning is already written down
+# once. The two names INTRODUCED below belong to this cluster alone.
+# ---------------------------------------------------------------------------
+
+# A url for an EVENT-typed post, which `_seed_event_post` deliberately does not
+# give one. That combination is not a fabricated state: `Post.new` writes
+# `post.url` from the object's attachment at app/models.py:1968-1996 and its
+# Event branch at app/models.py:2212-2213 then sets `post.type` to
+# POST_TYPE_EVENT without clearing it, so a Mobilizon Event whose object carried
+# a Link attachment arrives here typed EVENT with a url. On PEER because both
+# tests below reach `:3468`'s `domain_from_url(new_url)`: `new_url` is this url
+# by then in both -- `:3418` put it there in one and `:3460` put it back in the
+# other -- so `:3462` is true and a `Domain` row for this host is looked up and
+# created. PEER is the host the rest of this file already treats as unremarkable,
+# and the row is not banned, so `:3469` lets both through. Nothing further down
+# runs: `:3472` is False in both, so `:3509` and `:3510` are never reached.
+EVENT_LINK_URL = f'https://{PEER}/events/1/page'
+
+# An `href` `urlparse` REFUSES: an unbalanced IPv6 bracket, for which `urlparse`
+# raises `ValueError('Invalid IPv6 URL')` and `url_is_parseable`
+# (app/utils.py:1540-1558) therefore returns False. That is `:3451`'s only true
+# side, and `:3451` is the only route to `:3460`.
+#
+# The same SHAPE as tests/test_unparseable_url_ingress.py's CRAFTED, whose lines
+# 28-35 explain why an unbalanced bracket rather than an unparseable-looking
+# path, but not the same STRING: CRAFTED is on youtube.com, which that file needs
+# so `is_video_hosting_site` types the post POST_TYPE_VIDEO. Its host here is
+# never read by anything -- `:3460` replaces `new_url` before `:3468`'s
+# `domain_from_url` is reached, so this string's only job is to be refused --
+# and it is on PEER for legibility rather than for any behaviour.
+UNPARSEABLE_HREF = f'https://{PEER}[abc'
+
+
+class TestEventUrlIsItsOwnNewUrl:
+    """`:3418`'s IF arm, `new_url = old_url` for a post typed POST_TYPE_EVENT,
+    and `:3460`'s -- the same expression re-run after `:3451` rejects a
+    peer-supplied url.
+
+    Both tests give the post EVENT_LINK_URL, which is what makes the two arms
+    distinguishable at all: with `post.url` at the None `_seed_event_post`
+    leaves, `old_url` and the `else` arm's `None` are the same value and the
+    collapse is an equivalent mutant. That is measured, not assumed -- it is why
+    `new_url = None` survived all 76 tests before these were written.
+
+    Neither test registers an HTTP route. `:3472`'s `old_url != new_url` is
+    False in both, so the url-change arm -- the only thing in the Links section
+    that fetches -- never runs, and the Event block itself fetches nothing
+    because neither Update carries an `image` key (`:3391` is false, `:3399`
+    runs). The session-scoped `block_outbound_http` router
+    (tests/conftest.py:214-216) raises on anything that escapes.
+
+    `post.title` is asserted in both. Without it these would be tests that
+    nothing CHANGED, which a function that never ran would satisfy just as well;
+    `_event_update` sends `name='an event'` and `make_post` seeds 'a post'
+    (tests/factories.py:292), so the title is the witness that the function
+    reached and passed the head.
+    """
+
+    def test_an_event_with_a_url_and_no_attachment_keeps_both_url_and_type(
+            self, app, db_session, redis_lock_only_double):
+        """`:3418`'s if arm, sole owner.
+
+        No `attachment` key, so `:3419` and `:3448` are both false and `new_url`
+        is still whatever `:3418` initialised it to. Under the real ternary that
+        is EVENT_LINK_URL and `:3472` is False. Under `new_url = None` the post
+        falls to `:3550`'s else and is retyped POST_TYPE_ARTICLE with its url
+        cleared -- both of which are asserted here against a baseline neither
+        equals.
+        """
+        post, _event = _seed_event_post()
+        post.url = EVENT_LINK_URL
+        db.session.commit()
+
+        update_post_from_activity(post, _event_update())
+
+        db.session.expire_all()
+        assert post.title == 'an event'
+        assert post.url == EVENT_LINK_URL
+        assert post.type == POST_TYPE_EVENT
+
+    def test_an_event_whose_attachment_url_will_not_parse_keeps_its_own_url(
+            self, app, db_session, redis_lock_only_double):
+        """`:3460`'s if arm, sole owner.
+
+        The attachment IS walked here -- `:3419`'s four conjuncts all hold and
+        `:3426`'s `href` arm sets `new_url` to UNPARSEABLE_HREF -- so `:3451` is
+        true and `:3460` puts `new_url` back to `old_url`, "exactly what new_url
+        was initialised to" as its own comment says. `:3462` is then true and
+        `:3468` creates a `Domain` for EVENT_LINK_URL, which `:3469` finds
+        unbanned, and `:3472` is False.
+
+        Distinct from the test above precisely because that one never reaches
+        `:3451`: collapsing `:3460` to `new_url = None` leaves that one green and
+        fails this one.
+        """
+        post, _event = _seed_event_post()
+        post.url = EVENT_LINK_URL
+        db.session.commit()
+
+        update_post_from_activity(post, _event_update(
+            attachment=[{'type': 'Link', 'href': UNPARSEABLE_HREF}]))
+
+        db.session.expire_all()
+        assert post.title == 'an event'
+        assert post.url == EVENT_LINK_URL
+        assert post.type == POST_TYPE_EVENT
+
+
+class TestUnparseableAttachmentUrlOnANonEvent:
+    """`:3460`'s ELSE arm, `new_url = None` for a post that is not an event.
+
+    The mirror of the second test above and the reason `:3460` needs two tests
+    rather than one: the two arms of a single ternary are two mutants, and
+    collapsing `:3460` to `new_url = old_url` leaves that one green -- for an
+    Event `old_url` IS what the real code assigns -- while failing this one.
+    """
+
+    def test_an_unparseable_attachment_url_clears_a_link_post_to_an_article(
+            self, app, db_session, redis_lock_only_double):
+        """`_seed_link_post` is POST_TYPE_LINK on SEEDED_URL, so `:3418` starts
+        `new_url` at None, the dispatch raises it to UNPARSEABLE_HREF, `:3451`
+        rejects it and `:3460` puts it back to None. `:3472` is then true and
+        `:3476`'s `if new_url:` false, so the post falls to `:3550`'s else:
+        POST_TYPE_ARTICLE at `:3551`, `post.url = None` at `:3564`.
+
+        Both asserted values are ones the seed does not hold, which is what
+        `_seed_link_post`'s own docstring seeds POST_TYPE_LINK for. `post.title`
+        is asserted for the same anti-vacuity reason the class above gives.
+
+        No HTTP: `:3476` is false, so `:3480`'s `is_image_url` -- the only HEAD
+        this arm issues -- is never reached.
+        """
+        post = _seed_link_post()
+
+        update_post_from_activity(post, _attachment_update(
+            {'type': 'Link', 'href': UNPARSEABLE_HREF}))
+
+        db.session.expire_all()
+        assert post.title == UPDATE_NAME
+        assert post.url is None
+        assert post.type == POST_TYPE_ARTICLE
+
+
+class TestUrllessPostGainsADomain:
+    """`:3509`'s ELSE arm, `old_domain = None` for a post that had no url.
+
+    THE ARM IS EXERCISED HERE AND ITS MUTANT IS STILL EQUIVALENT, and that is
+    the finding rather than a gap in the test. Collapsing `:3509` to
+    `old_domain = domain_from_url(old_url)` cannot be killed by anything,
+    because `domain_from_url` opens with `if not url: return None`
+    (app/utils.py:1562-1568) -- so for every falsy `old_url` the collapsed
+    expression returns the same None the `else` arm supplies. `Post.url` is a
+    string column, so the only falsy values it can hold are None and '', and
+    `domain_from_url` answers None for both. No fixture can separate the arms;
+    the ternary is belt-and-braces over a guard the callee already has.
+
+    That claim is stronger with this test than without it. Before it, the
+    mutant survived 76 tests NONE OF WHICH reached `:3509` with a falsy
+    `old_url` -- survival that says nothing. With it the arm is provably
+    reached and the mutant provably still survives.
+
+    The `if` arm is not re-covered here: collapsing `:3509` to
+    `old_domain = None` already kills exactly one test, and it is
+    TestSuspiciousDomainReassignment's
+    `test_a_url_change_inside_the_same_domain_leaves_the_block_out`.
+    """
+
+    def test_a_post_with_no_url_takes_the_new_domain(
+            self, app, db_session, http_mock, redis_lock_only_double):
+        """`post.url` is cleared to None before the call, which is the whole
+        fixture: `:3472` is then true against SUSPICIOUS_URL, `:3509` takes its
+        else arm, and `:3510`'s `new_domain and old_domain != new_domain` is
+        true because `old_domain` is None rather than because the two rows
+        differ.
+
+        Both notify flags are off, for the reason the cluster banner above
+        states as a rule: `:3517` would put the `Domain` OBJECT into
+        `Notification.targets` and the flush would raise. `:3543` and `:3544`
+        are the block's remaining effects and are what this asserts, against
+        SEEDED_POST_COUNT and a NULL `post.domain_id`.
+
+        `post.url` is asserted too, so a run in which the url-change arm never
+        fired at all could not satisfy this test.
+        """
+        post = _seed_suspicious_post()
+        post.url = None
+        db.session.commit()
+        new_domain = _suspicious_domain()
+        _taken(http_mock, SUSPICIOUS_URL)
+
+        update_post_from_activity(post, _linked_update(SUSPICIOUS_URL))
+
+        db.session.expire_all()
+        assert post.url == SUSPICIOUS_URL
+        assert post.domain_id == new_domain.id
+        assert new_domain.post_count == SEEDED_POST_COUNT + 1
+        assert Notification.query.count() == 0
