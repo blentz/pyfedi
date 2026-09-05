@@ -418,11 +418,19 @@ END_TIME = '2027-01-01T12:00:00+00:00'
 # What comes back out of `Poll.end_poll` after an Update carrying END_TIME, read
 # from a re-SELECT rather than off the in-memory attribute. Naive, because the
 # column is `db.DateTime` with no `timezone=True` (app/models.py:3782), so it is
-# `timestamp without time zone`: psycopg2 hands the peer's string to Postgres as
-# a literal and Postgres casts it, DISCARDING the offset rather than converting
-# by it. Measured, not assumed -- see TestQuestionEditPath's
-# `test_the_end_time_string_is_cast_by_postgres_to_a_naive_datetime`.
+# `timestamp without time zone`: psycopg2 adapts the peer's str to a BARE
+# literal (`adapt('...+05:00').getquoted()` is `b"'2027-01-01T12:00:00+05:00'"`,
+# with no `::` tag), so the column's own type drives the cast and the offset is
+# DISCARDED rather than converted by.
+#
+# END_TIME_OTHER_OFFSET is the same wall-clock time under a different offset --
+# a DIFFERENT instant, five hours earlier. It stores as the SAME
+# END_TIME_STORED, which is the whole finding, and it is asserted rather than
+# merely described: `test_the_end_time_string_is_cast_by_postgres_to_a_naive_datetime`
+# sends both. END_TIME alone could not show it, because `+00:00` cannot
+# distinguish "offset discarded" from "converted to UTC".
 END_TIME_STORED = datetime(2027, 1, 1, 12, 0)
+END_TIME_OTHER_OFFSET = '2027-01-01T12:00:00+05:00'
 
 # A contrary baseline for `end_poll`, far enough from END_TIME_STORED that no
 # assertion below can be satisfied by the seeded value.
@@ -731,9 +739,14 @@ class TestQuestionVoteCountGuards:
 class TestQuestionEditPath:
     """`app/activitypub/util.py:3333-3351`, the "Edit, not a totals update" arm.
 
-    It is reached when `total_vote_count == 0` -- which, given the three
-    `continue`s above it, is either "every choice really is on zero votes" or
-    "every vote was malformed". It then requires a `Poll` row (`:3335`) and an
+    It is reached when `total_vote_count == 0` -- which is a SUM at `:3331`,
+    over only the votes the three `continue`s let through, and not "every choice
+    is on zero votes". Four shapes reach it and this file sends all four: every
+    vote on zero; every vote malformed and skipped
+    (`TestQuestionVoteCountGuards`); a mix, one skipped and one counted at zero
+    (`test_a_vote_with_no_name_is_not_counted`); and well-formed non-zero totals
+    that CANCEL, which is how `test_the_edit_path_returns_before_the_totals_loop`
+    below sends -3 and 3. It then requires a `Poll` row (`:3335`) and an
     `endTime` (`:3336-3337`), writes `end_poll` and `mode`, and REPLACES the
     choice set outright:
 
@@ -896,16 +909,31 @@ class TestQuestionEditPath:
         WHAT ACTUALLY LANDS, measured by re-SELECT rather than reasoned about:
         `datetime.datetime(2027, 1, 1, 12, 0)`, with `tzinfo` None. `Poll.end_poll`
         is `db.Column(db.DateTime)` (app/models.py:3782) with no `timezone=True`,
-        i.e. `timestamp without time zone`, so END_TIME's `+00:00` is DISCARDED,
-        not converted. A separate probe sent `2027-01-01T12:00:00+05:00` and got
-        the same `datetime(2027, 1, 1, 12, 0)` back -- so a peer in a non-UTC
-        offset records a deadline off by that offset. That, and the
-        `sqlalchemy.exc.DataError` a malformed string raises out of the function
-        at commit time, are recorded as findings; neither is repaired here.
+        i.e. `timestamp without time zone`.
+
+        THE SECOND UPDATE IS THE POINT. `END_TIME`'s `+00:00` cannot distinguish
+        "the offset was discarded" from "the value was converted to UTC" -- both
+        give 12:00. `END_TIME_OTHER_OFFSET` is the same wall clock at `+05:00`,
+        a genuinely different instant five hours earlier, and it stores as the
+        SAME `END_TIME_STORED`. So the offset is DISCARDED, and a peer in a
+        non-UTC offset silently records a poll deadline wrong by that offset.
+
+        This is NOT what the Event block below does with the same field.
+        `:3367-3368` read `startTime`/`endTime` through `datetime.fromisoformat`,
+        which yields an AWARE datetime; psycopg2 tags an aware datetime
+        `::timestamptz`, and the assignment cast into a naive column then
+        CONVERTS by the server's session TimeZone (`Etc/UTC` under this harness)
+        instead of truncating. Measured both ways. The two blocks are not twins
+        in outcome -- only this one corrupts.
+
+        The `sqlalchemy.exc.DataError` a malformed `endTime` raises out of the
+        function at commit time is the other finding on this line. Neither is
+        repaired here.
 
         The seeded 2020 date is the contrary baseline: `end_poll` is nullable and
         `make_poll` leaves it None, so asserting a value over None would be
-        weaker.
+        weaker. The second Update re-seeds it for the same reason -- otherwise
+        the second assertion would be satisfied by what the first Update left.
         """
         post = _seed_post()
         poll, _ = _seed_poll(post, [('Old A', 7)])
@@ -918,6 +946,16 @@ class TestQuestionEditPath:
 
         assert poll.end_poll == END_TIME_STORED
         assert poll.end_poll.tzinfo is None
+
+        poll.end_poll = SEEDED_END_TIME
+        db.session.commit()
+
+        update_post_from_activity(post, _poll_update(_choice('Yes', 0),
+                                                     end_time=END_TIME_OTHER_OFFSET))
+
+        db.session.expire_all()
+
+        assert poll.end_poll == END_TIME_STORED
 
     def test_choices_are_numbered_from_one_in_the_order_the_update_lists_them(
             self, app, db_session, redis_lock_only_double):
@@ -950,7 +988,7 @@ class TestQuestionEditPath:
         WHY THE TOTALS ARE -3 AND 3, and not the zeroes every other test here
         sends. `:3351` does not guard the Links section the way the totals arm's
         `:3360` does -- deleting it drops control into the totals loop at
-        `:3353-3357`, which commits at `:3358` and returns at `:3360`, still
+        `:3354-3357`, which commits at `:3358` and returns at `:3360`, still
         short of the Links section. So `post.url` survives either way, and an
         all-zero Update makes that loop a no-op that rewrites the same 0s. This
         was measured, not predicted: with `return` → `pass` applied, the
