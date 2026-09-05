@@ -3775,15 +3775,27 @@ class TestUrlClearedToArticle:
 # So four tests, not six. The two arms with a pre-existing killer get a citation
 # in the table above rather than a second test that would pin nothing new.
 #
-# NAMES REACHED BACK FOR, and this cluster reaches further back than any other:
-# `_seed_event_post` and `_event_update` from the `Event` cluster (`:3418` and
-# `:3460` both read `post.type == POST_TYPE_EVENT`, and that cluster owns the
-# only Event-shaped fixture); `_seed_link_post`, `_attachment_update`,
-# SEEDED_URL and UPDATE_NAME from the attachment cluster; `_seed_suspicious_post`,
-# `_suspicious_domain`, `_linked_update`, `_taken`, SUSPICIOUS_URL and
-# SEEDED_POST_COUNT from the suspicious-domain cluster. Copying any of them would
-# have been a duplicate of a fixture whose reasoning is already written down
-# once. The two names INTRODUCED below belong to this cluster alone.
+# NAMES REACHED BACK FOR, and this cluster reaches further back than any other.
+# Each is listed under the cluster that DEFINES it, which for two of them is not
+# the cluster this one borrowed the usage from -- the suspicious-domain cluster
+# reuses `_taken` and `_linked_update` too and says so at its own banner:
+#
+#   `Event` cluster       -- `_seed_event_post` (:1372), `_event_update` (:1420).
+#                            `:3418` and `:3460` both read
+#                            `post.type == POST_TYPE_EVENT` and that cluster owns
+#                            the only Event-shaped fixture.
+#   attachment cluster    -- SEEDED_URL (:1753), UPDATE_NAME (:1758),
+#                            `_seed_link_post` (:1762), `_attachment_update`
+#                            (:1782), `_taken` (:1791).
+#   url-change cluster    -- `_linked_update` (:2202).
+#   suspicious-domain     -- SUSPICIOUS_URL (:2904), SEEDED_POST_COUNT (:2928),
+#                            `_seed_suspicious_post` (:2956), `_suspicious_domain`
+#                            (:2988). Four names, which is the count that
+#                            cluster's own banner states.
+#
+# Copying any of them would have been a duplicate of a fixture whose reasoning is
+# already written down once. The two names INTRODUCED below belong to this
+# cluster alone.
 # ---------------------------------------------------------------------------
 
 # A url for an EVENT-typed post, which `_seed_event_post` deliberately does not
@@ -3823,8 +3835,11 @@ class TestEventUrlIsItsOwnNewUrl:
     Both tests give the post EVENT_LINK_URL, which is what makes the two arms
     distinguishable at all: with `post.url` at the None `_seed_event_post`
     leaves, `old_url` and the `else` arm's `None` are the same value and the
-    collapse is an equivalent mutant. That is measured, not assumed -- it is why
-    `new_url = None` survived all 76 tests before these were written.
+    collapse is indistinguishable under `_seed_event_post` AS IT STANDS. Not an
+    equivalent mutant -- a different `post.url` kills it, which is exactly what
+    these two tests do. That it is a fixture gap and not an equivalence is
+    measured, not assumed: it is why `new_url = None` survived all 76 tests
+    before these were written and dies against the first of them now.
 
     Neither test registers an HTTP route. `:3472`'s `old_url != new_url` is
     False in both, so the url-change arm -- the only thing in the Links section
@@ -3957,11 +3972,21 @@ class TestUrllessPostGainsADomain:
         true because `old_domain` is None rather than because the two rows
         differ.
 
-        Both notify flags are off, for the reason the cluster banner above
-        states as a rule: `:3517` would put the `Domain` OBJECT into
-        `Notification.targets` and the flush would raise. `:3543` and `:3544`
-        are the block's remaining effects and are what this asserts, against
-        SEEDED_POST_COUNT and a NULL `post.domain_id`.
+        Both notify flags are off, and NOT because of the cluster banner's
+        serialisation rule -- that rule does not bite here. `_seed_suspicious_post`
+        leaves `post.domain_id` NULL (its docstring, `:2973`) and `:3544`'s
+        `post.domain = new_domain` runs AFTER the dict at `:3513-3518`, so
+        `post.domain` is still None at `:3517` and `orig_post_domain` would
+        serialise as a JSON null exactly as the banner says at `:2860-2861`.
+        A notifying domain would have worked.
+
+        The flags are off because the subject is `:3509`'s else arm feeding
+        `:3510`, and `:3543`'s `post_count` and `:3544`'s `post.domain` are that
+        gate's cheapest observable effects -- asserted below against
+        SEEDED_POST_COUNT and a NULL `post.domain_id`. Turning a flag on would
+        need a moderator or an admin fixture and would add `Notification` rows
+        that say nothing about `:3509`, and `Notification.query.count() == 0`
+        would stop being assertable as the witness that neither loop ran.
 
         `post.url` is asserted too, so a run in which the url-change arm never
         fired at all could not satisfy this test.
