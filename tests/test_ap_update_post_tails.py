@@ -1632,9 +1632,9 @@ class TestEventBlock:
         Closing that needs an `isinstance(..., dict)` at two sites and a
         decision about the list form (ActivityPub allows `image` to be an
         array), which is new behaviour this codebase has never had. Registered
-        -- and registered as an EXTENSION of tests/README.md's fact 71
-        (:2717-2735), which already states the substring rule and already
-        predicts this widening, not as a new discovery.
+        -- and registered as an EXTENSION of tests/README.md's fact 71, which
+        already states the substring rule and already predicts this widening,
+        not as a new discovery.
         """
         post, _ = _seed_event_post()
         old_id = _attach_banner(post, OLD_BANNER)
@@ -3792,18 +3792,23 @@ class TestUrlClearedToArticle:
 # the cluster this one borrowed the usage from -- the suspicious-domain cluster
 # reuses `_taken` and `_linked_update` too and says so at its own banner:
 #
-#   `Event` cluster       -- `_seed_event_post` (:1372), `_event_update` (:1420).
+#   `Event` cluster       -- `_seed_event_post`, `_event_update`.
 #                            `:3418` and `:3460` both read
 #                            `post.type == POST_TYPE_EVENT` and that cluster owns
 #                            the only Event-shaped fixture.
-#   attachment cluster    -- SEEDED_URL (:1753), UPDATE_NAME (:1758),
-#                            `_seed_link_post` (:1762), `_attachment_update`
-#                            (:1782), `_taken` (:1791).
-#   url-change cluster    -- `_linked_update` (:2202).
-#   suspicious-domain     -- SUSPICIOUS_URL (:2904), SEEDED_POST_COUNT (:2928),
-#                            `_seed_suspicious_post` (:2956), `_suspicious_domain`
-#                            (:2988). Four names, which is the count that
-#                            cluster's own banner states.
+#   attachment cluster    -- SEEDED_URL, UPDATE_NAME, `_seed_link_post`,
+#                            `_attachment_update`, `_taken`.
+#   url-change cluster    -- `_linked_update`.
+#   suspicious-domain     -- SUSPICIOUS_URL, SEEDED_POST_COUNT,
+#                            `_seed_suspicious_post`, `_suspicious_domain`.
+#                            Four names, which is the count that cluster's own
+#                            banner states.
+#
+# EACH IS LISTED BY NAME AND DELIBERATELY WITHOUT A LINE NUMBER. `grep -n` finds
+# any of them in one command, and a name cannot go stale; the twelve coordinates
+# this block used to carry were exact when written and were invalidated by the
+# next edit to this file, twice. Fact 99(a), applied to the case it was written
+# for -- do not "helpfully" restore them.
 #
 # Copying any of them would have been a duplicate of a fixture whose reasoning is
 # already written down once. The two names INTRODUCED below belong to this
@@ -3984,12 +3989,16 @@ class TestUrllessPostGainsADomain:
         true because `old_domain` is None rather than because the two rows
         differ.
 
-        Both notify flags are off, and NOT because of the cluster banner's
-        serialisation rule -- that rule does not bite here. `_seed_suspicious_post`
+        Both notify flags are off, and NOT because of the SUSPICIOUS-DOMAIN
+        cluster's serialisation rule -- that rule does not bite here.
+        (It is that cluster's banner, the one naming
+        `TestSuspiciousDomainTargetsSerialisation` as the only fixture allowed
+        to break it, and NOT this conditional-expression banner, which says
+        nothing about serialisation.) `_seed_suspicious_post`
         leaves `post.domain_id` NULL (its own docstring says so) and `:3544`'s
         `post.domain = new_domain` runs AFTER the dict at `:3513-3518`, so
         `post.domain` is still None at `:3517` and `orig_post_domain` would
-        serialise as a JSON null exactly as this cluster's banner says.
+        serialise as a JSON null exactly as that banner says.
         A notifying domain would have worked.
 
         The flags are off because the subject is `:3509`'s else arm feeding
