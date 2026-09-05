@@ -86,25 +86,56 @@ class _Field:
         self.data = data
 
 
+_WEB_FORM_BARE_NONE_FIELDS = {'flair', 'finish_in', 'image_alt_text'}
+"""Fields the SRC_WEB branch tests at the FIELD level rather than through
+`.data`: `if input.flair:` (:333), `if input.finish_in:` (:354), and
+`hasattr(input, 'image_alt_text')` (:340). For these three, and only these
+three, a `None` value must land on the form as a bare attribute -- `_Field`
+has no `__bool__`, so a `_Field(None)` would be truthy and never take the
+false arm the caller asked for. Every other field is read through `.data`
+unconditionally (e.g. :331 `input.language_id.data`, :337-338
+`input.scheduled_for.data` / `input.repeat.data`), so a `None` there must be
+`_Field(None)` -- `.data` on a bare `None` attribute raises AttributeError.
+"""
+
+
 def _web_form(**over):
     """The SRC_WEB shape, as a plain object carrying `_Field` attributes.
 
     Defaults are a complete POST_TYPE_LINK submission. `over` replaces:
       value        -> wrapped in _Field
-      None         -> the ATTRIBUTE is set to None, so `if input.flair:` (:333),
+      None, for a field in _WEB_FORM_BARE_NONE_FIELDS
+                   -> the ATTRIBUTE is set to None, so `if input.flair:` (:333),
                       `if input.finish_in:` (:354) and `input.image_alt_text`
                       (:340) take their false arms
+      None, for any other field
+                   -> wrapped as `_Field(None)`, so `.data` reads back None
+                      instead of raising (:331, :337-338 and others read
+                      `.data` unconditionally)
       _OMIT        -> the attribute is not set at all, so `hasattr` (:340) is
                       False
 
     `sticky` and `nsfl` are present because :388 and :390 read them below the
     :384 marker.
+
+    `language_id`, `scheduled_for` and `repeat` default to `None` here
+    (meaning: the field's `.data` is None), which is why they are NOT in
+    `_WEB_FORM_BARE_NONE_FIELDS` -- unlike `flair`/`finish_in`, nothing
+    downstream tests them at the field-object level.
+
+    `flair` defaults to `[]`, not `''`. `_Field` has no `__bool__`, so
+    `if input.flair:` (:333) is true for ANY `_Field` instance regardless of
+    `.data` -- the default therefore always takes the true arm and calls
+    `flair_from_form(input.flair.data)` (:334). `flair_from_form` (:334,
+    app/community/util.py:375-378) does `CommunityFlair.id.in_(tag_ids)`,
+    and SQLAlchemy accepts an empty list there but raises `ArgumentError` on a
+    bare string -- `''` is iterable but not a valid `IN` operand.
     """
     fields = {
         'title': 'a title', 'body': 'a body',
         'link_url': 'https://example.com/page', 'video_url': 'https://example.com/v.mp4',
         'nsfw': False, 'ai_generated': False, 'notify_author': True,
-        'language_id': None, 'tags': '', 'flair': '',
+        'language_id': None, 'tags': '', 'flair': [],
         'scheduled_for': None, 'repeat': None, 'timezone': 'UTC',
         'image_alt_text': '', 'sticky': False, 'nsfl': False,
         'mode': 'single', 'local_only': False, 'finish_in': '3d',
@@ -121,7 +152,10 @@ def _web_form(**over):
     for name, value in fields.items():
         if value is _OMIT:
             continue
-        setattr(form, name, None if value is None else _Field(value))
+        if value is None and name in _WEB_FORM_BARE_NONE_FIELDS:
+            setattr(form, name, None)
+        else:
+            setattr(form, name, _Field(value))
     return form
 
 
@@ -604,3 +638,291 @@ def test_api_poll_block_is_skipped_when_there_is_no_poll_key(db_session):
     edit_post(_api_input(), s.post, POST_TYPE_ARTICLE, SRC_API, user=s.user)
 
     assert Poll.query.filter_by(post_id=s.post.id).first() is None
+
+
+# ---------------------------------------------------------------------------
+# SRC_WEB: the form shape, :315-383
+# ---------------------------------------------------------------------------
+
+
+def test_web_branch_takes_the_link_url_for_a_link_post(db_session, http_mock):
+    """:320-321. `.strip()` at :321 is proved by the padding.
+
+    A url means :601 `is_image_url(url)` fires one HEAD. The seeded post has
+    url=None so :410's second call never happens.
+    """
+    s = _seed()
+    http_mock.head('https://example.com/doc').respond(200, headers={'Content-Type': 'text/html'})
+    http_mock.get('https://example.com/doc').respond(200, html='<html></html>')
+
+    edit_post(_web_form(link_url='  https://example.com/doc  '), s.post,
+              POST_TYPE_LINK, SRC_WEB, user=s.user)
+
+    assert s.post.url == 'https://example.com/doc'
+
+
+def test_web_branch_takes_the_video_url_for_a_video_post(db_session, http_mock):
+    """:322-323."""
+    s = _seed()
+    http_mock.head('https://example.com/clip.mp4').respond(200, headers={'Content-Type': 'video/mp4'})
+    http_mock.get('https://example.com/clip.mp4').respond(200, html='')
+
+    edit_post(_web_form(video_url='  https://example.com/clip.mp4  '), s.post,
+              POST_TYPE_VIDEO, SRC_WEB, user=s.user)
+
+    assert s.post.url == 'https://example.com/clip.mp4'
+    assert s.post.type == POST_TYPE_VIDEO
+
+
+def test_web_branch_keeps_the_existing_url_for_an_image_edit(db_session, http_mock):
+    """:324-325, BOTH conjuncts true: POST_TYPE_IMAGE and not from_scratch.
+
+    This is the one arm that reads `post.url` rather than the form. The brief
+    called for TWO HEADs (:410 and :601) against the same address, but that is
+    not what happens here: since `url = post.url` at :325, `url != post.url`
+    at :435 is False, so `url_changed` stays False, and the whole :565 block
+    -- including the :601 `is_image_url` call -- is skipped. Only the
+    unconditional :410 `is_image_url(post.url)` fires, so exactly one HEAD is
+    registered; a GET registration here would go uncalled and fail
+    `http_mock`'s `assert_all_called=True`.
+
+    Not in the brief: because :565's block never runs, `post.image_id` is
+    never set, and this function's federate step (:743) synchronously runs
+    `send_post`, which for a POST_TYPE_IMAGE post does
+    `post.image.source_url` (app/shared/tasks/pages.py:181) -- a crash on
+    `post.image is None` unrelated to what this test probes.
+    `community.local_only = True` makes :736 set `federate = False` first, so
+    the parsed url under test still lands but the unrelated federate crash
+    does not.
+    """
+    s = _seed(url='https://example.com/pic.png')
+    s.community.local_only = True
+    db.session.commit()
+    http_mock.head('https://example.com/pic.png').respond(200, headers={'Content-Type': 'image/png'})
+
+    edit_post(_web_form(), s.post, POST_TYPE_IMAGE, SRC_WEB, user=s.user,
+              from_scratch=False)
+
+    assert s.post.url == 'https://example.com/pic.png'
+
+
+def test_web_branch_clears_the_url_for_an_image_created_from_scratch(db_session):
+    """:324's second conjunct false, so :326-327 sets url=None. No HEAD, because
+    :565 `if url and ...` and :601 both short-circuit on a falsy url.
+
+    Not in the brief: with no url, `post.image_id` is never set, and this
+    function's federate step (:743) synchronously runs `send_post`, which for
+    a POST_TYPE_IMAGE post does `post.image.source_url`
+    (app/shared/tasks/pages.py:181) -- a crash on `post.image is None`
+    unrelated to what this test probes. `community.local_only = True` makes
+    :736 set `federate = False` first, so the parsed url under test still
+    lands but the unrelated federate crash does not.
+    """
+    s = _seed()
+    s.community.local_only = True
+    db.session.commit()
+    edit_post(_web_form(), s.post, POST_TYPE_IMAGE, SRC_WEB, user=s.user,
+              from_scratch=True)
+
+    assert s.post.url is None
+
+
+def test_web_branch_clears_the_url_for_an_article(db_session):
+    """:326-327 via the type dispatch falling all the way through."""
+    s = _seed()
+    edit_post(_web_form(), s.post, POST_TYPE_ARTICLE, SRC_WEB, user=s.user)
+
+    assert s.post.url is None
+
+
+def test_web_branch_reads_every_remaining_scalar_from_form_data(db_session):
+    """:318-319, :328-331, :337-339, and :388/:390 below the :384 marker.
+
+    :388 needs the user to be a moderator, owner or admin of the community for
+    `post.sticky` to be written at all; without that the sticky read never runs.
+    """
+    s = _seed()
+    make_community_member(s.user, s.community, is_moderator=True)
+
+    edit_post(_web_form(title='  web title  ', body='web body', nsfw=True,
+                        ai_generated=True, notify_author=False, timezone='Europe/Berlin',
+                        sticky=True, nsfl=True),
+              s.post, POST_TYPE_ARTICLE, SRC_WEB, user=s.user)
+
+    assert s.post.title == 'web title'
+    assert s.post.body == 'web body'
+    assert s.post.nsfw is True
+    assert s.post.ai_generated is True
+    assert s.post.notify_author is False
+    assert s.post.timezone == 'Europe/Berlin'
+    assert s.post.sticky is True
+    assert s.post.nsfl is True
+
+
+def test_web_branch_parses_tags_from_the_form_string(db_session):
+    """:332. Unconditional here -- the API branch guards the same call at :265."""
+    s = _seed()
+    edit_post(_web_form(tags='alpha,beta'), s.post, POST_TYPE_ARTICLE, SRC_WEB,
+              user=s.user)
+
+    db.session.expire(s.post)
+    assert sorted(t.name for t in s.post.tags) == ['alpha', 'beta']
+
+
+def test_web_branch_reads_flair_when_the_field_object_is_truthy(db_session):
+    """:333-334, true arm."""
+    s = _seed()
+    flair = make_community_flair(s.community, name='news')
+
+    edit_post(_web_form(flair=[flair.id]), s.post, POST_TYPE_ARTICLE,
+              SRC_WEB, user=s.user)
+
+    db.session.expire(s.post)
+    assert [f.id for f in s.post.flair] == [flair.id]
+
+
+def test_web_branch_leaves_flair_empty_when_the_field_object_is_falsy(db_session):
+    """:335-336. The guard at :333 tests the FIELD, not `.data`, so a form
+    without a flair field at all takes this arm -- `_web_form(flair=None)` sets
+    the attribute to None rather than to a _Field."""
+    s = _seed()
+    edit_post(_web_form(flair=None), s.post, POST_TYPE_ARTICLE, SRC_WEB, user=s.user)
+
+    db.session.expire(s.post)
+    assert list(s.post.flair) == []
+
+
+@pytest.mark.parametrize('image_alt_text,expected_reached', [
+    ('alt words', True),   # :340 both conjuncts true
+    (None, False),         # hasattr true, field falsy -- second conjunct false
+    (_OMIT, False),        # hasattr false -- first conjunct false
+])
+def test_web_branch_alt_text_needs_both_hasattr_and_a_truthy_field(
+        db_session, http_mock, image_alt_text, expected_reached):
+    """:340. Two conjuncts, three arms, and the witness is a real File.
+
+    `post.image` is set only on the image path, so this drives a .png url and
+    reads back `File.alt_text` written at :666 `if url and post.image:`.
+    """
+    s = _seed()
+    http_mock.head('https://example.com/pic.png').respond(200, headers={'Content-Type': 'image/png'})
+    http_mock.get('https://example.com/pic.png').respond(404)
+
+    edit_post(_web_form(link_url='https://example.com/pic.png',
+                        image_alt_text=image_alt_text),
+              s.post, POST_TYPE_LINK, SRC_WEB, user=s.user)
+
+    db.session.expire(s.post)
+    file = File.query.get(s.post.image_id)
+    assert file is not None
+    assert (file.alt_text == 'alt words') is expected_reached
+
+
+def test_web_branch_collects_non_empty_poll_choices_in_form_order(db_session):
+    """:343-353. The loop runs 1..15 and :347 drops the empty slots, so a poll
+    filled at 1, 3 and 15 proves both arms of the guard and the loop's extent."""
+    s = _seed()
+    edit_post(_web_form(choice_1='first', choice_3='third', choice_15='last'),
+              s.post, POST_TYPE_POLL, SRC_WEB, user=s.user)
+
+    rows = PollChoice.query.filter_by(post_id=s.post.id).order_by(PollChoice.sort_order).all()
+    assert [(r.choice_text, r.sort_order) for r in rows] == [
+        ('first', 1), ('third', 3), ('last', 15)]
+
+
+def test_web_branch_strips_poll_choice_text(db_session):
+    """:348's `.strip()`."""
+    s = _seed()
+    edit_post(_web_form(choice_1='  padded  '), s.post, POST_TYPE_POLL, SRC_WEB,
+              user=s.user)
+
+    rows = PollChoice.query.filter_by(post_id=s.post.id).all()
+    assert [r.choice_text for r in rows] == ['padded']
+
+
+def test_web_branch_sets_the_poll_end_when_finish_in_is_present(db_session):
+    """:354-355, true arm."""
+    s = _seed()
+    edit_post(_web_form(choice_1='a', finish_in='3d'), s.post, POST_TYPE_POLL,
+              SRC_WEB, user=s.user)
+
+    assert Poll.query.filter_by(post_id=s.post.id).first().end_poll is not None
+
+
+def test_web_branch_leaves_the_poll_end_unset_when_finish_in_is_absent(db_session):
+    """:354, false arm. The guard tests the FIELD, so finish_in=None takes it.
+
+    Not in the brief: with `finish_in=None`, `poll.end_poll` stays None, and
+    this function's federate step (:741/:743) synchronously runs the eager
+    Celery task, which for a POST_TYPE_POLL post does `ap_datetime(poll.end_poll)`
+    (app/activitypub/util.py:195) -- a crash on None unrelated to what this
+    test probes. `community.local_only = True` makes :736 set
+    `federate = False` first, so the parsing under test still runs but the
+    unrelated federate crash does not.
+    """
+    s = _seed()
+    s.community.local_only = True
+    db.session.commit()
+    edit_post(_web_form(choice_1='a', finish_in=None), s.post, POST_TYPE_POLL,
+              SRC_WEB, user=s.user)
+
+    assert Poll.query.filter_by(post_id=s.post.id).first().end_poll is None
+
+
+def test_web_branch_leaves_poll_data_none_for_a_non_poll_type(db_session):
+    """:356-357."""
+    s = _seed()
+    edit_post(_web_form(), s.post, POST_TYPE_ARTICLE, SRC_WEB, user=s.user)
+
+    assert Poll.query.filter_by(post_id=s.post.id).first() is None
+
+
+def test_web_branch_converts_event_times_from_the_forms_timezone_to_utc(db_session):
+    """:360-380. THE CONTRAST WITH :290.
+
+    The web branch attaches the form's timezone at :362-363 and CONVERTS with
+    `.astimezone(ZoneInfo('UTC'))` at :364-365 before stripping tzinfo at
+    :368-369. The API branch at :290 strips WITHOUT converting. So the same wall
+    clock submitted through the two branches lands on two different instants.
+
+    Europe/Berlin is UTC+2 on 2030-06-01, so 09:00 local is 07:00 UTC.
+    """
+    s = _seed()
+    edit_post(_web_form(event_timezone='Europe/Berlin',
+                        start_datetime=datetime(2030, 6, 1, 9, 0),
+                        end_datetime=datetime(2030, 6, 1, 10, 0)),
+              s.post, POST_TYPE_EVENT, SRC_WEB, user=s.user)
+
+    event = Event.query.filter_by(post_id=s.post.id).first()
+    assert event.start == datetime(2030, 6, 1, 7, 0)
+    assert event.end == datetime(2030, 6, 1, 8, 0)
+    assert event.start.tzinfo is None
+
+
+def test_web_branch_carries_every_remaining_event_field(db_session):
+    """:370-379, including the nested location dict.
+
+    Column names re-derived against app/models.py:3839-3855 and the write-back
+    at app/shared/post.py:709 (`max_attendees`), :712 (`online`), :713
+    (`online_link`) and :714 (`join_mode`) -- all four are real columns, so no
+    substitution was needed.
+    """
+    s = _seed()
+    edit_post(_web_form(max_attendees=42, online=True,
+                        online_link='https://meet.example/x', join_mode='request',
+                        irl_address='9 Lane', irl_city='Ville', irl_country='Elsewhere'),
+              s.post, POST_TYPE_EVENT, SRC_WEB, user=s.user)
+
+    event = Event.query.filter_by(post_id=s.post.id).first()
+    assert event.max_attendees == 42
+    assert event.online is True
+    assert event.online_link == 'https://meet.example/x'
+    assert event.join_mode == 'request'
+
+
+def test_web_branch_leaves_event_data_none_for_a_non_event_type(db_session):
+    """:381-382."""
+    s = _seed()
+    edit_post(_web_form(), s.post, POST_TYPE_ARTICLE, SRC_WEB, user=s.user)
+
+    assert Event.query.filter_by(post_id=s.post.id).first() is None
