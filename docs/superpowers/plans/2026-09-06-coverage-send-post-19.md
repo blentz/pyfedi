@@ -33,14 +33,14 @@ Copied verbatim from the spec. Every task's requirements implicitly include this
 
 **Spec success criterion 2 cannot be met as written, and this plan corrects it.**
 
-The spec asks for zero uncovered statements *and zero uncovered branch arms* in `:88-368`. Two arms are **unreachable**:
+The spec asks for zero uncovered statements *and zero uncovered branch arms* in `:88-371`. **THREE arms are unreachable — the two below, plus one more further down.** That count is stated identically in every paragraph of this section; if you find a different number anywhere on this page, the number is stale and three is correct. The first two:
 
 ```
-267:     if not community.local_only:      # missing arc (267, 307)
-330:     if not community.local_only:      # missing arc (330, 336)
+270:     if not community.local_only:      # missing arc (270, 310)
+333:     if not community.local_only:      # missing arc (333, 339)
 ```
 
-`community` is bound once at `:91` (`community = post.community`) and never reassigned anywhere in the function — verified by scanning `:88-368` for any `community =`. And `:153-154` is:
+`community` is bound once at `:91` (`community = post.community`) and never reassigned anywhere in the function — verified by scanning `:88-371` for any `community =`. And `:153-154` is:
 
 ```
 153:     if community.local_only or community.private:
@@ -49,25 +49,25 @@ The spec asks for zero uncovered statements *and zero uncovered branch arms* in 
 
 So `community.local_only` truthy returns at `:154`, and by `:270` it is always falsy. `not community.local_only` is therefore always `True`, and the false arms of `:270` and `:333` can never execute.
 
-**Two more arms are unreachable for different reasons, found while writing this plan.**
+**ONE more arm is unreachable, for a different reason, found while writing this plan.** This plan originally listed TWO here. The second — the true arm of what is now `:310` — was disproved in Task 5 round 1 and is NOT unreachable; it must be covered. The withdrawal is the first bullet below, kept in place rather than deleted so a reader who remembers the old claim finds its refutation where the claim used to be.
 
 ```
 196:       'name': post.title,          # set unconditionally, in the dict literal
 209:     if post.type != POST_TYPE_POLL:
 210:         page['name'] = post.title  # re-sets what :196 already set
 ...
-310:     if '@context' not in create:   # :272 may have deleted it -- SEE CORRECTION
+310:     if '@context' not in create:   # NOT unreachable -- :272 deletes it
 312:     if 'name' in page:             # :196 always put it there
 ```
 
-- **~~`:307`'s TRUE arm (`:308`) is unreachable.~~ THIS CLAIM IS FALSE AND IS WITHDRAWN.** Corrected in Task 5 round 1, verified against the tree at `e1692167`. The renumbered lines are `:310` and `:311`. `create` is built at `:253-262` with `'@context': default_context()` at `:260` — but `:272` is `del create['@context']`, reached whenever `community.is_local()` is true at `:271`. A local community therefore arrives at `:310` with no `@context`, and the TRUE arm at `:311` runs. It is not merely reachable, it is the DEFAULT path: `_seed()` builds a local community, so most tests in the file already take it. **Task 7 must cover both arms of `:310`, and Task 8 must NOT register its true arm as unreachable.**
+- **~~`:307`'s TRUE arm (`:308`) is unreachable.~~ THIS CLAIM IS FALSE AND IS WITHDRAWN.** Corrected in Task 5 round 1, verified against the tree at `e1692167`. The struck-through text is quoted verbatim as it was written, so `:307` and `:308` there are PRE-FIX NUMBERING and are the only stale line numbers left in this section, deliberately; the renumbered lines are `:310` and `:311`. `create` is built at `:253-262` with `'@context': default_context()` at `:260` — but `:272` is `del create['@context']`, reached whenever `community.is_local()` is true at `:271`. A local community therefore arrives at `:310` with no `@context`, and the TRUE arm at `:311` runs. It is not merely reachable, it is the DEFAULT path: `_seed()` builds a local community, so most tests in the file already take it. **Task 7 must cover both arms of `:310`, and Task 8 must NOT register its true arm as unreachable.**
 - **`:312`'s FALSE arm, arc `(312, 314)`, is unreachable.** `:196` sets `page['name']` unconditionally inside the dict literal, and nothing deletes it before `:312` — `:313` is the only `del` and it is inside the true arm. So `'name' in page` is always true. (Re-verified against the tree at `e1692167`, not merely renumbered.)
 
 **Criterion 2 is amended to:** zero uncovered statements, and zero uncovered branch arms **except three**: the false arms of `:270` and `:333`, and the false arm of `:312`. Task 8 registers all three with a written unreachability argument against `tests/README.md` fact 75's catalogue of causes. **This was FOUR until Task 5 round 1 disproved the fourth** — the true arm of what is now `:310` is reachable via `:272`'s `del`; see the withdrawn bullet above.
 
-Do not chase these four arms. Do not add a test that appears to reach them.
+Do not chase these THREE arms — the false arms of `:270`, `:333` and `:312`. Do not add a test that appears to reach them. **`:310` is not one of them:** both of its arms are reachable and Task 7 must cover both, as the withdrawn bullet above says.
 
-**Two findings fall out of the second pair, and Task 9 registers both.**
+**Two findings fall out of the `name`/`@context` group above, and Task 9 registers both.**
 
 1. **`:209-210` is a redundant statement.** `:196` already assigned `page['name'] = post.title` for every post type; `:210` assigns the same value again for non-polls only. It has no effect. This is fact 75's sixth cause — the statement-scoped one sub-project 16 added — appearing in the wild.
 2. **`:309`'s comment says "amend copy of the Create", and no copy is made.** `:257` is `'object': page` — a reference — and `:314` is `note = page`, another reference. So `:313`'s `del`, `:315`'s `content` reset and `:317`'s type change all mutate the very dict `create['object']` points at. The sends at `:298`, `:300`, `:302` and `:306` happen *before* `:309`, and `send_post_request` signs the body inside the call, so delivery order saves this from being a live defect — but the comment describes a copy that does not exist, and a future edit that moved a send below `:309` would silently ship the mutated object. Register it as a latent hazard with that reasoning, not as a crash.
