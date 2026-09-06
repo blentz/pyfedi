@@ -4,7 +4,7 @@
 
 **Goal:** Cover `move_object`, `move_post` and the `make_post`/`edit_post` wrappers in `app/shared/tasks/pages.py`, landing two production changes, taking the module from 84.91% to a full close.
 
-**Architecture:** All tests append to the existing `tests/test_shared_tasks_send_post.py` (2334 lines, 60 tests), which already carries the prelude they need. New helpers are appended at the **end** of that file rather than beside their siblings, because 11 committed citations point into it and a mid-file insertion would shift them. Assertions are on **serialized outbound request bytes** via respx, never on in-memory dicts.
+**Architecture:** All tests append to the existing `tests/test_shared_tasks_send_post.py` (2334 lines, **64 collected tests** — `grep -c '^def test_'` undercounts by 3 parametrised expansions; always use the collected count), which already carries the prelude they need. New helpers are appended at the **end** of that file rather than beside their siblings, because 11 committed citations point into it and a mid-file insertion would shift them. Assertions are on **serialized outbound request bytes** via respx, never on in-memory dicts.
 
 **Tech Stack:** pytest, respx/httpx, SQLAlchemy, Flask, Celery (eager), podman-compose via `./run_tests.sh`.
 
@@ -62,8 +62,10 @@ Copied verbatim from the spec. Every task's requirements implicitly include this
 `tests/test_shared_tasks_send_post.py:71` currently reads `from app.shared.tasks.pages import send_post`. Re-derive that line number against the current tree, then widen it **in place**:
 
 ```python
-from app.shared.tasks.pages import edit_post, make_post, move_object, move_post, send_post
+from app.shared.tasks.pages import edit_post, make_post as make_post_task, move_object, move_post, send_post
 ```
+
+**`make_post` MUST be aliased.** `from tests.factories import (..., make_post, ...)` runs two lines below and would rebind the bare name, so a later `make_post(...)` call would reach the FACTORY, not the Celery wrapper — silently, with a confusing failure. `edit_post`, `move_object`, `move_post` and `send_post` do not collide.
 
 All five names are added **now**, in one edit, even though `make_post` and `edit_post` are not used until Task 7 — so no later task has to touch this line again. Do not add a second import line: that would shift the 11 citations pointing into this file.
 
@@ -168,7 +170,7 @@ def test_a_remote_community_receives_the_bare_move(db_session, http_mock):
 - [ ] **Step 4: Run the file**
 
 Run: `./run_tests.sh tests/test_shared_tasks_send_post.py -q`
-Expected: 61 passed (60 existing + 1 new).
+Expected: **65** passed (64 existing + 1 new).
 
 - [ ] **Step 5: Commit**
 
@@ -230,7 +232,7 @@ def test_a_dormant_instance_does_not_receive_the_move(db_session, http_mock):
 - [ ] **Step 2: Run them**
 
 Run: `./run_tests.sh tests/test_shared_tasks_send_post.py -q`
-Expected: 63 passed.
+Expected: **67** passed.
 
 - [ ] **Step 3: Write the failing test for the guard that does not exist yet**
 
@@ -291,7 +293,7 @@ and `wc -l` is still **435**.
 - [ ] **Step 6: Run the file**
 
 Run: `./run_tests.sh tests/test_shared_tasks_send_post.py -q`
-Expected: 64 passed.
+Expected: **68** passed.
 
 - [ ] **Step 7: Commit**
 
@@ -397,7 +399,7 @@ Expected: `:396` reads `raise TaskError('Unsupported origin or target')`, and `w
 - [ ] **Step 5: Run the file**
 
 Run: `./run_tests.sh tests/test_shared_tasks_send_post.py -q`
-Expected: 66 passed.
+Expected: **70** passed.
 
 - [ ] **Step 6: Verify no citation shifted**
 
@@ -475,7 +477,7 @@ def test_the_remote_move_is_signed_as_the_user(db_session, http_mock):
 - [ ] **Step 2: Run the file**
 
 Run: `./run_tests.sh tests/test_shared_tasks_send_post.py -q`
-Expected: 68 passed.
+Expected: **72** passed.
 
 - [ ] **Step 3: Commit**
 
@@ -607,7 +609,7 @@ def test_one_following_instance_is_skipped_while_another_receives_the_move(
 - [ ] **Step 2: Run the file**
 
 Run: `./run_tests.sh tests/test_shared_tasks_send_post.py -q`
-Expected: 73 passed.
+Expected: **77** passed.
 
 - [ ] **Step 3: Commit**
 
@@ -750,7 +752,7 @@ def test_move_post_closes_the_session_on_the_happy_path(
 - [ ] **Step 2: Run the file**
 
 Run: `./run_tests.sh tests/test_shared_tasks_send_post.py -q`
-Expected: 78 passed.
+Expected: **82** passed.
 
 - [ ] **Step 3: Commit**
 
@@ -774,13 +776,14 @@ Subject: `test: cover move_post's guard arms and rollback path`
 
 ```python
 def test_make_post_delivers_a_create(db_session, http_mock):
-    """`make_post` (:63-72) delegates to `send_post` with the default
+    """`make_post` (:63-72), imported as `make_post_task` to avoid the factory
+    of the same name, delegates to `send_post` with the default
     `edit=False`. `type == 'Create'` is the witness that separates it from
     `edit_post`."""
     s = _seed(local_community=False, with_keys=True)
     route = _remote_inbox(s, http_mock)
 
-    make_post(None, s.post.id)
+    make_post_task(None, s.post.id)
 
     assert _sent_activity(route)['type'] == 'Create'
 
@@ -798,7 +801,7 @@ def test_make_post_rolls_back_and_closes_when_send_post_raises(
     record = _recording_task_session(monkeypatch)
 
     with pytest.raises(AttributeError):
-        make_post(None, s.post.id + 1000)
+        make_post_task(None, s.post.id + 1000)
 
     assert record.calls == ['rollback', 'close']
 
@@ -823,7 +826,7 @@ def test_edit_post_rolls_back_and_closes_when_send_post_raises(
 - [ ] **Step 2: Run the file**
 
 Run: `./run_tests.sh tests/test_shared_tasks_send_post.py -q`
-Expected: 81 passed.
+Expected: **85** passed.
 
 - [ ] **Step 3: Commit**
 
