@@ -2,9 +2,12 @@
 
 `app/shared/post.py:250-754` is the LOCAL post editor. Its federated twin,
 `update_post_from_activity`, was taken to zero uncovered statements by
-sub-project 17; two of that sub-project's findings (D287 and D292) are
+sub-project 17; two of that sub-project's findings (D287 and D286) are
 statements about how the two copies disagree, and both were found by reading
-this function without ever executing it. This file executes it.
+this function without ever executing it. This file executes it. (The other
+finding formerly mislabelled here is a different, still-open one -- `Post.new`'s
+unguarded `choice_ap['name']` read at `app/models.py:2205-2209`, the
+create-path sibling of D284 -- and has no test in this file.)
 
 SCOPE. Two clusters, 175 uncovered when this file was started:
 
@@ -225,7 +228,8 @@ def _make_admin(user):
     D295, and it is why `grant_permission` (which creates a Role with an AUTO
     id) is not enough: the filter is on `user_role.c.role_id == ROLE_ADMIN`, so
     the role's id must BE ROLE_ADMIN. The get-or-create below is the same shape
-    as tests/test_ap_update_post_tails.py:3021.
+    as tests/test_ap_update_post_tails.py:3039 (`def _make_admin`), whose
+    get-or-create body is at :3071-3075.
     """
     role = db.session.get(Role, ROLE_ADMIN)
     if role is None:
@@ -1076,13 +1080,15 @@ def test_web_branch_leaves_event_data_none_for_a_non_event_type(db_session):
 
 
 # ---------------------------------------------------------------------------
-# The domain and notify block, :565-598 -- D292
+# The domain and notify block, :565-598 -- D286 (the finding formerly
+# mislabelled here is a different, still-open one: Post.new's
+# app/models.py:2205-2209 unguarded choice_ap['name'] read)
 # ---------------------------------------------------------------------------
 
 
 def test_the_notify_dict_is_json_serialisable_and_the_edit_is_not_half_applied(
         db_session, http_mock):
-    """D292, at the site the register calls the worst of its four.
+    """D286, at the site the register calls the worst of its four.
 
     Before the fix, :577 puts the Domain ORM object into `targets_data`, which
     becomes `Notification.targets`, a db.JSON column. The flush raises
@@ -1150,7 +1156,7 @@ def test_the_notify_dict_is_json_serialisable_and_the_edit_is_not_half_applied(
 
 
 def test_the_notify_dict_carries_every_key_the_four_writers_share(db_session, http_mock):
-    """:573-579. The dict's SHAPE is the thing D292's arbitration protects:
+    """:573-579. The dict's SHAPE is the thing D286's arbitration protects:
     `orig_post_domain` has four writers and zero readers, so the argument for
     keeping the key is that the four stay comparable.
 
@@ -1228,10 +1234,10 @@ def test_a_moderator_of_a_notify_mods_domain_is_notified(db_session, http_mock):
     rather than latent: every notify_mods domain took down the whole edit.
 
     This is the FIRST test to reach :588 `db.session.add(notify)` through the
-    moderator loop; the D292 tests above reach the identical Notification
+    moderator loop; the D286 tests above reach the identical Notification
     construction through the ADMIN loop at :590-598 instead. Both paths read
     the same `targets_data` built at :573-579, so :577 now has two callers and
-    the assertion on `orig_post_domain` below re-proves D292's fix from this
+    the assertion on `orig_post_domain` below re-proves D286's fix from this
     second entry.
     """
     s = _seed(domain_name='suspicious.example', notify_mods=True)
@@ -1535,7 +1541,7 @@ def test_a_user_who_is_both_moderator_and_admin_is_notified_once(db_session, htt
     and already_notified was always empty when :592 read it.
 
     That is the real reason Task 4 lands before Task 6 -- not, as the spec's
-    section 4.1 said, because D292's test needed it. D292's test reaches :577
+    section 4.1 said, because D286's test needed it. D286's test reaches :577
     through the admin loop with D287 unfixed, because the dict at :573-579 is
     built before both loops.
     """
