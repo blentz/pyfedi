@@ -25,7 +25,7 @@ quietly breaks a render path:
   `post.type == POST_TYPE_LINK`/`VIDEO`/`IMAGE`, likewise excluded by the
   POST_TYPE_ARTICLE on the preceding line.
 - Every Python consumer reads it for truth (`if post.url:`). The three that do
-  not -- `app/shared/tasks/pages.py:179` and `:316`, `app/post/routes.py:1027`
+  not -- `app/shared/tasks/pages.py:179` and `:319`, `app/post/routes.py:1027`
   -- are all gated on POST_TYPE_LINK/VIDEO too.
 
 Two behaviours are pinned below, and only the second discriminates a fix that

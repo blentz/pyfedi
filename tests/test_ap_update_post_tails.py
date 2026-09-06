@@ -1102,7 +1102,7 @@ class TestQuestionEditPath:
 
         No claim is made here about how often a peer sends this shape. PyFedi
         itself does not: both of its outbound emitters, `app/activitypub/util.py:186-193`
-        and `app/shared/tasks/pages.py:228`, always write
+        and `app/shared/tasks/pages.py:229`, always write
         `'replies': {'type': 'Collection', 'totalItems': N}` (with `N` forced to
         0 when not an edit), so PyFedi's own poll Edit passes all three counting
         guards and arrives as the first shape the class docstring lists. What is

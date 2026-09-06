@@ -1,6 +1,6 @@
 """`send_post` -- the Celery-path builder and deliverer of an ActivityPub Page.
 
-`app/shared/tasks/pages.py:88-368`. This is the second of two Page builders in
+`app/shared/tasks/pages.py:88-371`. This is the second of two Page builders in
 the codebase; the other is `post_to_page` (app/activitypub/util.py:132-219),
 reached from the outbox collection view at app/activitypub/routes.py:2033. They
 are near-twins and their disagreements are findings D298, D299 and D300.
@@ -23,12 +23,12 @@ without help.
 
 NOTE ON :153, because sub-project 18 relied on the opposite. Setting
 `community.local_only = True` does NOT merely skip delivery -- it returns at
-:154 before the builder runs at all. That is also why the false arms of :267
-and :330 (`if not community.local_only:`) are UNREACHABLE: `community` is bound
-once at :91 and never reassigned, so by :267 the flag is always falsy. Those two
+:154 before the builder runs at all. That is also why the false arms of :270
+and :333 (`if not community.local_only:`) are UNREACHABLE: `community` is bound
+once at :91 and never reassigned, so by :270 the flag is always falsy. Those two
 arms are registered as unreachable rather than chased.
 
-STOPPING BEFORE THE NETWORK. :336-338 is
+STOPPING BEFORE THE NETWORK. :339-341 is
 `followers = ...; if not followers: return`. A post whose author has no inward
 UserFollower rows ends the function there. Combined with a local community that
 has no following_instances(), the entire builder runs with zero outbound
@@ -195,12 +195,12 @@ def _remote_inbox(s, http_mock, inbox=PEER_INBOX):
     `create`. Returns the respx route the outbound Create lands on; pair it
     with `_sent_activity` below.
 
-    Everything the builder produces between :163 and :259 lives in two locals,
+    Everything the builder produces between :163 and :262 lives in two locals,
     `page` and `create`, and is never persisted. The only way to read them is
-    to let the function actually deliver. pages.py:302-304 is the cheapest
-    route to that: the `else` arm of :268, taken when the community is NOT
+    to let the function actually deliver. pages.py:305-307 is the cheapest
+    route to that: the `else` arm of :271, taken when the community is NOT
     local, calls `send_post_request(community.ap_inbox_url, create, ...)` with
-    `create['object']` still bound to `page` (:254).
+    `create['object']` still bound to `page` (:257).
 
     Three things have to be true for that call to become an observable HTTP
     request, and this helper plus its caller supply all three:
@@ -224,10 +224,10 @@ def _remote_inbox(s, http_mock, inbox=PEER_INBOX):
     already happened by the time `_send` returns.
 
     WHY THE HTTP BODY AND NOT A MONKEYPATCHED RECORDER. `page` keeps being
-    mutated after delivery -- :310 deletes `name`, :312-327 rewrite `content`
-    and `type`, :328 adds `inReplyTo` -- and `create['object']` is the same
+    mutated after delivery -- :313 deletes `name`, :315-330 rewrite `content`
+    and `type`, :331 adds `inReplyTo` -- and `create['object']` is the same
     object throughout. A recorder that kept the dict would therefore be read
-    back in its post-:328 state, not the state that was sent. respx captures
+    back in its post-:331 state, not the state that was sent. respx captures
     the serialized request bytes at :494, so `_sent_activity` returns a true
     snapshot of what left the process.
 
@@ -493,8 +493,8 @@ def test_a_local_only_or_private_community_stops_before_the_builder(db_session, 
     """:153-154, both disjuncts.
 
     THIS IS THE RETURN SUB-PROJECT 18 WAS ACTUALLY USING. Its tests set
-    `community.local_only = True` believing it skipped delivery at :267; it in
-    fact returns here, before the builder. That is also why :267's and :330's
+    `community.local_only = True` believing it skipped delivery at :270; it in
+    fact returns here, before the builder. That is also why :270's and :333's
     false arms are unreachable -- see this file's module docstring.
     """
     s = _seed(body='hello @mentioned@test.piefed.local')
@@ -537,12 +537,12 @@ def test_a_remote_community_on_a_blocked_instance_stops(db_session):
     :147 -- it does not distinguish this early return from the function
     running to completion, since completion also leaves exactly one
     notification. But completion here would additionally call
-    `send_post_request(community.ap_inbox_url, ...)` at :303 (the remote,
-    non-`is_local` arm of :268) with `ap_inbox_url` left unset (None) by
+    `send_post_request(community.ap_inbox_url, ...)` at :306 (the remote,
+    non-`is_local` arm of :271) with `ap_inbox_url` left unset (None) by
     `_seed`/`make_community`; `post_request` (app/activitypub/signature.py:
     109-111) logs that as an `ActivityPubLog` failure row rather than raising.
     So `ActivityPubLog.query.count() == 0` DOES distinguish the two: it is
-    zero only if the function returned at :161 before reaching :303.
+    zero only if the function returned at :161 before reaching :306.
     """
     s = _seed(body='hello @mentioned@test.piefed.local', local_community=False)
     assert s.community.is_local() is False
@@ -567,7 +567,7 @@ def test_a_remote_community_on_a_blocked_instance_stops(db_session):
 # locals -- `type`, `tag`, `cc` -- that are read into the `page`/`create`
 # dicts at :185, :188-189 and never persisted or otherwise exposed. With the
 # communities and posts this file's tests build, the builder's own outbound
-# calls at :291-304 and :330-334 are never entered either: no peer instance
+# calls at :294-307 and :333-337 are never entered either: no peer instance
 # follows the local community and no `UserFollower` row exists, so
 # `send_post_request` is never invoked, leaving nothing -- mocked or real --
 # to inspect for `type`, `tag` or `cc`.
@@ -720,7 +720,7 @@ def test_an_image_post_with_no_image_row_does_not_crash(db_session):
     app/activitypub/util.py:172 guards it in the sibling builder.
 
     NO DELIVERY, AND NO `http_mock`, DELIBERATELY. The builder at :177-181 runs
-    long before the outbound calls at :291-334, so the crash this test names
+    long before the outbound calls at :294-337, so the crash this test names
     happens with a local community and zero requests. Adding a registered route
     would make `http_mock`'s `assert_all_called=True` (tests/conftest.py:288-295)
     raise its own teardown failure alongside the AttributeError, obscuring the
@@ -783,3 +783,155 @@ def test_a_non_image_post_with_an_image_row_gets_no_image_attachment(db_session,
     assert _attachment_of(route) == []
     assert _image_of(route) == {'type': 'Image',
                                 'url': 'https://example.com/pic.png'}
+
+
+# ---------------------------------------------------------------------------
+# D298 -- ap_datetime on nullable timestamps, :224-225, :233-236
+# ---------------------------------------------------------------------------
+#
+# `ap_datetime` (app/utils.py:2293-2294) is one statement,
+# `return date_time.isoformat() + '+00:00'`, with no None guard, and it has 29
+# call sites. The fix is therefore at the three callers here, not in
+# `ap_datetime`: most of the other 28 pass a non-nullable column, and making
+# `ap_datetime` return None would put `"endTime": null` on the wire, which a
+# peer cannot tell apart from a missing value without knowing our schema. An
+# ABSENT key is unambiguous, and it is what the sibling builder already does --
+# app/activitypub/util.py:168 guards its own `updated` key by omitting it.
+#
+# That is why every crash test below also asserts the key is ABSENT. Omission
+# is the whole of the arbitration, and nothing else in this file defends it: a
+# guard that emitted None instead would pass a test that only checked for the
+# absence of a traceback.
+#
+# THE SAME THREE READS EXIST UNFIXED IN THE OUTBOX BUILDER, at
+# app/activitypub/util.py:195, :200 and :201. They are reached from the outbox
+# collection view (app/activitypub/routes.py:2033), not from this Celery task,
+# and stay registered as D298.
+
+
+def _page_of(route):
+    """The Page object of the delivered Create, as it left the process.
+
+    Read it off the wire rather than off `page`: :314-331 keep mutating that
+    same dict after delivery. See `_remote_inbox`'s docstring.
+    """
+    return _sent_activity(route)['object']
+
+
+def test_a_poll_with_no_end_time_does_not_crash(db_session, http_mock):
+    """D298 at :225. `Poll.end_poll` (app/models.py:3782) is nullable, and
+    `edit_post` writes it only under `if 'end_poll' in poll_data and
+    poll_data['end_poll']` (app/shared/post.py:687), so a poll created or
+    edited with no end time reaches this call with None.
+
+    Before the fix this raised, verbatim:
+    `AttributeError: 'NoneType' object has no attribute 'isoformat'`
+    at app/utils.py:2294, from app/shared/tasks/pages.py:224.
+
+    The `endTime` assertion is the load-bearing half. Completing without
+    raising only proves the read was skipped; it does not prove the key was
+    omitted rather than emitted as null, which is the choice being made here.
+    """
+    s = _seed(post_type=POST_TYPE_POLL, local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    db.session.add(Poll(post_id=s.post.id, end_poll=None, mode='single'))
+    db.session.commit()
+
+    _send(s.post)
+
+    page = _page_of(route)
+    assert 'endTime' not in page
+    assert page['type'] == 'Question'
+
+
+def test_an_event_with_no_start_does_not_crash(db_session, http_mock):
+    """D298 at :234. `Event.start` (app/models.py:3841) is nullable, and
+    `edit_post` writes it only under `if 'start' in event_data`
+    (app/shared/post.py:703-704).
+
+    Before the fix this raised, verbatim:
+    `AttributeError: 'NoneType' object has no attribute 'isoformat'`
+    at app/utils.py:2294, from app/shared/tasks/pages.py:232.
+
+    `timezone` is set here because `edit_post` always writes one --
+    app/shared/post.py:708 is `event_data.get('timezone', 'UTC')`, with a
+    default -- so a start-less event on the reachable path still has a
+    timezone. That matters: it is what makes :322 a genuine `start`-only
+    guard rather than one covering for a second missing column.
+    """
+    s = _seed(post_type=POST_TYPE_EVENT, local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    db.session.add(Event(post_id=s.post.id, start=None, end=None,
+                         timezone='UTC'))
+    db.session.commit()
+
+    _send(s.post)
+
+    page = _page_of(route)
+    assert 'startTime' not in page
+    assert 'endTime' not in page
+    assert page['type'] == 'Event'
+
+
+def test_an_event_with_a_start_but_no_end_does_not_crash(db_session, http_mock):
+    """D298 at :236, reachable only once :233 is guarded. `Event.end`
+    (app/models.py:3842) is nullable and `edit_post` writes it only under
+    `if 'end' in event_data and event_data['end']` (app/shared/post.py:705).
+
+    Before the fix this raised, verbatim:
+    `AttributeError: 'NoneType' object has no attribute 'isoformat'`
+    at app/utils.py:2294, from app/shared/tasks/pages.py:233.
+
+    SEPARATE FROM THE TEST ABOVE BECAUSE THE TWO GUARDS ARE SEPARATELY
+    LOAD-BEARING: guarding `start` alone leaves this shape crashing on the
+    next statement. `startTime` is asserted present here as well, so the test
+    cannot pass by both guards having closed.
+    """
+    from datetime import datetime
+    s = _seed(post_type=POST_TYPE_EVENT, local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    db.session.add(Event(post_id=s.post.id, start=datetime(2030, 6, 1, 9, 0),
+                         end=None, timezone='UTC'))
+    db.session.commit()
+
+    _send(s.post)
+
+    page = _page_of(route)
+    assert page['startTime'] == '2030-06-01T09:00:00+00:00'
+    assert 'endTime' not in page
+
+
+def test_a_poll_with_an_end_time_still_emits_endTime(db_session, http_mock):
+    """:224's true arm. Without this, `if False:` would pass the crash test
+    above and silently drop `endTime` for every poll that has one."""
+    from datetime import datetime
+    s = _seed(post_type=POST_TYPE_POLL, local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    db.session.add(Poll(post_id=s.post.id, end_poll=datetime(2030, 6, 1, 12, 0),
+                        mode='single'))
+    db.session.commit()
+
+    _send(s.post)
+
+    assert _page_of(route)['endTime'] == '2030-06-01T12:00:00+00:00'
+
+
+def test_an_event_with_both_times_still_emits_both_keys(db_session, http_mock):
+    """:233 and :235, both true arms.
+
+    Both keys are asserted in one test because a single Event row carries
+    both columns; they are still separately killed, because `if False:` on
+    either guard drops only that guard's key and this asserts each by name.
+    """
+    from datetime import datetime
+    s = _seed(post_type=POST_TYPE_EVENT, local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    db.session.add(Event(post_id=s.post.id, start=datetime(2030, 6, 1, 9, 0),
+                         end=datetime(2030, 6, 1, 10, 0), timezone='UTC'))
+    db.session.commit()
+
+    _send(s.post)
+
+    page = _page_of(route)
+    assert page['startTime'] == '2030-06-01T09:00:00+00:00'
+    assert page['endTime'] == '2030-06-01T10:00:00+00:00'
