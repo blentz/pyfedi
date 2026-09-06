@@ -579,7 +579,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
                             }
             if domain.notify_mods:
                 for community_member in post.community.moderators():
-                    if community_member.is_local():
+                    if community_member.user.is_local():
                         notify = Notification(title='Suspicious content', url=post.ap_id,
                                               user_id=community_member.user_id, author_id=user.id,
                                               notif_type=NOTIF_REPORT,
