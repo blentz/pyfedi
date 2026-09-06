@@ -1763,7 +1763,7 @@ def test_an_inboxless_follower_instance_is_skipped(db_session):
 # `test_a_non_poll_marks_the_domain_as_sent_to` pair.
 #
 # :333's FALSE arm, arc (333, 339), is unreachable and is not chased here.
-# `community` is bound once at :91 and never rebound anywhere in :88-371, and
+# `community` is bound once at :91 and never rebound anywhere in :88-352, and
 # :153-154 is `if community.local_only or community.private: return` -- so
 # `not community.local_only` is necessarily true by the time :333 is evaluated.
 # `test_a_local_only_or_private_community_stops_before_the_builder` above pins
