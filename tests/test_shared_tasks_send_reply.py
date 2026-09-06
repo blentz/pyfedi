@@ -65,11 +65,13 @@ import pytest
 from app import db
 from app.constants import NOTIF_MENTION
 from app.models import (
-    ActivityPubLog, BannedInstances, Instance, Notification, PostReply,
+    ActivityPubLog, BannedInstances, CommunityBan, Instance, Notification,
+    PostReply,
 )
 from app.shared.tasks.notes import send_reply
 from tests.factories import (
-    make_community, make_instance, make_post, make_post_reply, make_user,
+    make_community, make_community_ban, make_instance, make_instance_block,
+    make_post, make_post_reply, make_user,
 )
 
 
@@ -893,3 +895,194 @@ def test_a_notified_recipients_unread_count_is_incremented(db_session):
 
     db.session.refresh(mentioned)
     assert mentioned.unread_notifications == before + 1
+
+
+# ---------------------------------------------------------------------------
+# The three early returns, :143-151
+# ---------------------------------------------------------------------------
+#
+# `:143` is `if community.local_only or community.private or not
+# community.instance.online():` -- THREE disjuncts, not two. The middle one,
+# `community.private`, is already covered above by
+# `test_a_private_community_does_not_federate_the_reply` /
+# `test_a_non_private_community_of_the_same_shape_does_federate`; it is not
+# repeated here. This block covers the FIRST disjunct (`local_only`), the
+# THIRD (`not community.instance.online()`, via both `dormant` and
+# `gone_forever`), `:147-148`'s `CommunityBan` return, and `:149-151`'s
+# not-local-community guard in both its disjuncts and its false arm.
+#
+# THE WITNESS IS `ActivityPubLog.query.count()`, not the mention
+# notification at `:118-141`. That block runs BEFORE `:143`, so "a
+# notification landed" is true whether the function returns at `:144`/
+# `:148`/`:151` or runs to completion -- it cannot tell the two apart and is
+# not used here. `post_request` (`app/activitypub/signature.py:103-105`,
+# see `test_a_private_community_does_not_federate_the_reply` above) inserts
+# an `ActivityPubLog` row for every outbound attempt before it ever touches
+# the transport, so a seed that WOULD deliver if nothing stopped it -- proven
+# by the existing `test_a_non_private_community_of_the_same_shape_does_
+# federate` baseline of exactly one row for the identical remote+deliverable
+# shape -- gives zero rows only if the return actually fired.
+
+
+def test_a_local_only_community_does_not_federate_the_reply(db_session):
+    """:143's FIRST disjunct -- `community.local_only`.
+
+    Same remote+deliverable shape as `test_a_non_private_community_of_the_
+    same_shape_does_federate` (that test's `local_only=False` is this test's
+    control), with `local_only=True` instead. `private` stays at its column
+    default of `False` and the instance stays online, isolating this one
+    disjunct.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    s.community.local_only = True
+    db.session.commit()
+
+    _send(s)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_dormant_instance_does_not_federate_the_reply(db_session):
+    """:143's THIRD disjunct -- `not community.instance.online()` -- via the
+    `dormant` column. `Instance.online()` (`app/models.py:118-119`) is
+    `not (self.dormant or self.gone_forever)`, so setting `dormant=True`
+    alone is enough to flip it. `local_only` and `private` stay at their
+    `False` defaults.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    s.community.instance.dormant = True
+    db.session.commit()
+
+    _send(s)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_gone_forever_instance_does_not_federate_the_reply(db_session):
+    """:143's THIRD disjunct again, the OTHER column -- `gone_forever`. Kept
+    as a separate test from the `dormant` one above because `Instance.
+    online()` reads both columns independently and either alone must flip
+    the guard; a single test setting both would not tell them apart.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    s.community.instance.gone_forever = True
+    db.session.commit()
+
+    _send(s)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_banned_author_does_not_federate_the_reply(db_session):
+    """:147-148 -- `CommunityBan` for `(user_id, community_id)`. `:143`
+    stays false here (the community is not local_only, not private, and its
+    instance is online), so this isolates the second return: without it,
+    the remote+deliverable shape below is the same one `test_a_non_private_
+    community_of_the_same_shape_does_federate` shows produces exactly one
+    `ActivityPubLog` row.
+
+    `make_community_ban` (`tests/factories.py:414-436`) defaults `banned_by`
+    to `community.user_id`, which `make_community` (`tests/factories.py:139`)
+    hardcodes to `1` -- the same id `s.user` gets as the first `User` row
+    this test creates, so the ban is self-authored. `CommunityBan` places no
+    constraint against that; `:146`'s query only cares about `(user_id,
+    community_id)`.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    make_community_ban(s.user, s.community)
+
+    _send(s)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_blocked_remote_instance_does_not_federate_the_reply(db_session):
+    """:149-151's FIRST disjunct -- `user.has_blocked_instance(community.
+    instance.id)`.
+
+    `assert s.community.is_local() is False` is not ceremony: `Community.
+    is_local()` (`app/models.py:795-796`) is `self.ap_id is None or
+    self.profile_id().startswith(SERVER_URL)`, a DISJUNCTION, and
+    `profile_id()` falls back to a computed default when `ap_profile_id` is
+    unset -- so a seed that set only `ap_id` would leave this returning
+    `True` and `:149`'s `if not community.is_local():` would never open,
+    silently skipping the very block this test targets. `_seed(local_
+    community=False)` sets both `ap_id` and `ap_profile_id` (see its
+    docstring), and this assertion is what would catch it if that ever
+    regressed.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    assert s.community.is_local() is False
+    make_instance_block(s.user, s.community.instance)
+
+    _send(s)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_banned_remote_instance_does_not_federate_the_reply(db_session):
+    """:149-151's SECOND disjunct -- `instance_banned(community.instance.
+    domain)`.
+
+    Same `is_local()` hazard as the test above, so the same assertion is
+    made immediately after seeding. `BannedInstances` is the table
+    `instance_banned` (`app/utils.py:2335-2356`) queries; `_make_deliverable`
+    (called first) puts the community's instance on `peer.example`, so the
+    row is added for that domain. `instance_banned` is `@cache.memoize`d, but
+    `tests/conftest.py:68` sets `CACHE_TYPE = 'NullCache'` for the whole
+    suite, so there is no stale-verdict hazard from the earlier `BannedInstances`
+    row `test_a_banned_remote_host_mention_is_swallowed_by_the_remote_except`
+    adds for the same domain in a different test.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    assert s.community.is_local() is False
+    db.session.add(BannedInstances(domain=s.community.instance.domain, reason='test'))
+    db.session.commit()
+
+    _send(s)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_local_community_skips_the_remote_instance_checks_entirely(db_session):
+    """:149's FALSE arm -- `not community.is_local()` is `False` for the
+    default (local) community, so `:150-151`'s block is never even
+    evaluated, let alone returned from.
+
+    A WEAKER TEST WOULD JUST SEND A REPLY AND CHECK IT COMPLETED -- several
+    tests above already show that. What makes this one discriminating
+    against the specific mutation of dropping or flipping the `not` is that
+    `user.has_blocked_instance(community.instance.id)` and `instance_banned
+    (community.instance.domain)` are made TRUE for the community's own
+    (local) instance before sending: an `InstanceBlock` row for `(s.user,
+    s.instance)` and a `BannedInstances` row for `s.instance.domain`. If
+    `:149` incorrectly entered that block for a local community, either
+    condition alone would trigger `:151`'s return. Because the community is
+    local, `:149` is skipped regardless, and the reply still reaches the
+    final "send copy of the Create to anyone else Mentioned" loop
+    (`:227-229`): a remote mentioned user on a different domain from the
+    community's own is never in `domains_sent_to` (`:199`, just
+    `[SERVER_NAME]` here, since the local community has no following
+    instances configured), so `post_request` (`app/activitypub/
+    signature.py:103-105`) fires for them and leaves exactly one
+    `ActivityPubLog` row -- the same unconditional-log-row reasoning the
+    tests above rely on, run here as evidence of full completion rather than
+    an early return.
+    """
+    s = _seed(body='hello @remoteuser@peer.example', with_keys=True)
+    assert s.community.is_local() is True
+    make_instance_block(s.user, s.instance)
+    db.session.add(BannedInstances(domain=s.instance.domain, reason='test'))
+    peer = _peer()
+    make_user(peer, 'remoteuser', local=False)
+    db.session.commit()
+
+    _send(s)
+
+    assert db.session.query(ActivityPubLog).count() == 1
