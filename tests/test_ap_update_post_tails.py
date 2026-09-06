@@ -2907,11 +2907,21 @@ class TestUrlChangeYoutubeFixup:
 #     It was the worst NOT because it crashes for every
 #     local edit. `post.domain = domain` at `:570` runs BEFORE the dict, so the
 #     crash was not conditional on the post having HAD a domain -- that half is
-#     load-bearing. What it did need is a RECIPIENT, and only one of the two
-#     loops can supply one: `:590-598`'s admin loop reaches `:577`'s dict with
-#     any admin present, while `:580-589`'s mod loop cannot reach it at all
-#     (see the note in the report -- `:582` raises before the Notification is
-#     built, for its own separate reason). `:568-569` also raises for a BANNED
+#     load-bearing. What it did need is a RECIPIENT, and when this was ranked
+#     only one of the two loops could supply one: `:590-598`'s admin loop
+#     reached the Notification with any admin present, while `:580-589`'s mod
+#     loop could not, because `:582` RAISED before the Notification was built,
+#     for its own separate reason (D287). THAT SENTENCE IS PAST TENSE NOW, AND
+#     THE PRESENT-TENSE FORM IT REPLACES WAS FALSE WHEN WRITTEN: commit
+#     `4e4b7d5f`, in this same branch range, fixed `:582` to
+#     `community_member.user.is_local()`, so the mod loop reaches `:588` and
+#     supplies a recipient of its own -- pinned by
+#     `test_a_moderator_of_a_notify_mods_domain_is_notified` in
+#     `tests/test_shared_post_edit.py`. Note also, because the old wording
+#     conflated the two, that the mod loop never failed to reach `:577`'s DICT:
+#     the dict is built at `:573-579`, ABOVE both loops, so `:577` evaluated
+#     for every notifying domain even with D287 fully live. What the mod loop
+#     could not reach was the Notification. `:568-569` also raises for a BANNED
 #     domain before the dict is built, so it was the notifying-domain case that
 #     crashed and not the banned one;
 #   - `:3517`/`:3535` here are peer-reachable but conditional

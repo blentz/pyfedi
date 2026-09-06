@@ -6383,6 +6383,34 @@ assertion. It is folded into 89 rather than added as 107 because it is the same
 mechanism with a second consequence, and a reader who looks up `RESTART
 IDENTITY` should find both without knowing to look twice.
 
+**MEASURED, NOT A DEFECT, AND UNTESTABLE UNDER THIS HARNESS: D287's fix spells
+the moderator dereference differently from every other site in the codebase
+that does the same thing.** `app/shared/post.py:582` now reads
+`if community_member.user.is_local():` -- it goes through the `user`
+relationship on the `CommunityMember` row. The three other production sites
+that need a moderator's `User` all RE-FETCH IT BY ID instead:
+`app/shared/post.py:874` and `app/shared/reply.py:346` both do
+`moderator = User.query.get(mod.user_id)` under an explicit `if moderator:`
+guard (`:875` and `:347`), and `app/activitypub/util.py:4723` does
+`moderator_account = db.session.query(User).get(moderator.user_id)` -- the same
+re-fetch, though with no `None` guard on it, since `:4724` dereferences
+`.is_local()` directly. The reason the idiom exists is that
+`Community.moderators()` is `@cache.memoize`d (`app/models.py:715`, over the
+`def` at `:716`), so in production its return value is a PICKLE ROUND-TRIP:
+`config.py:38` defaults `CACHE_TYPE` to `FileSystemCache`, while
+`tests/conftest.py:68` forces `NullCache` and every test therefore gets live
+ORM instances straight from the query. **This is not a defect.** The reviewer
+pickle-round-tripped a `CommunityMember` and confirmed that
+`user = db.relationship('User', foreign_keys=[user_id], lazy='joined')`
+(`app/models.py:3509`) has the related `User` already loaded into the instance
+state, so it survives serialisation and `.user.is_local()` succeeds on the
+deserialised copy. What is true is narrower and worth having on the record: the
+newly-live dereference at `:582` is **untested by construction against a
+cache-deserialised `CommunityMember`**, because the harness that would have to
+exercise it disables the cache. No test in this campaign can distinguish the
+two spellings; a change to `moderators()`' loading strategy or to the cache
+backend could, and this paragraph is what a reader would need at that point.
+
 ## Ratchet gotchas
 
 - `percent_covered` is a **blended statement+branch figure**. This matters for
