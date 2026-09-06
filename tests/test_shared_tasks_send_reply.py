@@ -1677,7 +1677,7 @@ def test_make_reply_delivers_a_create(db_session, http_mock):
     """`make_reply` (:55-64) delegates to `send_reply` with `edit=False`.
 
     `type == 'Create'` is the witness that separates it from `edit_reply`,
-    which is byte-identical except for the `edit=True` at :74. `send_async`
+    which is byte-identical except for the `edit=True` at :72. `send_async`
     is accepted and ignored; None is passed to prove it is not read.
     """
     s = _seed(local_community=False, with_keys=True)
@@ -1702,7 +1702,8 @@ def test_edit_reply_delivers_an_update(db_session, http_mock):
 
 def test_make_reply_rolls_back_and_closes_when_send_reply_raises(
         db_session, monkeypatch):
-    """:62-63's except arm and :64-65's finally, reached by a NATURAL raise.
+    """:60-62's except arm and :63's finally (`session.close()` at :64),
+    reached by a NATURAL raise.
 
     A reply id with no row makes `send_reply`'s `session.query(PostReply).
     filter_by(id=reply_id).one()` (`notes.py:81`) raise
@@ -1729,10 +1730,11 @@ def test_make_reply_rolls_back_and_closes_when_send_reply_raises(
 
 def test_edit_reply_rolls_back_and_closes_when_send_reply_raises(
         db_session, monkeypatch):
-    """:75-76's except arm and :77's finally -- `edit_reply`'s own copy of
-    the handler, which is a SEPARATE function body from `make_reply`'s and so
-    a separate pair of arcs. Written out rather than parametrised so each
-    function's arms are attributable to a named test.
+    """:73-75's except arm and :76's finally (`session.close()` at :77) --
+    `edit_reply`'s own copy of the handler, which is a SEPARATE function body
+    from `make_reply`'s and so a separate pair of arcs. Written out rather
+    than parametrised so each function's arms are attributable to a named
+    test.
 
     Same `NoResultFound` from `notes.py:81`'s `.one()` as the `make_reply`
     test above -- see that test's docstring for why the exception type
@@ -1749,7 +1751,8 @@ def test_edit_reply_rolls_back_and_closes_when_send_reply_raises(
 
 def test_make_reply_closes_the_session_on_the_happy_path(
         db_session, http_mock, monkeypatch):
-    """:64-65's finally on the SUCCESS path -- `close` with no `rollback`.
+    """:63's finally (`session.close()` at :64) on the SUCCESS path --
+    `close` with no `rollback`.
 
     The control for the two tests above: without it, `finally` running is
     only ever observed alongside an exception, and a wrapper that closed only
