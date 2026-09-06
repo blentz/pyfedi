@@ -43,7 +43,6 @@ So a test asserting that a mention produced no notification cannot distinguish
 absence.
 """
 
-import pytest
 from types import SimpleNamespace
 
 from app import db
@@ -52,8 +51,8 @@ from app.constants import (
     POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_VIDEO,
 )
 from app.models import (
-    CommunityBan, Event, File, Notification, Poll, PollChoice, User,
-    UserFollower,
+    BannedInstances, CommunityBan, Event, File, Notification, Poll,
+    PollChoice, User, UserFollower,
 )
 from app.shared.tasks.pages import send_post
 from tests.factories import (
@@ -147,36 +146,38 @@ def test_an_author_mentioning_themselves_is_not_notified(db_session):
     assert Notification.query.count() == 0
 
 
-def test_an_unresolvable_local_mention_is_skipped_silently(db_session):
-    """:105-108, the bare `except: pass`. THE REASON IS THE ASSERTION.
+def test_a_banned_remote_host_mention_is_skipped_via_the_remote_except(db_session):
+    """:112-114 -- the only reachable bare `except: pass` in mention
+    resolution. This test replaces `test_an_unresolvable_local_mention_is_
+    skipped_silently`, whose premise (that :107-108's local-arm except is
+    reachable) was wrong.
 
-    `search_for_user` raises for a name with no matching row, and :107-108
-    swallows it. A test that only asserted `Notification.query.count() == 0`
-    could not tell that outcome apart from the mention never being scanned at
-    all, so this asserts the post itself was still processed -- the function
-    ran past the scanner rather than dying in it.
+    THE LOCAL ARM'S EXCEPT AT :107-108 IS UNREACHABLE. For a bare local name
+    (no `@`), `search_for_user` (app/user/utils.py:85) hits :91-92
+    (`server = ''`), so :94's `if server:` is False and :98 -- the function's
+    only `raise` -- can never fire on that path. A no-match local lookup
+    instead falls through :103 (`if already_exists:`, False) and :105
+    (`elif not allow_fetch:`, False -- `allow_fetch` defaults True) to
+    :108-109's clean `return None`. A nonexistent local mention returns None
+    without ever raising, so :107-108 is dead code on this arm -- registered
+    here as a finding for the residual sweep rather than exercised.
+
+    THE REMOTE ARM CAN RAISE. `search_for_user` for `name@host` takes
+    app/user/utils.py:94's true branch, and :98 raises when the host has a
+    `BannedInstances` row. That reaches pages.py:112's call inside the
+    try/except, and :113-114 swallows it. If `_send` propagated that
+    exception uncaught, this test would fail -- passing is the witness that
+    the except actually fires.
     """
-    s = _seed(body='hello @nobodyhere@test.piefed.local')
+    s = _seed()
+    db.session.add(BannedInstances(domain='peer.example', reason='test'))
+    db.session.commit()
+    s.post.body = 'hello @someone@peer.example'
+    db.session.commit()
+
     _send(s.post)
 
     assert Notification.query.count() == 0
-    db.session.expire(s.post)
-    assert s.post.id is not None
-
-
-def test_a_remote_mention_takes_the_ap_id_branch(db_session):
-    """:109-114, the else arm of :102. The host differs from SERVER_NAME, so
-    the lookup key is the full `name@host` rather than a bare user name."""
-    s = _seed()
-    peer = _peer()
-    s.post.body = 'hello @remoteuser@peer.example'
-    db.session.commit()
-    remote = make_user(peer, 'remoteuser', local=False)
-    assert remote.ap_id == 'remoteuser@peer.example'
-
-    _send(s.post)
-
-    assert Notification.query.filter_by(user_id=remote.id).count() == 0
 
 
 def test_the_same_local_user_mentioned_twice_is_added_once(db_session):
