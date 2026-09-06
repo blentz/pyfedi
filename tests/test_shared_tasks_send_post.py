@@ -45,6 +45,8 @@ absence.
 
 from types import SimpleNamespace
 
+import pytest
+
 from app import db
 from app.constants import (
     NOTIF_MENTION, POST_TYPE_ARTICLE, POST_TYPE_EVENT, POST_TYPE_IMAGE,
@@ -56,7 +58,8 @@ from app.models import (
 )
 from app.shared.tasks.pages import send_post
 from tests.factories import (
-    make_community, make_community_member, make_instance, make_post, make_user,
+    make_community, make_community_member, make_instance, make_instance_block,
+    make_post, make_user,
 )
 
 
@@ -204,3 +207,207 @@ def test_two_different_local_users_are_both_added(db_session):
 
     assert Notification.query.filter_by(user_id=alpha.id).count() == 1
     assert Notification.query.filter_by(user_id=beta.id).count() == 1
+
+
+# ---------------------------------------------------------------------------
+# Mention notification, :125-147
+# ---------------------------------------------------------------------------
+
+
+def test_a_remote_recipient_gets_no_local_notification(db_session):
+    """:127, false arm -- `if recipient.is_local():`.
+
+    `User.is_local()` tests `ap_id`, which `make_user(local=False)` sets. The
+    recipient is still collected into `recipients` (and so still reaches :172's
+    tag loop), but no Notification row is written for them.
+    """
+    s = _seed()
+    peer = _peer()
+    s.post.body = 'hello @remoteuser@peer.example'
+    db.session.commit()
+    remote = make_user(peer, 'remoteuser', local=False)
+
+    _send(s.post)
+
+    assert Notification.query.filter_by(user_id=remote.id).count() == 0
+
+
+def test_an_edit_reuses_the_existing_mention_notification(db_session):
+    """:128-129 and :132's false arm. On an edit, an existing Notification with
+    the same url suppresses a second one -- so the count stays 1 across a
+    create followed by an edit."""
+    s = _seed(body='hello @mentioned@test.piefed.local')
+    mentioned = make_user(s.instance, 'mentioned', local=True)
+
+    _send(s.post, edit=False)
+    assert Notification.query.filter_by(user_id=mentioned.id).count() == 1
+
+    _send(s.post, edit=True)
+    assert Notification.query.filter_by(user_id=mentioned.id).count() == 1
+
+
+def test_an_edit_with_no_prior_notification_creates_one(db_session):
+    """:128-129 with the query returning None, so :132's TRUE arm still runs.
+    This is the arm that distinguishes "edit suppresses" from "edit never
+    notifies"."""
+    s = _seed(body='hello @mentioned@test.piefed.local')
+    mentioned = make_user(s.instance, 'mentioned', local=True)
+
+    _send(s.post, edit=True)
+
+    assert Notification.query.filter_by(user_id=mentioned.id).count() == 1
+
+
+def test_the_mention_notification_carries_its_targets_and_bumps_the_unread_count(db_session):
+    """:133-147. The targets dict at :133-138 and the counter at :145.
+
+    `author_user_name` at :137 is a conditional expression; coverage.py emits no
+    arc for one (tests/README.md fact 87), so both arms need named tests. This
+    takes the `user_name` arm -- a local author has `ap_id` None.
+    """
+    s = _seed(body='hello @mentioned@test.piefed.local')
+    mentioned = make_user(s.instance, 'mentioned', local=True)
+    before = mentioned.unread_notifications
+    assert s.user.ap_id is None
+
+    _send(s.post)
+
+    notification = Notification.query.filter_by(user_id=mentioned.id).one()
+    assert notification.targets['gen'] == '0'
+    assert notification.targets['post_id'] == s.post.id
+    assert notification.targets['author_user_name'] == 'author'
+    db.session.expire(mentioned)
+    assert mentioned.unread_notifications == before + 1
+
+
+def test_the_mention_notification_uses_ap_id_when_the_author_has_one(db_session):
+    """:137, the OTHER arm of the conditional expression."""
+    s = _seed(body='hello @mentioned@test.piefed.local')
+    s.user.ap_id = 'author@peer.example'
+    db.session.commit()
+    mentioned = make_user(s.instance, 'mentioned', local=True)
+
+    _send(s.post)
+
+    notification = Notification.query.filter_by(user_id=mentioned.id).one()
+    assert notification.targets['author_user_name'] == 'author@peer.example'
+
+
+# ---------------------------------------------------------------------------
+# The four early returns, :149-161
+# ---------------------------------------------------------------------------
+
+
+def test_a_dormant_community_instance_stops_before_the_builder(db_session):
+    """:149-150. `Instance.online()` is `not (self.dormant or self.gone_forever)`
+    (app/models.py:118-119), and both columns default False (app/models.py:98,
+    :100), so this must be set explicitly.
+
+    The witness is that the mention notification from :125-147 DID land. That
+    is enough to distinguish an early return here from `send_post` never having
+    been called at all -- a never-called function would leave zero Notification
+    rows. It does NOT, on its own, distinguish an early return here from the
+    function running all the way to completion (nothing later in this test's
+    setup would raise if it did) -- only that narrower claim is made.
+    """
+    s = _seed(body='hello @mentioned@test.piefed.local')
+    mentioned = make_user(s.instance, 'mentioned', local=True)
+    s.instance.dormant = True
+    db.session.commit()
+
+    _send(s.post)
+
+    assert Notification.query.filter_by(user_id=mentioned.id).count() == 1
+
+
+def test_a_gone_forever_instance_also_stops(db_session):
+    """:149-150 via the second disjunct of `online()`. The two columns are
+    separately load-bearing. See the previous test's docstring for what the
+    Notification-count witness does and does not establish."""
+    s = _seed(body='hello @mentioned@test.piefed.local')
+    mentioned = make_user(s.instance, 'mentioned', local=True)
+    s.instance.gone_forever = True
+    db.session.commit()
+
+    _send(s.post)
+
+    assert Notification.query.filter_by(user_id=mentioned.id).count() == 1
+
+
+@pytest.mark.parametrize('flag', ['local_only', 'private'])
+def test_a_local_only_or_private_community_stops_before_the_builder(db_session, flag):
+    """:153-154, both disjuncts.
+
+    THIS IS THE RETURN SUB-PROJECT 18 WAS ACTUALLY USING. Its tests set
+    `community.local_only = True` believing it skipped delivery at :267; it in
+    fact returns here, before the builder. That is also why :267's and :330's
+    false arms are unreachable -- see this file's module docstring.
+    """
+    s = _seed(body='hello @mentioned@test.piefed.local')
+    mentioned = make_user(s.instance, 'mentioned', local=True)
+    setattr(s.community, flag, True)
+    db.session.commit()
+
+    _send(s.post)
+
+    assert Notification.query.filter_by(user_id=mentioned.id).count() == 1
+
+
+def test_a_banned_author_stops_before_the_builder(db_session):
+    """:156-158. A CommunityBan row for (author, community)."""
+    s = _seed(body='hello @mentioned@test.piefed.local')
+    mentioned = make_user(s.instance, 'mentioned', local=True)
+    db.session.add(CommunityBan(user_id=s.user.id, community_id=s.community.id))
+    db.session.commit()
+
+    _send(s.post)
+
+    assert Notification.query.filter_by(user_id=mentioned.id).count() == 1
+
+
+def test_a_remote_community_on_a_blocked_instance_stops(db_session):
+    """:159-161, first disjunct. :159 opens only for a community that is NOT
+    local -- `Community.is_local()` (app/models.py:795) tests `ap_id`, which
+    `_seed` sets under `local_community=False`.
+
+    Uses the `make_instance_block` factory (tests/factories.py:576) rather than
+    constructing `InstanceBlock` inline -- it exists for exactly this row and
+    keeps the model import out of the test module.
+    """
+    s = _seed(body='hello @mentioned@test.piefed.local', local_community=False)
+    mentioned = make_user(s.instance, 'mentioned', local=True)
+    peer = _peer()
+    s.community.instance_id = peer.id
+    db.session.commit()
+    make_instance_block(s.user, peer)
+
+    _send(s.post)
+
+    assert Notification.query.filter_by(user_id=mentioned.id).count() == 1
+
+
+# ---------------------------------------------------------------------------
+# :163-174 -- deferred to Task 6
+# ---------------------------------------------------------------------------
+#
+# pages.py:163-168 (the type dispatch: 'Question' / 'Event' / 'Page') and
+# :172-174 (appending each recipient to `tag` and `cc`) all write only to
+# locals -- `type`, `tag`, `cc` -- that are read into the `page`/`create`
+# dicts at :185, :188-189 and never persisted or otherwise exposed. With the
+# communities and posts this file's tests build, the builder's own outbound
+# calls at :291-304 and :330-334 are never entered either: no peer instance
+# follows the local community and no `UserFollower` row exists, so
+# `send_post_request` is never invoked, leaving nothing -- mocked or real --
+# to inspect for `type`, `tag` or `cc`.
+#
+# The brief's `test_the_activity_type_follows_the_post_type` and
+# `test_a_mentioned_recipient_lands_in_both_tag_and_cc` would therefore only
+# have been able to assert that `_send` completed without raising for each
+# post type / for a mentioned recipient -- an assertion that cannot
+# distinguish the behaviour it names from any other code path that also
+# completes without raising. Per this project's rubric that is a defect, so
+# both are dropped here rather than kept with a softened docstring. Task 1
+# already established this as the recorded route for an unobservable arm
+# (pages.py:109-114's success path); Task 6, which builds the
+# outbound-delivery capture that makes the Create body's `type`, `tag` and
+# `cc` visible, is where these two arms belong.
