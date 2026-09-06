@@ -221,7 +221,8 @@ def send_post(post_id, edit=False, session=None):
         page['image'] = {'type': 'Image', 'url': image_url}
     if post.type == POST_TYPE_POLL:
         poll = Poll.query.filter_by(post_id=post.id).first()
-        page['endTime'] = ap_datetime(poll.end_poll)
+        if poll.end_poll is not None:
+            page['endTime'] = ap_datetime(poll.end_poll)
         page['votersCount'] = poll.total_votes() if edit else 0
         choices = []
         for choice in PollChoice.query.filter_by(post_id=post.id).order_by(PollChoice.sort_order).all():
@@ -229,8 +230,10 @@ def send_post(post_id, edit=False, session=None):
         page['oneOf' if poll.mode == 'single' else 'anyOf'] = choices
     elif post.type == POST_TYPE_EVENT:
         event = Event.query.filter_by(post_id=post.id).first()
-        page['startTime'] = ap_datetime(event.start)
-        page['endTime'] = ap_datetime(event.end)
+        if event.start is not None:
+            page['startTime'] = ap_datetime(event.start)
+        if event.end is not None:
+            page['endTime'] = ap_datetime(event.end)
         page['timezone'] = event.timezone
         page['maximumAttendeeCapacity'] = event.max_attendees
         page['participantCount'] = event.participant_count
@@ -316,7 +319,7 @@ def send_post(post_id, edit=False, session=None):
         note['content'] += '<p><a href=' + post.url + '>' + post.title + '</a></p>'
     elif post.type != POST_TYPE_POLL:
         note['content'] = '<p>' + post.title + '</p>'
-    if post.type == POST_TYPE_EVENT:
+    if post.type == POST_TYPE_EVENT and post.event.start is not None:
         # Convert UTC time to event timezone
         event_tz = ZoneInfo(post.event.timezone)
         local_start = post.event.start.replace(tzinfo=ZoneInfo('UTC')).astimezone(event_tz)
