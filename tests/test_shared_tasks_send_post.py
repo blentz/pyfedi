@@ -54,9 +54,10 @@ from app.constants import (
     NOTIF_MENTION, POST_TYPE_ARTICLE, POST_TYPE_EVENT, POST_TYPE_IMAGE,
     POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_VIDEO,
 )
+from app.activitypub.signature import default_context
 from app.models import (
-    ActivityPubLog, BannedInstances, CommunityBan, Event, File, Notification,
-    Poll, PollChoice, User, UserFollower,
+    ActivityPubLog, BannedInstances, CommunityBan, Event, File, Instance,
+    Language, Notification, Poll, PollChoice, User, UserFollower,
 )
 from app.shared.tasks.pages import send_post
 from tests.factories import (
@@ -973,10 +974,12 @@ def test_an_event_with_both_times_still_emits_both_keys(db_session, http_mock):
 FOLLOWER_INBOX = 'https://follower.example/u/fan/inbox'
 
 
-def _inward_follower(s, http_mock, domain='follower.example',
-                     inbox=FOLLOWER_INBOX):
+def _inward_follower(s, http_mock=None, domain='follower.example',
+                     inbox=FOLLOWER_INBOX, software='mastodon',
+                     with_inbox=True, instance=None):
     """A remote follower of the author, and the inbox their AMENDED copy lands
-    in. Returns the respx route; pair it with `_sent_activity`.
+    in. Returns the respx route, or None when no route was registered (no
+    `http_mock`, or `with_inbox=False`); pair a route with `_sent_activity`.
 
     THIS IS THE ONLY WAY TO OBSERVE :314-330. `_remote_inbox` captures the
     Page as it was at :306; everything from :313 onward -- the `name` delete,
@@ -1004,14 +1007,41 @@ def _inward_follower(s, http_mock, domain='follower.example',
 
     The domain stays inside `.example` so the autouse
     `_peer_example_resolves_without_a_resolver` fixture still answers for it.
+
+    THE KNOBS BELOW WERE ADDED BY TASK 7 and are all defaulted to the original
+    behaviour, so the Task 5 caller above is untouched. They exist because
+    :350's and :351's conjuncts are each closed by a DIFFERENT column of this
+    same row set, and building a second follower factory to close them would be
+    the duplication this helper was written to avoid. They mirror
+    `_community_follower`'s knobs one for one:
+
+      `software`     closes :350's third conjunct ('piefed').
+      `with_inbox`   leaves `Instance.inbox` at `make_instance`'s None, which
+                     closes :351's first conjunct.
+      `instance`     reuses an EXISTING Instance instead of making one, so the
+                     follower can be planted on a domain `domains_sent_to`
+                     already holds -- the only way to close :350's first
+                     conjunct, since the one other domain in that list is
+                     SERVER_NAME's, whose Instance is id 1 and is filtered out
+                     of `following_instances` in SQL (app/models.py:1673).
+      `http_mock`    now optional. A test whose follower is SUPPOSED to receive
+                     nothing must not register a route for it: `http_mock` is
+                     `assert_all_called=True` (tests/conftest.py:287-295), so an
+                     unfired route would fail the test for the wrong reason.
+                     Those tests count `ActivityPubLog` rows instead -- see
+                     `test_a_follower_instance_with_no_inbox_gets_no_amended_copy`
+                     for why that witness and not "no HTTP happened".
     """
-    instance = make_instance(domain, software='mastodon')
-    instance.inbox = inbox
+    if instance is None:
+        instance = make_instance(domain, software=software)
+    instance.inbox = inbox if with_inbox else None
     fan = make_user(instance, 'fan')
     db.session.add(UserFollower(local_user_id=s.user.id, remote_user_id=fan.id,
                                 is_inward=True))
     db.session.commit()
-    return http_mock.post(inbox).respond(200, json={})
+    if http_mock is None or not with_inbox:
+        return None
+    return http_mock.post(instance.inbox).respond(200, json={})
 
 
 def test_an_event_note_carries_its_start_localised_to_the_event_timezone(db_session, http_mock):
@@ -1504,3 +1534,556 @@ def test_an_inboxless_follower_instance_is_skipped(db_session):
     _send(s.post)
 
     assert ActivityPubLog.query.count() == 0
+
+
+# ---------------------------------------------------------------------------
+# The Note amendment, :309-332
+# ---------------------------------------------------------------------------
+#
+# WHAT IS BEING AMENDED, AND WHY THE OBSERVABLE MOVES. :254 binds
+# `'object': page` and :311 binds `note = page`: one dict under two names. So
+# :313's `del`, :315's content reset and :317's type change all rewrite what
+# `create['object']` points at, IN PLACE, AFTER the community send at :306 has
+# already serialized it. Every assertion below therefore reads the FOLLOWER
+# delivery at :352 (`_inward_follower`), which is the first send that carries
+# the amendment; where a test needs to show that a key was present before the
+# amendment removed it, it reads the community delivery at :306
+# (`_remote_inbox`) in the same test and compares.
+#
+# The brief for this task asked for these assertions at :336, the mention
+# fan-out, instead. :352 is used because it needs no `search_for_user` round
+# trip to set up and because Task 5 already built `_inward_follower` for
+# exactly this; the amended `create` is the same object on both paths, so
+# nothing is lost. :336's own arms stay covered by Task 6's
+# `test_a_poll_does_not_mark_the_domain_as_sent_to` /
+# `test_a_non_poll_marks_the_domain_as_sent_to` pair.
+#
+# :333's FALSE arm, arc (333, 339), is unreachable and is not chased here.
+# `community` is bound once at :91 and never rebound anywhere in :88-371, and
+# :153-154 is `if community.local_only or community.private: return` -- so
+# `not community.local_only` is necessarily true by the time :333 is evaluated.
+# `test_a_local_only_or_private_community_stops_before_the_builder` above pins
+# the return that makes it so.
+#
+# :312's FALSE arm, arc (312, 314), is unreachable for the same kind of reason:
+# :196 puts `name` into the `page` dict literal unconditionally, :209-210
+# merely re-assigns the same key for a non-poll, and nothing between :196 and
+# :312 deletes it -- :313 IS the delete, inside :312's true arm.
+
+
+def test_a_local_communitys_amended_copy_regains_the_context_key(db_session, http_mock):
+    """:310 TRUE -> :311, `create['@context'] = default_context()`.
+
+    THE TRUE ARM IS THE ORDINARY PATH, NOT A CORNER CASE. :271 is
+    `if community.is_local():` and :272 is `del create['@context']`, so every
+    local community -- `_seed()`'s default -- arrives at :310 with the key
+    already gone.
+
+    READ THE DOCSTRING, NOT THE NAME, FOR WHAT THIS CAN AND CANNOT KILL.
+    `post_request` (app/activitypub/signature.py:100-101) opens with
+    `if '@context' not in body: body['@context'] = default_context()`, so a
+    mutant that deleted :310-311 outright would have the key put back, with the
+    same value and in the same trailing position, before the body was
+    serialized at :456. The key's PRESENCE therefore cannot separate :311 from
+    its own deletion, and no assertion in this file can; registered as a
+    finding rather than claimed as a kill. MEASURED, NOT ASSUMED: `if True:` at
+    :310 and a `pass` at :311 each leave every test in this file green.
+
+    What the assertions DO pin is that this test is genuinely standing on
+    :310's true arm. `create` is built at :253-262 with `@context` sixth and
+    `audience` last; a run that never deleted it keeps that order (see the
+    remote-community test below, which asserts exactly that). Seeing
+    `@context` LAST here is the proof that :272 ran and the key was re-added
+    afterwards -- a Python dict re-append moves the key to the end, and
+    `json.dumps` preserves insertion order.
+
+    No `_remote_inbox` here: the community is local, so :271's true arm runs
+    and :294's loop has nothing to iterate (no CommunityMember rows, and the
+    follower is 'mastodon' so `user.following_instances(software='piefed')` is
+    empty too). The follower delivery at :352 is the only request made.
+    """
+    s = _seed(with_keys=True)
+    assert s.community.is_local() is True
+    route = _inward_follower(s, http_mock)
+
+    _send(s.post)
+
+    activity = _sent_activity(route)
+    assert activity['@context'] == default_context()
+    assert list(activity)[-1] == '@context'
+
+
+def test_a_remote_communitys_amended_copy_keeps_the_context_it_started_with(db_session, http_mock):
+    """:310 FALSE -- the guard finds `@context` still in place, so :311 is
+    skipped.
+
+    A remote community takes :271's `else` at :305-307, which never reaches
+    :272's `del`, so the key survives from the :253-262 literal untouched.
+
+    THE WITNESS IS THE KEY ORDER, not the key's presence: presence is true on
+    both arms (see the local-community test above for why nothing on the wire
+    can separate :311 from its absence). In the literal, `@context` is the
+    seventh key and `audience` the eighth and last. Asserting that layout on
+    the follower's copy proves the key was never removed and re-appended --
+    i.e. that this test really is on :310's FALSE arm and not silently on the
+    true one. The community delivery at :306 is asserted to carry the same
+    layout, which is what shows the amendment left it alone.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    assert s.community.is_local() is False
+    community_route = _remote_inbox(s, http_mock)
+    follower_route = _inward_follower(s, http_mock)
+
+    _send(s.post)
+
+    for route in (community_route, follower_route):
+        activity = _sent_activity(route)
+        assert activity['@context'] == default_context()
+        assert list(activity)[6] == '@context'
+        assert list(activity)[-1] == 'audience'
+
+
+def test_the_amended_note_drops_the_name_the_page_carried(db_session, http_mock):
+    """:312 TRUE -> :313, `del page['name']`.
+
+    Mastodon has no use for a Note with a `name`, and :196 always supplies one.
+    The pair of deliveries in this one test is what makes the delete
+    observable: the community's copy, serialized at :306 BEFORE the amendment,
+    still carries `name`; the follower's copy, serialized at :352 after it,
+    does not. Asserting only the absence would pass against a mutant that
+    stopped :196 writing the key in the first place.
+
+    :312's false arm is unreachable -- see the block comment above.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    community_route = _remote_inbox(s, http_mock)
+    follower_route = _inward_follower(s, http_mock)
+
+    _send(s.post)
+
+    assert _page_of(community_route)['name'] == 'a post'
+    assert 'name' not in _sent_activity(follower_route)['object']
+
+
+def test_a_page_is_retyped_as_a_note(db_session, http_mock):
+    """:316's FIRST disjunct -- `note['type'] == 'Page'` -- and :317.
+
+    :168 gives an article the type 'Page'; :317 rewrites it to 'Note'. Both
+    deliveries are asserted because the rewrite happens between them: without
+    the community copy, a mutant that made :185 emit 'Note' from the start
+    would pass.
+
+    :316's SECOND disjunct, `note['type'] == 'Event'`, is taken by
+    `test_an_event_note_carries_its_start_localised_to_the_event_timezone`
+    above, which asserts the follower's object is a 'Note' for an Event post.
+    Not duplicated here. :316's FALSE arm is
+    `test_a_poll_note_keeps_its_question_type_and_stays_empty` below.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    community_route = _remote_inbox(s, http_mock)
+    follower_route = _inward_follower(s, http_mock)
+
+    _send(s.post)
+
+    assert _page_of(community_route)['type'] == 'Page'
+    assert _sent_activity(follower_route)['object']['type'] == 'Note'
+
+
+def test_a_poll_note_keeps_its_question_type_and_stays_empty(db_session, http_mock):
+    """Three false arms in one post shape, because one post shape is what
+    produces all three:
+
+      :316 FALSE  -- :164 types a poll 'Question', which is neither 'Page' nor
+                     'Event', so :317 does not run and the type survives the
+                     amendment.
+      :318 FALSE  -- a poll is neither POST_TYPE_LINK nor POST_TYPE_VIDEO.
+      :320 FALSE  -- `elif post.type != POST_TYPE_POLL` is exactly the poll
+                     exclusion, so no title paragraph is written either.
+
+    They are separately killed despite sharing a test: a mutant on :316 changes
+    the asserted `type`, and a mutant on either :318 or :320 changes the
+    asserted `content` (to the anchor paragraph or to the title paragraph
+    respectively). The empty string is the whole point -- :191 gave the Page a
+    real body for a poll and :315 threw it away, so `content == ''` also pins
+    :315 for the one type where nothing writes it back.
+
+    `post.body` is None, so :327 is false and nothing is appended afterwards.
+    """
+    s = _seed(post_type=POST_TYPE_POLL, local_community=False, with_keys=True)
+    community_route = _remote_inbox(s, http_mock)
+    follower_route = _inward_follower(s, http_mock)
+    db.session.add(Poll(post_id=s.post.id, end_poll=None, mode='single'))
+    db.session.commit()
+
+    _send(s.post)
+
+    assert _page_of(community_route)['content'] == '<p>a post</p>'
+    note = _sent_activity(follower_route)['object']
+    assert note['type'] == 'Question'
+    assert note['content'] == ''
+
+
+@pytest.mark.parametrize('post_type', [POST_TYPE_LINK, POST_TYPE_VIDEO])
+def test_a_link_or_video_note_gets_an_anchor_to_its_url(db_session, http_mock,
+                                                        post_type):
+    """:318 TRUE -> :319, once per disjunct.
+
+    Parametrized rather than written twice because the two disjuncts of
+    `post.type == POST_TYPE_LINK or post.type == POST_TYPE_VIDEO` differ only
+    in the constant: each parameter closes the other disjunct, so dropping
+    either one from :318 fails exactly one case.
+
+    The expected string is spelled out in full, unquoted `href` included, so it
+    pins :319's concatenation verbatim -- production really does emit
+    `<a href=...>` with no quotes. It also pins that :319 APPENDS to the ''
+    that :315 just wrote (a mutant swapping `+=` for `=` is invisible here, but
+    a mutant deleting :315 would leave the Page's own body in front of the
+    anchor and fail).
+    """
+    s = _seed(post_type=post_type, url='https://example.com/x',
+              local_community=False, with_keys=True)
+    _remote_inbox(s, http_mock)
+    follower_route = _inward_follower(s, http_mock)
+
+    _send(s.post)
+
+    note = _sent_activity(follower_route)['object']
+    assert note['content'] == '<p><a href=https://example.com/x>a post</a></p>'
+
+
+def test_an_article_note_gets_its_title_as_a_paragraph(db_session, http_mock):
+    """:320 TRUE -> :321, and :331.
+
+    An article is neither a link/video (so :318 is false and control reaches
+    the `elif`) nor a poll (so :320 opens), and :321 writes the title
+    paragraph.
+
+    Three further arms are pinned by asserting `content` WHOLE rather than by
+    substring, and by naming the two keys:
+
+      :322 first conjunct FALSE -- an article is not an event, so no localised
+           start is appended. Its TRUE arm is
+           `test_an_event_note_carries_its_start_localised_to_the_event_timezone`
+           and its second conjunct's false arm is
+           `test_an_event_with_no_start_does_not_crash`; both are above and
+           neither is duplicated here.
+      :327 FALSE -- `post.body_html` is None, so :93 makes `post_body_html` ''
+           and nothing is appended. READ THE NEXT PARAGRAPH BEFORE CREDITING
+           THIS WITH A KILL.
+      :329 FALSE -- `make_post` never sets `language_id`, so no `contentMap` is
+           emitted. A mutant making :329 unconditional would emit
+           `{'en': ...}`, because `Post.language_code` (app/models.py:2645-2649)
+           falls back to 'en'; the absent key is what refuses it. Paired with
+           `test_a_note_with_a_language_carries_a_content_map` below.
+
+    :327's TRUE-direction mutant survives, and no test in this file can kill
+    it. `post_body_html` is '' on this arm (:93), so forcing :327 open runs
+    `note['content'] = note['content'] + ''`, which is the identity. The guard
+    is an optimisation, not a behaviour, in the false direction; `if True:`
+    there is an EQUIVALENT MUTANT. Measured, not assumed. What the pair with
+    `test_a_post_body_is_appended_to_the_amended_note` below does kill is the
+    other direction, `if False:`.
+
+    :331 sets `inReplyTo` to None explicitly. `is None` is asserted rather than
+    `not in`, because the key being PRESENT and null is the behaviour -- the
+    Page never had the key, so deleting :331 removes it entirely.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _remote_inbox(s, http_mock)
+    follower_route = _inward_follower(s, http_mock)
+
+    _send(s.post)
+
+    note = _sent_activity(follower_route)['object']
+    assert note['content'] == '<p>a post</p>'
+    assert 'contentMap' not in note
+    assert note['inReplyTo'] is None
+
+
+def test_a_post_body_is_appended_to_the_amended_note(db_session, http_mock):
+    """:327 TRUE -> :328, `note['content'] = note['content'] + post_body_html`.
+
+    The mirror of the article test above, differing only in `body_html`. The
+    whole-string assertion pins the CONCATENATION and its order: :321's title
+    paragraph first, the rendered body after. A mutant replacing :328's
+    concatenation with a plain assignment loses the title and fails here, while
+    the article test above stays green.
+
+    This is also the only test that can close :327 in the direction that has an
+    observable: `if False:` there drops the body and fails here. The other
+    direction is an equivalent mutant -- see the article test's docstring.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _remote_inbox(s, http_mock)
+    follower_route = _inward_follower(s, http_mock)
+    s.post.body_html = '<p>the body</p>'
+    db.session.commit()
+
+    _send(s.post)
+
+    note = _sent_activity(follower_route)['object']
+    assert note['content'] == '<p>a post</p><p>the body</p>'
+
+
+def test_a_note_with_a_language_carries_a_content_map(db_session, http_mock):
+    """:329 TRUE -> :330, `note['contentMap'] = {post.language_code(): ...}`.
+
+    The language is deliberately NOT English. `Post.language_code`
+    (app/models.py:2645-2649) returns 'en' whenever `language_id` is unset, so
+    a mutant that made :329 unconditional would still emit a `contentMap` --
+    keyed 'en'. Asserting the key is 'fr' is what separates "the guard opened
+    because a language is set" from "the guard was removed".
+
+    The mapped value is asserted too, so :330 cannot be reduced to an empty or
+    stale string: it must be the content as it stands AFTER :321 and :328.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _remote_inbox(s, http_mock)
+    follower_route = _inward_follower(s, http_mock)
+    language = Language(code='fr', name='French')
+    db.session.add(language)
+    db.session.commit()
+    s.post.language_id = language.id
+    db.session.commit()
+
+    _send(s.post)
+
+    note = _sent_activity(follower_route)['object']
+    assert note['contentMap'] == {'fr': '<p>a post</p>'}
+
+
+# ---------------------------------------------------------------------------
+# The follower fan-out, :339-352
+# ---------------------------------------------------------------------------
+#
+# :340-341's EARLY RETURN IS ALREADY EXERCISED and is not given a test of its
+# own. Every test in this file that never builds a UserFollower row takes it --
+# `test_a_remote_community_receives_the_create_at_its_inbox` above is the
+# clearest, since it asserts the community route fired exactly once and so
+# would notice anything sent afterwards. Adding a test for it would also be
+# adding a test that cannot fail: deleting :340-341 changes nothing, because
+# `followers` is then empty, :344's loop has nothing to iterate and
+# `user.following_instances()` -- which joins the same UserFollower rows
+# (app/models.py:1668-1670) -- returns []. The arc is covered; the statement
+# has no observable of its own.
+#
+# TWO CONJUNCTS IN THIS BLOCK ARE UNREACHABLE, both for the reason Task 6
+# recorded at :295: `User.following_instances` (app/models.py:1667-1676)
+# already applies the same filters in SQL, so the Python re-check can only ever
+# see the value it filtered for.
+#
+#   :350's `instance.id != 1` -- app/models.py:1673 is
+#   `instances.filter(Instance.id != 1, Instance.gone_forever == False)`,
+#   unconditionally. The local instance can never be yielded, so the conjunct
+#   is never False.
+#
+#   :351's `instance.online()` -- `Instance.online()` is
+#   `not (self.dormant or self.gone_forever)` (app/models.py:118-119), and
+#   app/models.py:1672-1673 filters `Instance.dormant == False` and
+#   `Instance.gone_forever == False`. Every instance the loop can see is
+#   already online.
+#
+# Registered as findings; not chased. MEASURED, NOT ASSUMED: deleting either
+# conjunct from its `if` leaves every test in this file green, while deleting
+# any of the other five fails exactly the test named for it.
+#
+# The remaining five conjuncts each get a test below.
+
+
+def test_each_follower_is_appended_to_the_activitys_cc(db_session, http_mock):
+    """:346 TRUE -> :347, `create['cc'].append(user_details.public_url())`.
+
+    THE MENTION IS LOAD-BEARING, not scenery. With no mention, `create['cc']`
+    would be `[]` at :347 and a mutant replacing the `.append` with an
+    assignment would produce the identical one-element list. Seeding cc with a
+    mentioned recipient at :174 first means the assertion pins BOTH that the
+    follower was added AND that what was already there survived, in order.
+
+    The mentioned user lives on the community's own instance, so :335 refuses a
+    second delivery to them (its domain went into `domains_sent_to` at :307) --
+    which is why no route is registered for that instance. That behaviour is
+    `test_the_remote_communitys_domain_is_marked_as_sent_to`'s subject, not
+    this test's; it is relied on here only to keep the request count at two.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _remote_inbox(s, http_mock)
+    follower_route = _inward_follower(s, http_mock)
+    mentioned = make_user(s.community.instance, 'remoteuser', local=False)
+    s.post.body = 'hello @remoteuser@peer.example'
+    db.session.commit()
+
+    _send(s.post)
+
+    assert _sent_activity(follower_route)['cc'] == [
+        mentioned.public_url(), 'https://follower.example/users/fan']
+
+
+def test_a_follower_row_with_no_user_is_skipped(db_session, http_mock):
+    """:346 FALSE -- `session.query(User).get(follower.remote_user_id)` returns
+    None, so :347 is skipped for that row.
+
+    THE ONLY SHAPE THE DATABASE ALLOWS IS A NULL remote_user_id. The brief
+    suggested a row whose `remote_user_id` "matches no User"; Postgres refuses
+    that outright -- `UserFollower.remote_user_id` is
+    `db.ForeignKey('user.id')` (app/models.py:3568) and inserting a dangling
+    integer raises IntegrityError, measured. The column is nullable, though, so
+    a NULL is insertable, and `Query.get(None)` returns None (with a SAWarning
+    that a fully NULL identity cannot load an object). That is the arm.
+
+    A SECOND, REAL FOLLOWER IS REQUIRED for the test to observe anything: the
+    NULL row is invisible to `user.following_instances()` at :349, which joins
+    `UserFollower.remote_user_id == User.id` (app/models.py:1669), so on its
+    own it produces no delivery and no body to assert against.
+
+    The discriminator is twofold. Removing :346 makes :347 call
+    `.public_url()` on None, and `send_post` is called directly by `_send`, so
+    the AttributeError propagates and the test errors rather than fails
+    quietly. The `cc` assertion additionally refuses a mutant that skipped the
+    row but appended something else in its place.
+    """
+    s = _seed(with_keys=True)
+    route = _inward_follower(s, http_mock)
+    db.session.add(UserFollower(local_user_id=s.user.id, remote_user_id=None,
+                                is_inward=True))
+    db.session.commit()
+
+    _send(s.post)
+
+    assert _sent_activity(route)['cc'] == ['https://follower.example/users/fan']
+
+
+def test_a_follower_on_an_already_delivered_domain_is_skipped(db_session, http_mock):
+    """:350 FIRST conjunct FALSE -- `instance.domain not in domains_sent_to`.
+
+    The follower is planted on the community's OWN instance, whose domain :307
+    has already appended to `domains_sent_to`, and that instance's `inbox` is
+    pointed at the same URL the community's `ap_inbox_url` uses. So if the
+    conjunct were removed the same route would be hit a second time, and the
+    call count -- not the presence or absence of an HTTP mock -- is the
+    witness.
+
+    `ActivityPubLog` is counted as well, because a mutant that reached :352
+    with a DIFFERENT destination would miss the registered route, and
+    `post_request` (app/activitypub/signature.py:103-105) writes its log row
+    before the request is attempted and swallows the transport error at
+    :143-145. One row means one send was attempted, full stop.
+
+    No route is registered for the follower: `http_mock` is
+    `assert_all_called=True`, so a route this test expects never to fire would
+    fail it for the wrong reason.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    _inward_follower(s, instance=s.community.instance, inbox=PEER_INBOX)
+
+    _send(s.post)
+
+    assert len(route.calls) == 1
+    assert ActivityPubLog.query.count() == 1
+
+
+def test_a_piefed_follower_instance_is_skipped(db_session, http_mock):
+    """:350 THIRD conjunct FALSE -- `instance.software != 'piefed'`.
+
+    A PieFed peer gets the post through the community's own machinery, so the
+    Mastodon-shaped amended copy is not sent to it a second time. The instance
+    is otherwise fully qualified -- a third domain, an inbox, online,
+    unblocked, unbanned -- so this test closes that conjunct and nothing else.
+
+    Reached only because the community here is REMOTE: on a local community
+    :294 would iterate `user.following_instances(software='piefed')` and send
+    this same instance an Announce, which would put a second `ActivityPubLog`
+    row in the way of the witness.
+
+    THE WITNESS IS THE LOG ROW COUNT, not the absence of an HTTP request:
+    dropping the conjunct sends to `https://piefed.example/inbox`, which no
+    route serves, and `post_request` turns that into a `result='failure'` row
+    rather than re-raising. Counting rows sees it; "no HTTP happened" would
+    not. One row is the community delivery at :306.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _remote_inbox(s, http_mock)
+    _inward_follower(s, domain='piefed.example', software='piefed',
+                     inbox='https://piefed.example/inbox')
+
+    _send(s.post)
+
+    assert ActivityPubLog.query.count() == 1
+
+
+def test_a_follower_instance_with_no_inbox_gets_no_amended_copy(db_session, http_mock):
+    """:351 FIRST conjunct FALSE -- `if instance.inbox and ...`.
+
+    Distinct from `test_an_inboxless_follower_instance_is_skipped` above, which
+    is the same column read at :295 on the community Announce path; this is the
+    user fan-out at :351.
+
+    `Instance.inbox` is nullable, `make_instance` leaves it None, and no filter
+    in `User.following_instances` mentions it, so the instance genuinely
+    reaches :351 and is refused there.
+
+    THE WITNESS IS THE ActivityPubLog COUNT. Dropping `instance.inbox and`
+    calls `send_post_request(None, create, ...)`, and `post_request`
+    (app/activitypub/signature.py:109-111) turns a None uri into an
+    'empty uri' failure row without touching the transport -- so a test
+    asserting only that no HTTP request happened would pass against that
+    mutant. The single row this asserts is the community delivery at :306.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _remote_inbox(s, http_mock)
+    _inward_follower(s, with_inbox=False)
+
+    _send(s.post)
+
+    assert Instance.query.filter_by(domain='follower.example').one().inbox is None
+    assert ActivityPubLog.query.count() == 1
+
+
+def test_a_follower_instance_the_author_has_blocked_is_skipped(db_session, http_mock):
+    """:351 THIRD conjunct FALSE -- `not user.has_blocked_instance(instance.id)`.
+
+    `User.has_blocked_instance` (app/models.py:1467-1471) is an
+    `InstanceBlock` lookup on (user_id, instance_id), which is exactly what
+    `make_instance_block` writes. The follower's instance is otherwise fully
+    qualified, so the block is the only thing closing the guard.
+
+    The first assertion is the guard-opens proof: without it, a mis-seeded
+    block row would leave this test passing for the wrong reason -- and it
+    would still pass if the follower simply never reached :351 at all.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _remote_inbox(s, http_mock)
+    _inward_follower(s)
+    follower_instance = Instance.query.filter_by(domain='follower.example').one()
+    make_instance_block(s.user, follower_instance)
+
+    assert s.user.following_instances() == [follower_instance]
+
+    _send(s.post)
+
+    assert ActivityPubLog.query.count() == 1
+
+
+def test_a_defederated_follower_instance_is_skipped(db_session, http_mock):
+    """:351 FOURTH conjunct FALSE -- `not instance_banned(instance.domain)`.
+
+    `instance_banned` (app/utils.py:2334-2359) is a `BannedInstances` lookup on
+    `domain`. Its `@cache.memoize` decorator is inert here: tests/conftest.py:68
+    sets `CACHE_TYPE = 'NullCache'`, so no verdict leaks between tests.
+
+    The ban is on the FOLLOWER's domain, not the community's -- :160's
+    `instance_banned(community.instance.domain)` guard is a different call site
+    and would have returned before the builder, which would make this test pass
+    for the wrong reason. The first assertion pins that separation by showing
+    the community delivery still happened.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    _inward_follower(s)
+    db.session.add(BannedInstances(domain='follower.example'))
+    db.session.commit()
+
+    _send(s.post)
+
+    assert len(route.calls) == 1
+    assert ActivityPubLog.query.count() == 1
