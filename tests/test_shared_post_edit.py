@@ -20,8 +20,16 @@ SCOPE. Two clusters, 175 uncovered when this file was started:
 
 ENTRY is a direct call. `edit_post` opens with `if not user:` on BOTH branches
 (:252 for SRC_API, :316 for SRC_WEB), so passing `user=` skips
-`authorise_api_user` and `current_user` alike. No request context, no login, no
-auth token is needed anywhere in this file.
+`authorise_api_user` and `current_user` alike -- which is why almost every test
+here needs no request context, no login and no auth token, and is the reason the
+file works at all. Two tests deliberately do the opposite, because those two
+`if not user:` are themselves branch arms and the only way to take them is to
+withhold `user=`:
+`test_api_branch_authorises_from_the_bearer_token_when_no_user_is_passed` takes
+:253 and therefore mints a real Bearer JWT, and
+`test_web_branch_falls_back_to_the_logged_in_user_when_none_is_passed` takes
+:317 and therefore runs inside a Flask-Login request context. So the escape is a
+choice made per test, not a property of the file.
 
 THE HEAD REQUEST. `is_image_url` (app/utils.py:247) issues an httpx HEAD through
 `mime_type_using_head`, which catches only `httpx.HTTPError` and
