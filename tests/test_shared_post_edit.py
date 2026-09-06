@@ -41,8 +41,13 @@ setting gates only the Event block's call in app/activitypub/util.py, and
 :614/:616 call `make_image_sizes` directly.
 
 `http_mock` is `assert_all_called=True` (tests/conftest.py:288-295), so each
-test registers exactly the routes its own path reaches -- the crash tests below
-register the HEAD only, because they raise at :607 before the GET.
+test registers exactly the routes its own path reaches -- a registered route
+that is never reached FAILS the test at teardown. The two crash tests
+(`test_a_banned_domain_raises_before_anything_is_notified` and
+`test_a_pages_dev_domain_raises_even_when_it_is_not_banned`) therefore take no
+`http_mock` at all and register nothing: :569's raise sits inside :567's
+`if domain:`, which runs before :600-601, so those paths issue no HTTP request
+whatsoever.
 
 WHICH COMMIT RAISES. `:459 db.session.commit()` runs only inside
 `if not from_scratch:` (:421). Tests that need a durable pre-notify commit
@@ -246,6 +251,46 @@ def test_api_branch_reads_every_scalar_and_strips_the_title(db_session):
     assert s.post.notify_author is False
 
 
+def test_api_branch_authorises_from_the_bearer_token_when_no_user_is_passed(db_session):
+    """:252-253, the TRUE arm of `if not user:` -- the one SRC_API test in this
+    file that does not pass `user=`.
+
+    Every other test here passes `user=` so that :253 is skipped (see the module
+    docstring). This one takes the other arm, so `authorise_api_user`
+    (app/utils.py:3585) has to actually succeed and hand back a User.
+
+    THE WITNESS is :261's false arm, `user.timezone`. `timezone` is left out of
+    the input, so the value written to the post can only have come from the
+    object :253 bound -- a call that returned the wrong user, or that was
+    skipped, could not produce 'Pacific/Auckland'.
+
+    WHY password_updated_at IS PINNED TO THE PAST. The column defaults to
+    `utcnow` (app/models.py:1051), so `make_user` stamps it with a
+    sub-second-precision "now". :3630-3634 compares it against the token's
+    `iat`, which `encode_jwt_token` (app/models.py:1618) truncates to whole
+    seconds -- a token minted in the same wall-clock second as the user is
+    therefore sometimes read as predating a password change and rejected. This
+    is the same pin, for the same reason, that tests/conftest.py's
+    `api_baseline` fixture applies to its user 1.
+
+    Nothing else has to be arranged: `make_user` already produces the shape
+    :3628 demands (ap_id None, verified True, banned False, deleted False), and
+    `_seed`'s post is authored by this same user, so :253's
+    `id_match=post.user_id` matches.
+    """
+    s = _seed()
+    s.user.timezone = 'Pacific/Auckland'
+    s.user.password_updated_at = datetime(2000, 1, 1)
+    db.session.commit()
+
+    edit_post(_api_input(title='from the token'), s.post, POST_TYPE_ARTICLE,
+              SRC_API, auth=f'Bearer {s.user.encode_jwt_token()}')
+
+    db.session.expire(s.post)
+    assert s.post.title == 'from the token'
+    assert s.post.timezone == 'Pacific/Auckland'
+
+
 def test_api_branch_falls_back_to_the_users_timezone_when_the_key_is_absent(db_session):
     """:261, false arm of `'timezone' in input`."""
     s = _seed()
@@ -443,6 +488,36 @@ def test_api_event_start_that_is_already_a_datetime_passes_through(db_session):
     assert event.start == naive
 
 
+def test_api_event_end_is_parsed_when_there_is_no_start(db_session):
+    """:288, the FALSE arm -- the jump from :288 straight to :293.
+
+    Every other event test in this file supplies `start`, so :288 always took
+    its true arm and the edge :288 -> :293 was never walked. An `event` dict
+    carrying only `end` walks it: the start block is skipped entirely and the
+    end block still parses.
+
+    The shape is not hypothetical -- :288 and :293 are independent `in` tests,
+    not an if/elif -- and :703 `if 'start' in event_data:` mirrors it when the
+    Event row is written, so `event.start` simply stays None.
+
+    `community.local_only = True` for the same reason as the two siblings
+    below: :743's federate step reaches `ap_datetime` on the event's datetimes
+    (app/shared/tasks/pages.py:233) and would crash on the None start, on a line
+    that has nothing to do with the arm under test. :736 sets `federate = False`
+    before that call.
+    """
+    s = _seed()
+    s.community.local_only = True
+    db.session.commit()
+    edit_post(_api_input(event={'end': '2030-06-01T10:00:00+05:00'}),
+              s.post, POST_TYPE_EVENT, SRC_API, user=s.user)
+
+    event = Event.query.filter_by(post_id=s.post.id).first()
+    assert event is not None
+    assert event.start is None
+    assert event.end == datetime(2030, 6, 1, 10, 0)
+
+
 def test_api_event_end_is_skipped_when_the_key_is_absent(db_session):
     """:293, first conjunct false.
 
@@ -503,7 +578,11 @@ def test_api_event_block_is_skipped_when_there_is_no_event_key(db_session):
 
 
 def test_api_poll_defaults_every_field_when_only_choices_are_given(db_session):
-    """:303-307. All three `.get` defaults at once.
+    """:303-307. Two of the three `.get` defaults at once: `mode` -> 'single'
+    (:304) and `local_only` -> False (:305). `choices` (:306) is SUPPLIED here,
+    so its `[]` default is NOT taken -- the choices are what make the defaults
+    observable, since a poll with no choices writes no PollChoice rows to read
+    back.
 
     Not in the brief: with no `end_poll`, `poll.end_poll` stays None, and
     this function's federate step (:743) synchronously runs `send_post`,
@@ -643,6 +722,43 @@ def test_api_poll_block_is_skipped_when_there_is_no_poll_key(db_session):
 # ---------------------------------------------------------------------------
 # SRC_WEB: the form shape, :315-383
 # ---------------------------------------------------------------------------
+
+
+def test_web_branch_falls_back_to_the_logged_in_user_when_none_is_passed(app, db_session):
+    """:316-317, the TRUE arm of `if not user:` -- the one SRC_WEB test in this
+    file that does not pass `user=`.
+
+    Every other test here passes `user=` so that :317 is skipped (see the module
+    docstring), which is what lets the rest of the file run with no request
+    context at all. This one supplies the context instead: `login_user` inside
+    `app.test_request_context('/')` is the same shape tests/factories.py:117-118
+    and tests/test_utils_upload_video.py:222-223 use.
+
+    THE WITNESS is :386 `post.indexable = user.indexable`. The user is flipped
+    to non-indexable first, and Post.indexable defaults to True
+    (app/models.py:1731), so a False on the post can only have come from the
+    object :317 bound. An anonymous context would not merely give a different
+    answer -- Flask-Login's AnonymousUserMixin has no `indexable`, so :386 would
+    raise.
+
+    POST_TYPE_ARTICLE keeps `url` None at :327, so no HEAD is issued and no
+    `http_mock` route is needed -- the whole point of this test is the two lines
+    above the type dispatch.
+    """
+    from flask_login import login_user
+
+    s = _seed()
+    s.user.indexable = False
+    db.session.commit()
+
+    with app.test_request_context('/'):
+        login_user(s.user)
+        edit_post(_web_form(title='from current_user'), s.post,
+                  POST_TYPE_ARTICLE, SRC_WEB)
+
+    db.session.expire(s.post)
+    assert s.post.title == 'from current_user'
+    assert s.post.indexable is False
 
 
 def test_web_branch_takes_the_link_url_for_a_link_post(db_session, http_mock):
@@ -1141,12 +1257,19 @@ def test_a_remote_moderator_of_a_notify_mods_domain_is_not_notified(db_session, 
 
     DEVIATION FROM THE BRIEF: the brief built `peer` before `_seed()`. That
     ordering makes peer.example the id-1 Instance, and make_community hardcodes
-    instance_id=1 (see _seed's docstring), so the community under edit would
-    silently have become a REMOTE community -- a shape none of the other tests
-    in this block use, and one that changes what :736 and the eager
-    `task_selector('edit_post')` below it see. `_seed()` runs first here so the
-    only remote thing in the fixture is the moderator, which is what the test
-    is about.
+    instance_id=1 (tests/factories.py:139, and see _seed's docstring), so the
+    community under edit would have been stamped with an `instance_id` pointing
+    at the PEER's Instance row instead of the local one.
+
+    It would NOT have become a remote community: `Community.is_local()`
+    (app/models.py:3201-3202) reads `ap_id`, and `make_community` never sets
+    that column at all, so the community stays local however the instances are
+    ordered. The damage is narrower and quieter than that -- a scrambled FK, a
+    community whose rows say it lives on peer.example while every locality
+    predicate still calls it local -- which is precisely why it is worth writing
+    down rather than leaving to whoever next reorders these two lines.
+    `_seed()` runs first, so the only remote thing in the fixture is the
+    moderator, which is what the test is about.
     """
     s = _seed(domain_name='suspicious.example', notify_mods=True)
     peer = make_instance('peer.example', software='lemmy')
