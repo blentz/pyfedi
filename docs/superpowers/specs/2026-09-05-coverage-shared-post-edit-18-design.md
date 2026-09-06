@@ -292,3 +292,9 @@ These bind every task and are copied verbatim into the plan.
 8. `coverage_floors.ini` gains an `app/shared/post.py` entry at the measured floor.
 9. The findings register carries D297 onward, and D287/D292 are marked fixed.
 10. The full suite is green, with the pass/skip counts recorded.
+
+---
+
+## 10. Correction, dated 2026-09-05, appended by a later register round and NOT known to any task above
+
+**The finding number is wrong throughout this document.** The `orig_post_domain` / `TypeError: Object of type Domain is not JSON serializable` defect that every "D292" above refers to (all eleven occurrences, §4.1, §4.2's heading, §4.2's body, and criteria 5 and 9) is **D286**, not D292. The number was read once from the spec draft and copied forward without anyone re-opening the register cell it named. **D292 is a different, still-open entry**: `Post.new`'s unguarded `choice_ap['name']` read at `app/models.py:2205-2209`, the create-path sibling of D284. Nothing in this design was wrong except the label — the fix, the tests and the arbitration this document argues for are all correct under the name D286. This document is left as written, since a design document is a record of what was designed; the corrected label and the six citing sites in `tests/test_shared_post_edit.py` are carried in `docs/superpowers/plans/2026-09-05-coverage-shared-post-edit-18.md`'s own SECOND CORRECTION note and in the findings register at `docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md`, where the closure is recorded against D286.
