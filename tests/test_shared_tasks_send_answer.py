@@ -519,6 +519,55 @@ def test_one_following_instance_is_skipped_while_another_receives(
     assert db.session.query(ActivityPubLog).count() == 1
 
 
+def test_choose_answer_passes_is_undo_false(db_session, http_mock):
+    """:234 -- `send_answer(post_reply_id, user_id, False)`.
+
+    `type == 'ChooseAnswer'` is the witness: the flag it passes is not
+    observable any other way, and `unchoose_answer` differs from this
+    function ONLY in that argument, so a mutant swapping the two would be
+    caught here and in its companion below.
+
+    `send_async` is accepted and ignored by the task; None is passed to prove
+    it is not read.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    choose_answer(None, s.reply.id, s.user.id)
+
+    assert _sent_activity(route)['type'] == 'ChooseAnswer'
+
+
+def test_unchoose_answer_passes_is_undo_true(db_session, http_mock):
+    """:239 -- `send_answer(post_reply_id, user_id, True)`. The companion to
+    the test above; `type == 'Undo'` is a value the False flag could not
+    produce."""
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    unchoose_answer(None, s.reply.id, s.user.id)
+
+    assert _sent_activity(route)['type'] == 'Undo'
+
+
+def test_a_missing_post_reply_rolls_back_and_re_raises(db_session, http_mock):
+    """:306-308's except arm, reached without a faked exception.
+
+    `session.query(PostReply).get(<absent id>)` returns None at :246, and
+    :248's `post_reply.community` raises AttributeError. The wrapper catches
+    it at :306, rolls back, and RE-RAISES at :308 -- so the exception
+    escaping is itself half the assertion, and a mutant that swallowed it
+    would fail here.
+
+    A monkeypatched sentinel would prove the handler catches a fake
+    exception; this proves it catches the one the real path produces.
+    """
+    s = _seed(with_keys=True)
+
+    with pytest.raises(AttributeError):
+        send_answer(s.reply.id + 1000, s.user.id, False)
+
+
 # ---------------------------------------------------------------------------
 # Sub-project 21, Task 6: mutation-testing record for send_answer's guards
 # ---------------------------------------------------------------------------
