@@ -738,3 +738,103 @@ def test_a_missing_post_reply_rolls_back_and_re_raises(db_session, http_mock):
 # covered by the plan's own documented fallback form, which is a double
 # assertion-kill (multi-kill). No mutant was left as an unexamined
 # survivor, and no no-op result was left mistaken for one either.
+
+
+# ---------------------------------------------------------------------------
+# Sub-project 21, Task 9: residuals, unreachability and the ternary walk
+# ---------------------------------------------------------------------------
+#
+# THE FIVE FUNCTIONS IN SCOPE ARE AT ZERO MISSING STATEMENTS AND ZERO MISSING
+# BRANCH ARMS. Measured on the full-suite run of 2026-09-06 (report mtime
+# 15:57:53; 3919 passed, 3 skipped, 6 subtests passed), per-function by AST
+# extent rather than by convention:
+#
+#     make_reply      :55-64    missing=[]        arms=[]
+#     edit_reply      :68-77    missing=[]        arms=[]
+#     send_reply      :80-229   missing=[100,101] arms=[]
+#     choose_answer   :233-234  missing=[]        arms=[]
+#     unchoose_answer :238-239  missing=[]        arms=[]
+#     send_answer     :242-310  missing=[]        arms=[]
+#
+# `app/shared/tasks/notes.py` as a whole: 159 statements, 2 missing, 60
+# branches, 0 partial -- 99.09%.
+#
+# 1. THE MODULE'S ONLY RESIDUAL IS NOT IN THIS SUB-PROJECT'S SCOPE.
+#    `:100-101` is `send_reply`'s LOCAL mention arm -- the bare `except: pass`
+#    around `search_for_user(user_name)`. Sub-project 20 proved it unreachable
+#    and registered it. THE ESTABLISHER IS THE CALLEE, not a caller or an
+#    enclosing guard: `:95` (`if match.group(2) ==
+#    current_app.config['SERVER_NAME']:`) pins the mention's host half to this
+#    server, so `search_for_user` takes its local branch and RETURNS `None`
+#    for an unknown name rather than raising. Nothing can reach `:101`. The
+#    remote twin -- `search_for_user(ap_id)` at `:105` under `except: pass` at
+#    `:106-107` -- is the same three tokens and is NOT unreachable. Fact 111
+#    records that shape in `send_post`'s twin scanner
+#    (`app/shared/tasks/pages.py:107-108` against `:113-114`); the pair must be
+#    read as two arms, not as one shape occurring twice.
+#
+# 2. `:300`'s `instance.online()` CONJUNCT IS UNREACHABLE-FALSE, AND IT IS NOT
+#    A MISSING ARM. `:300` is
+#      `if instance.inbox and instance.online() and not
+#       user.has_blocked_instance(instance.id) and not
+#       instance_banned(instance.domain):`
+#    and `instance` comes from `post_reply.community.following_instances()` at
+#    `:299`. THE ESTABLISHER IS THE SQL QUERY -- fact 75's cause 4(b), the
+#    fourth kind D302 records. `Community.following_instances`
+#    (`app/models.py:842-851`) is called with the default
+#    `include_dormant=False`, so `:849` filters `Instance.dormant == False` and
+#    `:850` filters `Instance.gone_forever == False`; `Instance.online()`
+#    (`app/models.py:118-119`) is exactly `not (self.dormant or
+#    self.gone_forever)`. Every row the loop can see already satisfies it.
+#    coverage.py records a branch arc at the `if` level and not per conjunct,
+#    so this conjunct appears in NO residual and ZERO MISSING ARMS IS WHAT AN
+#    UNREACHABLE CONJUNCT LOOKS LIKE -- not evidence against one. Registered
+#    as a FIFTH site in D302, appended to that cell per its own instruction
+#    ("A fifth such site belongs in this cell, not in a new number") rather
+#    than renumbered. `_community_follower(..., dormant=True)` exists to set
+#    the column the SQL already filters, and is deliberately NOT used as a
+#    live-branch fixture.
+#
+# 3. THE TERNARY WALK. Run against the tree at this commit, over the five
+#    FunctionDefs in scope, reporting `ast.IfExp` nodes. RAW OUTPUT, not a
+#    confirmation of an expectation:
+#
+#      make_reply 55 64
+#      edit_reply 68 77
+#      choose_answer 233 234
+#      unchoose_answer 238 239
+#      send_answer 242 310
+#         TERNARY 303 undo if is_undo else lock
+#
+#    EXACTLY ONE conditional expression exists in the five, and the four
+#    wrappers have none. This sub-project's own spec claimed `send_answer` had
+#    none at all until the walk was run, and sub-project 19's controller named
+#    three where the walk found eight -- which is why the walk is reported
+#    rather than the expectation.
+#
+#    RECONCILIATION, one named test per arm (coverage.py emits no arc for a
+#    conditional expression -- fact 87 -- so the coverage number cannot do
+#    this):
+#
+#      :303 FALSE arm, `payload = lock`
+#        test_the_remote_choose_carries_its_full_key_set_and_keeps_its_context
+#        (:319; docstring at :321 names the arm). Asserts the delivered
+#        activity's `type` is 'ChooseAnswer' and its full key set.
+#        Also taken by test_a_remote_community_receives_the_bare_choose_answer
+#        (:247) and test_the_remote_delivery_is_signed_as_the_user (:370).
+#
+#      :303 TRUE arm, `payload = undo`
+#        test_the_remote_undo_wraps_the_choose_and_strips_its_inner_context
+#        (:346; docstring at :348 names the arm). Asserts `type` == 'Undo'
+#        wrapping the ChooseAnswer.
+#
+#    Both arms are additionally mutation-confirmed: M7 in the record above
+#    inverts `:303` and kills four tests, one by assertion and three by
+#    UnboundLocalError.
+#
+# 4. NOTHING ELSE IN THE FIVE FUNCTIONS IS UNREACHABLE. Every other guard,
+#    loop arm and wrapper arm has a named test above: `:248`'s three
+#    early-return conjuncts, `:265`, `:279`, `:280`, the `:299` loop's three
+#    arms (never entered / guard-continue / guard-send), and the
+#    `except`/`finally` pair at `:306-310` reached by a natural
+#    `AttributeError` rather than a faked exception.
