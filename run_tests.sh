@@ -18,7 +18,9 @@ if [ "${1:-}" = "--down" ]; then
 fi
 
 # Waits for Postgres to accept connections. Returns non-zero if it never does.
-# Used twice: after starting the stack, and again after a staleness reset.
+# Called once, at the only place the stack is started. (It used to be called
+# twice -- the second call followed the staleness reset described below, which
+# was removed with the TRUNCATE teardown in ec98595c.)
 wait_for_postgres() {
     printf 'Waiting for Postgres'
     for _ in $(seq 1 60); do
