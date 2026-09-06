@@ -245,7 +245,7 @@ def send_answer(post_reply_id, user_id, is_undo):
         user = session.query(User).get(user_id)
         post_reply = session.query(PostReply).get(post_reply_id)
 
-        if post_reply.community.local_only or not post_reply.community.instance.online():
+        if post_reply.community.local_only or post_reply.community.private or not post_reply.community.instance.online():
             return
 
         answer_ap_id = f"{current_app.config['SERVER_URL']}/activities/answer/{gibberish(15)}"
