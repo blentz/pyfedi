@@ -3886,8 +3886,11 @@ generation is slow, and leaves `private_key`/`public_key` as `None` otherwise
 (`:49`). Signing calls `.encode()` on the private key, so a delivery test whose
 sending actor was built with the default dies inside the signature machinery
 with an `AttributeError` on `None` -- **and it dies before the HTTP layer is
-reached**, so `respx` records no request and reports an unmatched route or an
-unmet `assert_all_called` instead. The factory's own docstring says it (`:47`):
+reached**, so `respx` sees **no request at all**. That rules out the diagnosis
+you would reach for: there is no unmatched-route error, because an unmatched
+route needs a request to not match. What you get is an unmet `assert_all_called`
+in teardown, which is fact 102's shape -- a control-flow failure wearing a
+routing failure's clothes. The factory's own docstring says it (`:47`):
 **any test asserting on delivery must build its sending actor with
 `with_keys=True`.** Note the actor that matters is whichever one signs: on
 `send_post`'s Announce path that is the **community** for the group Announce
@@ -3916,9 +3919,13 @@ before trying to kill a mutation of the dead one.
 **112. `Community.is_local()` IS A DISJUNCTION, SO CLEARING OR SETTING `ap_id`
 ALONE DOES NOT MAKE A FACTORY COMMUNITY REMOTE.** `app/models.py:795-796` is
 `return self.ap_id is None or self.profile_id().startswith(f"{SERVER_URL}")`.
-**Both** disjuncts must be false. `make_community` writes an `ap_profile_id` on
-the test `SERVER_URL`'s own host, so a community given an `ap_id` still answers
-`is_local() == True` through the second disjunct, and a test that expected to
+**Both** disjuncts must be false, and `profile_id()` (`app/models.py:787-789`)
+reads `ap_profile_id`, falling back to a `SERVER_URL`-based value only when that
+column is unset. `make_community` (`tests/factories.py:122`) takes `host` as a
+parameter but **defaults it to `'test.piefed.local'`**, which is exactly
+`SERVER_NAME` in the test config (`tests/conftest.py:69`), and writes
+`ap_profile_id=f'https://{host}/c/{name}'` at `:141`. So a community given an
+`ap_id` still answers `is_local() == True` through the second disjunct, and a test that expected to
 exercise `send_post`'s remote branch (`:305-307`) silently takes the local
 Announce branch instead -- with no error, because both branches send. **A
 sub-project 18 correction said "`is_local()` tests `ap_id`" and was itself
