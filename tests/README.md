@@ -2959,8 +2959,15 @@ collapsed one arm of an `a if c else b`, neither 1-5, 6 nor 8 do.
    has no host, so `:88`'s `if '@' in address` is false, `:91-92` set
    `server = ''`, `:94`'s `if server:` is then false and the function's sole
    `raise` (`:98`, the blocked-instance check) is skipped; the hit path returns
-   a `User` at `:104` and the miss path ends at `:108-109` returning `None`. The
-   call cannot raise, so `:107-108` is dead. On the **remote** arm the address
+   a `User` at `:104` and the miss path ends at `:108-109` returning `None`. **No
+   INPUT to that call reaches a `raise`, so `:107-108` cannot be reached by
+   choosing a mention** -- which is the property this cause is about, and it is
+   what was proved. It is **not** the stronger "the handler can never run": the
+   clause is **bare** (`except:`), and `:101` is a
+   `db.session.query(User).filter_by(...).first()`, so a `SQLAlchemyError` from
+   the DB layer still lands in it. **Say "unreachable for every input", not
+   "dead"** -- the weaker claim is the one the argument supports, and it is
+   already enough to explain why no test chases the lines. On the **remote** arm the address
    always contains `@`, so `:94` opens and `:98` can fire, and that handler is
    ordinary reachable code. **The two handlers are the same three tokens and
    only one of them is dead**, which is the whole reason this needs proving
@@ -3838,17 +3845,25 @@ unreachable in a suite that always uses the convenience.**
 **107. `send_post` HAS NO USABLE DEFAULT FOR `session`, AND THE FAILURE IS ON
 THE FIRST LINE.** `send_post(post_id, edit=False, session=None)`
 (`app/shared/tasks/pages.py:88`) dereferences it immediately: `:89` is
-`session.query(Post).get(post_id)`. The default exists for the two Celery
-wrappers above it, `make_post` (`:63-72`) and `edit_post` (`:76-85`), which each
-build a task session with `get_task_session()` and pass it in explicitly under
-`patch_db_session`. **A direct unit test must pass `db.session` itself**; there
+`session.query(Post).get(post_id)`. **The default has NO user in the tree.** An
+earlier draft of this fact said it "exists for the two Celery wrappers above it";
+it does not. `make_post` (`:63-72`) and `edit_post` (`:76-85`) each build a task
+session with `get_task_session()` and pass it in **explicitly** -- `:67` is
+`send_post(post_id, session=session)` and `:80` is
+`send_post(post_id, edit=True, session=session)`, both under `patch_db_session`
+-- so neither wrapper ever takes the default. **A default parameter with no
+caller that uses it is not a convenience, it is an unexploded trap**, and this
+one detonates on the first statement of the function. **A direct unit test must pass `db.session` itself**; there
 is no arrangement of fixtures under which omitting it works, and the
 `AttributeError: 'NoneType' object has no attribute 'query'` you get instead
 looks like a fixture problem rather than a signature one.
 
 **108. FOUR EARLY RETURNS STAND BETWEEN `send_post`'s ENTRY AND ITS BUILDER, AND
-THE ONE EVERYBODY REACHES FOR AS A WORKAROUND DOES NOT DO WHAT ITS USERS
-THINK.** To reach the Page builder at all, a test must clear every one of
+THE ONE EVERYBODY REACHES FOR AS A WORKAROUND DOES NOT DO WHAT THIS
+SUB-PROJECT'S OWN PLAN AND DESIGN SAID IT DID.** (That headline named "its
+users" until the users were checked; see the correction below -- the ten tests
+usually blamed for this had it right in writing.) To reach the Page builder at
+all, a test must clear every one of
 `:149-150` (`if not community.instance.online(): return`), `:153-154`
 (`if community.local_only or community.private: return`), `:156-158` (a
 `CommunityBan` row for this user and community) and `:159-161` (a remote
@@ -3857,10 +3872,24 @@ community whose instance the user has blocked, or that is instance-banned).
 (`app/models.py:118-119`) and both columns default `False`, so a factory
 instance is online without help. **The trap is `:153`.** Setting
 `community.local_only = True` **returns at `:154`, before the builder runs at
-all** -- it does not merely skip delivery at `:270`, which is what ten tests in
-`tests/test_shared_post_edit.py` and one implementation plan all assumed.
-The workaround still worked, for a different reason than the one written in its
-docstrings, and **a green suite cannot tell those two apart.** It is also why
+all** -- it does not merely skip delivery at `:270`. **WHO ACTUALLY BELIEVED
+OTHERWISE IS NARROWER THAN THIS FACT FIRST CLAIMED, AND THE CORRECTION MATTERS
+BECAUSE THE FACT NAMED TEN INNOCENT TESTS.** The first draft said this "is what
+ten tests in `tests/test_shared_post_edit.py` and one implementation plan all
+assumed", and that "the workaround still worked, for a different reason than the
+one written in its docstrings". **The implementation-plan half is true**
+(`docs/superpowers/plans/2026-09-06-coverage-send-post-19.md:535`, and the design
+at `docs/superpowers/specs/2026-09-06-coverage-send-post-19-design.md:177`, both
+say `:267`). **The ten-tests half is FALSE.** All ten sites --
+`tests/test_shared_post_edit.py:534`, `:562`, `:580`, `:630`, `:665`, `:680`,
+`:866`, `:901`, `:1075`, `:1456` -- state the **correct** mechanism in their
+docstrings: `app/shared/post.py:736` sets `federate = False`, so `:743` never
+dispatches. **Those tests never enter `send_post` at all**, so neither `:270`
+nor `:153-154` is their mechanism, and their docstrings say so. The `:153`
+observation stands and is worth keeping, but it is a fact about **direct
+`send_post` tests** -- the ones in `tests/test_shared_tasks_send_post.py` -- and
+not about anything in `tests/test_shared_post_edit.py`. **A fact that blames the
+wrong artefact sends the next reader to rewrite ten correct docstrings.** It is also why
 the false arms of `:270` and `:333` (both `if not community.local_only:`) are
 unreachable: `community` is bound once at `:91` and never rebound in `:88-352`,
 so by `:270` the flag is necessarily falsy. **When a fixture line is a
@@ -3893,9 +3922,22 @@ in teardown, which is fact 102's shape -- a control-flow failure wearing a
 routing failure's clothes. The factory's own docstring says it (`:47`):
 **any test asserting on delivery must build its sending actor with
 `with_keys=True`.** Note the actor that matters is whichever one signs: on
-`send_post`'s Announce path that is the **community** for the group Announce
-(`:298`, `:302`) and the **user** for a direct or microblog-update send (`:300`,
-`:306`).
+`send_post`'s Announce path that is the **community** for both Announces
+(`:298`, `:302`) and the **user** for both direct Creates (`:300`, `:306`).
+**The signer grouping is right; an earlier draft's LABELS for it were swapped,
+and they are corrected here rather than quietly reworded.** That draft called
+`:298` and `:302` together "the group Announce". They are two different
+activities: **`:298` sends `microblog_announce`** (built at `:285-293`, whose
+`object` is the bare `post.ap_id`), to an instance in `MICROBLOG_APPS` when
+`activity == 'create'`; **`:302` sends `group_announce`** (built at `:276-284`,
+whose `object` is the whole `create`), to everything else. Both are signed with
+`community.private_key`, which is why the grouping held while the names did not.
+Symmetrically, `:300` is the **microblog update** -- the same microblog instance
+when `activity != 'create'`, sent as a bare `create` from the user -- and `:306`
+is the Create posted to a **remote community's** `ap_inbox_url`, also from the
+user. **Two sends that share a signer are not the same activity, and a fixture
+fact that names them by signer will mislabel them the moment someone asserts on
+the body.**
 
 **111. TWO BARE `except: pass` CLAUSES THAT LOOK IDENTICAL ARE NOT, AND A TEST
 ASSERTING AN ABSENCE THROUGH ONE OF THEM PROVES NOTHING ABOUT WHY.**
@@ -3906,8 +3948,11 @@ opposite reachability. The **remote** handler at `:113-114` is live:
 `search_for_user` (`app/user/utils.py:85-158`) raises at `:98` for a
 blocked-instance host, so a mention of a user on a banned instance is silently
 dropped and a test can pin that. The **local** handler at `:107-108` is
-**dead**: a bare local name never satisfies `:88`'s `if '@' in address`, so
-`:94`'s `if server:` is false and `:98` is unreachable. **The consequence for a
+**unreachable for every input** (it was written "dead" here, which claims more
+than was proved -- the clause is bare and a DB-layer error out of
+`app/user/utils.py:101` would still land in it): a bare local name never
+satisfies `:88`'s `if '@' in address`, so `:94`'s `if server:` is false and
+`:98` is unreachable. **The consequence for a
 test is that "the mention produced no recipient" has at least three causes here
 and the assertion cannot distinguish them** -- the user did not exist, the host
 was banned, or the name matched the author so `app/shared/tasks/pages.py:104`
@@ -3938,10 +3983,23 @@ the second one fails silently. Set `ap_profile_id` to a foreign host as well.
 FALLS THROUGH TO A REAL DNS LOOKUP.** The name says GET; `signed_request`
 (`app/activitypub/signature.py:442`) calls it for every request it signs,
 `if is_invalid_get_request_uri(uri): raise ValueError("URI is invalid")`. The
-validator (`app/utils.py:5494-5533`) short-circuits under `current_app.debug`
-(`:5495-5496`) and otherwise resolves the host with `socket.getaddrinfo`
-(`:5520`) to reject private and loopback addresses, **failing open** on
-`gaierror`/`timeout` (`:5521-5522`). So a suite that mocks HTTP but not DNS
+validator (`app/utils.py:5494-5536` by `ast`) short-circuits under
+`current_app.debug` (`:5495-5496`) and otherwise resolves the host with
+`socket.getaddrinfo` (`:5520`) to reject private and loopback addresses,
+**failing open** on `gaierror`/`timeout` (`:5521-5522`). **The extent read
+`5494-5533` until the final review of sub-project 19, and the three lines it
+dropped QUALIFY THIS FACT'S OWN HEADLINE.** `:5535-5536` is a trailing
+`except Exception: return True` wrapping the whole body -- it **fails CLOSED**,
+rejecting the URI, for anything the resolver or the parse raises that is not
+`gaierror`/`timeout`. So "it falls through to a real DNS lookup" and "fails
+open" are both true of `:5521-5522` specifically and **not** of the function as
+a whole: the same validator fails open on one exception class and closed on
+every other. **Two committed values disagreed about this range**, and the test
+file had the right one: `tests/test_shared_tasks_send_post.py:166` has said
+`5494-5536` since it was written. **When two of your own documents cite
+different extents for one function, the one that is WRONG is not reliably the
+older one** -- check both against `ast` rather than assuming the newer citation
+was derived. So a suite that mocks HTTP but not DNS
 still touches the resolver on every outbound federation call, and its speed
 depends on how fast the network says no. **The fix is a delegating stub, not a
 blanket one**: intercept `getaddrinfo` for `.example` hosts and return a canned

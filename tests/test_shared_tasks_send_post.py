@@ -1,16 +1,25 @@
 """`send_post` -- the Celery-path builder and deliverer of an ActivityPub Page.
 
 `app/shared/tasks/pages.py:88-352`. This is the second of two Page builders in
-the codebase; the other is `post_to_page` (app/activitypub/util.py:132-219),
-reached from the outbox collection view at app/activitypub/routes.py:2033. They
-are near-twins and their disagreements are findings D298, D299 and D300.
+the codebase; the other is `post_to_page` (app/activitypub/util.py:132-217 by
+`ast`; :217 is `return activity_data` and :220 opens `post_replies_for_ap`).
+Its direct callers are app/activitypub/routes.py:2059 and :2184. It is NOT
+reached from routes.py:2033 -- that line calls `post_to_activity`, which calls
+`post_to_page` at app/activitypub/util.py:115. They are near-twins and their
+disagreements are findings D298, D299 and D300. (Both citations on these two
+lines were wrong: the extent read 132-219, and routes.py:2033 was named as the
+caller. D305, a fourth claimed disagreement about the `attachment` key, has been
+withdrawn -- util.py:147 puts `"attachment": []` in `post_to_page`'s
+unconditional dict literal, so the two builders agree there.)
 
 ENTRY is a direct call. `send_post(post_id, edit=False, session=None)` has no
 usable default for `session` -- :89 is `session.query(Post).get(post_id)` -- so
 every test here passes `db.session` explicitly.
 
-FOUR EARLY RETURNS stand between entry and the builder at :175, and a test that
-wants to reach the builder must clear all four:
+FOUR EARLY RETURNS stand between entry and the builder at :163, and a test that
+wants to reach the builder must clear all four. (This said :175 until the final
+review of sub-project 19; :175 is `language = {...}`, a line INSIDE the builder,
+and the rest of this file already says :163 -- see :199, :563 and :1192.)
 
   :149-150  `if not community.instance.online(): return`
   :153-154  `if community.local_only or community.private: return`
@@ -310,15 +319,18 @@ def test_a_banned_remote_host_mention_is_skipped_via_the_remote_except(db_sessio
     skipped_silently`, whose premise (that :107-108's local-arm except is
     reachable) was wrong.
 
-    THE LOCAL ARM'S EXCEPT AT :107-108 IS UNREACHABLE. For a bare local name
+    THE LOCAL ARM'S EXCEPT AT :107-108 IS UNREACHABLE FOR EVERY INPUT. For a
+    bare local name
     (no `@`), `search_for_user` (app/user/utils.py:85) hits :91-92
     (`server = ''`), so :94's `if server:` is False and :98 -- the function's
     only `raise` -- can never fire on that path. A no-match local lookup
     instead falls through :103 (`if already_exists:`, False) and :105
     (`elif not allow_fetch:`, False -- `allow_fetch` defaults True) to
     :108-109's clean `return None`. A nonexistent local mention returns None
-    without ever raising, so :107-108 is dead code on this arm -- registered
-    here as a finding for the residual sweep rather than exercised.
+    without ever raising, so NO CHOICE OF MENTION reaches :107-108 on this arm
+    -- registered here as a finding for the residual sweep rather than
+    exercised. It is not dead code in the stronger sense: the clause is bare, so
+    a SQLAlchemyError out of app/user/utils.py:101 would still land in it.
 
     THE REMOTE ARM CAN RAISE. `search_for_user` for `name@host` takes
     app/user/utils.py:94's true branch, and :98 raises when the host has a
@@ -793,7 +805,9 @@ def test_a_non_image_post_with_an_image_row_gets_no_image_attachment(db_session,
 # `ap_datetime` (app/utils.py:2293-2294) is one statement,
 # `return date_time.isoformat() + '+00:00'`, with no None guard, and it has 29
 # call sites. The fix is therefore at the three callers here, not in
-# `ap_datetime`: most of the other 28 pass a non-nullable column, and making
+# `ap_datetime`: most of the other 26 (this read "28" until the final review of
+# sub-project 19 -- 29 sites minus the three guarded here is 26, not 28)
+# pass a non-nullable column, and making
 # `ap_datetime` return None would put `"endTime": null` on the wire, which a
 # peer cannot tell apart from a missing value without knowing our schema. An
 # ABSENT key is unambiguous, and it is what the sibling builder already does --
@@ -1340,9 +1354,20 @@ def test_the_delivered_object_type_follows_the_post_type(db_session, http_mock,
 # or an ENCLOSING GUARD as the establisher and neither is what happens here:
 # the establisher is an EARLIER RETURN in the same function.
 #
-# Sub-project 18 set `community.local_only = True` in ten of its tests
-# believing it skipped delivery at :270. It did not; it returned at :154. The
-# workaround worked, for a different reason than the one written down.
+# CORRECTED by the final review of sub-project 19. This block used to read:
+# "Sub-project 18 set `community.local_only = True` in ten of its tests
+# believing it skipped delivery at :270." That is FALSE and it named ten
+# innocent tests. All ten sites -- tests/test_shared_post_edit.py:534, :562,
+# :580, :630, :665, :680, :866, :901, :1075, :1456 -- document the CORRECT
+# mechanism in their docstrings: app/shared/post.py:736 sets `federate = False`
+# so :743 never dispatches, and send_post is never entered. Neither :270 nor
+# :153-154 is their mechanism, because neither line runs for them.
+#
+# What DID say :270 is this sub-project's own plan
+# (docs/superpowers/plans/2026-09-06-coverage-send-post-19.md:535) and design
+# (docs/superpowers/specs/2026-09-06-coverage-send-post-19-design.md:177), and
+# they are about DIRECT send_post tests -- this file's kind. For a direct test
+# the trap is real: local_only returns at :154 and the builder never runs.
 #
 # (3): THE FALSE ARM OF :312, arc (312, 314). :312 is `if 'name' in page:`.
 # :196 sets `'name': post.title` unconditionally, inside the dict literal that
@@ -1356,15 +1381,26 @@ def test_the_delivered_object_type_follows_the_post_type(db_session, http_mock,
 # (4): THE STATEMENTS :107-108, the bare `except: pass` on the LOCAL arm of the
 # mention scanner. This is the only item of the four scoped to statements, and
 # fact 75's only statement-level cause -- 6, the redundant statement -- does
-# NOT fit it: the handler is not redundant, it is unreachable, because
-# `search_for_user` (app/user/utils.py:85-158) has no raising path for a bare
-# local name. Read the callee in order for the argument :106 passes it:
+# NOT fit it: the handler is not redundant, it is unreachable FOR EVERY INPUT,
+# because `search_for_user` (app/user/utils.py:85-158) has no raising path for a
+# bare local name. Read the callee in order for the argument :106 passes it:
 # :88's `if '@' in address` is false for a name with no host, so :91-92 set
 # `server = ''`; :94's `if server:` is then false, so the function's sole
 # `raise` (:98, the blocked-instance check -- confirmed sole by an AST walk for
 # `ast.Raise` inside the `FunctionDef`) is skipped; the hit path returns a User
 # at :104 and the miss path ends at :108-109, `if not server: return None`.
-# The call therefore returns a User or None and never raises.
+# The call therefore returns a User or None and never raises OF ITS OWN
+# ACCORD.
+#
+# THE LIMIT OF THAT PROOF, added by the final review of sub-project 19. The
+# clause is BARE -- `except:`, not `except Exception:` -- so it also catches
+# what the callee's machinery raises. On this arm :101 is
+# `db.session.query(User).filter_by(user_name=name, ap_id=None).first()`, and a
+# SQLAlchemyError from a dropped connection lands in :107-108 and is swallowed.
+# What is proved is "no INPUT reaches a raise", which is exactly enough to
+# explain why no test here chases the lines and why coverage will always report
+# them missing. It is NOT "these lines can never run", and it would not justify
+# deleting them.
 #
 # Contrast :112, the REMOTE arm: its address always contains '@', so :94 opens
 # and :98 can fire. Its `except` at :113-114 IS reached, by
@@ -2274,7 +2310,8 @@ def test_a_follower_instance_the_author_has_blocked_is_skipped(db_session, http_
 def test_a_defederated_follower_instance_is_skipped(db_session, http_mock):
     """:351 FOURTH conjunct FALSE -- `not instance_banned(instance.domain)`.
 
-    `instance_banned` (app/utils.py:2334-2359) is a `BannedInstances` lookup on
+    `instance_banned` (app/utils.py:2335-2364 by `ast`; this cited 2334-2359
+    until the final review of sub-project 19) is a `BannedInstances` lookup on
     `domain`. Its `@cache.memoize` decorator is inert here: tests/conftest.py:68
     sets `CACHE_TYPE = 'NullCache'`, so no verdict leaks between tests.
 
