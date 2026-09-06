@@ -34,44 +34,79 @@ AND the containers, so the next run replays all ~269 migrations (about 8s) and
 rebuilds the image. Measured 2026-08-31: a stack left up for eight hours ran the
 full suite in 186s, while the run immediately after `--down` plus a rebuild took
 260s. Tearing down to "get the speed back" is the wrong instinct -- see the next
-note for what actually goes slow and how the suite handles it.
+note for what the teardown actually costs.
 
-**The suite resets the database itself when it goes slow.** You should not need
-`--down` for speed; reach for it only to recover a genuinely wedged stack.
+**The per-test teardown DELETEs rows; it no longer TRUNCATEs tables, and the
+staleness reset that TRUNCATE needed is gone.** Changed 2026-09-06, commit
+`ec98595c`. You should not need `--down` for speed; reach for it only to recover
+a genuinely wedged stack.
 
-The mechanism, measured 2026-08-31. `db_session` truncates all ~90 tables after
-EVERY test, so one full run issues about a quarter of a million table
-truncations, and Postgres degrades badly under that: a single such TRUNCATE
-costs about **0.05ms against a fresh database and about 124ms after two or three
-full runs** -- roughly 2500x. At 2964 tests that is the difference between a
-~190s suite and one that cannot finish inside ten minutes. It is invisible in
-`--durations`: the cost lands on every test's teardown evenly, so the slowest
-twenty tests still total under a minute while the run as a whole crawls.
+The mechanism as it stands. `db_session` (`tests/conftest.py:137-188`) issues one
+statement built once from the model metadata by `_teardown_sql`
+(`tests/conftest.py:119-133`): `SET LOCAL session_replication_role = replica`,
+then a `DELETE FROM` for every table in `db.metadata.sorted_tables`, then a
+`setval` sweep over every sequence in the `public` schema. Each of the three
+parts is load-bearing and none of them is interchangeable with the others:
 
-Two things that are NOT the cause, both checked: user-table bloat (zero dead
-tuples across all 90 tables) and coverage instrumentation (`--cov=app
---cov-branch` costs only about 1.4x). `VACUUM` does not recover it either --
-`VACUUM FULL` on `pg_class` and the other catalogs left TRUNCATE at ~124ms.
-Only a fresh database helps.
+- `session_replication_role = replica` disables FK triggers for the duration of
+  the transaction. That is what `TRUNCATE ... CASCADE` used to buy, and it is
+  not optional -- the schema's foreign keys are **not acyclic**, so there is no
+  deletion order that satisfies them all. `SET LOCAL` ends at the `COMMIT`, so
+  the next test sees constraints enforced normally.
+- The `setval` sweep replaces `RESTART IDENTITY`. Fixtures hard-code
+  `instance_id=1` and `user_id=1`, so resetting the sequences is not optional
+  either -- facts 21, 61 and 89 all rest on ids restarting at 1 in every test,
+  and they are all still true. Only the *mechanism* changed.
+- `db.metadata.sorted_tables` rather than `pg_tables` leaves `alembic_version`
+  alone; wiping it would strand `flask db upgrade`.
 
-So `run_tests.sh` probes `pg_total_relation_size('pg_class')` before each run --
-about 300kB fresh, tens of MB once TRUNCATE has gone slow -- and restarts
-`test-db` when it exceeds 4 MB (override with `PYFEDI_TEST_STALE_KB`). That
-discards the tmpfs volume, and `flask db upgrade` rebuilds the schema in about 8
-seconds, which is far cheaper than the run it saves. pg_class's size is an
-odometer for relfilenode churn, not the cause; vacuuming it away does not make
-TRUNCATE fast again, which is exactly why the fix is a reset rather than a
-vacuum.
+Measured 2026-09-06 on identical fresh stacks over the same 629-test subset:
+**124.5ms mean teardown / 55.13s wall to 5.2ms mean teardown / 16.18s wall.**
+Across a full run the teardown now totals about **16.5s, 3.7% of the run**, and
+it does **not drift** as the run proceeds (first hundred tests 6.5ms, last
+hundred 5.8ms), so DELETE's dead tuples are not outrunning autovacuum.
 
-Proof it is self-maintaining: two full runs back to back took 254.66s and
-245.27s, the second having reset itself after detecting 45 MB.
+**What was there before, and the figure in it that was false.** `db_session`
+used to `TRUNCATE` all ~90 tables after every test. TRUNCATE allocates a fresh
+relfilenode per table, so ~2735 teardowns per run churned the system catalog;
+`run_tests.sh` probed `pg_total_relation_size('pg_class')` before each run and
+restarted `test-db` once it passed a threshold, because a fresh database was the
+only thing that recovered the speed. That probe has been **removed** -- with the
+churn gone there is nothing for it to detect, and leaving it in would pay for an
+8-second migration replay on nothing.
+
+This document and `run_tests.sh` both claimed a single TRUNCATE cost "about
+0.05ms against a fresh database" and ~124ms once degraded, "roughly 2500x".
+**The 0.05ms figure is wrong and the ratio built on it was wrong with it.**
+Measured directly 2026-09-06: truncating 90 tables on a genuinely fresh database
+costs **76ms**. The degradation to ~124ms was real, but it was second-order --
+the base cost always dominated, and 0.05ms was almost certainly measured against
+**one** empty table rather than ninety. The practical consequence is that
+TRUNCATE was never affordable here even at its best, so the fix was to stop
+truncating rather than to keep resetting the database.
+
+Still true from the old investigation, and worth not re-checking: user-table
+bloat was never the cause (zero dead tuples across all 90 tables), coverage
+instrumentation is not either (`--cov=app --cov-branch` costs about 1.4x), and
+`VACUUM FULL` on `pg_class` did not recover TRUNCATE's speed.
+
+Two alternatives that were measured and lost, recorded so nobody re-derives
+them: truncating only non-empty tables (probed with `EXISTS`) measured 92.4ms,
+and tracking dirty tables in-process measured 135.3ms. Both lose for the same
+reason -- `TRUNCATE "user" CASCADE` re-expands to dozens of tables, so
+subsetting buys nothing.
 
 **A run over ten minutes is a broken environment, not a slow suite.**
 `pytest.ini` sets `session_timeout = 600` alongside the per-test `timeout = 60`.
-The per-test limit only ever catches ONE hung test; the degradation above makes
-every test slow and would otherwise be waited out in silence. If you hit the
-session budget with a freshly reset database, suspect the environment -- host
-CPU governor and power profile, and `podman stats` -- not the tests.
+The per-test limit only ever catches ONE hung test; the session limit is what
+catches a whole-run slowdown spread evenly over every teardown, which is what
+the old TRUNCATE degradation was and which no `--durations` listing would have
+shown. That particular cause is gone (see above), so if you hit the session
+budget now, suspect the environment -- host CPU governor and power profile, and
+`podman stats` -- not the tests. **And note that pytest exits 0 on a session
+timeout**: a truncated run reads as green, so check the test count and the
+mtime of anything the run was supposed to write, never the exit code. Fact 117
+is the second member of that family.
 
 **podman-compose names the project after the directory.** A second checkout gets a
 separate stack, and `./run_tests.sh --down` only stops the stack belonging to the
@@ -102,8 +137,9 @@ raises without it. `test-runner` gets that environment from `.env.test`.
 
 Database-backed tests skip, rather than fail, when `TEST_DATABASE_URL` is unset.
 
-**Warning:** the `db_session` fixture truncates every table after each test.
-`conftest.py`'s `is_disposable_database_url()` refuses to run unless the database
+**Warning:** the `db_session` fixture deletes every row of every table after each
+test -- with FK triggers disabled, so nothing protects you from pointing it at a
+database you care about. `conftest.py`'s `is_disposable_database_url()` refuses to run unless the database
 name (the last "/"-separated path segment, with any `?query`/`#fragment` stripped)
 ends with `_test` — a bare substring match on "test" is not enough, since that
 would also accept real database names like `attestation` or a URL whose query
@@ -1608,8 +1644,8 @@ reimplement it.
 **2. Why seeded rows reach the dispatcher.** `process_inbox_request` does its
 work through `get_task_session()`, an independent `Session(bind=db.engine)`,
 not through `db.session`. Rows seeded by the factories in a test are still
-visible to it because the `db_session` fixture (`tests/conftest.py:117`)
-truncates tables rather than rolling back a transaction, and the factories
+visible to it because the `db_session` fixture (`tests/conftest.py:137`)
+cleans up by deleting rows rather than by rolling back a transaction, and the factories
 `commit()`, so by the time the dispatcher's own session queries the database
 the rows are durably there for any session bound to the same engine to see —
 no transaction-visibility trick is involved.
@@ -1779,12 +1815,23 @@ regardless of what is in the database.
 narrowed.
 
 **13. If a suite run hangs, do not kill it.** A killed run leaves Postgres
-backends idle-in-transaction holding relation locks, and every later run
-then blocks on the `db_session` fixture's teardown `TRUNCATE`
-(`tests/conftest.py:143`) — producing hangs and, once connections are
-cleared, failures from half-truncated tables that look exactly like real
+backends idle-in-transaction holding locks, and a later run then blocks in the
+`db_session` fixture's teardown — producing hangs and, once connections are
+cleared, failures from a half-cleaned database that look exactly like real
 regressions. Recovery is `./run_tests.sh --down` plus a rebuild, which
 replays ~269 migrations. This cost 5c a long detour.
+**THE ADVICE IS UNCHANGED BY THE 2026-09-06 TEARDOWN REWRITE; THE MECHANISM IS
+NOT, AND THE DIFFERENCE IS NOT MEASURED.** As written, this fact described the
+teardown `TRUNCATE` at `tests/conftest.py:143` blocking on a relation lock.
+TRUNCATE takes `ACCESS EXCLUSIVE`, so *any* surviving backend — even one that
+only ever ran a `SELECT` — blocked it. The teardown is now `DELETE`
+(`tests/conftest.py:119-133`, executed at `:177`), which takes `ROW EXCLUSIVE`
+and conflicts only at the row level, so a survivor that holds no uncommitted
+writes no longer blocks it at all. **That is reasoned from the lock modes, not
+measured** — nobody has reproduced the hang against the new teardown. Expect it
+to still happen when the survivor died mid-test with uncommitted writes, which
+is the ordinary case, and expect it to be less likely otherwise. Diagnose it
+with the `pg_stat_activity` query in fact 18 either way.
 
 **14. `inbox_activity`'s `**fields` is applied last.** `inbox_activity`
 (`tests/factories.py:912-929`) builds its default dict — `id`, `type`,
@@ -1843,17 +1890,29 @@ independently in Tasks 3 and 10 (`tests/test_inbox_dispatch_undo_follow.py`,
 `tests/test_inbox_dispatch_undo_moderation.py`).
 
 **18. Never run two pytest sessions against one test stack.** `db_session`
-resets state by `TRUNCATE`-ing every table after every test, which assumes
+resets state by emptying every table after every test, which assumes
 exclusive access to the database. Two concurrent sessions — a full-suite run
 and a single-file run, say — corrupt each other in two ways at once: one
-session's `TRUNCATE ... CASCADE` deletes rows the other just committed, and
+session's teardown deletes rows the other just committed, and
 their identical seed values collide (`duplicate key value violates unique
 constraint "ix_instance_domain"`, `Key (domain)=(peer.example) already
 exists`). Worse, they can deadlock outright: one backend sits `idle in
-transaction` while the other's `TRUNCATE` blocks on `Lock: relation`, and
+transaction` while the other's teardown blocks, and
 neither progresses. Observed twice on 2026-09-01, once costing about fifteen
 minutes before it was recognised, and both times the failures looked like
 real test regressions rather than contention.
+**THE EXCLUSIVE-ACCESS ASSUMPTION SURVIVED THE 2026-09-06 TEARDOWN REWRITE
+UNCHANGED, AND ONLY THE LOCK SHAPE MOVED.** This fact was written when the
+teardown was `TRUNCATE ... CASCADE`; it is now `DELETE` with
+`session_replication_role = replica` (`tests/conftest.py:119-133`). The
+**corruption** half is word-for-word as true as before — deleting every row of
+every table still deletes the other session's committed rows, and the seed
+collisions are untouched. The **blocking** half changes mode: `ACCESS EXCLUSIVE`
+became `ROW EXCLUSIVE`, so the block is now row-level rather than relation-level
+and the wait shows as `Lock: transactionid` or `Lock: tuple` rather than
+`Lock: relation`. Reasoned from the lock modes, **not** re-observed. The rule
+does not soften either way: two sessions still destroy each other's data on the
+first teardown, whatever they do or do not wait on.
 
 To diagnose it, ask Postgres directly rather than guessing:
 
@@ -1899,8 +1958,8 @@ real foreign keys.** `make_community` (`tests/factories.py:122-151`) never
 takes a `user_id` or `instance_id` argument — it always writes `1` for
 both, and `Community.user_id` carries a real `db.ForeignKey('user.id')`
 (`app/models.py:543`) enforced by this suite's real Postgres test database.
-Since `db_session`'s `TRUNCATE ... RESTART IDENTITY` leaves both tables
-empty at the start of every test, calling `make_community(...)` before any
+Since `db_session`'s teardown leaves both tables
+empty and both sequences back at 1 at the start of every test, calling `make_community(...)` before any
 `User` row exists raises an `IntegrityError` on the factory's own internal
 commit — before the code under test ever runs. A test must seed a `User`
 (or an `Instance`, for the `instance_id` side) first, so it lands on id 1.
@@ -2015,9 +2074,12 @@ container -- check for and kill survivors before starting another run.**
 Cancelling a run from the host leaves the container's pytest process alive,
 still holding the test database. Starting a second run then puts two
 pytest sessions against one Postgres instance at once (see fact 18 above),
-and the second run's `db_session` teardown `TRUNCATE` can block for many
+and the second run's `db_session` teardown can block for many
 minutes -- nearly ten, once -- behind the survivor's `idle in transaction`
-session. The image has no `kill` binary, so list and kill survivors through
+session. (That observation was made against the old `TRUNCATE` teardown; see
+fact 13 for what the 2026-09-06 `DELETE` rewrite does and does not change about
+it. Killing the survivor is the remedy either way.) The image has no `kill`
+binary, so list and kill survivors through
 the venv's own Python:
 
     podman exec pyfedi_test-runner_1 sh -c 'ls -d /proc/[0-9]*| while read d; do tr "\0" " " < "$d/cmdline" | grep -q bin/pytest && echo $d; done'
@@ -3299,10 +3361,18 @@ reviewer: a finding whose line number is wrong is still usually a real finding,
 so state the *content* you read as well as the address you read it at -- the
 content survives an off-by-one and the address does not.
 
-**89. `TRUNCATE ... RESTART IDENTITY` makes two entities share a primary key, so
+**89. THE PER-TEST SEQUENCE RESET (once `TRUNCATE ... RESTART IDENTITY`, now a
+`setval` sweep) makes two entities share a primary key, so
 an id-valued assertion can be SILENTLY VACUOUS with the whole file green.**
-`tests/conftest.py:143` truncates with `RESTART IDENTITY`, so every sequence
-restarts at 1 in every test. A helper that seeds one `Community` and then one
+`db_session`'s teardown resets every sequence in the `public` schema to 1
+(`tests/conftest.py:131-132`, inside the statement `_teardown_sql` builds at
+`:119-133`), so every sequence
+restarts at 1 in every test. **The 2026-09-06 rewrite changed the spelling and
+nothing else about this fact**: `RESTART IDENTITY` went away with the `TRUNCATE`
+it was attached to, and `SELECT setval(c.oid, 1, false)` over
+`pg_class WHERE relkind = 'S'` was written to preserve exactly this behaviour
+because fixtures depend on it. Everything below still holds, and so do facts 21
+and 61, which rest on the same reset. A helper that seeds one `Community` and then one
 `Post` gives **both** primary key 1, and an assertion like `targets ==
 {..., 'post_id': post.id, 'community_id': community.id}` cannot tell the two
 apart. Measured, not reasoned: mutating production's `'community_id':
@@ -3328,7 +3398,7 @@ this same collision -- 21 that `make_community` hard-codes the FKs at all, 61
 that the hard-coding makes two guard clauses collapse into one. This is the
 third: which ROW those hard-coded ids point at.) `make_community`
 (`tests/factories.py:122-151`) hard-codes `instance_id=1` (`:139`), and
-`RESTART IDENTITY` means whichever `make_instance` runs **first** gets id 1. So
+the per-test sequence reset means whichever `make_instance` runs **first** gets id 1. So
 a test that builds a peer `Instance` before seeding its own community leaves
 that community's `instance_id` pointing at the **peer's** row. Nothing is
 vacuous and no assertion is weakened -- the fixture is simply wrong about which
@@ -3488,6 +3558,10 @@ a register cell -- all said `:143` and agreed with each other.** A correction
 that disagrees with N agreeing prior citations needs N-fold verification, not
 less. And **nobody downstream had a reason to re-open `tests/conftest.py`**,
 which is precisely why this was the one that landed.
+(Both of those line numbers are now history and are left standing as history:
+the `TRUNCATE` teardown was replaced on 2026-09-06 and `tests/conftest.py:143`
+is inside `db_session`'s docstring today. The episode is what this paragraph
+records, not the location, and rewriting the numbers would falsify it.)
 
 **The proximate cause is mechanical, and it is worth more than the principle.**
 `sed -n 'A,Bp'` prints content with **no line numbers**, so mapping the first
@@ -3978,6 +4052,22 @@ incomplete in exactly the direction that matters**, which is the general
 warning: a correction to a one-line predicate is worth reading the predicate
 for, because "it tests X" and "it tests X **or** Y" fail differently and only
 the second one fails silently. Set `ap_profile_id` to a foreign host as well.
+**EXTENDED BY SUB-PROJECT 20 RATHER THAN GIVEN ITS OWN NUMBER, BECAUSE
+`User.is_local()` IS THE SAME DISJUNCTION AND FAILS BY THE OPPOSITE SYMPTOM --
+a reader who learns only one of the two will mis-predict the other.**
+`User.is_local()` (`app/models.py:1251-1252`) is
+`return self.ap_id is None or self.ap_profile_id.startswith(SERVER_URL)`. It
+reads `ap_profile_id` **directly**, with no `profile_id()` fallback in front of
+it, so setting `ap_id` alone on a factory user does not make the user remote and
+does not silently answer local either -- it **crashes**, with
+`AttributeError: 'NoneType' object has no attribute 'startswith'` raised from
+inside `is_local()` at whatever production line happened to call it. The
+`Community` half above falls back to a computed default and therefore decides
+LOCAL in silence. Same shape, opposite failure: one class blows up in your face
+and the other lies to you. Sub-project 19 hit the `Community` half (a guard
+that silently never opened); sub-project 20's Task 3 hit the `User` half while
+writing the true-arm test for `send_reply`'s `:129` ternary. **The remedy is the
+same for both: set the second disjunct's column too, never the first alone.**
 
 **113. THE DELIVERY PATH RUNS `is_invalid_get_request_uri` ON POSTs TOO, AND IT
 FALLS THROUGH TO A REAL DNS LOOKUP.** The name says GET; `signed_request`
@@ -4007,6 +4097,81 @@ blanket one**: intercept `getaddrinfo` for `.example` hosts and return a canned
 resolver while leaving the validator itself genuinely running -- a stub that
 made the function return `False` outright would have deleted the check the tests
 are supposed to be exercising.
+
+**114. `send_reply`'s `parent_id` IS A BRANCH, NOT A LOOKUP DETAIL, AND THE TWO
+ARMS BIND `parent` TO DIFFERENT CLASSES.** `app/shared/tasks/notes.py:83-86` is
+`if parent_id:` -> `parent = session.query(PostReply)...one()`, `else:` ->
+`parent = reply.post`. So `parent` is a `PostReply` for a nested reply and a
+`Post` for a top-level one, and everything downstream that touches `parent`
+inherits that: `:90` seeds `recipients` with `parent.author`, `:120` excludes
+`parent.author.id` from notification, and `:175` writes
+`'inReplyTo': parent.public_url()`. **`inReplyTo` is the observable**, and it is
+the only one that discriminates cleanly -- `PostReply.public_url()` and
+`Post.public_url()` produce different URL shapes, so a test that asserts it
+cannot pass under the other arm. A test that instead asserts
+`Notification.query.count() == 0` proves nothing here, because both arms can
+reach zero notifications for unrelated reasons. Pass `parent_id` explicitly in
+every helper that calls `send_reply`; a helper that defaults it silently tests
+one arm twice.
+
+**115. `recipients` IS SEEDED WITH THE PARENT'S AUTHOR BEFORE THE MENTION SCAN
+RUNS, WHICH MAKES TWO THINGS UNOBSERVABLE UNDER THE DEFAULT SEED.**
+`app/shared/tasks/notes.py:90` is `recipients = [parent.author]`, not `[]`.
+Two consequences, and both bit sub-project 20's Task 1:
+(a) the dedup loop at `:110-115` runs against a **non-empty** list from its very
+first iteration, so there is no "first mention is never compared" arm to cover,
+and a test that mentions the parent's author exercises the `add_recipient =
+False` path at `:113` rather than the append at `:116-117`;
+(b) the parent's author is a **delivery target that is excluded from
+notification** -- `:120` is `if recipient.is_local() and recipient.id !=
+parent.author.id:`, while `:155-157` still puts them in `tag`/`cc` and `:227`
+still delivers to them. Those two roles are easy to conflate and a test that
+conflates them cannot fail.
+**The trap is that the default seed makes the reply's author and the parent's
+author the same person**, which collapses `:97`'s
+`if user_name != user.user_name:` and `:120`'s second conjunct onto the same
+state, so neither arm is observable. The fix is a helper that reauthors the
+parent to a third user (`_reauthor_the_parent` in
+`tests/test_shared_tasks_send_reply.py`) -- and note it depends on session
+expire/reload mechanics, so reauthor **before** the call under test, not after.
+
+**116. A NULLABLE COLUMN IS NOT EVIDENCE THAT A MISSING GUARD IS A DEFECT.
+SETTLE REACHABILITY OVER THE DISPATCHERS, NOT OVER THE COLUMN.** Sub-project 20
+opened on a real asymmetry: `app/shared/tasks/pages.py:97` guards its mention
+scan with `if post.body:` and its twin `app/shared/tasks/notes.py:92` does not,
+and `PostReply.body` is `db.Column(db.Text)` (`app/models.py:2901`), nullable.
+The column's nullability makes the crash **storable**; it says nothing about
+whether anything can dispatch that row into the function. Enumerating the
+dispatchers settled it in the other direction: `send_reply` is called only from
+`notes.py:59` and `:72`, `task_selector('make_reply'|'edit_reply')` appears at
+exactly three sites (`app/shared/reply.py:194`, `:232`, `app/post/routes.py:928`),
+all three write `body` through `piefed_markdown_to_lemmy_markdown`
+(`app/utils.py:1233-1237`), and that function **raises the identical `TypeError`
+on `None` before any commit** -- so the bad state dies in the writer. The
+`None`-capable writers that do exist (`app/activitypub/util.py:3020`, `:2639`,
+`app/community/util.py:272`) are all inbound and dispatch no task.
+**Two method points, both of which cost time when skipped.** Enumerate
+**call sites of the task**, not call sites of the function -- a `grep` for the
+function name misses the Celery indirection in both directions. And **execute
+the suspected raiser** rather than reading it: one line in a REPL settled what
+two documents had been arguing about. The finding is registered as latent
+(D310), the probe test is kept as characterization, and no guard was written --
+a guard on a state no writer can produce has mutants no production-shaped test
+can kill.
+
+**117. A WRONG `--cov` TARGET COLLECTS NOTHING, WRITES NO JSON, AND EXITS 0.**
+`pytest-cov`'s `--cov` takes a **module** path, not a file path.
+`--cov=app/shared/tasks/notes.py` produces `CoverageWarning: Module
+app/shared/tasks/notes.py was never imported (module-not-imported)` followed by
+`CoverageWarning: No data was collected (no-data-collected)`, writes **no**
+`--cov-report=json:` file at all, and **pytest still exits 0**. A full 257.23s
+suite run was spent this way before the warnings were read. The dotted form
+`--cov=app.shared.tasks.notes` works, and `--cov=app` is the campaign's standard
+because one run serves every module. **This is the same failure mode as the
+`session_timeout` truncation** (`pytest.ini:28`, and the note near the top of
+this file): a green exit code over a run that produced nothing. The check is the
+same in both cases -- **read the mtime of the file the run was supposed to
+write, and the test count, never the exit code.**
 
 ## Known noise
 

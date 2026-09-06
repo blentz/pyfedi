@@ -74,8 +74,9 @@ fi
 # This repository has ~269 migrations. `flask db upgrade` is a fast no-op while
 # the database persists between runs, which is the normal case. It replays in
 # full -- measured at about 8 seconds, not the minutes its count suggests --
-# after `--down` or after the staleness reset above, because both leave an empty
-# database behind.
+# after `--down`, because that leaves an empty database behind. (It used to
+# replay after the staleness reset described above as well; that reset was
+# removed with the TRUNCATE teardown, so `--down` is now the only trigger.)
 echo "Applying migrations..."
 $COMPOSE exec -T test-runner flask db upgrade
 
