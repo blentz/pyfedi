@@ -254,3 +254,63 @@ def test_a_remote_community_receives_the_bare_choose_answer(db_session, http_moc
 
     assert route.called
     assert _sent_activity(route)['type'] == 'ChooseAnswer'
+
+
+def test_a_local_only_community_does_not_federate_the_answer(db_session, http_mock):
+    """:248's TRUE arm via `local_only`, returning at :249."""
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    s.community.local_only = True
+    db.session.commit()
+
+    _send(s)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_dormant_instance_does_not_receive_the_answer(db_session, http_mock):
+    """:248's TRUE arm via `not instance.online()`.
+
+    `Instance.online()` (app/models.py:118-119) is
+    `not (self.dormant or self.gone_forever)`, so setting `dormant` on the
+    community's OWN instance closes it. This is the community's instance, not
+    a follower's -- the follower filter at :299 is a different mechanism
+    entirely, covered in Task 5.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    s.community.instance.dormant = True
+    db.session.commit()
+
+    _send(s)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_private_community_does_not_federate_the_answer(db_session, http_mock):
+    """:248's `private` conjunct -- THE ONE PRODUCTION CHANGE THIS
+    SUB-PROJECT LANDS.
+
+    `Community.private` (app/models.py:611) is commented "only members can
+    view. no federation.", and before this conjunct landed `:248` tested only
+    `local_only` and `instance.online()` -- so a private, non-local-only
+    community federated its chosen answers out.
+
+    This is the SECOND site of D309 the campaign has closed; sub-project 20
+    closed `:143` in the same file for the same finding. `local_only` is left
+    False deliberately: with it True the test would pass on the pre-existing
+    conjunct and prove nothing.
+
+    THE UNCOUPLED STATE THIS SEEDS HAS NO CURRENT UI PATH -- the two form
+    fields are tied at app/community/routes.py:103-104 and :1230-1231, and
+    the three write statements are :122, :1234 and :1237 -- so the severity
+    is latent and the guard is defence in depth.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    s.community.private = True
+    db.session.commit()
+
+    _send(s)
+
+    assert db.session.query(ActivityPubLog).count() == 0
