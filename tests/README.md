@@ -4307,7 +4307,7 @@ that had nothing to do with the arm it was written for. The tests that stand
 record both contracts explicitly --
 `tests/test_shared_tasks_send_reply.py:1703` and `:1731` assert `NoResultFound`
 and say in their docstrings that it is **not** the `.get()`-returns-`None`
-shape, and `tests/test_shared_tasks_send_answer.py:553` asserts `AttributeError`
+shape, and `tests/test_shared_tasks_send_answer.py:605` asserts `AttributeError`
 and names the two-step path that produces it. **The rule: read the lookup you
 are about to defeat before writing the `raises`.** A sibling function is not
 evidence about this one, and the two styles are close enough in a diff to look
