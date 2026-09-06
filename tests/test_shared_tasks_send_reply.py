@@ -78,6 +78,7 @@ import socket
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy.exc import NoResultFound
 
 from app import db
 from app.constants import NOTIF_MENTION
@@ -85,7 +86,7 @@ from app.models import (
     ActivityPubLog, BannedInstances, CommunityBan, Emoji, Instance,
     Notification, PostReply, UserFlair,
 )
-from app.shared.tasks.notes import send_reply
+from app.shared.tasks.notes import edit_reply, make_reply, send_reply
 from app.user.utils import search_for_user
 from app.utils import ap_datetime
 from tests.factories import (
@@ -1625,3 +1626,139 @@ def test_a_mentioned_recipient_on_an_already_sent_domain_gets_no_second_copy(
 # so that neither test could pass under the other's arm. :185 and :187 were
 # proved by mutation during sub-project 20's Task 5 review: all four arms were
 # mutated and all four mutants were killed by assertion, with no survivors.
+
+
+# ---------------------------------------------------------------------------
+# make_reply and edit_reply, :55-64 and :68-77 -- the Celery entry points that
+# delegate to send_reply above
+# ---------------------------------------------------------------------------
+
+
+def _recording_task_session(monkeypatch):
+    """Make `get_task_session` hand back a GENUINE Session that records
+    `rollback()` and `close()`.
+
+    The session is real and does real work -- only the observation is added,
+    by wrapping the two methods rather than replacing the object. A fake
+    session would prove the wrapper calls methods on a mock; this proves it
+    calls them on the session the function actually used.
+
+    Returns a `SimpleNamespace(calls=[])`; the wrapper appends 'rollback' and
+    'close' to it in the order they happened, so `finally` running after
+    `except` is observable rather than assumed.
+    """
+    from app import db as _db
+    from sqlalchemy.orm import Session as _Session
+    import app.shared.tasks.notes as notes_module
+
+    record = SimpleNamespace(calls=[])
+
+    def _make():
+        session = _Session(bind=_db.engine)
+        real_rollback, real_close = session.rollback, session.close
+
+        def rollback():
+            record.calls.append('rollback')
+            return real_rollback()
+
+        def close():
+            record.calls.append('close')
+            return real_close()
+
+        session.rollback = rollback
+        session.close = close
+        return session
+
+    monkeypatch.setattr(notes_module, 'get_task_session', _make)
+    return record
+
+
+def test_make_reply_delivers_a_create(db_session, http_mock):
+    """`make_reply` (:55-64) delegates to `send_reply` with `edit=False`.
+
+    `type == 'Create'` is the witness that separates it from `edit_reply`,
+    which is byte-identical except for the `edit=True` at :74. `send_async`
+    is accepted and ignored; None is passed to prove it is not read.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    make_reply(None, s.reply.id, None)
+
+    assert _sent_activity(route)['type'] == 'Create'
+
+
+def test_edit_reply_delivers_an_update(db_session, http_mock):
+    """`edit_reply` (:68-77) delegates with `edit=True`, so :185/:187 build
+    an Update rather than a Create. The companion to the test above; `Update`
+    is a value `edit=False` could not produce."""
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    edit_reply(None, s.reply.id, None)
+
+    assert _sent_activity(route)['type'] == 'Update'
+
+
+def test_make_reply_rolls_back_and_closes_when_send_reply_raises(
+        db_session, monkeypatch):
+    """:62-63's except arm and :64-65's finally, reached by a NATURAL raise.
+
+    A reply id with no row makes `send_reply`'s `session.query(PostReply).
+    filter_by(id=reply_id).one()` (`notes.py:81`) raise
+    `sqlalchemy.exc.NoResultFound` -- not the `.get()`-returns-None-then-
+    AttributeError shape the task brief for this test described; the brief's
+    prose had drifted from `:81`'s actual query method, so the exception type
+    here is corrected against the current source rather than copied. Nothing
+    is faked: the exception is the one the real path produces for a missing
+    row, so a refactor that stopped raising would fail this test rather than
+    leave it green.
+
+    The recorded call ORDER is the assertion that `finally` ran after
+    `except`, which a bare "was close called" check could not distinguish
+    from a wrapper that closed instead of rolling back.
+    """
+    s = _seed()
+    record = _recording_task_session(monkeypatch)
+
+    with pytest.raises(NoResultFound):
+        make_reply(None, s.reply.id + 1000, None)
+
+    assert record.calls == ['rollback', 'close']
+
+
+def test_edit_reply_rolls_back_and_closes_when_send_reply_raises(
+        db_session, monkeypatch):
+    """:75-76's except arm and :77's finally -- `edit_reply`'s own copy of
+    the handler, which is a SEPARATE function body from `make_reply`'s and so
+    a separate pair of arcs. Written out rather than parametrised so each
+    function's arms are attributable to a named test.
+
+    Same `NoResultFound` from `notes.py:81`'s `.one()` as the `make_reply`
+    test above -- see that test's docstring for why the exception type
+    differs from the brief's original AttributeError description.
+    """
+    s = _seed()
+    record = _recording_task_session(monkeypatch)
+
+    with pytest.raises(NoResultFound):
+        edit_reply(None, s.reply.id + 1000, None)
+
+    assert record.calls == ['rollback', 'close']
+
+
+def test_make_reply_closes_the_session_on_the_happy_path(
+        db_session, http_mock, monkeypatch):
+    """:64-65's finally on the SUCCESS path -- `close` with no `rollback`.
+
+    The control for the two tests above: without it, `finally` running is
+    only ever observed alongside an exception, and a wrapper that closed only
+    in the except arm would pass everything else in this file.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _remote_inbox(s, http_mock)
+    record = _recording_task_session(monkeypatch)
+
+    make_reply(None, s.reply.id, None)
+
+    assert record.calls == ['close']
