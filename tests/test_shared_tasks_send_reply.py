@@ -35,7 +35,7 @@ FIVE DIVERGENCES, established before any test was written:
    assert KEY ORDER and say so rather than claiming a kill.
 
 5. There is NO amendment block. `send_post` rewrites its Page into a Note at
-   `:309-330`, which is where its aliasing hazard lives; this function is
+   `:309-332`, which is where its aliasing hazard lives; this function is
    already a Note. Assertions still read serialized bytes, because `:203`'s
    `del` mutates `create` in place.
 
