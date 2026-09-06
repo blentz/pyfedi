@@ -3264,6 +3264,30 @@ them distinct and confirm it dies. Note that assigning an explicit primary key
 does **not** advance the sequence, so a later unseeded row of the same type
 takes id 1 and reintroduces the collision -- reserve ids in a helper's docstring
 and say which are taken.
+**A SHARPER EDGE OF THE SAME MECHANISM, added by sub-project 18 and folded in
+here rather than given its own number, because a reader who looks up `RESTART
+IDENTITY` should find both consequences without knowing to look twice: seeding
+ORDER is load-bearing, not just distinctness, and what it corrupts is a FOREIGN
+KEY rather than an assertion.** (Facts 21 and 61 own the other two halves of
+this same collision -- 21 that `make_community` hard-codes the FKs at all, 61
+that the hard-coding makes two guard clauses collapse into one. This is the
+third: which ROW those hard-coded ids point at.) `make_community`
+(`tests/factories.py:122-151`) hard-codes `instance_id=1` (`:139`), and
+`RESTART IDENTITY` means whichever `make_instance` runs **first** gets id 1. So
+a test that builds a peer `Instance` before seeding its own community leaves
+that community's `instance_id` pointing at the **peer's** row. Nothing is
+vacuous and no assertion is weakened -- the fixture is simply wrong about which
+instance the community belongs to, and every later query that joins through it
+inherits that. The remedy is ordering, not an extra assertion: seed local first,
+or pass the instance explicitly. **And the failure this DOES NOT cause is worth
+recording, because it is the one people reach for first:** it does **not** flip
+`Community.is_local()`, which tests `ap_id` (`app/models.py:3201-3202`) and
+never looks at `instance_id`, and `make_community` sets no `ap_id` at all. A
+test that "proves" its community went remote by checking `is_local()` is
+measuring nothing. Sub-project 17's closure of a parked residual is the same
+mechanism seen from the other side -- `post.instance_id == community.id` **by
+construction**, so a distinctness guard could not be made true there -- which is
+why this is one fact and not two.
 
 **90. A task that commits INSIDE its recipient loop leaves durable partial
 state that no rollback removes -- and that state is assertable, so assert it.**
@@ -3620,6 +3644,120 @@ forever, where "8 of 23" was not checkable for a week.
 it. `17.md` is the **regex failing on a legitimate full path it could not
 traverse** -- a character class narrower than the paths in your repo
 manufactures those silently, and on the page they look exactly like shorthands.
+
+**101. A HELPER THAT LOOKS LIKE STRING WORK ISSUES AN HTTP REQUEST, AND ITS
+`except` IS TOO NARROW TO HIDE RESPX FROM YOU.** `is_image_url`
+(`app/utils.py:247`) reads like extension sniffing and mostly is -- but before
+it looks at the path it calls `mime_type_using_head` (`:270`), which issues a
+real `httpx_client.head(url, timeout=5)` (`:336`). That function catches
+`httpx.HTTPError` and `httpx.InvalidURL` (`:345`) and returns `''`, which is
+exactly the shape that lulls you: a malformed url degrades silently, so nothing
+in the helper's behaviour suggests a route is needed. **respx's
+unmatched-request error is neither of those two types**, so under `http_mock` it
+escapes `mime_type_using_head` entirely and surfaces inside your test at a line
+that mentions no HTTP at all. **A url-bearing test must register the HEAD
+route.** And count the calls rather than assuming one: `edit_post` can call
+`is_image_url` **twice** -- `app/shared/post.py:410` on `post.url` and `:601` on
+the new `url` -- so a test that seeds a post with a url and then edits it to a
+different url pays for two HEADs to two different addresses. **This is fact 67's
+shape reached by a different mechanism** -- there, an actor lookup fetches; here,
+a string helper does -- and it fails identically, as an unmatched request at a
+line that mentions no HTTP. The rule both share: **before mocking, read what a
+helper does on the way to its answer, not just what it returns.**
+
+**102. AN `assert_all_called` TEARDOWN FAILURE IS USUALLY A CONTROL-FLOW
+MISREADING, NOT A ROUTE TYPO -- AND IT COMES IN TWO SHAPES.** `http_mock` sets
+`assert_all_called=True` -- the *Fixtures for external services* section above
+explains why it is a coverage check on your fixture and worth keeping -- so a
+route you register and the code never requests fails the test at
+teardown, in a traceback that names respx and not your misreading. Both shapes
+below cost real time in sub-project 18 and are diagnosed the same way: **go read
+the control flow that reaches the request, do not adjust the route.**
+**(a) NESTING IS READ OFF INDENTATION COLUMNS, NEVER OFF PROXIMITY.** In
+`edit_post`, `if url and (from_scratch or url_changed):` (`app/shared/post.py:565`)
+sits at 4 spaces while `:566`, `:600` and `:601` all sit at 8. So `:600-601` are
+**siblings of `:566` inside `:565`'s body**, not nested inside `if domain:`
+(`:567`) forty lines closer to them -- and `:660`'s `elif` at 4 spaces pairs
+with `:565`'s `if`, which is the confirming reading. A test whose url is
+**unchanged** never reaches `:601` at all, so a GET registered for it is dead
+and the run fails on a passing assertion. **(b) A GUARD THAT RAISES MAKES EVERY
+ROUTE DEAD, INCLUDING THE FIXTURE ITSELF.** `app/shared/post.py:568-569` raises
+inside `if domain:` and **above** `:600-601`, so a test of the banned-domain or
+`.pages.dev` path must register **no routes at all** and must not request
+`http_mock` -- an unused router is an `assert_all_called` failure whether or not
+any route is defined. This was established by an actual teardown failure, not by
+inspection. Two notes on asserting that raise: it is a **bare `Exception`**, so
+`pytest.raises(Exception)` is the only available assertion and it will happily
+swallow an `AttributeError` or a `TypeError` your fixture caused -- **match on
+the message**, which is `f'{domain.name} is blocked by admin'`, or the test
+passes for the wrong reason.
+
+**103. `Site.admins()` NEEDS THE ROLE ROW'S ID TO *BE* `ROLE_ADMIN`, SO
+`grant_permission` IS NOT ENOUGH.** `Site.admins()` (`app/models.py:3995-4000`)
+takes its JOIN arm whenever `g.admin_ids` is unset, which `tests/conftest.py`
+guarantees by clearing `flask.g` before every test. That arm filters on
+`user_role.c.role_id == ROLE_ADMIN` (4, `app/constants.py:81`) and joins
+`user_role` with an **INNER** join, so a roleless `User.id == 1` is eliminated
+before the `or_` is evaluated and the `User.id == 1` disjunct cannot rescue it
+-- that is **D295**. `grant_permission` (`tests/factories.py:363`) creates its
+`Role` with an **auto** id (`:371`), which satisfies the join but not the
+filter, so it makes a user with a role and not an admin. **The shape that works
+is a get-or-create keyed on `ROLE_ADMIN` itself** -- `db.session.get(Role,
+ROLE_ADMIN)`, and only insert `Role(id=ROLE_ADMIN, ...)` if it is absent -- and
+the get-or-create half is load-bearing rather than defensive: `Role` rows are
+**shared across calls**, so a test that makes two admins in one run (there is
+one:  `test_a_moderator_and_a_separate_admin_are_both_notified` in
+`tests/test_shared_post_edit.py`) hits the same primary key twice and a bare
+insert raises. Nothing else about the helper needs to change for a second
+admin; only that branch.
+
+**104. WRITING AN AWARE `datetime` INTO A NAIVE `db.DateTime` COLUMN CONVERTS TO
+UTC AND *THEN* STRIPS -- IT DOES NOT KEEP THE WALL-CLOCK DIGITS.** Measured
+against this stack: `'2030-06-01T12:00:00+05:00'` parsed with a bare
+`datetime.fromisoformat` and written to `Poll.end_poll` (`app/models.py:3782`,
+a plain `db.DateTime`, i.e. TIMESTAMP WITHOUT TIME ZONE) reads back as
+`datetime(2030, 6, 1, 7, 0)` with `tzinfo is None`. **Both halves matter for an
+assertion.** Asserting the hour alone cannot distinguish this from the other
+lossy answer -- `.replace(tzinfo=None)`, which keeps hour 12 and discards the
+instant -- so **assert the hour AND `tzinfo is None`**, and choose an offset
+that makes the two answers differ (a `+00:00` fixture proves nothing). Do not
+reason from the value you passed in; round-trip it. This is the mechanism behind
+**D297**, where three sites in one function disagree about which of the two
+answers they want.
+
+**105. A TEST DOUBLE WHOSE FIELDS ARE ALL OBJECTS CANNOT EXPRESS A *FALSY
+FIELD*, AND YOU NEED BOTH SPELLINGS IN THE SAME DOUBLE.** A WTForms-shaped
+double is usually built by wrapping each value in something with a `.data`
+attribute. That works until the code under test distinguishes **the field object
+being falsy** from **the field's `.data` being `None`** -- and `edit_post`'s
+`SRC_WEB` arm does both, a few lines apart: `if input.flair:`
+(`app/shared/post.py:333`), `if input.finish_in:` (`:354`) and
+`hasattr(input, 'image_alt_text') and input.image_alt_text` (`:340`) test the
+**object**, while `:331`, `:337` and `:338` read `.data` unconditionally.
+Wrapping `None` in a field object makes it **truthy**, so the first group's
+false arms become unreachable; setting the attribute to a bare `None` makes
+`.data` raise `AttributeError`, so the second group breaks. **Neither spelling
+works for the whole form** -- choose per field, and say in the fixture's
+docstring which fields are bare and why, because the next person to add a field
+will copy whichever spelling is nearest.
+
+**106. BOTH SOURCE BRANCHES OF `edit_post` OPEN WITH `if not user:`, SO PASSING
+`user=` SKIPS AUTHENTICATION ENTIRELY.** `app/shared/post.py:252` (`SRC_API`,
+guarding `authorise_api_user` at `:253`) and `:316` (`SRC_WEB`, guarding
+`user = current_user` at `:317`) are the same escape written twice. Supplying
+`user=` therefore needs **no request context, no login and no auth token**,
+which is why most tests of this function are plain unit tests -- and it is worth
+knowing before you build a request context you do not need. **Both other arms
+are reachable and both are now demonstrated**, so neither has to be re-derived:
+for `:253`, a real `User.encode_jwt_token()` passed as `auth=f'Bearer {token}'`,
+with the user's `password_updated_at` pinned well in the past because `iat` is
+truncated to whole seconds (`app/models.py:1618`) and a token minted in the same
+second as the password stamp loses that race -- the `api_baseline` fixture
+(`tests/conftest.py:502`, `:574`) pins `2000-01-01` for exactly this reason. For
+`:317`, `app.test_request_context('/')` with `login_user`, the same shape
+`tests/factories.py:117-118` already uses. **The general point is that a
+convenience parameter which bypasses a guard makes that guard's own arms look
+unreachable in a suite that always uses the convenience.**
 
 ## Known noise
 
