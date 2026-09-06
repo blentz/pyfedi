@@ -579,28 +579,41 @@ def test_one_following_instance_is_skipped_while_another_receives(
 #
 # | M4 | 266 | skip the inner `del lock['@context']` |
 #   sed -i '266s/del lock/lock.pop("@context", None) if False else None; del lock/'
-#   | 13 passed (SURVIVOR) | n/a | n/a |
-#   This exact sed, applied verbatim as specified, produces a line reading
+#   | 13 passed | NO-OP SUBSTITUTION (not a mutant -- the sed leaves the
+#   guarded statement byte-for-byte unchanged) | n/a |
+#   This exact sed, applied verbatim as specified in the plan, is a
+#   DEFECTIVE MUTATION: it applies cleanly (no syntax error, no crash) but
+#   changes nothing. It produces a line reading
 #   `lock.pop("@context", None) if False else None; del lock['@context']`.
 #   The prepended `if False else None` conditional is a dead expression
 #   statement whose value is discarded; the trailing `del lock['@context']`
-#   from the original line is untouched and still executes unconditionally
-#   after the semicolon (verified directly: running the mutated line against
-#   a dict removes '@context' exactly as the original did). The substitution
-#   therefore does not change send_answer's behavior in any observable way
-#   for any input -- it is GENUINELY EQUIVALENT to the unmutated line, which
-#   is why all 13 tests pass identically to baseline. This is not a gap in
-#   test coverage; it is the specified sed failing to alter semantics.
-#   As a supplementary check (not itself part of the Task 6 table, run to
-#   confirm the guard this mutation was meant to probe is in fact covered),
-#   the brief's documented fallback form was also applied:
-#   sed -i "266s/^/#/" (comments the line out, genuinely skipping the
-#   delete). Result: 2 failed, 11 passed, both assertion-kills, multi-kill.
-#   Failing tests: test_the_remote_undo_wraps_the_choose_and_strips_its_inner_context
+#   is not a modified copy of the original statement -- it IS the original
+#   statement, character-for-character, still executing unconditionally,
+#   because the sed's `s/del lock/.../ ` target never overlapped with the
+#   `['@context']` subscript that gives the statement its effect (verified
+#   directly: running the mutated line against a dict removes '@context'
+#   exactly as the original did). No alternate program was ever produced,
+#   so this result is neither a SURVIVOR (which requires a real semantic
+#   change no test catches) nor an EQUIVALENT MUTANT (which requires a real
+#   semantic change that provably can't be observed) -- it is a no-op
+#   substitution, and a no-op result says nothing whatsoever about test
+#   coverage for this guard. The general lesson for future mutation sweeps:
+#   a mutation that applies cleanly and leaves every test green is not
+#   evidence about the tests until you have separately confirmed the
+#   substitution actually altered the program -- the plan anticipated only
+#   a *syntax* failure mode here ("if it does not apply cleanly, use the
+#   fallback"), but what actually occurred was a silent no-op that applied
+#   perfectly while mutating nothing.
+#   The real mutation for :266 is the plan's own documented fallback form,
+#   which was also applied: sed -i "266s/^/#/" (comments the line out,
+#   genuinely skipping the delete). Result: 2 failed, 11 passed -- a DOUBLE
+#   ASSERTION-KILL, multi-kill. Failing tests:
+#   test_the_remote_undo_wraps_the_choose_and_strips_its_inner_context
 #   (asserts '@context' not in the delivered ChooseAnswer object),
 #   test_a_local_community_announces_the_undo_and_strips_two_contexts
-#   (asserts '@context' not in the nested ChooseAnswer object). Both were
-#   reverted and the tree re-verified clean before proceeding.
+#   (asserts '@context' not in the nested ChooseAnswer object). This is the
+#   result that establishes :266's guard is actually covered. Both mutation
+#   forms were reverted and the tree re-verified clean before proceeding.
 #
 # | M5 | 279 | invert `is_local()` (`if post_reply.community.is_local():` ->
 #   `if not post_reply.community.is_local():`) |
@@ -668,8 +681,11 @@ def test_one_following_instance_is_skipped_while_another_receives(
 # Summary: of the 8 guards checked (M1-M7 plus the :281 spot-check), 7 kill
 # outright under the sed given (6 as specified in the table, plus the
 # already-known :281 check), 6 of those as multi-kills and 2 as sole-kills.
-# One mutation (M4, line 266, as literally specified) is a genuinely
-# equivalent transformation -- the given sed does not alter execution
-# semantics at all -- but the guard it targets is proven covered by the
-# documented fallback form, which is killed twice over (multi-kill,
-# assertion-kill). No mutant was left as an unexamined survivor.
+# One mutation (M4, line 266, as literally specified in the plan) is a
+# no-op substitution -- a defective sed that applies cleanly but never
+# alters execution semantics, producing no mutant at all -- so its
+# 13-passed result is neither a survivor nor an equivalent mutant and says
+# nothing about test coverage on its own. The guard it targets is proven
+# covered by the plan's own documented fallback form, which is a double
+# assertion-kill (multi-kill). No mutant was left as an unexamined
+# survivor, and no no-op result was left mistaken for one either.
