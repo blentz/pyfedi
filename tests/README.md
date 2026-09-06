@@ -2851,20 +2851,20 @@ was a reviewer reading the fact. **If you change a guard, the list of
 mutations to re-run is derivable from the diff; derive it before you write the
 commit message, not after someone asks.**
 
-**75. The five catalogued causes of an unkillable CLAUSE, one of an unkillable
+**75. The five catalogued causes of an unkillable CLAUSE, TWO of an unkillable
 STATEMENT, and one of an unkillable ARM OF A CONDITIONAL EXPRESSION. Name which
 one you have and prove it; never invent a test to fake a kill.** Causes 4 and 5
 were added by sub-project 14 and are the two that most often get mis-filed as
 ordinary fixture gaps. **The list is organised by SYNTACTIC UNIT, and reading
 the unit first is what keeps a survivor from being mis-filed: causes 1-5 are
-causes of an unkillable *clause*; cause 6, added by sub-project 16, is the
-statement-level case; cause 7, added by sub-project 17, is the
+causes of an unkillable *clause*; causes 6 and 8, added by sub-projects 16 and
+19, are the statement-level cases; cause 7, added by sub-project 17, is the
 expression-arm case. Each was numbered separately rather than folded into 4(a)
 for the same reason -- force-fitting one unit into another unit's taxonomy is
 what produces a mis-filed survivor.** Read the scope of the item before you
 claim it: if the mutant you are explaining deleted or narrowed a whole
 statement rather than dropping a conjunct, 1-5 do not apply to it; if it
-collapsed one arm of an `a if c else b`, neither 1-5 nor 6 do.
+collapsed one arm of an `a if c else b`, neither 1-5, 6 nor 8 do.
 
 1. **The factory always produces the matching value** (fact 33) -- the clause is
    fine, the fixture cannot vary what it tests. Fixable.
@@ -2949,6 +2949,54 @@ collapsed one arm of an `a if c else b`, neither 1-5 nor 6 do.
    cause lives: fact 87 says coverage emits no arc for a ternary, so an unkilled
    expression arm is invisible to both figures and is only ever found by an AST
    enumeration followed by a mutation** -- which is how this one was found (D294).
+8. **Unreachable handler** -- **the second statement-scoped cause, and the one
+   for a `try`/`except` whose body can never run.** A bare `except: pass`, or
+   any handler, is unkillable when the **callee inside the `try` has no raising
+   path for the argument shape this call site can produce**. `search_for_user`
+   (`app/user/utils.py:85-158`) is called twice in `send_post`, at
+   `app/shared/tasks/pages.py:106` and `:112`, each inside a bare `except: pass`
+   -- and only one of the two handlers is dead. On the **local** arm the address
+   has no host, so `:88`'s `if '@' in address` is false, `:91-92` set
+   `server = ''`, `:94`'s `if server:` is then false and the function's sole
+   `raise` (`:98`, the blocked-instance check) is skipped; the hit path returns
+   a `User` at `:104` and the miss path ends at `:108-109` returning `None`. The
+   call cannot raise, so `:107-108` is dead. On the **remote** arm the address
+   always contains `@`, so `:94` opens and `:98` can fire, and that handler is
+   ordinary reachable code. **The two handlers are the same three tokens and
+   only one of them is dead**, which is the whole reason this needs proving
+   rather than eyeballing. **Prove it the way cause 7 is proved -- by reading
+   the callee's statements in order and showing no `raise` is reachable for this
+   call site's argument -- and confirm the `raise` set by an AST walk for
+   `ast.Raise` inside the callee's `FunctionDef` rather than by `grep`.**
+   Discriminate it from the two it is nearest: it is **not 6**, because cause 6
+   requires the mutated statement's effect to be performed by other code that
+   runs after it, and an unreachable handler body performs **no effect at all** --
+   it is unreachable, not redundant; and it is **not 1-5 or 7**, which are scoped
+   to a clause and an expression arm respectively. Not fixable, and no test
+   should be written for it. **Standing on one instance**, like cause 7 did when
+   it was added; it is listed anyway because the alternative on meeting this
+   shape is force-fitting it into 6 or manufacturing a `raise` the call site
+   cannot produce -- sub-project 19 met it, argued it in a committed comment
+   block in `tests/test_shared_tasks_send_post.py`, and wrote no test for it.
+
+**NAME THE ESTABLISHER, NOT ONLY THE CAUSE.** Every entry above answers *what
+kind* of survivor you have; a checkable entry also answers **what makes it
+true**, and the campaign has now met **four distinct establishers** for cause
+4(b) and cause 8 alone: an **earlier return** in the same function (`send_post`'s
+`:153-154` returning on `community.local_only`, which is why the false arms of
+`:270` and `:333` are dead); an **unconditional assignment** (`:196` setting
+`page['name']` inside the dict literal, which is why `:312`'s false arm is
+dead); a **callee with no raising path** on the argument shape this site
+produces (cause 8's own establisher); and **the SQL query that produced the loop
+variable** (`Community.following_instances` and `User.following_instances`
+filtering `dormant`, `gone_forever` and `id != 1` in SQL, which is why three
+conjuncts in `send_post`'s two delivery loops are unreachable-False -- D302).
+Note that 4(b) as written names a **caller** or an **enclosing guard** and none
+of these four is either. **Recording which establisher applies is what makes the
+entry checkable later**, because that is the thing a future change breaks: a
+guard whose establisher is an SQL filter comes back to life the moment somebody
+passes `include_dormant=True`, and nobody re-reads an entry that only says
+"tautology".
 
 **Crash-only killability is another thing that looks like this list but is not
 on it**: fact 68's third note describes a clause no *assertion* can kill because
@@ -3645,6 +3693,34 @@ it. `17.md` is the **regex failing on a legitimate full path it could not
 traverse** -- a character class narrower than the paths in your repo
 manufactures those silently, and on the page they look exactly like shorthands.
 
+**A CORRECTION SWEEP HUNTS THE OLD VALUE, NOT THE NEW TEXT, AND THIS IS THE
+SUB-RULE THAT ACTUALLY GETS SKIPPED.** The two passes above tell you how to
+verify citations you are *reading*. When you are **changing** one -- correcting
+a line number, retiring a range, renaming a symbol -- there is a third move, and
+it is a different grep: **search the whole repository for the value you are
+retiring.** Sub-project 19 corrected `send_post`'s extent from `:88-371` to
+`:88-352` and swept by grepping `88-352`, the text it had just written. Every
+occurrence it found was one it had already fixed, the sweep came back clean, and
+**a stale `:88-371` survived the whole fix round** in a file the sweep never had
+a reason to open. A bare `grep -n '371'` would have found it in one command.
+**The rule, and it is one line: after you change a number, grep for the number
+you changed it FROM.** The same applies to a retired symbol name and to a
+renamed fixture. **It generalises past citations**, which is why it lives here
+rather than in a task brief: a search built from the corrected state can only
+ever confirm the correction, and confirming your own edit is not a sweep.
+
+**When that grep was finally run, it did not find one stale value -- it found
+THREE VALUES FOR ONE FACT, and that is the yield worth expecting.** The same
+function's extent was written `88-371` in the sub-project's plan (seven lines),
+`88-368` in its design (five lines) and `88-352` in its tests and its register
+entry; none was a typo, each was a different rule for where a function ends, and
+no reader comparing any two documents would have flagged it because each
+document was internally consistent. **A retired-value grep is therefore not only
+a cleanup pass -- it is the cheapest available test of whether the people
+writing about one thing were counting it the same way.** Run it before you
+believe a correction is finished, and when it returns hits, state **the pattern,
+the revision and the counting unit** with the enumeration.
+
 **101. A HELPER THAT LOOKS LIKE STRING WORK ISSUES AN HTTP REQUEST, AND ITS
 `except` IS TOO NARROW TO HIDE RESPX FROM YOU.** `is_image_url`
 (`app/utils.py:247`) reads like extension sniffing and mostly is -- but before
@@ -3758,6 +3834,114 @@ second as the password stamp loses that race -- the `api_baseline` fixture
 `tests/factories.py:117-118` already uses. **The general point is that a
 convenience parameter which bypasses a guard makes that guard's own arms look
 unreachable in a suite that always uses the convenience.**
+
+**107. `send_post` HAS NO USABLE DEFAULT FOR `session`, AND THE FAILURE IS ON
+THE FIRST LINE.** `send_post(post_id, edit=False, session=None)`
+(`app/shared/tasks/pages.py:88`) dereferences it immediately: `:89` is
+`session.query(Post).get(post_id)`. The default exists for the two Celery
+wrappers above it, `make_post` (`:63-72`) and `edit_post` (`:76-85`), which each
+build a task session with `get_task_session()` and pass it in explicitly under
+`patch_db_session`. **A direct unit test must pass `db.session` itself**; there
+is no arrangement of fixtures under which omitting it works, and the
+`AttributeError: 'NoneType' object has no attribute 'query'` you get instead
+looks like a fixture problem rather than a signature one.
+
+**108. FOUR EARLY RETURNS STAND BETWEEN `send_post`'s ENTRY AND ITS BUILDER, AND
+THE ONE EVERYBODY REACHES FOR AS A WORKAROUND DOES NOT DO WHAT ITS USERS
+THINK.** To reach the Page builder at all, a test must clear every one of
+`:149-150` (`if not community.instance.online(): return`), `:153-154`
+(`if community.local_only or community.private: return`), `:156-158` (a
+`CommunityBan` row for this user and community) and `:159-161` (a remote
+community whose instance the user has blocked, or that is instance-banned).
+`Instance.online()` is `not (self.dormant or self.gone_forever)`
+(`app/models.py:118-119`) and both columns default `False`, so a factory
+instance is online without help. **The trap is `:153`.** Setting
+`community.local_only = True` **returns at `:154`, before the builder runs at
+all** -- it does not merely skip delivery at `:270`, which is what ten tests in
+`tests/test_shared_post_edit.py` and one implementation plan all assumed.
+The workaround still worked, for a different reason than the one written in its
+docstrings, and **a green suite cannot tell those two apart.** It is also why
+the false arms of `:270` and `:333` (both `if not community.local_only:`) are
+unreachable: `community` is bound once at `:91` and never rebound in `:88-352`,
+so by `:270` the flag is necessarily falsy. **When a fixture line is a
+workaround, write down the mechanism AND check it, because the next reader will
+inherit the mechanism and not the outcome.**
+
+**109. `send_post`'s NATURAL STOPPING POINT IS `:339-341`, AND A BUILDER TEST
+THEREFORE NEEDS NO `http_mock` AT ALL.** `followers = session.query(UserFollower)
+.filter_by(local_user_id=post.user_id, is_inward=True).all()` at `:339` followed
+by `if not followers: return` at `:341` ends the function before the follower
+fan-out. Combine that with a **local** community that has no
+`following_instances()` and the entire builder -- mentions, Page, Create,
+Announce construction, the Note amendment -- runs with **zero outbound
+requests**. Assert on the built structures and stop there. Reach for `respx`
+only when the test is about delivery, and when it is, remember fact 102: an
+`assert_all_called` failure at that boundary is usually one of these returns,
+not a route typo.
+
+**110. A SENDER WITHOUT `with_keys=True` DIES AT SIGNING, BEFORE ANY REQUEST IS
+ATTEMPTED, AND THE TRACEBACK BLAMES THE WRONG THING.** `make_user`
+(`tests/factories.py:39`) generates a real RSA keypair only when asked, because
+generation is slow, and leaves `private_key`/`public_key` as `None` otherwise
+(`:49`). Signing calls `.encode()` on the private key, so a delivery test whose
+sending actor was built with the default dies inside the signature machinery
+with an `AttributeError` on `None` -- **and it dies before the HTTP layer is
+reached**, so `respx` records no request and reports an unmatched route or an
+unmet `assert_all_called` instead. The factory's own docstring says it (`:47`):
+**any test asserting on delivery must build its sending actor with
+`with_keys=True`.** Note the actor that matters is whichever one signs: on
+`send_post`'s Announce path that is the **community** for the group Announce
+(`:298`, `:302`) and the **user** for a direct or microblog-update send (`:300`,
+`:306`).
+
+**111. TWO BARE `except: pass` CLAUSES THAT LOOK IDENTICAL ARE NOT, AND A TEST
+ASSERTING AN ABSENCE THROUGH ONE OF THEM PROVES NOTHING ABOUT WHY.**
+`send_post`'s mention scanner calls `search_for_user` twice --
+`app/shared/tasks/pages.py:106` under `except: pass` at `:107-108`, and `:112`
+under `except: pass` at `:113-114` -- and the two are the same three tokens with
+opposite reachability. The **remote** handler at `:113-114` is live:
+`search_for_user` (`app/user/utils.py:85-158`) raises at `:98` for a
+blocked-instance host, so a mention of a user on a banned instance is silently
+dropped and a test can pin that. The **local** handler at `:107-108` is
+**dead**: a bare local name never satisfies `:88`'s `if '@' in address`, so
+`:94`'s `if server:` is false and `:98` is unreachable. **The consequence for a
+test is that "the mention produced no recipient" has at least three causes here
+and the assertion cannot distinguish them** -- the user did not exist, the host
+was banned, or the name matched the author so `app/shared/tasks/pages.py:104`
+(`if user_name != user.user_name:`) never called at all. Assert on the
+*reason* (seed the banned instance, or the missing user, and say which in the
+docstring), not merely on the empty `recipients` list; and see fact 75's cause 8
+before trying to kill a mutation of the dead one.
+
+**112. `Community.is_local()` IS A DISJUNCTION, SO CLEARING OR SETTING `ap_id`
+ALONE DOES NOT MAKE A FACTORY COMMUNITY REMOTE.** `app/models.py:795-796` is
+`return self.ap_id is None or self.profile_id().startswith(f"{SERVER_URL}")`.
+**Both** disjuncts must be false. `make_community` writes an `ap_profile_id` on
+the test `SERVER_URL`'s own host, so a community given an `ap_id` still answers
+`is_local() == True` through the second disjunct, and a test that expected to
+exercise `send_post`'s remote branch (`:305-307`) silently takes the local
+Announce branch instead -- with no error, because both branches send. **A
+sub-project 18 correction said "`is_local()` tests `ap_id`" and was itself
+incomplete in exactly the direction that matters**, which is the general
+warning: a correction to a one-line predicate is worth reading the predicate
+for, because "it tests X" and "it tests X **or** Y" fail differently and only
+the second one fails silently. Set `ap_profile_id` to a foreign host as well.
+
+**113. THE DELIVERY PATH RUNS `is_invalid_get_request_uri` ON POSTs TOO, AND IT
+FALLS THROUGH TO A REAL DNS LOOKUP.** The name says GET; `signed_request`
+(`app/activitypub/signature.py:442`) calls it for every request it signs,
+`if is_invalid_get_request_uri(uri): raise ValueError("URI is invalid")`. The
+validator (`app/utils.py:5494-5533`) short-circuits under `current_app.debug`
+(`:5495-5496`) and otherwise resolves the host with `socket.getaddrinfo`
+(`:5520`) to reject private and loopback addresses, **failing open** on
+`gaierror`/`timeout` (`:5521-5522`). So a suite that mocks HTTP but not DNS
+still touches the resolver on every outbound federation call, and its speed
+depends on how fast the network says no. **The fix is a delegating stub, not a
+blanket one**: intercept `getaddrinfo` for `.example` hosts and return a canned
+**global** address, delegating everything else. That keeps the suite off the
+resolver while leaving the validator itself genuinely running -- a stub that
+made the function return `False` outright would have deleted the check the tests
+are supposed to be exercising.
 
 ## Known noise
 
