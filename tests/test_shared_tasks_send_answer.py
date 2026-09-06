@@ -380,3 +380,69 @@ def test_the_remote_delivery_is_signed_as_the_user(db_session, http_mock):
     _send(s)
 
     assert _key_id_of(route) == s.user.public_url() + '#main-key'
+
+
+def test_a_local_community_announces_the_choose_to_a_following_instance(
+        db_session, http_mock):
+    """:279's TRUE arm with :280 FALSE -- :284's `del lock['@context']` and
+    the Announce built at :290-298.
+
+    The Announce keeps the `@context` built at :295; the ChooseAnswer nested
+    at :294 has had its own stripped at :284. Asserting both directions is
+    what catches a mutant that deletes from the wrong object.
+
+    `cc` is the community's followers collection here (:289), NOT the
+    `[community.public_url()]` the inner object carries (:253) -- :289
+    rebinds the name to a NEW list, so the inner object's `cc` still points
+    at the old one. Asserting both proves the rebinding did not alias.
+    """
+    s = _seed(with_keys=True)
+    fan = _community_follower(s, http_mock)
+
+    _send(s, is_undo=False)
+
+    sent = _sent_activity(fan.route)
+    assert sent['type'] == 'Announce'
+    assert '@context' in sent
+    assert sent['actor'] == s.community.public_url()
+    assert sent['object']['type'] == 'ChooseAnswer'
+    assert '@context' not in sent['object']
+    assert sent['cc'] == [s.community.ap_followers_url]
+    assert sent['object']['cc'] == [s.community.public_url()]
+
+
+def test_a_local_community_announces_the_undo_and_strips_two_contexts(
+        db_session, http_mock):
+    """:279's TRUE arm with :280 TRUE -- :281's `del undo['@context']`, on
+    top of :266's `del lock['@context']` which already ran.
+
+    THIS IS THE THREE-LEVEL PATH and the only one where two deletes fire.
+    The Announce keeps its `@context`; the Undo nested inside it lost its at
+    :281; the ChooseAnswer nested inside THAT lost its at :266. All three
+    levels are asserted, because a mutant that skipped either delete would
+    still produce a well-formed activity and only this shape would catch it.
+    """
+    s = _seed(with_keys=True)
+    fan = _community_follower(s, http_mock)
+
+    _send(s, is_undo=True)
+
+    sent = _sent_activity(fan.route)
+    assert sent['type'] == 'Announce'
+    assert '@context' in sent
+    assert sent['object']['type'] == 'Undo'
+    assert '@context' not in sent['object']
+    assert sent['object']['object']['type'] == 'ChooseAnswer'
+    assert '@context' not in sent['object']['object']
+
+
+def test_the_announce_is_signed_as_the_community(db_session, http_mock):
+    """:301 signs with `community.private_key` and
+    `community.public_url() + '#main-key'` -- the companion to Task 3's
+    user-signed assertion. See `_key_id_of`."""
+    s = _seed(with_keys=True)
+    fan = _community_follower(s, http_mock)
+
+    _send(s)
+
+    assert _key_id_of(fan.route) == s.community.public_url() + '#main-key'
