@@ -446,3 +446,57 @@ def test_the_announce_is_signed_as_the_community(db_session, http_mock):
     _send(s)
 
     assert _key_id_of(fan.route) == s.community.public_url() + '#main-key'
+
+
+def test_a_local_community_with_no_followers_sends_nothing(db_session, http_mock):
+    """:299's loop never entered -- arc (299, 310), straight to the `finally`.
+
+    `following_instances()` returns empty because no CommunityMember exists
+    on a remote instance. The Announce is still BUILT at :290-298; nothing
+    delivers it. `ActivityPubLog.query.count() == 0` is the witness, since
+    `post_request` would have written a row for any attempt.
+    """
+    s = _seed(with_keys=True)
+
+    _send(s)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_following_instance_without_an_inbox_is_skipped(db_session, http_mock):
+    """:300's FALSE arm -- arc (300, 299), the loop continuing.
+
+    `with_inbox=False` leaves `Instance.inbox` None, closing :300's FIRST
+    conjunct before any of the other three is evaluated. No route is
+    registered, so `http_mock`'s `assert_all_called=True` is not tripped, and
+    the `ActivityPubLog` count of 0 rules out a request having been attempted
+    against a None inbox -- which would have produced an "empty uri" failure
+    row rather than nothing at all.
+    """
+    s = _seed(with_keys=True)
+    _community_follower(s, http_mock, with_inbox=False)
+
+    _send(s)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_one_following_instance_is_skipped_while_another_receives(
+        db_session, http_mock):
+    """Both loop arms in ONE run -- (300, 299) then (300, 301).
+
+    The discriminating case: a single-instance test cannot show that the
+    guard skips an instance WITHOUT also stopping the loop, because with one
+    member "skipped" and "loop ended" look identical. With two, the delivered
+    one proves iteration continued past the skipped one.
+    """
+    s = _seed(with_keys=True)
+    _community_follower(s, http_mock, domain='mute.example',
+                        member_name='mute', with_inbox=False)
+    good = _community_follower(s, http_mock, domain='fan.example',
+                               member_name='fan')
+
+    _send(s)
+
+    assert good.route.call_count == 1
+    assert db.session.query(ActivityPubLog).count() == 1
