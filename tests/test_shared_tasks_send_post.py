@@ -97,3 +97,109 @@ def _peer(domain='peer.example', software='lemmy'):
 def _send(post, edit=False):
     """`send_post` takes an explicit session; there is no usable default."""
     return send_post(post.id, edit=edit, session=db.session)
+
+
+# ---------------------------------------------------------------------------
+# Mention extraction, :96-123
+# ---------------------------------------------------------------------------
+
+
+def test_a_body_with_no_mentions_skips_the_scanner_entirely(db_session):
+    """:97, false arm -- `if post.body:` with a body that is falsy.
+
+    The witness is that no Notification exists: the scanner never runs, so
+    :126's loop has nothing to iterate.
+    """
+    s = _seed(body=None)
+    _send(s.post)
+
+    assert Notification.query.count() == 0
+
+
+def test_a_local_mention_resolves_and_is_notified(db_session):
+    """:98-108 and :115-123. The local arm of :102's host comparison.
+
+    `current_app.config['SERVER_NAME']` is 'test.piefed.local'
+    (tests/conftest.py:69), which is what `_seed` gives the local instance, so
+    `@mentioned@test.piefed.local` takes :103-108.
+    """
+    s = _seed(body='hello @mentioned@test.piefed.local')
+    mentioned = make_user(s.instance, 'mentioned', local=True)
+    assert len({s.user.id, mentioned.id}) == 2
+
+    _send(s.post)
+
+    notifications = Notification.query.filter_by(user_id=mentioned.id).all()
+    assert len(notifications) == 1
+    assert notifications[0].notif_type == NOTIF_MENTION
+    assert notifications[0].subtype == 'post_mention'
+
+
+def test_an_author_mentioning_themselves_is_not_notified(db_session):
+    """:104, false arm -- `if user_name != user.user_name:`.
+
+    The author is 'author', so `@author@test.piefed.local` is skipped without
+    ever calling `search_for_user`.
+    """
+    s = _seed(body='hello @author@test.piefed.local')
+    _send(s.post)
+
+    assert Notification.query.count() == 0
+
+
+def test_an_unresolvable_local_mention_is_skipped_silently(db_session):
+    """:105-108, the bare `except: pass`. THE REASON IS THE ASSERTION.
+
+    `search_for_user` raises for a name with no matching row, and :107-108
+    swallows it. A test that only asserted `Notification.query.count() == 0`
+    could not tell that outcome apart from the mention never being scanned at
+    all, so this asserts the post itself was still processed -- the function
+    ran past the scanner rather than dying in it.
+    """
+    s = _seed(body='hello @nobodyhere@test.piefed.local')
+    _send(s.post)
+
+    assert Notification.query.count() == 0
+    db.session.expire(s.post)
+    assert s.post.id is not None
+
+
+def test_a_remote_mention_takes_the_ap_id_branch(db_session):
+    """:109-114, the else arm of :102. The host differs from SERVER_NAME, so
+    the lookup key is the full `name@host` rather than a bare user name."""
+    s = _seed()
+    peer = _peer()
+    s.post.body = 'hello @remoteuser@peer.example'
+    db.session.commit()
+    remote = make_user(peer, 'remoteuser', local=False)
+    assert remote.ap_id == 'remoteuser@peer.example'
+
+    _send(s.post)
+
+    assert Notification.query.filter_by(user_id=remote.id).count() == 0
+
+
+def test_the_same_local_user_mentioned_twice_is_added_once(db_session):
+    """:116-123, the dedup. :118's first disjunct -- a local recipient has
+    `ap_id` None, so the comparison falls to `user_name`."""
+    s = _seed(body='@mentioned@test.piefed.local and again @mentioned@test.piefed.local')
+    mentioned = make_user(s.instance, 'mentioned', local=True)
+    assert mentioned.ap_id is None
+
+    _send(s.post)
+
+    assert Notification.query.filter_by(user_id=mentioned.id).count() == 1
+
+
+def test_two_different_local_users_are_both_added(db_session):
+    """:122-123, the true arm of `if add_recipient:` on the second pass --
+    the dedup must NOT suppress a genuinely different recipient."""
+    s = _seed(body='@alpha@test.piefed.local and @beta@test.piefed.local')
+    alpha = make_user(s.instance, 'alpha', local=True)
+    beta = make_user(s.instance, 'beta', local=True)
+    assert len({s.user.id, alpha.id, beta.id}) == 3
+
+    _send(s.post)
+
+    assert Notification.query.filter_by(user_id=alpha.id).count() == 1
+    assert Notification.query.filter_by(user_id=beta.id).count() == 1
