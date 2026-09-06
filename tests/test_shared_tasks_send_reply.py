@@ -1446,7 +1446,7 @@ def test_a_mentioned_recipient_on_a_new_domain_gets_a_forwarded_copy(
     dictionaries always append at the END: `..., audience, @context`. That is
     what this test pins. It is NOT evidence that deleting :225 would be
     caught: `post_request` (app/activitypub/signature.py:100-101) and
-    `HttpSignature.signed_request` (app/activitypub/signature.py:452-453)
+    `HttpSignature.signed_request` (app/activitypub/signature.py:454-455)
     each independently re-run the identical `if '@context' not in body:
     body['@context'] = default_context()` check on this same dict before it
     is serialized, so a mutant deleting :225 would see the key re-added in
