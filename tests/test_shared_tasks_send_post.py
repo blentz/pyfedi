@@ -699,3 +699,87 @@ def test_the_image_url_stays_empty_when_the_file_has_no_paths(db_session, http_m
     _send(s.post)
 
     assert _image_of(route) == {'type': 'Image', 'url': ''}
+
+
+# ---------------------------------------------------------------------------
+# D299 -- the image attachment, :180-181
+# ---------------------------------------------------------------------------
+
+
+def test_an_image_post_with_no_image_row_does_not_crash(db_session):
+    """D299. :181 dereferences `post.image` under `elif post.type ==
+    POST_TYPE_IMAGE` with NO image_id check.
+
+    Before the fix this raises `AttributeError: 'NoneType' object has no
+    attribute 'source_url'`. The state is ordinary, not contrived:
+    `edit_post` produces a POST_TYPE_IMAGE post with `image_id` None whenever
+    the image path at app/shared/post.py:601-608 is not taken.
+
+    :213 in this same function, thirty-two lines below, already guards the same
+    dereference with `if post.image_id:`, and
+    app/activitypub/util.py:172 guards it in the sibling builder.
+
+    NO DELIVERY, AND NO `http_mock`, DELIBERATELY. The builder at :177-181 runs
+    long before the outbound calls at :291-334, so the crash this test names
+    happens with a local community and zero requests. Adding a registered route
+    would make `http_mock`'s `assert_all_called=True` (tests/conftest.py:288-295)
+    raise its own teardown failure alongside the AttributeError, obscuring the
+    very failure text that proves the test reaches :181.
+    """
+    s = _seed(post_type=POST_TYPE_IMAGE)
+    assert s.post.image_id is None
+
+    _send(s.post)
+
+
+def _attachment_of(route):
+    """The `attachment` member of the delivered Create's Page object, :197."""
+    return _sent_activity(route)['object']['attachment']
+
+
+def test_an_image_post_with_an_image_row_still_gets_its_attachment(db_session, http_mock):
+    """:180-181, the true arm -- the guard must not suppress a real image.
+
+    Without this, `elif False:` would pass the test above and lose the feature,
+    so the assertion is on the delivered `attachment`, not on completing
+    without raising. `attachment` is a local read into `page` at :197 and never
+    persisted, so this reads it back off the wire via `_remote_inbox` /
+    `_sent_activity` -- the same capture the :213-221 tests above use.
+    """
+    s = _seed(post_type=POST_TYPE_IMAGE, local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    _attach_image(s.post, source_url='https://example.com/pic.png',
+                  alt_text='a picture')
+
+    _send(s.post)
+
+    assert _attachment_of(route) == [{'type': 'Image',
+                                      'url': 'https://example.com/pic.png',
+                                      'name': 'a picture'}]
+
+
+def test_a_non_image_post_with_an_image_row_gets_no_image_attachment(db_session, http_mock):
+    """:180's TYPE test, isolated from its image_id test.
+
+    The post is an ARTICLE that nonetheless carries an `image_id`, which is the
+    only shape that separates `elif post.type == POST_TYPE_IMAGE and
+    post.image_id:` from a mutant that kept only `elif post.image_id:`. The
+    four :213-221 tests above all attach an image to a LINK post, and a LINK is
+    caught by :178 before :180 is ever evaluated, so none of them can see that
+    mutation; an ARTICLE reaches :180 and does.
+
+    `page['image']` is still emitted here (:213 is true), and is asserted
+    alongside the empty `attachment` so the test cannot pass by the image
+    simply having failed to attach.
+    """
+    s = _seed(post_type=POST_TYPE_ARTICLE, local_community=False,
+              with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    _attach_image(s.post, source_url='https://example.com/pic.png',
+                  alt_text='a picture')
+
+    _send(s.post)
+
+    assert _attachment_of(route) == []
+    assert _image_of(route) == {'type': 'Image',
+                                'url': 'https://example.com/pic.png'}
