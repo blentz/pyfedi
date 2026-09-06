@@ -999,7 +999,7 @@ def _inward_follower(s, http_mock=None, domain='follower.example',
                 dormant nor gone_forever.
       :350      `instance.domain not in domains_sent_to and instance.id != 1
                 and instance.software != 'piefed'`. `domains_sent_to` already
-                holds SERVER_NAME (:261) and the community's domain (:307), so
+                holds SERVER_NAME (:264) and the community's domain (:307), so
                 this follower lives on a THIRD domain. `make_instance`'s
                 default software is 'mastodon', which is what this path is for.
       :351      `instance.inbox` must be set -- `make_instance` leaves it None
@@ -1540,8 +1540,8 @@ def test_an_inboxless_follower_instance_is_skipped(db_session):
 # The Note amendment, :309-332
 # ---------------------------------------------------------------------------
 #
-# WHAT IS BEING AMENDED, AND WHY THE OBSERVABLE MOVES. :254 binds
-# `'object': page` and :311 binds `note = page`: one dict under two names. So
+# WHAT IS BEING AMENDED, AND WHY THE OBSERVABLE MOVES. :257 binds
+# `'object': page` and :314 binds `note = page`: one dict under two names. So
 # :313's `del`, :315's content reset and :317's type change all rewrite what
 # `create['object']` points at, IN PLACE, AFTER the community send at :306 has
 # already serialized it. Every assertion below therefore reads the FOLLOWER
@@ -1571,7 +1571,7 @@ def test_an_inboxless_follower_instance_is_skipped(db_session):
 # :312 deletes it -- :313 IS the delete, inside :312's true arm.
 
 
-def test_a_local_communitys_amended_copy_regains_the_context_key(db_session, http_mock):
+def test_a_local_communitys_amended_copy_carries_the_context_key_last(db_session, http_mock):
     """:310 TRUE -> :311, `create['@context'] = default_context()`.
 
     THE TRUE ARM IS THE ORDINARY PATH, NOT A CORNER CASE. :271 is
@@ -1579,7 +1579,10 @@ def test_a_local_communitys_amended_copy_regains_the_context_key(db_session, htt
     local community -- `_seed()`'s default -- arrives at :310 with the key
     already gone.
 
-    READ THE DOCSTRING, NOT THE NAME, FOR WHAT THIS CAN AND CANNOT KILL.
+    THE NAME IS THE KEY'S POSITION, NOT ITS RESTORATION, and that is
+    deliberate: position is what this test can actually pin. An earlier name
+    ('...regains_the_context_key') claimed the restoration, which the finding
+    below shows nothing in this file can distinguish.
     `post_request` (app/activitypub/signature.py:100-101) opens with
     `if '@context' not in body: body['@context'] = default_context()`, so a
     mutant that deleted :310-311 outright would have the key put back, with the
@@ -1590,9 +1593,9 @@ def test_a_local_communitys_amended_copy_regains_the_context_key(db_session, htt
     :310 and a `pass` at :311 each leave every test in this file green.
 
     What the assertions DO pin is that this test is genuinely standing on
-    :310's true arm. `create` is built at :253-262 with `@context` sixth and
-    `audience` last; a run that never deleted it keeps that order (see the
-    remote-community test below, which asserts exactly that). Seeing
+    :310's true arm. `create` is built at :253-262 with `@context` seventh and
+    `audience` eighth and last; a run that never deleted it keeps that order
+    (see the remote-community test below, which asserts exactly that). Seeing
     `@context` LAST here is the proof that :272 ran and the key was re-added
     afterwards -- a Python dict re-append moves the key to the end, and
     `json.dumps` preserves insertion order.
