@@ -44,6 +44,7 @@ absence.
 """
 
 import json
+import socket
 from types import SimpleNamespace
 
 import pytest
@@ -126,6 +127,68 @@ def _send(post, edit=False):
 
 PEER_INBOX = 'https://peer.example/c/c1/inbox'
 
+_REAL_GETADDRINFO = socket.getaddrinfo
+
+# The address a `.example` host resolves to under the stub below. Any globally
+# routable literal will do -- the only property app/utils.py:5530 reads off it
+# is `is_global` -- but a real one keeps the fixture honest if anyone ever
+# prints it. 93.184.216.34 was example.com's address for years.
+_EXAMPLE_TLD_ADDRESS = '93.184.216.34'
+
+
+def _getaddrinfo_without_the_network(host, *args, **kwargs):
+    """`socket.getaddrinfo`, answering for `.example` hosts without a resolver.
+
+    Everything else is delegated to the real function unchanged, so nothing in
+    the process that genuinely needs to resolve a name is affected.
+    """
+    if isinstance(host, str) and (host == 'example' or host.endswith('.example')):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, '',
+                 (_EXAMPLE_TLD_ADDRESS, 0))]
+    return _REAL_GETADDRINFO(host, *args, **kwargs)
+
+
+@pytest.fixture(autouse=True)
+def _peer_example_resolves_without_a_resolver(monkeypatch):
+    """Keep `_remote_inbox`'s delivery off the network's DNS resolver.
+
+    THIS IS NOT OPTIONAL AND MUST NOT BE DELETED AS UNNECESSARY. Signing a
+    delivery runs `is_invalid_get_request_uri` (app/utils.py:5494-5536), called
+    from `HttpSignature.signed_request` at app/activitypub/signature.py:442 --
+    for POST as well as GET. Its `current_app.debug` short-circuit at
+    app/utils.py:5495-5496 does NOT fire here: neither config.py nor
+    tests/conftest.py sets DEBUG, so `app.debug` is False. Control therefore
+    reaches app/utils.py:5520, `socket.getaddrinfo(f.host, None)`, and a real
+    lookup of `peer.example` goes out to whatever resolver the machine has.
+
+    That lookup is fail-open (app/utils.py:5519-5522 returns False on
+    `gaierror`/`timeout`), which is exactly why it is dangerous rather than
+    merely slow: on a machine whose resolver is fast and NXDOMAINs it costs
+    nothing and nobody notices, but on one that is slow, that hangs, or that
+    hijacks NXDOMAIN into a wildcard A record pointing somewhere private, the
+    same tests stall or start failing at app/utils.py:5530-5531's `is_global`
+    check. A suite whose outcome depends on the host's resolver is not
+    hermetic, and `_remote_inbox` is shared by every delivery test in this
+    file.
+
+    The stub is deliberately the NARROWEST thing that removes the lookup: it
+    replaces only the resolver, for only the reserved-by-RFC-2606 `.example`
+    TLD this file's peers live under, delegating every other host to the real
+    `socket.getaddrinfo`. `is_invalid_get_request_uri` itself still runs in
+    full -- the empty-host, `.local`, scheme and `is_global` checks all execute
+    against a real answer -- so the production path is exercised, not skipped.
+    The canned address is globally routable, so the verdict is False, which is
+    the same verdict the fail-open path produces today; this makes that verdict
+    deterministic rather than a property of the machine.
+
+    Autouse, because `_remote_inbox` is a plain function and cannot request a
+    fixture: this is how it gets the isolation without growing a parameter that
+    every calling test would have to remember. It is inert for the tests that
+    never deliver -- they resolve nothing -- and `monkeypatch` undoes it after
+    each test, so the patch never outlives the test that needed it.
+    """
+    monkeypatch.setattr(socket, 'getaddrinfo', _getaddrinfo_without_the_network)
+
 
 def _remote_inbox(s, http_mock, inbox=PEER_INBOX):
     """THE CAPTURE MECHANISM for anything `send_post` writes into `page` or
@@ -171,6 +234,14 @@ def _remote_inbox(s, http_mock, inbox=PEER_INBOX):
     `http_mock` is `assert_all_called=True` (tests/conftest.py:287-295), so the
     route registered here failing to fire is itself a test failure -- a test
     using this helper cannot silently stop delivering.
+
+    NO NETWORK IS TOUCHED, including DNS. Signing the delivery runs
+    `is_invalid_get_request_uri`, which resolves the inbox host for real at
+    app/utils.py:5520 and fails open at :5521-5522 -- so without help these
+    tests would depend on the machine's resolver. The autouse
+    `_peer_example_resolves_without_a_resolver` fixture above answers for
+    `.example` hosts in-process; read its docstring before changing `inbox` to
+    a host outside that TLD, which would put the live lookup back.
     """
     s.community.instance_id = _peer().id
     s.community.ap_inbox_url = inbox
