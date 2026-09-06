@@ -62,9 +62,13 @@ parts is load-bearing and none of them is interchangeable with the others:
 
 Measured 2026-09-06 on identical fresh stacks over the same 629-test subset:
 **124.5ms mean teardown / 55.13s wall to 5.2ms mean teardown / 16.18s wall.**
-Across a full run the teardown now totals about **16.5s, 3.7% of the run**, and
+Across a full run the teardown now totals about **16.5s**, and
 it does **not drift** as the run proceeds (first hundred tests 6.5ms, last
 hundred 5.8ms), so DELETE's dead tuples are not outrunning autovacuum.
+**Say which run before quoting that as a percentage**: 16.5s is **3.7%** of the
+447.32s plain full run `ec98595c` measured it against, and **7.2%** of the
+228.46s full `--cov=app --cov-branch` run recorded on 2026-09-06. Both are true
+and they are of different runs; the seconds are the portable figure.
 
 **What was there before, and the figure in it that was false.** `db_session`
 used to `TRUNCATE` all ~90 tables after every test. TRUNCATE allocates a fresh
@@ -91,10 +95,18 @@ instrumentation is not either (`--cov=app --cov-branch` costs about 1.4x), and
 `VACUUM FULL` on `pg_class` did not recover TRUNCATE's speed.
 
 Two alternatives that were measured and lost, recorded so nobody re-derives
-them: truncating only non-empty tables (probed with `EXISTS`) measured 92.4ms,
-and tracking dirty tables in-process measured 135.3ms. Both lose for the same
-reason -- `TRUNCATE "user" CASCADE` re-expands to dozens of tables, so
-subsetting buys nothing.
+them: truncating only the non-empty tables, found with an `EXISTS` probe,
+measured **92.4ms**, and tracking dirty tables in-process with a
+`before_cursor_execute` listener measured **135.3ms** -- both **worse** than the
+124.5ms they were meant to beat, which is exactly why they are written down.
+Both lose for the same reason: `TRUNCATE "user" CASCADE` re-expands to dozens of
+tables, so subsetting buys nothing. **Provenance, because it is weaker than the
+rest of this section's**: these two figures come from the same fresh stacks and
+the same 629-test subset as the 124.5ms and 5.2ms above, but unlike those they
+are **not** in `ec98595c`'s commit message -- they are recorded in the
+sub-project 20 ledger, `.superpowers/sdd/2026-09-06-coverage-send-reply-20/progress.md`,
+under its Task 7 entry, which is **gitignored**. A reader who cannot reach that
+file has this paragraph and nothing else.
 
 **A run over ten minutes is a broken environment, not a slow suite.**
 `pytest.ini` sets `session_timeout = 600` alongside the per-test `timeout = 60`.
@@ -4118,14 +4130,16 @@ one arm twice.
 RUNS, WHICH MAKES TWO THINGS UNOBSERVABLE UNDER THE DEFAULT SEED.**
 `app/shared/tasks/notes.py:90` is `recipients = [parent.author]`, not `[]`.
 Two consequences, and both bit sub-project 20's Task 1:
-(a) the dedup loop at `:110-115` runs against a **non-empty** list from its very
+(a) the dedup loop at `:110-114` runs against a **non-empty** list from its very
 first iteration, so there is no "first mention is never compared" arm to cover,
 and a test that mentions the parent's author exercises the `add_recipient =
-False` path at `:113` rather than the append at `:116-117`;
+False` path at `:113` rather than the append at `:116` (which `:115`'s
+`if add_recipient:` guards);
 (b) the parent's author is a **delivery target that is excluded from
 notification** -- `:120` is `if recipient.is_local() and recipient.id !=
-parent.author.id:`, while `:155-157` still puts them in `tag`/`cc` and `:227`
-still delivers to them. Those two roles are easy to conflate and a test that
+parent.author.id:`, while `:154-158` still puts them in `tag` and `cc` -- `cc`
+initialised at `:154`, the loop `:156-158`, with `tag.append` at `:157` and
+`cc.append` at `:158` -- and `:227` still delivers to them. Those two roles are easy to conflate and a test that
 conflates them cannot fail.
 **The trap is that the default seed makes the reply's author and the parent's
 author the same person**, which collapses `:97`'s
