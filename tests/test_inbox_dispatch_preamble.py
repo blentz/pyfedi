@@ -70,7 +70,7 @@ MUTATION, round 2 (same drop, but letting the fetch SUCCEED): re-ran the
 identical mutation with a mocked 200 response for the unfound actor's own
 URL (a minimal Person document, following the recipe in
 tests/test_ap_resolve_remote_post.py's serve_remote_object / this file's
-conftest.py:288 http_mock, registering exactly one GET route rather than
+conftest.py:336 http_mock, registering exactly one GET route rather than
 federation_peer's webfinger+actor pair -- our fetch is a direct-URL fetch,
 which never calls webfinger, so federation_peer's unused webfinger route
 would fail http_mock's assert_all_called=True teardown check). Traced

@@ -46,7 +46,7 @@ process_question_answer (:2463-2496).
 
 process_question_answer does `from app import redis_client` INSIDE the
 function body (:2475), then `redis_client.lock(...)`. This is exactly
-tests/conftest.py:394's `redis_double` fixture's SECOND documented mechanism,
+tests/conftest.py:442's `redis_double` fixture's SECOND documented mechanism,
 not its first: the fixture's docstring distinguishes `get_redis_connection`
 (imported as `from app.utils import get_redis_connection` at four separate
 module-level binding sites, each bound once at import time, so each needs its

@@ -140,7 +140,7 @@ def record_moderation(monkeypatch, *names):
     by name (or, for `announce_activity_to_followers`, defines it itself),
     so patching the DEFINING module under a different name would leave
     routes' own copy pointing at the original -- the same binding-site trap
-    tests/conftest.py:394 documents.
+    tests/conftest.py:442 documents.
 
     The lambda binds `_n=name` as a keyword default so each closure closes
     over its OWN name, rather than every closure sharing whichever value

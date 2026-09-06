@@ -41,7 +41,7 @@ staleness reset that TRUNCATE needed is gone.** Changed 2026-09-06, commit
 `ec98595c`. You should not need `--down` for speed; reach for it only to recover
 a genuinely wedged stack.
 
-The mechanism as it stands. `db_session` (`tests/conftest.py:137-188`) issues one
+The mechanism as it stands. `db_session` (`tests/conftest.py:137-202`) issues one
 statement built once from the model metadata by `_teardown_sql`
 (`tests/conftest.py:119-133`): `SET LOCAL session_replication_role = replica`,
 then a `DELETE FROM` for every table in `db.metadata.sorted_tables`, then a
@@ -60,6 +60,19 @@ parts is load-bearing and none of them is interchangeable with the others:
 - `db.metadata.sorted_tables` rather than `pg_tables` leaves `alembic_version`
   alone; wiping it would strand `flask db upgrade`.
 
+**`session_replication_role` IS A SUPERUSER GUC, AND THAT REQUIREMENT IS
+LOAD-BEARING AND EASY TO MISS.** The teardown works because
+`compose.test.yaml` sets `POSTGRES_USER: pyfedi`, which the official Postgres
+image creates as the **cluster superuser**, and `.env.test` points both URLs at
+that role. Point `TEST_DATABASE_URL` at some other `*_test` database reached
+with an ordinary role -- which `is_disposable_database_url()` accepts, and which
+this file describes as a supported thing to do -- and every `db_session` test
+dies in teardown with `permission denied to set parameter
+"session_replication_role"`. It fails loudly and immediately rather than
+silently leaving foreign keys unenforced, which is why this is a note and not a
+warning, but it is a constraint the podman stack satisfies by accident of the
+image's defaults and nothing else in the repo states.
+
 Measured 2026-09-06 on identical fresh stacks over the same 629-test subset:
 **124.5ms mean teardown / 55.13s wall to 5.2ms mean teardown / 16.18s wall.**
 Across a full run the teardown now totals about **16.5s**, and
@@ -69,6 +82,36 @@ hundred 5.8ms), so DELETE's dead tuples are not outrunning autovacuum.
 447.32s plain full run `ec98595c` measured it against, and **7.2%** of the
 228.46s full `--cov=app --cov-branch` run recorded on 2026-09-06. Both are true
 and they are of different runs; the seconds are the portable figure.
+
+**THE ONE RISK THIS ARRANGEMENT CARRIES, NAMED SO IT IS RECOGNISED RATHER THAN
+RE-DISCOVERED: NOTHING RECLAIMS RELATION SPACE ANY MORE.** `DELETE FROM t` with
+no `WHERE` scans the relation's **page high-water mark**, not its live rows.
+`TRUNCATE` reset every relation to zero blocks after every test; `DELETE` never
+shrinks one, and `VACUUM` only truncates *trailing* all-empty pages. The data
+lives in tmpfs (`compose.test.yaml`) and survives for the life of the container
+across every run that does not `--down`. And the `pg_class` probe that
+diagnosed the 2026-08-31 slowdown was removed in the same commit, so there is
+now no automatic signal at all.
+
+- **Steady state is fine and that is measured, not assumed.** Ordinary tests
+  insert tens of rows, and the teardown does not drift across a full run
+  (6.5ms → 5.8ms). Nothing here is a reason to change how you write tests.
+- **The trigger is a single outlier test.** One test that seeds tens of
+  thousands of rows -- a pagination case, a backfill, a fuzz case -- extends
+  those relations and their indexes permanently for the life of the container.
+  Every remaining teardown in that run, and every teardown of every later run
+  on the same stack, then seq-scans the extended pages.
+- **The symptom is the one this whole section is about**: teardown cost rises
+  for every test at once, so `--durations` stays flat and innocent while the
+  run as a whole crawls. If you see that, this is the first thing to suspect,
+  and `select pg_database_size('pyfedi_test');` is the one-line check the
+  removed odometer used to do for you.
+- **The remedy is `./run_tests.sh --down`**, which destroys the tmpfs volume
+  and reclaims everything, at the cost of an ~8s migration replay and an image
+  rebuild. **This is the exception to "`--down` is not for speed" at the top of
+  this file**: that advice was written about the TRUNCATE arrangement and holds
+  for the ordinary case, but `--down` is now the *only* thing that shrinks a
+  relation.
 
 **What was there before, and the figure in it that was false.** `db_session`
 used to `TRUNCATE` all ~90 tables after every test. TRUNCATE allocates a fresh
@@ -115,10 +158,14 @@ catches a whole-run slowdown spread evenly over every teardown, which is what
 the old TRUNCATE degradation was and which no `--durations` listing would have
 shown. That particular cause is gone (see above), so if you hit the session
 budget now, suspect the environment -- host CPU governor and power profile, and
-`podman stats` -- not the tests. **And note that pytest exits 0 on a session
-timeout**: a truncated run reads as green, so check the test count and the
-mtime of anything the run was supposed to write, never the exit code. Fact 117
-is the second member of that family.
+`podman stats` -- not the tests. **A session timeout exits NON-ZERO -- pytest
+exits 1 and `run_tests.sh` propagates it**, exactly as `pytest.ini:26-27` says.
+Earlier revisions of this file claimed the opposite; that claim was measured
+false on 2026-09-06 and the measurement is fact 118 below. What throws the
+status away is **piping pytest's output**, which every campaign run does.
+Still check the test count and the mtime of whatever the run was supposed to
+write -- those catch more than a timeout does, including the silent case fact
+117 records -- but check them **as well as** the exit code, not instead of it.
 
 **podman-compose names the project after the directory.** A second checkout gets a
 separate stack, and `./run_tests.sh --down` only stops the stack belonging to the
@@ -150,8 +197,10 @@ raises without it. `test-runner` gets that environment from `.env.test`.
 Database-backed tests skip, rather than fail, when `TEST_DATABASE_URL` is unset.
 
 **Warning:** the `db_session` fixture deletes every row of every table after each
-test -- with FK triggers disabled, so nothing protects you from pointing it at a
-database you care about. `conftest.py`'s `is_disposable_database_url()` refuses to run unless the database
+test, with FK triggers disabled -- so the *database* offers no resistance
+whatever, and the only thing standing between that statement and a database you
+care about is the name check below. `conftest.py`'s
+`is_disposable_database_url()` refuses to run unless the database
 name (the last "/"-separated path segment, with any `?query`/`#fragment` stripped)
 ends with `_test` — a bare substring match on "test" is not enough, since that
 would also accept real database names like `attestation` or a URL whose query
@@ -1837,7 +1886,7 @@ NOT, AND THE DIFFERENCE IS NOT MEASURED.** As written, this fact described the
 teardown `TRUNCATE` at `tests/conftest.py:143` blocking on a relation lock.
 TRUNCATE takes `ACCESS EXCLUSIVE`, so *any* surviving backend — even one that
 only ever ran a `SELECT` — blocked it. The teardown is now `DELETE`
-(`tests/conftest.py:119-133`, executed at `:177`), which takes `ROW EXCLUSIVE`
+(`tests/conftest.py:119-133`, executed at `:191`), which takes `ROW EXCLUSIVE`
 and conflicts only at the row level, so a survivor that holds no uncommitted
 writes no longer blocks it at all. **That is reasoned from the lock modes, not
 measured** — nobody has reproduced the hang against the new teardown. Expect it
@@ -3922,7 +3971,7 @@ for `:253`, a real `User.encode_jwt_token()` passed as `auth=f'Bearer {token}'`,
 with the user's `password_updated_at` pinned well in the past because `iat` is
 truncated to whole seconds (`app/models.py:1618`) and a token minted in the same
 second as the password stamp loses that race -- the `api_baseline` fixture
-(`tests/conftest.py:502`, `:574`) pins `2000-01-01` for exactly this reason. For
+(`tests/conftest.py:550`, `:622`) pins `2000-01-01` for exactly this reason. For
 `:317`, `app.test_request_context('/')` with `login_user`, the same shape
 `tests/factories.py:117-118` already uses. **The general point is that a
 convenience parameter which bypasses a guard makes that guard's own arms look
@@ -4181,11 +4230,65 @@ app/shared/tasks/notes.py was never imported (module-not-imported)` followed by
 `--cov-report=json:` file at all, and **pytest still exits 0**. A full 257.23s
 suite run was spent this way before the warnings were read. The dotted form
 `--cov=app.shared.tasks.notes` works, and `--cov=app` is the campaign's standard
-because one run serves every module. **This is the same failure mode as the
-`session_timeout` truncation** (`pytest.ini:28`, and the note near the top of
-this file): a green exit code over a run that produced nothing. The check is the
-same in both cases -- **read the mtime of the file the run was supposed to
-write, and the test count, never the exit code.**
+because one run serves every module. **Re-measured 2026-09-06 rather than
+carried forward**: `pytest tests/test_shared_tasks_send_reply.py -q
+-k targets_data_uses --cov=app/shared/tasks/notes.py --cov-branch
+--cov-report=json:/tmp/badcov.json` printed both CoverageWarnings, `1 passed`,
+exit **0**, and `/tmp/badcov.json` did not exist afterwards.
+**THIS FACT'S HEADLINE IS TRUE AND ITS ORIGINAL COMPARISON WAS NOT.** It used to
+say this is "the same failure mode as the `session_timeout` truncation -- a
+green exit code over a run that produced nothing". A session timeout exits
+**non-zero** (fact 118), so the two are not the same failure mode. What they
+share is narrower and still worth knowing: **a run can look finished and have
+produced nothing.** This one really does exit 0, because every test really did
+pass -- only the *coverage* side was a no-op. So here the exit code cannot help
+you and **the mtime of the report file is the only check**; for a timeout the
+exit code is the fastest check you have. Two different traps, two different
+detectors, and conflating them was what put a false claim in this document.
+
+**118. A SESSION TIMEOUT EXITS 1. IF YOU PIPE PYTEST, YOU THROW ITS EXIT CODE
+AWAY -- THAT, NOT PYTEST, IS WHERE THE "EXIT 0" CAME FROM.** For several
+sub-projects this document and the campaign's Global Constraints blocks
+asserted that "pytest still exits 0 on a session timeout, so a truncated run
+reads as green -- never trust the exit code". **That is false**, and the wrong
+justification is worse than no justification, because an agent told never to
+trust the exit code will ignore a genuine failure. Measured 2026-09-06, four
+commands, all reproducible from this page:
+
+    # 1. pytest directly, inside the container
+    podman-compose -f compose.test.yaml exec -T test-runner \
+      pytest tests/test_shared_tasks_send_reply.py -q -o session_timeout=1
+    # -> "!!! session-timeout: 1.0 sec exceeded !!!", "1 passed", exit 1
+
+    # 2. the same thing through the wrapper -- it propagates
+    ./run_tests.sh tests/test_shared_tasks_send_reply.py -q -o session_timeout=1
+    # -> exit 1
+
+    # 3. control: the wrapper propagates other codes too
+    ./run_tests.sh tests/test_shared_tasks_send_reply.py -q -k no_such_test_name_exists
+    # -> exit 5 (pytest's "no tests collected")
+
+    # 4. the actual culprit
+    ./run_tests.sh tests/test_shared_tasks_send_reply.py -q -o session_timeout=1 2>&1 | tail -1
+    # -> $? is 0, but ${PIPESTATUS[0]} is 1
+
+`pytest.ini:26-27` ("Checked BETWEEN tests, so the run stops at the first test
+to start after the budget is spent, **and exits non-zero**") was right the whole
+time, and the false claim sat three lines from a citation of it. **The rule to
+carry is about the shell, not about pytest**: `$?` after a pipeline is the
+status of the LAST command in the pipe, so `pytest ... | grep`, `| tail` or
+`| tee` reports grep's, tail's or tee's success. Either do not pipe, or read
+`${PIPESTATUS[0]}`. **And keep checking the test count and the report mtime
+anyway** -- they catch the case fact 117 records, where the exit code is
+genuinely 0 and genuinely uninformative. Two detectors, both cheap, neither
+sufficient alone.
+
+**How the wrong version survived so long is the transferable part.** It was
+never measured; it was inferred from one observation made through a pipe, then
+copied verbatim into two designs, two plans and this file, where each copy
+corroborated the others. **Four agreeing citations of an unmeasured claim are
+one claim, not four** -- fact 88's rule about N agreeing prior citations cuts
+both ways, and the tie-breaker is a five-second experiment, not a vote.
 
 ## Known noise
 

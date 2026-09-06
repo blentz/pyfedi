@@ -2571,7 +2571,7 @@ So the honest statement is:
 
 ### 5. A test-harness gap, not a production defect
 
-`block_outbound_http` (`tests/conftest.py:212-268`) is session-scoped,
+`block_outbound_http` (`tests/conftest.py:263-332` by ast) is session-scoped,
 autouse, and patches only `httpx` via respx. Its own docstring names three
 known escapes: `urllib.request.urlopen`, `botocore`/`urllib3`, and `smtplib`
 (see "`block_outbound_http` blocks httpx and nothing else" above). Task 6
@@ -4394,7 +4394,7 @@ harness failure modes that reading the production code cannot reveal.
 | # | function | defect | status | evidence |
 |---|---|---|---|---|
 | D211 | `site_ban_remove_data`'s reply query (`app/activitypub/util.py:2310`) -- a **test-suite** finding | **Not a production defect. The `deleted=False` clause of `db.session.query(PostReply).filter_by(user_id=blocked.id, deleted=False)` was enforced by no test until this sub-project's Task 6 fix round, and the cause was a COMBINATORIAL GAP -- the third instance in this campaign, after D186 and D197.** Dropping the clause left all 24 tests then in the file green: every fixture seeded only undeleted replies, so the set the filter exists to exclude was empty and the mutant could not be distinguished. The **post-side** `deleted=False` at `:2323` was killed cleanly by an existing test, which is what makes this a per-call-site gap rather than a missing test for the function: one clause, two call sites, one of them unreachable by the fixtures at hand. The consequence had the clause ever been dropped is concrete rather than theoretical -- `site_ban_remove_data` would re-process replies it had already soft-deleted, decrementing `post.reply_count`, `community.post_reply_count` and the ancestors' `child_count` a second time for rows already accounted for, so counters would drift down on every re-ban. Closed in the same sub-project under a controller fix-round authorisation. | closed by a test in the same sub-project | measured: `test_a_site_ban_skips_replies_already_deleted` (`tests/test_ap_moderation.py`) seeds an already-deleted `PostReply` as the user's only content, so a working filter leaves every counter alone. After it, **both** `deleted=False` mutations kill exactly one distinct test each, sole and non-overlapping -- the post-side test seeds no reply at all and the reply-side test seeds only an undeleted post, so each kill is attributable to one call site. `git diff app/activitypub/util.py` verified empty after each mutation |
-| D212 | `redis_double` (`tests/conftest.py:428-445`, the CAVEAT paragraph) against `delete_post_or_comment` (`app/activitypub/util.py:2214-2254`) -- a **test-suite** finding | **Not a production defect, and recorded because a plan told nine tasks to use a fixture that cannot work.** The shared `redis_double` fixture cannot serve a redis-py lock in this environment: fakeredis with no `lupa` implements no Lua, so `Lock.acquire()` succeeds on a plain `SET NX PX` and `Lock.release()` raises `unknown command 'evalsha'` on every `__exit__`. The failure mode is the awkward one -- the fixture looks correct, the lock is acquired, and the test dies on the way out of the `with` block. This is the **third** file in the repo to need a local lock-only double (`tests/test_inbox_dispatch_undo_content.py:35`, `tests/test_inbox_dispatch_votes.py:145-158`, and now `tests/test_ap_moderation.py`), and the pattern is identical in all three: patch `app.redis_client` -- the binding `delete_post_or_comment` reaches through its in-body re-executed import at `:2205` -- with an object whose `.lock(...)` returns `contextlib.nullcontext()`. The plan also stated the wrong lock count (four; there are seven). Registered rather than fixed because the alternative -- adding Lua support to the shared conftest fixture -- changes every suite that uses it and was outside this sub-project's authorisation. | not fixed, registered only; a local double is the accepted remedy | measured: the failure was hit by Task 1's implementer as real test failures, not reasoned about; the controller verified the documented cause in the fixture's own docstring and the two precedents, and the reviewer confirmed the new double patches the right binding and returns a genuine no-op context manager with no silent fallthrough to the real shared compose Redis. The seven lock sites were counted against source, and the next `redis_client.lock` in the file placed at `:2938`, outside the slice |
+| D212 | `redis_double` (`tests/conftest.py:442-499` by ast, the CAVEAT paragraph at `:477-493`) against `delete_post_or_comment` (`app/activitypub/util.py:2214-2254`) -- a **test-suite** finding | **Not a production defect, and recorded because a plan told nine tasks to use a fixture that cannot work.** The shared `redis_double` fixture cannot serve a redis-py lock in this environment: fakeredis with no `lupa` implements no Lua, so `Lock.acquire()` succeeds on a plain `SET NX PX` and `Lock.release()` raises `unknown command 'evalsha'` on every `__exit__`. The failure mode is the awkward one -- the fixture looks correct, the lock is acquired, and the test dies on the way out of the `with` block. This is the **third** file in the repo to need a local lock-only double (`tests/test_inbox_dispatch_undo_content.py:35`, `tests/test_inbox_dispatch_votes.py:145-158`, and now `tests/test_ap_moderation.py`), and the pattern is identical in all three: patch `app.redis_client` -- the binding `delete_post_or_comment` reaches through its in-body re-executed import at `:2205` -- with an object whose `.lock(...)` returns `contextlib.nullcontext()`. The plan also stated the wrong lock count (four; there are seven). Registered rather than fixed because the alternative -- adding Lua support to the shared conftest fixture -- changes every suite that uses it and was outside this sub-project's authorisation. | not fixed, registered only; a local double is the accepted remedy | measured: the failure was hit by Task 1's implementer as real test failures, not reasoned about; the controller verified the documented cause in the fixture's own docstring and the two precedents, and the reviewer confirmed the new double patches the right binding and returns a genuine no-op context manager with no silent fallthrough to the real shared compose Redis. The seven lock sites were counted against source, and the next `redis_client.lock` in the file placed at `:2938`, outside the slice |
 
 ### 5. Three asymmetries deliberately NOT counted as defects
 
@@ -5789,7 +5789,10 @@ the source open anyway, and the fifth was a correction of a cell that was
 RIGHT -- this fix wave reported fact 89's `tests/conftest.py:143` as an
 off-by-one and wrote `:142` into a test docstring, against three independent
 artefacts that cited `:143` and agreed with each other. Corrected at
-`9005a671`. **This is the sibling of fact 94, not a restatement of fact 88**:
+`9005a671`. (**Both numbers are history, marked by sub-project 20 in fact 88's
+convention**: `ec98595c` removed the `TRUNCATE` teardown and shifted
+`tests/conftest.py` by 34 lines, so neither `:142` nor `:143` names anything
+relevant today. The episode is what this paragraph records, not the location.) **This is the sibling of fact 94, not a restatement of fact 88**:
 88 is about who is fallible and is written for the receiver of a review; 94 is
 about how a set is enumerated; 95 is about which direction of travel has no
 reader positioned to catch it. Its proximate cause is mechanical and is the
@@ -5905,7 +5908,7 @@ why patching would have looked like a fix. Now fact 98.
 |---|---|---|---|---|
 | D293 | `update_post_from_activity`'s **head** (`app/activitypub/util.py:3183-3272`) -- sub-project 14's region, which that sub-project closed | **Not a defect in this slice -- THREE items inside a region a previous sub-project took to zero uncovered statements, none of which its own success criterion could have caught. Registered together because they share a cause.** **(1) The `author_user_name` ternary at `:3247`** -- `author.ap_id if author.ap_id else author.user_name`, inside the post-mention `targets_data` dict -- is **untested at BOTH arms**, the only ternary in the function with no test at all. The three tests that create that `Notification` (`tests/test_ap_update_pair.py`, the `post_mention` tests) assert subtype, url, the unread count and a row count, and `grep -rn author_user_name tests/` returns hits in **three** files and **none of them is `tests/test_ap_update_pair.py`**, which is the file covering this function: `tests/test_ap_create_reply.py` (nine hits, including live assertions on `notification.targets['author_user_name']` whose docstrings explicitly pin the *else* arm of the identical idiom), `tests/test_ap_notify_post.py` (eleven), and this slice's own `tests/test_ap_update_post_tails.py` (one). **All of them are other functions' copies of the idiom; not one reaches `:3247`**, and the file that would have to is the one with zero hits -- which is why the sibling coverage is evidence FOR the gap rather than against it. **Fact 87 is exactly why sub-project 14's criterion could not have detected it: coverage.py emits no arc for a conditional expression, so 100% statements and 100% branches are consistent with an unexercised arm.** **(2) and (3) The two residual branch arms.** `[3223, 3225]` and `[3263, 3261]` are the **only** missing branches in the whole function after this slice: the `False` sides of `if hashtag:` (`:3223`) and `if flair:` (`:3263`), i.e. the "lookup returned `None`" arms of `find_hashtag_or_create` and `find_flair_or_create`. Both are above `:3273` and therefore in sub-project 14's head, not this slice's tails. **Why they are grouped with the ternary rather than filed as an ordinary coverage gap:** all three are places where a *statement* figure of 100% is compatible with an unexercised path, and all three sat unnoticed through a sub-project that measured itself and passed. **What this does NOT say:** none of the three is asserted to be a defect. The two branch arms are cheap fixtures for whoever reopens that region, and the ternary's arms are display-name fallbacks whose mutants store a different string, not a crash -- fact 87(b)'s "cosmetic" category. **The finding is about the criterion, not the code.** | not a defect; gap recorded in a closed region | measured for the two branch arms -- the controller's post-slice coverage session reports `update_post_from_activity` with **zero** missing statements and exactly these two missing branches -- and read for the ternary: enumerated by an **AST walk** (`ast.parse` -> `IfExp` inside the `FunctionDef`, extent from `end_lineno`), which returns eight `IfExp` in the function at `:3183`, `:3232`, `:3247`, `:3266`, `:3268`, `:3418`, `:3460`, `:3509`, the split falling exactly at `:3273` -- **five above it** in sub-project 14's head (`:3183`, `:3232`, `:3247`, `:3266`, `:3268`) and **three below** in this slice's tails (`:3418`, `:3460`, `:3509`). Reproduced exactly by an independent AST walk at review. `:3223`, `:3225`, `:3261` and `:3263` re-read at this commit to confirm the two arcs are the guards named |
 | D294 | `update_post_from_activity`'s old-domain lookup (`app/activitypub/util.py:3509`) | **Not a defect -- an EQUIVALENT MUTANT with no catalogued cause, and the specimen that adds a seventh cause to `tests/README.md`'s fact 75.** `old_domain = domain_from_url(old_url) if old_url else None` is redundant with the callee's own guard: `domain_from_url` (`app/utils.py:1561`) opens `if not url: ... return None` (`:1562-1568`) with no side effect before that return, so collapsing the `else` arm -- making it a bare `domain_from_url(old_url)` -- computes the same value **for all inputs**, not merely for all fixtures. **The taxonomy point is the entry.** **fact 75's own scope sentences** scope causes 1-5 to a **clause** and cause 6 to a **statement**; an *arm of a conditional expression* is neither. Cause 3 (subsumption) is defined over conjuncts and needs a later one implying an earlier; cause 4(a) needs a body writing back what the guard asserts; cause 4(b) needs the condition falsified before the guard runs, and `old_url` genuinely can be falsy here; cause 6 needs code running **after** the mutated statement, where this callee's guard runs **instead of** the collapsed arm. **The implementer declined to force-fit and proposed a seventh cause rather than editing the facts file itself**, which is the correct division of labour and is why the proposal arrived with its discriminators already worked out. **This register round accepted it as cause 7 and recorded that it stands on ONE instance where cause 6 stood on two** -- listed anyway, because the alternative on meeting this shape is a mis-filed 4(a) or a fake kill, which is precisely what fact 75 exists to prevent. **The arm is still worth covering** even though the mutant is unkillable: a later change to `domain_from_url`'s guard would make the two arms diverge, and only a test exercising the falsy input would notice. **And note where this cause lives:** fact 87 says coverage emits no arc for a ternary, so an unkilled expression arm is invisible to both figures and is only ever found by an AST enumeration followed by a mutation -- which is how this one was found. | not a defect, equivalence recorded; fact 75 gains cause 7 | reading-level plus source-verified, and the equivalence upheld independently at review: `app/utils.py:1562-1568` read in full and confirmed to be `if not url:` -> comment -> `return None` with no statement between the test and the return, so the equivalence holds for **all inputs** rather than for the fixtures present. The taxonomy exclusion checked cause by cause against `tests/README.md`'s own scope sentences rather than by impression. Covered: the `if` arm has an existing killer and the `else` arm is cited in the test file's cluster banner rather than duplicated |
-| D295 | `Site.admins()` (`app/models.py:3995-4000`) -- a **plan** claim corrected, and a reachability verdict future fixtures need | **Not a defect -- `Site.admins()` returns `[]` for a roleless `User.id == 1`, and the plan for this sub-project asserts the opposite THREE times.** The plan reads, at `docs/superpowers/plans/2026-09-04-coverage-update-tails-17.md:97-101`, `:707-712` and `:904-906`, that the method "joins `user_role` for `ROLE_ADMIN` **or** `User.id == 1`" and therefore that "user 1 is an admin by that `or_` clause without any role row". **False.** The query is `db.session.query(User).filter_by(deleted=False, banned=False).join(user_role).filter(or_(user_role.c.role_id == ROLE_ADMIN, User.id == 1))` -- and `.join(user_role)` carries no `isouter=True`, so it is an **INNER** join: a user with **no** `user_role` row is eliminated from the result set **before** the `or_` is ever evaluated, and `User.id == 1` cannot rescue a row the join already dropped. **Which arm the fixtures take was established rather than assumed**: `Site.admins()` reads `g.admin_ids` when present (`:3996-3997`), `tests/conftest.py:137` is `g.__dict__.clear()`, and nothing in the suite sets `admin_ids` -- so **every** test takes the join arm, and each admin fixture must be given a role row explicitly. **One tightening in the tests is load-bearing and is recorded so it is not simplified away:** the fixtures grant an ordinary non-staff role rather than `ROLE_STAFF`, because `Site.staff()` (`app/models.py:4003-4005`, cited from its `def` as `admins()` is above and not from its `@staticmethod` at `:4002`) is the same join narrowed to `ROLE_STAFF` **without** the id disjunct -- so a user 1 holding `ROLE_STAFF` would let an `admins()` -> `staff()` mutant explain the same row, and the mutation would survive. **Every original line of the plan is left exactly as written and the correction lives here**, which is this file's convention for a dated planning record: the plan was a forecast, the forecast was wrong, and rewriting it would delete the evidence that "verify rather than inherit" earned its place in the constraints. **The pointer is made TWO-WAY rather than one-way, on the controller's Ruling N, in the shape sub-project 16 used**: the plan carries a dated annotation appended after its last original line -- appended, because any insertion above would shift the very line numbers this cell cites -- naming the three claims, giving the corrected reading and directing the reader here. A reader who opens the plan first is sent to this entry; a reader who opens this entry first is told the plan is unrevised. The append was verified to be exactly that: 4 insertions, 0 deletions, every one of the plan's **971** original lines byte-identical and in order (`971` is `wc -l`; an earlier draft of this clause said 972, which was `split('\n')` counting the trailing empty element -- the verification itself was sound, only the number was a counting artefact). **What makes this worth a number rather than a process note: the false claim was written by the controller and repeated into two further artefacts as an established fact, and the standing instruction to verify it from source sits in the same paragraph.** The instruction is what caught it. | not a defect; the plan's claim corrected, the plan unrevised | reading-level, verified **three times independently** -- by the implementer that was told the claim and checked it anyway, by the reviewer, and by the controller. `app/models.py:3995-4000` read in full at this commit, the absence of `isouter=True` confirmed by reading the `.join(` call rather than by grepping for the flag, and `Site.staff()` at `:4003-4005` read side by side to establish the ordinary-role tightening. `tests/conftest.py:137` read to confirm `g` is cleared. Covered: every admin-arm test in `tests/test_ap_update_post_tails.py` names in its docstring which disjunct its fixture satisfies |
+| D295 | `Site.admins()` (`app/models.py:3995-4000`) -- a **plan** claim corrected, and a reachability verdict future fixtures need | **Not a defect -- `Site.admins()` returns `[]` for a roleless `User.id == 1`, and the plan for this sub-project asserts the opposite THREE times.** The plan reads, at `docs/superpowers/plans/2026-09-04-coverage-update-tails-17.md:97-101`, `:707-712` and `:904-906`, that the method "joins `user_role` for `ROLE_ADMIN` **or** `User.id == 1`" and therefore that "user 1 is an admin by that `or_` clause without any role row". **False.** The query is `db.session.query(User).filter_by(deleted=False, banned=False).join(user_role).filter(or_(user_role.c.role_id == ROLE_ADMIN, User.id == 1))` -- and `.join(user_role)` carries no `isouter=True`, so it is an **INNER** join: a user with **no** `user_role` row is eliminated from the result set **before** the `or_` is ever evaluated, and `User.id == 1` cannot rescue a row the join already dropped. **Which arm the fixtures take was established rather than assumed**: `Site.admins()` reads `g.admin_ids` when present (`:3996-3997`), `tests/conftest.py:156` is `g.__dict__.clear()`, and nothing in the suite sets `admin_ids` -- so **every** test takes the join arm, and each admin fixture must be given a role row explicitly. **One tightening in the tests is load-bearing and is recorded so it is not simplified away:** the fixtures grant an ordinary non-staff role rather than `ROLE_STAFF`, because `Site.staff()` (`app/models.py:4003-4005`, cited from its `def` as `admins()` is above and not from its `@staticmethod` at `:4002`) is the same join narrowed to `ROLE_STAFF` **without** the id disjunct -- so a user 1 holding `ROLE_STAFF` would let an `admins()` -> `staff()` mutant explain the same row, and the mutation would survive. **Every original line of the plan is left exactly as written and the correction lives here**, which is this file's convention for a dated planning record: the plan was a forecast, the forecast was wrong, and rewriting it would delete the evidence that "verify rather than inherit" earned its place in the constraints. **The pointer is made TWO-WAY rather than one-way, on the controller's Ruling N, in the shape sub-project 16 used**: the plan carries a dated annotation appended after its last original line -- appended, because any insertion above would shift the very line numbers this cell cites -- naming the three claims, giving the corrected reading and directing the reader here. A reader who opens the plan first is sent to this entry; a reader who opens this entry first is told the plan is unrevised. The append was verified to be exactly that: 4 insertions, 0 deletions, every one of the plan's **971** original lines byte-identical and in order (`971` is `wc -l`; an earlier draft of this clause said 972, which was `split('\n')` counting the trailing empty element -- the verification itself was sound, only the number was a counting artefact). **What makes this worth a number rather than a process note: the false claim was written by the controller and repeated into two further artefacts as an established fact, and the standing instruction to verify it from source sits in the same paragraph.** The instruction is what caught it. | not a defect; the plan's claim corrected, the plan unrevised | reading-level, verified **three times independently** -- by the implementer that was told the claim and checked it anyway, by the reviewer, and by the controller. `app/models.py:3995-4000` read in full at this commit, the absence of `isouter=True` confirmed by reading the `.join(` call rather than by grepping for the flag, and `Site.staff()` at `:4003-4005` read side by side to establish the ordinary-role tightening. `tests/conftest.py:156` read to confirm `g` is cleared. Covered: every admin-arm test in `tests/test_ap_update_post_tails.py` names in its docstring which disjunct its fixture satisfies |
 | D296 | `tests/factories.py:769` -- a **test-suite** finding, out of every task's slice | **Not a production defect -- `make_poll`'s docstring cites `Poll.post_id` at `app/models.py:3745`; it is at `:3781`.** The claim the citation supports is correct: `post_id` **is** `Poll`'s primary key (`post_id = db.Column(db.Integer, db.ForeignKey('post.id'), primary_key=True)`), so a post has at most one poll and the identity map returns the same object for the same post, which is what makes the arm's `.get()` lookup work. Only the pointer is wrong. **Recorded here rather than fixed for two reasons, and the second is the transferable one.** `tests/factories.py` belonged to no task in this sub-project, and this campaign's rule is that a task does not edit a file outside its slice to tidy a citation. And **it is not established whether this cell was wrong when written or has since drifted** -- `app/models.py` has grown by hundreds of lines across the campaign, so 36 lines of drift is entirely ordinary -- which decides the repair: a citation that was right when written is re-read before reuse and left alone, while one that was wrong when written is fixed in place. **Whoever owns `tests/factories.py` next should determine which it is before editing**, and this entry exists so that determination has somewhere to start. | not a production defect; recorded for the owner of `tests/factories.py` | measured at this commit: `app/models.py:3781` read directly and confirmed to be `Poll.post_id`, with `class Poll(db.Model)` at `:3780`; `tests/factories.py:764-775` read in full to confirm the cited claim itself is true and only the coordinate is stale. Found by the task that read `make_poll` while writing poll fixtures, which correctly left the file alone and reported it |
 
 **Next free number: D312.** D284-D296 were taken by sub-project 17 -- D284 and
@@ -7073,7 +7076,7 @@ has a pattern rather than a one-off.
 USER'S DIRECTION, AND IT CHANGED WHAT A COVERAGE RUN COSTS.** Commit `ec98595c`
 replaced `db_session`'s per-test `TRUNCATE` of ~90 tables with a `DELETE` sweep
 under `SET LOCAL session_replication_role = replica` plus a `setval` reset of
-the public schema's sequences (`tests/conftest.py:119-133`, executed at `:177`).
+the public schema's sequences (`tests/conftest.py:119-133`, executed at `:191`).
 Measured on identical fresh stacks over the same 629-test subset: **124.5ms mean
 teardown / 55.13s to 5.2ms / 16.18s**, with no drift across a full run (first
 hundred tests 6.5ms, last hundred 5.8ms). `run_tests.sh`'s `pg_class` staleness
@@ -7099,11 +7102,94 @@ app/shared/tasks/notes.py was never imported (module-not-imported)` and
 at all, and **pytest exits 0**. A 257.23s full-suite run was spent that way
 before the warnings were read. The dotted form `--cov=app.shared.tasks.notes`
 works; `--cov=app` is what the spec documents and what this campaign uses,
-because one run serves every module. **This is the same failure mode the campaign
-already guards against for `session_timeout`** -- a green exit code over a run
-that produced nothing -- and the check is the same one: read the mtime of the
-file the run was supposed to write, and the test count, never the exit code. It
-is carried into `tests/README.md` as fact 117.
+because one run serves every module. **Re-measured for the final review rather
+than carried forward**: `pytest ... -k targets_data_uses
+--cov=app/shared/tasks/notes.py --cov-branch --cov-report=json:/tmp/badcov.json`
+printed both warnings and `1 passed`, exited **0**, and left no
+`/tmp/badcov.json`. It is carried into `tests/README.md` as fact 117.
+
+**AND THE SENTENCE THAT ORIGINALLY FOLLOWED IT WAS FALSE, WHICH IS THE MORE
+IMPORTANT FINDING OF THE TWO.** This paragraph used to end "this is the same
+failure mode the campaign already guards against for `session_timeout` -- a
+green exit code over a run that produced nothing -- ... never trust the exit
+code." **A session timeout exits 1.** `pytest.ini:26-27` had said so all along
+("Checked BETWEEN tests, so the run stops at the first test to start after the
+budget is spent, **and exits non-zero**"), three lines above the `:28` this
+campaign kept citing. Measured 2026-09-06, four commands, recorded in full as
+`tests/README.md` fact 118: pytest inside the container exits **1** on a
+`session_timeout=1` run; `./run_tests.sh` propagates that **1**; a control with
+no matching test propagates **5**; and only the **pipeline** loses it --
+`./run_tests.sh ... | tail -1` gives `$?` of 0 while `${PIPESTATUS[0]}` is 1.
+**Every campaign run pipes pytest through `grep` or `tail`, and `$?` after a
+pipeline is the LAST element's status.** The observation was real; the
+attribution was wrong, and the wrong attribution is the dangerous part, because
+"never trust the exit code" tells an agent to ignore a genuine failure. The
+corrected rule is: **do not pipe, or read `${PIPESTATUS[0]}` -- and keep
+checking the test count and the report mtime as well, because those catch the
+`--cov` case above, where the exit code really is 0 and really is
+uninformative.** Two traps, two detectors, and conflating them is what put a
+false claim into a harness reference, two designs and two plans at once.
+**FOUR AGREEING CITATIONS OF AN UNMEASURED CLAIM ARE ONE CLAIM.** Fact 88's
+"a correction that disagrees with N agreeing prior citations needs N-fold
+verification" has a converse this campaign had not written down: N agreeing
+copies of something nobody ever measured carry the weight of the single
+measurement behind them, which here was zero. The tie-breaker was a five-second
+experiment that no one had run in five sub-projects.
+
+**A CITATION SWEEP SCOPED BY SUBJECT MISSED FORTY-EIGHT CITATIONS. THE TRIGGER
+FOR A SWEEP IS "WHICH FILE'S LINE NUMBERS MOVED", NOT "WHAT DID THE CHANGE TALK
+ABOUT".** `ec98595c` moved `tests/conftest.py` from 770 lines to 804 -- two
+insertions, `_teardown_sql` and an expanded teardown comment -- so every
+citation of a line at or past the first insertion point was off by 20 or 34.
+The controller's Ruling 6 scoped the follow-up sweep to "`tests/README.md`'s
+harness prose, which `ec98595c` invalidated", and enumerated the sites by what
+they **said**: TRUNCATE, the staleness reset, the 0.05ms figure. **That axis is
+wrong, and the register records it rather than the ruling's own stated cost.**
+Scoping by subject caught every paragraph that talked about truncating and
+missed every citation that merely **pointed into** the file: 48 across 11 files,
+four of them in the sub-project's own new test file and four more in the very
+README the ruling scoped. The right first command is `grep -rn 'conftest\.py:'`
+across the tree, not a grep for the concept. **The ledger recorded Ruling 6's
+cost as "a larger diff that mixes two subjects". That was not the cost.** The
+cost was a scope narrow enough to look complete while leaving the largest
+citation breakage this campaign has produced in one commit untouched -- and it
+looked complete precisely because everything inside the chosen axis really had
+been swept. **Two secondary shapes fell out of the repair, both worth keeping.**
+First, `tests/test_shared_tasks_send_reply.py` cited **one** fact -- that
+`http_mock` is built with `assert_all_called=True` -- **three different ways**
+(`:287-295`, `:294`, `:283`), all correct before the shift and none after; the
+repair collapses them to one wording, because *one fact stated three ways is one
+fact that cannot be swept*. Second, the fix itself re-broke what it had just
+mended: adding the superuser note to `tests/conftest.py`'s teardown comment
+shifted the file again by 15 lines, invalidating every number the same round had
+just written. **Edit the cited file FIRST, then re-derive the citations** --
+the order is not a stylistic preference, it is the difference between one sweep
+and two.
+
+**NOTHING RECLAIMS RELATION SPACE ANY MORE, AND THE ODOMETER THAT WOULD HAVE
+DETECTED IT WENT IN THE SAME COMMIT.** `DELETE FROM t` with no `WHERE` scans the
+relation's page **high-water mark**, not its live rows. `TRUNCATE` reset every
+relation to zero blocks after every test; `DELETE` never shrinks one, `VACUUM`
+truncates only trailing all-empty pages, the data lives in tmpfs that survives
+every run short of `--down`, and `ec98595c` removed the `pg_class` probe that
+was the only automatic signal the test database had degraded. **Steady state is
+genuinely fine and the measurement supports it** -- ordinary tests insert tens
+of rows, and the teardown does not drift across a full run (6.5ms to 5.8ms).
+**The unbounded part is a ratchet with an outlier trigger**: one test seeding
+tens of thousands of rows extends those relations and their indexes permanently
+for the life of the container, and every later teardown in that run and in every
+later run on the same stack seq-scans the extended pages -- reproducing exactly
+the evenly-spread, `--durations`-invisible slowdown `ec98595c` was written to
+eliminate, with the difference that the 2026-08-31 investigation had an odometer
+pointing at the cause and this arrangement has none. **Documented rather than
+engineered away**, in `tests/README.md`'s teardown section, as a named risk with
+its trigger, its symptom, a one-line check (`select
+pg_database_size('pyfedi_test');`) and its remedy (`./run_tests.sh --down`,
+which reclaims because the volume is tmpfs). **That remedy is a stated exception
+to this file's own "`--down` is not for speed" advice**, which was written about
+the TRUNCATE arrangement and is now true only in the ordinary case. **A change
+that removes a cost and its detector in one commit should say so at the time**;
+this one is being said afterwards, by a review.
 
 **"DO NOT MODIFY ANYTHING UNDER `app/`" WAS READ AS FORBIDDING TEMPORARY
 MUTATIONS, AND A TASK SHIPPED WITH ITS DISCRIMINATION UNMEASURED.** Task 5
@@ -7214,7 +7300,7 @@ for a reader to query: the index is the *unguarded-peer-input* family for the
 silently change what sub-project 17's re-derived arithmetic (61 = D236 through
 D296 inclusive) is counting. It stands unchanged.
 
-**Four shapes carried forward into `tests/README.md` as new facts 114-117, plus
+**Five shapes carried forward into `tests/README.md` as new facts 114-118, plus
 one existing fact extended rather than duplicated.** The new facts:
 `send_reply`'s `parent_id` is a **branch** binding `parent` to a `PostReply` or
 a `Post`, with `inReplyTo` as the only clean observable (114); `recipients` is
@@ -7223,7 +7309,10 @@ empty and the parent author is a delivery target *excluded from notification* --
 and the default seed collapses two arms onto one state (115); a nullable column
 is not evidence that a missing guard is a defect, and reachability is settled
 over the **dispatchers**, not the column (116); and a wrong `--cov` target
-collects nothing, writes no JSON and exits 0 (117). **The extension is fact
+collects nothing, writes no JSON and exits 0 (117); and a session timeout
+exits **1** while a shell pipeline is what throws pytest's status away, with the
+four-command experiment recorded verbatim so the next reader can re-run it
+rather than inherit it (118). **The extension is fact
 112**, which gains `User.is_local()` alongside `Community.is_local()`: the same
 disjunction with the **opposite** symptom -- `User.is_local()`
 (`app/models.py:1251-1252`) reads `ap_profile_id` directly and **crashes** with

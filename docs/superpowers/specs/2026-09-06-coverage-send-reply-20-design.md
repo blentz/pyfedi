@@ -201,6 +201,7 @@ Copied verbatim into the plan; they bind every task.
 - Any run at or over ~600s is erroneous — that is `session_timeout` in `pytest.ini:28`, and pytest **still
   exits 0** on a session timeout, so a truncated run reads as green. Check the test count and the coverage
   report's mtime, never the exit code.
+  **[CORRECTED 2026-09-06 by sub-project 20's final review, marked here rather than rewritten because a design/plan is a dated record of what implementers were dispatched with: "still exits 0" IS FALSE. pytest exits 1 on a session timeout and `run_tests.sh` propagates it, exactly as `pytest.ini:26-27` says. The observed exit 0 came from PIPING pytest through `grep`/`tail`, which makes `$?` the pipe's last element; `${PIPESTATUS[0]}` recovers it. Keep checking the count and the mtime -- but check the exit code TOO. Measured four ways in `tests/README.md` fact 118.]**
 - Coverage command: `./run_tests.sh --cov=app --cov-branch --cov-report=json:scratch_full_cov.json -q`.
 - Mutation discipline as §4 states it, including the line-count assertion after every restore.
 - **Use `ast.parse` and `FunctionDef.end_lineno` for a function's extent, never a convention.** Sub-project 19

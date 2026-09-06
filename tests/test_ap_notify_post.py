@@ -387,8 +387,8 @@ def test_a_subscriber_to_the_author_is_notified(app, db_session):
     THREE more posts are seeded and the task is run against the LAST of them,
     so that no two of the ids this `targets` dict carries hold the same number.
     `_seed_scenario` seeds one Community and then one Post, and
-    `TRUNCATE ... RESTART IDENTITY` (tests/conftest.py:143) restarts every
-    sequence at 1, so Community and Post both take primary key 1 while its two
+    the `db_session` teardown resets every
+    sequence to 1 after each test (tests/conftest.py:131-132), so Community and Post both take primary key 1 while its two
     users take 1 and 2 -- the silently-vacuous shape fact 89 in tests/README.md
     records. ONE extra post is not enough in this arm, unlike in the
     NOTIF_COMMUNITY arm's happy path below: `post.id` would then be 2, which is

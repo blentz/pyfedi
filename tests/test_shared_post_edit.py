@@ -51,7 +51,7 @@ suite -- turning off `cache_remote_images_locally` -- does NOT work here: that
 setting gates only the Event block's call in app/activitypub/util.py, and
 :614/:616 call `make_image_sizes` directly.
 
-`http_mock` is `assert_all_called=True` (tests/conftest.py:288-295), so each
+`http_mock` is `assert_all_called=True` (tests/conftest.py:336-343), so each
 test registers exactly the routes its own path reaches -- a registered route
 that is never reached FAILS the test at teardown. The two crash tests
 (`test_a_banned_domain_raises_before_anything_is_notified` and
@@ -194,7 +194,8 @@ def _seed(url=None, domain_name=None, notify_mods=False, notify_admins=False):
     route this file would have to register.
 
     make_community hardcodes instance_id=1 and user_id=1, and
-    tests/conftest.py:143 truncates with RESTART IDENTITY, so the first
+    the db_session teardown resets every sequence (tests/conftest.py:131-132), so
+    the first
     make_instance here is id 1 and the first make_user is id 1.
     """
     instance = make_instance('test.piefed.local', software='piefed')

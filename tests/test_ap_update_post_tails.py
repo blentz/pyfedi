@@ -20,7 +20,7 @@ The function commits on `db.session`, not on a separate `get_task_session()`.
 is holding and the next attribute access re-loads them. No explicit refresh is
 needed; tests read `post.<column>` straight after the call.
 
-`http_mock` is built with `assert_all_called=True` (tests/conftest.py:288-295),
+`http_mock` is built with `assert_all_called=True` (tests/conftest.py:336-343),
 so a test that registers a route its path never reaches FAILS. Every test below
 registers exactly the routes its own scenario reaches, which is why the
 "only likes" and "neither endpoint" cases register one route and none at all
@@ -255,7 +255,7 @@ class TestVideoVoteCollections:
         block still writes the OP's own upvote over whatever was there.
 
         No HTTP fixture at all -- the session-scoped `block_outbound_http`
-        router (tests/conftest.py:214-216) raises on any request that escapes,
+        router (tests/conftest.py:263-332) raises on any request that escapes,
         so an unexpected fetch here fails rather than leaving the process.
         """
         post = _seed_post()
@@ -355,7 +355,7 @@ class TestVideoVoteCollectionRetry:
     """The `except httpx.HTTPError:` / `time.sleep(3)` / second `get_request`
     pair at `app/activitypub/util.py:3282-3287`.
 
-    `no_real_sleeping` (tests/conftest.py:454-470) neutralises both sleep sites,
+    `no_real_sleeping` (tests/conftest.py:503-518) neutralises both sleep sites,
     not just the one in this block: `app/activitypub/util.py` does a
     module-level `import time` and calls `time.sleep(3)`, which a patch to
     `time.sleep` covers, while `app/utils.py` binds `from time import sleep` at
@@ -836,8 +836,8 @@ class TestQuestionEditPath:
 
         The ids are checked too, and are the sharper half of the proof: they say
         the two 'Yes'/'No' rows are NEW rows rather than the seeded rows renamed
-        in place. `tests/conftest.py:143` truncates with `RESTART IDENTITY`, so
-        `PollChoice.id` restarts at 1 in every test and the two sets are small
+        in place. the `db_session` teardown resets every sequence
+        (`tests/conftest.py:131-132`), so `PollChoice.id` restarts at 1 in every test and the two sets are small
         enough to collide by accident; the `len(...) == 2` guards are there
         because two equal ids on either side would make `isdisjoint` vacuous.
         """
@@ -1440,8 +1440,9 @@ def _attach_banner(post, source_url):
 
     `source_url` is the caller's, never a default: the seeded banner and the one
     an Update supplies must be distinguishable by a column, because their ids
-    cannot be relied on to differ across runs -- tests/conftest.py:143 truncates
-    with RESTART IDENTITY, so `File.id` restarts at 1 in every test.
+    cannot be relied on to differ across runs -- the db_session teardown resets
+    every sequence (tests/conftest.py:131-132), so `File.id` restarts at 1 in
+    every test.
     """
     banner = File(source_url=source_url)
     db.session.add(banner)
@@ -1500,7 +1501,7 @@ class TestEventBlock:
         No HTTP fixture: the Update carries no `image`, so `:3391` is False and
         the block reaches neither `make_image_sizes` nor anything else that
         fetches. The session-scoped `block_outbound_http` router
-        (tests/conftest.py:214-216) raises on any request that escapes anyway.
+        (tests/conftest.py:263-332) raises on any request that escapes anyway.
         """
         post, _ = _seed_event_post()
 
@@ -2182,8 +2183,8 @@ YOUTUBE_IMAGE_EMBED_URL = 'https://www.youtube.com/watch?v=photo.png'
 
 # The `File` a post already has before the Update. Its source_url differs from
 # every url above because ids cannot tell two rows apart here:
-# tests/conftest.py:143 truncates with RESTART IDENTITY, so `File.id` restarts
-# at 1 in every test (harness fact 89, the same reason `_attach_banner` takes
+# the db_session teardown resets every sequence (tests/conftest.py:131-132), so
+# `File.id` restarts at 1 in every test (harness fact 89, the same reason `_attach_banner` takes
 # its source_url from the caller).
 EXISTING_IMAGE = f'https://{PEER}/changed/already-here.png'
 
@@ -2309,7 +2310,7 @@ class TestUrlChangeGate:
 
         No HTTP fixture for exactly that reason: with the arm skipped nothing is
         fetched, and the session-scoped `block_outbound_http` router
-        (tests/conftest.py:214-216) raises on anything that escapes.
+        (tests/conftest.py:263-332) raises on anything that escapes.
         """
         post = _seed_link_post()
         old_id = _attach_banner(post, EXISTING_IMAGE)
@@ -2697,7 +2698,8 @@ class TestUrlChangeOldImage:
         """`:3475` recording the old id and `:3571` spending it.
 
         The two rows are told apart by `source_url`, never by id:
-        tests/conftest.py:143 truncates with RESTART IDENTITY, so the seeded row
+        the db_session teardown resets every sequence (tests/conftest.py:131-132), so
+        the seeded row
         is id 1 in every run and the new one id 2, and an assertion reading ids
         alone would be measuring the sequence. `assert len({old_id, new_id})
         == 2` is the explicit guard that the pair is distinct before anything is
@@ -2965,8 +2967,8 @@ SEEDED_POST_COUNT = 7
 # `targets_data['post_id']` (`:3514`, and again at `:3532`) is `post.id`, and
 # every value a mutation could put there instead is a small id this fixture
 # also creates: `post.community_id` (1), `post.user_id` (2), `post.image_id`
-# (1), and the two `Domain` ids. tests/conftest.py:143 truncates with
-# `RESTART IDENTITY`, so those ids are the same in every test (harness fact 89)
+# (1), and the two `Domain` ids. the db_session teardown resets every
+# sequence (tests/conftest.py:131-132), so those ids are the same in every test (harness fact 89)
 # and a post seeded in the obvious order would take id 1 and make the assertion
 # satisfiable by three of them. DECOY_POSTS is how many `Post` rows precede the
 # one under test -- `_seed_link_post`'s own, plus DECOY_POSTS - 1 more -- so it
@@ -3057,7 +3059,7 @@ def _make_admin(user, role_id=ROLE_ADMIN):
             return db.session.query(User).filter_by(deleted=False, banned=False).join(user_role).filter(
                                           or_(user_role.c.role_id == ROLE_ADMIN, User.id == 1)).order_by(User.id).all()
 
-    tests/conftest.py:137 clears `flask.g` before every test and nothing in this
+    tests/conftest.py:156 clears `flask.g` before every test and nothing in this
     file sets `admin_ids`, so **every test here takes the JOIN arm**. That is
     the point of saying so: a fixture that stashed `g.admin_ids` would never
     reach the query, and a test claiming to exercise the role path would be
@@ -3699,7 +3701,7 @@ class TestUrlClearedToArticle:
 
     No HTTP fixture in any of them: nothing on this side of the branch fetches
     anything, and the session-scoped `block_outbound_http` router
-    (tests/conftest.py:214-216) raises on anything that escapes.
+    (tests/conftest.py:263-332) raises on anything that escapes.
     """
 
     def test_an_update_with_no_url_clears_the_post_s_image(
@@ -3895,7 +3897,7 @@ class TestEventUrlIsItsOwnNewUrl:
     that fetches -- never runs, and the Event block itself fetches nothing
     because neither Update carries an `image` key (`:3391` is false, `:3399`
     runs). The session-scoped `block_outbound_http` router
-    (tests/conftest.py:214-216) raises on anything that escapes.
+    (tests/conftest.py:263-332) raises on anything that escapes.
 
     `post.title` is asserted in both. Without it these would be tests that
     nothing CHANGED, which a function that never ran would satisfy just as well;

@@ -13,14 +13,28 @@ FIVE DIVERGENCES, established before any test was written:
    `db.Column(db.Text)` (`app/models.py:2901`), so None is storable. Whether a
    None-bodied reply can REACH this line is measured in this file, not assumed.
 
-2. `:143` does not test `community.private`, and `pages.py:153` does. That flag
-   is commented "only members can view. no federation" (`app/models.py:611`),
-   and `pages.py` is the only one of TEN senders in `app/shared/tasks/` that
-   honours it. The leak is LATENT: both writers of the flag couple it to
-   `local_only` in the view layer (`app/community/routes.py:103-104` and
-   `:1230-1231`), so no current path produces `private=True, local_only=False`,
-   and `:143`'s `local_only` test already catches every private community that
-   exists.
+2. `:143` DID NOT test `community.private` and now does -- commit `00c2ff5e`,
+   this branch, registered as D309. THIS ENTRY IS KEPT AND CORRECTED RATHER
+   THAN DELETED, because it is the divergence the sub-project was opened on.
+   The flag is commented "only members can view. no federation"
+   (`app/models.py:611`). Re-derived at HEAD against every `local_only` read in
+   `app/shared/tasks/`, attributed by `ast`: there are TWELVE federation gates
+   keyed on `local_only`, of which `pages.py:153` (`send_post`) and
+   `notes.py:143` (`send_reply`) test `private` and **TEN do not** --
+   `notes.py:248`, `adds.py:63`, `blocks.py:104`, `deletes.py:127`/`:130`,
+   `flags.py:57`, `groups.py:59`, `likes.py:60`, `locks.py:89`,
+   `pages.py:398`, `removes.py:63`. The design said ten gates and nine
+   omissions; that was two sites short, and D309 records why.
+   The leak is LATENT: `Community.private` is written at exactly three
+   statements, all in `app/community/routes.py` -- `:122` (create),
+   `:1234` (`True`) and `:1237` (`False`) -- and the two that can write `True`
+   are reached only inside `if form.private.data:` blocks that set
+   `form.local_only.data = True` first (`:103-104` and `:1230-1231`). So no
+   current path produces `private=True, local_only=False`, and `:143`'s
+   `local_only` test already catches every private community that exists.
+   **Do not copy an enumeration out of this docstring without re-deriving it**:
+   the numbers above replace an earlier "ten senders / both writers" version of
+   this paragraph that a later slice would have inherited.
 
 3. `:217`'s `instance.online()` cannot be False. `:216` calls
    `community.following_instances()` with the default `include_dormant=False`,
@@ -52,8 +66,11 @@ parent's author is always a delivery recipient but is deliberately excluded
 from the mention notification. That interaction has no analogue in the twin.
 
 THREE EARLY RETURNS stand between entry and the builder: `:143-144`,
-`:147-148`, `:149-151`. `send_post` has a fourth only because it tests
-`community.private`.
+`:147-148`, `:149-151`. `send_post` has a fourth, and the reason is STRUCTURAL
+rather than a difference in what the two functions test: both test
+`community.private` at HEAD, but `pages.py` gives it its own `return`
+(`:153-154`) while `notes.py` folds it into `:143`'s disjunction. Counting
+returns is not counting guards.
 """
 
 import json
@@ -69,6 +86,7 @@ from app.models import (
     Notification, PostReply, UserFlair,
 )
 from app.shared.tasks.notes import send_reply
+from app.user.utils import search_for_user
 from app.utils import ap_datetime
 from tests.factories import (
     make_community, make_community_ban, make_community_member, make_instance,
@@ -81,8 +99,8 @@ def _seed(body='a reply', with_parent_reply=False, local_community=True,
     """instance, author, community, post, reply -- and the parent the call needs.
 
     ORDER IS LOAD-BEARING. `make_community` hardcodes `instance_id=1` and
-    tests/conftest.py:143 truncates with RESTART IDENTITY, so the local instance
-    is created first; a peer built before this call would take id 1 and leave
+    the db_session teardown resets every sequence
+    (tests/conftest.py:131-132), so the local instance is created first; a peer built before this call would take id 1 and leave
     the community's FK pointing at it.
 
     `with_parent_reply=True` makes the parent a PostReply, which is `:83`'s
@@ -264,8 +282,9 @@ def _remote_inbox(s, http_mock, inbox=PEER_INBOX):
          transport. This helper sets it, and registers exactly that URL with
          `http_mock`.
       3. The author must have a keypair -- `_seed(with_keys=True)` -- because
-         `HttpSignature.signed_request` (app/activitypub/signature.py:472)
-         signs with `user.private_key` before issuing the request at :494.
+         `HttpSignature.signed_request` (app/activitypub/signature.py:425-515,
+         extent by ast) signs with `user.private_key` at :472 before issuing
+         the request at :494.
 
     Delivery is synchronous here: `send_post_request`
     (app/activitypub/signature.py:82-91) calls `post_request.delay(...)` at
@@ -282,9 +301,14 @@ def _remote_inbox(s, http_mock, inbox=PEER_INBOX):
     serialized snapshot is what actually left the process. respx captures the
     request bytes at app/activitypub/signature.py:494.
 
-    `http_mock` is `assert_all_called=True` (tests/conftest.py:287-295), so the
-    route registered here failing to fire is itself a test failure -- a test
-    using this helper cannot silently stop delivering.
+    `http_mock` (tests/conftest.py:336-343) is built with
+    `assert_all_called=True` at :342, so the route registered here failing to
+    fire is itself a test failure -- a test using this helper cannot silently
+    stop delivering. (One wording for that fact, used identically everywhere it
+    appears in this file: this docstring said :287-295, another said :294 and a
+    third said :283 -- all three correct before ec98595c shifted
+    tests/conftest.py, none of them afterwards, and one fact stated three ways
+    is one fact that cannot be swept.)
 
     NO NETWORK IS TOUCHED, including DNS. Signing the delivery runs
     `is_invalid_get_request_uri`, which resolves the inbox host for real at
@@ -458,6 +482,19 @@ def test_a_banned_remote_host_mention_is_swallowed_by_the_remote_except(db_sessi
     propagated the exception, this test would error -- passing is the witness
     that the except fires.
 
+    THE ESTABLISHER IS ASSERTED DIRECTLY, BECAUSE THE NOTIFICATION COUNT CANNOT
+    FAIL ON ITS OWN. A remote recipient never produces a Notification at all --
+    :120 requires `recipient.is_local()` -- so `Notification.query.count() == 0`
+    holds whether or not :106-107 swallows anything, and the only discrimination
+    left would be "`_send` did not raise". That is real but silent: if
+    `search_for_user` were ever refactored to RETURN None for a banned host
+    instead of raising (app/user/utils.py:98 is its only `raise`, in a function
+    whose every other miss returns None), this test would keep passing, coverage
+    would keep reporting :105-107 as executed because the call sits inside the
+    `try` either way, and :106-107 would lose its only witness without a single
+    red test. The `pytest.raises` below pins the raise itself, so that refactor
+    fails HERE and names the reason.
+
     THE LOCAL ARM'S EXCEPT AT :100-101 IS UNREACHABLE FOR EVERY MENTION, and no
     test here claims otherwise. For a bare local name app/user/utils.py:88
     finds no '@', so :91-92 sets `server = ''`, :94 is False and the function's
@@ -472,6 +509,11 @@ def test_a_banned_remote_host_mention_is_swallowed_by_the_remote_except(db_sessi
     db.session.add(BannedInstances(domain='peer.example', reason='test'))
     s.reply.body = 'hello @someone@peer.example'
     db.session.commit()
+
+    # The establisher: this is what :105 calls, and it must RAISE for
+    # :106-107 to be the thing under test.
+    with pytest.raises(Exception, match='peer.example is blocked'):
+        search_for_user('someone@peer.example')
 
     _send(s)
 
@@ -679,10 +721,12 @@ def test_a_private_community_does_not_federate_the_reply(db_session):
     with `private=False` and asserts a row DOES appear, which is what makes
     this pair discriminating rather than a count of nothing.
 
-    `http_mock` is deliberately NOT requested: it is `assert_all_called=True`
-    (`tests/conftest.py:294`), so registering the peer inbox this test wants
-    never to be called would itself fail the test. The session-wide respx mock
-    (`tests/conftest.py:283`) still intercepts, so no network is touched.
+    `http_mock` is deliberately NOT requested: `http_mock`
+    (`tests/conftest.py:336-343`) is built with `assert_all_called=True` at
+    `:342`, so registering the peer inbox this test wants never to be called
+    would itself fail the test. The session-wide respx mock in
+    `block_outbound_http` (`tests/conftest.py:263-332`, `assert_all_called=False`
+    at `:331`) still intercepts, so no network is touched.
     """
     s = _seed(local_community=False, with_keys=True)
     _make_deliverable(s)
