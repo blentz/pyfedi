@@ -4354,11 +4354,23 @@ in a test is the session the fixtures seeded through. **Measured, not read**: an
 `InstanceBlock` flushed-but-not-committed into `db.session` makes `send_answer`
 skip a follower it would otherwise deliver to, and a `CommunityMember` flushed
 the same way makes it deliver to a follower the task session cannot see -- while
-inside `patch_db_session` the identical row is invisible. **The consequences for
-a test are both directions of one hazard.** A test can accidentally *pass*
-because a row it never committed was visible through the unpatched half; and a
-test can accidentally *fail* because a row it committed is visible to the
-unpatched half but the assertion was reasoned about the task session. Fact 64 is
+inside `patch_db_session` the identical row is invisible. **Both directions of
+the hazard come from the SAME uncommitted state**, and they differ only in
+whether the extra visibility makes the function do more or do less. A test can
+accidentally *pass* because a row it flushed but never committed was visible
+through the unpatched half and made the function **deliver** -- the
+`CommunityMember` case above; and a test can accidentally *fail* because a row
+it flushed but never committed was visible through the unpatched half and made
+the function **skip** -- the `InstanceBlock` case, where a "delivery happened"
+assertion dies on state the test would have reasoned was invisible.
+**A COMMITTED row is NOT this mechanism and cannot be**: both sessions bind to
+the same engine, the fixture commits rather than holding an outer transaction,
+and isolation is READ COMMITTED, so a committed row is visible to **both**
+halves and nothing diverges. D312 says the same thing from the other side --
+"both sessions are bound to the same engine and read the same committed rows".
+So if one of the other unpatched task functions fails on an ordinary committed
+fixture row, **the cause is somewhere else**; do not add `patch_db_session`
+scaffolding to chase a mechanism that is not there. Fact 64 is
 the other end of this: `get_task_session()` leaves `autoflush=True` where
 `db.session` in this app is `autoflush=False` (`app/__init__.py:81`), so the two
 sessions do not even agree about when a pending row becomes visible. **Ask which
