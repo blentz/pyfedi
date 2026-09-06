@@ -297,3 +297,269 @@ def _peer_instance(s):
     """
     return db.session.query(Instance).get(s.community.instance_id)
 
+
+# ---------------------------------------------------------------------------
+# Entry and parent dispatch, :80-90
+# ---------------------------------------------------------------------------
+
+
+def test_a_top_level_reply_names_the_post_as_its_inReplyTo(db_session, http_mock):
+    """:83's FALSE arm and :86. `parent_id` is None, so `parent = reply.post`
+    and `:175`'s `inReplyTo` is the POST's public url.
+
+    The delivered body is the witness. Asserting only that no notification
+    appeared would pass against a broken dispatch, because the post's author is
+    excluded at :120 either way.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    _send(s)
+
+    assert _sent_activity(route)['object']['inReplyTo'] == s.post.public_url()
+
+
+def test_a_nested_reply_names_its_parent_reply_as_its_inReplyTo(db_session, http_mock):
+    """:83's TRUE arm and :84. `parent_id` is set, so the parent is a PostReply
+    and `:175`'s `inReplyTo` is the PARENT REPLY's public url -- a different
+    value from the test above, which is what makes the pair discriminating."""
+    s = _seed(with_parent_reply=True, local_community=False, with_keys=True)
+    assert isinstance(s.parent, PostReply)
+    route = _remote_inbox(s, http_mock)
+
+    _send(s)
+
+    assert _sent_activity(route)['object']['inReplyTo'] == s.parent.public_url()
+    assert s.parent.public_url() != s.post.public_url()
+
+
+# ---------------------------------------------------------------------------
+# Mention scan, :91-116
+# ---------------------------------------------------------------------------
+
+
+def test_a_body_with_no_mentions_never_enters_the_scan_loop(db_session):
+    """:93, the zero-iteration case -- `re.finditer` yields nothing, so the
+    loop body at :94-116 never runs and `recipients` stays exactly `:90`'s
+    `[parent.author]`.
+
+    The witness is that no Notification exists. That is only meaningful as half
+    of a pair: `test_a_local_mention_resolves_and_is_notified` below runs the
+    same seed WITH an `@name@host` in the body and gets a row, so the difference
+    between the two isolates the scan. Note that :92 has no `if reply.body:`
+    guard (divergence 1), so this test proves the loop is empty, not that the
+    scan was skipped.
+    """
+    s = _seed(body='a reply with no mentions in it at all')
+
+    _send(s)
+
+    assert Notification.query.count() == 0
+
+
+def test_a_local_mention_resolves_and_is_notified(db_session):
+    """:95's TRUE arm (:96-101) plus :108's true arm and :115-116.
+
+    `current_app.config['SERVER_NAME']` is 'test.piefed.local'
+    (tests/conftest.py:69), which is what `_seed` gives the local instance, so
+    `@mentioned@test.piefed.local` compares equal at :95 and takes the local
+    branch. `subtype` is 'comment_mention' here, where the twin writes
+    'post_mention'.
+    """
+    s = _seed(body='hello @mentioned@test.piefed.local')
+    mentioned = make_user(s.instance, 'mentioned', local=True)
+    assert len({s.user.id, mentioned.id}) == 2
+
+    _send(s)
+
+    notifications = Notification.query.filter_by(user_id=mentioned.id).all()
+    assert len(notifications) == 1
+    assert notifications[0].notif_type == NOTIF_MENTION
+    assert notifications[0].subtype == 'comment_mention'
+
+
+def test_a_remote_mention_resolves_and_reaches_the_delivered_tags(db_session, http_mock):
+    """:95's FALSE arm -- :102-107 builds `name@host` and resolves it -- with
+    :108's true arm and :115-116 appending the result.
+
+    THE DELIVERED `tag` IS THE WITNESS, not a Notification. A remote recipient
+    never gets one (:120 tests `recipient.is_local()`), so an absence assertion
+    could not tell a resolved remote mention from an unresolved one. `:157`
+    writes one `tag`/`cc` entry per recipient, so the remote user's
+    `public_url()` appearing there is proof the else arm resolved them and
+    :116 appended them.
+
+    The mentioned user is put on the SAME peer the community lives on, so
+    :228's `domains_sent_to` check suppresses a second delivery and the route
+    below sees exactly one call.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    remote = make_user(_peer_instance(s), 'remoteuser', local=False)
+    s.reply.body = 'hello @remoteuser@peer.example'
+    db.session.commit()
+
+    _send(s)
+
+    note = _sent_activity(route)['object']
+    assert [t['href'] for t in note['tag']] == [s.user.public_url(),
+                                                remote.public_url()]
+    assert remote.public_url() in note['cc']
+    assert Notification.query.filter_by(user_id=remote.id).count() == 0
+
+
+def test_the_author_mentioning_themselves_is_never_looked_up(db_session):
+    """:97's FALSE arm -- `if user_name != user.user_name:`.
+
+    THIS TEST ONLY WORKS BECAUSE THE PARENT HAS A DIFFERENT AUTHOR. With
+    `_seed`'s default the reply's author IS `parent.author`, so a self-mention
+    that slipped past :97 would be deduped at :111 against `:90`'s seeded
+    entry and excluded at :120 for being `parent.author` -- the guard would be
+    unobservable. `_reauthor_the_parent` hands the post to 'op', so if :97
+    stopped skipping, `search_for_user('author')` would resolve, :111 would
+    NOT match 'op', :116 would append the author, and :120 would notify them
+    because their id differs from `parent.author.id`. Zero notifications is
+    therefore a real witness for the guard.
+    """
+    s = _seed(body='hello @author@test.piefed.local')
+    op = _reauthor_the_parent(s)
+    assert op.id != s.user.id
+
+    _send(s)
+
+    assert Notification.query.count() == 0
+
+
+def test_a_banned_remote_host_mention_is_swallowed_by_the_remote_except(db_session):
+    """:104-107 -- the only REACHABLE bare `except: pass` in this scan.
+
+    `search_for_user` for `name@host` takes app/user/utils.py:94's true branch,
+    and :98 raises when the host has a `BannedInstances` row. That reaches
+    notes.py:105's call inside the try, and :106-107 swallows it. If `_send`
+    propagated the exception, this test would error -- passing is the witness
+    that the except fires.
+
+    THE LOCAL ARM'S EXCEPT AT :100-101 IS UNREACHABLE FOR EVERY MENTION, and no
+    test here claims otherwise. For a bare local name app/user/utils.py:88
+    finds no '@', so :91-92 sets `server = ''`, :94 is False and the function's
+    only `raise` at :98 is skipped; a nonexistent local name then falls through
+    :103 and :105 to :108-109's clean `return None`. Sub-project 19 established
+    this against the same function. It is not dead in the stronger sense -- the
+    clause is bare, so a SQLAlchemyError out of app/user/utils.py:101 would
+    still land in it -- and it is registered for the residual sweep rather than
+    chased.
+    """
+    s = _seed()
+    db.session.add(BannedInstances(domain='peer.example', reason='test'))
+    s.reply.body = 'hello @someone@peer.example'
+    db.session.commit()
+
+    _send(s)
+
+    assert Notification.query.count() == 0
+
+
+def test_an_unresolvable_local_mention_adds_no_recipient(db_session):
+    """:108's FALSE arm -- `search_for_user` returned None, so :109-116 is
+    skipped entirely and nothing is appended.
+
+    'nobody' matches no User row, and app/user/utils.py:108-109 returns None
+    without raising (see the previous test's docstring), so `recipient` is
+    falsy at :108. The parent is re-authored so that an appended recipient
+    WOULD have produced a notification -- without that, :120's exclusion of
+    `parent.author` would mask the difference.
+    """
+    s = _seed(body='hello @nobody@test.piefed.local')
+    _reauthor_the_parent(s)
+
+    _send(s)
+
+    assert Notification.query.count() == 0
+
+
+def test_a_mention_of_the_parent_author_is_deduped_against_the_seeded_recipient(
+        db_session, http_mock):
+    """:110-114 with `add_recipient` going FALSE on the FIRST iteration, via
+    :111's FIRST disjunct (`not recipient.ap_id and user_name ==`).
+
+    THIS IS THE DEDUP CASE THE TWIN CANNOT HAVE. `send_post` starts from `[]`,
+    so its first mention always appends; `:90` seeds `[parent.author]`, so the
+    very first mention is already compared against something. Here the mention
+    IS the parent's author, so the existing recipient it collides with is
+    `:90`'s seed -- not an earlier mention. The companion test below is the
+    other case.
+
+    The delivered `tag` is the witness. Both users are local and
+    `parent.author` is excluded at :120, so notification counts are identical
+    whether or not the dedup fired; `:157` appends one tag per recipient, so a
+    failed dedup would show up as a second, duplicate entry.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    op = _reauthor_the_parent(s)
+    s.reply.body = 'hello @op@test.piefed.local'
+    db.session.commit()
+    route = _remote_inbox(s, http_mock)
+
+    _send(s)
+
+    note = _sent_activity(route)['object']
+    assert [t['href'] for t in note['tag']] == [op.public_url()]
+
+
+def test_the_same_local_user_mentioned_twice_is_added_once(db_session):
+    """:110-114 with `add_recipient` going FALSE on the SECOND pass, via
+    :111's FIRST disjunct -- and the existing recipient it matches is an
+    EARLIER MENTION, not `:90`'s seed.
+
+    The first pass compares 'mentioned' against `parent.author` and does not
+    match, so :116 appends. The second pass walks `[parent.author, mentioned]`
+    and matches on the second element. A local user has `ap_id` None, so the
+    comparison falls to `user_name`. Two notifications would appear if the
+    dedup failed: :121's `edit` is False, so :125's `existing_notification` is
+    None on both passes and :134 would write a second row.
+    """
+    s = _seed(body='@mentioned@test.piefed.local and again @mentioned@test.piefed.local')
+    mentioned = make_user(s.instance, 'mentioned', local=True)
+    assert mentioned.ap_id is None
+
+    _send(s)
+
+    assert Notification.query.filter_by(user_id=mentioned.id).count() == 1
+
+
+def test_the_same_remote_user_mentioned_twice_is_added_once(db_session, http_mock):
+    """:110-114 via :111's SECOND disjunct (`recipient.ap_id and ap_id ==`),
+    matching an EARLIER MENTION.
+
+    A remote user has a non-None `ap_id`, so the first disjunct's
+    `not recipient.ap_id` is False and only the second can fire. The delivered
+    `tag` is the witness for the same reason as the parent-author case: a
+    remote recipient is never notified, so a duplicate would only ever show up
+    in the outbound body.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    remote = make_user(_peer_instance(s), 'remoteuser', local=False)
+    assert remote.ap_id == 'remoteuser@peer.example'
+    s.reply.body = '@remoteuser@peer.example and again @remoteuser@peer.example'
+    db.session.commit()
+
+    _send(s)
+
+    note = _sent_activity(route)['object']
+    assert [t['href'] for t in note['tag']] == [s.user.public_url(),
+                                                remote.public_url()]
+
+
+def test_two_different_local_users_are_both_added(db_session):
+    """:115-116, the TRUE arm of `if add_recipient:` on the second pass -- the
+    dedup must not suppress a genuinely different recipient."""
+    s = _seed(body='@alpha@test.piefed.local and @beta@test.piefed.local')
+    alpha = make_user(s.instance, 'alpha', local=True)
+    beta = make_user(s.instance, 'beta', local=True)
+    assert len({s.user.id, alpha.id, beta.id}) == 3
+
+    _send(s)
+
+    assert Notification.query.filter_by(user_id=alpha.id).count() == 1
+    assert Notification.query.filter_by(user_id=beta.id).count() == 1
