@@ -1336,3 +1336,63 @@ From spec §9, with criterion 2 amended by this plan's amendment section:
 8. `coverage_floors.ini` gains an `app/shared/tasks/pages.py` entry at the measured floor.
 9. The register carries D300 onward; D298 and D299 are marked fixed, with D298's three `app/activitypub/util.py` copies recorded as still open.
 10. The full suite is green, with the pass/skip counts and the coverage report's mtime recorded.
+
+---
+
+## CORRECTION NOTE — 2026-09-06, final review of sub-project 19
+
+**Appended, not merged into the body, and appended at the END so that every line
+number this plan is cited by elsewhere stays valid.** This plan is a dispatch
+record: it must keep saying what implementers were actually dispatched with
+(sub-project 18's D292 precedent), so its stale line numbers and its two
+disagreeing extents are left exactly as they are. **The two entries below are
+different in kind. They are statements of FACT that are false — a reader acting
+on them gets a wrong answer about the code, not merely a wrong offset — and
+silence about them would let the next sub-project re-derive them from a document
+this campaign treats as authoritative.**
+
+### 1. `:73` and `:1278` — "every send happens before `:309`". FALSE.
+
+Both lines say the four `send_post_request` calls at `app/shared/tasks/pages.py:298`,
+`:300`, `:302` and `:306` are all the sends there are, and that all of them
+precede the Mastodon-friendly amendment at `:309`.
+
+**`send_post` (`:88-352` by `ast`) contains SIX `send_post_request` calls:**
+`:298`, `:300`, `:302`, `:306`, **`:336`** and **`:352`**. The last two are
+**below** `:309`, and they are not an oversight — they are the mention and
+follower deliveries and they ship the amended object **by design**. `:332` is
+`create['object'] = note`, and `:343`'s comment reads *"send the amended copy of
+the Create to anyone who is following the User."* The branch this plan produced
+says the same thing in two places: `tests/test_shared_tasks_send_post.py:1105-1109`
+("The second send at :352 is the first one that carries those mutations") and the
+section comment at `:1784-1791`.
+
+**D304's conclusion survives, for the OPPOSITE reason to the one recorded here.**
+The aliasing is harmless because the four *community* sends serialize the dict
+before the amendment touches it, the two *mention/follower* sends are supposed to
+see the amendment, and nothing reads `create['object']` or `page` expecting
+pre-amendment state after `:332`. The corrected argument, with the
+statement-by-statement read of `:332-352` behind that last clause, is in the
+findings register at D304
+(`docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md`). **Read it
+before quoting `:73` or `:1278`.**
+
+### 2. `:535` — `community.local_only` "skipped delivery at `:267`". FALSE.
+
+It **returns at `:154`**, before the builder runs at all. The design repeats the
+error at `docs/superpowers/specs/2026-09-06-coverage-send-post-19-design.md:177`.
+
+This half was already registered. What the final review corrected is the *blame*
+attached to it: the ten `tests/test_shared_post_edit.py` tests routinely cited
+alongside this plan as sharing the mistake do **not** share it — all ten
+docstrings state the correct mechanism, that `app/shared/post.py:736` sets
+`federate = False` so `:743` never dispatches and `send_post` is never entered.
+**It was this plan and the design that got it wrong, and nothing in
+`tests/test_shared_post_edit.py`.**
+
+### What is deliberately NOT corrected
+
+The extent, written `88-371` on `:5`, `:36`, `:43`, `:1166`, `:1208`, `:1330` and
+`:1332`, and `88-368` on `:153`. `send_post` is `:88-352` by `ast`. **A plan that
+contradicts itself about the extent of the function it dispatches work on is
+worth recording**, and it is recorded in the register rather than repaired here.
