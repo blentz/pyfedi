@@ -65,10 +65,11 @@ import pytest
 from app import db
 from app.constants import NOTIF_MENTION
 from app.models import (
-    ActivityPubLog, BannedInstances, CommunityBan, Instance, Notification,
-    PostReply,
+    ActivityPubLog, BannedInstances, CommunityBan, Emoji, Instance,
+    Notification, PostReply, UserFlair,
 )
 from app.shared.tasks.notes import send_reply
+from app.utils import ap_datetime
 from tests.factories import (
     make_community, make_community_ban, make_instance, make_instance_block,
     make_post, make_post_reply, make_user,
@@ -1086,3 +1087,158 @@ def test_a_local_community_skips_the_remote_instance_checks_entirely(db_session)
     _send(s)
 
     assert db.session.query(ActivityPubLog).count() == 1
+
+
+# ---------------------------------------------------------------------------
+# Note and Create builders, :153-199
+# ---------------------------------------------------------------------------
+
+
+def test_the_note_carries_its_full_key_set_and_a_mentions_tag_and_cc_entries(
+        db_session, http_mock):
+    """:156-158's WITH-A-MENTION arm, plus the computed fields at :175-176 and
+    :179-180.
+
+    `recipients` (`:90`) always starts with `parent.author`, so the loop at
+    `:156` never has zero iterations; what varies is whether a Mention adds a
+    SECOND entry. Here it does, so `tag` and `cc` each carry two entries --
+    the seeded author's and the mentioned remote user's -- which is the
+    contrast the companion test below (no mention) is built to isolate.
+
+    `:175`'s `inReplyTo` for a top-level reply and a nested reply is already
+    covered by `test_a_top_level_reply_names_the_post_as_its_inReplyTo` and
+    `test_a_nested_reply_names_its_parent_reply_as_its_inReplyTo` above; this
+    test does not re-assert that pair, only the full key set that includes
+    the field.
+
+    `distinguished` and `flair` (`:179-180`) are copied straight from the
+    reply and the author's per-community flair respectively; both default to
+    a falsy value (`False` and `''`), so this test sets each to a value only
+    the real field could produce -- a Boolean `True` and the community-scoped
+    flair text -- before asserting them back off the wire.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    mentioned = make_user(_peer_instance(s), 'remoteuser', local=False)
+    s.reply.body = 'hello @remoteuser@peer.example'
+    s.reply.distinguished = True
+    db.session.add(UserFlair(user_id=s.user.id, community_id=s.community.id,
+                             flair='bronze'))
+    db.session.commit()
+
+    _send(s)
+
+    note = _sent_activity(route)['object']
+    assert set(note.keys()) == {
+        'id', 'url', 'type', 'attributedTo', 'to', 'cc', 'tag', 'audience',
+        'content', 'mediaType', 'source', 'inReplyTo', 'published',
+        'language', 'contentMap', 'distinguished', 'flair',
+    }
+    assert [t['href'] for t in note['tag']] == [s.user.public_url(),
+                                                mentioned.public_url()]
+    assert note['cc'] == [s.community.public_url(), s.user.public_url(),
+                          mentioned.public_url()]
+    assert note['published'] == ap_datetime(s.reply.posted_at)
+    assert note['distinguished'] is True
+    assert note['flair'] == 'bronze'
+
+
+def test_the_note_has_only_the_seeded_recipient_without_a_mention(
+        db_session, http_mock):
+    """:156-158's WITHOUT-A-MENTION arm -- the control for the test above.
+
+    With no `@user@host` in the body, `recipients` never grows past `:90`'s
+    seeded `[parent.author]`, so the loop at `:156` runs exactly once and
+    `tag`/`cc` each carry exactly one entry -- the seeded author's, not the
+    two the test above produces. That difference in COUNT, not merely
+    content, is what shows the loop ran once rather than twice.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    _send(s)
+
+    note = _sent_activity(route)['object']
+    assert note['tag'] == [{'href': s.user.public_url(),
+                            'name': s.user.mention_tag(),
+                            'type': 'Mention'}]
+    assert note['cc'] == [s.community.public_url(), s.user.public_url()]
+
+
+def test_replys_tags_for_activitypub_extend_the_mention_tags(
+        db_session, http_mock):
+    """:159 -- `tag.extend(reply.tags_for_activitypub())`, appending PAST the
+    per-recipient entries `:156-158` already wrote.
+
+    `PostReply.tags_for_activitypub` (app/models.py:3239-3263) only emits
+    entries for `:emoji_token:` syntax found in the body -- unlike `Post`'s
+    version, it has no flair loop -- so an `Emoji` row matching a token in
+    `reply.body` is what makes `:159` add anything at all. No mention is in
+    the body, so `tag` starts as the single-entry list the companion test
+    above establishes; the SECOND entry here, with `type: 'Emoji'`, is only
+    explained by `:159` having run.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    db.session.add(Emoji(token=':smile:', url='https://cdn.example/smile.png',
+                         instance_id=s.instance.id))
+    s.reply.body = 'hello :smile:'
+    db.session.commit()
+
+    _send(s)
+
+    note = _sent_activity(route)['object']
+    assert [t['type'] for t in note['tag']] == ['Mention', 'Emoji']
+    assert note['tag'][-1]['name'] == ':smile:'
+
+
+def test_edit_false_builds_a_create_activity_and_omits_updated(
+        db_session, http_mock):
+    """:182's FALSE arm (no `updated` key) and BOTH `:185`/`:187` FALSE arms.
+
+    `:185` and `:187` are conditional expressions -- coverage.py emits no arc
+    for either (fact 87 per the module docstring) -- so only an assertion
+    that the OTHER arm's value could not produce is a real witness. With
+    `edit=False`, `:185` binds `activity = 'create'`, which `:186` folds into
+    `create_id`, and `:187` binds `type = 'Create'`, which `:190` carries into
+    the delivered activity. Both are asserted here; the companion test below
+    is what shows the 'update'/'Update' arms are reachable at all, since
+    'create' in an id could otherwise just be this function's only spelling.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    _send(s, edit=False)
+
+    activity = _sent_activity(route)
+    assert 'updated' not in activity['object']
+    assert '/activities/create/' in activity['id']
+    assert '/activities/update/' not in activity['id']
+    assert activity['type'] == 'Create'
+
+
+def test_edit_true_builds_an_update_activity_and_adds_updated(
+        db_session, http_mock):
+    """:182's TRUE arm (`note['updated']`) and BOTH `:185`/`:187` TRUE arms --
+    the companion to the test above, with `edit=True` at every point of
+    difference.
+
+    `:185` now binds `activity = 'update'`, so `:186`'s `create_id` contains
+    'update' rather than 'create', and `:187` binds `type = 'Update'`, carried
+    into `:190`. `updated` (`:183`) is present here and was absent above;
+    together the two tests are the only witnesses for `:185`, `:187` and
+    `:182`, since none of the three leaves an arc coverage can see.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    _send(s, edit=True)
+
+    activity = _sent_activity(route)
+    note = activity['object']
+    assert 'updated' in note
+    assert note['updated'].endswith('+00:00')
+    assert note['updated'] != note['published']
+    assert '/activities/update/' in activity['id']
+    assert '/activities/create/' not in activity['id']
+    assert activity['type'] == 'Update'
