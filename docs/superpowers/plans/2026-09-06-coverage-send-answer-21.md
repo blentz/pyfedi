@@ -51,7 +51,7 @@ Copied verbatim from the spec. Every task's requirements implicitly include this
 - Create: `tests/test_shared_tasks_send_answer.py`
 
 **Interfaces:**
-- Produces: `_seed(local_community=True, with_keys=False, is_local_community=...)` returning `SimpleNamespace(instance, user, community, post, reply)`; `_send(s, is_undo=False)`; `_sent_activity(route, index=-1)`; `_make_deliverable(s, inbox)`; `_remote_inbox(s, http_mock, inbox)`; `_community_follower(s, http_mock, ...)`; `_key_id_of(route, index=-1)`; the autouse `_peer_example_resolves_without_a_resolver` fixture; constant `PEER_INBOX`.
+- Produces: `_seed(local_community=True, with_keys=False)` returning `SimpleNamespace(instance, user, community, post, reply)`; `_send(s, is_undo=False)`; `_sent_activity(route, index=-1)`; `_make_deliverable(s, inbox)`; `_remote_inbox(s, http_mock, inbox)`; `_community_follower(s, http_mock, ...)`; `_key_id_of(route, index=-1)`; the autouse `_peer_example_resolves_without_a_resolver` fixture; constant `PEER_INBOX`.
 
 - [ ] **Step 1: Write the module prelude**
 
@@ -1054,7 +1054,7 @@ Re-derive `:88` against the current tree before editing — the file has shifted
 - [ ] **Step 5: Run the file**
 
 Run: `./run_tests.sh tests/test_shared_tasks_send_reply.py -q`
-Expected: 47 passed (41 existing + 6 new).
+Expected: 46 passed (41 existing + 5 new: two happy paths, two error paths, one happy-path close control).
 
 - [ ] **Step 6: Commit**
 
