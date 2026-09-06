@@ -80,8 +80,9 @@ def _seed(body=None, post_type=POST_TYPE_ARTICLE, url=None, local_community=True
     """The local instance, a local author, a community, and a post.
 
     ORDER IS LOAD-BEARING. `make_community` hardcodes `instance_id=1`
-    (tests/factories.py) and tests/conftest.py:143 truncates with
-    RESTART IDENTITY, so whichever Instance is inserted first gets id 1. The
+    (tests/factories.py) and the db_session teardown resets every
+    sequence (tests/conftest.py:131-132), so whichever Instance is inserted first
+    gets id 1. The
     local instance is created first here so the community's FK points at it. A
     peer built before this call would capture id 1 and silently make the
     community's instance the peer -- see `_peer` below.
@@ -241,7 +242,7 @@ def _remote_inbox(s, http_mock, inbox=PEER_INBOX):
     the serialized request bytes at :494, so `_sent_activity` returns a true
     snapshot of what left the process.
 
-    `http_mock` is `assert_all_called=True` (tests/conftest.py:287-295), so the
+    `http_mock` is `assert_all_called=True` (tests/conftest.py:336-343), so the
     route registered here failing to fire is itself a test failure -- a test
     using this helper cannot silently stop delivering.
 
@@ -735,7 +736,7 @@ def test_an_image_post_with_no_image_row_does_not_crash(db_session):
     NO DELIVERY, AND NO `http_mock`, DELIBERATELY. The builder at :177-181 runs
     long before the outbound calls at :294-337, so the crash this test names
     happens with a local community and zero requests. Adding a registered route
-    would make `http_mock`'s `assert_all_called=True` (tests/conftest.py:288-295)
+    would make `http_mock`'s `assert_all_called=True` (tests/conftest.py:336-343)
     raise its own teardown failure alongside the AttributeError, obscuring the
     very failure text that proves the test reaches :181.
     """
@@ -1147,7 +1148,7 @@ def _inward_follower(s, http_mock=None, domain='follower.example',
                      of `following_instances` in SQL (app/models.py:1673).
       `http_mock`    now optional. A test whose follower is SUPPOSED to receive
                      nothing must not register a route for it: `http_mock` is
-                     `assert_all_called=True` (tests/conftest.py:287-295), so an
+                     `assert_all_called=True` (tests/conftest.py:336-343), so an
                      unfired route would fail the test for the wrong reason.
                      Those tests count `ActivityPubLog` rows instead -- see
                      `test_a_follower_instance_with_no_inbox_gets_no_amended_copy`
@@ -1732,7 +1733,7 @@ def test_a_dormant_follower_instance_is_skipped(db_session):
     both calls return `[]` and the test would pass for the wrong reason).
 
     No `http_mock`: nothing should be sent. The session-scoped empty respx
-    router (tests/conftest.py:283) raises on any unmatched request, which
+    router (tests/conftest.py:331) raises on any unmatched request, which
     `post_request` records as an `ActivityPubLog` failure rather than
     re-raising -- so `ActivityPubLog.query.count() == 0` is the proof that no
     delivery was even attempted.

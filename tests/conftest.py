@@ -172,6 +172,20 @@ def db_session(app):
     # schema's foreign keys are not acyclic. SET LOCAL ends at the COMMIT below,
     # so the next test sees constraints enforced normally.
     #
+    # session_replication_role is a SUPERUSER-context GUC, and that requirement
+    # is load-bearing and satisfied here only by accident of the image's
+    # defaults: compose.test.yaml sets POSTGRES_USER: pyfedi, which the official
+    # Postgres image creates as the cluster superuser, and .env.test points both
+    # URLs at that role. is_disposable_database_url() accepts any database whose
+    # name ends _test, so pointing TEST_DATABASE_URL at an external one reached
+    # with an ordinary role is a supported-looking path that fails every
+    # db_session test here with:
+    #   permission denied to set parameter "session_replication_role"
+    # It fails loudly and immediately rather than silently leaving FKs
+    # unenforced -- if the SET is refused the whole multi-statement string
+    # errors -- but nothing else in the repo states the requirement.
+    # tests/README.md's teardown section carries the same note.
+    #
     # The setval sweep replaces RESTART IDENTITY. Tests depend on ids starting
     # at 1 (fixtures hardcode instance_id=1), so resetting is not optional.
     db.session.connection().exec_driver_sql(_teardown_sql(db))

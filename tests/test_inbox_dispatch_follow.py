@@ -84,7 +84,7 @@ def record_sends(monkeypatch):
 
     routes.py imports send_post_request by name, so patching
     app.activitypub.signature would leave routes' copy pointing at the
-    original. Same binding-site trap tests/conftest.py:394 documents.
+    original. Same binding-site trap tests/conftest.py:442 documents.
     """
     sends = []
     monkeypatch.setattr(
