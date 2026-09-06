@@ -1310,7 +1310,7 @@ Expected: exit 0, with `app/shared/tasks/pages.py` now among the modules listed.
 
 - [ ] **Step 6: Ask the controller for the full-suite run**
 
-Report ready. The controller runs the suite once and reports pass/skip/subtest counts, wall time, and the coverage report's mtime. A run at or over 600s is a `session_timeout` truncation that still exits 0 — the controller checks the test count, not the exit code.
+Report ready. The controller runs the suite once and reports pass/skip/subtest counts, wall time, and the coverage report's mtime. A run at or over 600s is a `session_timeout` truncation. **CORRECTED 2026-09-06:** pytest exits **1** on a session timeout and `run_tests.sh` propagates it (`pytest.ini:26-27`); the "still exits 0" this line used to claim was the exit status of a shell **pipeline**, not of pytest. Check the test count and the coverage report's mtime as before, and read the real code with `${PIPESTATUS[0]}` rather than `$?` when piping. See `tests/README.md` fact 118.
 
 - [ ] **Step 7: Commit**
 

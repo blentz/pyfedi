@@ -226,7 +226,7 @@ def _remote_inbox(s, http_mock, inbox=PEER_INBOX):
          transport. This helper sets it, and registers exactly that URL with
          `http_mock`.
       3. The author must have a keypair -- `_seed(with_keys=True)` -- because
-         `HttpSignature.signed_request` (app/activitypub/signature.py:472)
+         `HttpSignature.signed_request` (app/activitypub/signature.py:425)
          signs with `user.private_key` before issuing the request at :494.
 
     Delivery is synchronous here: `send_post_request`
