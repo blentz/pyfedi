@@ -708,3 +708,188 @@ def test_a_non_private_community_of_the_same_shape_does_federate(db_session):
     _send(s)
 
     assert db.session.query(ActivityPubLog).count() == 1
+
+
+# ---------------------------------------------------------------------------
+# The mention-notification block, :118-141
+# ---------------------------------------------------------------------------
+
+
+def test_a_remote_recipient_is_never_notified(db_session):
+    """:120's FIRST conjunct -- `recipient.is_local()`.
+
+    The seeded remote recipient has `id != parent.author.id` (:120's second
+    conjunct is True for them, same as for any third party), so this isolates
+    the first conjunct specifically: were `is_local()` dropped from the
+    condition, `remote`'s id-inequality alone would satisfy it and this test
+    would fail. The community stays local (the default), so nothing here
+    depends on delivery -- `remote` is resolved purely through the mention
+    scan's `already_exists` lookup at `app/user/utils.py:99`, with no network
+    reached.
+    """
+    s = _seed(body='hello @remoteuser@peer.example')
+    peer = _peer()
+    remote = make_user(peer, 'remoteuser', local=False)
+    assert remote.ap_id == 'remoteuser@peer.example'
+
+    _send(s)
+
+    assert Notification.query.filter_by(user_id=remote.id).count() == 0
+
+
+def test_a_mention_of_the_parents_author_is_excluded_but_a_third_party_is_notified(
+        db_session):
+    """:120's SECOND conjunct -- `recipient.id != parent.author.id` -- THE
+    DIVERGENCE FROM `send_post`.
+
+    `send_post`'s `recipients` starts `[]`; `:90` here seeds it with
+    `[parent.author]`, so the parent's author is always a delivery recipient
+    (divergence in this file's module docstring) but this conjunct excludes
+    them from ever being NOTIFIED of their own reply. `send_post` has no
+    equivalent conjunct because it has nothing seeded to exclude.
+
+    `_reauthor_the_parent` gives the parent a local author, 'op', distinct
+    from the reply's author -- without that split every `_seed()` reply's
+    author IS `parent.author`, and the two facts described in that helper's
+    docstring would hide each other. 'op' is then mentioned BY NAME so they
+    are resolved and re-collide with :90's seeded entry at :111 (deduped, not
+    re-appended -- `test_a_mention_of_the_parent_author_is_deduped_against_
+    the_seeded_recipient` above covers that dedup on its own), leaving
+    `recipients` as `[op, third]`. The loop at :119 then reaches op first:
+    `op.is_local()` is True and `op.id == parent.author.id`, so the second
+    conjunct is what stops the notification -- if it were dropped, op's
+    `is_local()` alone would satisfy the guard and they would be notified.
+    `third` has no such collision, so a real notification for them is proof
+    the guard is not simply skipping every recipient.
+    """
+    s = _seed()
+    op = _reauthor_the_parent(s)
+    third = make_user(s.instance, 'third', local=True)
+    s.reply.body = 'hello @op@test.piefed.local and @third@test.piefed.local'
+    db.session.commit()
+
+    _send(s)
+
+    assert Notification.query.filter_by(user_id=op.id).count() == 0
+    assert Notification.query.filter_by(user_id=third.id).count() == 1
+
+
+def test_edit_true_creates_once_then_skips_a_duplicate_on_the_second_call(
+        db_session):
+    """:121's TRUE arm (`if edit:`) across two calls, exercising both results
+    `:122`'s query can produce and both arms of `:125`.
+
+    The first `edit=True` call finds no matching row at `:122` --
+    `existing_notification` is None -- so `:125`'s `not existing_notification`
+    is True and `:126-141` creates one. The second call, same reply and
+    therefore the same `:122` URL, now finds the row the first call wrote, so
+    `existing_notification` is truthy and `:125` is False: `:126-141` does not
+    run again. One notification surviving two calls is the witness; the
+    companion test below makes `edit=False` the control that shows this is
+    not simply because "the second mention was ignored."
+    """
+    s = _seed(body='hello @mentioned@test.piefed.local')
+    mentioned = make_user(s.instance, 'mentioned', local=True)
+
+    _send(s, edit=True)
+    assert Notification.query.filter_by(user_id=mentioned.id).count() == 1
+
+    _send(s, edit=True)
+    assert Notification.query.filter_by(user_id=mentioned.id).count() == 1
+
+
+def test_edit_false_never_checks_for_an_existing_notification_and_duplicates(
+        db_session):
+    """:121's FALSE arm -- `:124` sets `existing_notification = None`
+    unconditionally, without running `:122`'s query at all.
+
+    The first call uses `edit=True` to write a real notification row, so a
+    matching row genuinely exists in the database. The second call, on the
+    same reply, uses `edit=False`: if `:124` behaved like `:122`'s query, it
+    would find that row and skip. It does not consult the row at all, so
+    `:125` is True again and a SECOND notification is written. Two rows after
+    the second call is the only way to observe that `:124` never looks --
+    the test above showed `edit=True` skipping when a match exists; this one
+    shows `edit=False` does not, against the identical existing row.
+    """
+    s = _seed(body='hello @mentioned@test.piefed.local')
+    mentioned = make_user(s.instance, 'mentioned', local=True)
+
+    _send(s, edit=True)
+    assert Notification.query.filter_by(user_id=mentioned.id).count() == 1
+
+    _send(s, edit=False)
+    assert Notification.query.filter_by(user_id=mentioned.id).count() == 2
+
+
+def test_targets_data_records_post_comment_and_falls_back_to_username(
+        db_session):
+    """:127-132's `targets_data` dict, and :129's FALSE arm -- `author.ap_id
+    if author.ap_id else author.user_name` -- taken because a locally-authored
+    reply's `ap_id` is None (`tests/factories.py:58`).
+
+    coverage.py emits no arc for a conditional expression (fact 87 per the
+    brief), so only an assertion that would fail under the other arm's value
+    can show which one ran: `author_user_name` here is asserted to equal
+    `s.user.user_name`, a value the TRUE arm could not produce, since the
+    TRUE arm reads `ap_id` and this author's `ap_id` is None.
+    """
+    s = _seed(body='hello @mentioned@test.piefed.local')
+    mentioned = make_user(s.instance, 'mentioned', local=True)
+    assert s.user.ap_id is None
+
+    _send(s)
+
+    notification = Notification.query.filter_by(user_id=mentioned.id).one()
+    assert notification.targets == {
+        'gen': '0',
+        'post_id': s.post.id,
+        'author_user_name': s.user.user_name,
+        'comment_id': s.reply.id,
+        'comment_body': s.reply.body,
+    }
+
+
+def test_targets_data_uses_the_authors_ap_id_when_present(db_session):
+    """:129's TRUE arm -- the companion to the test above. Giving the reply's
+    author an `ap_id` (locally-authored replies never have one on their own,
+    per the previous test) makes `author.ap_id` truthy, so `targets_data`
+    records that value instead of `user_name`. The two tests together are
+    what `:129`'s missing coverage.py arc requires: neither value alone would
+    distinguish the branch that produced it.
+
+    `_reauthor_the_parent` is used here for a reason UNRELATED to its usual
+    purpose: with the default seed the reply's author is also `:90`'s seeded
+    `parent.author`, the first entry `:119`'s loop reaches, so `:120` would
+    call `is_local()` on this same user BEFORE the exclusion is decided.
+    `is_local()` (`app/models.py:1251-1252`) reads `ap_profile_id` whenever
+    `ap_id` is set, and a plain local user has no `ap_profile_id` -- setting
+    only `ap_id` on that user crashes the very first loop iteration.
+    Reauthoring the parent moves `parent.author` to 'op', so the reply's
+    author is never iterated over and its `is_local()` is never called.
+    """
+    s = _seed(body='hello @mentioned@test.piefed.local')
+    _reauthor_the_parent(s)
+    mentioned = make_user(s.instance, 'mentioned', local=True)
+    s.user.ap_id = 'author@elsewhere.example'
+    db.session.commit()
+
+    _send(s)
+
+    notification = Notification.query.filter_by(user_id=mentioned.id).one()
+    assert notification.targets['author_user_name'] == 'author@elsewhere.example'
+
+
+def test_a_notified_recipients_unread_count_is_incremented(db_session):
+    """:139 -- `recipient.unread_notifications += 1`, run only on the
+    `:125` create path. Asserted as a delta across the call rather than a
+    fixed value, so the test does not depend on `User`'s column default.
+    """
+    s = _seed(body='hello @mentioned@test.piefed.local')
+    mentioned = make_user(s.instance, 'mentioned', local=True)
+    before = mentioned.unread_notifications
+
+    _send(s)
+
+    db.session.refresh(mentioned)
+    assert mentioned.unread_notifications == before + 1
