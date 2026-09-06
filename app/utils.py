@@ -5812,3 +5812,21 @@ def roles_with(permission):
         filter(RolePermission.permission == permission).\
         order_by(Role.weight)
     return ', '.join([role.name for role in roles.all()])
+
+
+class TaskError(Exception):
+    """Raised by app/shared/tasks/ when a task is given arguments it cannot act on.
+
+    DEFINED AT THE END OF THIS FILE DELIBERATELY, not beside get_task_session
+    and patch_db_session where it thematically belongs. This module carries
+    358 `utils.py:NNN` citations in tracked files, 135 of them at or after
+    :3673; inserting there would invalidate all 135. Appending after the last
+    line invalidates none. Do not "tidy" this upward without re-deriving those
+    citations first.
+
+    Introduced by sub-project 22 for app/shared/tasks/pages.py's
+    `move_object`, which previously raised a bare `Exception`. `raise
+    Exception(...)` is the established idiom across app/shared/ -- see the
+    findings register -- so this is the first narrow raise among eleven sites
+    and is intended as the migration target for the rest.
+    """

@@ -8,7 +8,7 @@ from app.models import CommunityBan, Instance, Notification, Poll, PollChoice, P
     Community
 from app.user.utils import search_for_user
 from app.utils import gibberish, instance_banned, ap_datetime, get_recipient_language, get_task_session, \
-    patch_db_session
+    patch_db_session, TaskError
 
 from flask import current_app
 from flask_babel import _, force_locale, gettext
@@ -393,7 +393,7 @@ def move_object(session, user_id, object, origin, target):
     if isinstance(origin, Community) and isinstance(target, Community):
         community = origin
     else:
-        raise Exception('Unsupported origin or target')
+        raise TaskError('Unsupported origin or target')
 
     if community.local_only or community.private or not community.instance.online():
         return

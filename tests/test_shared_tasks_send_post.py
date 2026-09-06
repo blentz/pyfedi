@@ -68,7 +68,7 @@ from app.models import (
     ActivityPubLog, BannedInstances, CommunityBan, Event, File, Instance,
     Language, Notification, Poll, PollChoice, User, UserFollower,
 )
-from app.shared.tasks.pages import edit_post, make_post, move_object, move_post, send_post
+from app.shared.tasks.pages import edit_post, make_post as make_post_task, move_object, move_post, send_post
 from tests.factories import (
     make_community, make_community_member, make_instance, make_instance_block,
     make_post, make_user,
@@ -2484,3 +2484,41 @@ def test_a_private_community_does_not_federate_the_move(db_session, http_mock):
     _move(s)
 
     assert db.session.query(ActivityPubLog).count() == 0
+
+
+# Imported here rather than in the import block at the top of this file:
+# 11 committed citations point into this file, and a new line at :72 would
+# shift every one of them by one. Appending costs nothing.
+from app.utils import TaskError
+
+
+def test_a_non_community_origin_raises_task_error(db_session):
+    """:393's FALSE arm via `origin`, raising at :396 -- the second of this
+    sub-project's two production changes.
+
+    `move_object` requires BOTH `origin` and `target` to be `Community`. This
+    test closes the guard on `origin`; its companion below closes it on
+    `target`. TWO tests are needed, not one: a mutant changing `and` to `or`
+    is killed by neither alone, because either single non-Community argument
+    still leaves the other's isinstance True.
+
+    Raising `TaskError` rather than a bare `Exception` is the change. A caller
+    can now catch this failure without catching everything -- `move_post`'s
+    handler at :383 is `except Exception:` and so is unaffected today.
+    """
+    s = _seed(with_keys=True)
+    target = make_community('c2')
+    db.session.commit()
+
+    with pytest.raises(TaskError):
+        move_object(db.session, s.user.id, s.post, origin=s.post, target=target)
+
+
+def test_a_non_community_target_raises_task_error(db_session):
+    """:393's FALSE arm via `target` -- the companion to the test above, and
+    the half that makes an `and`->`or` mutant die."""
+    s = _seed(with_keys=True)
+
+    with pytest.raises(TaskError):
+        move_object(db.session, s.user.id, s.post, origin=s.community,
+                    target=s.post)
