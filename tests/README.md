@@ -1712,7 +1712,8 @@ the rows are durably there for any session bound to the same engine to see —
 no transaction-visibility trick is involved.
 
 **3. The request-context asymmetry.** `patch_db_session`
-(`app/utils.py:3664`) only replaces `db.session` when `has_request_context()`
+(`app/utils.py:3679`; the number was `:3664` and had drifted) only replaces
+`db.session` when `has_request_context()`
 is false. A direct call to `dispatch()` has no request context, so patching
 occurs and `db.session` becomes a proxy onto the dispatcher's task session; a
 real signed HTTP request (Task 8's seam tests) has a request context, so
@@ -4289,6 +4290,125 @@ copied verbatim into two designs, two plans and this file, where each copy
 corroborated the others. **Four agreeing citations of an unmeasured claim are
 one claim, not four** -- fact 88's rule about N agreeing prior citations cuts
 both ways, and the tie-breaker is a five-second experiment, not a vote.
+
+**119. TWO ROW LOOKUPS FORTY LINES APART IN ONE MODULE RAISE DIFFERENT
+EXCEPTIONS FOR A MISSING ID, SO "PASS AN ABSENT ID" IS NOT ONE TECHNIQUE BUT
+TWO.** `app/shared/tasks/notes.py:81` is
+`session.query(PostReply).filter_by(id=reply_id).one()`, which raises
+`sqlalchemy.exc.NoResultFound` **at that line** when the row is absent.
+`app/shared/tasks/notes.py:246` is `session.query(PostReply).get(post_reply_id)`,
+which returns **`None`** and raises nothing; the failure surfaces later and
+elsewhere, as `AttributeError` at `:248` when the guard dereferences
+`post_reply.community`. Same file, same model, same intent, two error contracts.
+**This cost a fix round in sub-project 21**: the plan reached the error arm by
+"pass a missing id" and generalised `send_reply`'s style to `send_answer`'s, so
+the `pytest.raises` named the wrong exception and the test failed for a reason
+that had nothing to do with the arm it was written for. The tests that stand
+record both contracts explicitly --
+`tests/test_shared_tasks_send_reply.py:1703` and `:1731` assert `NoResultFound`
+and say in their docstrings that it is **not** the `.get()`-returns-`None`
+shape, and `tests/test_shared_tasks_send_answer.py:553` asserts `AttributeError`
+and names the two-step path that produces it. **The rule: read the lookup you
+are about to defeat before writing the `raises`.** A sibling function is not
+evidence about this one, and the two styles are close enough in a diff to look
+interchangeable. The same split exists between `.one()`, `.first()`,
+`.one_or_none()` and `.get()` generally; only `.one()` raises.
+
+**120. A MUTATION THAT APPLIES CLEANLY AND LEAVES EVERY TEST GREEN IS NOT
+EVIDENCE ABOUT THE TESTS UNTIL YOU CONFIRM THE SUBSTITUTION CHANGED THE
+PROGRAM.** Three outcomes look identical in the pytest output and mean opposite
+things:
+
+- a **survivor** -- a real semantic change that no test caught. A gap in the
+  tests, and the only one of the three that is a finding about coverage.
+- an **equivalent mutant** -- a real semantic change that provably cannot be
+  observed. A dead end; fact 75 catalogues the causes.
+- a **no-op substitution** -- nothing was mutated. The `sed` applied, the file
+  changed, the program did not. It says **nothing whatsoever** about the tests.
+
+Sub-project 21's M4 was the third kind: a `sed` prepending a dead `if False`
+expression to a `del`, which produced a line whose trailing statement was the
+original statement character-for-character, still executing unconditionally.
+It applied perfectly, ran green, and was first written up as a survivor and then
+as an equivalent mutant before being measured -- the mutated line was executed
+against a dict and removed the key exactly as the original did. **The committed
+mutation record at the end of `tests/test_shared_tasks_send_answer.py` works
+this through in full, with the defective `sed`, the line it produced, and the
+fallback form that is a real double assertion-kill; read it there rather than
+re-deriving it.** The general failure mode the plan anticipated was a *syntax*
+error ("if it does not apply cleanly, use the fallback"); the one that occurred
+was silent. **Before filing a green mutation run as any kind of result, show
+that the mutant computes something different** -- run the changed line, or diff
+the behaviour, not just the file.
+
+**121. A TASK FUNCTION THAT OPENS `get_task_session()` WITHOUT
+`patch_db_session` SPLITS ITS READS ACROSS TWO SESSIONS, AND IN A TEST THE
+SECOND ONE IS YOUR OWN.** `make_reply` (`app/shared/tasks/notes.py:56`, `:58`)
+and `edit_reply` (`:69`, `:71`) open a task session **and** enter
+`with patch_db_session(session):`, so `db.session` *becomes* that task session
+for the call. `send_answer` (`:243`) opens one and uses it directly, with no
+patch -- so its own two lookups (`:245`, `:246`) run on the task session while
+`Community.following_instances()` (`app/models.py:843`) and
+`User.has_blocked_instance()` (`app/models.py:1470`) run on `db.session`, which
+in a test is the session the fixtures seeded through. **Measured, not read**: an
+`InstanceBlock` flushed-but-not-committed into `db.session` makes `send_answer`
+skip a follower it would otherwise deliver to, and a `CommunityMember` flushed
+the same way makes it deliver to a follower the task session cannot see -- while
+inside `patch_db_session` the identical row is invisible. **The consequences for
+a test are both directions of one hazard.** A test can accidentally *pass*
+because a row it never committed was visible through the unpatched half; and a
+test can accidentally *fail* because a row it committed is visible to the
+unpatched half but the assertion was reasoned about the task session. Fact 64 is
+the other end of this: `get_task_session()` leaves `autoflush=True` where
+`db.session` in this app is `autoflush=False` (`app/__init__.py:81`), so the two
+sessions do not even agree about when a pending row becomes visible. **Ask which
+session each read goes through before deciding what a seeded row proves** -- and
+the cheap way to find out is a `do_orm_execute` listener keyed on session
+identity, which answers it in one run instead of by tracing callees. The
+asymmetry itself is registered as D312.
+
+**122. AN ACTIVITY BUILDER THAT `del`s KEYS BEFORE DELIVERY CANNOT BE ASSERTED
+THROUGH A RECORDER HOLDING THE DICT -- ASSERT ON THE SERIALIZED BYTES.**
+`send_answer` builds `lock`, `undo` and `announce` as locals that are never
+persisted, and mutates them **in place**: `app/shared/tasks/notes.py:266` strips
+`lock['@context']` when `lock` is about to be nested inside `undo` at `:272`,
+and `:281` and `:284` strip `undo`'s and `lock`'s when either is about to be
+nested inside `announce` at `:294`. The outermost object keeps the `@context` it
+was built with. **A recorder that captures the dict object captures a
+reference**, so by the time the assertion runs it reads the dict in its
+post-`del` state and cannot tell "this key was never there" from "this key was
+deleted after you saw it". The tests therefore assert on the JSON body respx
+captured at `app/activitypub/signature.py:494` -- the bytes that actually left
+-- via `_sent_activity()` in `tests/test_shared_tasks_send_answer.py`. **The
+generalisation is not about `@context`**: any builder that mutates a payload
+between construction and send has this property, and a recorder is only safe
+when it snapshots (`copy.deepcopy`, or a serialization) at capture time. There
+is a second reason to prefer the wire here, recorded because it has already gone
+wrong once: sub-project 19 got a `@context` claim wrong by **reasoning** about
+which deletes run on which path, and declared an arm unreachable that the
+ordinary path reached. Assert, do not argue.
+
+**123. WHEN A TEST'S PROOF DEPENDS ON WHICH ROW AN UNORDERED QUERY RETURNS
+FIRST, ASSERT THE ORDER -- FACT 90 SAYS AVOID THE DEPENDENCE, THIS SAYS WHAT TO
+DO WHEN THE DISCRIMINATING CASE REQUIRES IT.** `Community.following_instances()`
+(`app/models.py:842-851`) ends in an unordered `.distinct().all()` with no
+`ORDER BY`, so which follower comes back first is a property of the current
+query plan. `tests/test_shared_tasks_send_answer.py:484`'s skip-then-deliver
+test is the case where the dependence cannot be designed away: a **single**
+follower cannot show that a guard skips an instance *without also stopping the
+loop*, because "skipped" and "loop ended" look identical with one row; two are
+needed, and the proof only holds if the **skipped** one comes first. So the test
+asserts `[i.domain for i in s.community.following_instances()] ==
+['mute.example', 'fan.example']` before acting, with a failure message saying
+why. **The failure mode this prevents is silent, not loud**: if the planner ever
+returns them the other way, a mutant that turned "skip and continue" into "skip
+and break" would still leave one delivery and one `ActivityPubLog` row, and the
+test would keep passing while testing less than its name claims. An explicit
+order assertion converts that into a failure with an explanation. **Where fact
+90 applies -- two rows inside one arm, where the order is incidental -- keep
+following it and remove the dependence instead.** The two facts are the same
+observation about unordered SQL with opposite remedies, chosen by whether the
+order is load-bearing for the proof.
 
 ## Known noise
 
