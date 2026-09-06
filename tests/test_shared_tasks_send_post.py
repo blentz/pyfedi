@@ -826,7 +826,9 @@ def test_a_poll_with_no_end_time_does_not_crash(db_session, http_mock):
 
     Before the fix this raised, verbatim:
     `AttributeError: 'NoneType' object has no attribute 'isoformat'`
-    at app/utils.py:2294, from app/shared/tasks/pages.py:224.
+    at app/utils.py:2294, from app/shared/tasks/pages.py:224 -- that number is
+    PRE-FIX NUMBERING. The guard now occupies :224 and the read it protects
+    moved down to :225, which is the line named at the top of this docstring.
 
     The `endTime` assertion is the load-bearing half. Completing without
     raising only proves the read was skipped; it does not prove the key was
@@ -851,7 +853,8 @@ def test_an_event_with_no_start_does_not_crash(db_session, http_mock):
 
     Before the fix this raised, verbatim:
     `AttributeError: 'NoneType' object has no attribute 'isoformat'`
-    at app/utils.py:2294, from app/shared/tasks/pages.py:232.
+    at app/utils.py:2294, from app/shared/tasks/pages.py:232 -- PRE-FIX
+    NUMBERING. The read now sits at :234, guarded by :233.
 
     `timezone` is set here because `edit_post` always writes one --
     app/shared/post.py:708 is `event_data.get('timezone', 'UTC')`, with a
@@ -880,7 +883,8 @@ def test_an_event_with_a_start_but_no_end_does_not_crash(db_session, http_mock):
 
     Before the fix this raised, verbatim:
     `AttributeError: 'NoneType' object has no attribute 'isoformat'`
-    at app/utils.py:2294, from app/shared/tasks/pages.py:233.
+    at app/utils.py:2294, from app/shared/tasks/pages.py:233 -- PRE-FIX
+    NUMBERING. The read now sits at :236, guarded by :235.
 
     SEPARATE FROM THE TEST ABOVE BECAUSE THE TWO GUARDS ARE SEPARATELY
     LOAD-BEARING: guarding `start` alone leaves this shape crashing on the
@@ -935,3 +939,113 @@ def test_an_event_with_both_times_still_emits_both_keys(db_session, http_mock):
     page = _page_of(route)
     assert page['startTime'] == '2030-06-01T09:00:00+00:00'
     assert page['endTime'] == '2030-06-01T10:00:00+00:00'
+
+
+# ---------------------------------------------------------------------------
+# The localised-start block, :322-326
+# ---------------------------------------------------------------------------
+#
+# :322's guard is the fourth one commit e1692167 added, and it is NOT one of
+# D298's three. It exists because :325 dereferences the SAME nullable
+# `Event.start` a second time --
+# `post.event.start.replace(tzinfo=ZoneInfo('UTC')).astimezone(event_tz)` --
+# under a block that was gated only on `post.type == POST_TYPE_EVENT`. Guarding
+# :233 alone therefore MOVED the crash rather than removing it: a start-less
+# event died ninety lines later instead, at :324's
+# `ZoneInfo(post.event.timezone)` with `TypeError: expected str, bytes or
+# os.PathLike object, not NoneType`.
+#
+# `timezone` is deliberately NOT part of that guard. app/shared/post.py:708 is
+# `event.timezone = event_data.get('timezone', 'UTC')` -- an unconditional
+# write with a default -- and app/api/alpha/schema.py:350 declares
+# `timezone = fields.String(...)` with no `allow_none=True`, so marshmallow
+# rejects an explicit null before `edit_post` is reached. `timezone` is
+# genuinely unreachable as None through this path; `start` is not.
+#
+# THE TRUE ARM NEEDS ITS OWN OBSERVABLE, and it is not the one the tests above
+# use. :322-326 runs at :322, which is BELOW the community delivery at :306, so
+# the Page captured by `_remote_inbox` was serialized before this block ran and
+# cannot see it. A mutant reading `if post.type == POST_TYPE_EVENT and False:`
+# survives every test above -- measured, not assumed. `_inward_follower` below
+# supplies the second delivery that does see it.
+
+
+FOLLOWER_INBOX = 'https://follower.example/u/fan/inbox'
+
+
+def _inward_follower(s, http_mock, domain='follower.example',
+                     inbox=FOLLOWER_INBOX):
+    """A remote follower of the author, and the inbox their AMENDED copy lands
+    in. Returns the respx route; pair it with `_sent_activity`.
+
+    THIS IS THE ONLY WAY TO OBSERVE :314-330. `_remote_inbox` captures the
+    Page as it was at :306; everything from :313 onward -- the `name` delete,
+    the `content` reset, the Event->Note type change, the localised start, the
+    `contentMap` -- happens afterwards, to the same dict. The second send at
+    :352 is the first one that carries those mutations.
+
+    Reaching :352 means clearing, in order:
+
+      :339-341  `followers = session.query(UserFollower).filter_by(
+                local_user_id=post.user_id, is_inward=True).all()`, then
+                `if not followers: return`. Hence the UserFollower row, which
+                must be `is_inward=True`.
+      :349      `user.following_instances()` (app/models.py:1667-1676) joins
+                Instance -> User -> UserFollower on the SAME inward filter, so
+                the follower must be a REMOTE user whose instance is neither
+                dormant nor gone_forever.
+      :350      `instance.domain not in domains_sent_to and instance.id != 1
+                and instance.software != 'piefed'`. `domains_sent_to` already
+                holds SERVER_NAME (:261) and the community's domain (:307), so
+                this follower lives on a THIRD domain. `make_instance`'s
+                default software is 'mastodon', which is what this path is for.
+      :351      `instance.inbox` must be set -- `make_instance` leaves it None
+                -- and the instance online and unblocked.
+
+    The domain stays inside `.example` so the autouse
+    `_peer_example_resolves_without_a_resolver` fixture still answers for it.
+    """
+    instance = make_instance(domain, software='mastodon')
+    instance.inbox = inbox
+    fan = make_user(instance, 'fan')
+    db.session.add(UserFollower(local_user_id=s.user.id, remote_user_id=fan.id,
+                                is_inward=True))
+    db.session.commit()
+    return http_mock.post(inbox).respond(200, json={})
+
+
+def test_an_event_note_carries_its_start_localised_to_the_event_timezone(db_session, http_mock):
+    """:322's TRUE arm, and the only test that reaches :324-326 at all.
+
+    Without it, `if post.type == POST_TYPE_EVENT and False:` survives the whole
+    file: the localised-start block could be deleted outright and nothing would
+    notice, because every other event test reads the Page as it was at :306,
+    before this block runs.
+
+    The timezone is deliberately NOT 'UTC'. 2030-06-01T13:00 UTC is
+    2030-06-01T09:00 in America/New_York (EDT, UTC-4, in June), so the asserted
+    string also pins :325's conversion -- a mutant that dropped the
+    `.astimezone(event_tz)` would emit 13:00 and be caught. 'UTC' would make
+    input and output identical and hide that.
+
+    `content` is asserted whole rather than by substring, so the composition is
+    pinned too: :315 resets it to '', :320's `elif post.type !=
+    POST_TYPE_POLL:` writes the title paragraph, and :326 APPENDS to that with
+    `+=`. A mutant swapping :326's `+=` for `=` would lose the title and is
+    caught here. `post.body` is None, so :327's `if post_body_html:` is false
+    and nothing further is appended.
+    """
+    from datetime import datetime
+    s = _seed(post_type=POST_TYPE_EVENT, local_community=False, with_keys=True)
+    _remote_inbox(s, http_mock)
+    follower_route = _inward_follower(s, http_mock)
+    db.session.add(Event(post_id=s.post.id, start=datetime(2030, 6, 1, 13, 0),
+                         end=None, timezone='America/New_York'))
+    db.session.commit()
+
+    _send(s.post)
+
+    note = _sent_activity(follower_route)['object']
+    assert note['type'] == 'Note'
+    assert note['content'] == ('<p>a post</p>'
+                               '<p>2030-06-01T09:00:00 (America/New_York)</p>')

@@ -521,9 +521,14 @@ def test_api_event_end_is_parsed_when_there_is_no_start(db_session):
 
     `community.local_only = True` for the same reason as the two siblings
     below: :743's federate step reaches `ap_datetime` on the event's datetimes
-    (app/shared/tasks/pages.py:234) and would crash on the None start, on a line
-    that has nothing to do with the arm under test. :736 sets `federate = False`
-    before that call.
+    (app/shared/tasks/pages.py:234) and WOULD ONCE HAVE CRASHED on the None
+    start, on a line that has nothing to do with the arm under test. :736 sets
+    `federate = False` before that call.
+
+    NO LONGER A CRASH: fixed in e1692167, which guards the read and omits
+    the key. The route-around is retained pending a follow-up task -- it is
+    another sub-project's behaviour to change, and removing it here would
+    alter what this test covers.
     """
     s = _seed()
     s.community.local_only = True
@@ -543,10 +548,15 @@ def test_api_event_end_is_skipped_when_the_key_is_absent(db_session):
     Not in the brief: with `end` unset, `event.end` stays None, and this
     function's own federate step (:743, unconditional on `from_scratch`)
     synchronously runs `send_post`, which for a POST_TYPE_EVENT post does
-    `ap_datetime(event.end)` (app/shared/tasks/pages.py:236) -- a crash on
-    None unrelated to what this test probes. `community.local_only = True`
+    `ap_datetime(event.end)` (app/shared/tasks/pages.py:236) -- once a crash
+    on None unrelated to what this test probes. `community.local_only = True`
     makes :736 set `federate = False` before that call, so the parsing under
     test still runs but the unrelated federate crash does not.
+
+    NO LONGER A CRASH: fixed in e1692167, which guards the read and omits
+    the key. The route-around is retained pending a follow-up task -- it is
+    another sub-project's behaviour to change, and removing it here would
+    alter what this test covers.
     """
     s = _seed()
     s.community.local_only = True
@@ -606,10 +616,15 @@ def test_api_poll_defaults_every_field_when_only_choices_are_given(db_session):
     Not in the brief: with no `end_poll`, `poll.end_poll` stays None, and
     this function's federate step (:743) synchronously runs `send_post`,
     which for a POST_TYPE_POLL post does `ap_datetime(poll.end_poll)`
-    (app/shared/tasks/pages.py:225) -- a crash on None unrelated to what this
-    test probes. `community.local_only = True` makes :736 set
+    (app/shared/tasks/pages.py:225) -- once a crash on None unrelated to what
+    this test probes. `community.local_only = True` makes :736 set
     `federate = False` first, so the parsing under test still runs but the
     unrelated federate crash does not.
+
+    NO LONGER A CRASH: fixed in e1692167, which guards the read and omits
+    the key. The route-around is retained pending a follow-up task -- it is
+    another sub-project's behaviour to change, and removing it here would
+    alter what this test covers.
     """
     s = _seed()
     s.community.local_only = True
@@ -1041,14 +1056,20 @@ def test_web_branch_leaves_the_poll_end_unset_when_finish_in_is_absent(db_sessio
     (app/shared/post.py:739-743) -> `edit_post` (app/shared/tasks/pages.py:76)
     -> `send_post` (:88), which for a POST_TYPE_POLL post does
     `page['endTime'] = ap_datetime(poll.end_poll)` (app/shared/tasks/pages.py:225)
-    -- a crash on None unrelated to what this test probes (`ap_datetime` itself
-    is app/utils.py:2294, `date_time.isoformat() + '+00:00'` with no None
-    guard). `post_to_activity` (app/activitypub/util.py:195 does the same
+    -- once a crash on None unrelated to what this test probes (`ap_datetime`
+    itself is app/utils.py:2294, `date_time.isoformat() + '+00:00'` with no
+    None guard). `post_to_activity` (app/activitypub/util.py:195 does the same
     `ap_datetime(poll.end_poll)`) is NOT on this path -- its only caller is the
     outbox collection view at app/activitypub/routes.py:2033.
     `community.local_only = True` makes :736 set `federate = False` first, so
     the parsing under test still runs but the unrelated federate crash does
     not.
+
+    NO LONGER A CRASH: fixed in e1692167, which guards the read and omits
+    the key. The route-around is retained pending a follow-up task -- it is
+    another sub-project's behaviour to change, and removing it here would
+    alter what this test covers. app/activitypub/util.py:195 is NOT fixed and
+    stays registered as D298.
     """
     s = _seed()
     s.community.local_only = True
