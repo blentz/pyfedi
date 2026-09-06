@@ -1179,3 +1179,266 @@ def test_a_moderator_is_not_notified_when_the_domain_does_not_ask(db_session, ht
               POST_TYPE_LINK, SRC_API, user=s.user, from_scratch=False)
 
     assert Notification.query.filter_by(user_id=moderator.id).count() == 0
+
+
+# ---------------------------------------------------------------------------
+# The rest of the suspicious-domain block, :565-598
+# ---------------------------------------------------------------------------
+
+
+def test_the_domain_block_is_reached_from_scratch_without_a_url_change(db_session, http_mock):
+    """:565, `from_scratch` true arm. `url_changed` is False here because :435's
+    block runs only inside `if not from_scratch:` (:421) -- so this is the one
+    route into :566 that does not depend on the url having changed."""
+    s = _seed(domain_name='suspicious.example', notify_mods=True)
+    moderator = make_user(s.instance, 'mod', local=True)
+    make_community_member(moderator, s.community, is_moderator=True)
+
+    http_mock.head('https://suspicious.example/pic.png').respond(
+        200, headers={'Content-Type': 'image/png'})
+    http_mock.get('https://suspicious.example/pic.png').respond(404)
+
+    edit_post(_api_input(url='https://suspicious.example/pic.png'), s.post,
+              POST_TYPE_LINK, SRC_API, user=s.user, from_scratch=True)
+
+    assert Notification.query.filter_by(user_id=moderator.id).count() == 1
+
+
+def test_the_domain_block_is_skipped_when_the_url_is_unchanged(db_session, http_mock):
+    """:565, both `from_scratch` and `url_changed` false. The post already HAS
+    the url, so :435 `url != post.url` is false and :436 never runs.
+
+    DEVIATION FROM THE BRIEF, on two points, both found by running the test.
+
+    First: :600-601 (`fixup_url` / the second `is_image_url` call) are NOT
+    unconditional -- they sit at the SAME indentation as :566's `domain =
+    domain_from_url(url)`, both inside :565's `if url and (from_scratch or
+    url_changed):`. With both false here, that whole block -- including :601
+    -- never runs, so :410's HEAD (on the pre-existing `post.url`) is the ONLY
+    request this path makes. The brief's claim that the route "is matched
+    twice" and its registered GET-404 for the make_image_sizes retry are both
+    wrong for this arm; the GET route is never reached and http_mock's
+    assert_all_called=True fails on it if registered. Removed here.
+
+    Second: :410 alone still sets `post.type = POST_TYPE_IMAGE` (the HEAD
+    reports image/png), and because :601's file-creation block never runs,
+    `post.image_id` stays None. `from_scratch=False` means :743
+    `task_selector('edit_post', ...)` runs synchronously (Celery eager) and
+    reaches the registered defect this campaign does not fix: pages.py:181
+    `post.image.source_url` with no `image_id` guard, `post.image` is None,
+    AttributeError. `s.community.local_only = True` (committed before the
+    call) makes :736 set `federate = False`, so that dead branch of send_post
+    is never entered -- confirmed this cannot affect the notify block, which
+    is long done by :736. Applied only to this test in this file's new
+    section: it is the only one whose post ends up POST_TYPE_IMAGE with
+    image_id left None. The hostless-url test below crashes inside :601
+    itself and never reaches :736; every other test here reaches :601 through
+    the true arm of :565, which sets image_id before send_post ever runs.
+    """
+    s = _seed(url='https://suspicious.example/pic.png',
+              domain_name='suspicious.example', notify_mods=True)
+    s.community.local_only = True
+    moderator = make_user(s.instance, 'mod', local=True)
+    make_community_member(moderator, s.community, is_moderator=True)
+    db.session.commit()
+
+    http_mock.head('https://suspicious.example/pic.png').respond(
+        200, headers={'Content-Type': 'image/png'})
+
+    edit_post(_api_input(url='https://suspicious.example/pic.png'), s.post,
+              POST_TYPE_LINK, SRC_API, user=s.user, from_scratch=False)
+
+    assert Notification.query.filter_by(user_id=moderator.id).count() == 0
+
+
+def test_the_domain_block_is_skipped_for_a_hostless_url(db_session):
+    """:567, false arm. domain_from_url (app/utils.py:1561) returns None when
+    urlparse finds no hostname, and every caller writes `if domain:` first.
+
+    MEASURED, against httpx 0.28.1 and this harness's respx setup, rather than
+    assumed: httpx does not raise while BUILDING a HEAD request for
+    'file:///etc/passwd' -- Client.build_request succeeds for it, so
+    mime_type_using_head's `except (httpx.HTTPError, httpx.InvalidURL):` guard
+    is not what is at stake here. What matters is what happens once the
+    request is actually sent. This harness's session-scoped
+    `block_outbound_http` (tests/conftest.py) replaces httpx's transport with
+    an empty respx router BEFORE `http_mock` even exists, so a request already
+    goes through respx whether or not a test asks for `http_mock`. respx's own
+    route matcher never matches a `file:` URL -- confirmed by registering
+    `http_mock.head('file:///etc/passwd')` in an isolated respx router and
+    sending the same request through it: the call still misses the route and
+    respx raises `respx.models.AllMockedAssertionError` (a plain
+    AssertionError subclass, not httpx.HTTPError or httpx.InvalidURL), so
+    mime_type_using_head's except clause does not catch it. `http_mock` is
+    therefore deliberately NOT a fixture of this test: no route this test
+    could register would ever be exercised, and http_mock's
+    assert_all_called=True would fail on it regardless.
+
+    :566-567 still run and take the false arm (domain is None) before :601's
+    `is_image_url(url)` -- reached because :565's own gate is true here
+    (`from_scratch=True`) -- makes that same HEAD attempt and the call raises.
+    The raise is expected and is not this test's concern; what it proves is
+    that no domain-block side effect (no post.domain write, no notification)
+    happened first.
+    """
+    s = _seed()
+
+    with pytest.raises(Exception):
+        edit_post(_api_input(url='file:///etc/passwd'), s.post, POST_TYPE_LINK,
+                  SRC_API, user=s.user, from_scratch=True)
+
+    assert Notification.query.count() == 0
+
+
+def test_a_banned_domain_raises_before_anything_is_notified(db_session):
+    """:568-569, first conjunct. The message is the domain name plus a fixed
+    suffix, and it is what the web route surfaces to the person editing.
+
+    DEVIATION FROM THE BRIEF: dropped the registered HEAD route (and the
+    `http_mock` fixture with it). :569's raise sits INSIDE :567's `if domain:`,
+    which runs before :600-601 (see the sibling test above) -- so this path
+    never issues an HTTP request at all, and a registered-but-unreached route
+    would fail http_mock's assert_all_called=True at teardown. Measured: with
+    the route registered, the run failed exactly that way.
+    """
+    s = _seed(domain_name='banned.example')
+    s.domain.banned = True
+    db.session.commit()
+
+    with pytest.raises(Exception) as excinfo:
+        edit_post(_api_input(url='https://banned.example/pic.png'), s.post,
+                  POST_TYPE_LINK, SRC_API, user=s.user, from_scratch=True)
+
+    assert 'banned.example is blocked by admin' in str(excinfo.value)
+
+
+def test_a_pages_dev_domain_raises_even_when_it_is_not_banned(db_session):
+    """:568, second conjunct. `.pages.dev` is hardcoded, so a domain nobody has
+    banned still raises -- the two conjuncts are separately load-bearing.
+
+    DEVIATION FROM THE BRIEF: no `http_mock` fixture, for the same reason as
+    the sibling banned-domain test above -- the raise at :569 precedes any
+    HTTP request, so a registered HEAD route would go uncalled.
+    """
+    s = _seed(domain_name='thing.pages.dev')
+    assert s.domain.banned is False
+
+    with pytest.raises(Exception) as excinfo:
+        edit_post(_api_input(url='https://thing.pages.dev/pic.png'), s.post,
+                  POST_TYPE_LINK, SRC_API, user=s.user, from_scratch=True)
+
+    assert 'thing.pages.dev is blocked by admin' in str(excinfo.value)
+
+
+def test_the_new_domain_gains_a_post_and_the_old_one_loses_one(db_session, http_mock):
+    """:570-571, against :443-445's decrement on the old url. The two are a
+    pair: a url change moves the count from one Domain to the other.
+
+    Three HEAD/GET requests are reached, and this test registers exactly
+    those three: :410's `is_image_url(post.url)` on the OLD url (seeded
+    non-None on purpose, so that guard's true arm runs too), :601's
+    `is_image_url(url)` on the NEW url, and the bodiless-404 GET the
+    module docstring describes for `make_image_sizes`'s source-url retry.
+    No GET is ever made against the old url -- :410's call is HEAD-only and
+    its result (POST_TYPE_IMAGE) is never read again once the type is
+    overwritten by the new url's own is_image_url check at :601.
+    """
+    s = _seed(url='https://old.example/a.png')
+    old = make_domain('old.example')
+    old.post_count = 5
+    new = make_domain('new.example')
+    new.post_count = 2
+    db.session.commit()
+    assert len({old.id, new.id}) == 2
+
+    http_mock.head('https://old.example/a.png').respond(200, headers={'Content-Type': 'image/png'})
+    http_mock.head('https://new.example/b.png').respond(200, headers={'Content-Type': 'image/png'})
+    http_mock.get('https://new.example/b.png').respond(404)
+
+    edit_post(_api_input(url='https://new.example/b.png'), s.post, POST_TYPE_LINK,
+              SRC_API, user=s.user, from_scratch=False)
+
+    db.session.expire(old)
+    db.session.expire(new)
+    assert old.post_count == 4
+    assert new.post_count == 3
+    assert s.post.domain_id == new.id
+
+
+def test_an_admin_of_a_notify_admins_domain_is_notified(db_session, http_mock):
+    """:590-598. Site.admins() joins user_role with an INNER join (D295), so a
+    roleless User.id == 1 is NOT an admin -- the `or_(..., User.id == 1)` never
+    sees a roleless user, and the filter is on role_id == ROLE_ADMIN, so the
+    role's id must BE ROLE_ADMIN -- which is what _make_admin arranges."""
+    s = _seed(domain_name='suspicious.example', notify_admins=True)
+    admin = make_user(s.instance, 'admin', local=True)
+    _make_admin(admin)
+
+    http_mock.head('https://suspicious.example/pic.png').respond(
+        200, headers={'Content-Type': 'image/png'})
+    http_mock.get('https://suspicious.example/pic.png').respond(404)
+
+    edit_post(_api_input(url='https://suspicious.example/pic.png'), s.post,
+              POST_TYPE_LINK, SRC_API, user=s.user, from_scratch=True)
+
+    assert Notification.query.filter_by(user_id=admin.id).count() == 1
+
+
+def test_no_admin_is_notified_when_the_domain_does_not_ask(db_session, http_mock):
+    """:590, false arm."""
+    s = _seed(domain_name='quiet.example', notify_admins=False)
+
+    http_mock.head('https://quiet.example/pic.png').respond(
+        200, headers={'Content-Type': 'image/png'})
+    http_mock.get('https://quiet.example/pic.png').respond(404)
+
+    edit_post(_api_input(url='https://quiet.example/pic.png'), s.post,
+              POST_TYPE_LINK, SRC_API, user=s.user, from_scratch=True)
+
+    assert Notification.query.count() == 0
+
+
+def test_a_user_who_is_both_moderator_and_admin_is_notified_once(db_session, http_mock):
+    """:589 and :592, the dedup. THIS TEST IS ONLY REACHABLE BECAUSE D287 IS
+    FIXED: before that fix, :582 raised for every moderator, so :589 never ran
+    and already_notified was always empty when :592 read it.
+
+    That is the real reason Task 4 lands before Task 6 -- not, as the spec's
+    section 4.1 said, because D292's test needed it. D292's test reaches :577
+    through the admin loop with D287 unfixed, because the dict at :573-579 is
+    built before both loops.
+    """
+    s = _seed(domain_name='suspicious.example', notify_mods=True, notify_admins=True)
+    both = make_user(s.instance, 'both', local=True)
+    make_community_member(both, s.community, is_moderator=True)
+    _make_admin(both)
+
+    http_mock.head('https://suspicious.example/pic.png').respond(
+        200, headers={'Content-Type': 'image/png'})
+    http_mock.get('https://suspicious.example/pic.png').respond(404)
+
+    edit_post(_api_input(url='https://suspicious.example/pic.png'), s.post,
+              POST_TYPE_LINK, SRC_API, user=s.user, from_scratch=True)
+
+    assert Notification.query.filter_by(user_id=both.id).count() == 1
+
+
+def test_a_moderator_and_a_separate_admin_are_both_notified(db_session, http_mock):
+    """:592, the true arm -- `admin.id not in already_notified`. Two distinct
+    people, so the dedup must NOT suppress the second."""
+    s = _seed(domain_name='suspicious.example', notify_mods=True, notify_admins=True)
+    moderator = make_user(s.instance, 'mod', local=True)
+    make_community_member(moderator, s.community, is_moderator=True)
+    admin = make_user(s.instance, 'admin', local=True)
+    _make_admin(admin)
+    assert len({s.user.id, moderator.id, admin.id}) == 3
+
+    http_mock.head('https://suspicious.example/pic.png').respond(
+        200, headers={'Content-Type': 'image/png'})
+    http_mock.get('https://suspicious.example/pic.png').respond(404)
+
+    edit_post(_api_input(url='https://suspicious.example/pic.png'), s.post,
+              POST_TYPE_LINK, SRC_API, user=s.user, from_scratch=True)
+
+    assert Notification.query.filter_by(user_id=moderator.id).count() == 1
+    assert Notification.query.filter_by(user_id=admin.id).count() == 1
