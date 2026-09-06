@@ -1495,3 +1495,78 @@ def test_a_mentioned_recipient_on_an_already_sent_domain_gets_no_second_copy(
 
     assert fan.route.call_count == 1
     assert db.session.query(ActivityPubLog).count() == 1
+
+
+# ---------------------------------------------------------------------------
+# TWO UNREACHABLE ITEMS, and why no test here chases them.
+#
+# Measured against scratch_full_cov.json at 2026-09-06 11:06:42, from a full
+# `--cov=app --cov-branch` run of 3898 passed / 3 skipped / 6 subtests in
+# 228.46s: inside `send_reply` (:80-229, extent taken from an AST walk, not from
+# reading the file) coverage reports exactly the lines 100-101 missing and
+# EXACTLY ZERO missing branch arms. 85 of the function's 87 statements run.
+#
+# (1) :100-101, THE LOCAL ARM'S `except: pass`.
+#
+# :95-101 is the local half of the mention scan:
+#
+#     if match.group(2) == current_app.config['SERVER_NAME']:   # :95
+#         user_name = match.group(1)                            # :96
+#         if user_name != user.user_name:                       # :97
+#             try:                                              # :98
+#                 recipient = search_for_user(user_name)        # :99
+#             except:                                           # :100
+#                 pass                                          # :101
+#
+# The establisher is the CALLEE: `search_for_user` cannot raise for a bare local
+# name. :95 has already established that the mention's host half equals
+# SERVER_NAME, so `user_name` reaching :99 carries no '@' and no scheme, and
+# `search_for_user` takes its local branch -- a query returning None for a
+# miss, not an exception. The remote half of the same scan (:102 onward) is
+# where a raise is possible, and it has its own handler.
+#
+# tests/README.md fact 75, cause 4(c) -- a handler for an exception the callee
+# cannot raise on this path. Already registered by sub-project 19, which found
+# the identical shape at tests/test_shared_tasks_send_post.py:322 (`send_post`'s
+# :107-108). This is the SECOND instance of that shape, in a second module, so
+# it is a pattern rather than a one-off.
+#
+# (2) :217's `instance.online()` CONJUNCT.
+#
+# :217 is `if instance.inbox and instance.online() and not
+# user.has_blocked_instance(instance.id) and not instance_banned(instance.domain):`
+# and `instance` comes from `community.following_instances()` at :216.
+#
+# The establisher is a SQL filter that has already excluded every row for which
+# the conjunct could be False. `Community.following_instances`
+# (app/models.py:842-851) filters `Instance.dormant == False` at :849 and
+# `Instance.gone_forever == False` at :850, and `Instance.online`
+# (app/models.py:118-119) is exactly `return not (self.dormant or
+# self.gone_forever)`. Both disjuncts are pinned False by the query, so
+# `online()` is True for every row the loop can ever see.
+#
+# This is why the conjunct shows no missing arc at all rather than a missing
+# False arc: it is not that the arm is untested, it is that the arm does not
+# exist to be taken.
+#
+# Sub-project 19 registered the same establisher for `send_post`'s :295
+# (tests/test_shared_tasks_send_post.py:1477). Same method, same two filtered
+# columns, different caller -- so the finding generalises to every
+# `following_instances()` caller that re-checks `online()`, not just to these
+# two sites.
+#
+# NOTE ON THE ZERO MISSING ARMS. Zero is not by itself proof that both arms of
+# every branch run, because coverage.py emits NO ARC for a conditional
+# expression (tests/README.md fact 87) -- a ternary with an unexercised arm is
+# invisible here. Per fact 94 the ternaries were enumerated by an AST walk over
+# the `send_reply` FunctionDef rather than by grep, which found exactly three:
+#
+#   :129  author.ap_id if author.ap_id else author.user_name
+#   :185  'create' if not edit else 'update'
+#   :187  'Create' if not edit else 'Update'
+#
+# All three have a named test per arm. :129's two arms are covered by the pair
+# at :828 and :856 in this file, which assert the two DIFFERENT recorded values
+# so that neither test could pass under the other's arm. :185 and :187 were
+# proved by mutation during sub-project 20's Task 5 review: all four arms were
+# mutated and all four mutants were killed by assertion, with no survivors.
