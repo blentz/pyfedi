@@ -489,12 +489,29 @@ def test_one_following_instance_is_skipped_while_another_receives(
     guard skips an instance WITHOUT also stopping the loop, because with one
     member "skipped" and "loop ended" look identical. With two, the delivered
     one proves iteration continued past the skipped one.
+
+    THAT PROOF DEPENDS ON ORDER. `Community.following_instances()`
+    (app/models.py:842-851) ends in an unordered `.distinct().all()` -- no
+    `ORDER BY` -- so which row Postgres returns first is a property of the
+    current query plan, not of the code. If `fan.example` were ever returned
+    BEFORE `mute.example`, a mutant that turned "skip and continue" into
+    "skip and break" (or "skip and return") would still leave
+    `good.route.call_count == 1` and one `ActivityPubLog` row, and this test
+    would pass without having exercised the continuation it claims to. The
+    assertion below makes that dependency loud instead of silent: it fails
+    with an explanation the moment the incidental order changes, rather than
+    quietly testing less than it says it does.
     """
     s = _seed(with_keys=True)
     _community_follower(s, http_mock, domain='mute.example',
                         member_name='mute', with_inbox=False)
     good = _community_follower(s, http_mock, domain='fan.example',
                                member_name='fan')
+
+    ordered = [i.domain for i in s.community.following_instances()]
+    assert ordered == ['mute.example', 'fan.example'], (
+        f'this test proves the loop CONTINUES past a skip, which requires '
+        f'the skipped instance first; got {ordered}')
 
     _send(s)
 
