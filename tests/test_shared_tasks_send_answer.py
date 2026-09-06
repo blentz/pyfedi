@@ -314,3 +314,69 @@ def test_a_private_community_does_not_federate_the_answer(db_session, http_mock)
     _send(s)
 
     assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_the_remote_choose_carries_its_full_key_set_and_keeps_its_context(
+        db_session, http_mock):
+    """:303's FALSE arm -- `undo if is_undo else lock` selecting `lock` --
+    delivered by :304.
+
+    `type` is what separates the two arms: the ChooseAnswer could not be
+    produced by the true arm, which sends an Undo. `@context` is asserted
+    PRESENT because nothing nests this object on this path -- :266 runs only
+    under `is_undo` and :284 only under `is_local`, and neither is taken
+    here, so the `@context` built at :259 survives to the wire.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    _send(s, is_undo=False)
+
+    sent = _sent_activity(route)
+    assert sent['type'] == 'ChooseAnswer'
+    assert set(sent) == {'id', 'type', 'actor', 'object', '@context',
+                         'audience', 'to', 'cc'}
+    assert sent['actor'] == s.user.public_url()
+    assert sent['object'] == s.reply.public_url()
+    assert sent['audience'] == s.community.public_url()
+    assert sent['to'] == ['https://www.w3.org/ns/activitystreams#Public']
+    assert sent['cc'] == [s.community.public_url()]
+
+
+def test_the_remote_undo_wraps_the_choose_and_strips_its_inner_context(
+        db_session, http_mock):
+    """:303's TRUE arm -- selecting `undo` -- and :266's `del`.
+
+    The companion to the test above: `type` is `Undo` here, which the false
+    arm could not produce. The nesting is the point -- `undo['object']` is
+    the ChooseAnswer, and :266 stripped ITS `@context` before :272 nested it,
+    while the Undo itself keeps the one built at :273. That asymmetry is what
+    a mutant deleting the wrong object's `@context` would break.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    _send(s, is_undo=True)
+
+    sent = _sent_activity(route)
+    assert sent['type'] == 'Undo'
+    assert '@context' in sent
+    assert sent['object']['type'] == 'ChooseAnswer'
+    assert '@context' not in sent['object']
+    assert sent['actor'] == s.user.public_url()
+    assert sent['object']['object'] == s.reply.public_url()
+
+
+def test_the_remote_delivery_is_signed_as_the_user(db_session, http_mock):
+    """:304 signs with `user.public_url() + '#main-key'`, where :301 signs as
+    the COMMUNITY. `keyId` is the only observable that separates them, and
+    the user's and community's public urls differ in path (`/u/author` vs
+    `/c/c1`), so a mutant swapping the signer produces a valid but wrong
+    keyId and this fails rather than merely not-noticing.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    _send(s)
+
+    assert _key_id_of(route) == s.user.public_url() + '#main-key'
