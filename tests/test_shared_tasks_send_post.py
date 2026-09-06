@@ -1,6 +1,6 @@
 """`send_post` -- the Celery-path builder and deliverer of an ActivityPub Page.
 
-`app/shared/tasks/pages.py:88-371`. This is the second of two Page builders in
+`app/shared/tasks/pages.py:88-352`. This is the second of two Page builders in
 the codebase; the other is `post_to_page` (app/activitypub/util.py:132-219),
 reached from the outbox collection view at app/activitypub/routes.py:2033. They
 are near-twins and their disagreements are findings D298, D299 and D300.
@@ -943,6 +943,113 @@ def test_an_event_with_both_times_still_emits_both_keys(db_session, http_mock):
 
 
 # ---------------------------------------------------------------------------
+# The poll options block, :226-230
+# ---------------------------------------------------------------------------
+#
+# THREE CONDITIONAL-EXPRESSION ARMS THAT NO COVERAGE FIGURE CAN SEE. :226 is
+# `poll.total_votes() if edit else 0`, :229 is `choice.num_votes if edit else 0`
+# and :230 is `page['oneOf' if poll.mode == 'single' else 'anyOf'] = choices`.
+# Each is one statement on one line, so both of its arms cover that line and
+# coverage.py emits no arc for the choice -- tests/README.md fact 87. The
+# region can therefore sit at 100% statements and 100% branches with the `edit`
+# arm of :226 and :229 and the 'anyOf' arm of :230 never once executed, which
+# is exactly the state this file was in before these three tests: every poll
+# fixture above passes `edit=False` and `mode='single'`, and none of them
+# writes a PollChoice row at all, so :229 was reached only from other test
+# modules and neither of its arms was pinned here.
+#
+# Found by the AST walk fact 87(c) prescribes -- `ast.parse`, then every
+# `IfExp` inside the `send_post` `FunctionDef` -- not by reading the residual,
+# which lists none of them.
+
+
+def _poll_with_choices(post, mode='single', end_poll=None):
+    """A Poll for `post` plus two PollChoice rows carrying real vote counts.
+
+    THE COUNTS ARE NON-ZERO ON PURPOSE. :226 and :229 each choose between a
+    stored number and the literal `0`, so a fixture whose choices had no votes
+    would make both arms compute the same value and neither test below could
+    tell them apart -- fact 33 wearing fact 87's hat.
+
+    `sort_order` is set because :228 orders by it
+    (`PollChoice.query.filter_by(post_id=post.id).order_by(
+    PollChoice.sort_order)`), and the tests assert the choices in order.
+    """
+    db.session.add(Poll(post_id=post.id, end_poll=end_poll, mode=mode))
+    db.session.add(PollChoice(post_id=post.id, choice_text='yes',
+                              sort_order=1, num_votes=3))
+    db.session.add(PollChoice(post_id=post.id, choice_text='no',
+                              sort_order=2, num_votes=4))
+    db.session.commit()
+
+
+def test_a_created_polls_vote_counts_are_reported_as_zero(db_session, http_mock):
+    """:226 and :229 on their `not edit` arms, and :230 on its 'single' arm.
+
+    A poll being federated for the first time reports no votes regardless of
+    what the rows say, which is what `if edit else 0` encodes. The fixture
+    gives the two choices 3 and 4 votes, so `Poll.total_votes()`
+    (app/models.py:3814-3816, `SUM(num_votes)`) would be 7 and the two
+    `totalItems` would be 3 and 4 if either ternary took its other arm.
+    Asserting the zeros is therefore a real discrimination, not a restatement
+    of an empty fixture.
+    """
+    s = _seed(post_type=POST_TYPE_POLL, local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    _poll_with_choices(s.post)
+
+    _send(s.post, edit=False)
+
+    page = _page_of(route)
+    assert page['votersCount'] == 0
+    assert [c['name'] for c in page['oneOf']] == ['yes', 'no']
+    assert [c['replies']['totalItems'] for c in page['oneOf']] == [0, 0]
+
+
+def test_an_edited_polls_vote_counts_are_reported_in_full(db_session, http_mock):
+    """:226 and :229 on their `edit` arms.
+
+    The mirror of the test above, differing only in `edit=True`. 7 is not a
+    third constant: it is the sum of the 3 and 4 asserted per choice on the
+    next line, so a mutant that collapsed :226 to `poll.total_votes()` and one
+    that collapsed :229 to `choice.num_votes` are killed by the create test
+    while this one holds them honest in the other direction.
+    """
+    s = _seed(post_type=POST_TYPE_POLL, local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    _poll_with_choices(s.post)
+
+    _send(s.post, edit=True)
+
+    page = _page_of(route)
+    assert page['votersCount'] == 7
+    assert [c['replies']['totalItems'] for c in page['oneOf']] == [3, 4]
+
+
+def test_a_multiple_choice_poll_is_delivered_under_anyOf(db_session, http_mock):
+    """:230's 'anyOf' arm.
+
+    `Poll.mode` (app/models.py:3783) is a free-text column whose own comment
+    documents the two values as "'single' or 'multiple'"; every other poll
+    fixture in this file is 'single', so without this test the key the choices
+    are delivered under is fixed by the fixtures rather than by the code.
+
+    `'oneOf' not in page` is asserted first and separately: it is the half that
+    fails on a mutant which emits both keys, which reading `page['anyOf']`
+    alone would not notice.
+    """
+    s = _seed(post_type=POST_TYPE_POLL, local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    _poll_with_choices(s.post, mode='multiple')
+
+    _send(s.post, edit=False)
+
+    page = _page_of(route)
+    assert 'oneOf' not in page
+    assert [c['name'] for c in page['anyOf']] == ['yes', 'no']
+
+
+# ---------------------------------------------------------------------------
 # The localised-start block, :322-326
 # ---------------------------------------------------------------------------
 #
@@ -1207,6 +1314,103 @@ def test_the_delivered_object_type_follows_the_post_type(db_session, http_mock,
     _send(s.post)
 
     assert _sent_activity(route)['object']['type'] == expected
+
+
+# ---------------------------------------------------------------------------
+# FOUR UNREACHABLE ITEMS, and why no test here chases them.
+#
+# Three are branch arms; the fourth is a pair of STATEMENTS. Together they are
+# the whole of what `send_post` (:88-352) leaves unmeasured -- coverage reports
+# exactly the lines 107-108 and exactly the arcs (270, 310), (312, 314) and
+# (333, 339) as missing inside the function, and nothing else.
+#
+# (1) AND (2): THE FALSE ARMS OF :270 AND :333, both `if not
+# community.local_only:` -- the arcs (270, 310) and (333, 339). They will stay
+# missing.
+#
+# `community` is bound once, at :91 (`community = post.community`), and is
+# never reassigned anywhere in :88-352. And :153-154 is
+# `if community.local_only or community.private: return`. So a community with
+# `local_only` set returns at :154, long before :270; by the time control
+# reaches :270, `community.local_only` is necessarily falsy and
+# `not community.local_only` is necessarily True.
+#
+# tests/README.md fact 75, cause 4(b) -- a condition falsified by an invariant
+# established before the guard runs. Worth recording that 4(b) names a CALLER
+# or an ENCLOSING GUARD as the establisher and neither is what happens here:
+# the establisher is an EARLIER RETURN in the same function.
+#
+# Sub-project 18 set `community.local_only = True` in ten of its tests
+# believing it skipped delivery at :270. It did not; it returned at :154. The
+# workaround worked, for a different reason than the one written down.
+#
+# (3): THE FALSE ARM OF :312, arc (312, 314). :312 is `if 'name' in page:`.
+# :196 sets `'name': post.title` unconditionally, inside the dict literal that
+# builds `page`, and nothing removes the key before :312 -- :313 is the only
+# `del` and it sits inside the true arm -- so the false arm can never run.
+# :209-210 re-assigns the same key for non-polls, which is a redundant
+# statement rather than a second writer: :196 has already set it for every
+# type. Cause 4(b) again, with a third kind of establisher: an unconditional
+# assignment rather than a return.
+#
+# (4): THE STATEMENTS :107-108, the bare `except: pass` on the LOCAL arm of the
+# mention scanner. This is the only item of the four scoped to statements, and
+# fact 75's only statement-level cause -- 6, the redundant statement -- does
+# NOT fit it: the handler is not redundant, it is unreachable, because
+# `search_for_user` (app/user/utils.py:85-158) has no raising path for a bare
+# local name. Read the callee in order for the argument :106 passes it:
+# :88's `if '@' in address` is false for a name with no host, so :91-92 set
+# `server = ''`; :94's `if server:` is then false, so the function's sole
+# `raise` (:98, the blocked-instance check -- confirmed sole by an AST walk for
+# `ast.Raise` inside the `FunctionDef`) is skipped; the hit path returns a User
+# at :104 and the miss path ends at :108-109, `if not server: return None`.
+# The call therefore returns a User or None and never raises.
+#
+# Contrast :112, the REMOTE arm: its address always contains '@', so :94 opens
+# and :98 can fire. Its `except` at :113-114 IS reached, by
+# test_a_banned_remote_host_mention_is_skipped_via_the_remote_except above.
+# The two handlers are the same three tokens and only one of them is dead.
+#
+# OFFERED TO THE NEXT README TASK AS A NEW CAUSE FOR FACT 75: an UNREACHABLE
+# HANDLER -- a bare `except` whose callee has no raising path for the argument
+# shape this call site can produce. It is proved the way cause 7 is proved, by
+# reading the callee's statements rather than by counting failures, but it is
+# scoped to a statement, so neither 1-5 (clause) nor 7 (expression arm) covers
+# it, and 6 asserts redundancy this shape does not have.
+#
+# A FIFTH ITEM WAS LISTED HERE AND IS WITHDRAWN. The plan claimed the TRUE arm
+# of :310 (`if '@context' not in create:`) was unreachable because :260 always
+# puts `@context` into `create`. It does -- and :272 then DELETES it, on every
+# local community, which is `_seed()`'s default. So :311 runs on the ordinary
+# path. Cover it; do not register it. Disproved in Task 5 round 1 by reading
+# :270-272, after renumbering exposed the claim to a re-check.
+#
+# AND THREE REDUNDANT CONJUNCTS THE COVERAGE FIGURES CANNOT SHOW AT ALL.
+# :295's `instance.online()`, :351's `instance.online()` and :350's
+# `instance.id != 1` are all unreachable-False. `Instance.online()` is
+# `not (self.dormant or self.gone_forever)` (app/models.py:118-119), and both
+# loops draw their `instance` from a query that has already applied those same
+# predicates in SQL: `Community.following_instances` (app/models.py:842-851)
+# filters `Instance.dormant == False` at :849 and `Instance.id != 1,
+# Instance.gone_forever == False` at :850, and `User.following_instances`
+# (app/models.py:1667-1676) does the same at :1672 and :1673. No row either
+# loop can see fails any of the three conjuncts.
+#
+# THEY DO NOT APPEAR IN THE RESIDUAL ABOVE, AND THAT IS THE POINT. Coverage
+# records a branch arc at the `if` level, not per conjunct, so a conjunct that
+# never varies is invisible to the branch figure for the same structural reason
+# fact 87 gives for a conditional expression. Mutation found these; no number
+# could have. They are cause 4(b) once more, with the establisher being THE
+# QUERY THAT PRODUCED THE LOOP VARIABLE -- a fourth kind of establisher, and
+# the reason this block names the establisher every time instead of just citing
+# the cause.
+#
+# The tests below still exercise :295 and :351 as whole guards -- a dormant
+# instance cannot be produced, but an INBOXLESS one can, and
+# test_an_inboxless_follower_instance_is_skipped and
+# test_a_follower_instance_with_no_inbox_gets_no_amended_copy close each `if`
+# on its first conjunct.
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
