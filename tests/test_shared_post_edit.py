@@ -446,7 +446,14 @@ def test_api_branch_drops_flair_ids_that_match_no_row(db_session):
 
 def test_api_branch_leaves_flair_empty_when_flair_id_is_falsy(db_session):
     """:271's second conjunct false, so :279-280. An empty list is present but
-    falsy -- distinct from the key being absent."""
+    falsy -- distinct from the key being absent.
+
+    THAT ARM IS NOT SEPARATELY OBSERVABLE, though, so this test documents it
+    rather than pinning it. Measured: dropping :271's `and input['flair_id']`
+    leaves this passing, because the `[]` then falls through to :277 and
+    `CommunityFlair.id.in_([])` selects nothing, so :278 yields the same `[]`
+    the :279-280 arm assigns. The two arms are distinguishable only in the
+    query issued, which nothing here observes."""
     s = _seed()
     edit_post(_api_input(flair_id=[]), s.post, POST_TYPE_ARTICLE, SRC_API, user=s.user)
 
@@ -830,9 +837,20 @@ def test_web_branch_keeps_the_existing_url_for_an_image_edit(db_session, http_mo
     a workaround. `community.local_only = True` makes :736 set
     `federate = False` first, so the parsed url under test still lands but the
     unrelated federate crash does not.
+
+    THE URL ASSERTION ALONE IS TAUTOLOGICAL, so it is not the observable here.
+    `post.url` is written nowhere outside :565's block, which this arm skips, so
+    `assert s.post.url == ...` merely restates the seed -- measured: mutating
+    :325 to `url = None` left it passing, because :410's HEAD is guarded by
+    `post.url` and not by `url`. What distinguishes the arm is `url_changed`
+    staying False at :435: under the mutant `url != post.url` becomes true, so
+    :442-445 fires and decrements the seeded domain's `post_count`. The
+    `post_count == 5` assertion below is therefore the one that kills it.
     """
     s = _seed(url='https://example.com/pic.png')
     s.community.local_only = True
+    old_domain = make_domain('example.com')
+    old_domain.post_count = 5
     db.session.commit()
     http_mock.head('https://example.com/pic.png').respond(200, headers={'Content-Type': 'image/png'})
 
@@ -840,6 +858,7 @@ def test_web_branch_keeps_the_existing_url_for_an_image_edit(db_session, http_mo
               from_scratch=False)
 
     assert s.post.url == 'https://example.com/pic.png'
+    assert old_domain.post_count == 5
 
 
 def test_web_branch_clears_the_url_for_an_image_created_from_scratch(db_session):
@@ -881,10 +900,22 @@ def test_web_branch_clears_the_url_for_an_article(db_session):
 
 
 def test_web_branch_reads_every_remaining_scalar_from_form_data(db_session):
-    """:318-319, :328-331, :337-339, and :388/:390 below the :384 marker.
+    """:318-319, :328-330, :339, and :388/:390 below the :384 marker.
 
     :388 needs the user to be a moderator, owner or admin of the community for
     `post.sticky` to be written at all; without that the sticky read never runs.
+
+    THREE OF THE READS IN THAT RANGE ARE CARRIED BUT NOT OBSERVED, and this
+    docstring used to claim them: `language_id` (:331), `scheduled_for` (:337)
+    and `repeat` (:338). `_web_form`'s defaults pin all three to `None`
+    (tests/test_shared_post_edit.py:154-155) and no test in this file overrides
+    them; the API branch does not read a form at all -- `language_id` comes
+    from `_api_input`'s own `None` default (:183) and `scheduled_for`/`repeat`
+    are hard-coded `None` in production at app/shared/post.py:281-282. No
+    assertion anywhere in this file reads any of the three back. The statements
+    execute -- that is all this test proves about them. The consequence is that
+    `app/shared/post.py:413-416`'s `if scheduled_for:` block, and with it the
+    `POST_STATUS_SCHEDULED` write at :416, NEVER RUNS in this suite.
     """
     s = _seed()
     make_community_member(s.user, s.community, is_moderator=True)
@@ -937,17 +968,25 @@ def test_web_branch_leaves_flair_empty_when_the_field_object_is_falsy(db_session
     assert list(s.post.flair) == []
 
 
-@pytest.mark.parametrize('image_alt_text,expected_reached', [
-    ('alt words', True),   # :340 both conjuncts true
-    (None, False),         # hasattr true, field falsy -- second conjunct false
-    (_OMIT, False),        # hasattr false -- first conjunct false
+@pytest.mark.parametrize('image_alt_text,expected', [
+    ('alt words', 'alt words'),  # :340 both conjuncts true
+    (None, ''),                  # hasattr true, field falsy -- second conjunct false
+    (_OMIT, ''),                 # hasattr false -- first conjunct false
 ])
 def test_web_branch_alt_text_needs_both_hasattr_and_a_truthy_field(
-        db_session, http_mock, image_alt_text, expected_reached):
+        db_session, http_mock, image_alt_text, expected):
     """:340. Two conjuncts, three arms, and the witness is a real File.
 
     `post.image` is set only on the image path, so this drives a .png url and
     reads back `File.alt_text` written at :666 `if url and post.image:`.
+
+    THE FALSE ARMS ASSERT THE EXACT VALUE, not `(alt_text == 'alt words') is
+    False`. Under the boolean form the false cases only proved that :340's
+    `else` produced something other than the true arm's string, so mutating
+    `else ''` to `else 'MUTANT'` left all three parameterisations passing --
+    measured. The API sibling
+    `test_api_branch_normalises_absent_and_null_alt_text_to_empty` (:262-264)
+    has always compared against the exact `''`; this now matches it.
     """
     s = _seed()
     http_mock.head('https://example.com/pic.png').respond(200, headers={'Content-Type': 'image/png'})
@@ -960,7 +999,7 @@ def test_web_branch_alt_text_needs_both_hasattr_and_a_truthy_field(
     db.session.expire(s.post)
     file = File.query.get(s.post.image_id)
     assert file is not None
-    assert (file.alt_text == 'alt words') is expected_reached
+    assert file.alt_text == expected
 
 
 def test_web_branch_collects_non_empty_poll_choices_in_form_order(db_session):
@@ -1021,7 +1060,16 @@ def test_web_branch_leaves_the_poll_end_unset_when_finish_in_is_absent(db_sessio
 
 
 def test_web_branch_leaves_poll_data_none_for_a_non_poll_type(db_session):
-    """:356-357."""
+    """:356-357, EXECUTED BUT NOT OBSERVABLE.
+
+    The `else` arm runs -- the type is not POST_TYPE_POLL -- but the value it
+    assigns is never read: :669's `if type == POST_TYPE_POLL and poll_data:`
+    tests `type` FIRST, and `type` is already POST_TYPE_ARTICLE here, so the
+    second conjunct short-circuits away. Measured: replacing :357's `= None`
+    with a full poll dict leaves this test passing. What the assertion below
+    pins is that no Poll row was created, which is a fact about :669, not
+    about :357.
+    """
     s = _seed()
     edit_post(_web_form(), s.post, POST_TYPE_ARTICLE, SRC_WEB, user=s.user)
 
@@ -1072,7 +1120,13 @@ def test_web_branch_carries_every_remaining_event_field(db_session):
 
 
 def test_web_branch_leaves_event_data_none_for_a_non_event_type(db_session):
-    """:381-382."""
+    """:381-382, EXECUTED BUT NOT OBSERVABLE -- the same shape as :356-357 above.
+
+    :696's `if type == POST_TYPE_EVENT and event_data:` tests `type` FIRST, and
+    `type` is POST_TYPE_ARTICLE here, so the assigned value is never read.
+    Measured: replacing :382's `= None` with a full event dict leaves this test
+    passing. The assertion below pins :696, not :382.
+    """
     s = _seed()
     edit_post(_web_form(), s.post, POST_TYPE_ARTICLE, SRC_WEB, user=s.user)
 
@@ -1235,10 +1289,14 @@ def test_a_moderator_of_a_notify_mods_domain_is_notified(db_session, http_mock):
 
     This is the FIRST test to reach :588 `db.session.add(notify)` through the
     moderator loop; the D286 tests above reach the identical Notification
-    construction through the ADMIN loop at :590-598 instead. Both paths read
-    the same `targets_data` built at :573-579, so :577 now has two callers and
-    the assertion on `orig_post_domain` below re-proves D286's fix from this
-    second entry.
+    construction through the ADMIN loop at :590-598 instead. :577 DOES NOT GAIN
+    A SECOND CALLER from that -- `targets_data` is built once at :573-579,
+    above both loops, and passed to each Notification BY REFERENCE, so :577
+    executes exactly once per edit no matter how many recipients there are.
+    What the moderator loop newly exercises is its own DB row and the JSON
+    round-trip through it; the assertion on `orig_post_domain` below re-proves
+    D286's fix as it is read back from a moderator's Notification rather than
+    an admin's.
     """
     s = _seed(domain_name='suspicious.example', notify_mods=True)
     moderator = make_user(s.instance, 'mod', local=True)
@@ -1417,13 +1475,27 @@ def test_the_domain_block_is_skipped_for_a_hostless_url(db_session):
     The raise is expected and is not this test's concern; what it proves is
     that no domain-block side effect (no post.domain write, no notification)
     happened first.
-    """
-    s = _seed()
 
-    with pytest.raises(Exception):
+    THE `match=` IS LOAD-BEARING, and this file's own harness fact 102
+    (tests/README.md) is about exactly this shape: :569 raises a bare
+    `Exception`, so a bare `pytest.raises(Exception)` here swallowed anything
+    at all -- measured: mutating :567 to `if True:` produced
+    `AttributeError: 'NoneType' object has no attribute 'banned'`, which a bare
+    `raises` accepted, and `Notification.query.count() == 0` held either way.
+    Matching respx's own unmatched-request message pins that the raise came
+    from :601's HEAD and not from a dereference of the None domain. A Domain
+    row is seeded under the name a naive parse would pull off this url's PATH
+    ('etc'), so `s.post.domain_id is None` below says the block attached
+    nothing rather than merely that the table was empty.
+    """
+    s = _seed(domain_name='etc')
+
+    with pytest.raises(Exception,
+                       match=r"RESPX: <Request\('HEAD', '/etc/passwd'\)> not mocked!"):
         edit_post(_api_input(url='file:///etc/passwd'), s.post, POST_TYPE_LINK,
                   SRC_API, user=s.user, from_scratch=True)
 
+    assert s.post.domain_id is None
     assert Notification.query.count() == 0
 
 
@@ -1522,8 +1594,18 @@ def test_an_admin_of_a_notify_admins_domain_is_notified(db_session, http_mock):
 
 
 def test_no_admin_is_notified_when_the_domain_does_not_ask(db_session, http_mock):
-    """:590, false arm."""
+    """:590, false arm. THE ADMIN MUST BE SEEDED FOR THIS TO SAY ANYTHING.
+
+    An earlier version of this test seeded no admin, so `Site.admins()`
+    returned `[]` and `Notification.query.count() == 0` held whichever way
+    `:590` went -- measured: mutating `:590` to `if True:` left it passing.
+    Its moderator sibling `test_a_moderator_is_not_notified_when_the_domain_
+    does_not_ask` (`:580`'s false arm) has always seeded its moderator, which
+    is why that one did kill the equivalent mutant.
+    """
     s = _seed(domain_name='quiet.example', notify_admins=False)
+    admin = make_user(s.instance, 'admin', local=True)
+    _make_admin(admin)
 
     http_mock.head('https://quiet.example/pic.png').respond(
         200, headers={'Content-Type': 'image/png'})
@@ -1532,6 +1614,7 @@ def test_no_admin_is_notified_when_the_domain_does_not_ask(db_session, http_mock
     edit_post(_api_input(url='https://quiet.example/pic.png'), s.post,
               POST_TYPE_LINK, SRC_API, user=s.user, from_scratch=True)
 
+    assert Notification.query.filter_by(user_id=admin.id).count() == 0
     assert Notification.query.count() == 0
 
 
