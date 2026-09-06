@@ -177,7 +177,7 @@ def send_post(post_id, edit=False, session=None):
     attachment = []
     if post.type == POST_TYPE_LINK or post.type == POST_TYPE_VIDEO:
         attachment.append({'href': post.url, 'type': 'Link'})
-    elif post.type == POST_TYPE_IMAGE:
+    elif post.type == POST_TYPE_IMAGE and post.image_id:
         attachment.append({'type': 'Image', 'url': post.image.source_url, 'name': post.image.alt_text})
 
     page = {
