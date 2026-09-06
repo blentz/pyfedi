@@ -702,14 +702,25 @@ def test_a_private_community_does_not_federate_the_reply(db_session):
     `instance.online()` -- so a private, non-local-only community federated its
     replies out.
 
-    THE UNCOUPLED STATE THIS SEEDS HAS NO CURRENT UI PATH. Both writers of the
-    flag set `local_only` alongside it in the view layer
-    (`app/community/routes.py:103-104` and `:1230-1231`), so `private=True,
-    local_only=False` is producible at the model and database level but not
-    through the site. The conjunct is defence in depth on the footing the
-    design spec's 2.2 describes, matching `pages.py:153`, which is the only one
-    of the ten senders in `app/shared/tasks/` that tests the flag. The other
-    eight remain unguarded and stay registered.
+    THE UNCOUPLED STATE THIS SEEDS HAS NO CURRENT UI PATH. Every write of the
+    flag couples `local_only` to it in the view layer: the two form fields are
+    tied at `app/community/routes.py:103-104` and `:1230-1231`, and the three
+    write statements are `:122` (create), `:1234` (True) and `:1237` (False).
+    So `private=True, local_only=False` is producible at the model and database
+    level but not through the site. The conjunct is defence in depth on the
+    footing the design spec's 2.2 describes. Of the TWELVE functions in
+    `app/shared/tasks/` carrying a `local_only` federation gate -- the register
+    counts functions, not `if` statements, because `delete_object` splits its
+    gate across two lines -- exactly two test `private` --
+    `pages.py:153` and this one, `notes.py:143` -- and the remaining TEN stay
+    unguarded and registered as D309.
+
+    These figures supersede an earlier "ten senders / other eight / both
+    writers" count that this docstring and the module docstring both carried;
+    it undercounted because a shape-based grep skips `delete_object`, whose
+    gate is split across `deletes.py:127` and `:130`, and because `move_object`
+    (`pages.py:398`) sat in a span an earlier sub-project had declared out of
+    scope.
 
     THE ASSERTION IS AN ABSENCE OF DELIVERY, and it is positive rather than
     vacuous: `post_request` (`app/activitypub/signature.py:103-105`) inserts an
