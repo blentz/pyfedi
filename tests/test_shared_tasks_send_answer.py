@@ -517,3 +517,159 @@ def test_one_following_instance_is_skipped_while_another_receives(
 
     assert good.route.call_count == 1
     assert db.session.query(ActivityPubLog).count() == 1
+
+
+# ---------------------------------------------------------------------------
+# Sub-project 21, Task 6: mutation-testing record for send_answer's guards
+# ---------------------------------------------------------------------------
+#
+# `send_answer` (app/shared/tasks/notes.py), verified by ast.parse /
+# FunctionDef.end_lineno against the tree at the time of this record, spans
+# lines 242-310. Every mutation below was applied with one targeted
+# single-line `sed`, run against `./run_tests.sh
+# tests/test_shared_tasks_send_answer.py -q` alone, then reverted with
+# `git checkout -- app/` and re-verified clean (`git diff -- app/` empty,
+# `wc -l app/shared/tasks/notes.py` == 310) before the next mutation. No
+# mutation was ever combined with another, and the tree ended this task
+# exactly as it started: no diff against app/, 310 lines.
+#
+# Baseline (unmutated): 13 passed.
+#
+# | # | line | mutation | sed | result | kill type | sole/multi |
+# |---|------|----------|-----|--------|-----------|------------|
+# | M1 | 248 | negate the whole guard (`if post_reply` -> `if not post_reply`) |
+#   sed -i '248s/if post_reply/if not post_reply/' | 9 failed, 4 passed |
+#   assertion-kill (all 9; 8 of the 9 also carry a secondary RESPX
+#   "not called" teardown ERROR, but the test body's own assertion fails
+#   first in every case) | multi-kill | Failing tests:
+#   test_a_remote_community_receives_the_bare_choose_answer,
+#   test_a_local_only_community_does_not_federate_the_answer,
+#   test_the_remote_choose_carries_its_full_key_set_and_keeps_its_context,
+#   test_the_remote_undo_wraps_the_choose_and_strips_its_inner_context,
+#   test_the_remote_delivery_is_signed_as_the_user,
+#   test_a_local_community_announces_the_choose_to_a_following_instance,
+#   test_a_local_community_announces_the_undo_and_strips_two_contexts,
+#   test_the_announce_is_signed_as_the_community,
+#   test_one_following_instance_is_skipped_while_another_receives.
+#
+# | M2 | 248 | drop the `private` conjunct |
+#   sed -i '248s/ or post_reply.community.private//' | 1 failed, 12 passed |
+#   assertion-kill | sole-kill | Failing test:
+#   test_a_private_community_does_not_federate_the_answer.
+#   Matches the result already recorded by Task 2/3/4 reviewers: no
+#   disagreement.
+#
+# | M3 | 265 | invert `is_undo` (`if is_undo:` -> `if not is_undo:`) |
+#   sed -i '265s/if is_undo:/if not is_undo:/' | 7 failed, 6 passed |
+#   crash-kill (all 7: 2x UnboundLocalError on `undo` at notes.py:303/:281
+#   when is_undo is True and the `undo` dict is never built; 5x KeyError on
+#   '@context' at notes.py:284 when is_undo is False and the block wrongly
+#   runs, deleting lock['@context'] early so the later unconditional
+#   `del lock['@context']` at :284 raises) | multi-kill | Failing tests:
+#   test_the_remote_undo_wraps_the_choose_and_strips_its_inner_context
+#   (UnboundLocalError),
+#   test_a_local_community_announces_the_choose_to_a_following_instance
+#   (KeyError),
+#   test_a_local_community_announces_the_undo_and_strips_two_contexts
+#   (UnboundLocalError),
+#   test_the_announce_is_signed_as_the_community (KeyError),
+#   test_a_local_community_with_no_followers_sends_nothing (KeyError),
+#   test_a_following_instance_without_an_inbox_is_skipped (KeyError),
+#   test_one_following_instance_is_skipped_while_another_receives (KeyError).
+#
+# | M4 | 266 | skip the inner `del lock['@context']` |
+#   sed -i '266s/del lock/lock.pop("@context", None) if False else None; del lock/'
+#   | 13 passed (SURVIVOR) | n/a | n/a |
+#   This exact sed, applied verbatim as specified, produces a line reading
+#   `lock.pop("@context", None) if False else None; del lock['@context']`.
+#   The prepended `if False else None` conditional is a dead expression
+#   statement whose value is discarded; the trailing `del lock['@context']`
+#   from the original line is untouched and still executes unconditionally
+#   after the semicolon (verified directly: running the mutated line against
+#   a dict removes '@context' exactly as the original did). The substitution
+#   therefore does not change send_answer's behavior in any observable way
+#   for any input -- it is GENUINELY EQUIVALENT to the unmutated line, which
+#   is why all 13 tests pass identically to baseline. This is not a gap in
+#   test coverage; it is the specified sed failing to alter semantics.
+#   As a supplementary check (not itself part of the Task 6 table, run to
+#   confirm the guard this mutation was meant to probe is in fact covered),
+#   the brief's documented fallback form was also applied:
+#   sed -i "266s/^/#/" (comments the line out, genuinely skipping the
+#   delete). Result: 2 failed, 11 passed, both assertion-kills, multi-kill.
+#   Failing tests: test_the_remote_undo_wraps_the_choose_and_strips_its_inner_context
+#   (asserts '@context' not in the delivered ChooseAnswer object),
+#   test_a_local_community_announces_the_undo_and_strips_two_contexts
+#   (asserts '@context' not in the nested ChooseAnswer object). Both were
+#   reverted and the tree re-verified clean before proceeding.
+#
+# | M5 | 279 | invert `is_local()` (`if post_reply.community.is_local():` ->
+#   `if not post_reply.community.is_local():`) |
+#   sed -i '279s/if post_reply.community.is_local():/if not post_reply.community.is_local():/'
+#   | 10 failed, 3 passed | mixed: 4 assertion-kills + 6 crash-kills
+#   (IndexError raised by the test helper indexing into an httpx route's
+#   uncalled `.calls`, reached because the mutation sends every test down
+#   the opposite branch from the one its mocks are set up for) | multi-kill
+#   (expected: this mutation flips every test's path at once) | Assertion-kill
+#   failing tests: test_a_remote_community_receives_the_bare_choose_answer,
+#   test_a_local_community_with_no_followers_sends_nothing,
+#   test_a_following_instance_without_an_inbox_is_skipped,
+#   test_one_following_instance_is_skipped_while_another_receives.
+#   Crash-kill (IndexError) failing tests:
+#   test_the_remote_choose_carries_its_full_key_set_and_keeps_its_context,
+#   test_the_remote_undo_wraps_the_choose_and_strips_its_inner_context,
+#   test_the_remote_delivery_is_signed_as_the_user,
+#   test_a_local_community_announces_the_choose_to_a_following_instance,
+#   test_a_local_community_announces_the_undo_and_strips_two_contexts,
+#   test_the_announce_is_signed_as_the_community.
+#
+# | M6 | 280 | invert the inner `is_undo` (`if is_undo:` -> `if not is_undo:`) |
+#   sed -i '280s/if is_undo:/if not is_undo:/' | 6 failed, 7 passed |
+#   crash-kill (all 6: 5x UnboundLocalError on `undo` at notes.py:281 when
+#   is_undo is False and the branch wrongly tries `del undo['@context']`
+#   without `undo` ever having been built; 1x KeyError at notes.py:284 when
+#   is_undo is True, since `undo['@context']` was already deleted by the
+#   wrongly-run branch and the later unconditional delete at :284 fails) |
+#   multi-kill | Failing tests (all UnboundLocalError except as noted):
+#   test_a_local_community_announces_the_choose_to_a_following_instance,
+#   test_a_local_community_announces_the_undo_and_strips_two_contexts
+#   (KeyError), test_the_announce_is_signed_as_the_community,
+#   test_a_local_community_with_no_followers_sends_nothing,
+#   test_a_following_instance_without_an_inbox_is_skipped,
+#   test_one_following_instance_is_skipped_while_another_receives.
+#
+# | M7 | 303 | invert the ternary (`undo if is_undo else lock` ->
+#   `lock if is_undo else undo`) |
+#   sed -i '303s/undo if is_undo else lock/lock if is_undo else undo/' |
+#   4 failed, 9 passed | mixed: 1 assertion-kill + 3 crash-kills
+#   (UnboundLocalError on `undo`, since the remote/else branch is only
+#   reached by non-local communities and `undo` is built only when is_undo
+#   is True) | multi-kill | Assertion-kill failing test:
+#   test_the_remote_undo_wraps_the_choose_and_strips_its_inner_context
+#   (asserts the delivered activity's type == 'Undo'; the mutant delivers
+#   `lock`, whose type is 'ChooseAnswer', giving a genuine
+#   'ChooseAnswer' == 'Undo' mismatch). Crash-kill failing tests:
+#   test_a_remote_community_receives_the_bare_choose_answer,
+#   test_the_remote_choose_carries_its_full_key_set_and_keeps_its_context,
+#   test_the_remote_delivery_is_signed_as_the_user (all UnboundLocalError on
+#   `undo` when is_undo is False, since the mutant now selects `undo` for
+#   the false arm). Matches the result already recorded by Task 2/3/4
+#   reviewers: no disagreement.
+#
+# Additional check (not one of the seven table rows, but explicitly called
+# out as already mutation-tested and belonging in a complete record):
+#
+# | -- | 281 | neuter `del undo['@context']` to `pass` |
+#   sed -i "281s/del undo\['@context'\]/pass/" | 1 failed, 12 passed |
+#   assertion-kill | sole-kill | Failing test:
+#   test_a_local_community_announces_the_undo_and_strips_two_contexts.
+#   Matches the result already recorded by Task 2/3/4 reviewers: no
+#   disagreement.
+#
+# Summary: of the 8 guards checked (M1-M7 plus the :281 spot-check), 7 kill
+# outright under the sed given (6 as specified in the table, plus the
+# already-known :281 check), 6 of those as multi-kills and 2 as sole-kills.
+# One mutation (M4, line 266, as literally specified) is a genuinely
+# equivalent transformation -- the given sed does not alter execution
+# semantics at all -- but the guard it targets is proven covered by the
+# documented fallback form, which is killed twice over (multi-kill,
+# assertion-kill). No mutant was left as an unexamined survivor.
