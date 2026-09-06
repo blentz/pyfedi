@@ -550,22 +550,105 @@ def test_unchoose_answer_passes_is_undo_true(db_session, http_mock):
     assert _sent_activity(route)['type'] == 'Undo'
 
 
-def test_a_missing_post_reply_rolls_back_and_re_raises(db_session, http_mock):
-    """:306-308's except arm, reached without a faked exception.
+def _recording_task_session(monkeypatch):
+    """Make `get_task_session` hand back a GENUINE Session that records
+    `rollback()` and `close()`.
+
+    A copy of the helper `send_reply`'s file introduced in Task 8
+    (`tests/test_shared_tasks_send_reply.py:1637`), duplicated rather than
+    imported: this campaign keeps its test modules independent so a helper
+    can be edited for one function's needs without silently changing
+    another's assertions.
+
+    The session is real and does real work -- only the observation is added,
+    by wrapping the two methods rather than replacing the object. A fake
+    session would prove the wrapper calls methods on a mock; this proves it
+    calls them on the session the function actually used.
+
+    THE PATCH TARGET IS THE NOTES MODULE, NOT `app.utils`.
+    `app/shared/tasks/notes.py:10` imports `get_task_session` into the notes
+    namespace, and `send_answer` resolves it there at `:243`. Patching
+    `app.utils.get_task_session` would apply cleanly, observe nothing, and
+    leave the assertion below trivially true against an empty list -- the
+    silent failure mode this docstring exists to prevent.
+
+    Returns a `SimpleNamespace(calls=[])`; the wrapper appends 'rollback' and
+    'close' to it in the order they happened, so `finally` running after
+    `except` is observable rather than assumed.
+    """
+    from app import db as _db
+    from sqlalchemy.orm import Session as _Session
+    import app.shared.tasks.notes as notes_module
+
+    record = SimpleNamespace(calls=[])
+
+    def _make():
+        session = _Session(bind=_db.engine)
+        real_rollback, real_close = session.rollback, session.close
+
+        def rollback():
+            record.calls.append('rollback')
+            return real_rollback()
+
+        def close():
+            record.calls.append('close')
+            return real_close()
+
+        session.rollback = rollback
+        session.close = close
+        return session
+
+    monkeypatch.setattr(notes_module, 'get_task_session', _make)
+    return record
+
+
+def test_a_missing_post_reply_rolls_back_and_re_raises(
+        db_session, http_mock, monkeypatch):
+    """:306-308's except arm and :309's finally (`session.close()` at :310),
+    reached without a faked exception.
 
     `session.query(PostReply).get(<absent id>)` returns None at :246, and
     :248's `post_reply.community` raises AttributeError. The wrapper catches
-    it at :306, rolls back, and RE-RAISES at :308 -- so the exception
-    escaping is itself half the assertion, and a mutant that swallowed it
+    it at :306, rolls back at :307, and RE-RAISES at :308 -- so the exception
+    escaping is itself part of the assertion, and a mutant that swallowed it
     would fail here.
 
     A monkeypatched sentinel would prove the handler catches a fake
     exception; this proves it catches the one the real path produces.
+
+    THE RECORDED CALL ORDER IS THE OTHER HALF. `pytest.raises` alone observes
+    only that something propagated: with `:307` neutered to `pass` the
+    AttributeError still escapes through `:308` and `:310` still closes, so a
+    `raises`-only test cannot tell a rollback from its absence. Asserting
+    `['rollback', 'close']` also fixes the ORDER, which distinguishes
+    `finally` running after `except` from a wrapper that closed instead of
+    rolling back.
     """
     s = _seed(with_keys=True)
+    record = _recording_task_session(monkeypatch)
 
     with pytest.raises(AttributeError):
         send_answer(s.reply.id + 1000, s.user.id, False)
+
+    assert record.calls == ['rollback', 'close']
+
+
+def test_send_answer_closes_the_session_on_the_happy_path(
+        db_session, http_mock, monkeypatch):
+    """:309's finally (`session.close()` at :310) on the SUCCESS path --
+    `close` with no `rollback`.
+
+    The control for the test above: without it, `finally` running is only
+    ever observed alongside an exception, and a handler that closed only in
+    the `except` arm would pass every other test in this file.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _remote_inbox(s, http_mock)
+    record = _recording_task_session(monkeypatch)
+
+    _send(s)
+
+    assert record.calls == ['close']
 
 
 # ---------------------------------------------------------------------------
@@ -584,9 +667,22 @@ def test_a_missing_post_reply_rolls_back_and_re_raises(db_session, http_mock):
 #
 # Baseline (unmutated): 13 passed.
 #
+# THE PASS COUNTS IN ROWS M1-M7 AND THE :281 SPOT-CHECK ARE AS OF COMMIT
+# `d077a2b5` (Task 6), WHEN THIS FILE HELD 13 TESTS. Task 7 then added three
+# and the final-review fix wave a fourth, so the file now holds 17 and a
+# re-run of any row returns a pass count higher by however many tests have
+# since been added -- the final reviewer re-ran M2 against the 16-test file
+# and got 1 failed, 15 passed, against the recorded 1 failed, 12 passed.
+# THAT IS FILE GROWTH, NOT A DIVERGENCE: the failing-test NAMES, and the
+# kill type and sole/multi classification, are the durable parts of every
+# row and are what a re-run must be compared against. Rows M8 and M9 below
+# were measured against the 17-test file and say so in place.
+#
 # | # | line | mutation | sed | result | kill type | sole/multi |
 # |---|------|----------|-----|--------|-----------|------------|
-# | M1 | 248 | negate the whole guard (`if post_reply` -> `if not post_reply`) |
+# | M1 | 248 | negate the `local_only` CONJUNCT ONLY, not the whole guard
+#   (`if post_reply` -> `if not post_reply`) -- CORRECTED LABEL, see the note
+#   under this row |
 #   sed -i '248s/if post_reply/if not post_reply/' | 9 failed, 4 passed |
 #   assertion-kill (all 9; 8 of the 9 also carry a secondary RESPX
 #   "not called" teardown ERROR, but the test body's own assertion fails
@@ -600,6 +696,37 @@ def test_a_missing_post_reply_rolls_back_and_re_raises(db_session, http_mock):
 #   test_a_local_community_announces_the_undo_and_strips_two_contexts,
 #   test_the_announce_is_signed_as_the_community,
 #   test_one_following_instance_is_skipped_while_another_receives.
+#   LABEL CORRECTION (final review of sub-project 21). This row originally
+#   read "negate the whole guard", which is NOT what the sed produces. `sed`
+#   replaces only the FIRST match on the line, so the mutant is
+#   `if not post_reply.community.local_only or post_reply.community.private
+#   or not post_reply.community.instance.online():` -- ONLY THE FIRST
+#   CONJUNCT IS NEGATED; the guard is not inverted, `local_only` is. The
+#   RESULTS above are unaffected and were re-confirmed by taking the
+#   complement of the recorded failing set against the 13 tests present at
+#   `d077a2b5`: the FOUR survivors are
+#   test_a_dormant_instance_does_not_receive_the_answer,
+#   test_a_private_community_does_not_federate_the_answer,
+#   test_a_local_community_with_no_followers_sends_nothing and
+#   test_a_following_instance_without_an_inbox_is_skipped -- exactly the
+#   zero-delivery tests whose community has `local_only=False`, for which
+#   `not local_only` is True and the mutated guard returns early, so their
+#   "no ActivityPubLog row" assertion still holds. The ninth failure,
+#   test_a_local_only_community_does_not_federate_the_answer, is the one
+#   zero-delivery test with `local_only=True`: the mutant makes its first
+#   conjunct False and it now delivers. THE SURVIVING SET IS ITSELF THE
+#   DISCRIMINATOR: had the whole guard been negated, the dormant and private
+#   tests would have had a True inner expression, so `not (...)` would be
+#   False, they would have proceeded to deliver, and they would have FAILED
+#   too -- 11 failed, 2 passed. That both survived is only consistent with
+#   the first-conjunct reading. Only the description was wrong.
+#   Recorded rather than silently
+#   rewritten because it is the same defect class as M4's no-op sed --
+#   a sentence describing a mutation that differs from the mutation the
+#   command actually performs -- and this one went uncaught longer because
+#   it killed nine tests, which made it look verified. See M8 below, which
+#   was added by the same review to mutate the third conjunct that M1's
+#   mislabel had made look already covered.
 #
 # | M2 | 248 | drop the `private` conjunct |
 #   sed -i '248s/ or post_reply.community.private//' | 1 failed, 12 passed |
@@ -717,6 +844,62 @@ def test_a_missing_post_reply_rolls_back_and_re_raises(db_session, http_mock):
 #   the false arm). Matches the result already recorded by Task 2/3/4
 #   reviewers: no disagreement.
 #
+# ROWS M8 AND M9 WERE ADDED BY SUB-PROJECT 21'S FINAL WHOLE-BRANCH REVIEW FIX
+# WAVE, against the 17-test file (baseline: 17 passed). Both were dry-run
+# without `-i` first and the produced line inspected before applying, per the
+# lesson M1 and M4 each taught once.
+#
+# | M8 | 248 | drop the `online()` conjunct
+#   (` or not post_reply.community.instance.online()` -> nothing) |
+#   sed -i '248s/ or not post_reply\.community\.instance\.online()//' |
+#   1 failed, 16 passed | assertion-kill | SOLE-KILL | Failing test:
+#   test_a_dormant_instance_does_not_receive_the_answer -- `assert 1 == 0`
+#   at its `db.session.query(ActivityPubLog).count() == 0`, i.e. the mutant
+#   delivers to the dormant instance where the original returns early.
+#   WHY THIS ROW EXISTS: across M1-M7 plus the :281 spot-check, :248's THIRD
+#   conjunct had never been mutated, and M1's incorrect "negate the whole
+#   guard" label made it look as though it had been. The dormant test's
+#   discrimination was argued (0 -> 1 by tracing) rather than measured. It is
+#   measured now, and the conjunct is proved covered by exactly one named
+#   test. Dry-run output confirmed a single-line substitution leaving the
+#   file at 310 lines before `-i` was used; restored with `git checkout --
+#   app/` and re-verified (`git diff -- app/` empty, `wc -l` == 310).
+#   All three of :248's conjuncts now have a sole-kill each: `local_only`
+#   (by M1's real mutant, which spares exactly the other two conjuncts'
+#   tests), `private` (M2) and `online()` (M8).
+#   RUN TWICE, and both runs are reported: once against the 16-test file
+#   before the M9 fix added the happy-path control (1 failed, 15 passed) and
+#   once after (1 failed, 16 passed), each restored and re-verified in
+#   between. Same sole test, same `assert 1 == 0`, same kill type -- the
+#   pass counts differ by exactly the one test added, which is the file
+#   growth the baseline note above describes and not a divergence.
+#
+# | M9 | 307 | neuter the rollback (`session.rollback()` -> `pass`) |
+#   sed -i '307s/session\.rollback()/pass/' | 1 failed, 16 passed |
+#   assertion-kill | SOLE-KILL | Failing test:
+#   test_a_missing_post_reply_rolls_back_and_re_raises --
+#   `assert ['close'] == ['rollback', 'close']`.
+#   WHY THIS ROW EXISTS: before the fix wave that test asserted only
+#   `pytest.raises(AttributeError)`, and NOTHING in this file observed
+#   `session.rollback()` (:307) or `session.close()` (:310). The final
+#   reviewer's stated scenario was that this exact mutant would leave all 16
+#   pre-fix tests green -- the AttributeError still propagates through :308
+#   and :310 still closes, so a `raises`-only body cannot tell a rollback
+#   from its absence -- and the run below is consistent with it: the ONLY
+#   test that fails is the one the fix wave strengthened, and the other 16
+#   (which include every assertion the pre-fix file made) all pass. The
+#   test whose name promised to catch this could not, before the fix.
+#   The fix wave ported `_recording_task_session` from
+#   `tests/test_shared_tasks_send_reply.py` (Task 8's helper: a GENUINE
+#   Session with only `rollback` and `close` wrapped) and strengthened the
+#   test to assert the recorded call ORDER. NOT AN EQUIVALENT MUTANT: the
+#   review flagged that `Session.close()` implicitly discards the
+#   transaction, so the mutant might be behaviourally equivalent at the
+#   database level -- but the CALL is a real, observable difference in what
+#   the wrapper does, and the wrapper's contract is that it rolls back
+#   before re-raising. The mutant is killed on that observable, which is the
+#   one the handler is written to provide. Restored and re-verified clean.
+#
 # Additional check (not one of the seven table rows, but explicitly called
 # out as already mutation-tested and belonging in a complete record):
 #
@@ -727,9 +910,12 @@ def test_a_missing_post_reply_rolls_back_and_re_raises(db_session, http_mock):
 #   Matches the result already recorded by Task 2/3/4 reviewers: no
 #   disagreement.
 #
-# Summary: of the 8 guards checked (M1-M7 plus the :281 spot-check), 7 kill
-# outright under the sed given (6 as specified in the table, plus the
-# already-known :281 check), 6 of those as multi-kills and 2 as sole-kills.
+# Summary (updated by the final-review fix wave, which added M8 and M9): of
+# the 10 mutations checked (M1-M9 plus the :281 spot-check), 9 kill outright
+# under the sed given (8 as specified in the table, plus the already-known
+# :281 check). Counting M4's fallback form, which also kills, that is 10
+# killing mutations: 6 multi-kills (M1, M3, M4-fallback, M5, M6, M7) and 4
+# sole-kills (M2, M8, M9 and the :281 check). NO SURVIVORS.
 # One mutation (M4, line 266, as literally specified in the plan) is a
 # no-op substitution -- a defective sed that applies cleanly but never
 # alters execution semantics, producing no mutant at all -- so its
@@ -738,6 +924,16 @@ def test_a_missing_post_reply_rolls_back_and_re_raises(db_session, http_mock):
 # covered by the plan's own documented fallback form, which is a double
 # assertion-kill (multi-kill). No mutant was left as an unexamined
 # survivor, and no no-op result was left mistaken for one either.
+#
+# COVERAGE OF :248 IS NOW CONJUNCT-LEVEL, NOT SITE-LEVEL. That distinction
+# is fact 68's (tests/README.md, from D229): a mutation of a whole guard
+# answers "does anything depend on this LINE?" where a fix that adds a
+# conjunct raises "does anything depend on this CLAUSE?", and the gap is
+# self-concealing because the site-level mutant still dies. M1's mislabel
+# was that failure mode wearing the opposite costume -- a CONJUNCT-level
+# mutation described as a site-level one, which made the two conjuncts it
+# spared look already proved. M2 and M8 close it: each of :248's three
+# conjuncts is now killed by a single named test of its own.
 
 
 # ---------------------------------------------------------------------------
@@ -747,11 +943,16 @@ def test_a_missing_post_reply_rolls_back_and_re_raises(db_session, http_mock):
 # THE FIVE FUNCTIONS IN SCOPE ARE AT ZERO MISSING STATEMENTS AND ZERO MISSING
 # BRANCH ARMS. Measured on the full-suite run of 2026-09-06 (report mtime
 # 15:57:53; 3919 passed, 3 skipped, 6 subtests passed), per-function by AST
-# extent rather than by convention:
+# extent rather than by convention. SIX rows are listed and FIVE are in
+# scope: `send_reply` is printed for context because it is the module's only
+# residual and the reason the module is not at 100%, and its non-empty
+# `missing` is that residual, not a gap in this sub-project's work.
 #
 #     make_reply      :55-64    missing=[]        arms=[]
 #     edit_reply      :68-77    missing=[]        arms=[]
-#     send_reply      :80-229   missing=[100,101] arms=[]
+#     send_reply      :80-229   missing=[100,101] arms=[]   (CONTEXT ONLY --
+#                                                            not one of the
+#                                                            five; see item 1)
 #     choose_answer   :233-234  missing=[]        arms=[]
 #     unchoose_answer :238-239  missing=[]        arms=[]
 #     send_answer     :242-310  missing=[]        arms=[]
