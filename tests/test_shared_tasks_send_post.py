@@ -1049,3 +1049,458 @@ def test_an_event_note_carries_its_start_localised_to_the_event_timezone(db_sess
     assert note['type'] == 'Note'
     assert note['content'] == ('<p>a post</p>'
                                '<p>2030-06-01T09:00:00 (America/New_York)</p>')
+
+
+# ---------------------------------------------------------------------------
+# The type dispatch and the tag/cc appends, :163-174
+# ---------------------------------------------------------------------------
+#
+# These are the three arms Tasks 1 and 2 deferred (see the ':163-174 --
+# deferred to Task 6' comment block above, and the note in
+# `test_a_remote_recipient_gets_no_local_notification`). All three write only
+# to locals -- `type`, `tag`, `cc` -- read into `page`/`create` at :185 and
+# :188-189 and never persisted, so the delivered body is the only observable.
+# `_remote_inbox` / `_sent_activity` supply it.
+
+
+def _key_id_of(route, index=-1):
+    """The `keyId` the captured request was signed under.
+
+    `HttpSignature.compile_signature` (app/activitypub/signature.py:353-359)
+    emits `keyId="<id>",headers="..."`, so the value is the first
+    double-quoted field. This is the ONLY observable that separates the two
+    signing actors inside :294's loop: :298 and :302 sign as the community
+    (`community.public_url() + '#main-key'`) while :300 signs as the author
+    (`user.public_url() + '#main-key'`), and respx never verifies a signature,
+    so the private key itself leaves no trace on the wire.
+    """
+    return route.calls[index].request.headers['signature'].split('"')[1]
+
+
+def test_a_remote_mention_resolves_and_reaches_the_delivered_activity(db_session, http_mock):
+    """:109-114, the REMOTE arm's SUCCESS path -- deferred from Task 1.
+
+    Task 1 could only reach `except: pass` at :113-114
+    (`test_a_banned_remote_host_mention_is_skipped_via_the_remote_except`).
+    The success path -- `search_for_user` returning a real remote User at :112
+    and :115's `if recipient:` opening -- had no witness there, because
+    `User.is_local()` is False for a remote recipient so :127 skips the
+    notification either way: a resolved remote mention and an unresolved one
+    both leave `Notification.query.count() == 0`.
+
+    The resolution IS visible in the delivered activity. A recipient that
+    reached `recipients` is appended to `tag` and `cc` at :172-174, which are
+    read into the body at :188-189 and :259. A mutant making :112 return None
+    -- or deleting :115-123 -- empties both, and this test fails.
+
+    The mentioned user is put on the community's own instance so that
+    :307's `domains_sent_to.append(community.instance.domain)` suppresses a
+    second, redundant delivery at :335; `s.community.instance` is the peer
+    `_remote_inbox` created, so no second `make_instance('peer.example')` is
+    attempted (`Instance.domain` is unique).
+    """
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    remote = make_user(s.community.instance, 'remoteuser', local=False)
+    assert remote.is_local() is False
+    s.post.body = 'hello @remoteuser@peer.example'
+    db.session.commit()
+
+    _send(s.post)
+
+    activity = _sent_activity(route)
+    assert activity['cc'] == [remote.public_url()]
+    assert {'href': remote.public_url(), 'name': remote.mention_tag(),
+            'type': 'Mention'} in activity['object']['tag']
+    # The proof that this is the resolution path and not the notification
+    # path: no Notification was written, yet the recipient still landed.
+    assert Notification.query.filter_by(user_id=remote.id).count() == 0
+
+
+def test_a_mentioned_recipient_lands_in_both_tag_and_cc(db_session, http_mock):
+    """:172-174 -- deferred from Task 2. `tag.append(...)` at :173 and
+    `cc.append(...)` at :174 are separate statements, so both are asserted:
+    a mutant dropping either one survives an assertion on the other.
+
+    `cc` is ONE list object shared by `page['cc']` (:188) and `create['cc']`
+    (:259) -- :170 binds it once and :174 mutates it in place -- so both are
+    checked, which also pins that neither key was rebuilt from something else.
+    `tag` starts as `post.tags_for_activitypub()` (:171); this post carries no
+    tags, so the single element is the Mention and `len(tag) == 1` holds.
+
+    A LOCAL mentioned user, deliberately: it keeps this test distinct from
+    `test_a_remote_mention_resolves_and_reaches_the_delivered_activity` above,
+    which takes :109-114's remote arm to reach the same two appends.
+    """
+    s = _seed(body='hello @mentioned@test.piefed.local', local_community=False,
+              with_keys=True)
+    mentioned = make_user(s.instance, 'mentioned', local=True)
+    route = _remote_inbox(s, http_mock)
+
+    _send(s.post)
+
+    activity = _sent_activity(route)
+    expected_tag = {'href': mentioned.public_url(),
+                    'name': mentioned.mention_tag(), 'type': 'Mention'}
+    assert activity['object']['tag'] == [expected_tag]
+    assert activity['object']['cc'] == [mentioned.public_url()]
+    assert activity['cc'] == [mentioned.public_url()]
+
+
+@pytest.mark.parametrize('post_type,expected', [
+    (POST_TYPE_POLL, 'Question'),
+    (POST_TYPE_EVENT, 'Event'),
+    (POST_TYPE_ARTICLE, 'Page'),
+])
+def test_the_delivered_object_type_follows_the_post_type(db_session, http_mock,
+                                                         post_type, expected):
+    """:163-168, all three arms -- deferred from Task 2.
+
+    `type` is a local, consumed at :185 as `page['type']`. Without a delivered
+    body there is nothing to read it off, which is why Task 2's version of
+    this test could only assert that `_send` did not raise -- true for every
+    arm and therefore not a test of the dispatch at all.
+
+    The Poll and Event rows exist because :222-248 dereference them
+    (`poll.mode` at :230, `event.timezone` at :237); they carry no bearing on
+    :163-168 itself, which branches on `post.type` alone.
+    """
+    s = _seed(post_type=post_type, local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    if post_type == POST_TYPE_POLL:
+        db.session.add(Poll(post_id=s.post.id, end_poll=None, mode='single'))
+    elif post_type == POST_TYPE_EVENT:
+        db.session.add(Event(post_id=s.post.id, start=None, end=None,
+                             timezone='UTC'))
+    db.session.commit()
+
+    _send(s.post)
+
+    assert _sent_activity(route)['object']['type'] == expected
+
+
+# ---------------------------------------------------------------------------
+# Create/Announce construction and per-instance delivery, :250-307
+# ---------------------------------------------------------------------------
+#
+# :294-304 is a DIFFERENT arm of :271 from the one `_remote_inbox` serves.
+# `_remote_inbox` forces `community.is_local()` False to reach :306; the
+# fan-out loop needs it True, which is what `_seed()`'s default gives. Hence
+# `_community_follower` below rather than a change to `_remote_inbox`, which
+# four other tasks depend on.
+#
+# WHAT MAKES AN INSTANCE A FOLLOWER, read off the query rather than assumed.
+# `Community.following_instances` (app/models.py:842-851) joins
+# Instance -> User -> CommunityMember and filters
+# `CommunityMember.community_id == self.id`, `CommunityMember.is_banned ==
+# False`, `Instance.id != 1`, `Instance.dormant == False` and
+# `Instance.gone_forever == False`. So the row shape is: a remote Instance
+# (id != 1 -- the local instance is id 1, see `_seed`), a User on it, and a
+# CommunityMember joining that user to the community. `make_community_member`
+# (tests/factories.py:382-392) sets `is_banned=False` already.
+#
+# The other half of :294's set, `user.following_instances(software='piefed')`
+# (app/models.py:1667-1676), needs inward `UserFollower` rows AND
+# `software == 'piefed'`; none of these tests create either, so it contributes
+# nothing and the set is exactly the community's followers.
+#
+# FINDING -- :295's `instance.online()` is UNREACHABLE-FALSE. `online()` is
+# `not (self.dormant or self.gone_forever)` (app/models.py:118-119), and BOTH
+# `following_instances` implementations already filter `Instance.dormant ==
+# False` and `Instance.gone_forever == False` in SQL. An offline instance can
+# therefore never enter the loop, so the second conjunct is a redundant
+# re-check that no test can drive to False.
+# `test_a_dormant_follower_instance_is_skipped` below pins the behaviour that
+# IS real -- an offline follower receives nothing -- and says so in its
+# docstring rather than claiming an arm it cannot take.
+
+
+def _community_follower(s, http_mock=None, domain='fan.example',
+                        software='lemmy', member_name='fan', with_inbox=True,
+                        dormant=False):
+    """A remote instance that `community.following_instances()` returns at
+    :294, plus the respx route its delivery lands on.
+
+    Returns `SimpleNamespace(instance, member, route)`; `route` is None when
+    no route was registered (no `http_mock`, or `with_inbox=False`).
+
+    THE COMMUNITY'S KEYPAIR IS SET HERE. :298 and :302 sign with
+    `community.private_key`, which `make_community` (tests/factories.py:
+    122-151) leaves None, and `HttpSignature.signed_request` calls `.encode()`
+    on it -- a keyless community dies exactly as a keyless author does. The
+    author's key is reused rather than a second one generated: generation
+    costs about a second per keypair, respx never verifies a signature, and
+    the actor a delivery was signed AS is observable through `keyId`
+    (`_key_id_of`), not through the key material. `_seed(with_keys=True)` is
+    therefore a precondition, asserted below.
+
+    `with_inbox=False` leaves `Instance.inbox` at `make_instance`'s None,
+    which is what closes :295's FIRST conjunct. `dormant=True` sets the column
+    `Community.following_instances` filters on -- see the FINDING above for
+    why that is a query-level exclusion and not :295's second conjunct.
+
+    The domain stays inside `.example` so the autouse
+    `_peer_example_resolves_without_a_resolver` fixture still answers for it.
+    """
+    assert s.user.private_key is not None, '_seed(with_keys=True) is required'
+    s.community.private_key = s.user.private_key
+    s.community.public_key = s.user.public_key
+    instance = make_instance(domain, software=software)
+    instance.inbox = f'https://{domain}/inbox' if with_inbox else None
+    instance.dormant = dormant
+    member = make_user(instance, member_name, local=False)
+    make_community_member(member, s.community)
+    db.session.commit()
+    route = (http_mock.post(instance.inbox).respond(200, json={})
+             if http_mock is not None and with_inbox else None)
+    return SimpleNamespace(instance=instance, member=member, route=route)
+
+
+def test_a_microblog_instance_gets_the_announce_on_create(db_session, http_mock):
+    """:296 TRUE and :297 TRUE -> :298, the `microblog_announce`.
+
+    'mastodon' is taken verbatim from `MICROBLOG_APPS`
+    (app/constants.py:89 -- `["mastodon", "misskey", "akkoma", "iceshrimp",
+    "pleroma", "fedibird"]`) rather than guessed.
+
+    The body separates all three delivery statements at once. :298 sends
+    `microblog_announce`, whose `object` is `post.ap_id`, a STRING (:289);
+    :302 would send `group_announce`, whose `object` is the `create` DICT
+    (:280); :300 would send `create` itself, type 'Create'. Asserting the type
+    is 'Announce' AND the object is the bare ap_id string admits only :298.
+    `keyId` additionally pins the community as the signing actor, which
+    separates :298/:302 from :300.
+    """
+    s = _seed(with_keys=True)
+    assert s.community.is_local() is True
+    fan = _community_follower(s, http_mock, software='mastodon')
+
+    _send(s.post, edit=False)
+
+    announce = _sent_activity(fan.route)
+    assert announce['type'] == 'Announce'
+    assert announce['object'] == s.post.ap_id
+    assert announce['actor'] == s.community.public_url()
+    assert _key_id_of(fan.route) == s.community.public_url() + '#main-key'
+
+
+def test_a_microblog_instance_gets_the_create_directly_on_edit(db_session, http_mock):
+    """:296 TRUE and :297 FALSE -> :300, the direct `create`.
+
+    Identical setup to the test above except `edit=True`, which makes
+    `activity` 'update' at :250 and closes :297's `if activity == 'create'`.
+    :300 sends the Create/Update envelope itself -- not an Announce -- and
+    signs it as the AUTHOR, so both the body type and the `keyId` flip
+    relative to the create case. Asserting only the type would leave a mutant
+    that swapped :300's signing actor alive.
+    """
+    s = _seed(with_keys=True)
+    fan = _community_follower(s, http_mock, software='mastodon')
+
+    _send(s.post, edit=True)
+
+    activity = _sent_activity(fan.route)
+    assert activity['type'] == 'Update'
+    assert activity['object']['id'] == s.post.public_url()
+    assert _key_id_of(fan.route) == s.user.public_url() + '#main-key'
+
+
+def test_a_lemmy_instance_gets_the_group_announce(db_session, http_mock):
+    """:296 FALSE -> :302, the `group_announce`.
+
+    'lemmy' is not in `MICROBLOG_APPS` (app/constants.py:89), so :296's
+    membership test fails and the `else` at :301-302 runs for BOTH create and
+    edit. `group_announce`'s `object` is the whole `create` dict (:280), which
+    is what distinguishes it from :298's string-object announce.
+
+    `cc` is asserted because :275 REBINDS the local `cc` to
+    `[community.ap_followers_url]` after :259 has already bound the original
+    recipient list into `create['cc']`. The nested Create therefore keeps the
+    empty recipient `cc` while the Announce carries the followers URL -- a
+    mutant that moved :275 above :253 would collapse the two.
+    """
+    s = _seed(with_keys=True)
+    fan = _community_follower(s, http_mock, software='lemmy')
+
+    _send(s.post, edit=False)
+
+    announce = _sent_activity(fan.route)
+    assert announce['type'] == 'Announce'
+    assert announce['object']['type'] == 'Create'
+    assert announce['object']['object']['id'] == s.post.public_url()
+    assert announce['cc'] == [s.community.ap_followers_url]
+    assert announce['object']['cc'] == []
+    assert _key_id_of(fan.route) == s.community.public_url() + '#main-key'
+
+
+def test_a_poll_does_not_mark_the_domain_as_sent_to(db_session, http_mock):
+    """:303 FALSE -- `if post.type != POST_TYPE_POLL:` -- so :304 is skipped.
+
+    `domains_sent_to` is a local; the only place its contents are read is
+    :335, `if recipient.instance.domain not in domains_sent_to`. So the
+    witness for :303's false arm is a SECOND delivery to the same inbox: the
+    mention fan-out at :336 is not suppressed, because the fan's domain was
+    never appended.
+
+    The mentioned user IS the community member, so one Instance serves both
+    roles and both sends target the same URL -- `route.calls` counts them.
+    Call 0 is the Announce from :302, call 1 the amended Create from :336.
+
+    Pairs with `test_a_non_poll_marks_the_domain_as_sent_to` below, whose
+    setup differs ONLY in `post_type`. Neither test alone distinguishes :303;
+    together they do.
+    """
+    s = _seed(post_type=POST_TYPE_POLL, body='hello @fan@fan.example',
+              with_keys=True)
+    fan = _community_follower(s, http_mock, software='lemmy')
+    db.session.add(Poll(post_id=s.post.id, end_poll=None, mode='single'))
+    db.session.commit()
+
+    _send(s.post)
+
+    assert len(fan.route.calls) == 2
+    assert _sent_activity(fan.route, index=0)['type'] == 'Announce'
+    second = _sent_activity(fan.route, index=1)
+    assert second['type'] == 'Create'
+    assert second['object']['type'] == 'Question'
+
+
+def test_a_non_poll_marks_the_domain_as_sent_to(db_session, http_mock):
+    """:303 TRUE -> :304, `domains_sent_to.append(instance.domain)`.
+
+    The mirror of the poll test above: same community member, same mention,
+    same Announce -- but an article appends 'fan.example' to
+    `domains_sent_to`, so :335's guard closes and :336 never fires. Exactly
+    one request reaches the inbox.
+
+    A mutant deleting :304 makes this test see two calls; a mutant that made
+    :303 unconditional makes the poll test see one. The pair pins the branch
+    in both directions.
+    """
+    s = _seed(post_type=POST_TYPE_ARTICLE, body='hello @fan@fan.example',
+              with_keys=True)
+    fan = _community_follower(s, http_mock, software='lemmy')
+
+    _send(s.post)
+
+    assert len(fan.route.calls) == 1
+    assert _sent_activity(fan.route)['type'] == 'Announce'
+
+
+def test_a_remote_community_receives_the_create_at_its_inbox(db_session, http_mock):
+    """:271 FALSE -> :306, the remote-community arm.
+
+    No Announce is built at all on this arm: the Create goes straight to
+    `community.ap_inbox_url`, signed by the AUTHOR. Asserting the request URL,
+    the body type and the `keyId` together separates :306 from every statement
+    in the `is_local()` branch above it, all of which POST to an
+    `Instance.inbox` instead.
+
+    `assert s.community.is_local() is False` is the guard-opens proof --
+    `Community.is_local()` (app/models.py:795-796) is a disjunction and
+    `ap_id` alone does not close it; see `_seed`'s docstring.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    assert s.community.is_local() is False
+    route = _remote_inbox(s, http_mock)
+
+    _send(s.post)
+
+    assert len(route.calls) == 1
+    assert str(route.calls[0].request.url) == PEER_INBOX
+    activity = _sent_activity(route)
+    assert activity['type'] == 'Create'
+    assert activity['object']['type'] == 'Page'
+    assert _key_id_of(route) == s.user.public_url() + '#main-key'
+
+
+def test_the_remote_communitys_domain_is_marked_as_sent_to(db_session, http_mock):
+    """:307, `domains_sent_to.append(community.instance.domain)`.
+
+    Same shape of witness as :304's: the append is only readable through
+    :335's membership test. A user mentioned on the community's OWN instance
+    would otherwise be delivered to a second time at :336 -- so the peer's
+    `Instance.inbox` is pointed at the same URL as the community's
+    `ap_inbox_url`, and the assertion is that the route fired ONCE.
+
+    Without :307 this test sees two calls. `make_instance` leaves `inbox`
+    None, so setting it here is what gives the counter-factual an observable
+    destination at all -- with None, :336 would fail into an 'empty uri'
+    `ActivityPubLog` row (app/activitypub/signature.py:109-111) and the call
+    count would stay 1 either way.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    s.community.instance.inbox = PEER_INBOX
+    make_user(s.community.instance, 'remoteuser', local=False)
+    s.post.body = 'hello @remoteuser@peer.example'
+    db.session.commit()
+
+    _send(s.post)
+
+    assert len(route.calls) == 1
+    assert _sent_activity(route)['type'] == 'Create'
+
+
+def test_a_dormant_follower_instance_is_skipped(db_session):
+    """An offline follower instance receives nothing.
+
+    READ THE DOCSTRING, NOT THE NAME, FOR WHICH ARM THIS IS. It is NOT :295's
+    second conjunct. `Instance.online()` is
+    `not (self.dormant or self.gone_forever)` (app/models.py:118-119), and
+    `Community.following_instances` (app/models.py:848-850) already filters
+    `Instance.dormant == False` and `Instance.gone_forever == False` in SQL --
+    as does `User.following_instances` (app/models.py:1671-1673). Every
+    instance :294 can yield is therefore already online, so
+    `instance.online()` at :295 is a redundant re-check whose False arm no
+    test can reach. Registered as a finding; not chased.
+
+    The two `following_instances` assertions are what make this test
+    distinguish anything: `include_dormant=True` returning the instance proves
+    the CommunityMember/User/Instance rows are shaped correctly and that the
+    exclusion is the dormancy and nothing else (a mis-seeded row would make
+    both calls return `[]` and the test would pass for the wrong reason).
+
+    No `http_mock`: nothing should be sent. The session-scoped empty respx
+    router (tests/conftest.py:283) raises on any unmatched request, which
+    `post_request` records as an `ActivityPubLog` failure rather than
+    re-raising -- so `ActivityPubLog.query.count() == 0` is the proof that no
+    delivery was even attempted.
+    """
+    s = _seed(with_keys=True)
+    fan = _community_follower(s, dormant=True)
+
+    assert s.community.following_instances() == []
+    assert s.community.following_instances(include_dormant=True) == [fan.instance]
+
+    _send(s.post)
+
+    assert ActivityPubLog.query.count() == 0
+
+
+def test_an_inboxless_follower_instance_is_skipped(db_session):
+    """:295 FIRST conjunct FALSE -- `if instance.inbox and ...`.
+
+    Unlike the dormant case above, this arm IS reachable: `Instance.inbox` is
+    nullable and `make_instance` leaves it None, and no `following_instances`
+    filter mentions it. The instance genuinely enters :294's loop and is
+    rejected at :295 -- which the first assertion proves by showing the query
+    returns it.
+
+    THE WITNESS IS THE ABSENCE OF AN ActivityPubLog ROW, not the absence of an
+    HTTP request. Deleting `instance.inbox and` from :295 would call
+    `send_post_request(None, group_announce, ...)`, and `post_request`
+    (app/activitypub/signature.py:109-111) turns a None uri into a
+    `result='failure'`/`exception_message='empty uri'` log row without ever
+    reaching the transport. A test asserting only 'no HTTP happened' would
+    therefore pass against that mutant; counting log rows does not.
+    """
+    s = _seed(with_keys=True)
+    fan = _community_follower(s, with_inbox=False)
+
+    assert s.community.following_instances() == [fan.instance]
+    assert fan.instance.inbox is None
+
+    _send(s.post)
+
+    assert ActivityPubLog.query.count() == 0
