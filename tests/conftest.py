@@ -113,13 +113,33 @@ def app():
         yield application
 
 
+_TEARDOWN_SQL_CACHE = []
+
+
+def _teardown_sql(db):
+    """The per-test cleanup statement, built once from the model metadata.
+
+    Uses db.metadata rather than pg_tables so alembic_version is left alone --
+    wiping it would strand `flask db upgrade`.
+    """
+    if not _TEARDOWN_SQL_CACHE:
+        deletes = ' '.join(f'DELETE FROM "{table.name}";'
+                           for table in db.metadata.sorted_tables)
+        _TEARDOWN_SQL_CACHE.append(
+            'SET LOCAL session_replication_role = replica; '
+            + deletes
+            + " SELECT setval(c.oid, 1, false) FROM pg_class c"
+              " WHERE c.relkind = 'S' AND c.relnamespace = 'public'::regnamespace;")
+    return _TEARDOWN_SQL_CACHE[0]
+
+
 @pytest.fixture
 def db_session(app):
     """Give each test a clean database (and a clean flask.g).
 
-    Truncates rather than rolling back a nested transaction: the code under test
-    calls db.session.commit() in several places, which a rollback-based fixture
-    would have to fight.
+    Deletes every row rather than rolling back a nested transaction: the code
+    under test calls db.session.commit() in several places, which a
+    rollback-based fixture would have to fight.
 
     The `app` fixture pushes one app context for the whole test session (see
     above), so flask.g is not reset between tests the way it would be for
@@ -132,17 +152,31 @@ def db_session(app):
     """
     from app import db
     from flask import g
-    from sqlalchemy import text
 
     g.__dict__.clear()
 
     yield db.session
 
     db.session.rollback()
-    table_names = ', '.join(f'"{table.name}"' for table in reversed(db.metadata.sorted_tables))
-    db.session.execute(text(f'TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE'))
+
+    # DELETE, not TRUNCATE. TRUNCATE allocates a fresh relfilenode for every
+    # table it touches, so ~90 of them per test churn the catalog; measured at
+    # 124ms per teardown, which is most of the suite's runtime. DELETE on
+    # already-tiny tables touches no catalog and measures ~6ms. fsync,
+    # synchronous_commit and full_page_writes are all off in the test container,
+    # so durability is not what either one is paying for.
+    #
+    # session_replication_role = replica disables FK triggers for the duration
+    # of the transaction, which is what TRUNCATE ... CASCADE was buying: with
+    # the constraints live there is no single safe deletion order, because the
+    # schema's foreign keys are not acyclic. SET LOCAL ends at the COMMIT below,
+    # so the next test sees constraints enforced normally.
+    #
+    # The setval sweep replaces RESTART IDENTITY. Tests depend on ids starting
+    # at 1 (fixtures hardcode instance_id=1), so resetting is not optional.
+    db.session.connection().exec_driver_sql(_teardown_sql(db))
     db.session.commit()
-    # TRUNCATE ... RESTART IDENTITY means the next test's rows reuse these same
+    # Resetting the sequences means the next test's rows reuse these same
     # primary keys. commit() alone leaves this scoped session's identity map
     # holding this test's now-stale objects at those keys; the next test's
     # fixture, constructing fresh rows at the same keys, then trips
