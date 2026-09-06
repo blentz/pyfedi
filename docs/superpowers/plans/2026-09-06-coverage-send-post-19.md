@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Take `send_post` (`app/shared/tasks/pages.py:88-368`) to zero uncovered statements and branch arms — except two arms proved unreachable — and land the two production fixes registered as D298 and D299.
+**Goal:** Take `send_post` (`app/shared/tasks/pages.py:88-371`) to zero uncovered statements and branch arms — except two arms proved unreachable — and land the two production fixes registered as D298 and D299.
 
-**Architecture:** One new test file, `tests/test_shared_tasks_send_post.py`, calls `send_post` directly with an explicit `session`. A locally-seeded community with no followers exercises the whole function and reaches the early `return` at `:338` without a single outbound request. Both fixes are guard additions, each test-first in its own commit, each mutation-proved.
+**Architecture:** One new test file, `tests/test_shared_tasks_send_post.py`, calls `send_post` directly with an explicit `session`. A locally-seeded community with no followers exercises the whole function and reaches the early `return` at `:341` without a single outbound request. Both fixes are guard additions, each test-first in its own commit, each mutation-proved.
 
 **Tech Stack:** pytest, respx (`http_mock`), SQLAlchemy, Flask, Celery (eager), `tests/factories.py`, `./run_tests.sh`.
 
@@ -47,7 +47,7 @@ The spec asks for zero uncovered statements *and zero uncovered branch arms* in 
 154:         return
 ```
 
-So `community.local_only` truthy returns at `:154`, and by `:267` it is always falsy. `not community.local_only` is therefore always `True`, and the false arms of `:267` and `:330` can never execute.
+So `community.local_only` truthy returns at `:154`, and by `:270` it is always falsy. `not community.local_only` is therefore always `True`, and the false arms of `:270` and `:333` can never execute.
 
 **Two more arms are unreachable for different reasons, found while writing this plan.**
 
@@ -56,21 +56,21 @@ So `community.local_only` truthy returns at `:154`, and by `:267` it is always f
 209:     if post.type != POST_TYPE_POLL:
 210:         page['name'] = post.title  # re-sets what :196 already set
 ...
-307:     if '@context' not in create:   # :257 always put it there
-309:     if 'name' in page:             # :196 always put it there
+310:     if '@context' not in create:   # :272 may have deleted it -- SEE CORRECTION
+312:     if 'name' in page:             # :196 always put it there
 ```
 
-- **`:307`'s TRUE arm (`:308`) is unreachable.** `create` is built at `:250-259` with `'@context': default_context()` at `:257`, and nothing removes it before `:307`. So `'@context' not in create` is never true.
-- **`:309`'s FALSE arm, arc `(309, 311)`, is unreachable.** `:196` sets `page['name']` unconditionally inside the dict literal, and nothing deletes it before `:309`. So `'name' in page` is always true.
+- **~~`:307`'s TRUE arm (`:308`) is unreachable.~~ THIS CLAIM IS FALSE AND IS WITHDRAWN.** Corrected in Task 5 round 1, verified against the tree at `e1692167`. The renumbered lines are `:310` and `:311`. `create` is built at `:253-262` with `'@context': default_context()` at `:260` — but `:272` is `del create['@context']`, reached whenever `community.is_local()` is true at `:271`. A local community therefore arrives at `:310` with no `@context`, and the TRUE arm at `:311` runs. It is not merely reachable, it is the DEFAULT path: `_seed()` builds a local community, so most tests in the file already take it. **Task 7 must cover both arms of `:310`, and Task 8 must NOT register its true arm as unreachable.**
+- **`:312`'s FALSE arm, arc `(312, 314)`, is unreachable.** `:196` sets `page['name']` unconditionally inside the dict literal, and nothing deletes it before `:312` — `:313` is the only `del` and it is inside the true arm. So `'name' in page` is always true. (Re-verified against the tree at `e1692167`, not merely renumbered.)
 
-**Criterion 2 is amended to:** zero uncovered statements, and zero uncovered branch arms **except four**: the false arms of `:267` and `:330`, the true arm of `:307`, and the false arm of `:309`. Task 8 registers all four with a written unreachability argument against `tests/README.md` fact 75's catalogue of causes.
+**Criterion 2 is amended to:** zero uncovered statements, and zero uncovered branch arms **except three**: the false arms of `:270` and `:333`, and the false arm of `:312`. Task 8 registers all three with a written unreachability argument against `tests/README.md` fact 75's catalogue of causes. **This was FOUR until Task 5 round 1 disproved the fourth** — the true arm of what is now `:310` is reachable via `:272`'s `del`; see the withdrawn bullet above.
 
 Do not chase these four arms. Do not add a test that appears to reach them.
 
 **Two findings fall out of the second pair, and Task 9 registers both.**
 
 1. **`:209-210` is a redundant statement.** `:196` already assigned `page['name'] = post.title` for every post type; `:210` assigns the same value again for non-polls only. It has no effect. This is fact 75's sixth cause — the statement-scoped one sub-project 16 added — appearing in the wild.
-2. **`:306`'s comment says "amend copy of the Create", and no copy is made.** `:254` is `'object': page` — a reference — and `:311` is `note = page`, another reference. So `:310`'s `del`, `:312`'s `content` reset and `:314`'s type change all mutate the very dict `create['object']` points at. The sends at `:295`, `:297`, `:299` and `:303` happen *before* `:306`, and `send_post_request` signs the body inside the call, so delivery order saves this from being a live defect — but the comment describes a copy that does not exist, and a future edit that moved a send below `:306` would silently ship the mutated object. Register it as a latent hazard with that reasoning, not as a crash.
+2. **`:309`'s comment says "amend copy of the Create", and no copy is made.** `:257` is `'object': page` — a reference — and `:314` is `note = page`, another reference. So `:313`'s `del`, `:315`'s `content` reset and `:317`'s type change all mutate the very dict `create['object']` points at. The sends at `:298`, `:300`, `:302` and `:306` happen *before* `:309`, and `send_post_request` signs the body inside the call, so delivery order saves this from being a live defect — but the comment describes a copy that does not exist, and a future edit that moved a send below `:309` would silently ship the mutated object. Register it as a latent hazard with that reasoning, not as a crash.
 
 ---
 
@@ -83,8 +83,8 @@ Measured by the controller on the current tree. 125 total, 64 statements and 61 
 | Mention extraction | `:96-123` | 21 | 14 | 1 |
 | Mention notification and the four early returns | `:125-174` | 18 | 14 | 2 |
 | Page builder | `:175-246` | 4 | 5 | 3 |
-| Create/Announce and community delivery | `:247-305` | 9 | 9 | 6 |
-| Note amendment and follower delivery | `:306-368` | 12 | 19 | 7 |
+| Create/Announce and community delivery | `:250-308` | 9 | 9 | 6 |
+| Note amendment and follower delivery | `:309-371` | 12 | 19 | 7 |
 
 **Note what this map says about the two fixes.** The builder is nearly covered already — its only uncovered statements are `:217-220`, the image-url fallback chain. So `:181`, `:224`, `:232` and `:233` are **already executed** by existing tests, with non-`None` values. The defects are live in behaviour but invisible to coverage. The failing tests in Tasks 4 and 5 must construct the `None` states specifically; adding coverage will not surface them.
 
@@ -107,7 +107,7 @@ Measured by the controller on the current tree. 125 total, 64 statements and 61 
 
 Each was re-derived against the current tree while this plan was written.
 
-1. `app/shared/tasks/pages.py:88` is `def send_post(post_id, edit=False, session=None):`. The file is **432 lines**. The next `def` is `move_post` at `:370` (its `@celery.task` decorator is `:369`).
+1. `app/shared/tasks/pages.py:88` is `def send_post(post_id, edit=False, session=None):`. The file is **435 lines** as of `e1692167` (432 before Task 5's fix). The next `def` is `move_post` at `:373` (its `@celery.task` decorator is `:372`).
 2. **`session` has no usable default.** `:89` is `session.query(Post).get(post_id)`, so `session=None` raises `AttributeError`. Every test passes `db.session`.
 3. **Four early returns stand between entry and the builder**, and a test must clear all four to reach `:175`:
    - `:149-150` `if not community.instance.online(): return`
@@ -115,12 +115,12 @@ Each was re-derived against the current tree while this plan was written.
    - `:156-158` a `CommunityBan` row for `(user, community)` → `return`
    - `:159-161` `if not community.is_local():` then a blocked or banned instance → `return`
 4. `Instance.online()` is `return not (self.dormant or self.gone_forever)`. Both columns default `False` (`app/models.py:98`, `:100`) and `make_instance` sets neither, so a factory instance is online. To take `:150`, set `dormant = True` and commit.
-5. **`community.local_only` is NOT the lever sub-project 18 thought it was.** It returns at `:154`, long before the delivery block at `:267`. That is why the false arms of `:267` and `:330` are dead — see the amendment above.
-6. **The natural stopping point before the network is `:336-338`:**
+5. **`community.local_only` is NOT the lever sub-project 18 thought it was.** It returns at `:154`, long before the delivery block at `:270`. That is why the false arms of `:270` and `:333` are dead — see the amendment above.
+6. **The natural stopping point before the network is `:339-341`:**
    ```
-   336:     followers = session.query(UserFollower).filter_by(local_user_id=post.user_id, is_inward=True).all()
-   337:     if not followers:
-   338:         return
+   339:     followers = session.query(UserFollower).filter_by(local_user_id=post.user_id, is_inward=True).all()
+   340:     if not followers:
+   341:         return
    ```
    A post whose author has no inward followers ends the function there. Combined with a local community that has no `following_instances()`, the whole builder runs with zero outbound requests.
 7. Delivery is `send_post_request` (`app/activitypub/signature.py:82`). A test that reaches it needs the sender to have keys — `make_user(..., with_keys=True)` — because signing calls `.encode()` on the private key and a keyless sender dies before any request.
@@ -1033,28 +1033,28 @@ The body must carry the arbitration: why the callers and not `ap_datetime` (29 c
 **Files:**
 - Modify: `tests/test_shared_tasks_send_post.py` (append)
 
-Target: `:247-305`, 9 statements / 9 branch arms. Note that `(267, 307)` is one of the two unreachable arms — do not chase it.
+Target: `:250-308`, 9 statements / 9 branch arms. Note that `(270, 310)` is one of the unreachable arms — do not chase it.
 
-The uncovered statements are `:293-304`, the per-instance fan-out inside `:291`'s loop:
+The uncovered statements are `:296-307`, the per-instance fan-out inside `:294`'s loop:
 
 ```
-291:             for instance in set(community.following_instances() + user.following_instances(software='piefed')):
-292:                 if instance.inbox and instance.online() and not user.has_blocked_instance(instance.id) and not instance_banned(instance.domain):
-293:                     if instance.software in MICROBLOG_APPS:
-294:                         if activity == 'create':
-295:                             send_post_request(instance.inbox, microblog_announce, ...)
-297:                             send_post_request(instance.inbox, create, ...)
-299:                         send_post_request(instance.inbox, group_announce, ...)
-300:                     if post.type != POST_TYPE_POLL:
-301:                         domains_sent_to.append(instance.domain)
-303:             send_post_request(community.ap_inbox_url, create, ...)
+294:             for instance in set(community.following_instances() + user.following_instances(software='piefed')):
+295:                 if instance.inbox and instance.online() and not user.has_blocked_instance(instance.id) and not instance_banned(instance.domain):
+296:                     if instance.software in MICROBLOG_APPS:
+297:                         if activity == 'create':
+298:                             send_post_request(instance.inbox, microblog_announce, ...)
+300:                             send_post_request(instance.inbox, create, ...)
+302:                         send_post_request(instance.inbox, group_announce, ...)
+303:                     if post.type != POST_TYPE_POLL:
+304:                         domains_sent_to.append(instance.domain)
+306:             send_post_request(community.ap_inbox_url, create, ...)
 ```
 
 - [ ] **Step 1: Establish the delivery harness**
 
 Every test in this task reaches `send_post_request`. Use the observable Task 3 settled on. The sender must be built with `make_user(..., with_keys=True)` — signing calls `.encode()` on the private key and a keyless sender dies before any request is attempted.
 
-`_seed` does not take a `with_keys` parameter. Add one — `_seed(..., with_keys=False)` — passing it through to `make_user`, and say in your report that you extended the prelude. Do not create a second seeding helper.
+`_seed` does not take a `with_keys` parameter. Add one — `_seed(..., with_keys=False)` — passing it through to `make_user`, and say in your report that you extended the prelude. Do not create a second seeding helper. **DONE ALREADY:** Task 3 added `with_keys`, and Tasks 3-5 added `_remote_inbox`, `_sent_activity`, `_page_of`, `_attach_image` and `_inward_follower`. Read them and reuse; add no new helper that duplicates one.
 
 - [ ] **Step 2: Write the delivery tests**
 
@@ -1064,14 +1064,14 @@ Write one named test for each of these, each asserting on the captured request b
 
 | Test | Arm | Setup |
 |---|---|---|
-| `test_a_microblog_instance_gets_the_announce_on_create` | `:293` true, `:294` true → `:295` | a follower instance whose `software` is in `MICROBLOG_APPS`, `edit=False` |
-| `test_a_microblog_instance_gets_the_create_directly_on_edit` | `:293` true, `:294` false → `:297` | same instance, `edit=True` |
-| `test_a_lemmy_instance_gets_the_group_announce` | `:293` false → `:299` | a follower instance whose `software` is `lemmy` |
-| `test_a_poll_does_not_mark_the_domain_as_sent_to` | `:300` false | `POST_TYPE_POLL`, and assert the mention fan-out at `:331-333` still reaches that domain |
-| `test_a_non_poll_marks_the_domain_as_sent_to` | `:300` true → `:301` | `POST_TYPE_ARTICLE`, and assert `:332`'s guard suppresses a second send to the same domain |
-| `test_a_remote_community_receives_the_create_at_its_inbox` | `:268` false → `:303` | `_seed(local_community=False)` with an `ap_inbox_url` |
-| `test_an_offline_follower_instance_is_skipped` | `:292` second conjunct false | follower instance with `dormant = True` |
-| `test_an_inboxless_follower_instance_is_skipped` | `:292` first conjunct false | follower instance with `inbox = None` |
+| `test_a_microblog_instance_gets_the_announce_on_create` | `:296` true, `:297` true → `:298` | a follower instance whose `software` is in `MICROBLOG_APPS`, `edit=False` |
+| `test_a_microblog_instance_gets_the_create_directly_on_edit` | `:296` true, `:297` false → `:300` | same instance, `edit=True` |
+| `test_a_lemmy_instance_gets_the_group_announce` | `:296` false → `:302` | a follower instance whose `software` is `lemmy` |
+| `test_a_poll_does_not_mark_the_domain_as_sent_to` | `:303` false | `POST_TYPE_POLL`, and assert the mention fan-out at `:334-336` still reaches that domain |
+| `test_a_non_poll_marks_the_domain_as_sent_to` | `:303` true → `:304` | `POST_TYPE_ARTICLE`, and assert `:335`'s guard suppresses a second send to the same domain |
+| `test_a_remote_community_receives_the_create_at_its_inbox` | `:271` false → `:306` | `_seed(local_community=False)` with an `ap_inbox_url` |
+| `test_an_offline_follower_instance_is_skipped` | `:295` second conjunct false | follower instance with `dormant = True` |
+| `test_an_inboxless_follower_instance_is_skipped` | `:295` first conjunct false | follower instance with `inbox = None` |
 
 Read `MICROBLOG_APPS` in `app/constants.py` and use a value from it verbatim rather than guessing. Read `Community.following_instances` (`app/models.py:1667`) and `User.following_instances` (`:842`) to learn what rows make an instance a follower, and seed accordingly — do not assume.
 
@@ -1098,7 +1098,7 @@ Subject: `test: cover send_post's Announce construction and per-instance deliver
 **Files:**
 - Modify: `tests/test_shared_tasks_send_post.py` (append)
 
-Target: `:306-368`, 12 statements / 19 branch arms. `(330, 336)` is the second unreachable arm — do not chase it.
+Target: `:309-371`, 12 statements / 19 branch arms. `(333, 339)` is another of the unreachable arms — do not chase it.
 
 - [ ] **Step 1: Write the Note-amendment tests**
 
@@ -1108,36 +1108,37 @@ The amendment turns the Page into a Mastodon-friendly Note. Cover each condition
 
 | Line | Arm to take |
 |---|---|
-| `:307` | **False arm only.** The true arm at `:308` is unreachable — `:257` always puts `@context` in `create`. |
-| `:309` | **True arm only.** The false arm, arc `(309, 311)`, is unreachable — `:196` always puts `name` in `page`. Do not try to build a post without one; `:209-210` re-assigns the same key rather than being its only writer. |
-| `:313` | `note['type'] == 'Page' or 'Event'` — both arms |
-| `:315` | LINK or VIDEO |
-| `:317` | not POLL |
-| `:319` | EVENT |
-| `:324` | `post_body_html` truthy and falsy |
-| `:326` | `post.language_id` set and unset |
+| `:310` | **BOTH arms.** The plan previously said "false arm only, the true arm is unreachable". That was WRONG and is withdrawn — see the Amendment. `:272` is `del create['@context']`, taken whenever `community.is_local()`, so a LOCAL community reaches `:310` with the key gone and runs `:311`. False arm: a REMOTE community (`_seed(local_community=False)`), which never enters `:271`'s true arm. |
+| `:312` | **True arm only.** The false arm, arc `(312, 314)`, is unreachable — `:196` always puts `name` in `page`. Do not try to build a post without one; `:209-210` re-assigns the same key rather than being its only writer. |
+| `:316` | `note['type'] == 'Page' or note['type'] == 'Event'` — both arms |
+| `:318` | LINK or VIDEO |
+| `:320` | not POLL |
+| `:322`, **first** conjunct | `post.type == POST_TYPE_EVENT` — true and false. |
+| `:322`, **second** conjunct | `post.event.start is not None` — true and false. **THIS IS A COMPOUND CONDITION WITH TWO ARMS, NOT ONE.** Task 5 round 1 added `test_an_event_note_carries_its_start_localised_to_the_event_timezone` for the all-true path (the only test in the file that reaches `:324-326`) and `test_an_event_with_no_start_does_not_crash` for the second conjunct false. **Do not tick this row with a single test.** Note that the true arm is observable ONLY at the follower delivery in Step 2, never through `_remote_inbox`, because `:322` runs below the community send at `:306`. |
+| `:327` | `post_body_html` truthy and falsy |
+| `:329` | `post.language_id` set and unset |
 
-Read `:306-329` before writing, and write one named test per arm, each asserting on the amended body actually sent to a mentioned recipient at `:333`.
+Read `:309-332` before writing, and write one named test per arm, each asserting on the amended body actually sent to a mentioned recipient at `:336`.
 
 - [ ] **Step 2: Write the follower-delivery tests**
 
 ```
-336:     followers = session.query(UserFollower).filter_by(local_user_id=post.user_id, is_inward=True).all()
-337:     if not followers:
-338:         return
-341:     for follower in followers:
-342:         user_details = session.query(User).get(follower.remote_user_id)
-343:         if user_details:
-344:             create['cc'].append(user_details.public_url())
-346:     for instance in user.following_instances():
-347:         if instance.domain not in domains_sent_to and instance.id != 1 and instance.software != 'piefed':
-348:             if instance.inbox and instance.online() and not user.has_blocked_instance(instance.id) and not instance_banned(instance.domain):
-349:                 send_post_request(instance.inbox, create, ...)
+339:     followers = session.query(UserFollower).filter_by(local_user_id=post.user_id, is_inward=True).all()
+340:     if not followers:
+341:         return
+344:     for follower in followers:
+345:         user_details = session.query(User).get(follower.remote_user_id)
+346:         if user_details:
+347:             create['cc'].append(user_details.public_url())
+349:     for instance in user.following_instances():
+350:         if instance.domain not in domains_sent_to and instance.id != 1 and instance.software != 'piefed':
+351:             if instance.inbox and instance.online() and not user.has_blocked_instance(instance.id) and not instance_banned(instance.domain):
+352:                 send_post_request(instance.inbox, create, ...)
 ```
 
-Cover: the early return at `:337-338` (already exercised by every earlier test — name which one and say so rather than adding a redundant test); `:343`'s true and false arms (a `UserFollower` row whose `remote_user_id` matches no `User` takes the false arm); and each of `:347`'s three conjuncts and `:348`'s four, one test per conjunct, each leaving the others satisfied.
+Cover: the early return at `:340-341` (already exercised by every earlier test — name which one and say so rather than adding a redundant test); `:346`'s true and false arms (a `UserFollower` row whose `remote_user_id` matches no `User` takes the false arm); and each of `:350`'s three conjuncts and `:351`'s four, one test per conjunct, each leaving the others satisfied.
 
-`tests/factories.py` has `make_follow(local_user, remote_user, is_accepted=True, is_inward=False)`. Read it and pass `is_inward=True`, since `:336` filters on that column.
+`tests/factories.py` has `make_follow(local_user, remote_user, is_accepted=True, is_inward=False)`. Read it and pass `is_inward=True`, since `:339` filters on that column. **Task 5 round 1 already added `_inward_follower(s, http_mock)`** to `tests/test_shared_tasks_send_post.py`, which builds the row and registers the follower inbox route, and whose docstring enumerates all of `:339`-`:351`'s conditions. Reuse it rather than building a second one.
 
 - [ ] **Step 3: Run**
 
@@ -1162,13 +1163,13 @@ Subject: `test: cover send_post's Note amendment and follower fan-out`
 
 - [ ] **Step 1: Ask the controller for the scoped measurement**
 
-Do NOT run the full suite. Report to the controller that Task 8 is ready and needs the missing statements and missing branch arms within `app/shared/tasks/pages.py:88-368`. Starting point was 64 statements and 61 branch arms.
+Do NOT run the full suite. Report to the controller that Task 8 is ready and needs the missing statements and missing branch arms within `app/shared/tasks/pages.py:88-371`. Starting point was 64 statements and 61 branch arms.
 
 - [ ] **Step 2: Write a test for each remaining arm**
 
 For each one the controller reports, write one named test whose docstring names the line and the arm. Follow the shapes already in the file.
 
-**Four arms are excluded and must NOT be chased:** the false arms of `:267` and `:330` (arcs `(267, 307)` and `(330, 336)`), the true arm of `:307`, and the false arm of `:309` (arc `(309, 311)`). See Step 4.
+**Three arms are excluded and must NOT be chased:** the false arms of `:270` and `:333` (arcs `(270, 310)` and `(333, 339)`), and the false arm of `:312` (arc `(312, 314)`). See Step 4. **This said FOUR until Task 5 round 1** — the true arm of `:310` was listed as unreachable and is not; `:272`'s `del create['@context']` reaches it on every local community. Cover it, do not register it.
 
 If any other arm is genuinely unreachable, do not fake it — write the argument instead, and consult `tests/README.md` fact 75's catalogue of causes for an unkillable clause, naming which cause applies or describing a new one.
 
@@ -1189,25 +1190,25 @@ for node in ast.walk(tree):
 PY
 ```
 
-Reconcile every result against a named test taking each arm. `:137`'s `user.ap_id if user.ap_id else user.user_name` is covered by two tests from Task 2. `:247` and `:249` are `'create' if not edit else 'update'` and `'Create' if not edit else 'Update'` — both arms of each need a named test. Report the walk's raw output and your reconciliation.
+Reconcile every result against a named test taking each arm. `:137`'s `user.ap_id if user.ap_id else user.user_name` is covered by two tests from Task 2. `:250` and `:252` are `'create' if not edit else 'update'` and `'Create' if not edit else 'Update'` — both arms of each need a named test. Report the walk's raw output and your reconciliation.
 
-- [ ] **Step 4: Write the unreachability argument for `:267` and `:330`**
+- [ ] **Step 4: Write the unreachability argument for `:270` and `:333`**
 
 Add this as a comment block in the test file, immediately above the delivery cluster, so the next reader finds it where the arms live:
 
 ```python
 # ---------------------------------------------------------------------------
-# FOUR UNREACHABLE ARMS, and why no test here chases them.
+# THREE UNREACHABLE ARMS, and why no test here chases them.
 #
-# `:267` and `:330` are both `if not community.local_only:`. Coverage reports
-# the arcs (267, 307) and (330, 336) -- their false arms -- as missing, and
+# `:270` and `:333` are both `if not community.local_only:`. Coverage reports
+# the arcs (270, 310) and (333, 339) -- their false arms -- as missing, and
 # they will stay missing.
 #
 # `community` is bound once at `:91` (`community = post.community`) and is
-# never reassigned anywhere in `:88-368`. And `:153-154` is
+# never reassigned anywhere in `:88-371`. And `:153-154` is
 # `if community.local_only or community.private: return`. So a community with
-# `local_only` set returns at `:154`, long before `:267`; by the time control
-# reaches `:267`, `community.local_only` is necessarily falsy, and
+# `local_only` set returns at `:154`, long before `:270`; by the time control
+# reaches `:270`, `community.local_only` is necessarily falsy, and
 # `not community.local_only` is necessarily True.
 #
 # This is a guard whose condition an earlier return has already decided --
@@ -1215,21 +1216,25 @@ Add this as a comment block in the test file, immediately above the delivery clu
 # sub-project's register entry for where it is recorded.
 #
 # Sub-project 18 set `community.local_only = True` in ten of its tests
-# believing it skipped delivery at `:267`. It did not; it returned at `:154`.
+# believing it skipped delivery at `:270`. It did not; it returned at `:154`.
 # The workaround worked, for a different reason than the one written down.
 #
-# The other two are decided by an unconditional assignment rather than by an
+# The third is decided by an unconditional assignment rather than by an
 # earlier return:
 #
-# `:307` is `if '@context' not in create:`. `create` is built at `:250-259`
-# with `'@context': default_context()` at `:257`, and nothing removes it before
-# `:307`, so the TRUE arm at `:308` can never run.
+# `:312` is `if 'name' in page:`. `:196` sets `page['name']` unconditionally
+# inside the dict literal, and nothing deletes it before `:312` -- `:313` is
+# the only `del` and it is inside the true arm -- so the FALSE arm, arc
+# (312, 314), can never run. Note that `:209-210` re-assigns the same key for
+# non-polls, which is a redundant statement, not a second writer: `:196` has
+# already set it for every type.
 #
-# `:309` is `if 'name' in page:`. `:196` sets `page['name']` unconditionally
-# inside the dict literal, and nothing deletes it before `:309`, so the FALSE
-# arm -- arc (309, 311) -- can never run. Note that `:209-210` re-assigns the
-# same key for non-polls, which is a redundant statement, not a second writer:
-# `:196` has already set it for every type.
+# A FOURTH ARM WAS LISTED HERE AND IS WITHDRAWN. The plan claimed the TRUE arm
+# of `:310` (`if '@context' not in create:`) was unreachable because `:260`
+# always puts `@context` into `create`. It does -- and `:272` then DELETES it,
+# on every local community, which is `_seed()`'s default. So `:311` runs on the
+# ordinary path. Cover it; do not register it. Disproved in Task 5 round 1 by
+# reading `:270-272`, after renumbering exposed the claim to a re-check.
 # ---------------------------------------------------------------------------
 ```
 
@@ -1267,10 +1272,10 @@ Read sub-project 18's section first and match its structure. Write:
 
 1. **Two defects fixed, test-first with mutation-proved tests — D298, D299.** For D298 state explicitly that only `app/shared/tasks/pages.py` is fixed and that `app/activitypub/util.py:195`, `:200` and `:201` remain open with the arbitration attached. Carry the arbitration verbatim: guard the callers not `ap_datetime` (29 call sites), omit the key rather than emit a null, precedent at `app/activitypub/util.py:168`.
 2. **D300 — the `href`/`EVENT` divergence.** `app/shared/tasks/pages.py:178-179` emits `{'href': post.url}` for LINK and VIDEO with no `None` check and without `POST_TYPE_EVENT`; `app/activitypub/util.py:170` requires `post.url is not None` and includes EVENT. `Post.url` is nullable (`app/models.py:1712`) and `edit_post` writes `None` at `app/shared/post.py:326-327` and `:613`. **Registered, not fixed:** the `None` half and the `EVENT` half need separate arguments, and adding EVENT changes what peers receive for every event post on a live install.
-3. **The two unreachable arms**, with the argument from Task 8 Step 4 and the correction it contains: sub-project 18's ten `local_only = True` workarounds worked by returning at `:154`, not by skipping delivery at `:267`. Record that those workarounds are now deletable and why this sub-project did not delete them (`tests/test_shared_post_edit.py` is not this sub-project's file, and removing them would require re-running that file's mutation tables).
+3. **The three unreachable arms** (it was four until Task 5 round 1 disproved the `:310` one — carry that correction too), with the argument from Task 8 Step 4: sub-project 18's ten `local_only = True` workarounds worked by returning at `:154`, not by skipping delivery at `:270`. Record that those workarounds are now deletable and why this sub-project did not delete them (`tests/test_shared_post_edit.py` is not this sub-project's file, and removing them would require re-running that file's mutation tables).
 4. **Two findings from the `name`/`@context` pair**, numbered after D300:
    - `app/shared/tasks/pages.py:209-210` is a **redundant statement**. `:196` already assigns `page['name'] = post.title` inside the dict literal for every post type; `:210` assigns the same value again for non-polls only, with no effect. Record it against fact 75's sixth cause — the statement-scoped one sub-project 16 added — as an instance found in production code rather than in a test.
-   - `app/shared/tasks/pages.py:306`'s comment says "amend **copy** of the Create" and **no copy is made**. `:254` is `'object': page` and `:311` is `note = page`; both are references to one dict, so `:310`'s `del`, `:312`'s content reset and `:314`'s type change all mutate `create['object']` in place. Not a live defect: every send at `:295`, `:297`, `:299` and `:303` happens before `:306`, and `send_post_request` signs the body inside the call. Register it as a **latent hazard** with exactly that reasoning — a future edit that moved a send below `:306` would ship the mutated object silently.
+   - `app/shared/tasks/pages.py:309`'s comment says "amend **copy** of the Create" and **no copy is made**. `:257` is `'object': page` and `:314` is `note = page`; both are references to one dict, so `:313`'s `del`, `:315`'s content reset and `:317`'s type change all mutate `create['object']` in place. Not a live defect: every send at `:298`, `:300`, `:302` and `:306` happens before `:309`, and `send_post_request` signs the body inside the call. Register it as a **latent hazard** with exactly that reasoning — a future edit that moved a send below `:309` would ship the mutated object silently.
 5. **Anything else Task 8 found**, numbered after those.
 
 Do a two-pass citation sweep over everything written (fact 100).
@@ -1284,8 +1289,8 @@ grep -o '^1[0-9][0-9]\.' tests/README.md | sort -u | tail -3
 Sub-project 18 ended at fact 106 plus an extension to fact 89. Append from 107. Candidates, each written only if it actually bit:
 
 - `send_post` has no usable default for `session`; `:89` dereferences it immediately.
-- The four early returns at `:150`, `:154`, `:158`, `:161`, and that `community.local_only` returns at `:154` rather than skipping delivery at `:267`.
-- `:336-338` is the natural stopping point before the network — no followers, no outbound request, no `http_mock` needed.
+- The four early returns at `:150`, `:154`, `:158`, `:161`, and that `community.local_only` returns at `:154` rather than skipping delivery at `:270`.
+- `:339-341` is the natural stopping point before the network — no followers, no outbound request, no `http_mock` needed.
 - A sender without `with_keys=True` dies at signing before any request is attempted.
 - `search_for_user`'s two bare `except:` clauses at `:107-108` and `:113-114`, and what that means for a test asserting absence.
 - Whether fact 75 gained a new cause from Task 8 Step 4.
@@ -1322,11 +1327,11 @@ Subject: `docs: register sub-project 19's findings and set app/shared/tasks/page
 From spec §9, with criterion 2 amended by this plan's amendment section:
 
 1. `tests/test_shared_tasks_send_post.py` exists and calls `send_post` directly.
-2. `send_post` (`:88-368`) is at zero uncovered statements, and zero uncovered branch arms **except four**: the false arms of `:267` and `:330`, the true arm of `:307`, and the false arm of `:309`. All four are registered with a written unreachability argument.
+2. `send_post` (`:88-371`) is at zero uncovered statements, and zero uncovered branch arms **except three**: the false arms of `:270` and `:333`, and the false arm of `:312`. All three are registered with a written unreachability argument. (Was four; the true arm of `:310` is reachable via `:272`'s `del create['@context']` and must be COVERED, not registered.)
 3. Both `edit=False` and `edit=True` are exercised throughout the builder.
-4. Every conditional expression in `:88-368` has both arms exercised by named tests, reconciled by an AST walk rather than by the coverage number.
+4. Every conditional expression in `:88-371` has both arms exercised by named tests, reconciled by an AST walk rather than by the coverage number.
 5. D299 is fixed at `:180-181` and proved by a test that fails with `AttributeError: 'NoneType' object has no attribute 'source_url'` before the fix.
-6. D298 is fixed at `:224`, `:232` and `:233`, each proved by a test that fails with `AttributeError: 'NoneType' object has no attribute 'isoformat'` before the fix, and the fix omits the key rather than emitting a null.
+6. D298 is fixed — at what were `:224`, `:232` and `:233` pre-fix and are now the guards at `:224`, `:233` and `:235` — each proved by a test that fails with `AttributeError: 'NoneType' object has no attribute 'isoformat'` before the fix, and the fix omits the key rather than emitting a null. A fourth guard at `:322` was required for the same nullable `Event.start`, read again at `:325`.
 7. `ap_datetime` (`app/utils.py:2293-2294`) is unchanged.
 8. `coverage_floors.ini` gains an `app/shared/tasks/pages.py` entry at the measured floor.
 9. The register carries D300 onward; D298 and D299 are marked fixed, with D298's three `app/activitypub/util.py` copies recorded as still open.
