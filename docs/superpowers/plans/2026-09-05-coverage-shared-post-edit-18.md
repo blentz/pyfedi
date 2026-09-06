@@ -34,6 +34,8 @@ Spec §4.1 says D287 must land first "so that the D292 test can reach the crash 
 
 The ordering is kept for a different and real reason: Task 6 covers the dedup arms at `:592`, which need a user who is both moderator and admin, and that is reachable only once `:582` works. Recording the corrected reason here rather than only deleting the wrong one is harness fact 96.
 
+**SECOND CORRECTION, appended by Task 8's register round and NOT known to any earlier task: the finding number is wrong throughout this document.** The `orig_post_domain` / `TypeError: Object of type Domain is not JSON serializable` defect is **D286**, not D292. Every "D292" in this plan, in the spec it came from, in Task 5's brief and commit `26ad38e7`'s body, and in six locations in `tests/test_shared_post_edit.py` (eight occurrences on seven lines, `grep -o 'D292'` at commit `2df31ca9`), means **D286** — the number was read once from the spec and copied forward without anyone re-opening the register cell it named. **D292 is a different, still-open entry**: `Post.new`'s unguarded `choice_ap['name']` read at `app/models.py:2205-2209`, the create-path sibling of D284. Nothing downstream broke — the fix, the tests and the arbitration are all correct, and only the label was wrong, which is exactly the part a green suite cannot check. The closure is recorded in `docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md` against D286, and the six sites are enumerated there by symbol for whoever next owns `tests/test_shared_post_edit.py`, since Task 8's authorisation was docs and config only.
+
 ---
 
 ## Harness facts this plan depends on
