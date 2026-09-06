@@ -1085,3 +1085,97 @@ def test_the_notify_dict_falls_back_to_user_name_when_there_is_no_ap_id(
 
     targets = Notification.query.filter_by(user_id=admin.id).one().targets
     assert targets['author_user_name'] == 'editor'
+
+
+# ---------------------------------------------------------------------------
+# The moderator loop, :580-589 -- D287
+# ---------------------------------------------------------------------------
+
+
+def test_a_moderator_of_a_notify_mods_domain_is_notified(db_session, http_mock):
+    """D287. :580-589.
+
+    Before the fix this raises `AttributeError: 'CommunityMember' object has no
+    attribute 'is_local'` at :582 -- CommunityMember (app/models.py:3499-3513)
+    has no such method. It has a `user` relationship at :3509, and User.is_local
+    is at :1251.
+
+    The failure is a CRASH, not a wrong value, and that is what makes D287 live
+    rather than latent: every notify_mods domain took down the whole edit.
+
+    This is the FIRST test to reach :588 `db.session.add(notify)` through the
+    moderator loop; the D292 tests above reach the identical Notification
+    construction through the ADMIN loop at :590-598 instead. Both paths read
+    the same `targets_data` built at :573-579, so :577 now has two callers and
+    the assertion on `orig_post_domain` below re-proves D292's fix from this
+    second entry.
+    """
+    s = _seed(domain_name='suspicious.example', notify_mods=True)
+    moderator = make_user(s.instance, 'mod', local=True)
+    make_community_member(moderator, s.community, is_moderator=True)
+    assert len({s.user.id, moderator.id}) == 2
+
+    http_mock.head('https://suspicious.example/pic.png').respond(
+        200, headers={'Content-Type': 'image/png'})
+    http_mock.get('https://suspicious.example/pic.png').respond(404)
+
+    edit_post(_api_input(url='https://suspicious.example/pic.png'), s.post,
+              POST_TYPE_LINK, SRC_API, user=s.user, from_scratch=False)
+
+    notifications = Notification.query.filter_by(user_id=moderator.id).all()
+    assert len(notifications) == 1
+    assert notifications[0].notif_type == NOTIF_REPORT
+    assert notifications[0].subtype == 'post_from_suspicious_domain'
+    assert notifications[0].targets['orig_post_domain'] == 'suspicious.example'
+
+
+def test_a_remote_moderator_of_a_notify_mods_domain_is_not_notified(db_session, http_mock):
+    """:582, false arm -- and the reason D287's fix is `user.is_local()` rather
+    than deleting the guard.
+
+    D288 records that the federated copy of this loop
+    (app/activitypub/util.py:3520-3527) has NO locality gate at all, so the two
+    editors disagree about remote moderators. This test pins THIS editor's
+    answer so that disagreement stays visible rather than being quietly
+    resolved by a later edit.
+
+    DEVIATION FROM THE BRIEF: the brief built `peer` before `_seed()`. That
+    ordering makes peer.example the id-1 Instance, and make_community hardcodes
+    instance_id=1 (see _seed's docstring), so the community under edit would
+    silently have become a REMOTE community -- a shape none of the other tests
+    in this block use, and one that changes what :736 and the eager
+    `task_selector('edit_post')` below it see. `_seed()` runs first here so the
+    only remote thing in the fixture is the moderator, which is what the test
+    is about.
+    """
+    s = _seed(domain_name='suspicious.example', notify_mods=True)
+    peer = make_instance('peer.example', software='lemmy')
+    remote_mod = make_user(peer, 'remotemod', local=False)
+    make_community_member(remote_mod, s.community, is_moderator=True)
+    assert remote_mod.ap_id is not None
+
+    http_mock.head('https://suspicious.example/pic.png').respond(
+        200, headers={'Content-Type': 'image/png'})
+    http_mock.get('https://suspicious.example/pic.png').respond(404)
+
+    edit_post(_api_input(url='https://suspicious.example/pic.png'), s.post,
+              POST_TYPE_LINK, SRC_API, user=s.user, from_scratch=False)
+
+    assert Notification.query.filter_by(user_id=remote_mod.id).count() == 0
+
+
+def test_a_moderator_is_not_notified_when_the_domain_does_not_ask(db_session, http_mock):
+    """:580, false arm. notify_mods defaults to False
+    (app/models.py:3458), which is the shape almost every Domain row has."""
+    s = _seed(domain_name='quiet.example', notify_mods=False)
+    moderator = make_user(s.instance, 'mod', local=True)
+    make_community_member(moderator, s.community, is_moderator=True)
+
+    http_mock.head('https://quiet.example/pic.png').respond(
+        200, headers={'Content-Type': 'image/png'})
+    http_mock.get('https://quiet.example/pic.png').respond(404)
+
+    edit_post(_api_input(url='https://quiet.example/pic.png'), s.post,
+              POST_TYPE_LINK, SRC_API, user=s.user, from_scratch=False)
+
+    assert Notification.query.filter_by(user_id=moderator.id).count() == 0
