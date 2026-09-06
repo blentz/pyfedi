@@ -1461,13 +1461,14 @@ says which numbers are taken. So there is one now, and it is this file:
   source different from how the review described them, and both corrections
   are recorded in the entries rather than applied silently**; that is the same
   discipline D209 records for a falsified spec claim.
-  **Next free number: D309.** D232-D235 were taken by sub-project 13's final
+  **Next free number: D312.** D232-D235 were taken by sub-project 13's final
   fix wave; D236-D251 by sub-project 14 and D252-D259 by that sub-project's own
   final fix wave; D260-D269 by sub-project 15 and D270-D273 by that
   sub-project's own final fix wave; D274-D282 by sub-project 16, with
   **D283 by that sub-project's own final fix wave**; **D284-D296 by
-  sub-project 17**; **D297-D299 by sub-project 18**; and **D300-D308 by
-  sub-project 19**, whose section is the last in this file.
+  sub-project 17**; **D297-D299 by sub-project 18**; **D300-D308 by
+  sub-project 19**; and **D309-D311 by sub-project 20**, whose section is the
+  last in this file.
   If you take it, say so here in the change that takes it.
 
 Two entries in the reports were deliberately **not** counted as defects, and are
@@ -3994,7 +3995,7 @@ which was tests, docstrings, comments and this register only.
 | D165 | `resolve_remote_handle` (`app/activitypub/routes.py:466-491`) | **Not fixed -- two of its own three guards are uncovered, despite this sub-project's report describing them as pinned.** `tests/test_remote_handle_resolution.py`'s four tests cover only the anonymous-caller guard (`:484-485`) and the exception-to-404 path (`:490-491`). The `'@' not in actor` guard (`:482-483`) is unreached: all four tests request `/u/wakko@mastodon.cloud`, a handle that always contains `@`. The AP-Accept guard (`:486-487`) is also unreached: `test_activitypub_request_does_not_resolve` sends the AP-Accept header but never authenticates, so it returns at the anonymous-caller guard (`:484-485`) before line `:486` is ever asked to branch true -- deleting the AP-Accept guard entirely would leave that test's `assert calls == []` green. Two cheap closures: the AP-Accept guard needs a test that logs in via `session_transaction()` **before** its first request (harness fact 37, `tests/README.md` -- a test cannot authenticate after an earlier request in the same test, because Flask-Login caches the loaded user on the app-context-scoped `g` for the life of the session-scoped `app` fixture) and then sends the AP-Accept header; the `'@' not in actor` guard needs one of Task 10's guard tests (`test_a_deleted_user_profile_is_not_served`, `test_a_banned_user_profile_is_not_served`) to stop stubbing `resolve_remote_handle` to `None` via `_double_the_renderers` and instead let it run for real against a bare (no `@`) actor name -- safe, because a bare name returns `None` at the first guard and never reaches `search_for_user`. | not fixed, registered only | reading-level plus measured: `scratch_full_cov.json`'s `app/activitypub/routes.py` entry lists `483` and `487` in `missing_lines` and `[482, 483]`/`[486, 487]` in `missing_branches`; `tests/test_remote_handle_resolution.py`'s four tests read directly, confirming all four target a handle containing `@` and that the AP-Accept test never authenticates |
 | D166 | webfinger's User lookup (`app/activitypub/routes.py:117-120`) vs. `user_profile`'s local lookup (`:376`) | **Not fixed -- a fourth lookup asymmetry, on a column D158 did not name.** Webfinger matches `func.lower(User.user_name) == actor` **or** `func.lower(User.alt_user_name) == actor` (`:117-120`). `user_profile`'s bare-username local lookup matches only `func.lower(User.user_name) == actor.lower()` (`:376`) -- `alt_user_name` plays no part. So a user reachable by their alt name via webfinger 404s at `/u/<altname>`, the same class of cross-endpoint disagreement D158 registers for the `deleted`/`banned` guards, but on a different column entirely; `alt_user_name` appeared nowhere in this register before this entry. | not fixed, registered only | reading-level: `app/activitypub/routes.py:117-120` and `:376` read directly, side by side; no test in this sub-project or `tests/test_actor_profiles.py` drives a user with a distinct `alt_user_name` through both endpoints to observe the divergence, so this is derived from reading, not measured |
 
-**Next free number: D309.** D165 and D166 were taken by this fix wave;
+**Next free number: D312.** D165 and D166 were taken by this fix wave;
 D167-D186 were taken by sub-project 10, D187-D199 by sub-project 11, D200-D212
 by sub-project 12, D213-D235 by sub-project 13, D236-D259 by sub-project 14,
 D260-D273 by sub-project 15, D274-D283 by sub-project 16, D284-D296 by
@@ -4034,8 +4035,13 @@ in sub-project 18's section with appended, marked closure notes, in the same
 D243/D257 convention. It did **not** extend the family index either: every one
 of D300-D308 belongs to `send_post`, `post_to_page` or the ActivityPub ingest,
 all outside that index's declared five-function scope, so its arithmetic still
-stands unchanged at D236-D296. If you
-take D309, say so here in the change that takes it.
+stands unchanged at D236-D296. **D309-D311 were taken by sub-project 20**, on
+the same terms: `send_reply`, the `local_only` federation gates across
+`app/shared/tasks/`, and the reply half of the ActivityPub ingest, none of them
+in the index's five functions, so its arithmetic is unchanged a second time. It
+edited exactly **one** earlier entry -- D302, extended in place rather than
+renumbered -- and no entry of this section. If you
+take D312, say so here in the change that takes it.
 
 ## Sub-project 10: the nine ActivityPub collection endpoints
 
@@ -4888,7 +4894,7 @@ cross-reference is for.
 | D258 | `update_post_from_activity`'s title handling (`app/activitypub/util.py:3183-3188`) | **Not fixed -- `"name": null` raises `AttributeError: 'NoneType' object has no attribute 'upper'`, and the pair guards `content is not None` while guarding nothing on `name`.** `'name' in request_json['object']` (`:3161`) is a membership test that `{"name": null}` satisfies, so `new_title = None` (`:3162`); `old_title != new_title` is then True for any post that has a title, `post.title = new_title` sets the title to `None` **in memory first** (`:3184`), and `new_title.upper()` (`:3185`) raises. **The contrast with D237 is the finding.** Both functions were taught to check `request_json['object']['content'] is not None` (`:3011`, `:3140`) because peers send a null content -- and the null-check was never extended to the sibling field twenty lines below, which peers null for the same reason: a Mastodon status has no `name`, and a peer normalising its `Update` shape emits `"name": null` rather than omitting the key. **Post-only**: the reply function has no title. Not fixed because this wave is documentation-only, and because the repair carries a real choice: appending `and request_json['object']['name'] is not None` sends a null `name` down the `else` branch, which autogenerates a microblog title from the body and sets `post.microblog = True` -- a materially different post from the one the peer described, and a contract question rather than a guard. **Note the in-memory `post.title = None` at `:3184` before the raise.** There is no commit between the two inside this function, so this function persists nothing; whether it becomes visible depends on the caller's session handling, and there are four call sites (`app/activitypub/routes.py:1264`, `:2330`, `:2345`, `app/activitypub/util.py:4317`) plus `app/post/routes.py:2256`. **Cost if wrong: a null `name` loses an `Update`, with a possible nulled title depending on the caller.** | not fixed, registered only | reading-level plus interpreter-checked at this commit: `:3160-3181` read to establish that `new_title` takes the raw value with no coercion on either branch, `:3183-3188` read for the three `.upper()` calls, and the five call sites listed by grep; `None.upper()` confirmed to raise `AttributeError`. Not covered -- every `name` in `tests/test_ap_update_pair.py` is a string, and `test_a_post_with_no_name_autogenerates_a_microblog_title` **omits the key** rather than nulling it, which is the case that does not crash |
 | D259 | `update_post_reply_from_activity`'s attachment loop (`app/activitypub/util.py:3045-3054`) | **Not fixed -- a non-string SCALAR *entry* inside an `attachment` LIST raises `TypeError` at `if 'href' in attachment` (`:3047`).** `"attachment": [1]` passes the `isinstance(…, list)` arm (`:3043-3044`), so `attachment_list` is `[1]`, and `'href' in 1` raises `TypeError: argument of type 'int' is not iterable`; the same holds for `null`, a bool and a float. **A STRING entry does not crash** -- `'href' in "https://example/i.png"` is a *substring* test returning `False` (this slice's fact 71), so all three `in` checks miss, `url` stays `''`, and the entry is silently dropped. **D251 is a different case and this entry does not correct it.** D251 is a scalar at the **top level** of `attachment`, which matches neither `isinstance` arm (`:3041-3044`), leaves `attachment_list` at `[]` and never enters the loop; this is a scalar **entry inside a well-formed list**, which does enter it. One is a benign no-op, the other is a crash -- which is exactly why D251 is a coverage gap and this is a register entry of the D236 family. Not fixed because this wave is documentation-only and because the choice -- skip the entry, skip the loop, or accept a bare string entry as a url, which the substring behaviour currently *almost* does by accident -- is behaviour nothing in the file selects. The post function has no attachment handling in the scoped region, so there is still no sibling to vote (D251's reason, unchanged). **Cost if wrong: one wrongly-typed element in an otherwise valid `attachment` list loses the whole `Update`.** | not fixed, registered only | reading-level plus interpreter-checked at this commit: the two `isinstance` arms (`:3041-3044`) and the loop body (`:3045-3054`) read; `'href' in` confirmed to raise `TypeError` for `1`, `None`, `True` and `1.5`, and to return `False` without raising for a string. Not covered -- `test_a_reply_single_attachment_dict_is_appended`, `test_a_reply_attachment_list_is_appended_in_order` and the four other attachment tests supply dict entries only |
 
-**Next free number: D309.** D236-D251 were taken by sub-project 14's twelve
+**Next free number: D312.** D236-D251 were taken by sub-project 14's twelve
 tasks; **D252-D259 were taken by its final fix wave** -- D252-D254 discharging
 the three asymmetry-table rows that were pinned but never decided, D255-D259
 registering five peer-reachable crashes inside the scoped region that the
@@ -4935,7 +4941,14 @@ no entry here -- though **D301 is this section's family shape arriving from the
 other direction and is worth a pointer**: it is unguarded peer input read by
 *our* ingest, registered because a fix this campaign made on the *sending* side
 obliges us to record it.
-If you take D309, say so here in the change that takes it.
+**D309-D311 were taken by sub-project 20**, again all outside the family index's
+declared scope, again extending neither the index nor this section, and editing
+no entry here -- and **D311 is D301's shape a second time and belongs with that
+pointer**: unguarded peer input written straight into a nullable column by
+`update_post_reply_from_activity` and `create_post_reply`, registered because a
+reachability measurement on the *sending* side had to enumerate the writers to
+settle whether a missing guard mattered.
+If you take D312, say so here in the change that takes it.
 
 **Ten shapes worth carrying forward from this sub-project's rulings, now in
 `tests/README.md` as facts 71-80 plus a corollary appended to fact 55:** `in`
@@ -5199,7 +5212,7 @@ names across every function in the campaign's scope, not the entry's.**
 | D272 | `create_post_reply`'s `contentMap` fallback (`app/activitypub/util.py:2650-2651`), the **SECOND copy of D255**, which scopes itself "post-only" | **Not fixed -- `next(iter(request_json['object']['contentMap']))` raises `StopIteration` on an EMPTY `contentMap`.** `"contentMap": {}` satisfies both conjuncts of the guard on the line above (`:2650`) -- `'contentMap' in request_json['object']` **and** `isinstance(..., dict)` -- and `next(iter({}))` then raises, there being no default argument. `create_post_reply` is an ordinary function, not a generator, so the `StopIteration` propagates out unconverted. **The join this slice failed to make, and it is the reason this entry exists rather than an appended note.** D253's own **CORRECTION**, written by sub-project 15, quotes this exact line -- `language = find_language(next(iter(request_json['object']['contentMap'])))` at `:2644-2655` -- to prove the `contentMap` asymmetry is three-way rather than two-way; D253's body, five sentences earlier, calls the post copy "itself a live crash (**D255**, `StopIteration` on `"contentMap": {}`)". The slice wrote both sentences, about the same line, in the same cell, and did not notice that the copy it had just found carries the crash the cell had just named. **D255's "post-only" claim is CORRECTED by this entry as to the crash's scope and CONFIRMED as to its mechanism**: the reply *update* function still has no `contentMap` arm (D253), so "post-only" was true of the pair D255 was comparing and false of the file. (D255 cites the post site as `:3200-3201`; at this commit it reads `:3203-3204`, the same three-line shift, and **D255's numbers are left as written** for the reason given in D270.) Not fixed for D255's reason unchanged: `next(iter(…), None)` would hand `find_language(None)` a `None` code and thereby *decide* that an empty `contentMap` means "no language", which nothing in the file says -- and here that decision is visible, because `language_id = language.id if language else None` (`:2652`) would quietly persist a null language rather than raise. **Cost if wrong: a two-character peer document kills every reply `Create`, not only every post `Update`.** | not fixed, registered only | reading-level plus interpreter-checked at this commit: the guard at `:2650` and the subscript at `:2651` read; `next(iter({}))` confirmed to raise `StopIteration`; the tail `try` located at `:2700`, below the raise. Not covered -- `test_a_non_dict_content_map_is_ignored_in_favour_of_site_language_id` sends a **string**, which fails the `isinstance` conjunct, and all four dict-carrying `contentMap` tests send exactly one key; no test in the module sends an empty dict. The `else None` arm at `:2652` is now pinned by `test_a_content_map_naming_an_unknown_language_leaves_the_reply_unlanguaged`, which reaches `find_language` returning None by a MISS rather than by an empty map, and so does not reach this crash |
 | D273 | `create_post_reply`'s flair block (`app/activitypub/util.py:2691-2699`) -- **no precedent entry, and no sibling either: neither update function writes a `UserFlair`.** (`update_post_from_activity` does carry a block spelled "flair", `:3257-3264`, but it clears and rebuilds `post.flair` -- community post-flair tags resolved through `find_flair_or_create` -- which is a different entity from the per-user, per-community `UserFlair` row this block writes. Same word, different table; the two must not be compared.) | **Not fixed -- `request_json['object']['flair'].strip()` (`:2698`) raises `AttributeError` for a TRUTHY NON-STRING flair, and the sibling branch nine lines up assigns the same value with neither `.strip()` nor a type check.** The block's guard is `'flair' in request_json['object'] and request_json['object']['flair']` (`:2691`) -- membership plus truthiness, no type check -- so `"flair": 123`, `"flair": true` and `"flair": ["gold"]` all enter it. Which of the two branches runs is decided by whether a `UserFlair` row already exists for this user in this community (`:2692-2694`): the **create** branch strips (`:2698`) and the **update** branch assigns raw (`:2695`). Two consequences, and the second is the more interesting: **(1)** a truthy non-string crashes the whole `Create` when the user has no flair here yet and does not crash on `.strip()` when they do; **(2)** for an ordinary padded STRING, `"flair": "  gold  "` is stored as `gold` on first arrival and as `  gold  ` on every subsequent one -- **an asymmetry between two branches of a single `if`/`else`, which is a narrower thing than every other asymmetry in this register and is exactly why the pair-comparison method could not see it.** It has been recorded since Task 7, but only in the docstrings of `test_a_flair_on_a_user_with_none_creates_a_user_flair_row` and `test_a_flair_on_a_user_with_an_existing_flair_updates_it`, where each names the other's spelling to keep the two fixtures distinguishable -- a true observation, correctly attributed, with no register entry behind it. Not fixed because the two candidate repairs choose behaviour: stripping in both branches changes what a re-sent padded flair persists, and type-guarding the block decides whether a non-string flair is dropped or fails the whole `Create`, neither of which the file states. **Cost if wrong: a non-string flair loses an entire reply `Create` for first-time flair-setters only, and a padded flair means two different stored values depending on whether the sender has posted in that community before.** | not fixed, registered only | reading-level plus interpreter-checked at this commit: the guard at `:2691`, the branch split at `:2694`, the raw assignment at `:2695` and the stripped one at `:2698` read; `.strip()` confirmed to raise `AttributeError` for `123`, `True` and `['gold']`; the tail `try` located at `:2700`, below both branches. Not covered -- the four flair tests in `tests/test_ap_create_reply.py` send `'  gold  '`, `'gold'`, no key at all, and `''`; none sends a truthy non-string. The strip asymmetry itself IS pinned, by the padded value in the create test and the unpadded one in the update test -- **covered but unregistered**, sub-project 14's "a row covered by a test is not a row discharged" reaching a fourth case |
 
-**Next free number: D309.** D260-D269 were taken by sub-project 15 --
+**Next free number: D312.** D260-D269 were taken by sub-project 15 --
 D260 the declined fix, D261 the one defect fixed here, D262-D265 four
 registrations, and D266-D269 the four asymmetry-table rows that needed
 entries -- and **D270-D273 by its final fix wave**, four unregistered
@@ -5219,7 +5232,7 @@ were still exact, and only the update-path entries in sub-project 14's section
 had drifted, uniformly by the three lines this slice's own fixes inserted above
 them. **D261 is in the index as the third copy of D237's `"content": null`
 crash**, which is the same "a third copy of an already-registered defect" shape
-this section records for D270-D272 and is the reason the index exists. **D283 was taken by sub-project 16's final fix wave**, which added it to that index's rejection list; none of this section's entries was touched by it. **D284-D296 were taken by sub-project 17**, which extended the same index to D236-D296 and touched no entry of this section either -- though it is worth noting here, because this section is where the "third copy" shape is recorded, that its **D292** is the same shape a fourth time: sub-project 17 fixed an unguarded `['name']` read on the update path and registered the create-path copy (`app/models.py:2205-2209`) in the same change rather than leaving it for a later slice to rediscover. **D297-D299 were taken by sub-project 18**, which touched no entry of this section and did not extend the index -- but which is worth a sentence *here* of all places, because **that sub-project's documents called the `orig_post_domain` defect "D292" throughout**, from its design onward. It is **D286**. D292 is still the `Post.new` `['name']` loop this paragraph describes, still open, and still the fourth generation of the third-copy shape; sub-project 18 closed one site of D286 and nothing of D292. Had the wrong label reached the register, this paragraph's own claim would have been the casualty. **D300-D308 were taken by sub-project 19**, which touched no entry of this section and did not extend the index; **D292 is still open and still untouched**, and **D301** is worth naming from here because it is this section's own shape read from the other end -- unguarded peer input in `Post.new` (`app/models.py:2203`, `:2215-2217`) and in `update_post_from_activity`'s Event tail (`app/activitypub/util.py:3375-3377`), registered because a fix on the sending side obliged it. If you take D309, say so here in the change that takes it.
+this section records for D270-D272 and is the reason the index exists. **D283 was taken by sub-project 16's final fix wave**, which added it to that index's rejection list; none of this section's entries was touched by it. **D284-D296 were taken by sub-project 17**, which extended the same index to D236-D296 and touched no entry of this section either -- though it is worth noting here, because this section is where the "third copy" shape is recorded, that its **D292** is the same shape a fourth time: sub-project 17 fixed an unguarded `['name']` read on the update path and registered the create-path copy (`app/models.py:2205-2209`) in the same change rather than leaving it for a later slice to rediscover. **D297-D299 were taken by sub-project 18**, which touched no entry of this section and did not extend the index -- but which is worth a sentence *here* of all places, because **that sub-project's documents called the `orig_post_domain` defect "D292" throughout**, from its design onward. It is **D286**. D292 is still the `Post.new` `['name']` loop this paragraph describes, still open, and still the fourth generation of the third-copy shape; sub-project 18 closed one site of D286 and nothing of D292. Had the wrong label reached the register, this paragraph's own claim would have been the casualty. **D300-D308 were taken by sub-project 19**, which touched no entry of this section and did not extend the index; **D292 is still open and still untouched**, and **D301** is worth naming from here because it is this section's own shape read from the other end -- unguarded peer input in `Post.new` (`app/models.py:2203`, `:2215-2217`) and in `update_post_from_activity`'s Event tail (`app/activitypub/util.py:3375-3377`), registered because a fix on the sending side obliged it. **D309-D311 were taken by sub-project 20**, which touched no entry of this section and did not extend the index either; **D292 is still open and still untouched**, and **D311 is worth naming from here for the same reason D301 was, and one better**: it is unguarded peer input written straight into a nullable column by `create_post_reply` (`app/activitypub/util.py:2639`, inside `:2593-2774`) and by `update_post_reply_from_activity` (`:3020`), which means one of its two sites sits **inside this section's own scoped function** and was not found by this slice. It is registered here as the reply half of D301's shape and as evidence for the copy-hunt rule this section already states -- **but its consequence is NOT a crash and the entry says so**: `markdown_to_html(None)` returns `''` (`app/utils.py:1160-1161`) rather than raising, and `PostReply.new` guards its own read at `app/models.py:3017`, so what lands is a silent NULL body, not a `KeyError`. A weaker consequence than D301's, recorded at its real strength rather than promoted to match the entry it resembles. If you take D312, say so here in the change that takes it.
 
 **Six shapes worth carrying forward from this sub-project's rulings, now in
 `tests/README.md` as facts 81-86 plus a corollary appended to fact 56 -- and a
@@ -5675,7 +5688,7 @@ proved the fix turned up beside it.
 |---|---|---|---|---|
 | D283 | `notify_about_post_task`'s `NOTIF_USER` arm, the `'author_id': post.user_id` entry of `targets_data` (`app/activitypub/util.py:2832`), against the `author` binding at `:2812` | **Not a defect -- a THIRD provable equivalent mutant in this function, and the first found by a sweep rather than met by accident.** Substituting `author.id` for `post.user_id` at `:2832` cannot be killed by any test, because `author` is bound twenty lines above as `author = session.query(User).get(post.user_id)` (`:2812`) and is never reassigned. Established by scanning the whole region rather than by not noticing a rebind: `awk 'NR>=2804 && NR<=2936 && /author/'` returns nine lines -- the comment at `:2811`, the binding at `:2812`, this dict's two keys (`:2832`, `:2833`), a THIRD dict key in the `NOTIF_TOPIC` arm (`:2887`), and four `author_id=` column keywords (`:2835`, `:2858`, `:2889`, `:2923`) -- **corrected in place by sub-project 17, not appended to.** This parenthetical read "five `author_id=` column keywords (`:2835`, `:2858`, `:2887`, `:2889`, `:2923`)"; `:2887` is `'author_id': post.user_id}`, a dict key in the `NOTIF_TOPIC` arm and not a column keyword, so the SPLIT was wrong the day it was written rather than having drifted -- every line number in it is exact at this commit, re-derived by `awk 'NR>=2804 && NR<=2936 && /author/'`, and the total of **nine** is unchanged. D283's verdict is unaffected, and the sentence immediately below already classified `:2887` correctly as "a dict key or a column name", which is why the miscount changed nothing that was derived from it. **The only assignment is `:2812` and the only read of the local is `:2833`**; every other occurrence is a dict key or a column name that happens to contain the word. **The two expressions are therefore the same integer on every reachable path, and no arrangement of seeded primary keys can separate them**, which is the distinction that matters: the sibling substitutions in the same dict ARE killable and were made so, and this one is not killable by anything. **Why this is registered rather than left in a fix report.** It was found while discharging the final review's one Important finding -- that `targets['post_id']` was silently vacuous because `_seed_scenario` gives Community and Post the same primary key (fact 89) -- by sweeping **every** id-valued key in the arm against **every** other id in scope rather than only the one the review named. That sweep is 12 mutants over two keys: eleven are sole kills of `test_a_subscriber_to_the_author_is_notified` and the twelfth is this one. **A future slice mutating this arm will otherwise rediscover it from scratch and, worse, may read the survivor as a coverage gap and write a test that cannot exist.** That is the same service D280 performs for the topic lookup's unreachable branch and D281 for the tail handler's two statements. **The generalisable half: a local bound from an expression is not an independent id, and a `targets` dict that carries both is carrying one value twice.** `community` is bound the same way, once for the whole function, at `:2815` (`community = session.query(Community).get(post.community_id)`), so `'community_id': post.community_id` -> `community.id` at `:2856` -- the NOTIF_COMMUNITY arm's dict, the only `'community_id'` entry in the function -- **is predicted to be the same equivalent mutant, and is recorded here as unswept rather than as measured.** Note it is a *different* mutation from the one sub-project 16 measured on that key: `'community_id': post.community_id` -> `post.id` dies, and did the work of exposing fact 89. | not a defect, equivalence recorded | measured, not reasoned: 21 mutations applied by line address to `app/activitypub/util.py` and each run against the whole 34-test file -- six substitutions of `'post_id': post.id` (`:2829`), six of `'author_id': post.user_id` (`:2832`), three of `'post_title'` (`:2830`) and six over the two name-valued ternaries (`:2831`, `:2833`). **20 died -- 14 of them sole kills of `test_a_subscriber_to_the_author_is_notified` and 6 multi-kills across the four `community_name`/`author_user_name` tests -- and this one alone returned 34 passed.** `app/activitypub/util.py` restored and `git diff -- app/` confirmed empty after every one. The seeded ids that make the other eleven killable are `community.id 1`, `author.id 2`, `subscriber.id 3`, `post.id 4`, verified by temporarily asserting the tuple rather than reasoned from factory order |
 
-**Next free number: D309.** D274-D283 were taken by sub-project 16 -- D274 the
+**Next free number: D312.** D274-D283 were taken by sub-project 16 -- D274 the
 NULL `unread_notifications` hazard, D275 the one defect fixed, D276-D279 four
 registrations, D280-D282 three findings that are not production defects, and
 **D283 the final fix wave's equivalent mutant, in subsection 6 above**.
@@ -5710,7 +5723,10 @@ scope, extended neither the index nor this note's arithmetic, and edited no
 entry of this section. **D300-D308 were taken by sub-project 19**, on the same
 terms: nine registrations outside the index's declared scope, no extension of
 the index or of this note's arithmetic, and no entry of this section edited.
-If you take D309, say
+**D309-D311 were taken by sub-project 20**, on the same terms a third time:
+three registrations outside the declared scope, no extension of the index or of
+this note's arithmetic, and no entry of this section edited.
+If you take D312, say
 so here in the change that takes it.
 
 **Nine shapes carried forward into `tests/README.md`, seven as new facts 88-94
@@ -5883,7 +5899,7 @@ why patching would have looked like a fix. Now fact 98.
 | D295 | `Site.admins()` (`app/models.py:3995-4000`) -- a **plan** claim corrected, and a reachability verdict future fixtures need | **Not a defect -- `Site.admins()` returns `[]` for a roleless `User.id == 1`, and the plan for this sub-project asserts the opposite THREE times.** The plan reads, at `docs/superpowers/plans/2026-09-04-coverage-update-tails-17.md:97-101`, `:707-712` and `:904-906`, that the method "joins `user_role` for `ROLE_ADMIN` **or** `User.id == 1`" and therefore that "user 1 is an admin by that `or_` clause without any role row". **False.** The query is `db.session.query(User).filter_by(deleted=False, banned=False).join(user_role).filter(or_(user_role.c.role_id == ROLE_ADMIN, User.id == 1))` -- and `.join(user_role)` carries no `isouter=True`, so it is an **INNER** join: a user with **no** `user_role` row is eliminated from the result set **before** the `or_` is ever evaluated, and `User.id == 1` cannot rescue a row the join already dropped. **Which arm the fixtures take was established rather than assumed**: `Site.admins()` reads `g.admin_ids` when present (`:3996-3997`), `tests/conftest.py:137` is `g.__dict__.clear()`, and nothing in the suite sets `admin_ids` -- so **every** test takes the join arm, and each admin fixture must be given a role row explicitly. **One tightening in the tests is load-bearing and is recorded so it is not simplified away:** the fixtures grant an ordinary non-staff role rather than `ROLE_STAFF`, because `Site.staff()` (`app/models.py:4003-4005`, cited from its `def` as `admins()` is above and not from its `@staticmethod` at `:4002`) is the same join narrowed to `ROLE_STAFF` **without** the id disjunct -- so a user 1 holding `ROLE_STAFF` would let an `admins()` -> `staff()` mutant explain the same row, and the mutation would survive. **Every original line of the plan is left exactly as written and the correction lives here**, which is this file's convention for a dated planning record: the plan was a forecast, the forecast was wrong, and rewriting it would delete the evidence that "verify rather than inherit" earned its place in the constraints. **The pointer is made TWO-WAY rather than one-way, on the controller's Ruling N, in the shape sub-project 16 used**: the plan carries a dated annotation appended after its last original line -- appended, because any insertion above would shift the very line numbers this cell cites -- naming the three claims, giving the corrected reading and directing the reader here. A reader who opens the plan first is sent to this entry; a reader who opens this entry first is told the plan is unrevised. The append was verified to be exactly that: 4 insertions, 0 deletions, every one of the plan's **971** original lines byte-identical and in order (`971` is `wc -l`; an earlier draft of this clause said 972, which was `split('\n')` counting the trailing empty element -- the verification itself was sound, only the number was a counting artefact). **What makes this worth a number rather than a process note: the false claim was written by the controller and repeated into two further artefacts as an established fact, and the standing instruction to verify it from source sits in the same paragraph.** The instruction is what caught it. | not a defect; the plan's claim corrected, the plan unrevised | reading-level, verified **three times independently** -- by the implementer that was told the claim and checked it anyway, by the reviewer, and by the controller. `app/models.py:3995-4000` read in full at this commit, the absence of `isouter=True` confirmed by reading the `.join(` call rather than by grepping for the flag, and `Site.staff()` at `:4003-4005` read side by side to establish the ordinary-role tightening. `tests/conftest.py:137` read to confirm `g` is cleared. Covered: every admin-arm test in `tests/test_ap_update_post_tails.py` names in its docstring which disjunct its fixture satisfies |
 | D296 | `tests/factories.py:769` -- a **test-suite** finding, out of every task's slice | **Not a production defect -- `make_poll`'s docstring cites `Poll.post_id` at `app/models.py:3745`; it is at `:3781`.** The claim the citation supports is correct: `post_id` **is** `Poll`'s primary key (`post_id = db.Column(db.Integer, db.ForeignKey('post.id'), primary_key=True)`), so a post has at most one poll and the identity map returns the same object for the same post, which is what makes the arm's `.get()` lookup work. Only the pointer is wrong. **Recorded here rather than fixed for two reasons, and the second is the transferable one.** `tests/factories.py` belonged to no task in this sub-project, and this campaign's rule is that a task does not edit a file outside its slice to tidy a citation. And **it is not established whether this cell was wrong when written or has since drifted** -- `app/models.py` has grown by hundreds of lines across the campaign, so 36 lines of drift is entirely ordinary -- which decides the repair: a citation that was right when written is re-read before reuse and left alone, while one that was wrong when written is fixed in place. **Whoever owns `tests/factories.py` next should determine which it is before editing**, and this entry exists so that determination has somewhere to start. | not a production defect; recorded for the owner of `tests/factories.py` | measured at this commit: `app/models.py:3781` read directly and confirmed to be `Poll.post_id`, with `class Poll(db.Model)` at `:3780`; `tests/factories.py:764-775` read in full to confirm the cited claim itself is true and only the coordinate is stale. Found by the task that read `make_poll` while writing poll fixtures, which correctly left the file alone and reported it |
 
-**Next free number: D309.** D284-D296 were taken by sub-project 17 -- D284 and
+**Next free number: D312.** D284-D296 were taken by sub-project 17 -- D284 and
 D285 the two defects fixed, D286-D292 seven registrations, and D293-D296 four
 findings that are not production defects. **No earlier entry was renumbered or
 moved by this sub-project, and exactly ONE was edited: D283's parenthetical
@@ -5935,7 +5951,12 @@ section** -- its two closures land on D298 and D299 in sub-project 18's section
 registrations sit in `send_post`, `post_to_page` or the ActivityPub ingest,
 outside the declared five-function scope, so the re-derived 61 stands a second
 time.
-If you take D309, say so here in the change that
+**D309-D311 were taken by sub-project 20, which also edited NO entry of this
+section** -- its one in-place edit is D302, in sub-project 19's section -- and
+which likewise did not extend the family index: `send_reply`, the
+`app/shared/tasks/` federation gates and the reply ingest are all outside the
+declared five-function scope, so the re-derived 61 stands a third time.
+If you take D312, say so here in the change that
 takes it.
 
 **THE FAMILY INDEX'S PARTITION IS RE-DERIVED, NOT INCREMENTED, AND ITS SHAPE
@@ -6363,7 +6384,7 @@ so a reader looking for a *correction* finds them without reading the prose:
    and `:577` -- so `post.domain_id` would have serialised a JSON `null`. The
    full form is in the D286 cell above.
 
-**Next free number: D309.** D297-D299 were taken by sub-project 18 -- D297 the
+**Next free number: D312.** D297-D299 were taken by sub-project 18 -- D297 the
 timestamp-semantics disagreement, D298 and D299 two unguarded dereferences on
 the Celery federation path. **This sub-project registered no defect inside its
 own scoped file that it did not fix**, which is a consequence of the slice being
@@ -6386,7 +6407,17 @@ section's own entries and says so here**: D298 and D299, both closed by its
 fixes -- D298 at four of its seven sites only -- each carrying an appended,
 marked closure note in its own row above, in the same D243/D257 convention.
 Nothing else in this section was renumbered, moved or edited, and that
-sub-project did not extend the family index either.
+sub-project did not extend the family index either. **D309-D311 were taken by
+sub-project 20, which edited NO entry of this section** -- its one in-place edit
+is D302, in sub-project 19's section -- and which did not extend the family
+index either, for the reason every sub-project since 17 has given: its three
+registrations are `send_reply`, the `local_only` federation gates across
+`app/shared/tasks/`, and the reply half of the ActivityPub ingest, none of them
+among the index's five functions. **Sub-project 20's own D309 is, however, the
+same shape this section's D298 and D299 record**: one federation gate honoured a
+flag that eleven siblings ignored, found by comparing near-twin senders rather than
+by a traceback -- so the "two copies of one builder disagree about a guard"
+pattern now has a third generation, and it was found the same way both times.
 
 **Six shapes carried forward into `tests/README.md` as new facts 101-106, plus
 one existing fact extended rather than duplicated.** The new facts: a helper
@@ -6689,7 +6720,7 @@ and carry appended, marked closure notes there; this subsection is the index.
 |---|---|---|---|---|
 | D300 | `send_post`'s link attachment (`app/shared/tasks/pages.py:178-179`), against its twin in the outbox builder (`app/activitypub/util.py:170`) | **Not fixed -- the same attachment builder in two copies disagrees about BOTH a `None` check and a post type, and the two halves need separate arguments.** `:178-179` is `if post.type == POST_TYPE_LINK or post.type == POST_TYPE_VIDEO: attachment.append({'href': post.url, 'type': 'Link'})` -- no `None` check on `post.url`, and no `POST_TYPE_EVENT`. `app/activitypub/util.py:170` is `if (post.type == POST_TYPE_LINK or post.type == POST_TYPE_VIDEO or post.type == POST_TYPE_EVENT) and post.url is not None:`. **The `None` half is reachable, but BOTH SITES THIS ENTRY ORIGINALLY CITED FOR IT ARE WRONG, and the corrected evidence is a different, narrower path.** `Post.url` is nullable (`app/models.py:1712`, `url = db.Column(db.String(2048))`, no `nullable=False`) -- that half stands. The withdrawn half: "`edit_post` writes `None` into it on two ordinary paths -- `app/shared/post.py:326-327` and `:613`". **`:326-327` does not write `Post.url` at all**: `else: url = None` assigns the **local** `url`, and `post.url` is written only at `:613`, `:618`, `:628`, `:640` and `:652`, every one of them under `:565`'s `if url and (from_scratch or url_changed):`, which a `None` `url` **skips**. So that path leaves `post.url` at whatever it already held; it never sets it to `None`. **`:613` really does write `post.url = None`**, but under `:612`'s `if type == POST_TYPE_EVENT:`, and `post.type` is `type` (`:398`), so the post is an EVENT -- which `app/shared/tasks/pages.py:178` excludes. That state cannot reach `:179`. **THE PATH THAT ACTUALLY WORKS** is `app/shared/post.py:652`, `post.url = embed_url`, with `:657` setting `POST_TYPE_LINK` (or `:655` `POST_TYPE_VIDEO`) immediately below it. `embed_url` comes from `fixup_url` (`app/utils.py:3311-3399`), which initialises it to `url` at `:3312` and replaces it in exactly one place with a value it did not compute: `:3339`, `embed_url = video_json['id']`, inside the PeerTube fix-up for a `/w/` URL on a host in the `peertube` instance table. **A peer that answers that fetch with `{"id": null}` puts `None` into `embed_url`**, `:654`'s `is_video_hosting_site(embed_url)` returns `False` for `None` rather than raising (`app/utils.py:317-318`), and `:657` then types the post `POST_TYPE_LINK` with `post.url` `None`. **Call it what it is: peer-controlled and conditional, NOT "two ordinary paths".** **AND THE CONSEQUENCE IS NOT MILDER THAN D298's AND D299's, WHICH THIS ENTRY ALSO GOT WRONG.** `app/shared/tasks/pages.py:318` is the *same* `POST_TYPE_LINK or POST_TYPE_VIDEO` test as `:178`, and `:319` is `note['content'] += '<p><a href=' + post.url + '>' + ...` -- string concatenation, no guard. `:309`-`:319` runs unconditionally after the community block (`:270`'s false arm is unreachable, see D303/the unreachability section), so any invocation that reaches `:179` with a `None` url reaches `:319` with it in the same call and raises `TypeError: can only concatenate str (not "NoneType") to str` -- **after** `{'href': null}` has already gone out to the community at `:298`-`:306`. A partial delivery followed by a crash, not a quiet wire-format wart. **The `EVENT` half is a behaviour change and that is why nothing is fixed here**: adding `POST_TYPE_EVENT` changes what every peer receives for every event post on a live install, which is an arbitration with a federation-compatibility question attached, not a coverage slice's call. **This is the SECOND disagreement found between these two builders in two sub-projects** (D299 the image guard, and this one). **It was written as "the third", counting D305's empty-`attachment` key, and D305 has been WITHDRAWN** -- `app/activitypub/util.py:147` puts `"attachment": []` in `post_to_page`'s unconditional literal, so the two builders agree there. They are near-twins by construction -- which is the argument for merging them, recorded here because no individual entry makes it | not fixed, registered only | reading-level, both builders read in full at this commit: `app/shared/tasks/pages.py:178-179` and `app/activitypub/util.py:170` compared clause by clause; nullability from `app/models.py:1712`. **THE REACHABILITY EVIDENCE WAS THE WEAK PART AND IT FAILED AT BOTH CITED SITES.** The original line claimed "both `None`-writing sites in `edit_post` read from source rather than inferred from the column's nullability"; re-derived, `:326-327` writes a **local** and `:613` writes an EVENT that `:178` excludes, so neither supports the claim -- the sites were located but their **enclosing guards were not read**, which is the same failure mode as the `88-371` extent: a `grep` hit taken as a proof. The replacement path (`app/shared/post.py:652`/`:657` reached through `app/utils.py:3339` with a peer's `{"id": null}`) is **reading-level, statement-by-statement, and its enclosing guards were read this time** -- `:565`'s gate, the `else` at `:641`, and `is_video_hosting_site`'s own `if url is None ... return False` at `app/utils.py:317-318`, which is what keeps `:654` from raising first. **It is NOT measured**: no test drives a PeerTube host through `fixup_url`, and nobody has observed a peer emitting `{"id": null}`. **The `:319` `TypeError` is likewise reading-level** -- `:318`'s condition read against `:178`'s and confirmed identical. **No test pins any of it**: the suite reaches `:179` only with a url set, so this entry was found by comparison rather than by a traceback, and the corrections to it were found by re-reading rather than by a failure |
 | D301 | PyFedi's own Event and poll ingest -- `app/activitypub/util.py:3375-3377` (the `Update` path) and `app/models.py:2203`, `:2215-2217` (the `Create` path) | **Not fixed -- our ingest subscripts optional ActivityStreams keys unguarded, so a peer that legitimately omits one gets a `KeyError`.** `:3375-3377` read `request_json['object']['startTime']`, `['endTime']` and `['timezone']`; `app/models.py:2203` reads `['endTime']` for a `Poll` and `:2215-2217` read `['startTime']`, `['endTime']` and `['timezone']` for an `Event`. ActivityPub does not require any of them. **THE COST ON THE `Create` PATH IS WORSE THAN "LOSES THE WHOLE ACTIVITY", WHICH IS WHAT THIS ROW FIRST RECORDED, AND THE ORDERING IS WHAT MAKES IT WORSE.** `Post.new` **commits the Post** at `app/models.py:2162` (`db.session.commit()` inside the `try`/`except IntegrityError` that establishes the row). Both unguarded subscripts are **below** that commit: `:2199` sets `post.type = constants.POST_TYPE_POLL` and `:2203` then subscripts `['endTime']`, with the poll branch's own commit not until `:2210`; `:2213` sets `post.type = constants.POST_TYPE_EVENT` and `:2215-2217` then subscript `['startTime']`, `['endTime']` and `['timezone']`. So the `KeyError` does not reject the activity cleanly -- **it leaves a HALF-INGESTED post**: a committed `Post` row with no `Poll` or `Event` row attached, and, because the type assignment at `:2199`/`:2213` is never committed, the **pre-poll / pre-event type persisted** on a row whose remote original is a poll or an event. A rejected activity can be retried; a committed row that lies about its own type cannot be distinguished from a real one by anything downstream. **The family continues past the three keys named above**: `app/activitypub/util.py:3378-3382` subscript `maximumAttendeeCapacity`, `participantCount`, `onlineLink`, `joinMode` and `externalParticipationUrl` on the `Update` path, and `app/models.py:2218-2222` subscript the same five on the `Create` path -- same shape, same absence of a guard, and on the `Create` path the same position below `:2162`. **This entry exists because D298's fix makes PyFedi one of the peers that omits them**, and the honest form of that arbitration is to register the receiver rather than to weaken the sender: emitting a null would paper over this defect, contradict the `app/activitypub/util.py:168` precedent, and leave it undiscovered. **THE SPLIT MATTERS AND A REVIEWER GOT IT WRONG IN THE PERMISSIVE DIRECTION.** The claim that all of these are unguarded is false: `app/activitypub/util.py:3336-3337` **is** guarded -- `if not 'endTime' in request_json['object']: return` -- and its failure mode is not a raise but a **silent `return` abandoning the whole poll `Edit`**, which is a different defect of the same family and is not merged into this row. Not fixed because the repair is a policy choice per key (default, skip the field, or abandon the activity) across two files and two subsystems, and because this round has no tests at any of those sites to prove a fix against | not fixed, registered only | reading-level, all five sites read from source at this commit; the guarded site at `:3336-3337` read specifically to check the reviewer's "all unguarded" claim, which is how the split was found. **The half-ingested-post ordering was re-derived for the final review** -- `app/models.py:2162`, `:2199`, `:2203`, `:2210`, `:2213` and `:2215-2217` read in sequence and their relative positions confirmed, rather than inferred from "`Post.new` commits somewhere". The five-key continuation at `app/activitypub/util.py:3378-3382` and `app/models.py:2218-2222` read from source in the same pass. **Not reached by any test in this campaign** -- it is the mirror image of a defect this sub-project fixed on the sending side, and it is registered on the strength of the fix rather than on a traceback |
-| D302 | `send_post`'s two delivery loops (`app/shared/tasks/pages.py:295`, `:350`, `:351`) | **Not a production defect. Three conjuncts are unreachable-False because the SQL query that produced the loop variable has already applied the identical predicates, and the coverage figures cannot show this at all.** `:349` calls `user.following_instances()` with the default `include_dormant=False`, so `app/models.py:1672` filters `Instance.dormant == False` and `:1673` filters `Instance.id != 1, Instance.gone_forever == False`; `Community.following_instances` (`app/models.py:842-851`) applies the same at `:849` and `:850`; and `Instance.online()` (`app/models.py:118-119`) is exactly `not (self.dormant or self.gone_forever)`. So `:295`'s `instance.online()` is already filtered, `:350`'s `instance.id != 1` is already filtered at `:1673`, and `:351`'s `instance.online()` has both its columns already filtered. **The establisher is the SQL query, which is a fourth kind for fact 75's cause 4(b)** -- not a caller, not an enclosing guard, not an earlier return. Registered rather than deleted because removing a defensive re-check is only safe while the query keeps its filters, and `include_dormant=True` is a real parameter that a future call site could pass | not a production defect; dead conjuncts, registered only | **measured with a control, which is what makes it credible rather than plausible**: deleting any of the three conjuncts leaves the whole suite green, while deleting any of the *other eight* conjuncts in the same **three** guards fails exactly its named test. **The count and the number of guards were both wrong in the first draft ("the other five conjuncts in the same two guards") and are corrected from source**: the three dead conjuncts sit in **three** guards, not two -- `:295` (4 conjuncts: `instance.inbox`, `instance.online()`, `not user.has_blocked_instance(...)`, `not instance_banned(...)`), `:350` (3: `instance.domain not in domains_sent_to`, `instance.id != 1`, `instance.software != 'piefed'`) and `:351` (the same 4 as `:295`) -- **11 conjuncts in total, 3 dead, 8 live**. `:350` and `:351` are separate `if` statements, one nested inside the other; reading them as one guard is what produced both errors at once. The query filters read from source at this commit. **They appear in NO coverage residual**, because coverage.py records a branch arc at the `if` level and not per conjunct -- the same blindness fact 87 records for conditional expressions, and the reason mutation found these and the percentage never would |
+| D302 | `send_post`'s two delivery loops (`app/shared/tasks/pages.py:295`, `:350`, `:351`) **plus `send_reply`'s Announce loop (`app/shared/tasks/notes.py:217`), added by sub-project 20** | **Not a production defect. Three conjuncts are unreachable-False because the SQL query that produced the loop variable has already applied the identical predicates, and the coverage figures cannot show this at all.** `:349` calls `user.following_instances()` with the default `include_dormant=False`, so `app/models.py:1672` filters `Instance.dormant == False` and `:1673` filters `Instance.id != 1, Instance.gone_forever == False`; `Community.following_instances` (`app/models.py:842-851`) applies the same at `:849` and `:850`; and `Instance.online()` (`app/models.py:118-119`) is exactly `not (self.dormant or self.gone_forever)`. So `:295`'s `instance.online()` is already filtered, `:350`'s `instance.id != 1` is already filtered at `:1673`, and `:351`'s `instance.online()` has both its columns already filtered. **The establisher is the SQL query, which is a fourth kind for fact 75's cause 4(b)** -- not a caller, not an enclosing guard, not an earlier return. Registered rather than deleted because removing a defensive re-check is only safe while the query keeps its filters, and `include_dormant=True` is a real parameter that a future call site could pass. **EXTENDED BY SUB-PROJECT 20 WITH A FOURTH SITE IN A SECOND FILE, appended rather than renumbered because the structural cause is identical and splitting it across two cells would hide the family this entry exists to hold.** `app/shared/tasks/notes.py:217` is `if instance.inbox and instance.online() and not user.has_blocked_instance(instance.id) and not instance_banned(instance.domain):`, and `instance` comes from `community.following_instances()` at `:216` -- the same method, called with the same default `include_dormant=False`, so `app/models.py:849` has already pinned `Instance.dormant == False` and `:850` `Instance.gone_forever == False`, and `Instance.online()` (`:118-119`) is exactly `not (self.dormant or self.gone_forever)`. The second conjunct is unreachable-False for every row the loop can see. **This site differs from `:295`, `:350` and `:351` in how it was FOUND, and that is the part worth carrying**: at `:295` the conjunct was invisible in the coverage residual and only mutation exposed it, whereas here the residual was already at **zero missing arms** and the conjunct was found by asking why a guard with four conjuncts showed no missing arc at all. **Zero missing arms is not the same claim as "both arms of everything run"** -- for a redundant conjunct there is no arm to miss, so a clean residual is what an unreachable conjunct looks like, not evidence against one. **The generalisation this fourth site licenses**: the establisher is a property of `following_instances()`, not of `send_post`, so it holds at **every** caller of that method that re-checks `online()`. A fifth such site belongs in this cell, not in a new number | not a production defect; dead conjuncts, registered only | **measured with a control, which is what makes it credible rather than plausible**: deleting any of the three conjuncts leaves the whole suite green, while deleting any of the *other eight* conjuncts in the same **three** guards fails exactly its named test. **The count and the number of guards were both wrong in the first draft ("the other five conjuncts in the same two guards") and are corrected from source**: the three dead conjuncts sit in **three** guards, not two -- `:295` (4 conjuncts: `instance.inbox`, `instance.online()`, `not user.has_blocked_instance(...)`, `not instance_banned(...)`), `:350` (3: `instance.domain not in domains_sent_to`, `instance.id != 1`, `instance.software != 'piefed'`) and `:351` (the same 4 as `:295`) -- **11 conjuncts in total, 3 dead, 8 live**. `:350` and `:351` are separate `if` statements, one nested inside the other; reading them as one guard is what produced both errors at once. The query filters read from source at this commit. **They appear in NO coverage residual**, because coverage.py records a branch arc at the `if` level and not per conjunct -- the same blindness fact 87 records for conditional expressions, and the reason mutation found these and the percentage never would |
 | D303 | `send_post`'s Page builder (`app/shared/tasks/pages.py:209-210`) | **Not a production defect. A redundant statement: `page['name']` is assigned twice with the same value, and the second assignment has no effect.** `:196` is `'name': post.title,` inside the dict literal that builds `page`, so the key is set for **every** post type; `:209-210` is `if post.type != POST_TYPE_POLL: page['name'] = post.title`, which re-assigns the same value for non-polls only. Nothing between `:196` and `:210` reads or deletes the key. **Worth registering rather than deleting because it is a load-bearing misdirection, not just dead code**: `:209-210` reads as though `name` were poll-conditional, which is what a reader would conclude, and it is exactly the wrong conclusion for `:312` (`if 'name' in page:`) whose false arm is unreachable *because* `:196` is unconditional. The sibling builder does the opposite and explicitly -- `app/activitypub/util.py:181` is `del activity_data['name']` inside the poll branch. **Recorded against fact 75's cause 6, the statement-scoped one sub-project 16 added, as an instance found in PRODUCTION code rather than in a mutation of a test** | not a production defect; redundant statement, registered only | reading-level, verified at this commit: `:196` and `:210` read from source, and `grep -n "page\['name'\]"` over the function returns exactly `:210` and `:313` with `:196` being the literal's `'name':` key. The unreachability of `:312`'s false arm is the corroboration, and it is measured -- coverage reports arc `(312, 314)` missing |
 | D304 | `send_post`'s Mastodon-friendly amendment (`app/shared/tasks/pages.py:309-317`) | **Not a live defect, and a latent hazard whose only guard is statement ORDER.** `:309`'s comment says "amend **copy** of the Create" and **no copy is made.** `:257` is `'object': page` and `:314` is `note = page` -- one dict, two names -- so `:313`'s `del note['name']` (via `page`), `:315`'s `note['content'] = ''` and `:317`'s type change all mutate `create['object']` **in place**. It is not a live defect -- **but the reason first recorded here was FALSE, and it is corrected in place rather than deleted (fact 96). This is the SECOND defect found in this one cell.** The withdrawn reason: "every send happens above the amendment: `:298`, `:300`, `:302` and `:306` are the four `send_post_request` calls and all four are above `:309`". **There are SIX `send_post_request` calls inside `:88-352`, not four** -- `:298`, `:300`, `:302`, `:306`, **`:336`** and **`:352`** -- and the last two are **below** `:309`. They are not an oversight; they are the mention and follower deliveries and they ship the amended object **by design**: `:332` is `create['object'] = note`, and `:343`'s comment reads "send the amended copy of the Create to anyone who is following the User". **This branch's own committed tests say the same thing** -- `tests/test_shared_tasks_send_post.py:1105-1109` ("The second send at :352 is the first one that carries those mutations") and the section comment at `:1784-1791`. **THE CONCLUSION SURVIVES FOR THE OPPOSITE REASON TO THE ONE RECORDED.** The aliasing is harmless because the four **community** sends at `:298`-`:306` serialize the dict before any amendment touches it, the two **mention/follower** sends at `:336` and `:352` are *supposed* to see the amendment, and **nothing reads `create['object']` or `page` expecting pre-amendment state after `:332`**. That last clause was re-derived here rather than assumed: `:332-352` is the whole remainder of the function (`send_post` ends at `:352` by `ast`), `:333-337` and `:349-352` only serialize `create`, `:339-347` touch only `followers` and `create['cc']`, and `page` has no reader at all after `:314` binds `note` to it. **The latent hazard is REAL but NARROWER than first written**: not "a send below `:309`" -- two already exist and are correct -- but a future send below `:309` that is meant to carry the **Page** and would silently get the Note. **And the missing copy costs less than first argued**: `:332` already rebinds `create['object']`, so a genuine copy at `:314` would produce byte-identical output on every path that exists today and would merely leave `page` unmutated. The comment is worse than absent because it tells the next reader the invariant is already enforced. **IT ALSO HAS A TESTING CONSEQUENCE, and that is the transferable half**: a recorder that holds a reference to the dict reads its **post-amendment** state rather than what was sent, so an assertion on the captured object would silently test the wrong document. This sub-project's capture therefore asserts on **serialized request bytes** | not a live defect; latent hazard, registered only | reading-level, verified at this commit: `:257`, `:314`, `:313`, `:315` and `:317` read from source and the aliasing confirmed. **THE CALL-SITE COUNT IN THIS CELL'S FIRST DRAFT WAS WRONG AND IS CORRECTED**: `grep -n 'send_post_request' app/shared/tasks/pages.py` returns **six** sites inside `send_post` -- `:298`, `:300`, `:302`, `:306`, `:336`, `:352` -- plus `:433` and `:435` in a later function and the import at `:4`. Four are above `:309`; **two are below it**. The "all four above `:309`" claim was never measured against that grep: it was carried out of the plan (`docs/superpowers/plans/2026-09-06-coverage-send-post-19.md:73` and `:1278`) into this cell unchecked, and the two sends it omits are pinned by this branch's own tests, which is how a false claim survived alongside its own counter-evidence. **The statement-by-statement read of `:332-352` behind the replacement reason was done for this correction**; the earlier draft asserted no such thing. **The testing consequence is measured, not reasoned** -- the capture in `tests/test_shared_tasks_send_post.py:256` is `json.loads(route.calls[index].request.content)`, i.e. it decodes the serialized request bytes rather than holding the dict, which is the shape this aliasing forces. **An earlier draft of this cell added that a dict-holding capture "was tried first"; nothing in the tree or in this sub-project's records supports that, so it is withdrawn rather than left standing** -- the byte capture is a fact, the history of how it got there was not one |
 | D305 | ~~`send_post`'s Page builder (`app/shared/tasks/pages.py:197`), against `post_to_page` (`app/activitypub/util.py:132-217`)~~ | **WITHDRAWN -- THE DIVERGENCE THIS ENTRY REGISTERS DOES NOT EXIST. Withdrawn in place and marked rather than deleted, because a correction that only deletes gets re-derived (fact 96), and because a future sub-project acting on this entry AS WRITTEN would CREATE the divergence it believed it was removing.** The withdrawn claim: "`post_to_page` assigns `activity_data['attachment']` only inside its guards (`app/activitypub/util.py:171`, `:175-177`), so the key is simply absent", making this "a third disagreement between the two Page builders: one emits `"attachment": []` where the other omits the key". **`app/activitypub/util.py:147` is `"attachment": [],` -- a key in the UNCONDITIONAL dict literal that runs `:133-165` for every post, whatever its type.** `:171` and `:175-177` **replace** that value; they never introduce the key, and nothing anywhere in `post_to_page` (`:132-217`) deletes it. **So both builders emit `"attachment": []` for the same posts, and they AGREE.** The half of the entry that was true and is retained as an observation: `app/shared/tasks/pages.py:177` initialises `attachment = []` and `:197` assigns `'attachment': attachment` unconditionally, so `send_post` does emit a present-but-empty array -- and D299's fix at `:180` made that state ordinary for a `POST_TYPE_IMAGE` post with `image_id` `None`. **That is a property of both builders, not a difference between them, and there is nothing here to fix.** The harm in leaving it standing is concrete: a reader told to "make `send_post` match `post_to_page`" would omit the key from `send_post` and thereby introduce the first real disagreement about `attachment` between the two | **WITHDRAWN by the final review of sub-project 19** -- no divergence; not a defect, not a registered item (was: not fixed, registered only) | **re-derived from source at this commit, and the original evidence line names exactly the read that was not done**: it said "both builders read in full" and "the unconditional assignment confirmed against the dict literal at `:183-208`" -- `send_post`'s literal. `post_to_page`'s literal at `app/activitypub/util.py:133-165` was **not** read; the entry inferred absence from the two guarded writes at `:171` and `:175-177` alone. `grep -n 'attachment' app/activitypub/util.py` returns `:147`, `:171` and `:175` inside `post_to_page`, and `:147` is inside the literal. **"Both read in full" was the claim, and the counter-evidence was fourteen lines above one of the lines actually cited** |
@@ -6750,7 +6781,7 @@ looking for a *correction* finds them without reading the prose:
    measurement: guarding `:233` moved the crash to `:324`/`:325` rather than
    removing it.
 
-**Next free number: D309.** D300-D308 were taken by sub-project 19 -- D300 the
+**Next free number: D312.** D300-D308 were taken by sub-project 19 -- D300 the
 `href`/`EVENT` divergence between the two Page builders, D301 the receiver-side
 `KeyError` family that D298's arbitration obliges us to record, D302 the three
 redundant conjuncts, D303 the redundant `page['name']` statement, D304 the
@@ -6770,6 +6801,17 @@ the ingest sites, all outside that index's declared scope of `create_post`,
 own arithmetic paragraph is therefore unchanged and still true as it stands** --
 sub-project 17's re-derived 61 = D236 through D296 inclusive does not extend,
 for the same reason it did not extend for sub-project 18.
+**D309-D311 were taken by sub-project 20, which edited exactly ONE entry of this
+section and says so here: D302**, extended in place with an appended, marked
+note in the D243/D257 convention, because it found a **fourth** site of the same
+shape -- `app/shared/tasks/notes.py:217`'s `instance.online()` conjunct, in a
+second file, on the same establisher. **It took no new number for it**, which is
+a deliberate reading of this register's own "record it once" discipline: a new
+cell for an identical structural cause would split the family that D302 exists
+to hold together, and the next reader who finds a fifth
+`following_instances()` caller re-checking `online()` should land in D302 and
+add to it rather than open D313. Nothing else in this section was renumbered,
+moved or edited, and that sub-project did not extend the family index either.
 
 **Seven shapes carried forward into `tests/README.md` as new facts 107-113, plus
 two existing facts extended rather than duplicated.** The new facts:
@@ -6794,6 +6836,375 @@ to look elsewhere; that is the same judgement sub-project 18 made when it folded
 its `RESTART IDENTITY` finding into fact 89 rather than opening fact 107. Fact
 100 gains the sweep discipline this sub-project needed: **grep for the value
 being corrected, not for the text you are writing.**
+
+## Sub-project 20: `send_reply`, the Celery-path Note builder and deliverer
+
+`docs/superpowers/specs/2026-09-06-coverage-send-reply-20-design.md` and
+`docs/superpowers/plans/2026-09-06-coverage-send-reply-20.md` (design and plan;
+the per-task briefs and reports live in the gitignored workspace
+`.superpowers/sdd/2026-09-06-coverage-send-reply-20/`, not committed), on branch
+`blentz`, from base `636e3126`. Seven test-writing tasks plus this register
+round brought `send_reply` (`app/shared/tasks/notes.py:80-229`) under test --
+the whole function, from the mention scanner and the notification fan-out
+through the three early returns, the Note and Create builders, the Announce
+construction and the follower delivery. **One** defect was fixed, in one commit,
+`00c2ff5e`, and it is **new**, not a sibling sub-project's registration: the
+private-community federation gate at `:143`. Tests live in
+`tests/test_shared_tasks_send_reply.py` (**41 tests**, 1572 lines).
+`app/shared/tasks/notes.py` measures **70.3196% blended** (66.67% statements,
+80.00% branches) after this sub-project, up from **10.0457%**; the file had **no
+entry in `coverage_floors.ini` at all** before this round, so nothing defended
+it, and it gains its first floor at **70**. Full suite after this sub-project:
+**3898 passed, 3 skipped, 6 subtests passed** in 228.46s, from
+`scratch_full_cov.json` written at 2026-09-06 11:06:42. **This sub-project's
+entire production diff is one conjunct**: `git diff --stat 636e3126..HEAD --
+app/` (from its own base commit, not from `main`, where the campaign's whole
+diff lives) is `1 file changed, 1 insertion(+), 1 deletion(-)`.
+`app/shared/tasks/notes.py` is **310 lines**, and was 310 lines before the fix
+too -- which mattered, because six later tasks cited lines below the guard.
+
+**THE SCOPED FUNCTION'S RESIDUAL IS TWO STATEMENTS AND *ZERO* ARMS, AND THE REST
+OF THE FILE'S RESIDUAL IS STATED SEPARATELY RATHER THAN LEFT TO BE INFERRED FROM
+THE PERCENTAGE.** Inside `send_reply` (`:80-229`) coverage reports exactly **2
+missing statements** (`:100`, `:101`) and **no missing branch arcs at all**; 85
+of the function's 87 statements run. Both missing statements are argued
+unreachable below and in a committed comment block. **Everything reachable in
+the function is covered.** The file's other 51 missing statements and all 12 of
+its missing arcs are outside the slice: **8 statements** in the `make_reply`
+Celery wrapper (`:56-64`) and **8** in `edit_reply` (`:69-77`), both uncovered
+because every test calls `send_reply` directly rather than through the task;
+**1 each** in `choose_answer` (`:234`) and `unchoose_answer` (`:239`); and the
+remaining **33 statements and all 12 arcs** in `send_answer` (`:242-310`), the
+sibling the design placed out of scope. Module totals for the file: 159
+statements, 53 missing, 60 branches, 12 missing arcs, 0 partial branches.
+**The three conditional expressions in `send_reply` are reconciled separately,
+because coverage cannot see them** (fact 87): `:129`, `:185` and `:187`,
+enumerated by an `ast.IfExp` walk over the `FunctionDef` rather than read off the
+report, each with both arms exercised by named tests -- `:129`'s two arms by the
+pair at `tests/test_shared_tasks_send_reply.py:828` and `:856`, which assert two
+different recorded values so neither can pass under the other's arm, and
+`:185`/`:187` by mutation in Task 5's review, four arms mutated and four
+assertion kills with no survivors.
+
+**THE FUNCTION'S EXTENT WAS WRITTEN THE SAME WAY IN EVERY DOCUMENT, WHICH IS
+WORTH RECORDING ONLY BECAUSE THE PREVIOUS SUB-PROJECT'S WAS NOT.** `send_reply`
+is `:80-229` by `ast`, and `80-229` is what the design (`:5`, `:14`, `:102`,
+`:220`), the plan (`:5`, `:67`, `:108`, `:563`), the test file's module
+docstring (`:3`) and the committed comment block (`:1505`) all say. Sub-project
+19 shipped three different extents for `send_post` across its own documents and
+spent a fix round on it; this one carried the AST discipline from the design
+onward and had nothing to correct. **The difference is not care, it is when the
+`ast` call happened** -- sub-project 19 derived the extent during its final task
+and sub-project 20's design opened with it, so there was never a convention-based
+value in circulation to survive into a document. **Run the AST walk before the
+first brief is written, not before the last.**
+
+**ONE GUARD LANDED, AND THE MEASUREMENT THAT CHOSE IT RAN OVER THE DISPATCHERS
+RATHER THAN OVER THE COLUMN.** The sub-project opened with two candidate fixes
+and a rule that at most one could land. The first candidate was `:92`,
+`matches = re.finditer(pattern, reply.body)`, whose twin `app/shared/tasks/pages.py:97`
+guards the identical scan with `if post.body:` and whose column, `PostReply.body`
+(`app/models.py:2901`), is nullable. **The nullable column is what made it look
+like a defect and it is not evidence of one.** The reachability question was
+settled by enumerating what can put a reply in front of the function:
+`send_reply` is called only from `app/shared/tasks/notes.py:59` and `:72`;
+`task_selector('make_reply'|'edit_reply')` appears at exactly three sites,
+`app/shared/reply.py:194`, `:232` and `app/post/routes.py:928`; all three write
+`body` through `piefed_markdown_to_lemmy_markdown` (`app/utils.py:1233-1237`);
+and that function, **executed rather than read**, raises
+`TypeError: expected string or bytes-like object, got 'NoneType'` on `None`
+before any commit -- byte-identical to the crash `:92` would produce. So the bad
+state dies in the writer. The writers that **can** store a `None` body
+(`app/activitypub/util.py:3020`, `:2639`, `app/community/util.py:272`) are all
+inbound and dispatch no task; they are **D311**. `:92` is therefore **D310**,
+registered as latent and left unguarded, and the private gate landed instead.
+**Three method points, each of which cost something when it was skipped
+somewhere in this campaign:** enumerate call sites of the **task**, not of the
+function, because the Celery indirection hides them in both directions;
+**execute** the suspected raiser rather than arguing about it; and when a brief
+names two writers, check whether the set is closed -- this one named two, the
+implementer found three dispatchers, and the review found a **third**
+`None`-capable writer the report had asserted away by writing "the TWO writers
+that CAN store a `None` body".
+
+**THE STATED REASON FOR DECLINING THE `:92` GUARD DID NOT SURVIVE REVIEW, AND
+THE DECISION DID. THE WRONG REASON IS IN A COMMITTED COMMIT MESSAGE.** The
+controller's brief and the implementer's report both rejected a `:92` guard as
+"untestable defence whose mutants nobody can kill". **That is false and the
+review showed why**: `PostReply.body` is nullable, the probe test seeds `None`
+at model level, so an `if False:` mutant would be killed by the existing
+mention-notification tests and an `if True:` mutant by the probe -- exactly the
+way the private gate's own mutants are killed by a directly seeded
+`private=True`. The distinction between "reachable by a supported model-level
+write" and "reachable only by a value no writer can produce" does not survive
+either, because the model-level write is available in both cases. **The decision
+stands on the OTHER reason that was given**: the twin-matching shape requires
+wrapping `:91-116` in `if reply.body:` and re-indenting ~26 lines, which shifts
+`:120`, `:129`, `:143`, `:175`, `:185`, `:187`, `:203`, `:217` and `:225` -- every
+line six later tasks cite -- by one. That is the hazard sub-project 19 paid two
+fix rounds for. **A third shape existed and was argued down rather than ignored**:
+`re.finditer(pattern, reply.body or '')` is one line in place and shifts nothing,
+so it defeats the line-number objection entirely -- and it was refused because
+its only advantage is cheapness, which is irrelevant once the guard itself is
+unwarranted. **Recorded because a correct decision reached through a wrong
+argument is the failure mode a green suite cannot detect**, and because the
+wrong argument is now permanent in `00c2ff5e`'s message.
+
+**THE PRIVATE-GATE ASYMMETRY, RECORDED ONCE, WITH THE ENUMERATION CORRECTED
+FROM THE DESIGN'S.** `Community.private` (`app/models.py:611`) is
+`db.Column(db.Boolean, default=False)` commented **"only members can view. no
+federation."** The design and the briefs said ten senders in `app/shared/tasks/`
+gate federation on `local_only`, that `app/shared/tasks/pages.py:153` was the
+only one that also tested `private`, and that nine omitted it. **Re-derived at
+this commit against every `local_only` read in `app/shared/tasks/`, the counts
+are different and the criterion is what makes them different.** Taking "a guard
+whose purpose is to suppress federation, keyed on `Community.local_only`" as the
+criterion, there are **twelve** such functions, not ten:
+`send_post` (`pages.py:153`) and `send_reply` (`notes.py:143`) test `private`;
+`send_answer` (`notes.py:248`), `add_object` (`adds.py:63`), `ban_person`
+(`blocks.py:104`), `delete_object` (`deletes.py:127` and `:130`),
+`report_object` (`flags.py:57`), `edit_community` (`groups.py:59`), `send_vote`
+(`likes.py:60`), `lock_object` (`locks.py:89`), `move_object` (`pages.py:398`)
+and `remove_object` (`removes.py:63`) do not. **The two the earlier count missed
+are `delete_object` and `move_object`**, and they were missed for different
+reasons worth naming: `delete_object` splits its gate across two `if`s
+(`:127` for non-posts, `:130` for posts with no followers) so it does not match
+the one-line shape the others share, and `move_object` sits in `pages.py`
+below `send_post`, in the half of that file the previous sub-project declared out
+of scope -- **an out-of-scope declaration is not a reason for a site to be absent
+from a cross-file enumeration**, and this one made a twelve-site family look like
+a ten-site one. `pages.py:270` and `:333` are deliberately **not** in the list:
+they are `if not community.local_only:` *inside* `send_post`, downstream of the
+return at `:153`, and are the unreachable arms D303 records. **The severity is
+LATENT and the reason is that both writers couple the flag**: `Community.private`
+is written in exactly two places, `app/community/routes.py:1234` on the edit path
+and `:122` (`private=private`) on the create path, and both are reached only
+through `if form.private.data:` blocks that set `form.local_only.data = True`
+first -- `:103-104` on create and `:1230-1231` on edit. Nothing at the model or
+the database level enforces that coupling, so the uncoupled state
+(`private=True, local_only=False`) is settable by a test, by a migration, by a
+shell, or by any future writer that forgets. **That is why the gate is worth
+closing and why closing it fixes nothing today**, and it is stated once here
+rather than once per site. Registered as **D309**.
+
+**THE REDUNDANT `online()` CONJUNCT IS A FOURTH INSTANCE OF D302 AND TOOK NO NEW
+NUMBER.** `:217` is
+`if instance.inbox and instance.online() and not user.has_blocked_instance(instance.id) and not instance_banned(instance.domain):`,
+over rows from `community.following_instances()` at `:216`.
+`Community.following_instances` (`app/models.py:842-851`) filters
+`Instance.dormant == False` at `:849` -- under `if not include_dormant:`, and the
+call takes the default -- and `Instance.id != 1, Instance.gone_forever == False`
+at `:850`; `Instance.online()` (`app/models.py:118-119`) is exactly
+`return not (self.dormant or self.gone_forever)`. Both of its disjuncts are
+pinned False by the query, so the conjunct is True for every row the loop can
+see. **The establisher was VERIFIED against the tree rather than inherited from
+the sibling entry**, which is the discipline sub-project 19's own withdrawn
+fifth unreachability claim was retired for. It is appended to **D302** with a
+marked note rather than given a number of its own; the reasoning for that choice
+is in D302's cell and in this section's closing paragraph.
+
+**AND IT IS THE INSTANCE THAT SHOWS WHAT "ZERO MISSING ARMS" DOES NOT MEAN.**
+At `send_post:295` the same conjunct was invisible in the residual and only
+mutation exposed it. Here the residual was **already zero missing arms** -- and
+the conjunct is still dead. For a redundant conjunct there is no arm to miss,
+because coverage.py records an arc at the `if` level and not per conjunct
+(fact 87), so **a clean residual is exactly what an unreachable conjunct looks
+like**. A slice that reads zero missing arms as "both arms of everything run"
+will conclude the opposite of the truth. The question that found this one was
+"why does a four-conjunct guard show no missing arc at all", and it is a better
+question than "what is still red".
+
+**THE TWO UNREACHABLE STATEMENTS ARE UNREACHABLE *BY INPUT*, AND THE
+QUALIFICATION IS RESTATED HERE BECAUSE THE COMMITTED COMMENT BLOCK STATES THE
+WEAKER FORM.** `:100-101` is the bare `except: pass` on the local arm of the
+mention scan. `:95` has already established that the mention's host half equals
+`SERVER_NAME`, so the name reaching `search_for_user` (`app/user/utils.py:85-158`)
+at `:99` carries no `@` and no scheme, `search_for_user` takes its local branch,
+and that branch's miss path returns `None` rather than raising. **No input
+reaches a `raise`, so no test can reach the handler by choosing a mention.**
+That is not the same as "these lines can never run": the handler is **bare** --
+`except:`, not `except Exception:` -- and the guarded call is a database query,
+so a `SQLAlchemyError` from a dropped connection lands in `:100-101` and is
+swallowed exactly as a `raise` would be. Sub-project 19 made that distinction
+explicitly for the identical shape at `send_post:107-108` and it is the
+difference between "coverage will never mark these lines" (true, and the reason
+no test chases them) and "these lines are dead" (false, and a claim that would
+justify deleting them). **The committed block at
+`tests/test_shared_tasks_send_reply.py:1500-1532` argues the callee correctly but
+is headed "TWO UNREACHABLE ITEMS" and does not carry the qualification.** It is
+not wrong -- it says "cannot raise for a bare local name", which is the
+input-scoped claim -- but it is weaker than what sub-project 19 established, and
+the register states the stronger form so the two do not drift. **This is the
+SECOND instance of the shape, in a second module**, so fact 75's cause 4(c) now
+has a pattern rather than a one-off.
+
+**THE TEST HARNESS WAS REWRITTEN IN THE MIDDLE OF THIS SUB-PROJECT, AT THE
+USER'S DIRECTION, AND IT CHANGED WHAT A COVERAGE RUN COSTS.** Commit `ec98595c`
+replaced `db_session`'s per-test `TRUNCATE` of ~90 tables with a `DELETE` sweep
+under `SET LOCAL session_replication_role = replica` plus a `setval` reset of
+the public schema's sequences (`tests/conftest.py:119-133`, executed at `:177`).
+Measured on identical fresh stacks over the same 629-test subset: **124.5ms mean
+teardown / 55.13s to 5.2ms / 16.18s**, with no drift across a full run (first
+hundred tests 6.5ms, last hundred 5.8ms). `run_tests.sh`'s `pg_class` staleness
+reset was **removed**, because it existed only to restart `test-db` once
+TRUNCATE's relfilenode churn had accumulated and there is no churn left to
+detect. **A full `--cov=app --cov-branch` run now takes 228.46s where it
+previously hit the 600s `session_timeout`**, which is the difference between
+this sub-project's measurement task succeeding and its predecessor's needing a
+retry. **A published figure was disproved in the process and is corrected in
+`tests/README.md` rather than quietly dropped**: the claim that a single
+TRUNCATE cost "about 0.05ms against a fresh database", degrading ~2500x to
+124ms, is false. Truncating 90 tables on a genuinely fresh database measures
+**76ms**; the degradation was real but second-order, and the base cost always
+dominated. The 0.05ms figure was almost certainly measured against **one** empty
+table rather than ninety. **A ratio is only as good as its denominator, and this
+one had been quoted for a week.**
+
+**A WRONG `--cov` TARGET FAILS SILENTLY AND GREEN, AND IT COST A FULL SUITE
+RUN.** `pytest-cov`'s `--cov` takes a **module** path, not a file path.
+`--cov=app/shared/tasks/notes.py` emits `CoverageWarning: Module
+app/shared/tasks/notes.py was never imported (module-not-imported)` and
+`CoverageWarning: No data was collected (no-data-collected)`, writes **no** JSON
+at all, and **pytest exits 0**. A 257.23s full-suite run was spent that way
+before the warnings were read. The dotted form `--cov=app.shared.tasks.notes`
+works; `--cov=app` is what the spec documents and what this campaign uses,
+because one run serves every module. **This is the same failure mode the campaign
+already guards against for `session_timeout`** -- a green exit code over a run
+that produced nothing -- and the check is the same one: read the mtime of the
+file the run was supposed to write, and the test count, never the exit code. It
+is carried into `tests/README.md` as fact 117.
+
+**"DO NOT MODIFY ANYTHING UNDER `app/`" WAS READ AS FORBIDDING TEMPORARY
+MUTATIONS, AND A TASK SHIPPED WITH ITS DISCRIMINATION UNMEASURED.** Task 5
+reported: "No mutation testing was performed against `app/` since the task
+forbids modifying anything under `app/`, even temporarily -- discrimination was
+verified by manual argument instead." That is a reasonable reading of the
+sentence and the wrong outcome; the constraint means do not **land** changes
+under `app/`. The review ran the six mutations the task had skipped and all six
+were killed by assertion, so the manual argument happened to be right -- **and
+the reviewer said what that was worth**: "an unlucky version of this same
+mistake could have produced a surviving mutant with nothing to catch it."
+**The corrected wording, now standing guidance for this campaign, is that a
+mutation is permitted and expected provided it is a targeted single-line edit,
+restored with `git checkout -- app/`, and followed by asserting BOTH an empty
+`git diff -- app/` AND the file's line count.** A prohibition on landing changes
+and a prohibition on making them are one word apart and produce different work.
+
+**AN INSTRUCTION TO PORT TEXT DOES NOT EXTEND TO KNOWINGLY PRESERVING AN
+ERROR.** Task 1 was told to carry a brief's module-docstring text verbatim. The
+brief cited the twin's amendment block as `app/shared/tasks/pages.py:309-330`;
+it is `:309-332`. The implementer caught it, used the corrected extent in the
+helper it was writing, and left the wrong number standing in the docstring
+because the instruction said verbatim -- **reporting it instead of fixing it**.
+The review ruled that the tree wins over a brief's prose and the disagreement
+goes in the report, and the fix round found the sharper form of the point: the
+two omitted lines, `:331` `note['inReplyTo'] = None` and `:332`
+`create['object'] = note`, **are the aliasing the block is cited for**. So
+`:309-330` would have pointed a reader at the half of the block that does not
+demonstrate the claim -- a wrong number that undermines the point it is cited
+for, not merely an off-by-two.
+
+### 1. Three items registered, one of them partially fixed -- D309-D311
+
+| # | function | defect | status | evidence |
+|---|---|---|---|---|
+| D309 | the `local_only` federation gates across `app/shared/tasks/` -- twelve functions, of which `send_post` (`app/shared/tasks/pages.py:153`) and now `send_reply` (`app/shared/tasks/notes.py:143`) test `Community.private` and **ten do not** | **Partially fixed -- `Community.private` means "no federation" and ten of twelve federation gates ignore it.** `app/models.py:611` is `private = db.Column(db.Boolean, default=False)` commented "only members can view. no federation." The ten omitting sites, re-derived at this commit: `send_answer` (`notes.py:248`), `add_object` (`adds.py:63`), `ban_person` (`blocks.py:104`), `delete_object` (`deletes.py:127`, `:130`), `report_object` (`flags.py:57`), `edit_community` (`groups.py:59`), `send_vote` (`likes.py:60`), `lock_object` (`locks.py:89`), `move_object` (`pages.py:398`) and `remove_object` (`removes.py:63`). A private community's votes, reports, locks, bans, deletes, removes, adds, moves, community edits and poll answers all federate today; only its posts and its comments do not. **The design's enumeration said ten gates and nine omissions and it was two sites short**; `delete_object` was missed because it splits its gate across `:127` and `:130` rather than matching the one-line shape, and `move_object` because it sits in the half of `pages.py` a previous sub-project had declared out of scope -- see the correction in this section's prose, because the *reason* the two were missed is more transferable than the count. **Fixed at ONE site**, `notes.py:143`, now `if community.local_only or community.private or not community.instance.online():` -- one conjunct, in place, and the file stayed 310 lines, which six later tasks' citations depended on. **Not fixed at the other ten**, for two stated reasons: the sub-project's rules allowed at most one production change, and a ten-site sweep across nine files is a change with a federation-behaviour question attached rather than a coverage slice's call. **SEVERITY: LATENT, and this is the part not to skip.** `Community.private` has exactly two writers, `app/community/routes.py:122` (`private=private`, the create path) and `:1234` (the edit path), and each is reached only inside an `if form.private.data:` block that sets `form.local_only.data = True` first (`:103-104` and `:1230-1231`). So today every private community is also `local_only` and the first conjunct already returns. The coupling is enforced **only in the view layer** -- not by the column, not by a constraint, not by `Community.new` -- so the uncoupled state is one migration, one shell session, one API writer or one forgetful form away, and the leak is silent when it arrives | **PARTIALLY FIXED by sub-project 20** at `app/shared/tasks/notes.py:143`, commit `00c2ff5e`; the other ten sites not fixed, registered only | **the fixed site is measured, the other ten are reading-level.** `test_a_private_community_does_not_federate_the_reply` asserts zero `ActivityPubLog` rows and `test_a_non_private_community_of_the_same_shape_does_federate` asserts one, so the pair discriminates rather than counting an absence; `ActivityPubLog` is a legitimate positive observable because `post_request` inserts its row at `app/activitypub/signature.py:103-105` **before** the transport and swallows transport failure at `:143-148`, so an attempted delivery leaves a row whether or not a route is registered. Three mutations at `:143`, each a single-line `sed` with `wc -l` = 310 and an empty `git diff -- app/` asserted after every restore: `or True or` kills the control test by assertion, `or False or` and the literal pre-fix line each kill the private test by assertion -- **each direction dying by a distinct named test**. The ten open sites were enumerated by reading every `local_only` occurrence in `app/shared/tasks/` at this commit and attributing each to its enclosing function by `ast`, not by grep proximity. The **latency** claim is reading-level: both writers and both coupling blocks read from source, and no test drives the uncoupled state through any of the ten |
+| D310 | `send_reply`'s mention scan (`app/shared/tasks/notes.py:92`), against its guarded twin in `send_post` (`app/shared/tasks/pages.py:97`) | **Not fixed -- LATENT, and the reachability argument is the entry, not the missing guard.** `:92` is `matches = re.finditer(pattern, reply.body)` with no guard; `pages.py:97` guards the identical scan with `if post.body:`; `PostReply.body` (`app/models.py:2901`) is nullable. On a `None` body `:92` raises `TypeError: expected string or bytes-like object, got 'NoneType'` from `re/__init__.py:285`, reached and reproduced by a retained probe test. **No production path produces that state.** `send_reply` is called only from `notes.py:59` and `:72`; `task_selector('make_reply')` and `task_selector('edit_reply')` appear at exactly three sites between them, `app/shared/reply.py:194`, `:232` and `app/post/routes.py:928`; all three write `body` through `piefed_markdown_to_lemmy_markdown` (`app/utils.py:1233-1237`), which raises the **identical** `TypeError` on `None` before `PostReply.new` and before any commit; and all three are gated on a locally-authored reply (`app/post/routes.py:1897`, `app/shared/reply.py:204`'s `id_match=reply.user_id`, and `make_reply` creating as the authorised user). The writers that **can** store `None` are inbound and dispatch nothing -- they are **D311**. **The asymmetry with `pages.py:97` is justified rather than an oversight**: `Post.body` genuinely goes `None` in production, `app/utils.py:5012` sets it when archiving a body to JSON, so that guard protects a state that occurs; `PostReply.body` has no equivalent nulling site. Not fixed because a guard on a state no writer can produce is defence a production-shaped test cannot exercise, and because the twin-matching shape re-indents ~26 lines and moves nine cited line numbers -- see the prose above for why the *first* of those two reasons was argued wrong the first time and the second is what carries the decision | not fixed, registered only; **latent** | **measured at the crash and reading-level at the reachability.** The probe (`test_a_none_body_crashes_the_unguarded_mention_scan`) seeds `body = None` at model level and asserts `pytest.raises(TypeError, match="expected string or bytes-like object, got 'NoneType'")`; it is kept as **characterization**, named for the behaviour the tree has rather than for the behaviour a guard would give it, and its docstring carries the whole reachability measurement. A companion (`test_an_empty_body_scans_cleanly_and_still_delivers`) pins `''`, the *other* falsy body `pages.py:97` would skip, so a later reader cannot mistake `''` for a witness of the missing guard. `piefed_markdown_to_lemmy_markdown(None)` was **executed**, not read, and produced the byte-identical message. The dispatcher enumeration was re-run by the review end to end -- `app/post/routes.py:153` and `:838` funnel through `reply.py:194` rather than being extra dispatchers, and no `send_task`/`apply_async` names either task -- and found no fourth route |
+| D311 | the `None`-capable writers of `PostReply.body` -- `update_post_reply_from_activity` (`app/activitypub/util.py:3020`), `create_post_reply` (`:2639`) and the community-import path (`app/community/util.py:272`) | **Not fixed -- unguarded peer input written straight into a nullable column, with a NON-crashing consequence that is stated rather than inflated.** `app/activitypub/util.py:3014` guards on `request_json['object']['content'] is not None`, but `:3017-3018` then switches to the `source` sub-object and `:3020` writes `reply.body = request_json['object']['source']['content']` **with no second null check**. So a Note carrying `"source": {"mediaType": "text/markdown", "content": null}` stores a NULL body. `:2633`/`:2639` are the same two lines on the `Create` path inside `create_post_reply` (`:2593-2774`), and `app/community/util.py:272` passes a `body` from the same shape into `PostReply.new`. **The consequence is a silent NULL, not an exception**: `markdown_to_html(None)` returns `''` rather than raising (`app/utils.py:1160-1161`), and `PostReply.new` guards its own read with `if reply.body:` (`app/models.py:3017`). **This is D301's shape in the reply half** -- our own ingest trusting an optional key a peer controls -- and it is registered at that lower strength deliberately, because promoting it to match D301's `KeyError` would be inventing a consequence. **Why it is registered at all, given no crash:** it is the reason D310 is *latent* rather than *impossible*, and the two entries have to be read together -- any future writer that routes an inbound reply into a local dispatch path, or any unguarded `reply.body` read added later, inherits D310's `TypeError` from these three sites. **One of the three sits inside sub-project 15's own scoped function and was not found by that slice**, which is further evidence for the copy-hunt rule that section already states. Not fixed because the repair is a policy choice (default to `''`, skip the field, or reject the activity) across two files and two subsystems, and because this round has no tests at any of those sites | not fixed, registered only | **reading-level, all three sites read from source at this commit**, plus two interpreter checks that bound the claim rather than support it: `markdown_to_html(None)` returns `''`, and `app/models.py:3017`'s `if reply.body:` guards the blocked-phrase scan. The `:3014` / `:3020` split -- a null check on `object.content` that does not cover `object.source.content` -- was read line by line rather than inferred from the presence of a guard nearby, which is the specific error the guarded-versus-unguarded split in D301 was recorded for. **Found as a by-product of D310's dispatcher enumeration, not by a traceback**, and the third site (`app/activitypub/util.py:2639`) was found by the review after the implementer's report had asserted a closed set of "the TWO writers that CAN store a `None` body". **Not reached by any test in this campaign** |
+
+### 2. Corrections landed, not deleted
+
+1. **`app/shared/tasks/pages.py:309-330` was `:309-332`**, in a brief and, briefly,
+   in a committed module docstring. The two omitted lines are the aliasing the
+   block is cited for. Corrected in `e7d939ef`; the full form is in the prose
+   above.
+2. **`PostReply.new` is `app/models.py:2967`, not `:2995`.** The controller's
+   brief **and the committed design spec** both cite `:2995`, which is the
+   `PostReply(...)` constructor call *inside* `new`. The register and this
+   sub-project's reports use `:2967-3187` by `ast`. **The design is a dated
+   record and is left as written**, on sub-project 18's D292 precedent; the
+   correction lives here. **The root cause is the campaign's most repeated
+   citation error** -- taking a line seen in a `grep` result as if it were the
+   definition -- and this was its tenth instance.
+3. **`instance_banned` was cited as `app/utils.py:2335-2356`; by `ast` it is
+   `:2335-2364`.** A loose span, not a wrong pointer -- the `def` line is right
+   and only the end is short -- which is exactly the kind of citation a reader
+   trusts without checking. Re-derived here rather than repeated.
+4. **Task 4's brief mapped `:143`'s disjuncts by their pre-fix ordinals.** The
+   fix at `:143` inserted `community.private` as the **second** disjunct, moving
+   `not community.instance.online()` from second to third, so a table written
+   against the plan would have had a test claim an arm it does not take. Caught
+   before dispatch. **This is the cost of a one-line fix that six later tasks
+   cite, and it is the cheap version** -- the alternative shape would have moved
+   nine line numbers instead of two ordinals.
+5. **`app/community/routes.py:269` cites `app/models.py:594` for the
+   `Community.private` column. The column is at `:611`.** `:594` is
+   `ap_id = db.Column(db.String(255), index=True)`. The comment was written by
+   `6854be2c` and the number has drifted since. **NOT FIXED HERE**: this round's
+   authorisation covers documentation and `coverage_floors.ini`, and
+   `app/community/routes.py` is production source. Named by symbol and by value
+   so the next task that opens that file fixes it in one pass -- the same
+   deferral shape sub-project 19 used for `132-219`, and the same warning
+   attached: **a citation sweep scoped by file type leaves the wrong value
+   standing where the next reader will trust it.**
+6. **`tests/README.md`'s TRUNCATE prose is corrected in this same change**,
+   because commit `ec98595c` invalidated it mid-sub-project. The disproved
+   0.05ms figure, the `pg_class` staleness reset that no longer exists, and the
+   teardown mechanism itself are corrected in the "things that will otherwise
+   waste your time" section and in facts 13, 18, 21, 29 and 89. **Facts 13 and
+   18 are corrected in MECHANISM but not in ADVICE, and the entries say which**:
+   the corruption a second concurrent session causes is unchanged, while the
+   lock it blocks on moves from `ACCESS EXCLUSIVE` to `ROW EXCLUSIVE` -- which
+   is **reasoned from the lock modes and not re-observed**, and is labelled that
+   way rather than asserted. Fact 88's narrative about a `tests/conftest.py:143`
+   citation dispute is **left standing as history** with a note saying so;
+   rewriting the numbers in a paragraph whose subject is a citation error would
+   falsify the record it exists to keep.
+
+**Next free number: D312.** D309-D311 were taken by sub-project 20 -- D309 the
+private-gate asymmetry across twelve federation senders, fixed at one of them,
+D310 the unguarded mention scan registered as latent, and D311 the three
+`None`-capable writers of `PostReply.body` on the ingest side. **Only D309 and
+D311 are production defects**, D309 partially fixed; D310 is a latent
+divergence registered rather than guarded. **Exactly one earlier entry was
+edited in place rather than renumbered: D302**, which gains a fourth site,
+`app/shared/tasks/notes.py:217`, with an appended marked note in the D243/D257
+convention. **No other entry was renumbered, moved or edited**, and the family
+index in sub-project 16's subsection 5 is **not** extended: D309's sites are the
+`local_only` federation gates, D310's is `send_reply` and D311's are
+`create_post_reply`, `update_post_reply_from_activity` and the community-import
+path, all outside that index's declared scope of `create_post`,
+`create_post_reply`, `update_post_from_activity`,
+`update_post_reply_from_activity` and `notify_about_post_task`. **D311's two
+`app/activitypub/util.py` sites are inside two of those five functions and it
+still does not extend the index**, which is worth stating rather than leaving
+for a reader to query: the index is the *unguarded-peer-input* family for the
+`Post` half, D311 is the `PostReply` half, and folding one into the other would
+silently change what sub-project 17's re-derived arithmetic (61 = D236 through
+D296 inclusive) is counting. It stands unchanged.
+
+**Four shapes carried forward into `tests/README.md` as new facts 114-117, plus
+one existing fact extended rather than duplicated.** The new facts:
+`send_reply`'s `parent_id` is a **branch** binding `parent` to a `PostReply` or
+a `Post`, with `inReplyTo` as the only clean observable (114); `recipients` is
+seeded with the parent's author before the scan runs, so the dedup loop is never
+empty and the parent author is a delivery target *excluded from notification* --
+and the default seed collapses two arms onto one state (115); a nullable column
+is not evidence that a missing guard is a defect, and reachability is settled
+over the **dispatchers**, not the column (116); and a wrong `--cov` target
+collects nothing, writes no JSON and exits 0 (117). **The extension is fact
+112**, which gains `User.is_local()` alongside `Community.is_local()`: the same
+disjunction with the **opposite** symptom -- `User.is_local()`
+(`app/models.py:1251-1252`) reads `ap_profile_id` directly and **crashes** with
+`AttributeError` when only `ap_id` is set, where `Community.is_local()`
+(`:795-796`) goes through `profile_id()`'s fallback and **silently decides
+local**. It is folded into 112 rather than opened as 118 because a reader who
+learns one half will mis-predict the other, and 112 is where they will look.
+**The teardown rewrite is deliberately NOT a new fact**: it is corrected in the
+prose section that already owned the subject and inside facts 13, 18, 21, 29 and
+89, on the same judgement that folded sub-project 18's `RESTART IDENTITY`
+finding into fact 89 -- a mechanism change belongs everywhere the old mechanism
+was claimed, not in a new entry that leaves the old claims standing.
 
 ## Ratchet gotchas
 
