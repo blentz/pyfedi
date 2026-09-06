@@ -2424,3 +2424,63 @@ def test_a_remote_community_receives_the_bare_move(db_session, http_mock):
 
     assert route.called
     assert _sent_activity(route)['type'] == 'Move'
+
+
+def test_a_local_only_community_does_not_federate_the_move(db_session, http_mock):
+    """:398's TRUE arm via `local_only`, returning at :399."""
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    s.community.local_only = True
+    db.session.commit()
+
+    _move(s)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_dormant_instance_does_not_receive_the_move(db_session, http_mock):
+    """:398's TRUE arm via `not instance.online()`.
+
+    `Instance.online()` (app/models.py:118-119) is
+    `not (self.dormant or self.gone_forever)`, so setting `dormant` on the
+    community's OWN instance closes it. `_make_deliverable` reassigns
+    `community.instance_id` to the peer before its commit, so this lands on
+    the instance the guard actually reads.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    s.community.instance.dormant = True
+    db.session.commit()
+
+    _move(s)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_private_community_does_not_federate_the_move(db_session, http_mock):
+    """:398's `private` conjunct -- the first of this sub-project's two
+    production changes.
+
+    `Community.private` (app/models.py:611) is commented "only members can
+    view. no federation.", and before this conjunct landed `:398` tested only
+    `local_only` and `instance.online()` -- so a private, non-local-only
+    community federated its moves out.
+
+    D309's THIRD closed site of ten; sub-projects 20 and 21 closed
+    `notes.py:143` and `notes.py:248`. `local_only` is left False
+    deliberately: with it True the test would pass on the pre-existing
+    conjunct and prove nothing.
+
+    NEITHER SIBLING GUARD IS A TEMPLATE. `pages.py:153` is
+    `local_only or private` with NO `online()` check; `notes.py:248` is
+    `local_only or private or not instance.online()`. This one matches :248,
+    because :398 already tests `online()`.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    s.community.private = True
+    db.session.commit()
+
+    _move(s)
+
+    assert db.session.query(ActivityPubLog).count() == 0
