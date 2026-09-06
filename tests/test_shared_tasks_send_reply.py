@@ -64,7 +64,9 @@ import pytest
 
 from app import db
 from app.constants import NOTIF_MENTION
-from app.models import BannedInstances, Instance, Notification, PostReply
+from app.models import (
+    ActivityPubLog, BannedInstances, Instance, Notification, PostReply,
+)
 from app.shared.tasks.notes import send_reply
 from tests.factories import (
     make_community, make_instance, make_post, make_post_reply, make_user,
@@ -218,6 +220,22 @@ def _peer_example_resolves_without_a_resolver(monkeypatch):
     monkeypatch.setattr(socket, 'getaddrinfo', _getaddrinfo_without_the_network)
 
 
+def _make_deliverable(s, inbox=PEER_INBOX):
+    """Attach the community to a real peer Instance and give it an inbox.
+
+    The half of `_remote_inbox` below that touches the database and nothing
+    else. `_remote_inbox` calls this and then registers the route; the private
+    gate tests call it ALONE, because they assert that the delivery never
+    happens and `http_mock` is `assert_all_called=True` -- registering a route
+    they expect never to fire would fail them for the wrong reason. Read
+    `_remote_inbox`'s docstring for why each of these two assignments is
+    required before `send_reply` can reach the transport at all.
+    """
+    s.community.instance_id = _peer().id
+    s.community.ap_inbox_url = inbox
+    db.session.commit()
+
+
 def _remote_inbox(s, http_mock, inbox=PEER_INBOX):
     """THE CAPTURE MECHANISM for anything `send_reply` writes into `note` or
     `create`. Returns the respx route the outbound Create lands on; pair it
@@ -273,9 +291,7 @@ def _remote_inbox(s, http_mock, inbox=PEER_INBOX):
     `.example` hosts in-process; read its docstring before changing `inbox` to
     a host outside that TLD, which would put the live lookup back.
     """
-    s.community.instance_id = _peer().id
-    s.community.ap_inbox_url = inbox
-    db.session.commit()
+    _make_deliverable(s, inbox)
     return http_mock.post(inbox).respond(200, json={})
 
 
@@ -563,3 +579,132 @@ def test_two_different_local_users_are_both_added(db_session):
 
     assert Notification.query.filter_by(user_id=alpha.id).count() == 1
     assert Notification.query.filter_by(user_id=beta.id).count() == 1
+
+
+# ---------------------------------------------------------------------------
+# The unguarded mention scan, :92 -- a LATENT crash, measured not assumed
+# ---------------------------------------------------------------------------
+
+
+def test_a_none_body_crashes_the_unguarded_mention_scan(db_session):
+    """:92 scans `reply.body` with no guard, where `pages.py:97` guards its
+    equivalent with `if post.body:`. `PostReply.body` is nullable
+    (`app/models.py:2901`), so the column permits the state this test seeds.
+
+    THE SEVERITY CLAIM HERE IS WRITTEN AFTER THE MEASUREMENT. Every writer that
+    can put a reply in front of `send_reply` writes a `str`:
+
+      * `app/shared/reply.py:182` (make_reply), `app/post/routes.py:917` (the
+        inline reply route) and `app/shared/reply.py:219` (edit_reply) each
+        assign `piefed_markdown_to_lemmy_markdown(content)`, which is one
+        `re.sub` (`app/utils.py:1233-1237`). `re.sub` RAISES this same
+        TypeError on None, so a None `content` dies in the writer before any
+        row is committed -- it cannot produce a None-bodied row.
+      * Those three sites are also the ONLY dispatchers of the `make_reply` /
+        `edit_reply` tasks that call this function (`app/shared/reply.py:194`,
+        `:232`, `app/post/routes.py:928`), and all three are gated on a local
+        author: `:1897` compares `post_reply.user_id == current_user.id` and
+        the API path passes `id_match=reply.user_id` to `authorise_api_user`
+        (`app/shared/reply.py:204`).
+      * The two writers that CAN store a None body --
+        `app/activitypub/util.py:3020`, and `PostReply.new`'s `body=` from
+        `app/community/util.py:272` -- are inbound/import paths for REMOTE
+        replies and dispatch neither task, so nothing they write reaches `:92`.
+
+    So the crash is LATENT: no production path currently reaches `:92` with a
+    None body. This test pins the behaviour rather than asserting the absence
+    of a crash, because a test that asserted "does not crash" would be a
+    permanently failing test, and one that skipped the state entirely would
+    leave the divergence from `pages.py:97` unrecorded. An empty-string body is
+    NOT the same state -- `re.finditer` accepts `''` -- so `''` is not a
+    substitute witness.
+
+    If a future writer ever stores a None body on a locally-authored reply,
+    this test starts describing a live crash and `:92` needs `pages.py:97`'s
+    guard. Adding that guard is expected to fail this test; that failure is the
+    signal to re-register the finding, not a reason to delete the test.
+    """
+    s = _seed()
+    s.reply.body = None
+    db.session.commit()
+
+    with pytest.raises(TypeError,
+                       match="expected string or bytes-like object, got 'NoneType'"):
+        _send(s)
+
+
+def test_an_empty_body_scans_cleanly_and_still_delivers(db_session, http_mock):
+    """The falsy body `:92` DOES survive, which is what makes the None case
+    above the only witness for the missing guard. `pages.py:97`'s `if post.body:`
+    would skip both; `:92` skips neither and only one of them raises."""
+    s = _seed(body='', local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    _send(s)
+
+    assert _sent_activity(route)['object']['source']['content'] == ''
+
+
+# ---------------------------------------------------------------------------
+# The private gate, :143
+# ---------------------------------------------------------------------------
+
+
+def test_a_private_community_does_not_federate_the_reply(db_session):
+    """:143's NEW `community.private` conjunct. `Community.private` is
+    commented "only members can view. no federation." (`app/models.py:611`),
+    and before this conjunct landed `notes.py:143` tested only `local_only` and
+    `instance.online()` -- so a private, non-local-only community federated its
+    replies out.
+
+    THE UNCOUPLED STATE THIS SEEDS HAS NO CURRENT UI PATH. Both writers of the
+    flag set `local_only` alongside it in the view layer
+    (`app/community/routes.py:103-104` and `:1230-1231`), so `private=True,
+    local_only=False` is producible at the model and database level but not
+    through the site. The conjunct is defence in depth on the footing the
+    design spec's 2.2 describes, matching `pages.py:153`, which is the only one
+    of the ten senders in `app/shared/tasks/` that tests the flag. The other
+    eight remain unguarded and stay registered.
+
+    THE ASSERTION IS AN ABSENCE OF DELIVERY, and it is positive rather than
+    vacuous: `post_request` (`app/activitypub/signature.py:103-105`) inserts an
+    `ActivityPubLog` row for every outbound attempt BEFORE it touches the
+    transport, and swallows the transport failure at `:143-148` -- so an
+    ungated send leaves a row behind whether or not a route was registered for
+    it. Zero rows therefore means `send_reply` returned at `:144` without
+    reaching `:221`. The companion test below seeds the identical community
+    with `private=False` and asserts a row DOES appear, which is what makes
+    this pair discriminating rather than a count of nothing.
+
+    `http_mock` is deliberately NOT requested: it is `assert_all_called=True`
+    (`tests/conftest.py:294`), so registering the peer inbox this test wants
+    never to be called would itself fail the test. The session-wide respx mock
+    (`tests/conftest.py:283`) still intercepts, so no network is touched.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    s.community.private = True
+    s.community.local_only = False
+    db.session.commit()
+
+    _send(s)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_non_private_community_of_the_same_shape_does_federate(db_session):
+    """:143's FALSE arm for the same conjunct -- the control for the test
+    above. Identical seed but `private=False`, so `:143` falls through and
+    `:221` delivers, leaving the `ActivityPubLog` row `post_request` writes at
+    `app/activitypub/signature.py:103-105`. Without this, the zero-row
+    assertion above would pass against a `send_reply` that never delivered
+    anything at all."""
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    s.community.private = False
+    s.community.local_only = False
+    db.session.commit()
+
+    _send(s)
+
+    assert db.session.query(ActivityPubLog).count() == 1

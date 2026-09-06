@@ -140,7 +140,7 @@ def send_reply(reply_id, parent_id, edit=False, session=None):
                     session.add(notification)
                     session.commit()
 
-    if community.local_only or not community.instance.online():
+    if community.local_only or community.private or not community.instance.online():
         return
 
     banned = session.query(CommunityBan).filter_by(user_id=user.id, community_id=community.id).first()
