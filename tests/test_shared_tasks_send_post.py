@@ -43,6 +43,7 @@ So a test asserting that a mention produced no notification cannot distinguish
 absence.
 """
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -63,7 +64,8 @@ from tests.factories import (
 )
 
 
-def _seed(body=None, post_type=POST_TYPE_ARTICLE, url=None, local_community=True):
+def _seed(body=None, post_type=POST_TYPE_ARTICLE, url=None, local_community=True,
+          with_keys=False):
     """The local instance, a local author, a community, and a post.
 
     ORDER IS LOAD-BEARING. `make_community` hardcodes `instance_id=1`
@@ -86,9 +88,15 @@ def _seed(body=None, post_type=POST_TYPE_ARTICLE, url=None, local_community=True
     the second disjunct too, `ap_profile_id`, `ap_public_url` and
     `ap_followers_url` are overridden onto `peer.example` here, alongside
     `ap_domain` for consistency with a real remote community's row shape.
+
+    `with_keys=True` is passed straight through to `make_user`
+    (tests/factories.py:39), giving the author a real RSA keypair. Off by
+    default because generation costs roughly a second; required by any test
+    that reaches `_remote_inbox` below, because signing calls `.encode()` on
+    `user.private_key` and a keyless author dies there before any request.
     """
     instance = make_instance('test.piefed.local', software='piefed')
-    user = make_user(instance, 'author', local=True)
+    user = make_user(instance, 'author', local=True, with_keys=with_keys)
     community = make_community('c1')
     post = make_post(community, user, ap_id='https://test.piefed.local/post/1')
     post.type = post_type
@@ -114,6 +122,66 @@ def _peer(domain='peer.example', software='lemmy'):
 def _send(post, edit=False):
     """`send_post` takes an explicit session; there is no usable default."""
     return send_post(post.id, edit=edit, session=db.session)
+
+
+PEER_INBOX = 'https://peer.example/c/c1/inbox'
+
+
+def _remote_inbox(s, http_mock, inbox=PEER_INBOX):
+    """THE CAPTURE MECHANISM for anything `send_post` writes into `page` or
+    `create`. Returns the respx route the outbound Create lands on; pair it
+    with `_sent_activity` below.
+
+    Everything the builder produces between :163 and :259 lives in two locals,
+    `page` and `create`, and is never persisted. The only way to read them is
+    to let the function actually deliver. pages.py:302-304 is the cheapest
+    route to that: the `else` arm of :268, taken when the community is NOT
+    local, calls `send_post_request(community.ap_inbox_url, create, ...)` with
+    `create['object']` still bound to `page` (:254).
+
+    Three things have to be true for that call to become an observable HTTP
+    request, and this helper plus its caller supply all three:
+
+      1. The community must be remote -- `_seed(local_community=False)`, which
+         closes both disjuncts of `Community.is_local()` (app/models.py:
+         795-796). See `_seed`'s docstring.
+      2. It must have an `ap_inbox_url`. `_seed` does NOT set one, and
+         `make_community` leaves it None; with None, `post_request`
+         (app/activitypub/signature.py:109-111) short-circuits to an
+         "empty uri" `ActivityPubLog` failure row and never reaches the
+         transport. This helper sets it, and registers exactly that URL with
+         `http_mock`.
+      3. The author must have a keypair -- `_seed(with_keys=True)` -- because
+         `HttpSignature.signed_request` (app/activitypub/signature.py:472)
+         signs with `user.private_key` before issuing the request at :494.
+
+    Delivery is synchronous here: `send_post_request`
+    (app/activitypub/signature.py:82-91) calls `post_request.delay(...)` at
+    :89, and tests/conftest.py:106-107 runs Celery eagerly, so the POST has
+    already happened by the time `_send` returns.
+
+    WHY THE HTTP BODY AND NOT A MONKEYPATCHED RECORDER. `page` keeps being
+    mutated after delivery -- :310 deletes `name`, :312-327 rewrite `content`
+    and `type`, :328 adds `inReplyTo` -- and `create['object']` is the same
+    object throughout. A recorder that kept the dict would therefore be read
+    back in its post-:328 state, not the state that was sent. respx captures
+    the serialized request bytes at :494, so `_sent_activity` returns a true
+    snapshot of what left the process.
+
+    `http_mock` is `assert_all_called=True` (tests/conftest.py:287-295), so the
+    route registered here failing to fire is itself a test failure -- a test
+    using this helper cannot silently stop delivering.
+    """
+    s.community.instance_id = _peer().id
+    s.community.ap_inbox_url = inbox
+    db.session.commit()
+    return http_mock.post(inbox).respond(200, json={})
+
+
+def _sent_activity(route, index=-1):
+    """The JSON body of the request `route` captured, decoded from the bytes
+    that were actually sent. Defaults to the most recent call."""
+    return json.loads(route.calls[index].request.content)
 
 
 # ---------------------------------------------------------------------------
@@ -444,3 +512,119 @@ def test_a_remote_community_on_a_blocked_instance_stops(db_session):
 # (pages.py:109-114's success path); Task 6, which builds the
 # outbound-delivery capture that makes the Create body's `type`, `tag` and
 # `cc` visible, is where these two arms belong.
+#
+# UPDATE, Task 3: that capture now exists -- `_remote_inbox` / `_sent_activity`
+# in the prelude above. Task 6 should reuse it rather than build a second one.
+
+
+# ---------------------------------------------------------------------------
+# The Page builder's image-url fallback, :213-221
+# ---------------------------------------------------------------------------
+#
+# :213-221 is
+#
+#   213:     if post.image_id:
+#   214:         image_url = ''
+#   215:         if post.image.source_url:
+#   216:             image_url = post.image.source_url
+#   217:         elif post.image.file_path:
+#   218:             image_url = post.image.file_path.replace('app/static/', ...)
+#   219:         elif post.image.thumbnail_path:
+#   220:             image_url = post.image.thumbnail_path.replace('app/static/', ...)
+#   221:         page['image'] = {'type': 'Image', 'url': image_url}
+#
+# The rewrite at :218 and :220 substitutes `current_app.config['SERVER_URL']`
+# + '/static/' for the leading 'app/static/'. SERVER_URL is built at
+# app/__init__.py:132-135 from HTTP_PROTOCOL (default 'https', config.py:52)
+# and SERVER_NAME, which tests/conftest.py:69 pins to 'test.piefed.local' --
+# so the expected strings below are spelled out in full rather than rebuilt
+# from the same config value the production code reads.
+#
+# `page` is a local, so each of these four asserts on the delivered Create's
+# `object.image` instead; see `_remote_inbox`.
+
+
+def _attach_image(post, **columns):
+    """A File on `post`, with only the columns the caller names set.
+
+    :215-220 is a three-step fallback over `source_url`, `file_path` and
+    `thumbnail_path` (app/models.py:373, :368 and :374), so each test must
+    leave the earlier columns unset for its own arm to be reached.
+    """
+    f = File(**columns)
+    db.session.add(f)
+    db.session.commit()
+    post.image_id = f.id
+    db.session.commit()
+    return f
+
+
+def _image_of(route):
+    """The `image` member of the delivered Create's Page object, :221."""
+    return _sent_activity(route)['object']['image']
+
+
+def test_the_image_url_prefers_the_source_url(db_session, http_mock):
+    """:215-216, the first arm. `source_url` wins over the other two, which
+    are both set here precisely so a mutation that reordered the chain or
+    dropped :215's guard would deliver one of their values instead."""
+    s = _seed(post_type=POST_TYPE_LINK, url='https://example.com/a',
+              local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    _attach_image(s.post, source_url='https://example.com/pic.png',
+                  file_path='app/static/posts/x.png',
+                  thumbnail_path='app/static/posts/x_thumb.png')
+
+    _send(s.post)
+
+    assert _image_of(route) == {'type': 'Image',
+                                'url': 'https://example.com/pic.png'}
+
+
+def test_the_image_url_falls_back_to_the_file_path(db_session, http_mock):
+    """:217-218, reached only when `source_url` is falsy. The stored path is
+    rewritten from 'app/static/' to the server's static URL, so the delivered
+    value is NOT the column value -- asserting the rewritten string is what
+    distinguishes this arm from one that emitted `file_path` verbatim."""
+    s = _seed(post_type=POST_TYPE_LINK, url='https://example.com/a',
+              local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    _attach_image(s.post, source_url=None, file_path='app/static/posts/x.png')
+
+    _send(s.post)
+
+    assert _image_of(route) == {
+        'type': 'Image',
+        'url': 'https://test.piefed.local/static/posts/x.png'}
+
+
+def test_the_image_url_falls_back_to_the_thumbnail_path(db_session, http_mock):
+    """:219-220, reached only when both `source_url` and `file_path` are
+    falsy. Same 'app/static/' rewrite as :218, over the thumbnail column."""
+    s = _seed(post_type=POST_TYPE_LINK, url='https://example.com/a',
+              local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    _attach_image(s.post, source_url=None, file_path=None,
+                  thumbnail_path='app/static/posts/x_thumb.png')
+
+    _send(s.post)
+
+    assert _image_of(route) == {
+        'type': 'Image',
+        'url': 'https://test.piefed.local/static/posts/x_thumb.png'}
+
+
+def test_the_image_url_stays_empty_when_the_file_has_no_paths(db_session, http_mock):
+    """:219's false arm -- all three columns falsy, so `image_url` keeps the
+    `''` assigned at :214 and :221 emits it. The key is that :221 runs at all:
+    an empty `url` is still a delivered `image` member, which is what
+    separates this from a post with no `image_id` (:213 false), where the
+    `image` key is absent entirely."""
+    s = _seed(post_type=POST_TYPE_LINK, url='https://example.com/a',
+              local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    _attach_image(s.post, source_url=None, file_path=None, thumbnail_path=None)
+
+    _send(s.post)
+
+    assert _image_of(route) == {'type': 'Image', 'url': ''}
