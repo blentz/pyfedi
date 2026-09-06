@@ -68,7 +68,7 @@ from app.models import (
     ActivityPubLog, BannedInstances, CommunityBan, Event, File, Instance,
     Language, Notification, Poll, PollChoice, User, UserFollower,
 )
-from app.shared.tasks.pages import send_post
+from app.shared.tasks.pages import edit_post, make_post, move_object, move_post, send_post
 from tests.factories import (
     make_community, make_community_member, make_instance, make_instance_block,
     make_post, make_user,
@@ -2332,3 +2332,95 @@ def test_a_defederated_follower_instance_is_skipped(db_session, http_mock):
 
     assert len(route.calls) == 1
     assert ActivityPubLog.query.count() == 1
+
+
+def _make_deliverable(s, inbox=PEER_INBOX):
+    """Attach the community to a real peer Instance and give it an inbox.
+
+    The half of `_remote_inbox` that touches the database and nothing else.
+    The early-return tests call this ALONE, because they assert the delivery
+    never happens and `http_mock` is built with `assert_all_called=True` --
+    registering a route they expect never to fire would fail them for the
+    wrong reason.
+
+    Defined here at the end of the file rather than beside `_remote_inbox`
+    because 11 committed citations point into this file and a mid-file
+    insertion would shift every one below it.
+    """
+    s.community.instance_id = _peer().id
+    s.community.ap_inbox_url = inbox
+    db.session.commit()
+
+
+def _recording_task_session(monkeypatch):
+    """Make `get_task_session` hand back a GENUINE Session that records
+    `rollback()` and `close()`.
+
+    Ported from tests/test_shared_tasks_send_reply.py -- copied rather than
+    imported across test modules, which is this campaign's deliberate pattern.
+
+    The session is real and does real work; only the observation is added, by
+    wrapping the two methods rather than replacing the object. A fake session
+    would prove the wrapper calls methods on a mock; this proves it calls them
+    on the session the function actually used.
+
+    THE PATCH TARGET IS THE `pages` MODULE. `app/shared/tasks/pages.py`
+    imports `get_task_session` into its own namespace, so patching
+    `app.utils.get_task_session` would miss the binding `make_post`,
+    `edit_post` and `move_post` actually call -- and the tests would pass
+    while observing nothing.
+
+    Returns a `SimpleNamespace(calls=[])`; the wrapper appends 'rollback' and
+    'close' in the order they happened, so `finally` running after `except` is
+    observable rather than assumed.
+    """
+    from app import db as _db
+    from sqlalchemy.orm import Session as _Session
+    import app.shared.tasks.pages as pages_module
+
+    record = SimpleNamespace(calls=[])
+
+    def _make():
+        session = _Session(bind=_db.engine)
+        real_rollback, real_close = session.rollback, session.close
+
+        def rollback():
+            record.calls.append('rollback')
+            return real_rollback()
+
+        def close():
+            record.calls.append('close')
+            return real_close()
+
+        session.rollback = rollback
+        session.close = close
+        return session
+
+    monkeypatch.setattr(pages_module, 'get_task_session', _make)
+    return record
+
+
+def _move(s, target=None):
+    """`move_object(session, user_id, object, origin, target)`.
+
+    `origin` is always the seeded community; `target` defaults to a SECOND
+    community so the two differ, which is what a real move means. Both must be
+    `Community` instances or `:393`'s guard raises.
+    """
+    if target is None:
+        target = make_community('c2')
+        db.session.commit()
+    return move_object(db.session, s.user.id, s.post, origin=s.community,
+                       target=target)
+
+
+def test_a_remote_community_receives_the_bare_move(db_session, http_mock):
+    """The harness itself: `:416`'s FALSE arm reaches `:435` and the bytes are
+    readable. Every later move test depends on this working."""
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    _move(s)
+
+    assert route.called
+    assert _sent_activity(route)['type'] == 'Move'
