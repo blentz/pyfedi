@@ -53,8 +53,8 @@ from app.constants import (
     POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_VIDEO,
 )
 from app.models import (
-    BannedInstances, CommunityBan, Event, File, Notification, Poll,
-    PollChoice, User, UserFollower,
+    ActivityPubLog, BannedInstances, CommunityBan, Event, File, Notification,
+    Poll, PollChoice, User, UserFollower,
 )
 from app.shared.tasks.pages import send_post
 from tests.factories import (
@@ -73,8 +73,19 @@ def _seed(body=None, post_type=POST_TYPE_ARTICLE, url=None, local_community=True
     peer built before this call would capture id 1 and silently make the
     community's instance the peer -- see `_peer` below.
 
-    `local_community=False` gives the community an `ap_id`, which is what
-    `Community.is_local()` tests, so :159's guard opens.
+    `local_community=False` gives the community a genuinely remote AP
+    identity. `Community.is_local()` (app/models.py:795-796) is a
+    DISJUNCTION -- `self.ap_id is None or self.profile_id().startswith(
+    SERVER_URL)` -- and `profile_id()` (app/models.py:787-789) reads
+    `ap_profile_id`, falling back to a `SERVER_URL`-based value only when
+    `ap_profile_id` is unset. `make_community`'s default `host` is
+    `test.piefed.local`, the test `SERVER_URL`'s host, so it always sets
+    `ap_profile_id` to a `SERVER_URL`-prefixed value -- meaning the second
+    disjunct is true regardless of `ap_id`. Setting `ap_id` alone therefore
+    left `is_local()` returning True; :159's guard never opened. To close
+    the second disjunct too, `ap_profile_id`, `ap_public_url` and
+    `ap_followers_url` are overridden onto `peer.example` here, alongside
+    `ap_domain` for consistency with a real remote community's row shape.
     """
     instance = make_instance('test.piefed.local', software='piefed')
     user = make_user(instance, 'author', local=True)
@@ -85,6 +96,10 @@ def _seed(body=None, post_type=POST_TYPE_ARTICLE, url=None, local_community=True
     post.url = url
     if not local_community:
         community.ap_id = 'c1@peer.example'
+        community.ap_profile_id = 'https://peer.example/c/c1'
+        community.ap_public_url = 'https://peer.example/c/c1'
+        community.ap_followers_url = 'https://peer.example/c/c1/followers'
+        community.ap_domain = 'peer.example'
     db.session.commit()
     return SimpleNamespace(instance=instance, user=user, community=community,
                            post=post)
@@ -367,14 +382,31 @@ def test_a_banned_author_stops_before_the_builder(db_session):
 
 def test_a_remote_community_on_a_blocked_instance_stops(db_session):
     """:159-161, first disjunct. :159 opens only for a community that is NOT
-    local -- `Community.is_local()` (app/models.py:795) tests `ap_id`, which
-    `_seed` sets under `local_community=False`.
+    local -- `Community.is_local()` (app/models.py:795-796) is a disjunction,
+    and `_seed(local_community=False)` now closes both of its disjuncts (see
+    `_seed`'s docstring for why setting `ap_id` alone was not enough). The
+    `assert s.community.is_local() is False` below is the guard-opens proof
+    the fix round asked for -- it fails loudly if this ever regresses to
+    closing again, rather than passing for the wrong reason.
 
     Uses the `make_instance_block` factory (tests/factories.py:576) rather than
     constructing `InstanceBlock` inline -- it exists for exactly this row and
     keeps the model import out of the test module.
+
+    STRONGER WITNESS THAN THE OTHER THREE EARLY-RETURN TESTS. A mention
+    notification landing only proves `send_post` was invoked and ran past
+    :147 -- it does not distinguish this early return from the function
+    running to completion, since completion also leaves exactly one
+    notification. But completion here would additionally call
+    `send_post_request(community.ap_inbox_url, ...)` at :303 (the remote,
+    non-`is_local` arm of :268) with `ap_inbox_url` left unset (None) by
+    `_seed`/`make_community`; `post_request` (app/activitypub/signature.py:
+    109-111) logs that as an `ActivityPubLog` failure row rather than raising.
+    So `ActivityPubLog.query.count() == 0` DOES distinguish the two: it is
+    zero only if the function returned at :161 before reaching :303.
     """
     s = _seed(body='hello @mentioned@test.piefed.local', local_community=False)
+    assert s.community.is_local() is False
     mentioned = make_user(s.instance, 'mentioned', local=True)
     peer = _peer()
     s.community.instance_id = peer.id
@@ -384,6 +416,7 @@ def test_a_remote_community_on_a_blocked_instance_stops(db_session):
     _send(s.post)
 
     assert Notification.query.filter_by(user_id=mentioned.id).count() == 1
+    assert ActivityPubLog.query.count() == 0
 
 
 # ---------------------------------------------------------------------------
