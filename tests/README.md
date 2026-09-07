@@ -4427,10 +4427,22 @@ on an immediate re-run **on a clean, unmutated tree**: an order assertion makes 
 incidental dependence fail loudly, which is not the same thing as making the test
 reliable. Fact 131 narrows this fact to the case where the ordering is the test's
 **subject**, and prescribes controlling the sequence -- patching the method to
-return a known one -- where it is not. **The example in the paragraph above,
-`tests/test_shared_tasks_send_answer.py:484`, still carries the assertion form and
-has not been audited for the same flake**; that is a statement about what has been
-measured, not an argument that it is safe.
+return a known one -- where it is not. **TWO tests still carry the superseded assertion form, and BOTH are named here
+because the first draft of this sentence named only one.**
+`tests/test_shared_tasks_send_answer.py:484`
+(`test_one_following_instance_is_skipped_while_another_receives`, assertion at
+`:511-514`) is the example the paragraph above uses, and
+`tests/test_shared_tasks_send_post.py:2646`
+(`test_one_following_instance_is_skipped_while_another_receives_the_move`,
+assertion at `:2669-2672`) carries the byte-for-byte identical idiom, down to the
+failure message. **`grep -rn 'ordered ==' tests/` returns exactly these two and
+nothing else** -- run it rather than trusting this count, because it is the
+enumeration and not the prose that keeps this honest. Neither has been audited
+for the flake fact 131 measured; that is a statement about what has been
+measured, not an argument that either is safe, and **fixing only the named one
+would leave the class open with nothing pointing at the other** -- which is this
+campaign's own copy-hunt rule, and the reason the enumeration is written out
+instead of "the example".
 
 **124. ONE FUNCTION, THREE `.get()` LOOKUPS, TWO OPPOSITE FAILURE MODES --
 BECAUSE ONLY THE FIRST ONE IS GUARDED. FACT 119 IS ABOUT LOOKUP STYLE; THIS IS
@@ -4657,7 +4669,14 @@ substitution, and `:22`'s `For Announce, remove @context from inner object`
 contains the English word `remove` identically in BOTH files, so a blind rewrite
 manufactures two spurious differences on a pair that has not diverged. The
 verified recipe is in D318's cell and at the end of
-`tests/test_shared_tasks_add_remove.py`.
+`tests/test_shared_tasks_add_remove.py`. **The recipe is the convenience; the
+committed check is `test_the_twins_are_structurally_identical`, which applies the
+same four rules in-process and asserts BYTE IDENTITY** -- if the two ever
+disagree the test is authoritative. It was shape-only (line count plus `ast`
+extents) until the final review wave, and shape-only could not see a conjunct
+dropped from one twin, a swapped ternary or a renamed local: **an equivalence
+invariant that compares SHAPE cannot see the divergence shape a one-line
+production fix produces, which is the shape it exists to catch.**
 Sub-project 23 applied ten single-line mutations to each file separately -- **20
 runs** -- and every pair came back with the same kill count, the same kill type
 (sole/multi, assertion/crash) and mirrored test names. **The value of the second
@@ -4701,7 +4720,13 @@ visiting every follower, so an `ORDER BY` would be an unmotivated production
 change hung off a test artefact. The defect was an assumption the TEST made that
 production never promised, and the test is where it belongs fixed. **Asserting an
 incidental order buys a loud failure, not a reliable test, and a test that fails
-loudly at random is still a test that fails at random.**
+loudly at random is still a test that fails at random.** **THE SUPERSEDED FORM
+SURVIVES AT EXACTLY TWO SITES, BOTH NAMED**:
+`tests/test_shared_tasks_send_answer.py:484` (assertion `:511-514`) and
+`tests/test_shared_tasks_send_post.py:2646` (assertion `:2669-2672`), found by
+`grep -rn 'ordered ==' tests/`. Sub-project 23 fixed its own two and deliberately
+left these -- another sub-project's files, with the flake unmeasured there -- so a
+later round applying this fact should expect **two** conversions, not one.
 
 **132. A `monkeypatch` THAT SILENTLY FAILS TO INTERCEPT LEAVES THE TESTS GREEN
 FOR THE WRONG REASON, SO A DEFLAKE IS NOT FINISHED UNTIL A PROBE HAS SHOWN THE
