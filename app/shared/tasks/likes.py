@@ -179,6 +179,9 @@ def vote_for_poll(send_async, user_id, post_id, choice_text):
         post = session.query(Post).get(post_id)
         user = session.query(User).get(user_id)
         if post:
+            community = post.community
+            if community.local_only or community.private or not community.instance.online():
+                return
             type = 'PollVote'
             poll_vote_id = f"{current_app.config['SERVER_URL']}/activities/{type.lower()}/{gibberish(15)}"
 
