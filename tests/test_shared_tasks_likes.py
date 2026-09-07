@@ -1,6 +1,6 @@
 """`send_vote`, `vote_for_poll` and their wrappers -- the AP Like/Dislike path.
 
-`app/shared/tasks/likes.py`, 236 lines. Two `@celery.task` wrappers
+`app/shared/tasks/likes.py`, 239 lines. Two `@celery.task` wrappers
 (`vote_for_post:24`, `vote_for_reply:40`) delegating to `send_vote:55`, plus a
 third independent task `vote_for_poll:176`.
 
@@ -634,6 +634,123 @@ def test_a_blocked_follower_is_skipped_and_the_loop_continues(
     vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
 
     assert _delivered_inboxes(route) == {OTHER_INBOX}
+
+
+def test_a_poll_vote_announces_to_a_following_instance(db_session, http_mock):
+    """`vote_for_poll:176` on a local community: `:202`'s is_local arm,
+    `:206`'s `del payload['@context']`, and delivery at `:230`.
+
+    The nested absence is the discriminating assertion, for the reason this
+    file's other Announce tests give.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    make_poll(s.post)
+    make_poll_choice(s.post, 'yes')
+    route, _inst = _follower(s, http_mock)
+
+    vote_for_poll(None, s.user.id, s.post.id, 'yes')
+
+    announce = _sent_activity(route)
+    assert announce['object']['type'] == 'PollVote'
+    assert announce['object']['choice_text'] == 'yes'
+    assert '@context' not in announce['object']
+
+
+def test_a_remote_poll_vote_is_sent_bare(db_session, http_mock):
+    """`:232-233`'s else arm."""
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    make_poll(s.post)
+    make_poll_choice(s.post, 'yes')
+    route = http_mock.post(PEER_INBOX).respond(200, json={})
+
+    vote_for_poll(None, s.user.id, s.post.id, 'yes')
+
+    payload = _sent_activity(route)
+    assert payload['type'] == 'PollVote'
+    assert '@context' in payload
+
+
+def test_an_absent_post_votes_nowhere(db_session, http_mock):
+    """`:181`'s false arm -- the only guard this function has today.
+
+    `.get()` at `:179` returns None for an absent id, so `if post:` is the
+    whole of its protection.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+
+    vote_for_poll(None, s.user.id, s.post.id + 1000, 'yes')
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_poll_vote_in_a_private_community_federates_nowhere(
+        db_session, http_mock):
+    """The gate `vote_for_poll` did not have.
+
+    Every other sender in this package gates on the community before
+    federating. `vote_for_poll` checked only `if post:` and then federated a
+    poll vote out of a private or local-only community with no check at all.
+    This is not a D309 omission -- those are guards missing a conjunct -- it is
+    the guard's absence.
+
+    This test FAILS before the gate is added: a real ActivityPubLog row is
+    written and a real request attempted.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    make_poll(s.post)
+    make_poll_choice(s.post, 'yes')
+    inst = make_instance('follower.example', software='lemmy')
+    inst.inbox = PEER_INBOX
+    member = make_user(inst, 'member_follower')
+    make_community_member(member, s.community)
+    s.community.private = True
+    db.session.commit()
+
+    vote_for_poll(None, s.user.id, s.post.id, 'yes')
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_poll_vote_in_a_local_only_community_federates_nowhere(
+        db_session, http_mock):
+    """The same gate's first disjunct. Separated from the private test because
+    the two fail independently and one test could not say which returned."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    make_poll(s.post)
+    make_poll_choice(s.post, 'yes')
+    inst = make_instance('follower.example', software='lemmy')
+    inst.inbox = PEER_INBOX
+    member = make_user(inst, 'member_follower')
+    make_community_member(member, s.community)
+    s.community.local_only = True
+    db.session.commit()
+
+    vote_for_poll(None, s.user.id, s.post.id, 'yes')
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_poll_vote_to_an_offline_instance_federates_nowhere(
+        db_session, http_mock):
+    """The same gate's third disjunct."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s, online=False)
+    make_poll(s.post)
+    make_poll_choice(s.post, 'yes')
+    inst = make_instance('follower.example', software='lemmy')
+    inst.inbox = PEER_INBOX
+    member = make_user(inst, 'member_follower')
+    make_community_member(member, s.community)
+    db.session.commit()
+
+    vote_for_poll(None, s.user.id, s.post.id, 'yes')
+
+    assert db.session.query(ActivityPubLog).count() == 0
 
 
 def test_a_banned_follower_is_skipped_and_the_loop_continues(
