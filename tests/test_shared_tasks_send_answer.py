@@ -482,7 +482,7 @@ def test_a_following_instance_without_an_inbox_is_skipped(db_session, http_mock)
 
 
 def test_one_following_instance_is_skipped_while_another_receives(
-        db_session, http_mock):
+        db_session, http_mock, monkeypatch):
     """Both loop arms in ONE run -- (300, 299) then (300, 301).
 
     The discriminating case: a single-instance test cannot show that the
@@ -490,28 +490,42 @@ def test_one_following_instance_is_skipped_while_another_receives(
     member "skipped" and "loop ended" look identical. With two, the delivered
     one proves iteration continued past the skipped one.
 
-    THAT PROOF DEPENDS ON ORDER. `Community.following_instances()`
+    THE SEQUENCE IS CONTROLLED, NOT OBSERVED. `Community.following_instances()`
     (app/models.py:842-851) ends in an unordered `.distinct().all()` -- no
     `ORDER BY` -- so which row Postgres returns first is a property of the
-    current query plan, not of the code. If `fan.example` were ever returned
-    BEFORE `mute.example`, a mutant that turned "skip and continue" into
-    "skip and break" (or "skip and return") would still leave
-    `good.route.call_count == 1` and one `ActivityPubLog` row, and this test
-    would pass without having exercised the continuation it claims to. The
-    assertion below makes that dependency loud instead of silent: it fails
-    with an explanation the moment the incidental order changes, rather than
-    quietly testing less than it says it does.
+    current query plan, not of the code. This test's subject is the loop's
+    continue-past-a-skip behaviour; that ordering is incidental to it, so
+    `following_instances` is patched for the duration of the call to hand
+    back a known sequence (the skipped instance first, then the delivering
+    one) instead of trusting the query to happen to agree. An earlier
+    version of this test asserted the LIVE order matched that sequence, on
+    the reasoning that a reversal would silently defeat a "skip and
+    continue" -> "skip and break" mutant; that assertion was reproducibly
+    flaky in practice -- it failed a real full-suite run despite two prior
+    passes -- because Postgres was free to answer either order. Controlling
+    the sequence here is strictly more discriminating than that observed
+    assertion ever was, since it no longer depends on the planner
+    cooperating.
+
+    THE PATCH TARGETS THE CLASS, NOT `s.community`. `send_answer` reads
+    through `get_task_session()` (app/utils.py:3673), an independent
+    `Session` from the test's own `db.session`, so `post_reply.community`
+    inside it is a DIFFERENT Python object than `s.community` even though
+    both back the same row. An instance-level
+    `monkeypatch.setattr(s.community, ...)` patches only the object the test
+    holds and is never consulted by the code under test -- confirmed by
+    making the stub raise and observing the loop still ran, undetected, on
+    the real (unordered) query. Patching `type(s.community)` replaces the
+    method for every instance, including the one `send_answer` loads for
+    itself.
     """
     s = _seed(with_keys=True)
-    _community_follower(s, http_mock, domain='mute.example',
+    mute = _community_follower(s, http_mock, domain='mute.example',
                         member_name='mute', with_inbox=False)
     good = _community_follower(s, http_mock, domain='fan.example',
                                member_name='fan')
-
-    ordered = [i.domain for i in s.community.following_instances()]
-    assert ordered == ['mute.example', 'fan.example'], (
-        f'this test proves the loop CONTINUES past a skip, which requires '
-        f'the skipped instance first; got {ordered}')
+    monkeypatch.setattr(type(s.community), 'following_instances',
+                        lambda self, *a, **kw: [mute.instance, good.instance])
 
     _send(s)
 
