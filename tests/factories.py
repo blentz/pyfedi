@@ -25,7 +25,8 @@ from app.models import (ActivityPubLog, ChatMessage, Community, CommunityBan, Co
                         DomainBlock, Feed, FeedItem, FeedJoinRequest, FeedMember, Instance, InstanceBan,
                         InstanceBlock, NotificationSubscription, Poll, PollChoice, Post, PostReply,
                         PostReplyBookmark, PostReplyVote, PostVote, Role, RolePermission, Site, User, UserBlock,
-                        UserFollower, UserFollowRequest, hidden_posts, read_posts, user_role, utcnow)
+                        UserFollower, UserFollowRequest, UserRegistration, hidden_posts, read_posts, user_role,
+                        utcnow)
 from app.utils import get_deduped_post_ids
 
 
@@ -1095,3 +1096,14 @@ def signed_inbox_post(client, activity: dict, sender, *, path: str = '/inbox',
         f'{sender.ap_profile_id}#main-key', send_via_async=True)
     return client.post(path, data=body if body is not None else body_bytes,
                        headers=headers, content_type='application/activity+json')
+
+
+def make_user_registration(user: User, answer: str = 'why', status: int = 0) -> UserRegistration:
+    """A pending application. `warning` is left None -- it is the column
+    app/shared/tasks/users.py writes, so a test that asserts on it needs it
+    to start empty.
+    """
+    application = UserRegistration(user_id=user.id, answer=answer, status=status)
+    db.session.add(application)
+    db.session.commit()
+    return application
