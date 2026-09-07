@@ -306,7 +306,7 @@ def test_a_user_banned_from_the_community_sends_no_vote(db_session, http_mock):
 
 
 def test_a_blocked_remote_community_sends_no_vote(db_session, http_mock):
-    """`:66-68`'s first disjunct: a REMOTE community whose instance the voter
+    """`:67`'s first disjunct: a REMOTE community whose instance the voter
     has blocked.
 
     `:66`'s `if not community.is_local():` guards this pair, so the local
@@ -324,9 +324,9 @@ def test_a_blocked_remote_community_sends_no_vote(db_session, http_mock):
 
 
 def test_a_banned_remote_community_sends_no_vote(db_session, http_mock):
-    """`:66-68`'s second disjunct, `instance_banned(community.instance.domain)`.
+    """`:67`'s second disjunct, `instance_banned(community.instance.domain)`.
 
-    Separated from the block test above because the two conjuncts fail
+    Separated from the block test above because the two disjuncts fail
     independently and a single test could not tell which one returned.
     """
     s = _seed(local_community=False, with_keys=True)
