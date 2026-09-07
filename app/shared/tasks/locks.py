@@ -86,7 +86,7 @@ def lock_object(session, user_id, object, is_undo=False):
     user = session.query(User).get(user_id)
     community = object.community
 
-    if community.local_only or not community.instance.online():
+    if community.local_only or community.private or not community.instance.online():
         return
 
     lock_id = f"{current_app.config['SERVER_URL']}/activities/lock/{gibberish(15)}"
