@@ -373,3 +373,94 @@ def test_a_banned_remote_community_sends_no_vote(db_session, http_mock):
     vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
 
     assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_an_emoji_vote_carries_its_content(db_session, http_mock):
+    """`:88-89`'s `if emoji:` arm, which adds a `content` key the other paths
+    never set."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote', emoji='\N{PARTY POPPER}')
+
+    announce = _sent_activity(route)
+    assert announce['object']['content'] == '\N{PARTY POPPER}'
+
+
+def test_a_vote_without_an_emoji_omits_content(db_session, http_mock):
+    """`:88`'s false arm. The control for the test above: without it, `content`
+    being present is never distinguished from it being unconditional."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+
+    announce = _sent_activity(route)
+    assert 'content' not in announce['object']
+
+
+def test_undoing_a_vote_wraps_a_context_free_copy(db_session, http_mock):
+    """`:92-105`'s undo payload and `:107-115`'s local Announce around it.
+
+    `vote_to_undo` IS A STRING, NOT A BOOLEAN: `:71` assigns it directly to
+    `type`, so passing `'Like'` produces an Undo whose nested object has
+    `type: 'Like'`.
+
+    `:96-97` copies vote_public and deletes `@context` from the COPY, then
+    `:110`/`:115` copies again and deletes from that. So the delivered Announce
+    has `@context` at the top level only -- and the two nested absences fail
+    independently, since `:97` and `:115` are separate statements.
+
+    The top-level `'@context' in announce` assertion does NOT discriminate --
+    `signature.py:100-101` reinjects it regardless of what `:127` did -- it is
+    kept only to pin the envelope's shape, as in the sibling locks.py tests.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+
+    vote_for_post(None, s.user.id, s.post.id, 'Like', 'upvote')
+
+    announce = _sent_activity(route)
+    assert '@context' in announce
+    assert announce['object']['type'] == 'Undo'
+    assert '@context' not in announce['object']
+    assert announce['object']['object']['type'] == 'Like'
+    assert '@context' not in announce['object']['object']
+
+
+def test_a_remote_community_receives_the_bare_vote(db_session, http_mock):
+    """`:160-167`'s else arm with `vote_to_undo` None: `:165` selects
+    vote_public and `:167` sends it to the community's own inbox, unwrapped.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    route = http_mock.post(PEER_INBOX).respond(200, json={})
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+
+    vote = _sent_activity(route)
+    assert vote['type'] == 'Like'
+    assert vote['audience'] == s.community.public_url()
+
+
+def test_a_remote_community_receives_the_bare_undo(db_session, http_mock):
+    """`:162-163`'s arm selecting undo_public.
+
+    THE DISCRIMINATING ASSERTION IS THE NESTED ABSENCE. The Undo's own
+    `@context` proves nothing -- signature.py:100-101 would reinject it -- but
+    the nested vote's absence, deleted at `:97`, is beyond the reinjection's
+    reach.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    route = http_mock.post(PEER_INBOX).respond(200, json={})
+
+    vote_for_post(None, s.user.id, s.post.id, 'Like', 'upvote')
+
+    undo = _sent_activity(route)
+    assert undo['type'] == 'Undo'
+    assert undo['object']['type'] == 'Like'
+    assert '@context' not in undo['object']
