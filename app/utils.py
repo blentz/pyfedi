@@ -5818,15 +5818,35 @@ class TaskError(Exception):
     """Raised by app/shared/tasks/ when a task is given arguments it cannot act on.
 
     DEFINED AT THE END OF THIS FILE DELIBERATELY, not beside get_task_session
-    and patch_db_session where it thematically belongs. This module carries
-    358 `utils.py:NNN` citations in tracked files, 135 of them at or after
-    :3673; inserting there would invalidate all 135. Appending after the last
-    line invalidates none. Do not "tidy" this upward without re-deriving those
-    citations first.
+    and patch_db_session where it thematically belongs. The reason is
+    STRUCTURAL and needs no count: the highest app/utils.py line cited
+    anywhere in the tree is :5743, and this file's last line before the class
+    was appended was :5798, so appending below :5798 cannot move any cited
+    line -- however many citations there turn out to be. Inserting beside the
+    task-session helpers at :3673 WOULD move every cited line above :5743, and
+    that is the placement this argument rules out. Do not "tidy" this upward
+    without re-deriving those citations first.
+
+    THIS DOCSTRING FIRST GAVE THAT REASON AS A COUNT AND THE COUNT DID NOT
+    REPRODUCE, which is why it is now stated structurally. It read "358
+    `utils.py:NNN` citations in tracked files, 135 of them at or after :3673".
+    The 135 reproduces exactly (occurrences of `app/utils.py:NNN` in tracked
+    files, excluding the auto-generated `#: app/utils.py:NNN` source
+    references in app/translations/**/*.po). The 358 does not: the same sweep
+    gives 324 occurrences and 192 distinct strings, 844 occurrences if the .po
+    files are counted, and a third reviewer's sweep gave 239 unique / ~330-346
+    occurrences / 105 at-or-after. Three derivations, three answers, and the
+    .po files are the main reason they diverge. The counts are withdrawn
+    rather than arbitrated, because the placement never depended on one; the
+    structural argument is also the only form that is stable under the .po
+    question, since including them does not change the maximum (:5743).
 
     Introduced by sub-project 22 for app/shared/tasks/pages.py's
     `move_object`, which previously raised a bare `Exception`. `raise
-    Exception(...)` is the established idiom across app/shared/ -- see the
-    findings register -- so this is the first narrow raise among eleven sites
-    and is intended as the migration target for the rest.
+    Exception(...)` is the established idiom across app/shared/ -- by `ast`,
+    69 bare `raise Exception(...)` statements in 9 files, so this is the FIRST
+    and ONLY narrow raise in the package, not "the first among eleven sites"
+    as this docstring first said (that was the design's ten-site sample plus
+    this one, and the design itself wrote "and more"). It is intended as the
+    migration target for the rest; see the findings register for D315.
     """
