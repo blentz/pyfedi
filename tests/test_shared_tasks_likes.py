@@ -658,7 +658,18 @@ def test_a_poll_vote_announces_to_a_following_instance(db_session, http_mock):
 
 
 def test_a_remote_poll_vote_is_sent_bare(db_session, http_mock):
-    """`:232-233`'s else arm."""
+    """`:232-233`'s else arm.
+
+    NO `@context` ASSERTION BELONGS ON THIS PATH. `payload` here is the
+    TOP-LEVEL body handed to `post_request`, and `signature.py:100-101`
+    reinjects a default `@context` at the top level whenever it is absent --
+    so even if `:198`'s `'@context': default_context()` were deleted
+    outright, the key would still be on the wire and this test could not
+    tell. Contrast the local test above, whose
+    `assert '@context' not in announce['object']` DOES discriminate: that
+    assertion is on the NESTED object, which the top-level-only reinjection
+    never reaches.
+    """
     s = _seed(local_community=False, with_keys=True)
     _make_deliverable(s)
     make_poll(s.post)
@@ -669,14 +680,13 @@ def test_a_remote_poll_vote_is_sent_bare(db_session, http_mock):
 
     payload = _sent_activity(route)
     assert payload['type'] == 'PollVote'
-    assert '@context' in payload
 
 
 def test_an_absent_post_votes_nowhere(db_session, http_mock):
-    """`:181`'s false arm -- the only guard this function has today.
+    """`:181`'s false arm -- the first of the function's two guards.
 
-    `.get()` at `:179` returns None for an absent id, so `if post:` is the
-    whole of its protection.
+    `.get()` at `:179` returns None for an absent id, so `if post:` is what
+    stops an absent post from ever reaching the community gate below it.
     """
     s = _seed(with_keys=True)
     _make_deliverable(s)
