@@ -303,3 +303,132 @@ def test_report_reply_delivers_a_flag_naming_the_reply(db_session, http_mock):
     assert flag['type'] == 'Flag'
     assert flag['object'] == s.reply.public_url()
     assert flag['object'] != s.post.public_url()
+
+
+def _recording_task_session(monkeypatch):
+    """Make `get_task_session` hand back a GENUINE Session that records
+    `rollback()` and `close()`.
+
+    A third copy of the helper introduced in
+    `tests/test_shared_tasks_send_reply.py:1637` and copied into
+    `tests/test_shared_tasks_send_answer.py:567`. Duplicated rather than
+    imported: this campaign keeps its test modules independent so a helper can
+    be edited for one function's needs without silently changing another's
+    assertions. THAT THERE ARE NOW THREE COPIES IS A REGISTERED FINDING.
+
+    The session is real and does real work -- only the observation is added, by
+    wrapping the two methods rather than replacing the object. A fake session
+    would prove the wrapper calls methods on a mock; this proves it calls them
+    on the session the function actually used.
+
+    THE PATCH TARGET IS THE FLAGS MODULE, NOT `app.utils`.
+    `app/shared/tasks/flags.py:4` imports `get_task_session` into the flags
+    namespace, and both wrappers resolve it there (`:27`, `:42`). Patching
+    `app.utils.get_task_session` would apply cleanly, observe nothing, and
+    leave the assertion trivially true against an empty list -- the silent
+    failure mode this docstring exists to prevent.
+
+    Returns a `SimpleNamespace(calls=[])`; the wrapper appends 'rollback' and
+    'close' in the order they happened, so `finally` running after `except` is
+    observable rather than assumed.
+    """
+    from app import db as _db
+    from sqlalchemy.orm import Session as _Session
+    import app.shared.tasks.flags as flags_module
+
+    record = SimpleNamespace(calls=[])
+
+    def _make():
+        session = _Session(bind=_db.engine)
+        real_rollback, real_close = session.rollback, session.close
+
+        def rollback():
+            record.calls.append('rollback')
+            return real_rollback()
+
+        def close():
+            record.calls.append('close')
+            return real_close()
+
+        session.rollback = rollback
+        session.close = close
+        return session
+
+    monkeypatch.setattr(flags_module, 'get_task_session', _make)
+    return record
+
+
+def test_a_missing_reply_raises_NoResultFound_and_rolls_back(
+        db_session, monkeypatch):
+    """`:30`'s `.filter_by(id=reply_id).one()` against an absent id, plus
+    `:32-34`'s except arm and `:35-36`'s finally.
+
+    `.one()` raises `NoResultFound` AT THE LOOKUP -- the handler is never
+    entered. Contrast the post wrapper's test below, which reaches `:56`.
+
+    Asserting `['rollback', 'close']` rather than merely `raises` is what
+    makes this a test of the wrapper: a `raises`-only test cannot tell a
+    rollback from its absence. The ORDER also distinguishes `finally` running
+    after `except` from a wrapper that closed instead of rolling back.
+    """
+    s = _seed()
+    record = _recording_task_session(monkeypatch)
+
+    with pytest.raises(NoResultFound):
+        report_reply(None, s.user.id, s.reply.id + 1000, 'spam', [])
+
+    assert record.calls == ['rollback', 'close']
+
+
+def test_a_missing_post_raises_AttributeError_and_rolls_back(
+        db_session, monkeypatch):
+    """`:45`'s `.get(post_id)` against an absent id, plus `:47-49` and
+    `:50-51`.
+
+    THE DIFFERENT EXCEPTION TYPE IS THE POINT. `.get()` returns None rather
+    than raising, so the failure arrives fifteen lines later at `:56`
+    (`object.community` on None) as `AttributeError`. Two lookup styles, one
+    file. Asserting the type is what records the asymmetry.
+    """
+    s = _seed()
+    record = _recording_task_session(monkeypatch)
+
+    with pytest.raises(AttributeError):
+        report_post(None, s.user.id, s.post.id + 1000, 'spam', [])
+
+    assert record.calls == ['rollback', 'close']
+
+
+def test_report_reply_closes_the_session_on_the_happy_path(
+        db_session, http_mock, monkeypatch):
+    """`:35-36`'s finally on the SUCCESS path -- `close` with no `rollback`.
+
+    The control for the error tests above: without it, `finally` running is
+    only ever observed alongside an exception, and a wrapper that closed only
+    in the `except` arm would pass every other test in this file.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, recipient_id = _reporting_instance(s, http_mock)
+    record = _recording_task_session(monkeypatch)
+
+    report_reply(None, s.user.id, s.reply.id, 'spam', [recipient_id])
+
+    assert record.calls == ['close']
+
+
+def test_report_post_closes_the_session_on_the_happy_path(
+        db_session, http_mock, monkeypatch):
+    """`:50-51`'s finally on the SUCCESS path. Written out separately from the
+    reply wrapper's rather than parametrised -- the two `finally` blocks are
+    different lines in different functions, and a parametrised pass would
+    cover one of them under a name that does not say which.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, recipient_id = _reporting_instance(s, http_mock)
+    record = _recording_task_session(monkeypatch)
+
+    report_post(None, s.user.id, s.post.id, 'spam', [recipient_id])
+
+    assert record.calls == ['close']
