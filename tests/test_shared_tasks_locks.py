@@ -293,6 +293,137 @@ def test_an_offline_community_instance_sends_no_lock(db_session, http_mock):
     assert db.session.query(ActivityPubLog).count() == 0
 
 
+def _recording_task_session(monkeypatch):
+    """Make `get_task_session` hand back a GENUINE Session that records
+    `rollback()` and `close()`.
+
+    THE SIXTH COPY of a helper that also lives in
+    tests/test_shared_tasks_send_reply.py, test_shared_tasks_send_answer.py,
+    test_shared_tasks_send_post.py, test_shared_tasks_add_remove.py and
+    test_shared_tasks_flags.py. Duplicated rather than imported: this campaign
+    keeps its test modules independent so a helper can be edited for one
+    function's needs without silently changing another's assertions. The count
+    is registered as D324, which this file's existence moves from five to six.
+
+    The session is real -- only the observation is added, by wrapping the two
+    methods rather than replacing the object. A fake session would prove the
+    wrapper calls methods on a mock; this proves it calls them on the session
+    the function actually used.
+
+    THE PATCH TARGET IS THE LOCKS MODULE, NOT `app.utils`.
+    `app/shared/tasks/locks.py:4` imports `get_task_session` into the locks
+    namespace and all four wrappers resolve it there (`:28`, `:43`, `:58`,
+    `:73`). Patching `app.utils.get_task_session` would apply cleanly, observe
+    nothing, and leave the assertion trivially true against an empty list.
+    """
+    from app import db as _db
+    from sqlalchemy.orm import Session as _Session
+    import app.shared.tasks.locks as locks_module
+
+    record = SimpleNamespace(calls=[])
+
+    def _make():
+        session = _Session(bind=_db.engine)
+        real_rollback, real_close = session.rollback, session.close
+
+        def rollback():
+            record.calls.append('rollback')
+            return real_rollback()
+
+        def close():
+            record.calls.append('close')
+            return real_close()
+
+        session.rollback = rollback
+        session.close = close
+        return session
+
+    monkeypatch.setattr(locks_module, 'get_task_session', _make)
+    return record
+
+
+def test_a_missing_post_raises_AttributeError_and_rolls_back(
+        db_session, monkeypatch):
+    """`:31`'s `.get(post_id)` against an absent id, plus `:33-35`'s except arm
+    and `:36-37`'s finally.
+
+    `.get()` returns None rather than raising, so the failure arrives at `:87`
+    (`object.community` on None) as `AttributeError` -- fifty-six lines later.
+    Asserting `['rollback', 'close']` rather than merely `raises` is what makes
+    this a test of the WRAPPER: a `raises`-only test cannot tell a rollback
+    from its absence, and the ORDER distinguishes `finally` running after
+    `except` from a wrapper that closed instead of rolling back.
+    """
+    s = _seed()
+    record = _recording_task_session(monkeypatch)
+
+    with pytest.raises(AttributeError):
+        lock_post(None, s.user.id, s.post.id + 1000)
+
+    assert record.calls == ['rollback', 'close']
+
+
+def test_a_missing_post_on_the_unlock_path_also_raises_AttributeError(
+        db_session, monkeypatch):
+    """`:46`'s `.get(post_id)` and `:48-52`'s tail. The undo twin of the test
+    above, written out separately because `unlock_post`'s except and finally
+    are different lines from `lock_post`'s."""
+    s = _seed()
+    record = _recording_task_session(monkeypatch)
+
+    with pytest.raises(AttributeError):
+        unlock_post(None, s.user.id, s.post.id + 1000)
+
+    assert record.calls == ['rollback', 'close']
+
+
+def test_a_missing_reply_raises_NoResultFound_and_rolls_back(
+        db_session, monkeypatch):
+    """`:61`'s `.filter_by(id=...).one()` against an absent id, plus `:63-67`.
+
+    THE DIFFERENT EXCEPTION TYPE IS THE POINT. `.one()` raises at the LOOKUP,
+    so `lock_object` is never entered at all -- unlike the post wrappers, which
+    reach `:87`. Asserting the type is what records the asymmetry.
+    """
+    s = _seed()
+    record = _recording_task_session(monkeypatch)
+
+    with pytest.raises(NoResultFound):
+        lock_post_reply(None, s.user.id, s.reply.id + 1000)
+
+    assert record.calls == ['rollback', 'close']
+
+
+def test_a_missing_reply_on_the_unlock_path_also_raises_NoResultFound(
+        db_session, monkeypatch):
+    """`:76`'s `.one()` and `:78-82`'s tail."""
+    s = _seed()
+    record = _recording_task_session(monkeypatch)
+
+    with pytest.raises(NoResultFound):
+        unlock_post_reply(None, s.user.id, s.reply.id + 1000)
+
+    assert record.calls == ['rollback', 'close']
+
+
+def test_lock_post_closes_the_session_on_the_happy_path(
+        db_session, http_mock, monkeypatch):
+    """`:36-37`'s finally on the SUCCESS path -- `close` with no `rollback`.
+
+    The control for the four error tests: without it, `finally` running is only
+    ever observed alongside an exception, and a wrapper that closed only in the
+    `except` arm would pass everything else in this file.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    _follower(s, http_mock)
+    record = _recording_task_session(monkeypatch)
+
+    lock_post(None, s.user.id, s.post.id)
+
+    assert record.calls == ['close']
+
+
 def test_a_private_community_sends_no_lock(db_session, http_mock):
     """D309's site in this module. Before this commit `:89` gated on
     `local_only` and `instance.online()` but not `Community.private`, so a lock
