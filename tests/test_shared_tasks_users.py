@@ -110,10 +110,22 @@ class _Response:
         self._closed = closed
 
     def json(self):
+        if isinstance(self._payload, _RaisingPayload):
+            raise ValueError('simulated decode failure')
         return self._payload
 
     def close(self):
         self._closed.append(self)
+
+
+class _RaisingPayload:
+    """A payload whose `json()` raises, standing in for a decode failure
+    inside `:27`'s try. Reaching `:75`'s handler by a NATURAL raise rather
+    than an injected one keeps the test on the same path a real transport or
+    decode error would take."""
+
+
+_RAISING_PAYLOAD = _RaisingPayload()
 
 
 def _recording_client(monkeypatch, *responses):
@@ -368,4 +380,146 @@ def test_a_false_result_at_the_real_index_counts_nothing(db_session, monkeypatch
     assert [url for url, _data in client.posts] == [
         'https://real.example/api/is_ip_banned',
         'https://real.example/api/is_email_banned',
+    ]
+
+
+def test_the_real_email_is_hidden_among_three_fakes(db_session, monkeypatch):
+    """`:53-62`. Three fake addresses, the real one inserted at
+    `email_index` -- 0 under `_lowest_randint`."""
+    s = _seed()
+    set_setting('ban_check_servers', 'real.example')
+    _no_sleep(monkeypatch)
+    _lowest_randint(monkeypatch)
+    client = _recording_client(monkeypatch, (200, [False]), (200, [False]))
+
+    check_user_application(s.application.id)
+
+    _url, data = client.posts[1]
+    submitted = data['emails'].split(',')
+    assert len(submitted) == 4
+    assert submitted[0] == APPLICANT_EMAIL
+
+
+@pytest.mark.xfail(strict=True, raises=TypeError, reason='D319, fixed in Task 10')
+def test_a_banned_email_counts(db_session, monkeypatch):
+    """`:69`, `:72` and `:73` taken on the email leg, with the IP leg clean --
+    so the count of 1 in the warning text can only have come from email.
+
+    EXPECTED TO FAIL: `num_banned` reaches 1, so `:79`'s true arm runs
+    `:80-81` and hits D319 -- see
+    `test_a_banned_ip_at_the_real_index_counts` for the mechanism. Not fixed
+    here; fixed in Task 10.
+    """
+    s = _seed()
+    set_setting('ban_check_servers', 'real.example')
+    _no_sleep(monkeypatch)
+    _lowest_randint(monkeypatch)
+    _recording_client(monkeypatch, (200, [False]), (200, [True]))
+
+    check_user_application(s.application.id)
+
+    db.session.expire_all()
+    assert db.session.query(UserRegistration).get(
+        s.application.id).warning == '1 instances have banned this account.'
+
+
+def test_a_non_200_email_response_counts_nothing(db_session, monkeypatch):
+    """`:69`'s false arm."""
+    s = _seed()
+    set_setting('ban_check_servers', 'real.example')
+    _no_sleep(monkeypatch)
+    _lowest_randint(monkeypatch)
+    _recording_client(monkeypatch, (200, [False]), (500, None))
+
+    check_user_application(s.application.id)
+
+    db.session.expire_all()
+    assert db.session.query(UserRegistration).get(s.application.id).warning is None
+
+
+def test_an_empty_email_result_list_counts_nothing(db_session, monkeypatch):
+    """`:72`'s `if email_results` guard and its length conjunct together."""
+    s = _seed()
+    set_setting('ban_check_servers', 'real.example')
+    _no_sleep(monkeypatch)
+    _lowest_randint(monkeypatch)
+    _recording_client(monkeypatch, (200, [False]), (200, []))
+
+    check_user_application(s.application.id)
+
+    db.session.expire_all()
+    assert db.session.query(UserRegistration).get(s.application.id).warning is None
+
+
+def test_a_false_result_at_the_real_email_index_counts_nothing(
+        db_session, monkeypatch):
+    """`:72`'s last conjunct alone, separated from the first two."""
+    s = _seed()
+    set_setting('ban_check_servers', 'real.example')
+    _no_sleep(monkeypatch)
+    _lowest_randint(monkeypatch)
+    _recording_client(monkeypatch, (200, [False]), (200, [False, True, True, True]))
+
+    check_user_application(s.application.id)
+
+    db.session.expire_all()
+    assert db.session.query(UserRegistration).get(s.application.id).warning is None
+
+
+@pytest.mark.xfail(strict=True, raises=TypeError, reason='D319, fixed in Task 10')
+def test_both_legs_banned_counts_twice(db_session, monkeypatch):
+    """`num_banned` accumulating across the two legs of ONE domain.
+
+    The warning text names 2, which no single-leg test can produce -- this is
+    what proves `:47` and `:73` increment the same counter.
+
+    EXPECTED TO FAIL: `num_banned` reaches 2, so `:79`'s true arm runs
+    `:80-81` and hits D319 -- see
+    `test_a_banned_ip_at_the_real_index_counts` for the mechanism. Not fixed
+    here; fixed in Task 10.
+    """
+    s = _seed()
+    set_setting('ban_check_servers', 'real.example')
+    _no_sleep(monkeypatch)
+    _lowest_randint(monkeypatch)
+    _recording_client(monkeypatch, (200, [True]), (200, [True]))
+
+    check_user_application(s.application.id)
+
+    db.session.expire_all()
+    assert db.session.query(UserRegistration).get(
+        s.application.id).warning == '2 instances have banned this account.'
+
+
+def test_a_failing_domain_does_not_stop_the_next_one(db_session, monkeypatch):
+    """`:75-77`: an exception inside one domain's body is logged and the loop
+    CONTINUES to the next domain.
+
+    THE SECOND DOMAIN'S REQUESTS ARE THE OBSERVATION. A handler that logged
+    and then broke out of the loop would leave `client.posts` holding only
+    broken.example's single attempt, and this assertion separates the two
+    behaviours. Nothing propagates out of `check_user_application` here --
+    `:75` is `except Exception` and swallowing IS the behaviour under test --
+    so there is no `pytest.raises` around the call.
+
+    Note that broken.example makes ONE request and working.example makes TWO:
+    the raise lands on the IP leg, so that domain's email leg never runs.
+    """
+    s = _seed()
+    set_setting('ban_check_servers', 'broken.example\nworking.example')
+    _no_sleep(monkeypatch)
+    _lowest_randint(monkeypatch)
+    client = _recording_client(
+        monkeypatch,
+        (200, _RAISING_PAYLOAD),   # broken.example IP leg: json() raises
+        (200, [False]),            # working.example IP leg
+        (200, [False]),            # working.example email leg
+    )
+
+    check_user_application(s.application.id)
+
+    assert [url for url, _data in client.posts] == [
+        'https://broken.example/api/is_ip_banned',
+        'https://working.example/api/is_ip_banned',
+        'https://working.example/api/is_email_banned',
     ]
