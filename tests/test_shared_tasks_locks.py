@@ -291,3 +291,32 @@ def test_an_offline_community_instance_sends_no_lock(db_session, http_mock):
     lock_post(None, s.user.id, s.post.id)
 
     assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_private_community_sends_no_lock(db_session, http_mock):
+    """D309's site in this module. Before this commit `:89` gated on
+    `local_only` and `instance.online()` but not `Community.private`, so a lock
+    on content in a private community federated out. This test pins down that
+    `community.private` is now part of the guard.
+
+    THE ORDER OF `:89`'s DISJUNCTS IS LOAD-BEARING. `private` sits BEFORE
+    `not community.instance.online()`, and `or` short-circuits left to right,
+    so a private community with no instance row (`Community.instance_id`,
+    app/models.py:575, is a nullable FK) returns at the `private` check instead
+    of raising `AttributeError` on `None.online()`. That is a side effect of
+    this fix, not something this test asserts -- reordering the disjuncts would
+    reopen the crash without failing this test, since this community always has
+    an instance.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    inst = make_instance('follower.example', software='lemmy')
+    inst.inbox = PEER_INBOX
+    member = make_user(inst, 'member_follower')
+    make_community_member(member, s.community)
+    s.community.private = True
+    db.session.commit()
+
+    lock_post(None, s.user.id, s.post.id)
+
+    assert db.session.query(ActivityPubLog).count() == 0
