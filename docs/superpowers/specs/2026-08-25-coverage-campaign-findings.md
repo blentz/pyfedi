@@ -2329,7 +2329,7 @@ wrong in either copy on its own.
 ### 6. New defects found while testing — D34-D40
 
 None fixed, same rule as every sub-project before this one. **Next free number
-after these: D41.**
+after these: D41.** *(Historical -- this marker records what was free in its own round and is NOT maintained. Take the live figure as the MAXIMUM over every such marker in this file: `grep -o 'Next free number: D[0-9]*' <this file> | sort -u -t D -k2 -n | tail -1`. Never take the first one you meet reading top-down.)*
 
 | # | function | defect | severity | evidence |
 |---|---|---|---|---|
@@ -3132,7 +3132,7 @@ block guard's third alternative, dead by default; D74 Reject's missing
 Tasks 5 and 7's two authorised fixes. **D78-D79 the fix-wave review's two
 corrections** (section 4 above): D78 the audit-trail asymmetry D77's fix
 introduced; D79 the missing `UserFollowRequest` delete D68's correction
-exposed. **Next free number: D80.**
+exposed. **Next free number: D80.** *(Historical -- this marker records what was free in its own round and is NOT maintained. Take the live figure as the MAXIMUM over every such marker in this file: `grep -o 'Next free number: D[0-9]*' <this file> | sort -u -t D -k2 -n | tail -1`. Never take the first one you meet reading top-down.)*
 
 ## Sub-project 5c: the Delete, Lock, Add, Remove and Block arms of moderation
 
@@ -3386,14 +3386,14 @@ explicitly-authorised fixes** (section 3 above): D97 Lock's comment branch
 Add's loop guard (`307d50a8`); D101-D102 Remove's feed-item and membership
 guards (`5edb87b6`). **D103 the fix wave's new finding** (section 4 above):
 the site-ban `already_banned` guard, a dead branch consequent on D91.
-**Next free number: D104.**
+**Next free number: D104.** *(Historical -- this marker records what was free in its own round and is NOT maintained. Take the live figure as the MAXIMUM over every such marker in this file: `grep -o 'Next free number: D[0-9]*' <this file> | sort -u -t D -k2 -n | tail -1`. Never take the first one you meet reading top-down.)*
 
 ### 6. D91 fixed, D103 closed -- 2026-08-31, outside any sub-project
 
 Authorised directly by the user after sub-project 5c closed ("fix the
 ban_until bug in routes.py"), so this sits outside 5c's no-fix contract
 rather than violating it. No new D-numbers: this section resolves D91 and
-closes D103. **Next free number is still D104.**
+closes D103. **Next free number is still D104.** *(Historical -- this marker records what was free in its own round and is NOT maintained. Take the live figure as the MAXIMUM over every such marker in this file: `grep -o 'Next free number: D[0-9]*' <this file> | sort -u -t D -k2 -n | tail -1`. Never take the first one you meet reading top-down.)*
 
 **The fix.** `app/activitypub/routes.py`'s ordinary site-ban branch now
 reads:
@@ -3650,7 +3650,7 @@ wave.
 | D111 | `process_inbox_request`, `Undo`/`Lock` (routes.py:1791) | **Not fixed, registered only -- out of scope for this wave.** `reason = core_activity['summary'] if 'summary' in core_activity else ''` reads the OUTER `Undo`'s `summary`, not the inner `Lock` object's. The sibling `Undo`/`Delete` sub-type correctly reads `core_activity['object']['summary']` (the inner object), and the non-`Undo` `Lock` arm correctly reads `core_activity['summary']` because there `core_activity` IS the `Lock` itself. For an `Undo`/`Lock`, the reason lives on the inner `Lock` object, one level down from where this line reads it -- a federated unlock's reason very likely never reaches the modlog. | not fixed, out of scope | **reading-level, not measured**: high-confidence by analogy with the `Undo`/`Delete` sibling's correct inner-object read, but Lemmy's exact `Undo`/`LockPost` wire payload was not confirmed from this repo, so whether real federated traffic actually nests the reason this way is inferred, not observed. No test in this suite passes a `summary` through an `Undo`/`Lock` activity at all, so the ternary's true arm (`'summary' in core_activity`) is never evaluated on either side -- full statement coverage of this line was reached without ever exercising the branch this defect lives in |
 | D112 | `process_inbox_request`, `Undo` arm (routes.py:1676 onward) | **Not fixed, registered only -- out of scope for this wave.** An `Undo` whose `object` is a bare URI string, rather than a nested activity dict, raises an unhandled `TypeError` out of `process_inbox_request` (subscripting a string by `'type'` at `core_activity['object']['type']`). This is a legal ActivityPub shape and it is peer-triggerable -- nothing in the preamble or this arm validates `object`'s shape before dispatching on it. | not fixed, out of scope | **measured**: already pinned by `tests/test_inbox_dispatch_undo_content.py`'s `test_a_string_inner_object_cannot_reach_choose_answer_at_all`, which sends a string inner `object` and asserts `dispatch()` raises `TypeError` -- this is the entire factual basis for D109 (the `ChooseAnswer` branch's unreachable `isinstance(..., str)` check), but the underlying defect -- an unhandled crash on a legal, peer-triggerable shape -- was itself never registered, only its downstream consequence (D109) was |
 
-**Next free number: D113.**
+**Next free number: D113.** *(Historical -- this marker records what was free in its own round and is NOT maintained. Take the live figure as the MAXIMUM over every such marker in this file: `grep -o 'Next free number: D[0-9]*' <this file> | sort -u -t D -k2 -n | tail -1`. Never take the first one you meet reading top-down.)*
 
 
 
@@ -3753,7 +3753,7 @@ coverage both say nothing about *which* scenario satisfied a given arc,
 and here the scenario that did is not the one anyone should rely on as
 having verified the ordinary case.
 
-**Next free number: D121.**
+**Next free number: D121.** *(Historical -- this marker records what was free in its own round and is NOT maintained. Take the live figure as the MAXIMUM over every such marker in this file: `grep -o 'Next free number: D[0-9]*' <this file> | sort -u -t D -k2 -n | tail -1`. Never take the first one you meet reading top-down.)*
 
 ## Sub-project 6: `process_chat`, the private-message acceptance policy
 
@@ -3809,7 +3809,7 @@ exactly Task 9's two commits, `5783beb8` and `d0c8d13f`. Every other task's
 | D130 | `process_chat`, both call sites (`app/activitypub/routes.py:1215-1216` and `:1246-1249`) | **Not fixed, registered only -- a behaviour change introduced by D121's fix, not itself a defect needing its own code change.** `process_chat` has two call sites: the dedicated `ChatMessage` branch (`routes.py:1215-1216`), which discards the return value entirely, and the `Create`/`Update` arm's fallback (`routes.py:1246-1249`, `if process_chat(...): return`), reached only when `object['type']` is something else (`Page`, `Note`, `Article`, ...) and `find_community` resolved nothing. Because the first call site discards the return value, D121's `content`-guard `True` return is only ever observable at the second, non-`ChatMessage` call site. A well-formed link-style `Page` -- no `content` key at all, which link posts legitimately lack -- addressed (`to`) to a local user with no resolvable community now reaches D121's guard, is logged as a `'ChatMessage has no content'` FAILURE (a message that is actively misleading for a `Page`), and `process_chat` returns `True`, so the arm returns immediately and the `Page` is silently dropped. Before Fix A, the identical input reached the unguarded `core_activity['object']['content']` read in the blocked-phrase check (pre-fix `routes.py:2567`) and raised an uncaught `KeyError` out of the Celery task instead -- a loud failure, visible as a task exception, rather than a quiet logged one. Nothing was delivered as a post in either world, so this is not a regression in outcome, but the *visibility* of the failure changed from loud to quiet. No test in this file exercises a content-less `Page` through the fallback path: both tests reaching the 1247 call site build their `Page` with `content: 'hello'` present. | not fixed, registered only | reading-level: `routes.py:1215-1216,1246-1249,2566-2568` read directly; `test_a_handled_chat_stops_the_arm_from_treating_it_as_content` (`tests/test_inbox_dispatch_chat.py:317-338`) and `test_an_unhandled_chat_lets_the_arm_continue_to_the_domain_check` (`tests/test_inbox_dispatch_chat.py:341-358`), the file's only tests reaching the 1247 call site, both supply `content`, so this specific input shape is untested in either direction |
 | D131 | `process_chat` (`app/activitypub/routes.py:2573`) | **Not fixed, registered only -- previously undernumbered.** `if core_activity['object']['content']:` tests truthiness, not membership, before running the blocked-phrase loop (`routes.py:2572-2578`). A `ChatMessage` whose `content` is present but falsy -- not only `''` (already noted in D121's evidence, harmless there since an empty string has no phrase to match) but any other JSON-falsy, non-string value the D128 gap lets through unconverted, such as `content: 0` or `content: false` -- skips the blocked-phrase filter entirely and proceeds toward storage. This behaviour was described only in D121's prose ("the blocked-phrase filter's separate falsy-content skip is unchanged by this fix") with no number of its own, making it uncitable independent of D121's row; this row gives it one. | not fixed, registered only | reading-level: `routes.py:2572-2578` read directly; no test in this suite sends a falsy non-string `content`, and `test_a_message_containing_no_blocked_phrase_is_delivered` (`tests/test_inbox_dispatch_chat.py:381-398`) covers only truthy content that matches no phrase, not falsy content that skips the check structurally |
 
-**Next free number: D132.**
+**Next free number: D132.** *(Historical -- this marker records what was free in its own round and is NOT maintained. Take the live figure as the MAXIMUM over every such marker in this file: `grep -o 'Next free number: D[0-9]*' <this file> | sort -u -t D -k2 -n | tail -1`. Never take the first one you meet reading top-down.)*
 
 ## Sub-project 7: `process_new_content`, the federated post/reply creation-and-edit delegate
 
@@ -3934,7 +3934,7 @@ every other task's `git diff --stat app/` is empty.
 | D153 | `process_webfinger_request`, Community lookup (`app/activitypub/routes.py:123`) | **Not fixed here -- closing it would be a fourth production edit outside this sub-project's three authorised fixes.** D142's fix made the Feed lookup the strictest of the three (`ap_id=None, public=True, banned=False, ap_deleted_at=None`, `:126-127` and `:130-131`); the User lookup guards `ap_id=None, deleted=False, banned=False` (`:117-120`); the Community lookup guards only `ap_id=None, local_only=False` (`:123`) -- neither a ban nor a soft-delete guard. `Community.banned` (`app/models.py:591`) and `Community.ap_deleted_at` (`app/models.py:584`) both exist. So a banned or soft-deleted local community is still resolved and advertised by webfinger -- name and `public_url()` included -- to any unauthenticated caller, the same defect class D142 fixed for Feed, on a different actor type. Two pieces of evidence this is an oversight rather than a policy choice: the four sibling local-community actor endpoints in this same file all filter `banned=False` on the identical `Community.query.filter_by(name=actor, banned=False, ap_id=None)` shape (`app/activitypub/routes.py:2018`, `:2049`, `:2074`, `:2100`); and `app/admin/routes.py:1472` sets `community.banned = True` on the community deletion path itself, with the inline comment "hide this community from the UI by banning it" -- so a deleted community is expected, elsewhere in this same codebase, to read as banned, and webfinger's Community lookup is the one place that expectation is not enforced. | not fixed, registered only | reading-level: `app/activitypub/routes.py:117-120,123,126-127,130-131` read directly for the three lookups' current guards; `app/models.py:584,591` read directly for `Community.ap_deleted_at`/`Community.banned`'s existence; `app/activitypub/routes.py:2018,2049,2074,2100` read directly for the four sibling endpoints' identical `banned=False` guard; `app/admin/routes.py:1472` read directly for the deletion-path comment. No test in this suite queries a banned or soft-deleted local community through webfinger to demonstrate the gap end to end |
 
 **Next free number: D154.** Taken by sub-project 9 (D154-D164) --
-see the "Sub-project 9" section below for the table.
+see the "Sub-project 9" section below for the table. *(Historical -- this marker records what was free in its own round and is NOT maintained. Take the live figure as the MAXIMUM over every such marker in this file: `grep -o 'Next free number: D[0-9]*' <this file> | sort -u -t D -k2 -n | tail -1`. Never take the first one you meet reading top-down.)*
 
 ## Sub-project 9: the actor-profile endpoints -- `user_profile`, `community_profile`, `feed_profile`
 
@@ -7523,7 +7523,15 @@ claim that D283's nine `author` hits include "five `author_id=` column
 keywords". **That pointer was already stale before this round** -- at the commit
 before this round it landed in a D263 paragraph -- and this round's insertions
 moved its intended target a further seven lines down. **The target is D283's
-cell, and at this commit it is at `:5705`.** **The defect the citation was
+cell, and the invariant that finds it under any further append is its row
+prefix -- `grep -n '^| D283 |'` on this file -- not a line number.** The number
+is given here only as-of, because this paragraph's own first version gave it
+un-anchored and was falsified nine lines from where the next round was editing:
+D283's cell was at **`:5705` at `cd9ab3a3`**, the commit this paragraph was
+written in, and it is at **`:5714` at this commit**, sub-project 22 having
+inserted at eight hunks above it for a cumulative +9.
+
+**The defect the citation was
 flagging is already discharged**: sub-project 17 corrected the parenthetical in
 place from five keywords to **four** (`:2835`, `:2858`, `:2889`, `:2923`),
 because `:2887` is a dict key in the `NOTIF_TOPIC` arm and not a column keyword,
@@ -7789,6 +7797,34 @@ census in its place, and carried into `tests/README.md` as fact 128, because the
 same failure -- a planning document paraphrasing a register cell into something
 the cell does not say -- cost sub-project 18 a wrong label (D286 called "D292")
 and is the second occurrence in five rounds.
+
+**The withdrawn figures were then discharged at their ORIGIN as well as at their
+restatements, in D275's two-way-pointer form -- and that choice settles which of
+two live conventions applies to which case.** The controller's Rulings 5 and 6
+corrected the restatements (D314's cell, D315's cell, the `TaskError` docstring)
+and left the origins standing: this round's plan still read "D312 names nine
+other unpatched task functions" (`...-22.md:941`) and still carried "eleven
+sites" as a *success criterion* (`:382`, `:942`, `:990`) and the withdrawn 358/135
+citation figures (`:374`, `:957`), and its design still carried the 358/96 figures
+(`...-22-design.md:133`, `:135`, `:149`, `:291-292`) and the origin of the nine
+(`:215`, with the eleven restated at `:160`, `:219` and `:294`). **Briefs are
+derived from the plan** -- D314's own evidence column records that the invented
+nine reached "this round's design, plan and briefs" by exactly that path -- so
+the carrier Ruling 3 requires was still open, and the correction lived only in
+the documents the next round's briefs will not read. **Two conventions were live
+for this: D275's dated annotation appended after the superseded document's last
+original line, and sub-project 21's leave-the-document-alone-and-correct-here,
+used nine paragraphs above for the tails-17 pointer. This round chose D275's,
+and the two are not in conflict once the distinction is named**: sub-project
+21's subject is a *coordinate* inside a historical record **of** a coordinate
+that drifted, so editing the document would falsify the very record it exists to
+keep; these are *figures a future brief will copy*, and the plan is the document
+the brief is derived from. **Appending rather than rewriting keeps both
+properties at once** -- the drifted paraphrase at plan `:941` survives verbatim,
+which is what makes it evidence for `tests/README.md` fact 128, and a reader who
+opens either planning document first is sent here. Both annotations are appended
+after their document's last original line; no line inside either document moved,
+so every citation into them still resolves.
 
 
 **Next free number: D316.** D314-D315 were taken by sub-project 22 -- D314 the
