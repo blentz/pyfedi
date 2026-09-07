@@ -763,6 +763,214 @@ def test_a_poll_vote_to_an_offline_instance_federates_nowhere(
     assert db.session.query(ActivityPubLog).count() == 0
 
 
+def test_a_poll_voteless_follower_is_skipped_and_the_loop_continues(
+        db_session, http_mock):
+    """`vote_for_poll` has its OWN delivery loop at `:224-231`, separate from
+    `send_vote`'s at `:135-152` -- a different function with a different
+    guard on the same shape. This closes the residual left by this file's
+    other skip tests, which all exercise `send_vote`'s loop via
+    `vote_for_post`/`vote_for_reply` and never reach `vote_for_poll`'s own.
+
+    The inboxless follower is created FIRST, for the same lower-id,
+    LAX-not-FLAKY reason `test_a_follower_without_an_inbox_is_skipped...`
+    gives for `send_vote`'s loop: `following_instances()` ends in an
+    unordered `.distinct().all()`.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    make_poll(s.post)
+    make_poll_choice(s.post, 'yes')
+    dud = make_instance('inboxless.example', software='lemmy')
+    dud.inbox = None
+    dud_member = make_user(dud, 'member_inboxless')
+    make_community_member(dud_member, s.community)
+    db.session.commit()
+    route, _good = _follower(s, http_mock, inbox=OTHER_INBOX,
+                             domain='good.example')
+
+    vote_for_poll(None, s.user.id, s.post.id, 'yes')
+
+    assert _delivered_inboxes(route) == {OTHER_INBOX}
+    assert len(route.calls) == 1
+
+
+def _recording_task_session(monkeypatch):
+    """Make `get_task_session` hand back a GENUINE Session that records
+    `rollback()` and `close()`.
+
+    The SEVENTH copy of this helper across the suite. Duplicated rather than
+    imported: this campaign keeps its test modules independent so a helper can
+    be edited for one function's needs without silently changing another's
+    assertions. The count is registered as D324.
+
+    THE PATCH TARGET IS THE LIKES MODULE, NOT `app.utils`. `likes.py:5` imports
+    `get_task_session` into the likes namespace and every function resolves it
+    there. Patching `app.utils.get_task_session` would apply cleanly, observe
+    nothing, and leave the assertions trivially true against an empty list.
+
+    NOTE WHAT THIS DOES AND DOES NOT REACH IN THIS MODULE. `send_vote` opens
+    its OWN session at `:56`, which this patch intercepts, AND runs inside a
+    wrapper whose session it also intercepts -- so a `send_vote` failure
+    records TWO closes, one per session. Assert on the ORDER and the presence
+    of 'rollback', not on an exact list length, unless you have read which
+    sessions a given path opens.
+    """
+    from app import db as _db
+    from sqlalchemy.orm import Session as _Session
+    import app.shared.tasks.likes as likes_module
+
+    record = SimpleNamespace(calls=[])
+
+    def _make():
+        session = _Session(bind=_db.engine)
+        real_rollback, real_close = session.rollback, session.close
+
+        def rollback():
+            record.calls.append('rollback')
+            return real_rollback()
+
+        def close():
+            record.calls.append('close')
+            return real_close()
+
+        session.rollback = rollback
+        session.close = close
+        return session
+
+    monkeypatch.setattr(likes_module, 'get_task_session', _make)
+    return record
+
+
+def test_a_database_failure_in_vote_for_poll_rolls_back_and_re_raises(
+        db_session, http_mock, monkeypatch):
+    """`vote_for_poll`'s bare `except:` arm at `:235` and its `finally` at
+    `:238-239`, reached WITHOUT a faked exception in the task's own logic.
+
+    The session's `execute` is made to raise. VERIFIED BY TRACEBACK where it
+    first fires rather than assumed: under this project's sqlalchemy, the
+    raise lands at `:179`'s `session.query(Post).get(post_id)` -- the FIRST
+    lookup in the function -- because `Query.get()` funnels through
+    `Session.execute()` on a fresh Session's identity-map miss.
+
+    The recorded ORDER fixes `finally` running after `except`, which a
+    `raises`-only test cannot observe.
+    """
+    from app import db as _db
+    from sqlalchemy.orm import Session as _Session
+    import app.shared.tasks.likes as likes_module
+
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    calls = []
+
+    def _make():
+        session = _Session(bind=_db.engine)
+        real_rollback, real_close = session.rollback, session.close
+
+        def rollback():
+            calls.append('rollback')
+            return real_rollback()
+
+        def close():
+            calls.append('close')
+            return real_close()
+
+        def execute(*_args, **_kwargs):
+            raise RuntimeError('database refused the query')
+
+        session.rollback = rollback
+        session.close = close
+        session.execute = execute
+        return session
+
+    monkeypatch.setattr(likes_module, 'get_task_session', _make)
+
+    with pytest.raises(RuntimeError):
+        vote_for_poll(None, s.user.id, s.post.id, 'yes')
+
+    assert calls == ['rollback', 'close']
+
+
+def test_vote_for_poll_closes_its_session_on_the_happy_path(
+        db_session, http_mock, monkeypatch):
+    """The same `finally` (`:238-239`) on the SUCCESS path -- `close` with no
+    `rollback`.
+
+    The control for the test above: without it, `finally` running is only ever
+    observed alongside an exception, and a handler that closed only in the
+    `except` arm would pass everything else in this file.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    make_poll(s.post)
+    make_poll_choice(s.post, 'yes')
+    _follower(s, http_mock)
+    record = _recording_task_session(monkeypatch)
+
+    vote_for_poll(None, s.user.id, s.post.id, 'yes')
+
+    assert record.calls == ['close']
+
+
+def test_a_failure_inside_send_vote_rolls_back_and_re_raises(
+        db_session, http_mock, monkeypatch):
+    """`send_vote`'s bare `except:` at `:168`, the end of its body, reached by
+    a NATURAL raise: the post is absent, so `:59`'s `object.community` raises
+    AttributeError on None.
+
+    TWO SESSIONS ARE RECORDED HERE and that is the observation. The wrapper
+    (`vote_for_post`) opens one at `:26` and `send_vote` opens its own at
+    `:56`, both intercepted by the same patch, so a failure inside `send_vote`
+    rolls back and closes each of them in turn.
+
+    MEASURED BEFORE ASSERTING: a bare `assert record.calls == []` was run
+    first; the actual sequence recorded is
+    `['rollback', 'close', 'rollback', 'close']`, NOT the
+    `['rollback', 'close', 'close']` a single-`rollback` guess would predict.
+    `send_vote`'s own `except`/`finally` (`:169`, `:172`) fire first, rolling
+    back and closing its OWN session; the exception then propagates out of
+    `patch_db_session` and `vote_for_post`'s `except`/`finally` (`:33`, `:36`)
+    roll back and close the OUTER session too -- `vote_for_post`'s `except`
+    calls `session.rollback()` unconditionally on whatever session it holds,
+    regardless of whether that session's own transaction did anything. So
+    BOTH sessions are rolled back, not just the inner one.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    record = _recording_task_session(monkeypatch)
+
+    with pytest.raises(AttributeError):
+        vote_for_post(None, s.user.id, s.post.id + 1000, None, 'upvote')
+
+    assert record.calls == ['rollback', 'close', 'rollback', 'close']
+
+
+def test_a_missing_reply_in_vote_for_reply_rolls_back_and_re_raises(
+        db_session, http_mock, monkeypatch):
+    """`vote_for_reply`'s bare `except:` at `:48` and its `finally` at
+    `:51-52` -- `vote_for_reply`'s OWN pair, distinct from both
+    `vote_for_post`'s (`:32`, `:35-36`) and `vote_for_poll`'s (`:235`,
+    `:238-239`). This closes the residual left by this file's other two
+    handler-failure tests, neither of which reaches `vote_for_reply` at all.
+
+    `:45`'s `.filter_by(id=reply_id).one()` raises `NoResultFound` directly
+    on a missing id -- unlike `vote_for_post`'s `.get()`, which returns None
+    and defers the failure fifty-five lines to `send_vote`. So only ONE
+    session is ever opened here (the wrapper's own, at `:42`) and
+    `send_vote` is never entered.
+    """
+    from sqlalchemy.orm.exc import NoResultFound
+
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    record = _recording_task_session(monkeypatch)
+
+    with pytest.raises(NoResultFound):
+        vote_for_reply(None, s.user.id, s.reply.id + 1000, None, 'upvote')
+
+    assert record.calls == ['rollback', 'close']
+
+
 def test_a_banned_follower_is_skipped_and_the_loop_continues(
         db_session, http_mock):
     """`:138`'s `not instance_banned(instance.domain)` conjunct, inverted
