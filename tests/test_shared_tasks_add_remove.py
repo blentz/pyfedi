@@ -169,10 +169,21 @@ def _remote_inbox(s, http_mock, inbox=PEER_INBOX):
     Three things must be true for `:100`'s call to become an observable
     request: the community must be remote (`_seed(local_community=False)`,
     closing BOTH disjuncts of `Community.is_local()`); it must have an
-    `ap_inbox_url`, which `make_community` leaves None and which `post_request`
-    (app/activitypub/signature.py:109-111) short-circuits on; and the user must
-    have a keypair (`_seed(with_keys=True)`), because signing calls `.encode()`
-    on `user.private_key`.
+    `ap_inbox_url`, which `make_community` leaves None; and the user must have
+    a keypair (`_seed(with_keys=True)`), because signing calls `.encode()` on
+    `user.private_key`.
+
+    WHY THE INBOX MATTERS IS NOT THAT `post_request` "SHORT-CIRCUITS" ON A
+    MISSING ONE -- that verb would make eight assertions in this file look
+    vacuous. `post_request` builds and `session.add`s its `ActivityPubLog` row
+    UNCONDITIONALLY at app/activitypub/signature.py:102, and only THEN reaches
+    the uri check at :109-111, which does not return early either: it marks the
+    already-written row `failure` / `empty uri`. So a row is written for ANY
+    attempted delivery, including one to a None inbox. That is exactly what
+    makes `assert db.session.query(ActivityPubLog).count() == 0` a real
+    observation -- it distinguishes "the guard returned before `:100`" from
+    "`:100` ran and delivered nowhere", which a short-circuit reading would say
+    it cannot.
 
     WHY THE HTTP BODY AND NOT A RECORDER: `:82` mutates `add` in place with
     `del`, so a recorder holding the dict would be read back post-`del`. respx
@@ -279,25 +290,85 @@ def test_the_twins_are_structurally_identical(db_session):
     ever stops being true, this test fails and the divergence becomes a
     detectable event rather than something a later sub-project discovers.
 
-    The comparison is deliberately coarse -- function names, extents and line
-    count -- because a stricter one would fail on the legitimate naming
-    differences, and a looser one would not notice a function being added.
+    WHAT IS COMPARED IS NORMALISED TEXT, NOT SHAPE. An earlier version of this
+    test asserted only line count and top-level `FunctionDef` extents, and
+    justified the coarseness as "a stricter one would fail on the legitimate
+    naming differences". THAT JUSTIFICATION DOES NOT HOLD: the hunk-directed
+    recipe at the end of this file normalises exactly those differences and
+    nothing else, so a stricter comparison is available for four `re.sub`
+    calls. Shape alone was blind to the divergence this test exists to catch --
+    dropping the `private` conjunct from `removes.py:63`, swapping `:74`'s
+    ternary arms, and renaming a local were each demonstrated to leave the line
+    count and every extent untouched. A one-conjunct edit applied to one twin
+    and not the other is PRECISELY the shape of this sub-project's own
+    production change, and shape could not have seen it.
+
+    THIS TEST IS THE AUTHORITATIVE FORM OF THE NORMALISATION. The four rules
+    below are the four `-e` clauses of the shell recipe at the end of this
+    file, in the same order and with the same `22!` line address; the shell
+    form is the by-hand convenience for reading the difference SET, and if the
+    two ever disagree this one is right and the comment is stale.
+
+    WHAT IT STILL CANNOT SEE, said plainly so nobody reads it as more than it
+    is. (a) A change made IDENTICALLY to both twins is invisible to any
+    equivalence check by construction -- that is what the mutation record and
+    the coverage floors are for, not this test. (b) A divergence expressible as
+    one of the four substitutions themselves is absorbed: the rules rewrite
+    `removes.py` toward `adds.py` and are deliberately blind to the tokens they
+    rewrite.
+
+    The line count and the extents are retained alongside the text comparison
+    even though the text subsumes them, because D318's evidence column cites
+    the exact values `100` and `[(27, 38), (42, 53), (56, 100)]` and a drift in
+    either is worth failing on by name.
     """
     import ast
+    import os
+    import re
 
-    def shape(path):
-        src = open(path).read()
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    adds_path = os.path.join(root, 'app', 'shared', 'tasks', 'adds.py')
+    removes_path = os.path.join(root, 'app', 'shared', 'tasks', 'removes.py')
+
+    def source(path):
+        with open(path, encoding='utf-8') as handle:
+            return handle.read()
+
+    def shape(src):
         return (
             len(src.splitlines()),
             [(n.lineno, n.end_lineno) for n in ast.parse(src).body
-             if isinstance(n, ast.FunctionDef)],
+             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))],
         )
 
-    adds_lines, adds_extents = shape('app/shared/tasks/adds.py')
-    removes_lines, removes_extents = shape('app/shared/tasks/removes.py')
+    def normalise(src):
+        """`removes.py` rewritten into `adds.py`'s names. Line-addressed,
+        because `:22`'s English word `remove` is identical in both files."""
+        out = []
+        for number, line in enumerate(src.splitlines(keepends=True), start=1):
+            line = re.sub(r'\bunsticky_post\b', 'sticky_post', line)
+            line = re.sub(r'\bremove_([a-z]*)', r'add_\1', line)
+            line = re.sub(r'\bRemove\b', 'Add', line)
+            if number != 22:
+                line = re.sub(r'\bremove\b', 'add', line)
+            out.append(line)
+        return ''.join(out)
+
+    adds_src = source(adds_path)
+    removes_src = source(removes_path)
+
+    adds_lines, adds_extents = shape(adds_src)
+    removes_lines, removes_extents = shape(removes_src)
 
     assert adds_lines == removes_lines == 100
     assert adds_extents == removes_extents == [(27, 38), (42, 53), (56, 100)]
+
+    assert normalise(removes_src) == adds_src, (
+        'the twins have DIVERGED beyond the four naming rules. Run the recipe '
+        'at the end of this file to see the difference set, then decide '
+        'whether the change belongs in both files or whether D318 no longer '
+        'holds.'
+    )
 
 
 def test_a_remote_community_receives_the_bare_add(db_session, http_mock):
@@ -396,6 +467,18 @@ def test_a_private_community_does_not_federate_the_add(db_session, http_mock):
     closed `notes.py:143`, `notes.py:248` and `pages.py:398`. `local_only` is
     left False deliberately: with it True the test would pass on the
     pre-existing conjunct and prove nothing.
+
+    THE SEEDED STATE IS NOT PRODUCTION-REACHABLE TODAY, AND THAT IS DELIBERATE.
+    `Community.private` is only ever written by local admin routes
+    (app/community/routes.py:122, :1234, :1237); nothing in the ActivityPub
+    ingest path assigns it, so a REMOTE private community cannot currently
+    arise. A remote one is used anyway because it is the only setup that makes
+    the pre-fix failure OBSERVABLE: unguarded, `:63` falls through to `:100`,
+    `post_request` writes a failure `ActivityPubLog` row and the count is 1. A
+    local private community would give a count of 0 both before and after the
+    fix, so the gate could not have been proved. The guard sits at `:63`,
+    before the local/remote split, so the arc is the same either way -- this is
+    defence in depth against a future ingest path, not a claim about today's.
     """
     s = _seed(local_community=False, with_keys=True)
     _make_deliverable(s)
@@ -832,6 +915,45 @@ def test_remove_mod_rolls_back_and_closes_on_a_missing_mod(
     assert record.calls == ['rollback', 'close']
 
 
+def test_add_object_raises_for_a_community_id_with_no_row(db_session):
+    """adds.py:61's `.one()` reached by a NATURAL raise -- the module's OTHER
+    NoResultFound, and the one no wrapper test touches.
+
+    THE TWO WRAPPER TESTS ABOVE DO NOT REACH IT. They pass a bad `mod_id`, so
+    their raise happens at `:47` inside `add_mod`, twelve lines before
+    `add_object` is called at `:48`. `:61` is a separate `.one()` on a separate
+    table, reached only when `:58`'s FALSE arm is taken with a `community_id`
+    that has no row -- the state a caller sees when a community is deleted
+    between enqueue and execution. Every other call site in this file passes
+    `s.community.id`.
+
+    ZERO COVERAGE EFFECT, AND THAT IS THE POINT OF WRITING IT DOWN: an
+    exception out of `.one()` is not a branch arc and both `:58` arcs were
+    already executed before this test existed. What it pins is the CONTRACT.
+    If `:61` were ever "hardened" to `.first()`, this raise would silently
+    become an `AttributeError` on `None.local_only` at `:63` and nothing in the
+    suite would notice. The design's success criterion 4 claims this raise is
+    reached; before this test it was not, so the criterion is now met by
+    measurement rather than by assertion.
+    """
+    from sqlalchemy.exc import NoResultFound
+    s = _seed()
+
+    with pytest.raises(NoResultFound):
+        add_object(db.session, s.user.id, s.mod, s.community.id + 1000)
+
+
+def test_remove_object_raises_for_a_community_id_with_no_row(db_session):
+    """removes.py:61's copy of the same `.one()` -- the twin. Written out
+    rather than parametrised so each file's raise is attributable to a named
+    test, which is this file's rule everywhere else."""
+    from sqlalchemy.exc import NoResultFound
+    s = _seed()
+
+    with pytest.raises(NoResultFound):
+        remove_object(db.session, s.user.id, s.mod, s.community.id + 1000)
+
+
 def test_sticky_post_closes_the_session_on_the_happy_path(
         db_session, http_mock, monkeypatch):
     """adds.py's finally on the SUCCESS path -- `close` with no `rollback`.
@@ -868,7 +990,18 @@ def test_unsticky_post_closes_the_session_on_the_happy_path(
 #
 # Both twins (app/shared/tasks/adds.py, app/shared/tasks/removes.py) were
 # mutated one line at a time, one file at a time, and run against this file
-# alone (35 tests collected as of this commit). Each mutation was applied
+# alone (35 tests collected at commit 8daee00a, when this record was written).
+#
+# THE FILE HAS SINCE GROWN AND THE PASS COUNTS BELOW HAVE NOT BEEN BACKDATED.
+# The final review fix wave added two tests, so re-running any mutation here now
+# reports one more passed than the line says -- 35 where it says 34, 34 where it
+# says 33. THE INVARIANT THIS RECORD CLAIMS IS THE KILL SET AND ITS SYMMETRY
+# ACROSS THE TWINS, not the pass total: which named tests die, whether the kill
+# is sole or multi, assertion or crash, and that the two twins answer
+# identically. Every one of those is unchanged by the file growing, which is why
+# the counts are left stated as-of their commit rather than rewritten.
+#
+# Each mutation was applied
 # with a single targeted `sed -i` to one file, tested, then reverted with
 # `git checkout -- app/` before the next mutation; `git diff -- app/` was
 # confirmed empty and both files confirmed at 100 lines after every restore.
@@ -1067,10 +1200,14 @@ def test_unsticky_post_closes_the_session_on_the_happy_path(
 # The `22!` address is the whole of point 2 and is the part that looks like a
 # typo. It is not.
 #
-# This recipe is a CONVENIENCE, not the invariant. The committed check is
-# test_the_twins_are_structurally_identical, which re-parses both files and
-# asserts line count and ast extents; the recipe is what a reader runs by hand
-# when they want to see the difference set rather than a pass/fail.
+# THIS SHELL FORM IS THE CONVENIENCE; THE TEST IS AUTHORITATIVE.
+# test_the_twins_are_structurally_identical applies these same four rules in
+# the same order as four `re.sub` calls -- including the `22!` line address --
+# and asserts the normalised `removes.py` equals `adds.py` byte for byte, on
+# top of the line count and the ast extents. If this comment and that test ever
+# disagree, THE TEST IS RIGHT and this block is stale; keep them in step by
+# editing the test first. What the shell form is still for is READING: it hands
+# you the difference SET, where the test hands you a pass/fail.
 # ---------------------------------------------------------------------------
 
 
