@@ -4463,16 +4463,25 @@ re-derivation.** The design and the class's own docstring said "358
 of `2a63f063^`, the commit the class was appended in**, the 135 reproduces
 exactly; the 358 does not -- the same sweep gives **322** occurrences (324 if
 only the `*.po` glob is excluded, **844** if the whole `.po` family is counted)
-and **192** distinct strings, and a reviewer's third sweep gave 239 unique /
-~330-346 occurrences / 105 at-or-after. **Two things make those sweeps
-disagree, and both are worth knowing before running one.** (a) The `.po` files
-carry auto-generated `#: app/utils.py:NNN` gettext source references that a
-human "citation" count means to exclude -- **and the obvious glob
-`app/translations/**/*.po` is itself incomplete**, missing
-`app/translations/lt/LC_MESSAGES/messages.po.original`, which carries the same
-references and is exactly the 322-versus-324 gap. (b) A naive `:NNN` regex
-misses the **endpoint** of a range citation, so it reports the maximum of
-`app/utils.py:5736-5743` as 5736. The same happened to the companion figure:
+and **191** distinct strings (the 324-sweep has 192 -- the distinct counts
+differ by the same file the occurrence counts do, and attaching 192 to the
+322-sweep was this fact's own first draft getting it wrong), and a reviewer's
+third sweep gave 239 unique / ~330-346 occurrences / 105 at-or-after. **Three
+things make those sweeps disagree, and all three are worth knowing before
+running one.** (a) The `.po` files carry auto-generated `#: app/utils.py:NNN`
+gettext source references that a human "citation" count means to exclude --
+**and the obvious glob `app/translations/**/*.po` is itself incomplete**,
+missing `app/translations/lt/LC_MESSAGES/messages.po.original`, which carries
+the same references and is exactly the 322-versus-324 gap. (b) A naive `:NNN`
+regex stops at the START of a range citation, so it reports the maximum of
+`app/utils.py:5736-5743` as 5736. (c) **And "count the endpoint" is not a rule
+you can then apply uniformly** -- one citation, `app/utils.py:3663-3673` in
+D60's cell, straddles the `:3673` boundary, so endpoint-counting the
+at-or-after test gives 136 where start-counting gives 135. Endpoints everywhere
+yields 136 and `:5743`; starts everywhere yields 135 and `:5736`; **only
+endpoint-for-the-maximum with start-for-the-threshold reproduces both published
+figures**, and it is the reading that matches what a range means -- it BEGINS
+at a line and REACHES another. The same happened to the companion figure:
 the design's "**96** `pages.py:NNN` citations" reproduces as 82, 113, 35 or 41
 at its own commit depending on the path prefix and the `.po` question, and as
 none of them is it 96.

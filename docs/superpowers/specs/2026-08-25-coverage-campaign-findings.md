@@ -7622,10 +7622,28 @@ this sub-project: **3941 passed, 3 skipped, 6 subtests passed** in 293.83s.
 citations depended on, and every mutation was reverted with `git diff -- app/`
 empty and `wc -l` re-asserted before the next. Both `pages.py` edits widen
 existing lines and `TaskError` was appended after `app/utils.py`'s last line, so
-no citation into either file could move: `git diff --stat c6ed020a..HEAD -- app/`
-is `2 files changed, 42 insertions(+), 4 deletions(-)`, of which `pages.py` is
-three changed lines -- the import at `:11`, the raise at `:396` and the gate at
-`:398`.
+no citation into either file could move.
+
+**THE `app/`-DISCIPLINE CHECK IS THE PER-FILE NUMSTAT, NOT THE TOTAL, and the
+total is given with an as-of clause rather than left `HEAD`-relative.**
+`git diff --numstat c6ed020a..HEAD -- app/` prints, for
+`app/shared/tasks/pages.py`, **3 insertions and 3 deletions** -- three MODIFIED
+lines, none added and none removed, so nothing in the file shifted: the import
+at `:11`, the raise at `:396` and the gate at `:398`. Its only other row is
+`app/utils.py`, every insertion of which is inside the `TaskError` docstring,
+below the class header at `:5801`. Those two facts are the whole of the
+discipline and neither moves. **The `--stat` TOTAL does move, and this
+paragraph originally asserted it against a literal `HEAD`**: it printed
+`2 files changed, 42 insertions(+), 4 deletions(-)` at `dce6eee2` and
+`65 insertions(+), 4 deletions(-)` at `78fa9fe9`, and the entire difference is
+the docstring being corrected -- `+62/-1` against `+39/-1` in `app/utils.py`,
+with `pages.py` at `+3/-3` throughout. **An un-anchored diffstat in committed
+prose is the same defect as an un-anchored citation count**, it was introduced
+in the same round as the one this section's corrections subsection records, and
+it is fixed the same way: name the commit, or state the invariant that survives
+the next one. A reviewer running the un-anchored form saw 23 unexplained
+insertions and had to re-derive by hand whether production code had slipped in
+-- which is the audit this sentence exists to short-circuit.
 
 ### 1. Two items registered, neither fixed -- D314-D315
 
@@ -7699,7 +7717,11 @@ error.
 **Two disputed counts withdrawn from committed prose and replaced with a
 structural argument.** `TaskError`'s docstring in `app/utils.py` justified its
 end-of-file placement with "358 `utils.py:NNN` citations in tracked files, 135 of
-them at or after `:3673`". The 135 reproduces exactly. **The 358 does not**, and
+them at or after `:3673`". **As of `2a63f063^`, the commit the class was appended
+in**, the 135 reproduces exactly -- and the anchor is not decoration: at
+`dce6eee2` the same sweep gives 136, and at `78fa9fe9` it gives 141, because each
+of those commits cites `app/utils.py` lines above `:3673` in the course of
+describing this very argument. **The 358 does not reproduce at any commit**, and
 neither does the design's companion figure of "96 `pages.py:NNN` citations": the
 same sweeps give **322** occurrences for `utils.py` at `2a63f063^` -- 324 if only
 the `*.po` glob is excluded and **844** if the whole `.po` family is counted --
@@ -7717,8 +7739,15 @@ the sweep reproducible instead of "off by a couple again".
 the un-anchored form of it was falsified inside this same round.** As of
 `2a63f063^`, the commit the class was appended in, the file's last line was
 `:5798` and the highest `app/utils.py` line cited anywhere in the tracked tree was
-`:5743` (counting the endpoint of the range citation `app/utils.py:5736-5743`,
-which a naive `:NNN` regex misses, reporting 5736 instead). Appending below
+`:5743`. **The sweep rule is SPLIT and saying only "count the endpoint" does not
+reproduce the figures**: take the ENDPOINT for the maximum, because
+`app/utils.py:5736-5743` reaches 5743 and a naive `:NNN` regex stops at 5736;
+but take the START for the at-or-after `:3673` test, because exactly one
+citation straddles that boundary -- `app/utils.py:3663-3673`, in D60's cell at
+`:2799` -- and endpoint-counting it gives 136 rather than 135. Endpoints
+everywhere yields 136 and `:5743`, starts everywhere yields 135 and `:5736`,
+and only the split reading yields both published figures. A range BEGINS at a
+line and REACHES another; the rule follows the meaning rather than the regex. Appending below
 `:5798` therefore could not move a cited line however many there were, and
 citations written *after* the append point into the appended region by
 construction and cannot be shifted by it either. **The `.po` family does not
