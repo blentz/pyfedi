@@ -309,12 +309,20 @@ def _recording_task_session(monkeypatch):
     """Make `get_task_session` hand back a GENUINE Session that records
     `rollback()` and `close()`.
 
-    A third copy of the helper introduced in
-    `tests/test_shared_tasks_send_reply.py:1637` and copied into
-    `tests/test_shared_tasks_send_answer.py:567`. Duplicated rather than
-    imported: this campaign keeps its test modules independent so a helper can
-    be edited for one function's needs without silently changing another's
-    assertions. THAT THERE ARE NOW THREE COPIES IS A REGISTERED FINDING.
+    One of FIVE copies, not a third: `grep -rn "^def _recording_task_session"
+    tests/` finds this one plus `tests/test_shared_tasks_send_reply.py:1637`,
+    `tests/test_shared_tasks_send_answer.py:567`,
+    `tests/test_shared_tasks_send_post.py:2355` (pre-dating this sub-project) and
+    `tests/test_shared_tasks_add_remove.py:244` (also pre-dating this
+    sub-project, and carrying an extra `module` parameter since it patches
+    either twin). This module's own docstring undercounted at "a third copy" /
+    "THREE COPIES" when it was written; the true population of five is
+    registered as **D324** in
+    `docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md`.
+    Duplicated rather than imported: this campaign keeps its test modules
+    independent so a helper can be edited for one function's needs without
+    silently changing another's assertions -- that design choice is unchanged
+    by the corrected count.
 
     The session is real and does real work -- only the observation is added, by
     wrapping the two methods rather than replacing the object. A fake session

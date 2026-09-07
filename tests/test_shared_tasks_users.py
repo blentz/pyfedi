@@ -524,13 +524,26 @@ def test_both_legs_banned_counts_twice(db_session, monkeypatch):
     """`num_banned` accumulating across the two legs of ONE domain.
 
     The warning text names 2, which no single-leg test can produce -- this is
-    what proves `:47` and `:73` increment the same counter.
+    what proves `:47` and `:73` increment the same counter. THIS IS NOT AN
+    ENDORSEMENT OF THE WORDING: `num_banned` counts LEGS (IP and email
+    checked separately), not INSTANCES, so one domain banning on both legs
+    reads "2 instances have banned this account." for a single instance.
+    Registered as **D323** in
+    `docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md` -- not
+    fixed, because fixing the string would be a fourth production change.
+    This test pins CURRENT (miscounted) behaviour and must keep passing.
 
     `num_banned` reaches 2, so `:80`'s true arm runs `:81-82` -- see
     `test_a_banned_ip_at_the_real_index_counts` for D319, the defect this
     test was originally written against and marked to expect failure on.
     Task 10 fixed `:81-82`, and this test now passes, asserting both legs'
     counts landed in the one persisted warning.
+
+    THE ASSERTED STRING IS THE MODULE'S OWN MISCOUNT (D323), NOT A CORRECT
+    COUNT: `num_banned` is incremented once per LEG (`:47` IP, `:73` email),
+    so this single-domain, both-legs-banned scenario produces "2 instances
+    have banned this account." for ONE banning instance. This test pins
+    present behaviour, not correct behaviour, and must keep passing.
     """
     s = _seed()
     set_setting('ban_check_servers', 'real.example')
@@ -585,13 +598,19 @@ def test_the_warning_update_binds_its_parameters(db_session, monkeypatch):
     `sqlalchemy.text` takes one positional parameter, so every run reaching
     `:80`'s true arm raised
     `TypeError: text() takes 1 positional argument but 2 were given`,
-    `:84` rolled back and re-raised, and the `warning` column was NEVER
-    WRITTEN. Measured at SQLAlchemy 2.0.52.
+    `:84`'s `except Exception:` caught it, `:85` rolled back and `:86`
+    re-raised, and the `warning` column was NEVER WRITTEN. Measured at
+    SQLAlchemy 2.0.52.
 
     THE ASSERTION IS THE PERSISTED COLUMN, read back after the task. Asserting
     that `session.execute` was CALLED would be satisfied by the broken code
     the moment the line is reached, which is the unfailable shape fact 132
     exists to catch.
+
+    THE ASSERTED STRING IS THE MODULE'S OWN MISCOUNT (D323), NOT A CORRECT
+    COUNT: `num_banned` counts LEGS, not instances, so this single-domain,
+    both-legs-banned scenario reads "2 instances" for ONE. This test pins
+    present behaviour, not correct behaviour, and must keep passing.
     """
     s = _seed()
     set_setting('ban_check_servers', 'real.example')
@@ -629,7 +648,7 @@ def test_both_responses_are_closed(db_session, monkeypatch):
 
 
 def test_a_database_failure_rolls_back_and_re_raises(db_session, monkeypatch):
-    """`:84-85`'s except arm and `:87-88`'s finally, reached WITHOUT a faked
+    """`:84-86`'s except arm and `:87-88`'s finally, reached WITHOUT a faked
     exception anywhere in the task's own logic.
 
     `get_task_session` is replaced by one whose `execute` raises

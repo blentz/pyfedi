@@ -4785,7 +4785,7 @@ is ever called -- so an assertion on `is_closed` passes identically whether or
 not the code under test calls `close()` at all. The carrier is D320
 (`app/shared/tasks/users.py`'s email leg, fixed by adding `email_response.close()`
 at `:74`): `test_both_responses_are_closed`
-(`tests/test_shared_tasks_users.py:609`) replaces the module's `httpx_client`
+(`tests/test_shared_tasks_users.py:628`) replaces the module's `httpx_client`
 with a recording double (`_Response`/`_recording_client`, `:99-158`) whose
 `close()` appends the response object to a real list, and asserts
 `len(client.closed) == 2`. **The pre-fix number must be checked, not just the
@@ -4816,7 +4816,7 @@ nested inside it. Sub-projects 20-23's senders wrap their objects in an
 Announce, so this reinjection lands on the Announce's own top level and never
 reaches the nested inner object; "no nested `@context`" is therefore a real,
 discriminating assertion there. `app/shared/tasks/flags.py`'s `report_object`
-posts a bare Flag with no wrapper (`tests/test_shared_tasks_flags.py:553`), so
+posts a bare Flag with no wrapper (`tests/test_shared_tasks_flags.py:561`), so
 the SAME reinjection mechanism lands on the Flag itself, with the identical
 value `default_context()` produces in both places -- `@context` is present and
 correct on the wire whether or not the builder set it, so no assertion about
@@ -4890,7 +4890,7 @@ numbers" is necessary and nowhere near sufficient.
 **140. A DOCSTRING SHOULD STATE WHAT ITS TEST CANNOT PROVE.** Two cases from
 this round earned their place.
   - `test_the_loop_continues_past_an_instance_without_an_inbox`
-    (`tests/test_shared_tasks_flags.py:476`) depends on Postgres returning an
+    (`tests/test_shared_tasks_flags.py:484`) depends on Postgres returning an
     unordered, two-row `Instance.id.in_(...)` scan in ascending-id order, which
     creation order makes likely but does not guarantee. Its docstring says so,
     and says which DIRECTION it fails in if the assumption breaks: **lax**

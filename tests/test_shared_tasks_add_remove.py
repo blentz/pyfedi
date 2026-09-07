@@ -176,7 +176,7 @@ def _remote_inbox(s, http_mock, inbox=PEER_INBOX):
     WHY THE INBOX MATTERS IS NOT THAT `post_request` "SHORT-CIRCUITS" ON A
     MISSING ONE -- that verb would make eight assertions in this file look
     vacuous. `post_request` builds and `session.add`s its `ActivityPubLog` row
-    UNCONDITIONALLY at app/activitypub/signature.py:102, and only THEN reaches
+    UNCONDITIONALLY at app/activitypub/signature.py:105, and only THEN reaches
     the uri check at :109-111, which does not return early either: it marks the
     already-written row `failure` / `empty uri`. So a row is written for ANY
     attempted delivery, including one to a None inbox. That is exactly what
