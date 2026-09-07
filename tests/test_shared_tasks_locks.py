@@ -555,6 +555,30 @@ def test_a_remote_undo_wraps_a_context_free_lock(db_session, http_mock):
     assert '@context' not in undo['object']
 
 
+def test_unlock_post_reply_sends_an_undo_to_a_remote_community(db_session, http_mock):
+    """`:71`'s wrapper reaching `:77`'s call into `lock_object` with
+    `is_undo=True` on a `PostReply` -- the one combination of wrapper x
+    `is_undo` x reply-vs-post this file otherwise leaves unexercised (`:404`'s
+    `unlock_post_reply` call raises at the `.one()` lookup before `:77`, so it
+    never reaches `lock_object` at all).
+
+    Remote community, so `:143-145`'s else arm sends the bare Undo; `:107`
+    strips `@context` from the Lock before nesting it, the same site
+    `test_a_remote_undo_wraps_a_context_free_lock` pins for the Post case.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    route = http_mock.post(PEER_INBOX).respond(200, json={})
+
+    unlock_post_reply(None, s.user.id, s.reply.id)
+
+    undo = _sent_activity(route)
+    assert undo['type'] == 'Undo'
+    assert undo['object']['type'] == 'Lock'
+    assert undo['object']['object'] == s.reply.public_url()
+    assert '@context' not in undo['object']
+
+
 def test_the_announce_addresses_the_communitys_followers(db_session, http_mock):
     """`:130`'s `cc = [community.ap_followers_url]`, which REPLACES the
     `cc = [community.public_url()]` set at `:94` for the non-announce paths.
@@ -591,6 +615,20 @@ def test_an_instance_without_an_inbox_is_skipped_and_the_loop_continues(
     to FLAKY: there is no direction in which a correct, continuing loop starts
     failing. A rigorous proof would control the order `:140` returns rows in,
     which this file does not do because those rows come from the task session.
+
+    THE ACTIVITYPUBLOG COUNT IS WHAT MAKES `if instance.inbox and ...`
+    DISCRIMINATE FROM `if True and ...`. `send_post_request` -> `post_request`
+    (app/activitypub/signature.py:104-106) adds and commits an ActivityPubLog
+    row for EVERY call, even one whose `uri` is `None` -- it merely marks that
+    row `result='failure', exception_message='empty uri'`
+    (signature.py:107-109) rather than raising or making an httpx request.
+    respx's `assert_all_called=True` never sees the dud's call at all, so a
+    delivered-inboxes assertion alone (which two other mutation-instrument runs
+    for this file showed passes unchanged whether the mutant is applied or
+    not) cannot tell a truthful skip from a mutated one that still short-circuits
+    before the network. The row count can: one row for the real delivery,
+    zero for a correctly-skipped dud, one MORE if the dud's request is
+    mistakenly attempted.
     """
     s = _seed(with_keys=True)
     _make_deliverable(s)
@@ -606,6 +644,7 @@ def test_an_instance_without_an_inbox_is_skipped_and_the_loop_continues(
 
     assert _delivered_inboxes(route) == {OTHER_INBOX}
     assert len(route.calls) == 1
+    assert db.session.query(ActivityPubLog).count() == 1
 
 
 def test_a_blocked_instance_is_skipped_and_the_loop_continues(
