@@ -269,7 +269,6 @@ def test_the_real_ip_is_hidden_among_three_fakes(db_session, monkeypatch):
     assert submitted[0] == APPLICANT_IP
 
 
-@pytest.mark.xfail(strict=True, raises=TypeError, reason='D319, fixed in Task 10')
 def test_a_banned_ip_at_the_real_index_counts(db_session, monkeypatch):
     """`:43`, `:46` and `:47` all taken: status 200, results truthy and long
     enough, and the element at `ip_index` true.
@@ -400,7 +399,6 @@ def test_the_real_email_is_hidden_among_three_fakes(db_session, monkeypatch):
     assert submitted[0] == APPLICANT_EMAIL
 
 
-@pytest.mark.xfail(strict=True, raises=TypeError, reason='D319, fixed in Task 10')
 def test_a_banned_email_counts(db_session, monkeypatch):
     """`:69`, `:72` and `:73` taken on the email leg, with the IP leg clean --
     so the count of 1 in the warning text can only have come from email.
@@ -500,7 +498,6 @@ def test_a_false_result_at_the_real_email_index_counts_nothing(
     ]
 
 
-@pytest.mark.xfail(strict=True, raises=TypeError, reason='D319, fixed in Task 10')
 def test_both_legs_banned_counts_twice(db_session, monkeypatch):
     """`num_banned` accumulating across the two legs of ONE domain.
 
@@ -557,3 +554,30 @@ def test_a_failing_domain_does_not_stop_the_next_one(db_session, monkeypatch):
         'https://working.example/api/is_ip_banned',
         'https://working.example/api/is_email_banned',
     ]
+
+
+def test_the_warning_update_binds_its_parameters(db_session, monkeypatch):
+    """D319. `:80-81` passed the params dict as a SECOND POSITIONAL ARGUMENT
+    TO `text()` rather than as the second argument to `session.execute()`.
+    `sqlalchemy.text` takes one positional parameter, so every run reaching
+    `:79`'s true arm raised
+    `TypeError: text() takes 1 positional argument but 2 were given`,
+    `:83` rolled back and re-raised, and the `warning` column was NEVER
+    WRITTEN. Measured at SQLAlchemy 2.0.52.
+
+    THE ASSERTION IS THE PERSISTED COLUMN, read back after the task. Asserting
+    that `session.execute` was CALLED would be satisfied by the broken code
+    the moment the line is reached, which is the unfailable shape fact 132
+    exists to catch.
+    """
+    s = _seed()
+    set_setting('ban_check_servers', 'real.example')
+    _no_sleep(monkeypatch)
+    _lowest_randint(monkeypatch)
+    _recording_client(monkeypatch, (200, [True]), (200, [True]))
+
+    check_user_application(s.application.id)
+
+    db.session.expire_all()
+    persisted = db.session.query(UserRegistration).get(s.application.id)
+    assert persisted.warning == '2 instances have banned this account.'

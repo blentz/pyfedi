@@ -77,8 +77,8 @@ def check_user_application(application_id, send_async=True):
                 continue
 
         if num_banned > 0:
-            session.execute(text('UPDATE "user_registration" SET warning = :warning WHERE id = :id',
-                                    {'warning': f"{num_banned} instances have banned this account.", 'id': application_id}))
+            session.execute(text('UPDATE "user_registration" SET warning = :warning WHERE id = :id'),
+                            {'warning': f"{num_banned} instances have banned this account.", 'id': application_id})
             session.commit()
     except Exception:
         session.rollback()
