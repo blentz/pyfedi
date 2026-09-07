@@ -4420,7 +4420,17 @@ order assertion converts that into a failure with an explanation. **Where fact
 90 applies -- two rows inside one arm, where the order is incidental -- keep
 following it and remove the dependence instead.** The two facts are the same
 observation about unordered SQL with opposite remedies, chosen by whether the
-order is load-bearing for the proof.
+order is load-bearing for the proof. **AMENDED BY FACT 131, READ IT BEFORE
+APPLYING THIS ONE.** Sub-project 23 carried this remedy into its own
+skip-then-deliver tests and then measured them failing on a first run and passing
+on an immediate re-run **on a clean, unmutated tree**: an order assertion makes an
+incidental dependence fail loudly, which is not the same thing as making the test
+reliable. Fact 131 narrows this fact to the case where the ordering is the test's
+**subject**, and prescribes controlling the sequence -- patching the method to
+return a known one -- where it is not. **The example in the paragraph above,
+`tests/test_shared_tasks_send_answer.py:484`, still carries the assertion form and
+has not been audited for the same flake**; that is a statement about what has been
+measured, not an argument that it is safe.
 
 **124. ONE FUNCTION, THREE `.get()` LOOKUPS, TWO OPPOSITE FAILURE MODES --
 BECAUSE ONLY THE FIRST ONE IS GUARDED. FACT 119 IS ABOUT LOOKUP STYLE; THIS IS
@@ -4603,6 +4613,110 @@ what makes this class worse than a stale line number is that the paraphrase
 reads as authoritative and no grep contradicts it. **Open the cell, and prefer
 re-measuring the population to inheriting its size.**
 
+
+**129. A FACTORY THAT LEAVES BOTH COLUMNS A TERNARY SELECTS BETWEEN AT `None`
+MAKES THE TERNARY'S TWO ARMS INDISTINGUISHABLE -- AND EVERY ASSERTION STILL
+PASSES, EVERY COVERAGE FIGURE STILL READS 100%. FACT 87 IS THE COVERAGE HALF;
+THIS IS THE ASSERTION HALF, AND IT IS THE ONE NO MUTATION OF THE PRODUCTION FILE
+WOULD CATCH.** `app/shared/tasks/adds.py:74` and `app/shared/tasks/removes.py:74`
+are `'target': community.ap_moderators_url if community_id else
+community.ap_featured_url`. `make_community` (`tests/factories.py:122`) sets
+**neither** column, so both default to `None`. With both `None` the two arms
+return the same value: a test that passes `community_id` and a test that does not
+both see `target is None`, `assert sent['target'] == <whatever>` passes under
+either arm, and the pair of tests that exists specifically to discriminate the
+arms discriminates nothing. **Fact 87 says coverage cannot see an unexercised
+ternary arm. This says that even when BOTH arms are exercised and BOTH are
+asserted on, the assertions can be vacuous** -- and the failure is invisible from
+every direction the campaign normally looks: the tests are green, the arms both
+run, the branch figure is clean, and swapping the ternary's arms in the source
+kills nothing, so even mutation testing reports the code as adequately covered.
+The defect is in the FIXTURE, and the fixture is not what gets mutated.
+**The remedy is two lines and belongs in the shared seed helper**: set the two
+columns to distinct non-`None` values and assert they differ
+(`assert FEATURED_URL != MODERATORS_URL`), so a later edit that drops one
+assignment fails loudly instead of silently voiding every test that reads the
+ternary. `_seed` in `tests/test_shared_tasks_add_remove.py` does exactly that, and
+its docstring says the assignments must stay. **It was proved empirically rather
+than argued, twice**: temporarily removing the two assignments makes both ternary
+smoke tests fail while the structural-equivalence test keeps passing, run once by
+the implementer and reproduced independently by the reviewer. **The general rule:
+when a ternary selects between two FACTORY-DEFAULTED fields, the fixture is part
+of the test's discrimination, not part of its setup.** Enumerate the ternaries
+with the `ast` walk fact 87(c) prescribes, then for each one ask what the factory
+leaves the two arms holding.
+
+**130. WHEN A MODULE HAS A TWIN, RUN EVERY MUTATION AGAINST BOTH -- AND TREAT A
+KILL/SURVIVE ASYMMETRY AS A DEFECT IN THE TESTS, NOT IN THE CODE.**
+`app/shared/tasks/adds.py` and `app/shared/tasks/removes.py` are the same file
+under two names: `diff` reports eight hunks, all of them name substitutions, and
+rewriting the token `remove` to `add` in all its forms makes them byte-identical.
+Sub-project 23 applied eight single-line mutations to each file separately -- 16
+runs -- and every pair came back with the same kill count, the same kill type
+(sole/multi, assertion/crash) and mirrored test names. **The value of the second
+run of each pair is not confirmation; it is that a DISAGREEMENT would have been
+a finding about the tests.** Identical files cannot legitimately answer the same
+perturbation differently, so an asymmetry means one twin's test is observing
+something its counterpart's is not -- a copied test that patches the wrong
+module, an assertion that got weakened on one side during a rename, a fixture
+that only one of the pair reaches. Those are exactly the bugs a one-file-per-twin
+test suite invites, and they are invisible to a run that mutates only one twin.
+**The same logic sets the bar for a FIX**: sub-project 23's flake fix had to land
+in both twins identically, because a fix applied to one only would itself be the
+first divergence. **And it sets the bar for a PRODUCTION change**: guarding one
+twin and not the other is not a smaller change than guarding both, it is a
+structural divergence, so "one production change per round" counts changes and
+not files. Where the twin-specificity of a test matters -- as it did for the
+`private` guard -- revert each twin's line separately and require exactly one
+failure, that twin's own; if reverting either fails both, the tests are not
+twin-specific and the whole layout is unsound.
+
+**131. A TEST THAT ASSERTS AN INCIDENTAL DATABASE ORDERING FAILS LOUDLY AT
+RANDOM. CONTROL THE SEQUENCE INSTEAD. THIS AMENDS FACT 123, WHICH IS RIGHT ONLY
+WHEN THE ORDER IS LOAD-BEARING FOR THE PROOF.** Fact 123 prescribed asserting the
+order returned by `Community.following_instances()` (`app/models.py:842-851`,
+an unordered `.distinct().all()`) in the skip-then-deliver tests, so that a
+reversal would fail loudly rather than silently weaken the test. Sub-project 23
+carried that forward, and the result was measured: both two-instance tests failed
+on a first run and passed on an immediate re-run **on a clean, unmutated tree**.
+The assertion worked exactly as designed; the DESIGN was hopeful. **The
+discriminator is whether the ordering is the test's subject or incidental to it.**
+Here the subject is the loop's continue-past-a-skip behaviour -- with one follower
+"skipped" and "loop ended" are indistinguishable, so two are needed and the
+skipped one must come first -- and the *query's* ordering is merely how the two
+rows happened to arrive. So the fix patches `following_instances` for the duration
+of the call to hand back a known sequence. **That is strictly MORE discriminating
+than the assertion it replaces**, because it no longer depends on the planner
+cooperating: the loop is tested against a known input every run instead of a
+hoped-for one. **What fact 123 got right and this does not overturn: do not add
+`ORDER BY` to production.** The delivery loop never relied on any order, only on
+visiting every follower, so an `ORDER BY` would be an unmotivated production
+change hung off a test artefact. The defect was an assumption the TEST made that
+production never promised, and the test is where it belongs fixed. **Asserting an
+incidental order buys a loud failure, not a reliable test, and a test that fails
+loudly at random is still a test that fails at random.**
+
+**132. A `monkeypatch` THAT SILENTLY FAILS TO INTERCEPT LEAVES THE TESTS GREEN
+FOR THE WRONG REASON, SO A DEFLAKE IS NOT FINISHED UNTIL A PROBE HAS SHOWN THE
+STUB IS LOAD-BEARING.** `monkeypatch.setattr(obj, 'method', stub)` patches the
+object you hand it. If the code under test reaches the method through a
+*different* object -- a second identity-mapped instance, a re-query, a copy -- the
+patch applies, the test runs, nothing raises, and the test passes on the real
+call it was meant to replace. **Every symptom of a working patch is present
+except the interception**, and for a deflake that is the worst possible outcome:
+the flake is hidden rather than fixed, and it returns later looking new. **The
+probe is three steps and costs one run**: make the stub RAISE instead of
+returning its value, run the tests, and confirm they now fail with the injected
+error -- then revert and byte-diff the file back before running for real.
+Sub-project 23 did exactly this for
+`monkeypatch.setattr(s.community, 'following_instances', ...)`, which proved that
+`object.community` is the same identity-mapped object as `s.community` and that
+the loop's call really goes through the stub. **Then run the deflaked test
+SEVERAL times, not once.** One green run is what let the original flake through;
+that fix was followed by five consecutive clean runs and a sixth after the commit.
+The same probe applies to any patch whose success is indistinguishable from its
+failure -- `setattr` on an instance, a patched module attribute the caller
+imported by value, a fixture that replaces a symbol the code re-imports.
 
 ## Known noise
 

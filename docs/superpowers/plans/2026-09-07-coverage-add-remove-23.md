@@ -1270,3 +1270,32 @@ From spec §9:
 7. Every mutation is run against **both** twins, and any kill/survive asymmetry between them is reported as a finding.
 8. The register carries D316 onward, with `:97` handled per D302's precedent and the twins' equivalence recorded.
 9. `coverage_floors.ini` gains entries for both modules at their measured figures, and **each is proved to bite**.
+
+---
+
+## Appended 2026-09-07 by sub-project 23's register round (Task 8) -- one figure in this document is superseded
+
+**This document says the twins' only textual difference, after normalising names,
+is "one docstring word". That is short of the truth in both directions, and the
+corrected form is in the register (`docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md`,
+sub-project 23's section, subsection 3) and in the module docstring of
+`tests/test_shared_tasks_add_remove.py`.** Measured rather than summarised:
+`diff app/shared/tasks/adds.py app/shared/tasks/removes.py` reports exactly
+**eight** hunks, all of them name substitutions, and **two of them are string
+literals** (`'Add'`/`'Remove'` and the `/activities/add/`-vs-`/activities/remove/`
+path segment) rather than a docstring word. Conversely, once the docstring word
+`Add:`/`Remove:` is normalised along with everything else, the two files are
+**byte-identical** -- there is no residual difference at all. The original claim
+was written by reading the diff and summarising it, and the summary lost two
+hunks; registering the equivalence as **D318** is what forced it to be counted.
+
+**A second figure is dated rather than wrong**: this document's "coverage
+residuals are the same lines and the same arcs" was true when written, and both
+twins now measure **100.0000%** with zero missing statements and zero partial
+branches, so the residual is empty in both. The ten arcs it lists are the ten
+**executed** arcs at this commit.
+
+**Appended rather than rewritten**, in D275's two-way-pointer form and per
+sub-project 22's precedent: no line above this annotation moved, so every
+citation into this document still resolves, and a reader who opens this document
+first is sent to the register.

@@ -1,11 +1,24 @@
 """`add_object` and `remove_object` -- the twin builders of AP Add and Remove.
 
 `app/shared/tasks/adds.py:56-100` and `app/shared/tasks/removes.py:56-100`
-(extents by ast). THE TWO MODULES ARE STRUCTURALLY IDENTICAL: both are 100
-lines and 51 statements, their coverage residuals are the same lines and the
-same arcs function for function, and after normalising names the only textual
-difference between the files is one docstring word. They share even their dead
-imports -- `post_request` is imported at `:2` of each and called in neither.
+(extents by ast). THE TWO MODULES ARE STRUCTURALLY IDENTICAL, and the claim is
+MEASURED rather than impressionistic: both are 100 lines and 51 statements with
+10 branches, both finished at zero missing statements and zero missing arms, and
+the ten executed arcs are the same ten in both files -- (58,59) (58,61) (63,64)
+(63,66) (81,82) (81,100) (96,-56) (96,97) (97,96) (97,98). `diff adds.py
+removes.py` reports exactly EIGHT hunks and every one of them is a name
+substitution (`Add:`/`Remove:`, `sticky_post`/`unsticky_post`,
+`add_mod`/`remove_mod`, `add_object`/`remove_object`, `add_id`/`remove_id`, the
+`add`/`remove` dict variable, the `'Add'`/`'Remove'` type literal, and the
+`/activities/add/`-vs-`/activities/remove/` path segment). Rewriting the token
+`remove` to `add` in all of its forms -- identifier, string literal and prose
+word -- makes the two files BYTE-IDENTICAL. **An earlier version of this
+paragraph said "after normalising names the only textual difference is one
+docstring word", which is short of the truth in both directions**: two string
+literals also differ, and once the docstring word is normalised with the rest
+nothing differs at all. They share even their dead imports -- `post_request` is
+imported at `:2` of each and called in neither; only `send_post_request` is
+called, at `:98` and `:100` of both.
 
 That equivalence is why one file tests both, and it is asserted rather than
 assumed (see `test_the_twins_are_structurally_identical` below), so a future
@@ -958,4 +971,112 @@ def test_unsticky_post_closes_the_session_on_the_happy_path(
 # Tree state after every mutation cycle: `git diff -- app/` empty and both
 # app/shared/tasks/adds.py and app/shared/tasks/removes.py at 100 lines,
 # verified before starting the next mutation.
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Unreachability and ternary reconciliation (sub-project 23, Task 8)
+#
+# Measured at commit 3359cb53 over the full suite (3976 passed, 3 skipped,
+# 6 subtests, exit 0). BOTH TWINS FINISHED AT 100.0000%: 51 statements with
+# 0 missing and 10 branches with 0 partial, in each file. Every one of the six
+# functions -- sticky_post/unsticky_post (:27-38), add_mod/remove_mod (:42-53)
+# and add_object/remove_object (:56-100), extents by ast.parse and
+# FunctionDef.end_lineno -- is at zero missing statements and zero missing arms.
+#
+# THIS BLOCK THEREFORE HAS NO UNCOVERED ARM TO ARGUE ABOUT, AND THAT IS THE
+# RESULT RATHER THAN AN OMISSION. The plan's step "write a test for each
+# remaining reachable arm" had nothing to do by the time it was reached: Tasks
+# 2-6 had already closed every arm in both files. Sub-projects 21 and 22 closed
+# their modules to 99.09% and 98.65%, each carrying proved-unreachable
+# residuals; these two carry none, and they are the campaign's first modules to
+# reach 100.
+#
+# The ten executed arcs, identical in both files:
+#   (58, 59)  (58, 61)  (63, 64)  (63, 66)  (81, 82)  (81, 100)
+#   (96, -56) (96, 97)  (97, 96)  (97, 98)
+#
+# ONE ITEM IS STILL UNREACHABLE, AND IT IS A REDUNDANCY FINDING RATHER THAN A
+# COVERAGE GAP.
+#
+#   :97's `instance.online()` conjunct, in BOTH twins, is unreachable-False.
+#   ESTABLISHER: the SQL query that produced the loop variable.
+#   `instance` comes from `community.following_instances()` at :96, which is
+#   `Community.following_instances` (app/models.py:842-851) called with the
+#   default `include_dormant=False`; :849 filters `Instance.dormant == False`
+#   and :850 filters `Instance.id != 1, Instance.gone_forever == False`, and
+#   `Instance.online()` (app/models.py:118-119) is exactly
+#   `not (self.dormant or self.gone_forever)`. Both columns the method reads
+#   are already pinned in SQL, so the conjunct is True for every row the loop
+#   can yield. This is fact 75's cause 4(b) with the query as the establisher,
+#   the same shape registered as D302 -- of which these two sites are the
+#   seventh and eighth.
+#
+#   IT APPEARS IN NO RESIDUAL, AND MUST NOT BE DESCRIBED AS AN UNCOVERED ARM.
+#   coverage.py records a branch arc at the `if` level, not per conjunct, so a
+#   short-circuited conjunct gets no arc of its own. Both of :97's arcs --
+#   (97, 98) taken and (97, 96) skipped -- are executed above, and the skip is
+#   produced by the LIVE `instance.inbox` conjunct
+#   (test_a_following_instance_without_an_inbox_gets_no_add and its removes
+#   twin). Zero missing arms is what a redundant conjunct looks like; it is not
+#   evidence that every conjunct has both values.
+#
+#   NOT CHASED, DELIBERATELY. A test seeding `dormant=True` on a follower would
+#   be green and worthless: the query would not return the row at all, so the
+#   conjunct would never be evaluated on it. Dropping `online()` from :97 is an
+#   EQUIVALENT MUTANT BY CONSTRUCTION (fact 120's second class), which is why
+#   the 16-run sweep above mutates the live `instance.inbox` conjunct at the
+#   same line (M8, a double assertion-kill in each twin) and not this one.
+#
+# TERNARY RECONCILIATION -- the ast walk's RAW OUTPUT, not a confirmation of an
+# expectation:
+#
+#   $ python3 - <<'PY'
+#     import ast
+#     for path in ('app/shared/tasks/adds.py', 'app/shared/tasks/removes.py'):
+#         src = open(path).read()
+#         print(path)
+#         for node in ast.walk(ast.parse(src)):
+#             if isinstance(node, ast.FunctionDef):
+#                 print('  ', node.name, node.lineno, node.end_lineno)
+#                 for sub in ast.walk(node):
+#                     if isinstance(sub, ast.IfExp):
+#                         print('     TERNARY', sub.lineno,
+#                               ast.get_source_segment(src, sub))
+#     PY
+#   app/shared/tasks/adds.py
+#      sticky_post 27 38
+#      add_mod 42 53
+#      add_object 56 100
+#        TERNARY 74 community.ap_moderators_url if community_id else community.ap_featured_url
+#   app/shared/tasks/removes.py
+#      unsticky_post 27 38
+#      remove_mod 42 53
+#      remove_object 56 100
+#        TERNARY 74 community.ap_moderators_url if community_id else community.ap_featured_url
+#
+#   EXACTLY ONE TERNARY PER TWIN, both at :74, and each arm has a named test:
+#
+#   adds.py:74    TRUE  (ap_moderators_url)
+#                 test_the_add_with_a_community_id_targets_the_moderators_url
+#                 test_add_mod_delivers_an_add_targeting_moderators
+#   adds.py:74    FALSE (ap_featured_url)
+#                 test_the_add_without_a_community_id_targets_the_featured_url
+#                 test_sticky_post_delivers_an_add_targeting_featured
+#   removes.py:74 TRUE  (ap_moderators_url)
+#                 test_the_remove_with_a_community_id_targets_the_moderators_url
+#                 test_remove_mod_delivers_a_remove_targeting_moderators
+#   removes.py:74 FALSE (ap_featured_url)
+#                 test_the_remove_without_a_community_id_targets_the_featured_url
+#                 test_unsticky_post_delivers_a_remove_targeting_featured
+#
+#   THE COVERAGE FIGURES CANNOT SEE ANY OF THAT (fact 87): a ternary is one
+#   statement on one line, both arms execute it, and no arc is recorded for the
+#   choice. The arms are proved discriminating by MUTATION instead -- M5 in the
+#   record above swaps them and is a five-test assertion-kill in each twin --
+#   and by `_seed` setting `ap_featured_url` and `ap_moderators_url` to
+#   DISTINCT non-None values. make_community (tests/factories.py:122) leaves
+#   both at None, and with both None the two arms return the same value, every
+#   `target` assertion passes under either, and the eight tests above prove
+#   nothing while still reading as fully covered.
 # ---------------------------------------------------------------------------
