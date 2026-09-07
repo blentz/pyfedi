@@ -482,17 +482,48 @@ def test_the_loop_continues_past_an_instance_without_an_inbox(
     a loop that CONTINUED past it are indistinguishable. Two rows, one skipped
     and one delivered, separate them.
 
-    THE ORDER IS NOT CONTROLLED AND IS NOT ASSERTED. `:73` returns rows through
-    the task session in whatever order the planner chooses, so this asserts
-    the SET of delivered inboxes. Whichever row comes first, exactly one
-    delivery must land.
+    CREATION ORDER IS LOAD-BEARING, AND THAT IS A WEAKNESS THIS TEST CANNOT
+    REMOVE, ONLY DOCUMENT. The inboxless instance is created FIRST, on
+    purpose, so it holds the lower id: `db_session`'s teardown resets the id
+    sequence per test, and `:73`'s `Instance.id.in_(instance_ids)` carries no
+    `ORDER BY`. On a two-row table the planner has no reason to do anything
+    but a physical (ascending-id) scan, so the inboxless row is expected
+    FIRST. If the good instance were created first instead (lower id), an
+    aborting loop -- `return` in place of `:74`'s implicit `continue` -- would
+    deliver to it before ever reaching the inboxless row and returning, and
+    both assertions below would pass identically to a correct, continuing
+    loop. That is the bug this ordering avoids: creation order here is chosen
+    so a `return`-on-skip mutant hits the skip on its FIRST iteration and
+    delivers nothing, which is what makes the assertions below fail against
+    it.
+
+    THIS IS AN ASSUMPTION ABOUT THE QUERY PLAN, NOT A GUARANTEE, AND NO
+    ORDERED ASSERTION IS ADDED TO PAPER OVER THAT. `:73`'s rows come from the
+    TASK session, not from any object this test holds, so nothing here
+    controls the order Postgres actually returns them in -- creation order
+    only makes ascending-id delivery likely, not certain. If that assumption
+    ever breaks (a planner choosing a different scan, a changed id sequence),
+    this test degrades to LAX: it would pass under an aborting loop too,
+    exactly like the reasoning above but with the two rows swapped. It does
+    NOT degrade to flaky -- there is no direction in which a correct,
+    continuing loop starts failing this test, only a direction in which an
+    aborting loop stops being caught. A rigorous proof would require
+    controlling the order `:73` returns rows in, rather than arranging ids to
+    influence it; this file does not do that, because the loop iterates rows
+    fetched by the task session, not rows the test can order itself.
+
+    The delivered-inbox assertion is still set-based, per the module
+    docstring's ordering discipline -- that discipline is about not asserting
+    WHICH inbox comes first among several delivered ones, which is a
+    different question from the one this docstring is about (whether the
+    loop reaches the second row at all).
     """
     s = _seed(with_keys=True)
     _make_deliverable(s)
-    route, good_id = _reporting_instance(s, http_mock)
     inboxless = make_instance('inboxless.example', software='lemmy')
     inboxless.inbox = None
     db.session.commit()
+    route, good_id = _reporting_instance(s, http_mock)
 
     report_post(None, s.user.id, s.post.id, 'spam', [inboxless.id, good_id])
 
@@ -515,6 +546,8 @@ def test_two_instances_with_inboxes_both_receive_the_flag(
     report_post(None, s.user.id, s.post.id, 'spam', [first_id, second_id])
 
     assert _delivered_inboxes(first, second) == {PEER_INBOX, OTHER_INBOX}
+    assert len(first.calls) == 1
+    assert len(second.calls) == 1
 
 
 def test_the_flag_carries_a_top_level_context_and_the_community_audience(
@@ -522,13 +555,34 @@ def test_the_flag_carries_a_top_level_context_and_the_community_audience(
     """`:60-71`'s envelope, asserted on the bytes that actually left.
 
     `@context` is at `:67`, INSIDE the flag dict -- and here the flag IS the
-    top-level posted object, because this module has no Announce wrapper. So
-    the assertion is that `@context` is PRESENT at the top level, which is the
-    opposite of the nested-absence assertions sub-projects 20-23 made about
-    Announce-wrapped activities.
+    top-level posted object, because this module has no Announce wrapper.
 
-    `app/activitypub/signature.py:100-101` reinjects `@context` top-level only;
-    that is consistent with, and invisible against, what `:67` already set.
+    NO ASSERTION ABOUT `@context` APPEARS HERE, AND NONE CAN REPLACE IT.
+    `app/activitypub/signature.py:100-101` is
+    `if '@context' not in body: body['@context'] = default_context()`,
+    which runs on `flag` itself before it is signed or sent -- and
+    `_sent_activity` reads the bytes that actually left, i.e. AFTER that
+    reinjection. Since `flag` has no Announce wrapper, `:100-101`'s
+    "top-level only" reinjection reaches exactly the level `:67` writes to,
+    with exactly the same value (`default_context()` in both places). So
+    `@context` is present, and identical, on the wire whether or not `:67`
+    ever runs -- there is no observable difference on the wire for any
+    assertion, presence or value, to discriminate on.
+
+    THIS IS THE MIRROR OF SUB-PROJECTS 20-23's NESTED-ABSENCE ASSERTIONS, NOT
+    AN EXCEPTION TO THEIR REASONING. Those modules wrap the object in an
+    Announce, so `:100-101`'s reinjection lands on the Announce's top level
+    and never reaches the nested inner object -- which is exactly what makes
+    "no nested `@context`" a meaningful, discriminating assertion there. Here
+    there is no wrapper, so the same reinjection mechanism lands on `flag`
+    itself, and that is exactly what makes any `@context` assertion on
+    `flag` non-discriminating. One mechanism, opposite consequences,
+    decided entirely by whether the activity is Announce-wrapped.
+
+    The three assertions below have no such fallback anywhere in the send
+    path: nothing between `:60-71` and the wire sets or reinjects
+    `audience`, `to`, or `id`, so they remain real coverage of `:60-61` and
+    `:68-69` even with the `@context` assertion gone.
     """
     s = _seed(with_keys=True)
     _make_deliverable(s)
@@ -537,7 +591,6 @@ def test_the_flag_carries_a_top_level_context_and_the_community_audience(
     report_post(None, s.user.id, s.post.id, 'spam', [recipient_id])
 
     flag = _sent_activity(route)
-    assert '@context' in flag
     assert flag['audience'] == s.community.public_url()
     assert flag['to'] == [s.community.public_url()]
     assert flag['id'].startswith('https://test.piefed.local/activities/flag/')
