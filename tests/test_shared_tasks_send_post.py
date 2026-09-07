@@ -2675,3 +2675,104 @@ def test_one_following_instance_is_skipped_while_another_receives_the_move(
 
     assert good.route.call_count == 1
     assert db.session.query(ActivityPubLog).count() == 1
+
+
+def test_move_post_delivers_a_move(db_session, http_mock):
+    """`move_post` (:373-387) -- the happy path through :379's TRUE arm.
+
+    `send_async` is accepted and ignored; None is passed to prove it is not
+    read.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    target = make_community('c2')
+    db.session.commit()
+
+    move_post(None, s.user.id, s.community.id, target.id, s.post.id)
+
+    assert _sent_activity(route)['type'] == 'Move'
+
+
+def test_move_post_does_nothing_when_the_post_is_missing(db_session, http_mock):
+    """:379's FALSE arm via `post` being None.
+
+    `:378`'s `.get()` returns None for an absent id, and `:379`'s first
+    conjunct closes. NOTHING RAISES -- the guard swallows it -- which is why
+    this is a distinct case from the deleted-post test below and cannot be
+    merged with it.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    target = make_community('c2')
+    db.session.commit()
+
+    move_post(None, s.user.id, s.community.id, target.id, s.post.id + 1000)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_move_post_does_nothing_when_the_post_is_deleted(db_session, http_mock):
+    """:379's FALSE arm via `post.deleted`.
+
+    The companion to the test above and a DIFFERENT failure mode: the post
+    exists and is found, and the second conjunct closes. A single "no work
+    happened" assertion could not tell these two apart, which is why they are
+    separate named tests.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    target = make_community('c2')
+    s.post.deleted = True
+    db.session.commit()
+
+    move_post(None, s.user.id, s.community.id, target.id, s.post.id)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_move_post_rolls_back_and_re_raises_on_a_bad_community(
+        db_session, monkeypatch):
+    """:383-385's except arm and :386-387's finally, reached by a NATURAL
+    raise.
+
+    A community id with no row makes `:380`'s `.get()` return None, so
+    `:393`'s `isinstance(target, Community)` is False and `:396` raises
+    `TaskError`. Nothing is faked: the exception is the one the real path
+    produces, so a refactor that stopped raising would fail this test rather
+    than leave it green.
+
+    NOTE THE ASYMMETRY WITH THE MISSING-POST TEST ABOVE: a missing POST is
+    swallowed by :379's guard, a missing COMMUNITY is not, because nothing
+    guards :380's result before :393 reads it.
+
+    The recorded call ORDER is the assertion that `finally` ran after
+    `except`, which a bare "was close called" check could not distinguish from
+    a wrapper that closed instead of rolling back.
+    """
+    s = _seed(with_keys=True)
+    record = _recording_task_session(monkeypatch)
+
+    with pytest.raises(TaskError):
+        move_post(None, s.user.id, s.community.id, s.community.id + 1000,
+                  s.post.id)
+
+    assert record.calls == ['rollback', 'close']
+
+
+def test_move_post_closes_the_session_on_the_happy_path(
+        db_session, http_mock, monkeypatch):
+    """:386-387's finally on the SUCCESS path -- `close` with no `rollback`.
+
+    The control for the test above: without it, `finally` running is only ever
+    observed alongside an exception, and a wrapper that closed only in the
+    except arm would pass everything else in this file.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _remote_inbox(s, http_mock)
+    target = make_community('c2')
+    db.session.commit()
+    record = _recording_task_session(monkeypatch)
+
+    move_post(None, s.user.id, s.community.id, target.id, s.post.id)
+
+    assert record.calls == ['close']
