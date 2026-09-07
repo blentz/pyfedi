@@ -4740,10 +4740,25 @@ the flake is hidden rather than fixed, and it returns later looking new. **The
 probe is three steps and costs one run**: make the stub RAISE instead of
 returning its value, run the tests, and confirm they now fail with the injected
 error -- then revert and byte-diff the file back before running for real.
-Sub-project 23 did exactly this for
-`monkeypatch.setattr(s.community, 'following_instances', ...)`, which proved that
-`object.community` is the same identity-mapped object as `s.community` and that
-the loop's call really goes through the stub. **Then run the deflaked test
+Sub-project 23 ran this probe on BOTH carriers and got OPPOSITE answers, which is
+the whole reason the fact exists. In `tests/test_shared_tasks_send_post.py` the
+instance-level `monkeypatch.setattr(s.community, 'following_instances', ...)`
+intercepted correctly: `_move` (:2413) calls `move_object(db.session, ...,
+origin=s.community, ...)` directly and `app/shared/tasks/pages.py:394` is
+`community = origin`, a plain reference assignment, so the object the test patched
+IS the object the loop touches. In `tests/test_shared_tasks_send_answer.py` the
+SAME patch shape intercepted NOTHING -- the raising stub never fired and the test
+reported `1 passed` -- because `send_answer` opens its own session at
+`app/shared/tasks/notes.py:243` and re-loads the reply at `:246`, so
+`post_reply.community` (:248, :299) is a different Python object.
+`get_task_session()` returns `Session(bind=db.engine)` (`app/utils.py:3673-3675`),
+and two Sessions never share identity-mapped objects for one row. That file needs
+`monkeypatch.setattr(type(s.community), 'following_instances', probe)`, whose stub
+takes `self` because class-level patching binds through the descriptor protocol.
+**ONE question decides which form a call site needs: does the production path
+re-load the object, or is the test's object passed straight through?** Answer it
+by reading the path, then confirm the answer with the raising probe -- never
+copy the form from a neighbouring file, because these two neighbours disagree. **Then run the deflaked test
 SEVERAL times, not once.** One green run is what let the original flake through;
 that fix was followed by five consecutive clean runs and a sixth after the commit.
 The same probe applies to any patch whose success is indistinguishable from its
