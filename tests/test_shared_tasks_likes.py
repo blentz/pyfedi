@@ -252,3 +252,88 @@ def test_federate_false_on_the_reply_wrapper_also_sends_nothing(
     vote_for_reply(None, s.user.id, s.reply.id, None, 'upvote', federate=False)
 
     assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_local_only_community_sends_no_vote(db_session, http_mock):
+    """`:60`'s first disjunct."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    inst = make_instance('follower.example', software='lemmy')
+    inst.inbox = PEER_INBOX
+    member = make_user(inst, 'member_follower')
+    make_community_member(member, s.community)
+    s.community.local_only = True
+    db.session.commit()
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_an_offline_community_instance_sends_no_vote(db_session, http_mock):
+    """`:60`'s last disjunct. The control is Task 8's smoke test, which runs
+    the same path with an online instance and DOES deliver."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s, online=False)
+    inst = make_instance('follower.example', software='lemmy')
+    inst.inbox = PEER_INBOX
+    member = make_user(inst, 'member_follower')
+    make_community_member(member, s.community)
+    db.session.commit()
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_user_banned_from_the_community_sends_no_vote(db_session, http_mock):
+    """`:63-65`. `session.query(CommunityBan).filter_by(...).first()` runs on
+    send_vote's OWN task session (`:56`), so the ban row must be committed --
+    which `make_community_ban` does.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    inst = make_instance('follower.example', software='lemmy')
+    inst.inbox = PEER_INBOX
+    member = make_user(inst, 'member_follower')
+    make_community_member(member, s.community)
+    make_community_ban(s.user, s.community)
+    db.session.commit()
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_blocked_remote_community_sends_no_vote(db_session, http_mock):
+    """`:66-68`'s first disjunct: a REMOTE community whose instance the voter
+    has blocked.
+
+    `:66`'s `if not community.is_local():` guards this pair, so the local
+    smoke tests never reach it -- which is why this test uses
+    `_seed(local_community=False)`.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    peer = _make_deliverable(s)
+    make_instance_block(s.user, peer)
+    db.session.commit()
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_banned_remote_community_sends_no_vote(db_session, http_mock):
+    """`:66-68`'s second disjunct, `instance_banned(community.instance.domain)`.
+
+    Separated from the block test above because the two conjuncts fail
+    independently and a single test could not tell which one returned.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    peer = _make_deliverable(s)
+    make_banned_instance(peer.domain)
+    db.session.commit()
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+
+    assert db.session.query(ActivityPubLog).count() == 0
