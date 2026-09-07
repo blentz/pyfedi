@@ -60,7 +60,7 @@ def remove_object(session, user_id, object, community_id=None):
     else:
         community = session.query(Community).filter_by(id=community_id).one()
 
-    if community.local_only or not community.instance.online():
+    if community.local_only or community.private or not community.instance.online():
         return
 
     remove_id = f"{current_app.config['SERVER_URL']}/activities/remove/{gibberish(15)}"

@@ -300,3 +300,100 @@ def test_a_remote_community_receives_the_bare_remove(db_session, http_mock):
     sent = _sent_activity(route)
     assert sent['type'] == 'Remove'
     assert sent['target'] == FEATURED_URL
+
+
+def test_a_local_only_community_does_not_federate_the_add(db_session, http_mock):
+    """adds.py:63's TRUE arm via `local_only`, returning at :64."""
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    s.community.local_only = True
+    db.session.commit()
+
+    add_object(db.session, s.user.id, s.post)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_local_only_community_does_not_federate_the_remove(db_session, http_mock):
+    """removes.py:63's TRUE arm via `local_only`. The twin of the test above."""
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    s.community.local_only = True
+    db.session.commit()
+
+    remove_object(db.session, s.user.id, s.post)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_dormant_instance_does_not_receive_the_add(db_session, http_mock):
+    """adds.py:63's TRUE arm via `not instance.online()`.
+
+    `Instance.online()` (app/models.py:118-119) is
+    `not (self.dormant or self.gone_forever)`. `_make_deliverable` reassigns
+    `community.instance_id` to the peer before its commit, so this lands on
+    the instance the guard actually reads.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    s.community.instance.dormant = True
+    db.session.commit()
+
+    add_object(db.session, s.user.id, s.post)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_dormant_instance_does_not_receive_the_remove(db_session, http_mock):
+    """removes.py:63's TRUE arm via `not instance.online()`. The twin of the
+    test above."""
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    s.community.instance.dormant = True
+    db.session.commit()
+
+    remove_object(db.session, s.user.id, s.post)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_private_community_does_not_federate_the_add(db_session, http_mock):
+    """adds.py:63's `private` conjunct -- one of this sub-project's two
+    production changes.
+
+    `Community.private` (app/models.py:611) is commented "only members can
+    view. no federation.", and before this conjunct landed `:63` tested only
+    `local_only` and `instance.online()` -- so a private, non-local-only
+    community federated its stickies and moderator adds out.
+
+    D309's FOURTH closed site of twelve gates; sub-projects 20, 21 and 22
+    closed `notes.py:143`, `notes.py:248` and `pages.py:398`. `local_only` is
+    left False deliberately: with it True the test would pass on the
+    pre-existing conjunct and prove nothing.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    s.community.private = True
+    db.session.commit()
+
+    add_object(db.session, s.user.id, s.post)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_private_community_does_not_federate_the_remove(db_session, http_mock):
+    """removes.py:63's `private` conjunct -- the twin, and D309's FIFTH closed
+    site.
+
+    THE TWINS ARE FIXED TOGETHER DELIBERATELY. Guarding one and not the other
+    would manufacture a structural divergence between two files that are
+    currently identical -- precisely the defect this campaign hunts for.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    s.community.private = True
+    db.session.commit()
+
+    remove_object(db.session, s.user.id, s.post)
+
+    assert db.session.query(ActivityPubLog).count() == 0
