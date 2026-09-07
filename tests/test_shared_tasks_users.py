@@ -424,46 +424,80 @@ def test_a_banned_email_counts(db_session, monkeypatch):
 
 
 def test_a_non_200_email_response_counts_nothing(db_session, monkeypatch):
-    """`:69`'s false arm."""
+    """`:69`'s false arm.
+
+    Asserts both legs' URLs were actually requested, in the straight-line
+    order `:37` then `:63` impose -- see
+    `test_a_non_200_ip_response_counts_nothing` for why this guards against a
+    swallowed exception making the "nothing counted" assertion pass on zero
+    requests.
+    """
     s = _seed()
     set_setting('ban_check_servers', 'real.example')
     _no_sleep(monkeypatch)
     _lowest_randint(monkeypatch)
-    _recording_client(monkeypatch, (200, [False]), (500, None))
+    client = _recording_client(monkeypatch, (200, [False]), (500, None))
 
     check_user_application(s.application.id)
 
     db.session.expire_all()
     assert db.session.query(UserRegistration).get(s.application.id).warning is None
+    assert [url for url, _data in client.posts] == [
+        'https://real.example/api/is_ip_banned',
+        'https://real.example/api/is_email_banned',
+    ]
 
 
 def test_an_empty_email_result_list_counts_nothing(db_session, monkeypatch):
-    """`:72`'s `if email_results` guard and its length conjunct together."""
+    """`:72`'s `if email_results` guard and its length conjunct together.
+
+    Asserts both legs' URLs were actually requested, in the straight-line
+    order `:37` then `:63` impose -- see
+    `test_a_non_200_ip_response_counts_nothing` for why this guards against a
+    swallowed exception making the "nothing counted" assertion pass on zero
+    requests.
+    """
     s = _seed()
     set_setting('ban_check_servers', 'real.example')
     _no_sleep(monkeypatch)
     _lowest_randint(monkeypatch)
-    _recording_client(monkeypatch, (200, [False]), (200, []))
+    client = _recording_client(monkeypatch, (200, [False]), (200, []))
 
     check_user_application(s.application.id)
 
     db.session.expire_all()
     assert db.session.query(UserRegistration).get(s.application.id).warning is None
+    assert [url for url, _data in client.posts] == [
+        'https://real.example/api/is_ip_banned',
+        'https://real.example/api/is_email_banned',
+    ]
 
 
 def test_a_false_result_at_the_real_email_index_counts_nothing(
         db_session, monkeypatch):
-    """`:72`'s last conjunct alone, separated from the first two."""
+    """`:72`'s last conjunct alone, separated from the first two.
+
+    Asserts both legs' URLs were actually requested, in the straight-line
+    order `:37` then `:63` impose -- see
+    `test_a_non_200_ip_response_counts_nothing` for why this guards against a
+    swallowed exception making the "nothing counted" assertion pass on zero
+    requests.
+    """
     s = _seed()
     set_setting('ban_check_servers', 'real.example')
     _no_sleep(monkeypatch)
     _lowest_randint(monkeypatch)
-    _recording_client(monkeypatch, (200, [False]), (200, [False, True, True, True]))
+    client = _recording_client(
+        monkeypatch, (200, [False]), (200, [False, True, True, True]))
 
     check_user_application(s.application.id)
 
     db.session.expire_all()
     assert db.session.query(UserRegistration).get(s.application.id).warning is None
+    assert [url for url, _data in client.posts] == [
+        'https://real.example/api/is_ip_banned',
+        'https://real.example/api/is_email_banned',
+    ]
 
 
 @pytest.mark.xfail(strict=True, raises=TypeError, reason='D319, fixed in Task 10')
