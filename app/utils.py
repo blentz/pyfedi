@@ -5819,27 +5819,50 @@ class TaskError(Exception):
 
     DEFINED AT THE END OF THIS FILE DELIBERATELY, not beside get_task_session
     and patch_db_session where it thematically belongs. The reason is
-    STRUCTURAL and needs no count: the highest app/utils.py line cited
-    anywhere in the tree is :5743, and this file's last line before the class
-    was appended was :5798, so appending below :5798 cannot move any cited
-    line -- however many citations there turn out to be. Inserting beside the
-    task-session helpers at :3673 WOULD move every cited line above :5743, and
-    that is the placement this argument rules out. Do not "tidy" this upward
-    without re-deriving those citations first.
+    STRUCTURAL and needs no count, and it is ANCHORED TO A COMMIT because the
+    un-anchored form of it was falsified within one round -- see below.
 
-    THIS DOCSTRING FIRST GAVE THAT REASON AS A COUNT AND THE COUNT DID NOT
+    AS OF 2a63f063^, THE COMMIT THIS CLASS WAS APPENDED IN: this file's last
+    line was :5798, and the highest app/utils.py line cited anywhere in the
+    tracked tree was :5743. Appending below :5798 therefore could not move a
+    single cited line, however many there were. Citations written AFTER the
+    append -- including this class's own register entry, D315, which cites
+    :5801 -- point INTO the appended region by construction and cannot be
+    shifted by it either. So the placement is safe in both directions and the
+    argument does not depend on a count. Inserting beside the task-session
+    helpers at :3673 WOULD move every cited line above it, which is the
+    placement this argument rules out. Do not "tidy" this upward without
+    re-deriving those citations first.
+
+    DO NOT RE-DERIVE THE MAXIMUM AT HEAD AND EXPECT :5743. At dce6eee2 the
+    same sweep gives 323 occurrences, 136 at or after :3673, and a maximum of
+    :5801 -- because the register entry for this very class cites it. That is
+    not drift; it is the claim being changed by the commit that made it, and
+    anchoring, not a better number, is the fix. Later commits will move it
+    again for the same reason.
+
+    THIS DOCSTRING FIRST GAVE THE REASON AS A BARE COUNT AND THE COUNT DID NOT
     REPRODUCE, which is why it is now stated structurally. It read "358
     `utils.py:NNN` citations in tracked files, 135 of them at or after :3673".
-    The 135 reproduces exactly (occurrences of `app/utils.py:NNN` in tracked
-    files, excluding the auto-generated `#: app/utils.py:NNN` source
-    references in app/translations/**/*.po). The 358 does not: the same sweep
-    gives 324 occurrences and 192 distinct strings, 844 occurrences if the .po
-    files are counted, and a third reviewer's sweep gave 239 unique / ~330-346
-    occurrences / 105 at-or-after. Three derivations, three answers, and the
-    .po files are the main reason they diverge. The counts are withdrawn
-    rather than arbitrated, because the placement never depended on one; the
-    structural argument is also the only form that is stable under the .po
-    question, since including them does not change the maximum (:5743).
+    Sweep definition, since it is what the derivations disagree about:
+    occurrences of `app/utils.py:NNN` in tracked files, counting the ENDPOINT
+    of a range citation such as `app/utils.py:5736-5743` (a naive `:NNN` regex
+    misses 5743 and reports 5736 as the maximum), and excluding the
+    auto-generated `#: app/utils.py:NNN` source references in
+    app/translations/**/*.po AND in
+    app/translations/lt/LC_MESSAGES/messages.po.original, which that glob
+    misses and which carries the same references.
+
+    Under that definition, AS OF 2a63f063^: 322 occurrences and 135 at or
+    after :3673, so the 135 reproduces exactly -- 324 if only the *.po glob is
+    excluded, 844 if the whole .po family is counted. The 358 is none of
+    those, and a third reviewer's sweep gave 239 unique / ~330-346 occurrences
+    / 105 at-or-after. Three derivations, three answers, and the .po family is
+    the main reason they diverge. The counts are withdrawn rather than
+    arbitrated, because the placement never depended on one; the structural
+    argument is also the only form stable under the .po question, since that
+    family's own highest cited line is :4484 and including it does not change
+    the maximum.
 
     Introduced by sub-project 22 for app/shared/tasks/pages.py's
     `move_object`, which previously raised a bare `Exception`. `raise
