@@ -451,3 +451,125 @@ def test_a_private_community_sends_no_lock(db_session, http_mock):
     lock_post(None, s.user.id, s.post.id)
 
     assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_the_announce_carries_a_top_level_context_and_a_bare_lock(
+        db_session, http_mock):
+    """`:125`'s `del lock['@context']` on the non-undo local path, and
+    `:131-139`'s Announce.
+
+    THIS ASSERTION DISCRIMINATES HERE AND WOULD NOT HAVE ONE SUB-PROJECT AGO.
+    `app/activitypub/signature.py:100-101` reinjects `@context` TOP-LEVEL ONLY.
+    In `flags.py` the Flag WAS the top-level object, so its `@context` was
+    present whether or not the builder set it and no assertion could tell.
+    Here the top level is the Announce and the Lock is NESTED, which the
+    reinjection never reaches -- so `'@context' not in announce['object']`
+    fails if `:125` stops deleting. The top-level `'@context' in announce`
+    assertion below does NOT discriminate -- the reinjection supplies it
+    either way -- it is kept only to pin the envelope's shape.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+
+    lock_post(None, s.user.id, s.post.id)
+
+    announce = _sent_activity(route)
+    assert '@context' in announce
+    assert '@context' not in announce['object']
+    assert announce['object']['type'] == 'Lock'
+
+
+def test_the_undo_announce_nests_a_context_free_undo_around_a_context_free_lock(
+        db_session, http_mock):
+    """The is_undo local path, where `@context` is deleted TWICE: `:107` strips
+    it from the Lock before `:113` nests it in the Undo, and `:122` strips it
+    from the Undo before `:135` nests THAT in the Announce.
+
+    So the delivered object has `@context` at exactly one level out of three.
+    Both inner assertions fail independently -- `:107` and `:122` are separate
+    statements and a regression could drop either. The top-level
+    `'@context' in announce` assertion does not discriminate (the reinjection
+    would supply it regardless); it is kept only to pin the envelope's shape.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+
+    unlock_post(None, s.user.id, s.post.id)
+
+    announce = _sent_activity(route)
+    assert '@context' in announce
+    assert announce['object']['type'] == 'Undo'
+    assert '@context' not in announce['object']
+    assert '@context' not in announce['object']['object']
+    assert announce['object']['object']['type'] == 'Lock'
+
+
+def test_a_remote_lock_keeps_its_context(db_session, http_mock):
+    """`:143-145`'s else arm. No Announce, so the Lock is the top-level object
+    and KEEPS the `@context` set at `:100` -- `:125` never ran, because it sits
+    behind `community.is_local()`, which is false on this path.
+
+    Note what this test cannot prove: `signature.py:100-101` would reinject
+    `@context` here anyway, so its presence is not evidence that `:100` set it.
+    What the assertion does establish is the SHAPE -- a bare Lock rather than
+    an Announce -- and `type` is what carries that.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    route = http_mock.post(PEER_INBOX).respond(200, json={})
+
+    lock_post(None, s.user.id, s.post.id)
+
+    lock = _sent_activity(route)
+    assert lock['type'] == 'Lock'
+    assert '@context' in lock
+
+
+def test_a_remote_undo_wraps_a_context_free_lock(db_session, http_mock):
+    """`:143-145` with is_undo: the Undo is top-level, and `:107` stripped the
+    Lock's `@context` before `:113` nested it. `:122` never runs on this path
+    -- it sits behind `community.is_local()`, which is false here -- but its
+    absence is unobservable since `:107` already removed the key it would
+    have deleted from a different object (the Undo, not the Lock).
+
+    THIS IS THE REMOTE PATH'S DISCRIMINATING ASSERTION. The Undo's own
+    `@context` proves nothing (reinjection would supply it), but the nested
+    Lock's ABSENCE is beyond the reinjection's reach and fails if `:107`
+    stops deleting.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    route = http_mock.post(PEER_INBOX).respond(200, json={})
+
+    unlock_post(None, s.user.id, s.post.id)
+
+    undo = _sent_activity(route)
+    assert undo['type'] == 'Undo'
+    assert undo['object']['type'] == 'Lock'
+    assert '@context' not in undo['object']
+
+
+def test_the_announce_addresses_the_communitys_followers(db_session, http_mock):
+    """`:130`'s `cc = [community.ap_followers_url]`, which REPLACES the
+    `cc = [community.public_url()]` set at `:94` for the non-announce paths.
+
+    The rebinding at `:130` is easy to miss because `cc` is built at `:94`,
+    used in the Lock at `:103`, and then overwritten -- so the Lock nested
+    inside the Announce carries the OLD cc while the Announce carries the new
+    one. Both are asserted here. `:130` REBINDS the name `cc` to a new list
+    rather than mutating the old one in place, so the list already stored on
+    `lock['cc']` at `:103` is unaffected by the rebinding.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+    s.community.ap_followers_url = 'https://test.piefed.local/c/c1/followers'
+    db.session.commit()
+
+    lock_post(None, s.user.id, s.post.id)
+
+    announce = _sent_activity(route)
+    assert announce['cc'] == ['https://test.piefed.local/c/c1/followers']
+    assert announce['object']['cc'] == [s.community.public_url()]
