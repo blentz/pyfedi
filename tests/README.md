@@ -4459,24 +4459,44 @@ belongs thematically, because inserting there would shift every line below it
 and this campaign's chronic defect is stale citations. **The decision was
 right. The justification was a number, and the number did not survive
 re-derivation.** The design and the class's own docstring said "358
-`utils.py:NNN` citations in tracked files, 135 of them at or after `:3673`". At
-this commit the 135 reproduces exactly; the 358 does not -- the same sweep
-gives **324** occurrences and **192** distinct strings, **844** occurrences if
-`app/translations/**/*.po` is counted (those files carry auto-generated
-`#: app/utils.py:NNN` source references, which is the main reason independent
-sweeps disagree), and a reviewer's third sweep gave 239 unique / ~330-346
-occurrences / 105 at-or-after. The same happened to the companion figure: the
-design's "**96** `pages.py:NNN` citations" reproduces as 82, 113, 35 or 41 at
-its own commit depending on whether the path prefix and the `.po` files are
-included, and as none of them is it 96. **The fix is not a better grep. It is
-to state the constraint as an extremum**: the highest `app/utils.py` line cited
-anywhere in the tree is `:5743`, and the file's last line was `:5798`, so
-appending below `:5798` cannot move a cited line **however many there are** --
-one number, stable under the `.po` question that makes every count diverge, and
-checkable in one command. Prefer `max(cited line) < insertion point` to
-`N citations would break`. Fact 98 is the same lesson for mutation tables: a
-count in committed prose is a claim with a short shelf life, and one that two
-derivations disagree about should be replaced, not arbitrated.
+`utils.py:NNN` citations in tracked files, 135 of them at or after `:3673`". **As
+of `2a63f063^`, the commit the class was appended in**, the 135 reproduces
+exactly; the 358 does not -- the same sweep gives **322** occurrences (324 if
+only the `*.po` glob is excluded, **844** if the whole `.po` family is counted)
+and **192** distinct strings, and a reviewer's third sweep gave 239 unique /
+~330-346 occurrences / 105 at-or-after. **Two things make those sweeps
+disagree, and both are worth knowing before running one.** (a) The `.po` files
+carry auto-generated `#: app/utils.py:NNN` gettext source references that a
+human "citation" count means to exclude -- **and the obvious glob
+`app/translations/**/*.po` is itself incomplete**, missing
+`app/translations/lt/LC_MESSAGES/messages.po.original`, which carries the same
+references and is exactly the 322-versus-324 gap. (b) A naive `:NNN` regex
+misses the **endpoint** of a range citation, so it reports the maximum of
+`app/utils.py:5736-5743` as 5736. The same happened to the companion figure:
+the design's "**96** `pages.py:NNN` citations" reproduces as 82, 113, 35 or 41
+at its own commit depending on the path prefix and the `.po` question, and as
+none of them is it 96.
+
+**The fix is not a better grep. It is to state the constraint as an extremum,
+AND TO ANCHOR IT TO A COMMIT** -- because the un-anchored form of this very
+claim was falsified inside the round that wrote it. The argument is: as of
+`2a63f063^` the highest `app/utils.py` line cited anywhere was `:5743` and the
+file's last line was `:5798`, so appending below `:5798` could not move a cited
+line **however many there were**, and citations written afterwards point into
+the appended region by construction. One number, stable under the `.po`
+question that makes every count diverge, and checkable in one command.
+**Then the register commit two commits later cited `app/utils.py:5801` -- the
+new class's own line -- and at that commit the sweep gives 323 occurrences, 136
+at or after `:3673`, and a maximum of `:5801`.** For a few hours the findings
+file contradicted itself: one paragraph said the maximum was `:5743`, another
+cited `:5801`. **A claim about citation counts is falsifiable by the commit
+that makes it**, and a register entry citing a symbol is the most likely
+falsifier of any claim about where that symbol's file is cited. Prefer
+`max(cited line) < insertion point, as of <commit>` to `N citations would
+break`, and write the as-of clause even when the claim is true as you type it.
+Fact 98 is the same lesson for mutation tables: a count in committed prose is a
+claim with a short shelf life, and one that two derivations disagree about
+should be replaced, not arbitrated.
 
 **126. A MUTATION COMMAND WRITTEN IN A PLAN IS UNTESTED CODE. DRY-RUN EVERY
 SUBSTITUTION WITHOUT `-i`, READ THE LINE IT PRODUCES, AND RECORD THE COMMAND
@@ -4498,12 +4518,21 @@ of the three was a failure of the *tests*:
   while the record implied they were proved. Fact 68's defect class inverted.
 
 **The three failures need three different checks and only the second is fact
-120's.** Run the `sed` without `-i` first and read its stdout; then diff the
-file; then read the produced line back into the record verbatim. The committed
+120's.** Run the `sed` without `-i` first and read BOTH its stdout and its
+stderr -- the first failure is invisible on stdout alone; then diff the file;
+then read the produced line back into the record verbatim. The committed
 mutation records at the ends of `tests/test_shared_tasks_send_post.py` and
 `tests/test_shared_tasks_send_answer.py` both now carry the produced line under
 every entry, which is the form that makes all three failures visible at review
 time instead of at re-derivation time.
+
+**THE VOCABULARY IS LOAD-BEARING AND THIS FACT'S OWN SOURCE RECORD GOT IT
+WRONG.** The `send_post` record's summary line called M5 "1 no-op substitution",
+which is the *second* class, not the first -- and a later round grepping for
+prior art would then have applied the wrong check, diffing a file against a
+`sed` that never executed. It is corrected in place with the old wording named.
+**"Nothing happened" is not one outcome but two**: the command did not run, or
+the command ran and the program did not change. Say which.
 
 **127. `@context` IS RE-ADDED AT THE TOP LEVEL ONLY -- BY TWO INDEPENDENT
 SITES -- WHICH IS EXACTLY WHY A NESTED-OBJECT `@context` ABSENCE ASSERTION IS
