@@ -386,7 +386,7 @@ def test_a_missing_post_raises_AttributeError_and_rolls_back(
     `:50-51`.
 
     THE DIFFERENT EXCEPTION TYPE IS THE POINT. `.get()` returns None rather
-    than raising, so the failure arrives fifteen lines later at `:56`
+    than raising, so the failure arrives eleven lines later at `:56`
     (`object.community` on None) as `AttributeError`. Two lookup styles, one
     file. Asserting the type is what records the asymmetry.
     """
