@@ -4920,8 +4920,8 @@ test passes vacuously, against zero deliveries, not against the delivery it
 was written to prove happened. The recipient needs a **user on that
 instance who is a member of the community**, and the instance must not be
 `id == 1` (the local one). Both of this sub-project's test files build this
-in their own `_follower` helper (`tests/test_shared_tasks_locks.py:146-166`,
-`tests/test_shared_tasks_likes.py:134-152`) and each says why in its
+in their own `_follower` helper (`tests/test_shared_tasks_locks.py:146-168`,
+`tests/test_shared_tasks_likes.py:134-157`) and each says why in its
 docstring.
 
 **142. A REDUNDANT CONJUNCT CAN BE INVISIBLE TO BRANCH COVERAGE AND STILL
