@@ -568,3 +568,109 @@ def test_the_announced_remove_is_signed_as_the_community(db_session, http_mock):
     remove_object(db.session, s.user.id, s.post)
 
     assert _key_id_of(fan.route) == s.community.public_url() + '#main-key'
+
+
+def test_a_local_community_with_no_followers_sends_no_add(db_session, http_mock):
+    """adds.py:96's loop never entered -- straight past to the return.
+
+    `following_instances()` returns empty because no CommunityMember exists on
+    a remote instance. The Announce is still BUILT at :87-95; nothing delivers
+    it.
+    """
+    s = _seed(with_keys=True)
+
+    add_object(db.session, s.user.id, s.post)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_local_community_with_no_followers_sends_no_remove(
+        db_session, http_mock):
+    """removes.py:96's loop never entered -- the twin."""
+    s = _seed(with_keys=True)
+
+    remove_object(db.session, s.user.id, s.post)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_following_instance_without_an_inbox_gets_no_add(db_session, http_mock):
+    """adds.py:97's FALSE arm -- the loop continuing.
+
+    `with_inbox=False` leaves `Instance.inbox` None, closing :97's FIRST
+    conjunct before any other is evaluated. No route is registered, so
+    `http_mock`'s `assert_all_called=True` is not tripped, and the count of 0
+    rules out a request attempted against a None inbox.
+    """
+    s = _seed(with_keys=True)
+    _community_follower(s, http_mock, with_inbox=False)
+
+    add_object(db.session, s.user.id, s.post)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_following_instance_without_an_inbox_gets_no_remove(
+        db_session, http_mock):
+    """removes.py:97's FALSE arm -- the twin."""
+    s = _seed(with_keys=True)
+    _community_follower(s, http_mock, with_inbox=False)
+
+    remove_object(db.session, s.user.id, s.post)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_one_instance_is_skipped_while_another_receives_the_add(
+        db_session, http_mock):
+    """Both of adds.py's loop arms in ONE run -- the skip, then the delivery.
+
+    The discriminating case: with a single follower, "skipped" and "loop
+    ended" both produce zero deliveries and are indistinguishable. The second,
+    delivering instance is what proves iteration continued PAST the skipped
+    one.
+
+    THE ORDER ASSERTION IS LOAD-BEARING, NOT DECORATION.
+    `Community.following_instances()` (app/models.py:842-851) ends in an
+    unordered `.distinct().all()` -- no ORDER BY -- so the order is a property
+    of Postgres's query plan, not of the code. If it ever reverses, a mutant
+    turning "skip and continue" into "skip and break" would still leave the
+    delivered route called once and this test would pass while no longer
+    proving what it claims.
+    """
+    s = _seed(with_keys=True)
+    _community_follower(s, http_mock, domain='mute.example',
+                        member_name='mute', with_inbox=False)
+    good = _community_follower(s, http_mock, domain='fan.example',
+                               member_name='fan')
+
+    ordered = [i.domain for i in s.community.following_instances()]
+    assert ordered == ['mute.example', 'fan.example'], (
+        f'this test proves the loop CONTINUES past a skip, which requires the '
+        f'skipped instance first; got {ordered}')
+
+    add_object(db.session, s.user.id, s.post)
+
+    assert good.route.call_count == 1
+    assert db.session.query(ActivityPubLog).count() == 1
+
+
+def test_one_instance_is_skipped_while_another_receives_the_remove(
+        db_session, http_mock):
+    """Both of removes.py's loop arms in one run -- the twin of the test
+    above, carrying the same order assertion for the same reason."""
+    s = _seed(with_keys=True)
+    _community_follower(s, http_mock, domain='mute.example',
+                        member_name='mute', with_inbox=False)
+    good = _community_follower(s, http_mock, domain='fan.example',
+                               member_name='fan')
+
+    ordered = [i.domain for i in s.community.following_instances()]
+    assert ordered == ['mute.example', 'fan.example'], (
+        f'this test proves the loop CONTINUES past a skip, which requires the '
+        f'skipped instance first; got {ordered}')
+
+    remove_object(db.session, s.user.id, s.post)
+
+    assert good.route.call_count == 1
+    assert db.session.query(ActivityPubLog).count() == 1
