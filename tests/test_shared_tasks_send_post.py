@@ -2841,8 +2841,9 @@ def test_edit_post_rolls_back_and_closes_when_send_post_raises(
 # `./run_tests.sh tests/test_shared_tasks_send_post.py -q`; restore with
 # `git checkout -- app/`; assert `git diff -- app/` empty AND
 # `wc -l app/shared/tasks/pages.py` == 435 before the next mutation.
-# All 9 mutations below were applied, tested, and reverted one at a time;
-# the tree was confirmed clean and at 435 lines after every one.
+# All 10 mutations below were applied, tested, and reverted one at a time;
+# the tree was confirmed clean and at 435 lines after every one. M10 was
+# added by Task 9's first fix round under the identical protocol.
 #
 # No survivors and no equivalent mutants were found: every mutation below
 # was killed by at least one existing test.
@@ -2954,9 +2955,60 @@ def test_edit_post_rolls_back_and_closes_when_send_post_raises(
 #     (`assert ['close'] == ['rollback', 'close']`).
 #   Matches the predicted result exactly.
 #
-# Summary: 9/9 mutations killed, 0 survivors, 0 equivalent mutants, 1 no-op
-# substitution found in the brief's own M5 sed literal (corrected above,
-# not a finding about the tests). Two disagreements with the predicted
+# M10 -- :398 drop the `local_only` conjunct
+#   Added by Task 9's first fix round, at the reviewer's direction, and run
+#   under the protocol above. It closes the last unmutated conjunct of the
+#   three in this sub-project's own production change at :398.
+#   sed -i '398s/community\.local_only or //'
+#   Dry-run (no -i) first, and the produced line read back:
+#     `    if community.private or not community.instance.online():`
+#   Result: SOLE assertion-kill of
+#     test_a_local_only_community_does_not_federate_the_move (:2429)
+#     (`assert 1 == 0` -- ActivityPubLog count 0 -> 1).
+#   1 failed, 84 passed in 26.46s. Restored with `git checkout -- app/`;
+#   `git diff -- app/` empty and `wc -l` == 435 re-asserted after.
+#   ALL THREE OF :398's CONJUNCTS NOW CARRY A SOLE KILL BY A DISTINCT NAMED
+#   TEST: `local_only` (M10), `private` (M2), `online()` (M3). That closes
+#   the gap sub-project 21 had to open a whole extra review round for at
+#   `notes.py:248`, and it is closed here in the round that made the change.
+#
+# THE COLLECTED COUNT IS 85, NOT 81. `grep -c '^def test_'` on this file
+# returns 81; three `@pytest.mark.parametrize` decorators (:505, 2 cases;
+# :1302, 3; :1970, 2) add four more. Every count in this record is the
+# COLLECTED one, which is what the pytest line prints.
+#
+# Summary: 10/10 mutations killed, 0 survivors, 0 equivalent mutants
+# ACTUALLY RUN, and 1 sed literal in the brief that DID NOT PARSE (M5's;
+# corrected above, and not a finding about the tests).
+#
+# THE M5 CLASSIFICATION IS CORRECTED IN PLACE HERE, WITH THE OLD WORDING
+# NAMED. This summary previously read "1 no-op substitution found in the
+# brief's own M5 sed literal". That is the wrong class, and Task 9's
+# `tests/README.md` fact 126 -- written after this record and partly from
+# it -- is what makes the distinction load-bearing. A **no-op
+# substitution** (fact 120, and sub-project 21's M4) APPLIES CLEANLY and
+# changes the file without changing the program. M5's sed never ran at
+# all: it exited with ``sed: -e expression #1, char 12: unknown option to
+# `s'``, so nothing was applied, nothing was mutated, and the right check
+# is to read the command's stderr, not to diff the file. The M5 entry
+# above was always correct; only this summary line was not.
+#
+# ONE CONJUNCT IN THIS FILE'S PRODUCTION SURFACE IS DELIBERATELY NOT
+# MUTATED, and the reason is a proof rather than a budget: :432's
+# `instance.online()`. It is an EQUIVALENT MUTANT BY CONSTRUCTION.
+# `community.following_instances()` at :431 has already filtered
+# `Instance.dormant == False` (app/models.py:849) and
+# `Instance.gone_forever == False` (:850) in SQL, and `Instance.online()`
+# (app/models.py:118-119) is exactly `not (self.dormant or
+# self.gone_forever)` -- so for every row the loop can yield the conjunct
+# is True, and dropping it cannot change what the loop does for any
+# reachable input. Running it would produce a green suite that says
+# nothing (fact 120's second class), not a survivor. Contrast M6, which
+# drops the LIVE `instance.inbox` conjunct from the same guard and is a
+# double assertion-kill; that contrast is the evidence, and it is already
+# run.
+#
+# Two disagreements with the predicted
 # results are recorded above and are both about SHAPE, not about coverage:
 # M1 kills one more test than predicted (3, not 2) and M4's crash-kills
 # land in test-helper IndexErrors rather than inside following_instances().
@@ -3043,8 +3095,20 @@ def test_edit_post_rolls_back_and_closes_when_send_post_raises(
 # (`notes.py:217`, `:300`) carry, and weaker than its first three
 # (`pages.py:295`, `:350`, `:351`), where deleting each of the three dead
 # conjuncts was measured to leave the suite green while deleting each of the
-# other eight in the same guards failed its named test. Recorded at its real
-# strength rather than promoted to match the sites it resembles.
+# other eight in the same guards failed its named test.
+#
+# THAT CONTROL IS NOT WORTH RUNNING HERE, AND THE REASON IS A PROOF RATHER
+# THAN A BUDGET. Dropping `online()` from :432 is an EQUIVALENT MUTANT BY
+# CONSTRUCTION: :431's query has already filtered both of the columns
+# `online()` reads, so the conjunct is True for every row the loop can
+# yield and the mutant computes the same function for every reachable
+# input. A green run would therefore be fact 120's second class -- a real
+# semantic change that provably cannot be observed -- and would add nothing
+# the SQL does not already say. This is NOT the situation at :398, whose
+# `local_only` conjunct is live, was the last of that guard's three left
+# unmutated, and is closed by M10 in the record above as a sole
+# assertion-kill. The two gaps looked alike and were not; only one was worth
+# 26 seconds.
 #
 # THE AST WALK, run at this commit over `app/shared/tasks/pages.py` for
 # `move_object`, `move_post`, `make_post` and `edit_post`, RAW OUTPUT:
