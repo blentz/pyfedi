@@ -4422,6 +4422,150 @@ following it and remove the dependence instead.** The two facts are the same
 observation about unordered SQL with opposite remedies, chosen by whether the
 order is load-bearing for the proof.
 
+**124. ONE FUNCTION, THREE `.get()` LOOKUPS, TWO OPPOSITE FAILURE MODES --
+BECAUSE ONLY THE FIRST ONE IS GUARDED. FACT 119 IS ABOUT LOOKUP STYLE; THIS IS
+ABOUT GUARD PLACEMENT, AND IT BITES WHEN THE STYLE IS UNIFORM.**
+`move_post` (`app/shared/tasks/pages.py:373-387`) is fifteen lines and makes
+three `session.query(...).get(...)` calls, all of which return `None` rather
+than raising. `:378` looks up the `Post` and `:379` guards it
+(`if post and not post.deleted:`), so a **missing post is silently swallowed**
+and the function returns having done nothing. `:380` and `:381` look up the two
+`Community` rows and **nothing guards either**; both are handed straight to
+`move_object` at `:382`, whose `:393` is
+`if isinstance(origin, Community) and isinstance(target, Community):` and whose
+`:396` raises. So a **missing community raises `TaskError`** out of the same
+call. Same module, same function, same lookup style, opposite contracts,
+decided entirely by which result has an `if` in front of it. The committed
+tests pin both directions and name them:
+`test_move_post_does_nothing_when_the_post_is_missing`
+(`tests/test_shared_tasks_send_post.py:2696`) asserts the swallow, and
+`test_move_post_rolls_back_and_re_raises_on_a_bad_community` (`:2733`) passes a
+real `Community` as `origin` and a missing (`None`) `target` and asserts the
+raise, the `rollback` and the re-raise. **The practical rule is fact 119's with
+the other half filled in**: read the lookup you are about to defeat, AND read
+what stands between it and its first dereference. A uniform lookup style is
+what makes this one invisible -- there is no `.one()`/`.get()` tell to notice,
+only an absent `if`. **The asymmetry also shows up in mutation**: sub-project
+22's M1, an `and`->`or` at `:393`, killed `move_post`'s rollback test as a
+third, unpredicted victim precisely because that test reaches `:393` through
+the unguarded pair.
+
+**125. WHERE A NEW SYMBOL GOES CAN LEGITIMATELY BE DECIDED BY CITATION
+ARITHMETIC -- BUT STATE THE REASON AS AN EXTREMUM, NOT AS A COUNT, BECAUSE
+COUNTS IN THIS CAMPAIGN DO NOT REPRODUCE AND EXTREMA DO.** Sub-project 22
+needed a `TaskError` class and put it at the END of `app/utils.py`, not beside
+`get_task_session` (`:3673-3675`) and `patch_db_session` (`:3679`) where it
+belongs thematically, because inserting there would shift every line below it
+and this campaign's chronic defect is stale citations. **The decision was
+right. The justification was a number, and the number did not survive
+re-derivation.** The design and the class's own docstring said "358
+`utils.py:NNN` citations in tracked files, 135 of them at or after `:3673`". At
+this commit the 135 reproduces exactly; the 358 does not -- the same sweep
+gives **324** occurrences and **192** distinct strings, **844** occurrences if
+`app/translations/**/*.po` is counted (those files carry auto-generated
+`#: app/utils.py:NNN` source references, which is the main reason independent
+sweeps disagree), and a reviewer's third sweep gave 239 unique / ~330-346
+occurrences / 105 at-or-after. The same happened to the companion figure: the
+design's "**96** `pages.py:NNN` citations" reproduces as 82, 113, 35 or 41 at
+its own commit depending on whether the path prefix and the `.po` files are
+included, and as none of them is it 96. **The fix is not a better grep. It is
+to state the constraint as an extremum**: the highest `app/utils.py` line cited
+anywhere in the tree is `:5743`, and the file's last line was `:5798`, so
+appending below `:5798` cannot move a cited line **however many there are** --
+one number, stable under the `.po` question that makes every count diverge, and
+checkable in one command. Prefer `max(cited line) < insertion point` to
+`N citations would break`. Fact 98 is the same lesson for mutation tables: a
+count in committed prose is a claim with a short shelf life, and one that two
+derivations disagree about should be replaced, not arbitrated.
+
+**126. A MUTATION COMMAND WRITTEN IN A PLAN IS UNTESTED CODE. DRY-RUN EVERY
+SUBSTITUTION WITHOUT `-i`, READ THE LINE IT PRODUCES, AND RECORD THE COMMAND
+YOU ACTUALLY RAN RATHER THAN THE ONE THE PLAN PROPOSED.** Three consecutive
+rounds have now been bitten by a different failure of the same kind, and none
+of the three was a failure of the *tests*:
+
+- **It does not parse.** Sub-project 22's M5 was written
+  `sed -i '417s\|^\|#\|'`, which exits with
+  ``sed: -e expression #1, char 12: unknown option to `s'``. Nothing was
+  mutated and nothing ran. The working form is `sed -i '417s|^|#|'`.
+- **It parses, applies, and mutates nothing.** Sub-project 21's M4 produced a
+  line whose trailing statement was the original character-for-character. That
+  is fact 120's *no-op substitution*, and it was written up twice, wrongly,
+  before being measured.
+- **It parses, applies, mutates -- and the LABEL is wrong.** Sub-project 21's
+  M1 was described as negating a whole guard; `sed` replaces only the first
+  match on a line, so it negated one conjunct and left two others unmutated
+  while the record implied they were proved. Fact 68's defect class inverted.
+
+**The three failures need three different checks and only the second is fact
+120's.** Run the `sed` without `-i` first and read its stdout; then diff the
+file; then read the produced line back into the record verbatim. The committed
+mutation records at the ends of `tests/test_shared_tasks_send_post.py` and
+`tests/test_shared_tasks_send_answer.py` both now carry the produced line under
+every entry, which is the form that makes all three failures visible at review
+time instead of at re-derivation time.
+
+**127. `@context` IS RE-ADDED AT THE TOP LEVEL ONLY -- BY TWO INDEPENDENT
+SITES -- WHICH IS EXACTLY WHY A NESTED-OBJECT `@context` ABSENCE ASSERTION IS
+MEANINGFUL AND A TOP-LEVEL PRESENCE ASSERTION IS NOT.** `post_request`
+(`app/activitypub/signature.py:100-101`) and `HttpSignature.signed_request`
+(`:454-455`) each run the identical `if '@context' not in body:
+body['@context'] = default_context()` on the outermost `body` before it is
+serialized. Neither walks into `body['object']`. Two consequences, opposite in
+sign, and this file already records only one of them:
+
+- **A top-level `@context` cannot be pinned.** A mutant deleting the two-line block that
+  re-adds it (`app/shared/tasks/pages.py:310-311`,
+  `app/shared/tasks/notes.py:225-226`) is an EQUIVALENT MUTANT: the key
+  comes back one frame later, with the same value, in the same trailing
+  position, and no assertion reachable from the wire can tell the two apart.
+  Established by sub-project 19 and repeated at
+  `tests/test_shared_tasks_send_reply.py:1498-1513`.
+- **A NESTED `@context` absence CAN be pinned, and that is the half worth
+  writing down**, because it is what makes three sub-projects' assertions real
+  rather than accidentally true. `del`s of a nested object's `@context`
+  (`app/shared/tasks/pages.py:417`, `app/shared/tasks/notes.py:266`, `:281`,
+  `:284`) are NOT undone, because the
+  re-adders only ever see the envelope. `assert '@context' not in
+  sent['object']` therefore fails when the `del` is removed -- measured, not
+  argued: sub-project 22's M5 commenting out `pages.py:417` is a SOLE
+  assertion-kill of
+  `test_a_local_community_announces_the_move_and_strips_its_inner_context`
+  (`tests/test_shared_tasks_send_post.py:2574`), and
+  `tests/test_shared_tasks_send_answer.py:434-436` asserts absence two levels
+  deep.
+
+**The generalisation: before asserting that a key is absent from a delivered
+payload, find every writer between construction and the wire and check which
+level it operates on.** Here the answer is "top level only, twice"; a re-adder
+that recursed would have made every one of those assertions vacuous while
+leaving them green. Fact 122 says assert on the serialized bytes rather than on
+a dict; this says what the bytes can and cannot prove once you have them.
+
+**128. BEFORE REGISTERING SOMETHING AS "ANOTHER INSTANCE OF D_n", READ D_n. A
+DESIGN'S SUMMARY OF A REGISTER ENTRY IS NOT THE ENTRY, AND THE SUMMARY IS WHAT
+THE NEXT TASK WILL COPY.** Sub-project 22's design and every brief derived from
+it said "D312 names nine other unpatched task functions sharing `send_answer`'s
+shape", and instructed the register round to establish whether `move_post` was
+a tenth. **D312 names no such nine.** Its cell is about `send_answer` alone and
+contrasts it with `make_reply` and `edit_reply`, which do patch. And the
+premise inverted on measurement: `move_post` (`app/shared/tasks/pages.py:377`)
+**does** enter `with patch_db_session(session):`, so it was never a candidate.
+**The measurement that should have been made instead is cheap and settles the
+question for good** -- an `ast` walk over `app/shared/tasks/` for every
+`FunctionDef` whose body mentions `get_task_session`, partitioned on whether it
+also mentions `patch_db_session`: **61 open a task session and 21 never patch**,
+of which 15 are in `maintenance.py` and 6 elsewhere (`follows.py:214`, `:242`,
+`likes.py:55`, `:176`, `notes.py:242`, `users.py:14`). Neither "nine" nor "ten"
+is any of those numbers. **The failure mode is specific and recurring**:
+sub-project 18's documents called D286 "D292" from the design onward, and this
+round's called a nonexistent list "D312". A planning document's paraphrase of a
+register cell is a citation like any other and gets checked like one (fact 99);
+what makes this class worse than a stale line number is that the paraphrase
+reads as authoritative and no grep contradicts it. **Open the cell, and prefer
+re-measuring the population to inheriting its size.**
+
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
