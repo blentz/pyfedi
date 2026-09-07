@@ -659,7 +659,7 @@ def test_a_blocked_instance_is_skipped_and_the_loop_continues(
     wrapper's task session for the duration of this call, so the row committed
     here is visible.
 
-    Blocked follower created first, for the reason the test above states.
+    Blocked follower created first, for the reason the inbox test states.
     """
     s = _seed(with_keys=True)
     _make_deliverable(s)

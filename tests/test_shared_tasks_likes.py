@@ -5,12 +5,12 @@
 third independent task `vote_for_poll:176`.
 
 THIS MODULE HAS THREE DELIVERY MECHANISMS FOR ONE LOCAL COMMUNITY, which no
-sibling module has. `:135`'s loop chooses per instance: `:141` writes an
-`ActivityBatch` row for `piefed`/`pylova` peers and commits inside the loop;
-`:145` appends a signed request and publishes them to redis after the loop when
-`current_app.config['NOTIF_SERVER']` is truthy; `:152` sends directly
-otherwise. `NOTIF_SERVER` defaults to `''` (config.py:131), so the second arm
-needs a config override to reach.
+sibling module has. `:135`'s loop chooses per instance: `:141` routes a
+`piefed`/`pylova` peer into the batch arm, where `:142-143` write an
+`ActivityBatch` row and commit it; `:145` selects the async arm when
+`current_app.config['NOTIF_SERVER']` is truthy, where `:146-149` sign the
+announce and `:157-159` publish it to redis after the loop ends; `:152` sends
+directly otherwise. `NOTIF_SERVER` defaults to `''` (config.py:131).
 
 THREE TASK SESSIONS ARE LIVE IN ONE `send_vote` CALL. The wrapper opens one at
 `:26`/`:42` and `patch_db_session` installs it as `db.session`; `send_vote`
@@ -402,7 +402,7 @@ def test_a_vote_without_an_emoji_omits_content(db_session, http_mock):
 
 
 def test_undoing_a_vote_wraps_a_context_free_copy(db_session, http_mock):
-    """`:92-105`'s undo payload and `:107-115`'s local Announce around it.
+    """`:92-105`'s undo payload and `:122-130`'s local Announce around it.
 
     `vote_to_undo` IS A STRING, NOT A BOOLEAN: `:71` assigns it directly to
     `type`, so passing `'Like'` produces an Undo whose nested object has

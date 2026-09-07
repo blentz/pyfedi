@@ -4909,6 +4909,81 @@ this round earned their place.
     test's community always has an instance. Both docstrings are more useful
     than one that claims more than its test can actually deliver.
 
+**141. `Community.following_instances()` (`app/models.py:842-851`) JOINS
+`CommunityMember`, SO A RECIPIENT FIXTURE NEEDS A MEMBER, NOT JUST AN
+INSTANCE.** The method's query joins `Instance` to `User` to `CommunityMember`
+and filters `CommunityMember.community_id == self.id`; it also filters
+`Instance.id != 1`, excluding the local instance. A fixture that creates only
+an `Instance` row and sets its `inbox` produces a query that returns zero
+rows, so the delivery loop never runs -- and every delivery assertion in that
+test passes vacuously, against zero deliveries, not against the delivery it
+was written to prove happened. The recipient needs a **user on that
+instance who is a member of the community**, and the instance must not be
+`id == 1` (the local one). Both of this sub-project's test files build this
+in their own `_follower` helper (`tests/test_shared_tasks_locks.py:146-166`,
+`tests/test_shared_tasks_likes.py:134-152`) and each says why in its
+docstring.
+
+**142. A REDUNDANT CONJUNCT CAN BE INVISIBLE TO BRANCH COVERAGE AND STILL
+VISIBLE TO MUTATION TESTING.** `coverage.py` does not decompose a boolean
+conjunction into its conjuncts -- `if a and b and c:` is recorded as one arc
+pair, taken or not -- so any input that fails at least one conjunct covers the
+False arc and the module can still reach 100%. A mutation that deletes a
+genuinely redundant conjunct SURVIVES that same suite, because no input the
+suite can construct is able to distinguish the guard with the conjunct from
+the guard without it. **When a mutation survives on a conjunct like this,
+check whether the conjunct is provably redundant (an earlier query already
+filters the same column) before treating the survival as a test gap** --
+fact 138's rule ("a surviving mutation is information about the test") has
+this as its stated exception. Both survivals recorded in this sub-project
+(the `instance.online()` re-check inside `following_instances()`'s loop, in
+both `locks.py` and `likes.py`) were confirmed as REAL mutations first -- the
+mutated line was read back and diffed against the original before the suite
+was run -- which is what separates a surviving mutation from a defective one
+that never actually changed the code.
+
+**143. `likes.py` RESOLVES `redis_client` BY IMPORTING IT INSIDE THE
+FUNCTION** (`from app import redis_client`, `likes.py:155`), so patching
+`app.redis_client` before the call intercepts the name the function will
+bind. Assert on **what was published** -- the channel name, the collected
+urls/headers, and the decoded JSON payload's activity type -- not merely that
+`publish` was called, which is satisfiable by a call that published nothing
+useful.
+
+**144. AN ORDERING ARRANGEMENT IN A SKIP TEST WAS MEASURED IN THIS ROUND, NOT
+MERELY ASSUMED -- AND THE MEASUREMENT IS BOUNDED, NOT A GENERAL PROOF.** Tests
+proving that a delivery loop CONTINUES past a skipped instance create the
+skipped instance first, so it is more likely to take the lower id.
+`following_instances()` ends in `.distinct().all()` with no `ORDER BY`, and
+Postgres commonly implements `SELECT DISTINCT` via a `HashAggregate`, whose
+output order follows hash-bucket layout rather than insertion order -- so the
+ordering arrangement might buy the test nothing at all. This round tested
+that empirically rather than leaving it as an assumption: commit `ddc16e6c`
+records **M17**, a `continue` -> `break` mutation applied to `send_vote`'s
+delivery loop and run four times, "killed every time, by all three skip
+tests" -- the same three test names failing each time.** **State exactly what that licenses and no more**: four runs
+against one Postgres instance and one dataset is an environment-scoped
+observation, not a proof of order-independence in general -- a different
+Postgres version, a different query planner choice, or a differently-sized
+table could still return rows in an order that makes the "create the skip
+first" arrangement load-bearing after all. The skip tests' own docstrings
+already say the discrimination "degrades to LAX, never FLAKY" if the
+assumption breaks; this measurement supports that existing language rather
+than replacing it or strengthening it into a guarantee.
+
+**145. A MUTATION LOOP MUST RESTORE PRODUCTION CODE BEFORE ANY POINT WHERE IT
+MIGHT STOP AND REPORT, NOT ONLY AT THE END OF A BATCH.** A run in this
+sub-project applied a `continue` -> `break` mutation to production code,
+executed four full test runs against it (the four runs fact 144 records), and
+reached its own reporting boundary before it had run the trailing `git
+checkout -- app/` that restores the file -- leaving a mutated production file
+on disk with no agent watching it. The restore ran and nothing was lost, but
+had the loop failed or been interrupted between the last run and the restore,
+the working tree would have been left dirty with a live behavioural change in
+`app/`. The rule this licenses: restore after EVERY mutation before doing
+anything else, including reporting results, rather than batching the restore
+to the end of a set of runs.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
