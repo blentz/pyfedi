@@ -2644,7 +2644,7 @@ def test_a_following_instance_without_an_inbox_gets_no_move(db_session, http_moc
 
 
 def test_one_following_instance_is_skipped_while_another_receives_the_move(
-        db_session, http_mock):
+        db_session, http_mock, monkeypatch):
     """Both loop arms in ONE run -- the skip, then the delivery.
 
     The discriminating case: a single-instance test cannot show that the guard
@@ -2652,24 +2652,37 @@ def test_one_following_instance_is_skipped_while_another_receives_the_move(
     "skipped" and "loop ended" look identical. With two, the delivered one
     proves iteration continued past the skipped one.
 
-    THE ORDER ASSERTION IS LOAD-BEARING AND NOT DECORATION.
-    `Community.following_instances()` (app/models.py:842-851) ends in an
-    unordered `.distinct().all()` -- no ORDER BY -- so the order is a property
-    of Postgres's query plan, not of the code. If it ever reverses, a mutant
-    turning "skip and continue" into "skip and break" would still leave the
-    delivered route called once, and this test would pass while no longer
-    proving what it claims.
+    THE SEQUENCE IS CONTROLLED, NOT OBSERVED. `Community.following_instances()`
+    (app/models.py:842-851) ends in an unordered `.distinct().all()` -- no
+    ORDER BY -- so which instance a live query returns first is a property of
+    Postgres's query plan, not of the code. This test's subject is the loop's
+    continue-past-a-skip behaviour; that ordering is incidental to it, so
+    `following_instances` is patched for the duration of the call to hand back
+    a known sequence (the skipped instance first, then the delivering one)
+    instead of trusting the query to happen to agree. An earlier version of
+    this test asserted the LIVE order matched that sequence, on the reasoning
+    that a reversal would silently defeat a "skip and continue" -> "skip and
+    break" mutant; that assertion was reproducibly flaky in practice -- it
+    failed a real full-suite run despite two prior passes -- because Postgres
+    was free to answer either order. Controlling the sequence here is
+    strictly more discriminating than that observed assertion ever was, since
+    it no longer depends on the planner cooperating.
+
+    THE PATCH TARGETS `s.community` ITSELF, NOT ITS CLASS. `_move` calls
+    `move_object(db.session, ..., origin=s.community, ...)` (:2413) directly,
+    so `community` inside `move_object` (pages.py:394, `community = origin`)
+    IS `s.community` -- the same Python object, not a copy loaded through a
+    separate task session. An instance-level patch is therefore sufficient
+    here; confirmed by making the stub raise and observing the raise
+    propagate out of `_move(s)`.
     """
     s = _seed(with_keys=True)
-    _community_follower(s, http_mock, domain='mute.example',
+    mute = _community_follower(s, http_mock, domain='mute.example',
                         member_name='mute', with_inbox=False)
     good = _community_follower(s, http_mock, domain='fan.example',
                                member_name='fan')
-
-    ordered = [i.domain for i in s.community.following_instances()]
-    assert ordered == ['mute.example', 'fan.example'], (
-        f'this test proves the loop CONTINUES past a skip, which requires the '
-        f'skipped instance first; got {ordered}')
+    monkeypatch.setattr(s.community, 'following_instances',
+                        lambda *a, **kw: [mute.instance, good.instance])
 
     _move(s)
 
