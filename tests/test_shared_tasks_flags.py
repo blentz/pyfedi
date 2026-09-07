@@ -190,6 +190,46 @@ def _delivered_inboxes(*routes):
     return {str(r.calls[i].request.url) for r in routes for i in range(len(r.calls))}
 
 
+def test_a_local_only_community_sends_no_flag(db_session, http_mock):
+    """`:57`'s first disjunct. `local_only` returns before the envelope is
+    built, so nothing is sent AND no ActivityPubLog row is written.
+
+    NO ROUTE IS REGISTERED. `http_mock` is built with
+    `assert_all_called=True`, so a route registered here and never called
+    would fail this test for the wrong reason.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    recipient = make_instance('recipient.example', software='lemmy')
+    recipient.inbox = PEER_INBOX
+    s.community.local_only = True
+    db.session.commit()
+
+    report_post(None, s.user.id, s.post.id, 'spam', [recipient.id])
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_an_offline_community_instance_sends_no_flag(db_session, http_mock):
+    """`:57`'s second disjunct. `Instance.online()` (app/models.py:118-119) is
+    `not (self.dormant or self.gone_forever)`, so a dormant-and-gone instance
+    returns.
+
+    THE CONTROL FOR THIS TEST IS Task 1's SMOKE TEST, which runs the same path
+    with `online=True` and DOES deliver. Without that pairing, an assertion of
+    zero rows passes against any breakage that stops delivery for any reason.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s, online=False)
+    recipient = make_instance('recipient.example', software='lemmy')
+    recipient.inbox = PEER_INBOX
+    db.session.commit()
+
+    report_post(None, s.user.id, s.post.id, 'spam', [recipient.id])
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
 def test_report_post_delivers_a_flag_to_the_named_instance(
         db_session, http_mock):
     """`report_post:40` end to end: `.get()` at `:45`, the gate at `:57`
