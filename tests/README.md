@@ -4765,6 +4765,150 @@ The same probe applies to any patch whose success is indistinguishable from its
 failure -- `setattr` on an instance, a patched module attribute the caller
 imported by value, a fixture that replaces a symbol the code re-imports.
 
+**133. `.env.test` SETS `CACHE_TYPE=NullCache` (`.env.test:11`), SO EVERY
+`@cache.memoize` IS INERT UNDER TEST -- DO NOT DESIGN A DEFENCE AGAINST A STALE
+MEMOIZED VALUE; THERE IS NO CACHE TO GO STALE.** `get_setting`
+(`app/utils.py:202-211`) is decorated `@cache.memoize(timeout=500)` and is the
+case that prompts this fact: reading the decorator alone, a test author's first
+instinct is to worry about a cached value outliving the row it was read from,
+and to reach for `cache.clear()` or a timeout workaround. Under `NullCache`
+every call recomputes from the database, so that worry is unfounded in this
+suite specifically -- worth recording because the decorator is visible in the
+source and the test config is not, so the defence looks obviously necessary
+right up until it is measured against `.env.test`.
+
+**134. `respx` CANNOT OBSERVE `Response.close()`. PROVING A CLOSE REQUIRES A
+RECORDING DOUBLE, NOT AN `is_closed` ASSERTION.** The `httpx.Response` a
+production function calls `.close()` on never leaves that function, and a
+respx-mocked response may already report `is_closed == True` before `close()`
+is ever called -- so an assertion on `is_closed` passes identically whether or
+not the code under test calls `close()` at all. The carrier is D320
+(`app/shared/tasks/users.py`'s email leg, fixed by adding `email_response.close()`
+at `:74`): `test_both_responses_are_closed`
+(`tests/test_shared_tasks_users.py:609`) replaces the module's `httpx_client`
+with a recording double (`_Response`/`_recording_client`, `:99-158`) whose
+`close()` appends the response object to a real list, and asserts
+`len(client.closed) == 2`. **The pre-fix number must be checked, not just the
+post-fix one**: the list holds one entry before the fix (only the IP leg's
+`close()` runs) and two after: a fix that produced `0 == 2` instead of `1 == 2`
+would mean the double was not observing the other leg either, and the fix
+would be passing the test for the wrong reason.
+
+**135. A NAME IMPORTED BY VALUE MUST BE PATCHED IN THE IMPORTING MODULE'S OWN
+NAMESPACE, NOT THE ORIGIN MODULE'S.** `app/shared/tasks/users.py:1` is
+`from time import sleep`, which binds `sleep` inside the `users` module's own
+namespace at import time; `check_user_application` calls
+`sleep(random.randint(1, 30))` at `:50`, once per configured ban-check domain.
+Patching `time.sleep` leaves that binding untouched and the call still resolves
+to the real function, so a test that patches the origin module absorbs the
+full random wait per domain instead of skipping it. The fix is
+`monkeypatch.setattr('app.shared.tasks.users.sleep', ...)`. Same family as fact
+132's class-versus-instance question -- a patch that looks like it should work
+and does not -- and settled by the same probe: make the stub raise and confirm
+the test fails before trusting that it passes for the right reason.
+
+**136. `app/activitypub/signature.py:100-101`'s `@context` REINJECTION IS
+TOP-LEVEL ONLY, AND WHETHER THAT MAKES AN ASSERTION MEANINGFUL OR VACUOUS
+DEPENDS ENTIRELY ON WHETHER THE ACTIVITY IS ANNOUNCE-WRAPPED.** `post_request`
+does `if '@context' not in body: body['@context'] = default_context()`
+immediately before signing and sending -- on `body` as posted, not on anything
+nested inside it. Sub-projects 20-23's senders wrap their objects in an
+Announce, so this reinjection lands on the Announce's own top level and never
+reaches the nested inner object; "no nested `@context`" is therefore a real,
+discriminating assertion there. `app/shared/tasks/flags.py`'s `report_object`
+posts a bare Flag with no wrapper (`tests/test_shared_tasks_flags.py:553`), so
+the SAME reinjection mechanism lands on the Flag itself, with the identical
+value `default_context()` produces in both places -- `@context` is present and
+correct on the wire whether or not the builder set it, so no assertion about
+its presence or its value can distinguish the two cases. One mechanism,
+opposite consequences, decided entirely by whether a wrapper exists: check for
+one before writing a `@context` assertion, rather than copying the nested-
+absence pattern by convention.
+
+**137. THE COVERAGE JSON WRITTEN BY `--cov-report=json:<path>` LANDS INSIDE THE
+`pyfedi_test-runner` CONTAINER, NOT ON THE HOST BIND MOUNT.** Retrieve it with
+`podman cp pyfedi_test-runner_1:<path> <same path>`. Do not conclude a coverage
+run failed because the file is not where the host `--cov` target implied it
+would be, and do not conclude it succeeded without reading the file back,
+since a wrong `--cov` target fails silently and green.
+
+**138. A SURVIVING MUTATION IS INFORMATION ABOUT THE TEST, NOT PROOF THE MUTANT
+IS DEFECTIVE.** `app/shared/tasks/users.py:18`'s outer guard,
+`if not application or not application.user:`, was mutated to drop its second
+disjunct and the mutation SURVIVED against
+`test_an_application_without_a_user_returns_without_requests`
+(`tests/test_shared_tasks_users.py:177`) as that test was originally written:
+with no `ban_check_servers` configured, `get_setting` returns `''`, the loop
+never touches `application.user` either way, and `client.posts == []` holds
+identically with or without the disjunct. **That is a real gap in the test, not
+a defective mutation** -- dropping the disjunct genuinely changes behaviour,
+the original assertion just could not see it. The fix strengthens the test
+rather than declaring the mutation invalid: configure a real domain so the loop
+body is entered, and assert on a captured `current_app.logger.error` call
+instead of on `client.posts` -- under the mutant the function proceeds into the
+loop, dereferences `application.user.ip_address` against `None`, raises, and
+that raise is swallowed and logged by the per-domain `except` before any HTTP
+call is made, so the logger call is what actually discriminates "returned
+before the loop" from "entered the loop and failed inside it." **Guard against
+the opposite error too**: a test rewritten until a mutation dies can end up
+asserting the implementation rather than the behaviour a caller could observe
+-- ask whether the new assertion describes something external, the way "the
+logger fired" does here, before trusting that a kill is real progress.
+
+**139. FOUR DOCUMENTATION-ROT MECHANISMS SHIPPED IN THIS SUB-PROJECT ALONE,
+NONE CATCHABLE BY A SWEEP THAT ONLY CHECKS A CITED LINE RESOLVES.** Listed
+together because the lesson is the same for all four: "re-derive the line
+numbers" is necessary and nowhere near sufficient.
+  1. **Stale ordinal.** `flags.py:57` gained a `private` disjunct in the middle
+     of an existing guard (commit `038f2180`); a neighbouring test's docstring
+     went on calling `community.instance.online()` the guard's "second
+     disjunct" when it had become the third the moment the guard grew a middle
+     term. Fixed by commit `72926db6`.
+  2. **Reused figure.** A docstring said the `object.community` read arrives
+     "fifteen lines later" than the `.get(post_id)` lookup it follows, but
+     fifteen was the distance for a different pair of lines (the module
+     docstring's `:45` minus `:30`); the real distance from `:45` to `:56` is
+     eleven. Only doing the subtraction for the SPECIFIC pair in the sentence
+     catches this. Fixed by commit `db5e340d`.
+  3. **Self-invalidated citation.** `tests/test_shared_tasks_users.py` cited
+     `make_user` at `tests/factories.py:39`, correct when drafted -- and the
+     SAME commit that drafted it edited `factories.py`'s `app.models` import
+     list, pushing the target to `:40`. True when copied, false when committed.
+     **This defeats the obvious defence**: verifying a citation before editing
+     cannot catch a citation the edit itself breaks. The rule is that citations
+     into a file your own diff touches must be re-derived AFTER the diff is
+     final, not before. Fixed by commit `976bf673`.
+  4. **Prose attached to a deleted line, surviving the deletion.** Three
+     `xfail(strict=True, ...)` decorators were removed from
+     `tests/test_shared_tasks_users.py` in the same commit that fixed the
+     `D319` defect they existed to pin -- and the docstrings attached to them
+     still read "EXPECTED TO FAIL" and "do not fix `app/` here", arguing
+     against the very fix that commit made. A decorator and its docstring are
+     one unit: when a line is changed, read the prose ATTACHED to it, not only
+     prose elsewhere that cites it. Fixed by commit `462ff8dc`.
+
+**140. A DOCSTRING SHOULD STATE WHAT ITS TEST CANNOT PROVE.** Two cases from
+this round earned their place.
+  - `test_the_loop_continues_past_an_instance_without_an_inbox`
+    (`tests/test_shared_tasks_flags.py:476`) depends on Postgres returning an
+    unordered, two-row `Instance.id.in_(...)` scan in ascending-id order, which
+    creation order makes likely but does not guarantee. Its docstring says so,
+    and says which DIRECTION it fails in if the assumption breaks: **lax**
+    (passes under a broken, aborting loop too), never **flaky** (fails under a
+    correct one) -- because the campaign's ban on ordered assertions exists to
+    prevent random red, and a lax degradation is a weaker proof but not a
+    source of one.
+  - `test_a_private_community_sends_no_flag`
+    (`tests/test_shared_tasks_flags.py:251`) states outright that the order of
+    `flags.py:57`'s disjuncts is load-bearing in a way the test cannot fail on:
+    `community.private` sits before `not community.instance.online()`, so a
+    private community with no instance row (`Community.instance_id` is a
+    nullable FK, `app/models.py:575`) short-circuits at the `private` check
+    instead of raising `AttributeError` on `None.online()`. Reordering the two
+    disjuncts would reopen that crash without failing this test, because this
+    test's community always has an instance. Both docstrings are more useful
+    than one that claims more than its test can actually deliver.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
