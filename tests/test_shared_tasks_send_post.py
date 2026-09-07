@@ -2961,3 +2961,144 @@ def test_edit_post_rolls_back_and_closes_when_send_post_raises(
 # M1 kills one more test than predicted (3, not 2) and M4's crash-kills
 # land in test-helper IndexErrors rather than inside following_instances().
 # ---------------------------------------------------------------------------
+
+
+# ===========================================================================
+# CLOSING app/shared/tasks/pages.py -- the residual, its establishers, and the
+# AST walk (sub-project 22, Task 9)
+# ===========================================================================
+#
+# THE WHOLE MODULE'S RESIDUAL, from the run that closed this sub-project
+# (243 statements, 2 missing; 128 branches, 3 partial; 98.6522911051213%
+# blended, floor raised from 84 to 98):
+#
+#   missing_lines    [107, 108]
+#   missing_branches [[270, 310], [312, 314], [333, 339]]
+#
+# Every one of those five items belongs to `send_post` (:88-352). The four
+# functions this sub-project scoped -- `move_object` (:390-435), `move_post`
+# (:373-387), `make_post` (:63-72) and `edit_post` (:76-85), extents by
+# `ast.parse` / `FunctionDef.end_lineno`, not by convention -- finished at
+# ZERO missing statements and ZERO missing arms. There was nothing left in
+# them to chase, and no test in this block's name exists because none was
+# needed; that is the reconciliation, not an omission.
+#
+# THE FIVE, WITH THEIR ESTABLISHERS. All five were established by
+# SUB-PROJECT 19 and are argued in full in the block at :1335 above
+# ("FOUR UNREACHABLE ITEMS"); repeated here only as an index, because a
+# reader arriving at the end of the file to ask "what is left?" should not
+# have to find that block first.
+#
+#   :107-108   the mention loop's first `except: pass`. UNREACHABLE FOR EVERY
+#              INPUT. Establisher: the CALLEE. `search_for_user`
+#              (app/user/utils.py:85) returns None rather than raising for
+#              every host `send_post` can hand it. Fact 75's cause 4(b) with
+#              the callee as the establisher.
+#   (270, 310) :270's FALSE arm, `if not community.local_only:`. Establisher:
+#              an EARLIER RETURN. :153-154 returns when `community.local_only`
+#              is set, and `community` is bound once at :91 and never
+#              reassigned, so by :270 the flag is always falsy.
+#   (333, 339) :333's FALSE arm, the same guard a second time, the same
+#              establisher.
+#   (312, 314) :312's FALSE arm. Establisher: an EARLIER WRITE in the same
+#              function -- see :1809 above.
+#
+# THE SIXTH ITEM IS NOT IN THE RESIDUAL AND THAT IS THE POINT: :432's
+# REDUNDANT `instance.online()` CONJUNCT.
+#
+#   :431  `for instance in community.following_instances():`
+#   :432  `if instance.inbox and instance.online() and not
+#         user.has_blocked_instance(instance.id) and not
+#         instance_banned(instance.domain):`
+#
+# `Community.following_instances()` (app/models.py:842-851) is called with its
+# default `include_dormant=False`, so app/models.py:849 has already pinned
+# `Instance.dormant == False` and :850 `Instance.gone_forever == False` in
+# SQL; and `Instance.online()` (app/models.py:118-119) is exactly
+# `not (self.dormant or self.gone_forever)`. The second conjunct is
+# unreachable-False for every row this loop can see. The ESTABLISHER IS THE
+# SQL QUERY, fact 75's cause 4(b) in the fourth form D302 records.
+#
+# This is the SIXTH site of D302 and it took no new number -- D302's cell
+# already generalised from four sites to "every caller of
+# `following_instances()` that re-checks `online()`", and predicted that a
+# fifth belonged in the cell rather than in a new entry. Sub-project 21 closed
+# that prediction with `notes.py:300`; this is the next one and it held again.
+#
+# WHAT MAKES IT WORTH REPEATING A SIXTH TIME IS THE DETECTION METHOD, WHICH
+# DID NOT CHANGE. :432 appears in NO residual: coverage.py records a branch
+# arc at the `if` level and not per conjunct, so a redundant conjunct has no
+# arm to miss and a CLEAN RESIDUAL IS WHAT ONE LOOKS LIKE. `move_object`'s
+# arcs at :432 were complete before anyone noticed the conjunct, exactly as
+# `send_reply`'s and `send_answer`'s were. Found by asking why a
+# four-conjunct guard showed no missing arc -- not by mutation, not by the
+# percentage. Consistent with that, M6 in the record above drops :432's
+# `instance.inbox` conjunct and is a double assertion-kill -- a LIVE conjunct
+# in the same guard, which is the contrast that makes the dead one legible.
+#
+# THE STRENGTH OF THIS SITE'S EVIDENCE, stated so it is not read as stronger
+# than it is: the establisher is READ FROM SOURCE (app/models.py:842-851,
+# :118-119) and not confirmed by a control mutation dropping `online()` from
+# :432. That is the same strength D302's fourth and fifth sites
+# (`notes.py:217`, `:300`) carry, and weaker than its first three
+# (`pages.py:295`, `:350`, `:351`), where deleting each of the three dead
+# conjuncts was measured to leave the suite green while deleting each of the
+# other eight in the same guards failed its named test. Recorded at its real
+# strength rather than promoted to match the sites it resembles.
+#
+# THE AST WALK, run at this commit over `app/shared/tasks/pages.py` for
+# `move_object`, `move_post`, `make_post` and `edit_post`, RAW OUTPUT:
+#
+#   make_post 63 72
+#   edit_post 76 85
+#   move_post 373 387
+#   move_object 390 435
+#
+# No TERNARY line for any of the four. That is a measurement, not the
+# expectation being confirmed: sub-project 21's spec claimed a function had no
+# ternaries by inspection and the walk found one at :303, which is why this
+# reports the raw output.
+#
+# WIDENING THE WALK TO `send_post` FINDS EIGHT, AND ALL EIGHT WERE ALREADY
+# RECONCILED BY SUB-PROJECT 19. Listed with where each is pinned, because
+# "the walk found eight" is only a reconciliation if each is accounted for:
+#
+#   :93   `post.body_html if post.body_html else ''`
+#         '' arm: test_an_article_note_gets_its_title_as_a_paragraph (:1998),
+#         which states it at :2014. Value arm:
+#         test_a_post_body_is_appended_to_the_amended_note (:2047).
+#   :137  `user.ap_id if user.ap_id else user.user_name`
+#         Both arms have their own named test and say so in their docstrings:
+#         ...carries_its_targets_and_bumps_the_unread_count (:429) takes the
+#         `user_name` arm, ...uses_ap_id_when_the_author_has_one (:451) the
+#         other.
+#   :191  `post_body_html if post.type != POST_TYPE_POLL else '<p>' +
+#         post.title + '</p>' + post_body_html`
+#         Poll arm: test_a_poll_note_keeps_its_question_type_and_stays_empty
+#         (:1936), which names :191 at :1950. Non-poll arm: every non-poll
+#         builder test in this file.
+#   :226  `poll.total_votes() if edit else 0`
+#   :229  `choice.num_votes if edit else 0`
+#   :230  `'oneOf' if poll.mode == 'single' else 'anyOf'`
+#         All three are the block at :961-978 above, which ran this same walk
+#         and wrote the three tests it obliged:
+#         test_a_created_polls_vote_counts_are_reported_as_zero (:1001),
+#         test_an_edited_polls_vote_counts_are_reported_in_full (:1024) and
+#         test_a_multiple_choice_poll_is_delivered_under_anyOf (:1044).
+#         `_poll_with_choices` (:981) gives the choices NON-ZERO votes on
+#         purpose, so the two arms of :226 and :229 compute different values.
+#   :250  `'create' if not edit else 'update'`
+#   :252  `'Create' if not edit else 'Update'`
+#         One predicate, `edit`, read twice on adjacent lines, so the two are
+#         reconciled together and no test pins one without the other. The
+#         `not edit` arms are every non-edit delivery test in this file; the
+#         `edit` arms are
+#         test_a_microblog_instance_gets_the_create_directly_on_edit (:1558),
+#         which names :250 at :1562. :252 carries no note of its own anywhere
+#         above -- recorded here so the next reader does not mistake the
+#         silence for an unexamined arm.
+#
+# Fact 87 is why the walk is run at all: coverage.py emits NO arc for a
+# conditional expression, so a region can sit at 100% statements and 100%
+# branches with one arm of every ternary in it never executed.
+# ===========================================================================
