@@ -249,3 +249,45 @@ def test_lock_post_reply_sends_a_lock_to_a_remote_community(db_session, http_moc
     assert lock['type'] == 'Lock'
     assert lock['object'] == s.reply.public_url()
     assert lock['object'] != s.post.public_url()
+
+
+def test_a_local_only_community_sends_no_lock(db_session, http_mock):
+    """`:89`'s first disjunct.
+
+    NO ROUTE IS REGISTERED. `http_mock` is built with `assert_all_called=True`
+    (tests/conftest.py:342), so a route registered here and never called would
+    fail this test for the wrong reason. The follower is built WITHOUT a route
+    for the same reason.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    inst = make_instance('follower.example', software='lemmy')
+    inst.inbox = PEER_INBOX
+    member = make_user(inst, 'member_follower')
+    make_community_member(member, s.community)
+    s.community.local_only = True
+    db.session.commit()
+
+    lock_post(None, s.user.id, s.post.id)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_an_offline_community_instance_sends_no_lock(db_session, http_mock):
+    """`:89`'s third disjunct after Task 3, its second today.
+
+    THE CONTROL IS TASK 1's SMOKE TEST, which runs the same path with an online
+    instance and DOES deliver. Without that pairing, zero rows passes against
+    any breakage that stops delivery for any reason.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s, online=False)
+    inst = make_instance('follower.example', software='lemmy')
+    inst.inbox = PEER_INBOX
+    member = make_user(inst, 'member_follower')
+    make_community_member(member, s.community)
+    db.session.commit()
+
+    lock_post(None, s.user.id, s.post.id)
+
+    assert db.session.query(ActivityPubLog).count() == 0
