@@ -4650,9 +4650,16 @@ leaves the two arms holding.
 KILL/SURVIVE ASYMMETRY AS A DEFECT IN THE TESTS, NOT IN THE CODE.**
 `app/shared/tasks/adds.py` and `app/shared/tasks/removes.py` are the same file
 under two names: `diff` reports eight hunks, all of them name substitutions, and
-rewriting the token `remove` to `add` in all its forms makes them byte-identical.
-Sub-project 23 applied eight single-line mutations to each file separately -- 16
-runs -- and every pair came back with the same kill count, the same kill type
+normalising all eight of them makes the files byte-identical. **The
+normalisation has to be hunk-directed, not a blind `remove`->`add` rewrite**:
+`unsticky_post` -> `sticky_post` is a PREFIX deletion rather than a token
+substitution, and `:22`'s `For Announce, remove @context from inner object`
+contains the English word `remove` identically in BOTH files, so a blind rewrite
+manufactures two spurious differences on a pair that has not diverged. The
+verified recipe is in D318's cell and at the end of
+`tests/test_shared_tasks_add_remove.py`.
+Sub-project 23 applied ten single-line mutations to each file separately -- **20
+runs** -- and every pair came back with the same kill count, the same kill type
 (sole/multi, assertion/crash) and mirrored test names. **The value of the second
 run of each pair is not confirmation; it is that a DISAGREEMENT would have been
 a finding about the tests.** Identical files cannot legitimately answer the same

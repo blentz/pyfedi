@@ -10,15 +10,28 @@ removes.py` reports exactly EIGHT hunks and every one of them is a name
 substitution (`Add:`/`Remove:`, `sticky_post`/`unsticky_post`,
 `add_mod`/`remove_mod`, `add_object`/`remove_object`, `add_id`/`remove_id`, the
 `add`/`remove` dict variable, the `'Add'`/`'Remove'` type literal, and the
-`/activities/add/`-vs-`/activities/remove/` path segment). Rewriting the token
-`remove` to `add` in all of its forms -- identifier, string literal and prose
-word -- makes the two files BYTE-IDENTICAL. **An earlier version of this
-paragraph said "after normalising names the only textual difference is one
-docstring word", which is short of the truth in both directions**: two string
-literals also differ, and once the docstring word is normalised with the rest
-nothing differs at all. They share even their dead imports -- `post_request` is
-imported at `:2` of each and called in neither; only `send_post_request` is
-called, at `:98` and `:100` of both.
+`/activities/add/`-vs-`/activities/remove/` path segment). Normalising all eight
+of those hunks makes the two files BYTE-IDENTICAL.
+
+THE NORMALISATION IS HUNK-DIRECTED, NOT A BLIND remove-to-add REWRITE, and the
+runnable recipe is at the END OF THIS FILE rather than here, because it contains
+regex escapes a docstring would eat. Two hunks defeat a blind rewrite:
+`unsticky_post` -> `sticky_post` is the deletion of an `un` PREFIX, not a
+substitution of the token `remove`; and `:22` -- "For Announce, remove @context
+from inner object" -- carries the English word `remove` IDENTICALLY IN BOTH
+FILES, so rewriting it changes a line that never differed. A blind rewrite
+manufactures two spurious differences on a pair that has not diverged, which is
+the opposite of what the equivalence claim is for.
+
+**Two earlier versions of this paragraph were wrong and are corrected here rather
+than quietly replaced**: the first said "after normalising names the only textual
+difference is one docstring word", which missed two string-literal hunks and also
+understated the result, since normalising everything leaves nothing at all; the
+second gave the blind-rewrite recipe just disclaimed.
+
+They share even their dead imports -- `post_request` is imported at `:2` of each
+and called in neither; only `send_post_request` is called, at `:98` and `:100` of
+both.
 
 That equivalence is why one file tests both, and it is asserted rather than
 assumed (see `test_the_twins_are_structurally_identical` below), so a future
@@ -971,6 +984,93 @@ def test_unsticky_post_closes_the_session_on_the_happy_path(
 # Tree state after every mutation cycle: `git diff -- app/` empty and both
 # app/shared/tasks/adds.py and app/shared/tasks/removes.py at 100 lines,
 # verified before starting the next mutation.
+#
+# ---------------------------------------------------------------------------
+# APPENDED BY TASK 8 (the register round), NOT PART OF TASK 7's SWEEP.
+#
+# Two mutations were added after the sweep, so the summary above -- "8/8
+# mutations x 2 twins = 16/16 runs" -- is Task 7's figure and is left standing
+# as written. The running total INCLUDING these two is 10 mutations x 2 twins
+# = 20/20 runs, all kills, still with zero asymmetry. They are marked here
+# rather than folded in above, because backdating a later measurement into an
+# earlier task's record is how a record becomes a summary.
+#
+# WHY THEY WERE ADDED. The `except` handlers at :34-36 and :49-51 were the only
+# statements in either twin with no mutation of their own. :35's reversion had
+# in fact been measured -- by Task 6's REVIEW, on both twins -- but that
+# measurement lived only in the sub-project workspace, which is gitignored and
+# will not exist for a future reader. A citation into a file that will not exist
+# is worse than no citation, so it is re-run here and committed. :50 had never
+# been mutated at all, and is added at the same time so that BOTH wrappers'
+# handlers carry a sole kill by a distinct named test rather than only one.
+#
+# Both were dry-run without `-i` first (fact 126) and the produced line read
+# back before applying. Same protocol as M1-M8: one file at a time, restored
+# with `git checkout -- app/`, `git diff -- app/` confirmed empty and both
+# files confirmed at 100 lines after every restore. Counts are as-of this
+# commit, against the same 35-test file.
+#
+# M9  :35  sticky_post/unsticky_post's rollback -> pass
+#     sed -i '35s/session\.rollback()/pass/'
+#     -> produced: "            pass"
+#     adds.py:    KILL, sole assertion-kill (1 failed / 34 passed in 5.17s)
+#                 test_sticky_post_rolls_back_and_closes_on_a_missing_post
+#     removes.py: KILL, sole assertion-kill (1 failed / 34 passed in 5.32s)
+#                 test_unsticky_post_rolls_back_and_closes_on_a_missing_post
+#     The failing assertion is `record.calls == ['rollback', 'close']`, which
+#     reports `['close'] == ['rollback', 'close']` -- the recording Session
+#     observes the missing rollback directly rather than inferring it from a
+#     side effect. Symmetric across twins.
+#     Independently measured once before, by Task 6's review, with the same
+#     result on both twins; this run reproduces it and commits it.
+#
+# M10 :50  add_mod/remove_mod's rollback -> pass
+#     sed -i '50s/session\.rollback()/pass/'
+#     -> produced: "            pass"
+#     adds.py:    KILL, sole assertion-kill (1 failed / 34 passed in 5.21s)
+#                 test_add_mod_rolls_back_and_closes_on_a_missing_mod
+#     removes.py: KILL, sole assertion-kill (1 failed / 34 passed in 5.34s)
+#                 test_remove_mod_rolls_back_and_closes_on_a_missing_mod
+#     NOT a duplicate of M9, and the sole-kill sets prove it: :35 lives in
+#     sticky_post's handler and :50 in add_mod's, so each kills exactly the
+#     test for ITS OWN wrapper and neither touches the other's. Had the two
+#     handlers been reachable from one test, M9 would already have killed this
+#     test too. Symmetric across twins.
+# ---------------------------------------------------------------------------
+#
+# ---------------------------------------------------------------------------
+# The twins' byte-identity recipe (Task 8)
+#
+# D318 records that the two modules are the same file under two names. The
+# check is `diff app/shared/tasks/adds.py app/shared/tasks/removes.py`, which
+# reports EIGHT hunks, every one a name substitution. Normalising all eight
+# yields byte identity -- but the normalisation must be HUNK-DIRECTED. A blind
+# rewrite of the token `remove` to `add` does NOT work, for two reasons:
+#
+#   1. `unsticky_post` -> `sticky_post` is the deletion of an `un` PREFIX. No
+#      substitution of `remove` can produce it, so :27 still differs.
+#   2. :22 -- "For Announce, remove @context from inner object" -- carries the
+#      English word `remove` IDENTICALLY IN BOTH FILES. Rewriting it changes a
+#      line that never differed, so :22 differs afterwards when it did not
+#      before.
+#
+# A blind rewrite therefore reports TWO spurious differences on a pair that has
+# not diverged, which is precisely the failure D318 exists to prevent. The
+# recipe below is verified to exit 0 at this commit:
+#
+#   sed -e 's/\bunsticky_post\b/sticky_post/g' \
+#       -e 's/\bremove_\([a-z]*\)/add_\1/g' \
+#       -e 's/\bRemove\b/Add/g' \
+#       -e '22!s/\bremove\b/add/g' \
+#       app/shared/tasks/removes.py | diff - app/shared/tasks/adds.py
+#
+# The `22!` address is the whole of point 2 and is the part that looks like a
+# typo. It is not.
+#
+# This recipe is a CONVENIENCE, not the invariant. The committed check is
+# test_the_twins_are_structurally_identical, which re-parses both files and
+# asserts line count and ast extents; the recipe is what a reader runs by hand
+# when they want to see the difference set rather than a pass/fail.
 # ---------------------------------------------------------------------------
 
 
