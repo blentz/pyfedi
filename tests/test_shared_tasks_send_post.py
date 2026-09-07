@@ -2522,3 +2522,50 @@ def test_a_non_community_target_raises_task_error(db_session):
     with pytest.raises(TaskError):
         move_object(db.session, s.user.id, s.post, origin=s.community,
                     target=s.post)
+
+
+def test_the_remote_move_carries_its_full_key_set_and_keeps_its_context(
+        db_session, http_mock):
+    """:416's FALSE arm, delivered by :435.
+
+    `@context` is asserted PRESENT because nothing nests this object on this
+    path -- :417's `del` runs only under `is_local()`, which is not taken
+    here, so the `@context` built at :409 survives to the wire.
+
+    `origin` and `target` are the two fields that distinguish a Move from
+    every other activity this module sends, and they must differ: asserting
+    both is what catches a mutant that passed the same community twice.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+    target = make_community('c2')
+    db.session.commit()
+
+    _move(s, target=target)
+
+    sent = _sent_activity(route)
+    assert sent['type'] == 'Move'
+    assert set(sent) == {'id', 'type', 'actor', 'object', '@context',
+                         'origin', 'target', 'to', 'cc'}
+    assert sent['actor'] == s.user.public_url()
+    assert sent['object'] == s.post.public_url()
+    assert sent['origin'] == s.community.public_url()
+    assert sent['target'] == target.public_url()
+    assert sent['origin'] != sent['target']
+    assert sent['to'] == ['https://www.w3.org/ns/activitystreams#Public']
+    assert sent['cc'] == [s.community.public_url()]
+
+
+def test_the_remote_move_is_signed_as_the_user(db_session, http_mock):
+    """:435 signs with `user.public_url() + '#main-key'`, where :433 signs as
+    the COMMUNITY. `keyId` is the only observable that separates them, and the
+    user's and community's public urls differ in path, so a mutant swapping
+    the signer produces a valid but wrong keyId and this fails rather than
+    merely not-noticing.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    _move(s)
+
+    assert _key_id_of(route) == s.user.public_url() + '#main-key'
