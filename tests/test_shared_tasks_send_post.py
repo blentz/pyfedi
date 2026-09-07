@@ -2776,3 +2776,49 @@ def test_move_post_closes_the_session_on_the_happy_path(
     move_post(None, s.user.id, s.community.id, target.id, s.post.id)
 
     assert record.calls == ['close']
+
+
+def test_make_post_delivers_a_create(db_session, http_mock):
+    """`make_post` (:63-72), imported as `make_post_task` to avoid the factory
+    of the same name, delegates to `send_post` with the default
+    `edit=False`. `type == 'Create'` is the witness that separates it from
+    `edit_post`."""
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    make_post_task(None, s.post.id)
+
+    assert _sent_activity(route)['type'] == 'Create'
+
+
+def test_make_post_rolls_back_and_closes_when_send_post_raises(
+        db_session, monkeypatch):
+    """:68-70's except arm and :71-72's finally, reached by a NATURAL raise.
+
+    `send_post:89` is `session.query(Post).get(post_id)`, which returns None
+    for an absent id, and `:90`'s `post.author` raises AttributeError.
+    Nothing is faked, so a refactor that stopped raising would fail this test
+    rather than leave it green.
+    """
+    s = _seed()
+    record = _recording_task_session(monkeypatch)
+
+    with pytest.raises(AttributeError):
+        make_post_task(None, s.post.id + 1000)
+
+    assert record.calls == ['rollback', 'close']
+
+
+def test_edit_post_rolls_back_and_closes_when_send_post_raises(
+        db_session, monkeypatch):
+    """:81-83's except arm and :84-85's finally -- `edit_post`'s own copy of
+    the handler, which is a SEPARATE function body from `make_post`'s and so a
+    separate pair of arcs. Written out rather than parametrised so each
+    function's arms are attributable to a named test."""
+    s = _seed()
+    record = _recording_task_session(monkeypatch)
+
+    with pytest.raises(AttributeError):
+        edit_post(None, s.post.id + 1000)
+
+    assert record.calls == ['rollback', 'close']
