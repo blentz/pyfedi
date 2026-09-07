@@ -20,9 +20,9 @@ from flask_login import login_user
 
 from app import db
 from app.activitypub.signature import RsaKeys
-from app.models import (ActivityPubLog, ChatMessage, Community, CommunityBan, CommunityBlock, CommunityFlair,
-                        CommunityFlairBlock, CommunityJoinRequest, CommunityMember, Conversation, Domain,
-                        DomainBlock, Feed, FeedItem, FeedJoinRequest, FeedMember, Instance, InstanceBan,
+from app.models import (ActivityPubLog, BannedInstances, ChatMessage, Community, CommunityBan, CommunityBlock,
+                        CommunityFlair, CommunityFlairBlock, CommunityJoinRequest, CommunityMember, Conversation,
+                        Domain, DomainBlock, Feed, FeedItem, FeedJoinRequest, FeedMember, Instance, InstanceBan,
                         InstanceBlock, NotificationSubscription, Poll, PollChoice, Post, PostReply,
                         PostReplyBookmark, PostReplyVote, PostVote, Role, RolePermission, Site, User, UserBlock,
                         UserFollower, UserFollowRequest, UserRegistration, hidden_posts, read_posts, user_role,
@@ -1107,3 +1107,17 @@ def make_user_registration(user: User, answer: str = 'why', status: int = 0) -> 
     db.session.add(application)
     db.session.commit()
     return application
+
+
+def make_banned_instance(domain: str) -> BannedInstances:
+    """A row that makes `instance_banned(domain)` return True.
+
+    `app/utils.py:2335` opens its OWN task session and queries
+    `BannedInstances` by exact domain, then separately by a `*` wildcard
+    pattern. This factory covers the exact-match arm; the wildcard arm is not
+    exercised by the outbound delivery gates that call it.
+    """
+    banned = BannedInstances(domain=domain)
+    db.session.add(banned)
+    db.session.commit()
+    return banned

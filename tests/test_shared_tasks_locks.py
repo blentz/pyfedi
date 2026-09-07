@@ -47,8 +47,8 @@ from app.shared.tasks.locks import (
     lock_post, lock_post_reply, unlock_post, unlock_post_reply,
 )
 from tests.factories import (
-    make_community, make_community_member, make_instance, make_post,
-    make_post_reply, make_user,
+    make_banned_instance, make_community, make_community_member,
+    make_instance, make_instance_block, make_post, make_post_reply, make_user,
 )
 
 PEER_INBOX = 'https://peer.example/inbox'
@@ -577,3 +577,105 @@ def test_the_announce_addresses_the_communitys_followers(db_session, http_mock):
     announce = _sent_activity(route)
     assert announce['cc'] == ['https://test.piefed.local/c/c1/followers']
     assert announce['object']['cc'] == [s.community.public_url()]
+
+
+def test_an_instance_without_an_inbox_is_skipped_and_the_loop_continues(
+        db_session, http_mock):
+    """`:141`'s first conjunct, with a second follower proving the loop
+    CONTINUES rather than aborting.
+
+    THE INBOXLESS FOLLOWER IS CREATED FIRST so it takes the lower id. This
+    relies on Postgres returning a small unordered join in ascending id --
+    an assumption about the query plan, not a guarantee. If it ever breaks
+    this test degrades to LAX (it would pass under an aborting loop too), never
+    to FLAKY: there is no direction in which a correct, continuing loop starts
+    failing. A rigorous proof would control the order `:140` returns rows in,
+    which this file does not do because those rows come from the task session.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    dud = make_instance('inboxless.example', software='lemmy')
+    dud.inbox = None
+    dud_member = make_user(dud, 'member_inboxless')
+    make_community_member(dud_member, s.community)
+    db.session.commit()
+    route, _good = _follower(s, http_mock, inbox=OTHER_INBOX,
+                             domain='good.example')
+
+    lock_post(None, s.user.id, s.post.id)
+
+    assert _delivered_inboxes(route) == {OTHER_INBOX}
+    assert len(route.calls) == 1
+
+
+def test_a_blocked_instance_is_skipped_and_the_loop_continues(
+        db_session, http_mock):
+    """`:141`'s third conjunct, `not user.has_blocked_instance(instance.id)`.
+
+    `User.has_blocked_instance` (app/models.py:1467-1471) reads InstanceBlock
+    through `db.session` -- which `patch_db_session` has pointed at the
+    wrapper's task session for the duration of this call, so the row committed
+    here is visible.
+
+    Blocked follower created first, for the reason the test above states.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    blocked = make_instance('blocked.example', software='lemmy')
+    blocked.inbox = PEER_INBOX
+    blocked_member = make_user(blocked, 'member_blocked')
+    make_community_member(blocked_member, s.community)
+    make_instance_block(s.user, blocked)
+    db.session.commit()
+    route, _good = _follower(s, http_mock, inbox=OTHER_INBOX,
+                             domain='good.example')
+
+    lock_post(None, s.user.id, s.post.id)
+
+    assert _delivered_inboxes(route) == {OTHER_INBOX}
+
+
+def test_a_banned_instance_is_skipped_and_the_loop_continues(
+        db_session, http_mock):
+    """`:141`'s fourth conjunct, `not instance_banned(instance.domain)`.
+
+    `instance_banned` (app/utils.py:2335) opens ITS OWN task session -- a third
+    session live during this call, after the wrapper's and any the handler
+    uses. The BannedInstances row must therefore be COMMITTED, not merely
+    added, to be visible to it.
+
+    Banned follower created first, for the reason the inbox test states.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    banned = make_instance('banned.example', software='lemmy')
+    banned.inbox = PEER_INBOX
+    banned_member = make_user(banned, 'member_banned')
+    make_community_member(banned_member, s.community)
+    make_banned_instance('banned.example')
+    db.session.commit()
+    route, _good = _follower(s, http_mock, inbox=OTHER_INBOX,
+                             domain='good.example')
+
+    lock_post(None, s.user.id, s.post.id)
+
+    assert _delivered_inboxes(route) == {OTHER_INBOX}
+
+
+def test_two_followers_both_receive_the_announce(db_session, http_mock):
+    """`:140`'s loop delivering more than once -- the arc back to the top.
+
+    Set-based, plus a per-route count so a duplicate delivery to one of the two
+    cannot hide behind a matching set.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    first, _f = _follower(s, http_mock, inbox=PEER_INBOX, domain='first.example')
+    second, _sec = _follower(s, http_mock, inbox=OTHER_INBOX,
+                             domain='second.example')
+
+    lock_post(None, s.user.id, s.post.id)
+
+    assert _delivered_inboxes(first, second) == {PEER_INBOX, OTHER_INBOX}
+    assert len(first.calls) == 1
+    assert len(second.calls) == 1
