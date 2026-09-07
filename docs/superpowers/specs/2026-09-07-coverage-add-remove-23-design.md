@@ -270,7 +270,16 @@ Next free number is **D316** — confirm against the register. Facts end at
    field asserted as `ap_featured_url` on one arm and `ap_moderators_url` on the
    other.
 4. `:58`'s two arms are covered, and the `NoResultFound` from `:61` is reached by
-   a natural raise.
+   a natural raise. **[Corrected by the final review wave, not backdated.] This
+   criterion was ticked at the round's close and was NOT met at that point: both
+   `pytest.raises(NoResultFound)` tests passed `s.mod.id + 1000` with a valid
+   `s.community.id`, so the raise happened at `:47` inside the wrapper, twelve
+   lines before `add_object` ran, and no test anywhere passed an invalid
+   `community_id`. It is met now, by
+   `test_add_object_raises_for_a_community_id_with_no_row` and its `remove_`
+   twin, which call the builders directly. Zero coverage effect -- an exception
+   out of `.one()` is not a branch arc -- so the gap was in spec conformance and
+   in what the suite pins, not in the number.**
 5. Each wrapper's error mechanic is established **by reading** and asserted
    accordingly — `AttributeError` for the `.get()` path, `NoResultFound` for the
    `.one()` path — with both arms witnessed by a recording `Session`.

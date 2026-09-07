@@ -325,6 +325,13 @@ def test_the_twins_are_structurally_identical(db_session):
     count -- because a stricter one would fail on the legitimate naming
     differences, and a looser one would not notice a function being added.
     """
+    # [SUPERSEDED BY THE FINAL REVIEW WAVE -- this block is the plan as written,
+    #  kept so citations into it resolve. The committed test compares NORMALISED
+    #  TEXT, not shape: the justification above is false, because the
+    #  hunk-directed recipe at the end of the test file normalises exactly the
+    #  legitimate naming differences and nothing else. Shape alone passes when
+    #  one twin loses a conjunct, gains a swapped ternary, or renames a local --
+    #  all three demonstrated. Read the committed function, not this one.]
     import ast
 
     def shape(path):
@@ -1264,7 +1271,7 @@ From spec §9:
 1. All six functions across the two twins are at zero uncovered statements and zero uncovered branch arms, except any proved unreachable with a written argument **naming its establisher**.
 2. Both end-to-end paths — local `Announce` and remote direct post — are asserted on **serialized outbound bytes** for **each** twin, with `@context` asserted present on the outermost object and absent on the nested one.
 3. `:74`'s ternary has both arms exercised by named tests in each twin, reconciled by an AST walk, with `target` asserted as `ap_featured_url` on one arm and `ap_moderators_url` on the other — **and those two columns set to distinct non-None values**, or the assertion cannot discriminate.
-4. `:58`'s two arms are covered, and the `NoResultFound` from `:61` is reached by a natural raise.
+4. `:58`'s two arms are covered, and the `NoResultFound` from `:61` is reached by a natural raise. **[Corrected by the final review wave, not backdated.] Ticked at the round's close and not met at that point** -- both `pytest.raises(NoResultFound)` tests raised at `:47`, twelve lines before `add_object` ran. Met now by `test_add_object_raises_for_a_community_id_with_no_row` and its `remove_` twin; see the design's criterion 4.
 5. Each wrapper's error mechanic is established **by reading** and asserted accordingly — `AttributeError` for the `.get()` path, `NoResultFound` for the `.one()` path — with both arms witnessed by a recording `Session`.
 6. Exactly two production changes land, the `private` conjunct at `adds.py:63` and `removes.py:63`, each proved by a test that fails before it, with both files still **100 lines**.
 7. Every mutation is run against **both** twins, and any kill/survive asymmetry between them is reported as a finding.
