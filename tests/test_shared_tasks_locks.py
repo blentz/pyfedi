@@ -209,9 +209,35 @@ def test_lock_post_reply_sends_a_lock_to_a_remote_community(db_session, http_moc
     `:143-145`'s else arm sending the bare Lock to the community's own inbox
     rather than wrapping it in an Announce.
 
-    The assertion that earns this test its place is `object`: it is the
+    The assertion that earns this test's place is `object`: it is the
     REPLY's url, which is what distinguishes `:61`'s lookup from `:31`'s
     reaching the same handler.
+
+    NO `@context` ASSERTION BELONGS ON THIS PATH. On the remote, non-undo
+    route `lock_object` never reaches any of its three deletion sites
+    (`:107`, `:122`, `:125`) -- those all sit behind `is_undo` or
+    `community.is_local()`, neither of which is true here -- so `lock` keeps
+    the `@context` `:100` set. But even a regression that stripped it
+    unconditionally would not be caught by asserting its presence: the Lock
+    IS the top-level posted object on this path, and
+    `send_post_request`/`post_request` reinjects a default `@context` at
+    `app/activitypub/signature.py:100-101`
+    (`if '@context' not in body: body['@context'] = default_context()`)
+    before the bytes leave, using the SAME `default_context()` value either
+    way. `_sent_activity` reads the post-reinjection bytes, so the key (and
+    its value) is indistinguishable between "never deleted" and
+    "deleted-then-reinjected" -- nothing on the wire discriminates them, and
+    no assertion here can.
+
+    Contrast the NESTED case: a later task's Announce test asserts the
+    ABSENCE of `@context` inside the Lock nested at `announce['object']`.
+    That assertion does discriminate, because the top-level reinjection at
+    signature.py:100-101 never reaches into a nested object -- it only
+    inspects the top-level `body` dict handed to it, so a nested `@context`
+    that `lock_object` failed to delete would survive onto the wire and the
+    absence assertion would catch it. The reinjection's blindness to nesting
+    is exactly what makes that later assertion meaningful where this one
+    would not be.
     """
     s = _seed(local_community=False, with_keys=True)
     _make_deliverable(s)
@@ -223,4 +249,3 @@ def test_lock_post_reply_sends_a_lock_to_a_remote_community(db_session, http_moc
     assert lock['type'] == 'Lock'
     assert lock['object'] == s.reply.public_url()
     assert lock['object'] != s.post.public_url()
-    assert '@context' in lock
