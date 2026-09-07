@@ -674,3 +674,161 @@ def test_one_instance_is_skipped_while_another_receives_the_remove(
 
     assert good.route.call_count == 1
     assert db.session.query(ActivityPubLog).count() == 1
+
+
+def test_sticky_post_delivers_an_add_targeting_featured(db_session, http_mock):
+    """`sticky_post` (:27-38) calls `add_object` with NO community_id, so it
+    drives :58's true arm and :74's false arm. `send_async` is accepted and
+    ignored; None is passed to prove it is not read."""
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    sticky_post(None, s.user.id, s.post.id)
+
+    sent = _sent_activity(route)
+    assert sent['type'] == 'Add'
+    assert sent['target'] == FEATURED_URL
+
+
+def test_unsticky_post_delivers_a_remove_targeting_featured(
+        db_session, http_mock):
+    """`unsticky_post` (:27-38 of removes.py) -- the twin."""
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    unsticky_post(None, s.user.id, s.post.id)
+
+    sent = _sent_activity(route)
+    assert sent['type'] == 'Remove'
+    assert sent['target'] == FEATURED_URL
+
+
+def test_add_mod_delivers_an_add_targeting_moderators(db_session, http_mock):
+    """`add_mod` (:42-53) passes community_id, driving :58's false arm and
+    :74's true arm. The `target` difference from `sticky_post` is the whole
+    witness that the two wrappers take opposite arms."""
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    add_mod(None, s.user.id, s.mod.id, s.community.id)
+
+    sent = _sent_activity(route)
+    assert sent['type'] == 'Add'
+    assert sent['target'] == MODERATORS_URL
+    assert sent['object'] == s.mod.public_url()
+
+
+def test_remove_mod_delivers_a_remove_targeting_moderators(
+        db_session, http_mock):
+    """`remove_mod` (:42-53 of removes.py) -- the twin."""
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    remove_mod(None, s.user.id, s.mod.id, s.community.id)
+
+    sent = _sent_activity(route)
+    assert sent['type'] == 'Remove'
+    assert sent['target'] == MODERATORS_URL
+
+
+def test_sticky_post_rolls_back_and_closes_on_a_missing_post(
+        db_session, monkeypatch):
+    """adds.py:34-36's except arm and :37-38's finally, reached by a NATURAL
+    raise.
+
+    `:32` uses `.get()`, which returns None for an absent id, and `:59`'s
+    `object.community` then raises AttributeError -- NOT NoResultFound, which
+    is what `:47`'s `.one()` raises twelve lines away in the same file.
+
+    The recorded call ORDER is the assertion that `finally` ran after
+    `except`, which a bare "was close called" check could not distinguish from
+    a wrapper that closed instead of rolling back.
+    """
+    import app.shared.tasks.adds as adds_module
+    s = _seed()
+    record = _recording_task_session(monkeypatch, adds_module)
+
+    with pytest.raises(AttributeError):
+        sticky_post(None, s.user.id, s.post.id + 1000)
+
+    assert record.calls == ['rollback', 'close']
+
+
+def test_unsticky_post_rolls_back_and_closes_on_a_missing_post(
+        db_session, monkeypatch):
+    """removes.py's copy of the same handler -- a SEPARATE function body and
+    so a separate pair of arcs. Written out rather than parametrised so each
+    twin's arms are attributable to a named test."""
+    import app.shared.tasks.removes as removes_module
+    s = _seed()
+    record = _recording_task_session(monkeypatch, removes_module)
+
+    with pytest.raises(AttributeError):
+        unsticky_post(None, s.user.id, s.post.id + 1000)
+
+    assert record.calls == ['rollback', 'close']
+
+
+def test_add_mod_rolls_back_and_closes_on_a_missing_mod(
+        db_session, monkeypatch):
+    """adds.py:49-51's except arm, reached by the OTHER lookup style.
+
+    `:47` uses `.filter_by(id=mod_id).one()`, which raises NoResultFound for an
+    absent id -- a different exception from the sibling wrapper twelve lines
+    above, in the same file. This is why each wrapper's mechanic is established
+    by reading rather than inherited.
+    """
+    from sqlalchemy.exc import NoResultFound
+    import app.shared.tasks.adds as adds_module
+    s = _seed()
+    record = _recording_task_session(monkeypatch, adds_module)
+
+    with pytest.raises(NoResultFound):
+        add_mod(None, s.user.id, s.mod.id + 1000, s.community.id)
+
+    assert record.calls == ['rollback', 'close']
+
+
+def test_remove_mod_rolls_back_and_closes_on_a_missing_mod(
+        db_session, monkeypatch):
+    """removes.py's copy of the `.one()` handler -- the twin."""
+    from sqlalchemy.exc import NoResultFound
+    import app.shared.tasks.removes as removes_module
+    s = _seed()
+    record = _recording_task_session(monkeypatch, removes_module)
+
+    with pytest.raises(NoResultFound):
+        remove_mod(None, s.user.id, s.mod.id + 1000, s.community.id)
+
+    assert record.calls == ['rollback', 'close']
+
+
+def test_sticky_post_closes_the_session_on_the_happy_path(
+        db_session, http_mock, monkeypatch):
+    """adds.py's finally on the SUCCESS path -- `close` with no `rollback`.
+
+    The control for the error tests: without it, `finally` running is only ever
+    observed alongside an exception, and a wrapper that closed only in the
+    except arm would pass everything else in this file.
+    """
+    import app.shared.tasks.adds as adds_module
+    s = _seed(local_community=False, with_keys=True)
+    _remote_inbox(s, http_mock)
+    record = _recording_task_session(monkeypatch, adds_module)
+
+    sticky_post(None, s.user.id, s.post.id)
+
+    assert record.calls == ['close']
+
+
+def test_unsticky_post_closes_the_session_on_the_happy_path(
+        db_session, http_mock, monkeypatch):
+    """removes.py's happy-path control -- the twin."""
+    import app.shared.tasks.removes as removes_module
+    s = _seed(local_community=False, with_keys=True)
+    _remote_inbox(s, http_mock)
+    record = _recording_task_session(monkeypatch, removes_module)
+
+    unsticky_post(None, s.user.id, s.post.id)
+
+    assert record.calls == ['close']
