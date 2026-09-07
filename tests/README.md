@@ -4961,7 +4961,7 @@ ordering arrangement might buy the test nothing at all. This round tested
 that empirically rather than leaving it as an assumption: commit `ddc16e6c`
 records **M17**, a `continue` -> `break` mutation applied to `send_vote`'s
 delivery loop and run four times, "killed every time, by all three skip
-tests" -- the same three test names failing each time.** **State exactly what that licenses and no more**: four runs
+tests" -- the same three test names failing each time. **State exactly what that licenses and no more**: four runs
 against one Postgres instance and one dataset is an environment-scoped
 observation, not a proof of order-independence in general -- a different
 Postgres version, a different query planner choice, or a differently-sized

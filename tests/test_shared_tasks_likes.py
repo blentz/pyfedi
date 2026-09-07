@@ -535,6 +535,13 @@ def test_a_notif_server_publishes_to_redis_instead_of_sending(
     NO ROUTE IS REGISTERED -- the whole point is that nothing goes out over
     HTTP on this path -- so an accidental send surfaces as an unmatched
     request under `http_mock`.
+
+    `assert body['urls'] == [PEER_INBOX]` BELOW IS A LIST EQUALITY over a
+    `following_instances()`-derived collection. It is deterministic ONLY
+    because this test has exactly one follower. Do not add a second follower
+    to this test without switching that assertion to a set comparison --
+    doing so would reintroduce the ordered-assertion flake class this
+    campaign banned.
     """
     published = []
 
@@ -594,6 +601,22 @@ def test_a_follower_without_an_inbox_is_skipped_and_the_loop_continues(
     the skip instead of continuing past it -- never to FLAKY. Creating the
     good follower first would let such an aborting loop deliver once and pass,
     which is the defect this ordering avoids.
+
+    THE ACTIVITYPUBLOG COUNT IS WHAT MAKES `if instance.inbox and ...`
+    DISCRIMINATE FROM `if True and ...`. `send_post_request` -> `post_request`
+    adds an ActivityPubLog row at `signature.py:105` for EVERY call, even one
+    whose `uri` is `None`, and commits it much later at `:151` -- the two are
+    far apart, and that separation is exactly why the row survives even a
+    call that goes on to fail. Guarded by the `if uri is None or uri == '':`
+    check at `signature.py:109`, a `None`-uri call merely marks that same row
+    `result='failure', exception_message='empty uri'` (`:110-111`) rather than
+    raising or making an httpx request. respx's `assert_all_called=True` never
+    sees the dud's call at all, so a delivered-inboxes assertion alone cannot
+    tell a truthful skip from a mutated one (`instance.inbox and` deleted)
+    that still reaches `send_post_request(None, announce, ...)` and short-
+    circuits before the network. The row count can: one row for the real
+    delivery, zero for a correctly-skipped dud, one MORE if the dud's request
+    is mistakenly attempted.
     """
     s = _seed(with_keys=True)
     _make_deliverable(s)
@@ -609,6 +632,7 @@ def test_a_follower_without_an_inbox_is_skipped_and_the_loop_continues(
 
     assert _delivered_inboxes(route) == {OTHER_INBOX}
     assert len(route.calls) == 1
+    assert db.session.query(ActivityPubLog).count() == 1
 
 
 def test_a_blocked_follower_is_skipped_and_the_loop_continues(
@@ -763,7 +787,7 @@ def test_a_poll_vote_to_an_offline_instance_federates_nowhere(
     assert db.session.query(ActivityPubLog).count() == 0
 
 
-def test_a_poll_voteless_follower_is_skipped_and_the_loop_continues(
+def test_a_poll_follower_without_an_inbox_is_skipped_and_the_loop_continues(
         db_session, http_mock):
     """`vote_for_poll` has its OWN delivery loop at `:224-231`, separate from
     `send_vote`'s at `:135-152` -- a different function with a different
@@ -775,6 +799,18 @@ def test_a_poll_voteless_follower_is_skipped_and_the_loop_continues(
     LAX-not-FLAKY reason `test_a_follower_without_an_inbox_is_skipped...`
     gives for `send_vote`'s loop: `following_instances()` ends in an
     unordered `.distinct().all()`.
+
+    THE ACTIVITYPUBLOG COUNT IS WHAT MAKES `if instance.inbox and ...`
+    DISCRIMINATE FROM `if True and ...`, for the same reason given in
+    `test_a_follower_without_an_inbox_is_skipped_and_the_loop_continues`
+    above: a `None`-uri call into `send_post_request` -> `post_request`
+    still adds and commits an ActivityPubLog row (`signature.py:105`,
+    `:151`) marked `result='failure', exception_message='empty uri'`
+    (`:109-111`) without making an httpx request, so respx's delivered-
+    inboxes assertion alone cannot tell a truthful skip from a mutated
+    `:225` guard (`instance.inbox and` deleted) that still reaches
+    `send_post_request(None, announce, ...)` and short-circuits before the
+    network.
     """
     s = _seed(with_keys=True)
     _make_deliverable(s)
@@ -792,6 +828,7 @@ def test_a_poll_voteless_follower_is_skipped_and_the_loop_continues(
 
     assert _delivered_inboxes(route) == {OTHER_INBOX}
     assert len(route.calls) == 1
+    assert db.session.query(ActivityPubLog).count() == 1
 
 
 def _recording_task_session(monkeypatch):
