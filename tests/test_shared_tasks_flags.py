@@ -53,7 +53,14 @@ _EXAMPLE_TLD_ADDRESS = '93.184.216.34'
 
 
 def _seed(local_community=True, with_keys=False):
-    """instance, reporter, community, post, reply -- committed.
+    """instance, user, author, community, post, reply -- committed, in that
+    binding order (see the `SimpleNamespace(...)` call at the end of this
+    function).
+
+    `user` IS THE REPORTING USER, bound from a local variable named
+    `reporter` -- the returned object has NO field named `reporter`, only
+    `user`. `author` is the user who wrote `post` and `reply`. A caller
+    passes `s.user.id` as `report_post`/`report_reply`'s `user_id` argument.
 
     ORDER IS LOAD-BEARING. `make_community` (tests/factories.py:122) hardcodes
     `instance_id=1` and the db_session teardown resets every sequence, so the
@@ -161,8 +168,9 @@ def _reporting_instance(s, http_mock, inbox=PEER_INBOX, domain='recipient.exampl
     the add is at `:105`. Corrected here.
 
     WHY THE HTTP BODY AND NOT A RECORDER: respx captures the bytes that
-    actually left, at app/activitypub/signature.py:494. A recorder holding the
-    dict would be read back after any in-place mutation.
+    actually left, handed to the transport as `data=body_bytes` at
+    app/activitypub/signature.py:498. A recorder holding the dict would be
+    read back after any in-place mutation.
     """
     recipient = make_instance(domain, software='lemmy')
     recipient.inbox = inbox
