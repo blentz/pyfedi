@@ -257,7 +257,7 @@ def test_the_real_ip_is_hidden_among_three_fakes(db_session, monkeypatch):
     assert submitted[0] == APPLICANT_IP
 
 
-@pytest.mark.xfail(strict=True, reason='D319, fixed in Task 10')
+@pytest.mark.xfail(strict=True, raises=TypeError, reason='D319, fixed in Task 10')
 def test_a_banned_ip_at_the_real_index_counts(db_session, monkeypatch):
     """`:43`, `:46` and `:47` all taken: status 200, results truthy and long
     enough, and the element at `ip_index` true.
@@ -288,34 +288,57 @@ def test_a_banned_ip_at_the_real_index_counts(db_session, monkeypatch):
 
 
 def test_a_non_200_ip_response_counts_nothing(db_session, monkeypatch):
-    """`:43`'s false arm. A 500 skips the whole result block."""
+    """`:43`'s false arm. A 500 skips the whole result block.
+
+    Asserts both legs' URLs were actually requested, in the straight-line
+    order `:37` then `:63` impose. Without this, a regression that makes
+    `:27`'s try raise before `httpx_client.post` is ever reached -- a None
+    `ip_address` breaking `:39`'s `','.join` is the known example, but not
+    the only possible one -- would be swallowed by `:75`'s `except`, skip
+    both legs, leave `warning` at None, and this test would pass having made
+    ZERO requests while claiming to exercise `:43`.
+    """
     s = _seed()
     set_setting('ban_check_servers', 'real.example')
     _no_sleep(monkeypatch)
     _lowest_randint(monkeypatch)
-    _recording_client(monkeypatch, (500, None), (200, [False]))
+    client = _recording_client(monkeypatch, (500, None), (200, [False]))
 
     check_user_application(s.application.id)
 
     db.session.expire_all()
     assert db.session.query(UserRegistration).get(s.application.id).warning is None
+    assert [url for url, _data in client.posts] == [
+        'https://real.example/api/is_ip_banned',
+        'https://real.example/api/is_email_banned',
+    ]
 
 
 def test_an_empty_ip_result_list_counts_nothing(db_session, monkeypatch):
     """`:46`'s `if ip_results` guard, and its `len(ip_results) > ip_index`
     conjunct: an empty list is falsy AND too short. Both fail together here,
     which is why the next test exists to separate them.
+
+    Asserts both legs' URLs were actually requested, in the straight-line
+    order `:37` then `:63` impose -- see
+    `test_a_non_200_ip_response_counts_nothing` for why this guards against a
+    swallowed exception making the "nothing counted" assertion pass on zero
+    requests.
     """
     s = _seed()
     set_setting('ban_check_servers', 'real.example')
     _no_sleep(monkeypatch)
     _lowest_randint(monkeypatch)
-    _recording_client(monkeypatch, (200, []), (200, [False]))
+    client = _recording_client(monkeypatch, (200, []), (200, [False]))
 
     check_user_application(s.application.id)
 
     db.session.expire_all()
     assert db.session.query(UserRegistration).get(s.application.id).warning is None
+    assert [url for url, _data in client.posts] == [
+        'https://real.example/api/is_ip_banned',
+        'https://real.example/api/is_email_banned',
+    ]
 
 
 def test_a_false_result_at_the_real_index_counts_nothing(db_session, monkeypatch):
@@ -324,14 +347,25 @@ def test_a_false_result_at_the_real_index_counts_nothing(db_session, monkeypatch
 
     SEPARATES the third conjunct from the first two, which the empty-list test
     above fails simultaneously.
+
+    Asserts both legs' URLs were actually requested, in the straight-line
+    order `:37` then `:63` impose -- see
+    `test_a_non_200_ip_response_counts_nothing` for why this guards against a
+    swallowed exception making the "nothing counted" assertion pass on zero
+    requests.
     """
     s = _seed()
     set_setting('ban_check_servers', 'real.example')
     _no_sleep(monkeypatch)
     _lowest_randint(monkeypatch)
-    _recording_client(monkeypatch, (200, [False, True, True, True]), (200, [False]))
+    client = _recording_client(
+        monkeypatch, (200, [False, True, True, True]), (200, [False]))
 
     check_user_application(s.application.id)
 
     db.session.expire_all()
     assert db.session.query(UserRegistration).get(s.application.id).warning is None
+    assert [url for url, _data in client.posts] == [
+        'https://real.example/api/is_ip_banned',
+        'https://real.example/api/is_email_banned',
+    ]
