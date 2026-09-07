@@ -5844,14 +5844,26 @@ class TaskError(Exception):
     THIS DOCSTRING FIRST GAVE THE REASON AS A BARE COUNT AND THE COUNT DID NOT
     REPRODUCE, which is why it is now stated structurally. It read "358
     `utils.py:NNN` citations in tracked files, 135 of them at or after :3673".
-    Sweep definition, since it is what the derivations disagree about:
-    occurrences of `app/utils.py:NNN` in tracked files, counting the ENDPOINT
-    of a range citation such as `app/utils.py:5736-5743` (a naive `:NNN` regex
-    misses 5743 and reports 5736 as the maximum), and excluding the
-    auto-generated `#: app/utils.py:NNN` source references in
-    app/translations/**/*.po AND in
+    Sweep definition, since it is what the derivations disagree about, and
+    stated precisely because "count the endpoint" alone is AMBIGUOUS and the
+    two readings give different answers. Occurrences of `app/utils.py:NNN` in
+    tracked files, excluding the auto-generated `#: app/utils.py:NNN` source
+    references in app/translations/**/*.po AND in
     app/translations/lt/LC_MESSAGES/messages.po.original, which that glob
-    misses and which carries the same references.
+    misses and which carries the same references. Then:
+
+      - for the MAXIMUM, take the ENDPOINT of a range citation. A naive `:NNN`
+        regex stops at the start and reports `app/utils.py:5736-5743`'s
+        maximum as 5736, which is wrong: the citation reaches 5743.
+      - for the AT-OR-AFTER :3673 test, take the START. Exactly one citation
+        straddles that boundary -- `app/utils.py:3663-3673`, in D60's cell at
+        findings.md:2799 -- so endpoint-counting there gives 136, not 135.
+
+    NO SINGLE RULE APPLIED UNIFORMLY YIELDS BOTH 135 AND :5743: endpoints
+    everywhere gives 136 and :5743, starts everywhere gives 135 and :5736. The
+    split above is what reproduces the figures below, and it is not arbitrary
+    -- a range is at-or-after a line when it BEGINS there, and it reaches a
+    line when it ENDS there.
 
     Under that definition, AS OF 2a63f063^: 322 occurrences and 135 at or
     after :3673, so the 135 reproduces exactly -- 324 if only the *.po glob is
