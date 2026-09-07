@@ -622,7 +622,7 @@ def test_a_following_instance_without_an_inbox_gets_no_remove(
 
 
 def test_one_instance_is_skipped_while_another_receives_the_add(
-        db_session, http_mock):
+        db_session, http_mock, monkeypatch):
     """Both of adds.py's loop arms in ONE run -- the skip, then the delivery.
 
     The discriminating case: with a single follower, "skipped" and "loop
@@ -630,24 +630,30 @@ def test_one_instance_is_skipped_while_another_receives_the_add(
     delivering instance is what proves iteration continued PAST the skipped
     one.
 
-    THE ORDER ASSERTION IS LOAD-BEARING, NOT DECORATION.
-    `Community.following_instances()` (app/models.py:842-851) ends in an
-    unordered `.distinct().all()` -- no ORDER BY -- so the order is a property
-    of Postgres's query plan, not of the code. If it ever reverses, a mutant
-    turning "skip and continue" into "skip and break" would still leave the
-    delivered route called once and this test would pass while no longer
-    proving what it claims.
+    THE SEQUENCE IS CONTROLLED, NOT OBSERVED. `Community.following_instances()`
+    (app/models.py:842-851) ends in an unordered `.distinct().all()` -- no
+    ORDER BY -- so which instance a live query returns first is a property of
+    Postgres's query plan, not of the code. This test's subject is the loop's
+    continue-past-a-skip behaviour; that ordering is incidental to it, so
+    `following_instances` is patched for the duration of the call to hand back
+    a known sequence (the skipped instance first, then the delivering one)
+    instead of trusting the query to happen to agree. An earlier version of
+    this test asserted the LIVE order matched that sequence, on the reasoning
+    that a reversal would silently defeat a "skip and continue" -> "skip and
+    break" mutant; that assertion was reproducibly flaky in practice --
+    confirmed to fail on a first run and pass on an immediate re-run of the
+    same, unmutated tree (task-7-review.md) -- because Postgres was free to
+    answer either order. Controlling the sequence here is strictly more
+    discriminating than that observed assertion ever was, since it no longer
+    depends on the planner cooperating.
     """
     s = _seed(with_keys=True)
-    _community_follower(s, http_mock, domain='mute.example',
+    mute = _community_follower(s, http_mock, domain='mute.example',
                         member_name='mute', with_inbox=False)
     good = _community_follower(s, http_mock, domain='fan.example',
                                member_name='fan')
-
-    ordered = [i.domain for i in s.community.following_instances()]
-    assert ordered == ['mute.example', 'fan.example'], (
-        f'this test proves the loop CONTINUES past a skip, which requires the '
-        f'skipped instance first; got {ordered}')
+    monkeypatch.setattr(s.community, 'following_instances',
+                        lambda *a, **kw: [mute.instance, good.instance])
 
     add_object(db.session, s.user.id, s.post)
 
@@ -656,19 +662,16 @@ def test_one_instance_is_skipped_while_another_receives_the_add(
 
 
 def test_one_instance_is_skipped_while_another_receives_the_remove(
-        db_session, http_mock):
+        db_session, http_mock, monkeypatch):
     """Both of removes.py's loop arms in one run -- the twin of the test
-    above, carrying the same order assertion for the same reason."""
+    above, controlling the sequence for the same reason."""
     s = _seed(with_keys=True)
-    _community_follower(s, http_mock, domain='mute.example',
+    mute = _community_follower(s, http_mock, domain='mute.example',
                         member_name='mute', with_inbox=False)
     good = _community_follower(s, http_mock, domain='fan.example',
                                member_name='fan')
-
-    ordered = [i.domain for i in s.community.following_instances()]
-    assert ordered == ['mute.example', 'fan.example'], (
-        f'this test proves the loop CONTINUES past a skip, which requires the '
-        f'skipped instance first; got {ordered}')
+    monkeypatch.setattr(s.community, 'following_instances',
+                        lambda *a, **kw: [mute.instance, good.instance])
 
     remove_object(db.session, s.user.id, s.post)
 
