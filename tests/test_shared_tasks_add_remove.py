@@ -497,3 +497,74 @@ def test_the_remote_remove_keeps_its_context_and_is_signed_as_the_user(
 
     assert '@context' in _sent_activity(route)
     assert _key_id_of(route) == s.user.public_url() + '#main-key'
+
+
+def test_a_local_community_announces_the_add_and_strips_its_inner_context(
+        db_session, http_mock):
+    """adds.py:81's TRUE arm -- :82's `del add['@context']` and the Announce
+    built at :87-95.
+
+    The Announce keeps the `@context` built at :92; the Add nested at :91 has
+    had its own stripped at :82. Asserting BOTH directions is what catches a
+    mutant deleting from the wrong object -- either alone would still accept a
+    well-formed activity.
+
+    `cc` is the followers collection here (:86), NOT the
+    `[community.public_url()]` the inner Add carries (:68) -- :86 rebinds the
+    name to a NEW list, so the inner object's `cc` still points at the old one.
+    Asserting both proves the rebinding did not alias.
+    """
+    s = _seed(with_keys=True)
+    fan = _community_follower(s, http_mock)
+
+    add_object(db.session, s.user.id, s.post)
+
+    sent = _sent_activity(fan.route)
+    assert sent['type'] == 'Announce'
+    assert '@context' in sent
+    assert sent['actor'] == s.community.public_url()
+    assert sent['object']['type'] == 'Add'
+    assert '@context' not in sent['object']
+    assert sent['cc'] == [s.community.ap_followers_url]
+    assert sent['object']['cc'] == [s.community.public_url()]
+
+
+def test_a_local_community_announces_the_remove_and_strips_its_inner_context(
+        db_session, http_mock):
+    """removes.py:81's TRUE arm -- the twin of the test above, asserting the
+    same asymmetry on the Remove."""
+    s = _seed(with_keys=True)
+    fan = _community_follower(s, http_mock)
+
+    remove_object(db.session, s.user.id, s.post)
+
+    sent = _sent_activity(fan.route)
+    assert sent['type'] == 'Announce'
+    assert '@context' in sent
+    assert sent['object']['type'] == 'Remove'
+    assert '@context' not in sent['object']
+    assert sent['cc'] == [s.community.ap_followers_url]
+    assert sent['object']['cc'] == [s.community.public_url()]
+
+
+def test_the_announced_add_is_signed_as_the_community(db_session, http_mock):
+    """adds.py:98 signs with `community.private_key` and
+    `community.public_url() + '#main-key'` -- the companion to Task 3's
+    user-signed assertion. The community's and user's public urls differ in
+    path, so a mutant swapping the signer produces a valid but wrong keyId."""
+    s = _seed(with_keys=True)
+    fan = _community_follower(s, http_mock)
+
+    add_object(db.session, s.user.id, s.post)
+
+    assert _key_id_of(fan.route) == s.community.public_url() + '#main-key'
+
+
+def test_the_announced_remove_is_signed_as_the_community(db_session, http_mock):
+    """removes.py:98 -- the twin of the test above."""
+    s = _seed(with_keys=True)
+    fan = _community_follower(s, http_mock)
+
+    remove_object(db.session, s.user.id, s.post)
+
+    assert _key_id_of(fan.route) == s.community.public_url() + '#main-key'
