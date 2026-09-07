@@ -397,3 +397,103 @@ def test_a_private_community_does_not_federate_the_remove(db_session, http_mock)
     remove_object(db.session, s.user.id, s.post)
 
     assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_the_add_without_a_community_id_targets_the_featured_url(
+        db_session, http_mock):
+    """:58's TRUE arm (:59) and :74's FALSE arm, in adds.py.
+
+    No `community_id` means the community comes from `object.community` at
+    :59, and `:74` selects `ap_featured_url`. `target` is the witness for
+    both at once, and it can only discriminate because `_seed` sets the two
+    URL columns to different values -- `make_community` leaves both None.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    add_object(db.session, s.user.id, s.post)
+
+    sent = _sent_activity(route)
+    assert sent['target'] == FEATURED_URL
+    assert set(sent) == {'id', 'type', 'actor', 'object', 'target',
+                         '@context', 'audience', 'to', 'cc'}
+    assert sent['actor'] == s.user.public_url()
+    assert sent['object'] == s.post.public_url()
+    assert sent['audience'] == s.community.public_url()
+    assert sent['to'] == ['https://www.w3.org/ns/activitystreams#Public']
+    assert sent['cc'] == [s.community.public_url()]
+
+
+def test_the_add_with_a_community_id_targets_the_moderators_url(
+        db_session, http_mock):
+    """:58's FALSE arm (:61) and :74's TRUE arm, in adds.py.
+
+    The companion to the test above: passing `community_id` resolves the
+    community by query at :61 and selects `ap_moderators_url` at :74. Asserting
+    a value the other arm could not produce is what makes the pair
+    discriminating.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    add_object(db.session, s.user.id, s.mod, s.community.id)
+
+    sent = _sent_activity(route)
+    assert sent['target'] == MODERATORS_URL
+    assert sent['object'] == s.mod.public_url()
+
+
+def test_the_remove_without_a_community_id_targets_the_featured_url(
+        db_session, http_mock):
+    """:58's TRUE arm and :74's FALSE arm, in removes.py -- the twin."""
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    remove_object(db.session, s.user.id, s.post)
+
+    sent = _sent_activity(route)
+    assert sent['type'] == 'Remove'
+    assert sent['target'] == FEATURED_URL
+    assert sent['object'] == s.post.public_url()
+
+
+def test_the_remove_with_a_community_id_targets_the_moderators_url(
+        db_session, http_mock):
+    """:58's FALSE arm and :74's TRUE arm, in removes.py -- the twin."""
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    remove_object(db.session, s.user.id, s.mod, s.community.id)
+
+    sent = _sent_activity(route)
+    assert sent['type'] == 'Remove'
+    assert sent['target'] == MODERATORS_URL
+    assert sent['object'] == s.mod.public_url()
+
+
+def test_the_remote_add_keeps_its_context_and_is_signed_as_the_user(
+        db_session, http_mock):
+    """`@context` is asserted PRESENT: nothing nests this object on this path,
+    because :82's `del` runs only under `is_local()`. And :100 signs with
+    `user.public_url() + '#main-key'` where :98 signs as the COMMUNITY --
+    `keyId` is the only observable that separates them.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    add_object(db.session, s.user.id, s.post)
+
+    assert '@context' in _sent_activity(route)
+    assert _key_id_of(route) == s.user.public_url() + '#main-key'
+
+
+def test_the_remote_remove_keeps_its_context_and_is_signed_as_the_user(
+        db_session, http_mock):
+    """The removes twin of the test above."""
+    s = _seed(local_community=False, with_keys=True)
+    route = _remote_inbox(s, http_mock)
+
+    remove_object(db.session, s.user.id, s.post)
+
+    assert '@context' in _sent_activity(route)
+    assert _key_id_of(route) == s.user.public_url() + '#main-key'
