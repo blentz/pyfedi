@@ -211,7 +211,7 @@ def test_a_local_only_community_sends_no_flag(db_session, http_mock):
 
 
 def test_an_offline_community_instance_sends_no_flag(db_session, http_mock):
-    """`:57`'s second disjunct. `Instance.online()` (app/models.py:118-119) is
+    """`:57`'s third disjunct. `Instance.online()` (app/models.py:118-119) is
     `not (self.dormant or self.gone_forever)`, so a dormant-and-gone instance
     returns.
 
@@ -249,12 +249,23 @@ def test_report_post_delivers_a_flag_to_the_named_instance(
 
 
 def test_a_private_community_sends_no_flag(db_session, http_mock):
-    """D309's site in this module. `:57` gates on `local_only` and
-    `instance.online()` but not on `Community.private`, so a report about
-    content in a private community federates out.
+    """D309's site in this module. Before this commit, `:57` gated on
+    `local_only` and `instance.online()` but not on `Community.private`, so
+    a report about content in a private community federated out. This test
+    pins down that `community.private` is now part of the guard.
 
-    This test FAILS before the conjunct is added -- a real ActivityPubLog
-    row is written and a real request is attempted -- and passes after.
+    This test FAILS without the `private` conjunct -- a real ActivityPubLog
+    row is written and a real request is attempted -- and passes with it.
+
+    THE ORDER OF `:57`'s DISJUNCTS IS LOAD-BEARING, NOT ARBITRARY. `private`
+    sits BEFORE `not community.instance.online()`, and `or` short-circuits
+    left to right, so a private community with no instance row
+    (`Community.instance_id`, app/models.py:575, is a nullable FK) returns
+    at the `private` check instead of reaching `community.instance.online()`
+    and raising `AttributeError` on `None.online()`. That is a side effect
+    of this test's fix, not something it asserts directly -- reordering the
+    disjuncts would reopen the crash without failing this test, since this
+    test's community always has an instance.
 
     NO ROUTE IS REGISTERED. `http_mock` is built with
     `assert_all_called=True`, so a route registered here and never called
