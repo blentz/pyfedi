@@ -2569,3 +2569,109 @@ def test_the_remote_move_is_signed_as_the_user(db_session, http_mock):
     _move(s)
 
     assert _key_id_of(route) == s.user.public_url() + '#main-key'
+
+
+def test_a_local_community_announces_the_move_and_strips_its_inner_context(
+        db_session, http_mock):
+    """:416's TRUE arm -- :417's `del move['@context']` and the Announce built
+    at :422-430.
+
+    The Announce keeps the `@context` built at :427; the Move nested at :426
+    has had its own stripped at :417. Asserting BOTH directions is what
+    catches a mutant that deletes from the wrong object -- either alone would
+    still accept a well-formed activity.
+
+    `cc` is the community's followers collection here (:421), NOT the
+    `[community.public_url()]` the inner Move carries (:403) -- :421 rebinds
+    the name to a NEW list, so the inner object's `cc` still points at the
+    old one. Asserting both proves the rebinding did not alias.
+    """
+    s = _seed(with_keys=True)
+    fan = _community_follower(s, http_mock)
+
+    _move(s)
+
+    sent = _sent_activity(fan.route)
+    assert sent['type'] == 'Announce'
+    assert '@context' in sent
+    assert sent['actor'] == s.community.public_url()
+    assert sent['object']['type'] == 'Move'
+    assert '@context' not in sent['object']
+    assert sent['cc'] == [s.community.ap_followers_url]
+    assert sent['object']['cc'] == [s.community.public_url()]
+
+
+def test_the_announced_move_is_signed_as_the_community(db_session, http_mock):
+    """:433 signs with `community.private_key` and
+    `community.public_url() + '#main-key'` -- the companion to Task 4's
+    user-signed assertion."""
+    s = _seed(with_keys=True)
+    fan = _community_follower(s, http_mock)
+
+    _move(s)
+
+    assert _key_id_of(fan.route) == s.community.public_url() + '#main-key'
+
+
+def test_a_local_community_with_no_followers_sends_no_move(db_session, http_mock):
+    """:431's loop never entered -- the arc straight past the loop.
+
+    `following_instances()` returns empty because no CommunityMember exists on
+    a remote instance. The Announce is still BUILT at :422-430; nothing
+    delivers it.
+    """
+    s = _seed(with_keys=True)
+
+    _move(s)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_following_instance_without_an_inbox_gets_no_move(db_session, http_mock):
+    """:432's FALSE arm -- the loop continuing.
+
+    `with_inbox=False` leaves `Instance.inbox` None, closing :432's FIRST
+    conjunct before any of the other three is evaluated. No route is
+    registered, so `http_mock`'s `assert_all_called=True` is not tripped, and
+    the count of 0 rules out a request attempted against a None inbox.
+    """
+    s = _seed(with_keys=True)
+    _community_follower(s, http_mock, with_inbox=False)
+
+    _move(s)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_one_following_instance_is_skipped_while_another_receives_the_move(
+        db_session, http_mock):
+    """Both loop arms in ONE run -- the skip, then the delivery.
+
+    The discriminating case: a single-instance test cannot show that the guard
+    skips an instance WITHOUT also stopping the loop, because with one member
+    "skipped" and "loop ended" look identical. With two, the delivered one
+    proves iteration continued past the skipped one.
+
+    THE ORDER ASSERTION IS LOAD-BEARING AND NOT DECORATION.
+    `Community.following_instances()` (app/models.py:842-851) ends in an
+    unordered `.distinct().all()` -- no ORDER BY -- so the order is a property
+    of Postgres's query plan, not of the code. If it ever reverses, a mutant
+    turning "skip and continue" into "skip and break" would still leave the
+    delivered route called once, and this test would pass while no longer
+    proving what it claims.
+    """
+    s = _seed(with_keys=True)
+    _community_follower(s, http_mock, domain='mute.example',
+                        member_name='mute', with_inbox=False)
+    good = _community_follower(s, http_mock, domain='fan.example',
+                               member_name='fan')
+
+    ordered = [i.domain for i in s.community.following_instances()]
+    assert ordered == ['mute.example', 'fan.example'], (
+        f'this test proves the loop CONTINUES past a skip, which requires the '
+        f'skipped instance first; got {ordered}')
+
+    _move(s)
+
+    assert good.route.call_count == 1
+    assert db.session.query(ActivityPubLog).count() == 1
