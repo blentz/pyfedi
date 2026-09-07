@@ -57,7 +57,7 @@ def _seed(ip=APPLICANT_IP, email=APPLICANT_EMAIL):
     """instance, user, application -- committed.
 
     `ip_address` AND `email` ARE SET HERE AND MUST STAY SET.
-    `make_user` (tests/factories.py:39) sets `email` but leaves `ip_address`
+    `make_user` (tests/factories.py:40) sets `email` but leaves `ip_address`
     None, and `:36` inserts it into a list that `:39` passes to `','.join`.
     A None member raises TypeError INSIDE the `try` at `:27`, which `:75`
     catches, logs and continues past -- so `num_banned` stays 0, no warning is
