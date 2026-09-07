@@ -432,3 +432,112 @@ def test_report_post_closes_the_session_on_the_happy_path(
     report_post(None, s.user.id, s.post.id, 'spam', [recipient_id])
 
     assert record.calls == ['close']
+
+
+def test_only_the_named_instances_receive_the_flag(db_session, http_mock):
+    """`:73`'s `Instance.id.in_(instance_ids)` filter. An instance that exists
+    and has an inbox but is NOT named receives nothing.
+
+    Its route is deliberately not registered: under
+    `http_mock(assert_all_called=True)` an unregistered inbox that IS posted
+    to fails the test as an unmatched request, which is the observation.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, named_id = _reporting_instance(s, http_mock)
+    unnamed = make_instance('unnamed.example', software='lemmy')
+    unnamed.inbox = OTHER_INBOX
+    db.session.commit()
+
+    report_post(None, s.user.id, s.post.id, 'spam', [named_id])
+
+    assert _delivered_inboxes(route) == {PEER_INBOX}
+
+
+def test_an_instance_without_an_inbox_is_skipped(db_session, http_mock):
+    """`:75`'s `instance.inbox is not None` guard, alone.
+
+    NO ROUTE IS REGISTERED, and the ActivityPubLog count is what proves the
+    skip. Per `_reporting_instance`'s docstring, `post_request` writes its row
+    unconditionally at app/activitypub/signature.py:105 -- so a count of 0
+    means `:76` was never reached, not merely that delivery failed.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    inboxless = make_instance('inboxless.example', software='lemmy')
+    inboxless.inbox = None
+    db.session.commit()
+
+    report_post(None, s.user.id, s.post.id, 'spam', [inboxless.id])
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_the_loop_continues_past_an_instance_without_an_inbox(
+        db_session, http_mock):
+    """`:74`'s loop CONTINUES after `:75` skips one row.
+
+    This is the test the `:75` guard's coverage needs and the one above cannot
+    give: with a single inboxless instance, a loop that ABORTED on the skip and
+    a loop that CONTINUED past it are indistinguishable. Two rows, one skipped
+    and one delivered, separate them.
+
+    THE ORDER IS NOT CONTROLLED AND IS NOT ASSERTED. `:73` returns rows through
+    the task session in whatever order the planner chooses, so this asserts
+    the SET of delivered inboxes. Whichever row comes first, exactly one
+    delivery must land.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, good_id = _reporting_instance(s, http_mock)
+    inboxless = make_instance('inboxless.example', software='lemmy')
+    inboxless.inbox = None
+    db.session.commit()
+
+    report_post(None, s.user.id, s.post.id, 'spam', [inboxless.id, good_id])
+
+    assert _delivered_inboxes(route) == {PEER_INBOX}
+    assert len(route.calls) == 1
+
+
+def test_two_instances_with_inboxes_both_receive_the_flag(
+        db_session, http_mock):
+    """`:74`'s loop delivering more than once -- the arc back to the top.
+
+    Set-based, for the reason the module docstring gives.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    first, first_id = _reporting_instance(s, http_mock)
+    second, second_id = _reporting_instance(
+        s, http_mock, inbox=OTHER_INBOX, domain='second.example')
+
+    report_post(None, s.user.id, s.post.id, 'spam', [first_id, second_id])
+
+    assert _delivered_inboxes(first, second) == {PEER_INBOX, OTHER_INBOX}
+
+
+def test_the_flag_carries_a_top_level_context_and_the_community_audience(
+        db_session, http_mock):
+    """`:60-71`'s envelope, asserted on the bytes that actually left.
+
+    `@context` is at `:67`, INSIDE the flag dict -- and here the flag IS the
+    top-level posted object, because this module has no Announce wrapper. So
+    the assertion is that `@context` is PRESENT at the top level, which is the
+    opposite of the nested-absence assertions sub-projects 20-23 made about
+    Announce-wrapped activities.
+
+    `app/activitypub/signature.py:100-101` reinjects `@context` top-level only;
+    that is consistent with, and invisible against, what `:67` already set.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, recipient_id = _reporting_instance(s, http_mock)
+
+    report_post(None, s.user.id, s.post.id, 'spam', [recipient_id])
+
+    flag = _sent_activity(route)
+    assert '@context' in flag
+    assert flag['audience'] == s.community.public_url()
+    assert flag['to'] == [s.community.public_url()]
+    assert flag['id'].startswith('https://test.piefed.local/activities/flag/')
