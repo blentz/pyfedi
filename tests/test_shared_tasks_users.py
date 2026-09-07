@@ -279,11 +279,13 @@ def test_a_banned_ip_at_the_real_index_counts(db_session, monkeypatch):
     email leg is scripted clean here, so the 1 can only have come from the IP
     leg.
 
-    EXPECTED TO FAIL: reaching `num_banned > 0` at `:79` runs `:80-81`, where
-    the params dict is passed as a second positional argument to `text()`
-    instead of to `session.execute()` -- `TypeError: text() takes 1
-    positional argument but 2 were given`. This is D319, a real production
-    defect fixed in Task 10; do not fix `app/` here.
+    Written against D319, a real production defect where `:80-81` passed the
+    params dict as a second positional argument to `text()` instead of to
+    `session.execute()`, so reaching `num_banned > 0` at `:79` raised
+    `TypeError: text() takes 1 positional argument but 2 were given` and the
+    `warning` column was never written. This test was marked to expect that
+    failure until Task 10 fixed `:80-81`; it now passes for real, and the
+    warning text it asserts is the proof the write happened.
     """
     s = _seed()
     set_setting('ban_check_servers', 'real.example')
@@ -403,10 +405,11 @@ def test_a_banned_email_counts(db_session, monkeypatch):
     """`:69`, `:72` and `:73` taken on the email leg, with the IP leg clean --
     so the count of 1 in the warning text can only have come from email.
 
-    EXPECTED TO FAIL: `num_banned` reaches 1, so `:79`'s true arm runs
-    `:80-81` and hits D319 -- see
-    `test_a_banned_ip_at_the_real_index_counts` for the mechanism. Not fixed
-    here; fixed in Task 10.
+    `num_banned` reaches 1, so `:79`'s true arm runs `:80-81` -- see
+    `test_a_banned_ip_at_the_real_index_counts` for D319, the defect this
+    test was originally written against and marked to expect failure on.
+    Task 10 fixed `:80-81`, and this test now passes, asserting the warning
+    was actually persisted for the email leg.
     """
     s = _seed()
     set_setting('ban_check_servers', 'real.example')
@@ -504,10 +507,11 @@ def test_both_legs_banned_counts_twice(db_session, monkeypatch):
     The warning text names 2, which no single-leg test can produce -- this is
     what proves `:47` and `:73` increment the same counter.
 
-    EXPECTED TO FAIL: `num_banned` reaches 2, so `:79`'s true arm runs
-    `:80-81` and hits D319 -- see
-    `test_a_banned_ip_at_the_real_index_counts` for the mechanism. Not fixed
-    here; fixed in Task 10.
+    `num_banned` reaches 2, so `:79`'s true arm runs `:80-81` -- see
+    `test_a_banned_ip_at_the_real_index_counts` for D319, the defect this
+    test was originally written against and marked to expect failure on.
+    Task 10 fixed `:80-81`, and this test now passes, asserting both legs'
+    counts landed in the one persisted warning.
     """
     s = _seed()
     set_setting('ban_check_servers', 'real.example')
