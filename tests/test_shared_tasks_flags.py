@@ -248,6 +248,30 @@ def test_report_post_delivers_a_flag_to_the_named_instance(
     assert flag['actor'] == s.user.public_url()
 
 
+def test_a_private_community_sends_no_flag(db_session, http_mock):
+    """D309's site in this module. `:57` gates on `local_only` and
+    `instance.online()` but not on `Community.private`, so a report about
+    content in a private community federates out.
+
+    This test FAILS before the conjunct is added -- a real ActivityPubLog
+    row is written and a real request is attempted -- and passes after.
+
+    NO ROUTE IS REGISTERED. `http_mock` is built with
+    `assert_all_called=True`, so a route registered here and never called
+    would fail this test for the wrong reason.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    recipient = make_instance('recipient.example', software='lemmy')
+    recipient.inbox = PEER_INBOX
+    s.community.private = True
+    db.session.commit()
+
+    report_post(None, s.user.id, s.post.id, 'spam', [recipient.id])
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
 def test_report_reply_delivers_a_flag_naming_the_reply(db_session, http_mock):
     """`report_reply:25` end to end. Written out separately from
     `report_post`'s test rather than parametrised: a parametrised failure
