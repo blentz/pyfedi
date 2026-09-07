@@ -2466,10 +2466,10 @@ def test_a_private_community_does_not_federate_the_move(db_session, http_mock):
     `local_only` and `instance.online()` -- so a private, non-local-only
     community federated its moves out.
 
-    D309's THIRD closed site of ten; sub-projects 20 and 21 closed
-    `notes.py:143` and `notes.py:248`. `local_only` is left False
-    deliberately: with it True the test would pass on the pre-existing
-    conjunct and prove nothing.
+    D309's THIRD closed site of TWELVE, not of ten -- that count was two sites short
+    and D309's cell says so (fact 128). Sub-projects 20 and 21 closed `notes.py:143`
+    and `notes.py:248`. `local_only` is left False deliberately: with it True the
+    test would pass on the pre-existing conjunct and prove nothing.
 
     NEITHER SIBLING GUARD IS A TEMPLATE. `pages.py:153` is
     `local_only or private` with NO `online()` check; `notes.py:248` is
