@@ -57,7 +57,7 @@ def send_vote(user_id, object, vote_to_undo, vote_direction, emoji):
     try:
         user = session.query(User).get(user_id)
         community = object.community
-        if community.local_only or not community.instance.online():
+        if community.local_only or community.private or not community.instance.online():
             return
 
         banned = session.query(CommunityBan).filter_by(user_id=user_id, community_id=community.id).first()

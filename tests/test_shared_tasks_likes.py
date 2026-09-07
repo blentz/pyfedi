@@ -286,6 +286,42 @@ def test_an_offline_community_instance_sends_no_vote(db_session, http_mock):
     assert db.session.query(ActivityPubLog).count() == 0
 
 
+def test_a_private_community_sends_no_vote(db_session, http_mock):
+    """D309's site in this module. Before this commit `:60` gated on
+    `local_only` and `instance.online()` but not `Community.private`, so a
+    vote in a private community federated out. This test pins down that
+    `community.private` is now part of the guard.
+
+    THE ORDER OF `:60`'s DISJUNCTS IS LOAD-BEARING, for the reason
+    test_shared_tasks_locks.py's equivalent test gives for its `:89`: `private`
+    sits BEFORE `not community.instance.online()`, and `or` short-circuits
+    left to right, so a private community with no instance row
+    (`Community.instance_id`, app/models.py:575, is a nullable FK) returns at
+    the `private` check instead of raising `AttributeError` on
+    `None.online()`. That is a side effect of this fix, not something this
+    test asserts -- reordering the disjuncts would reopen the crash without
+    failing this test, since this community always has an instance.
+
+    The follower is built inline rather than through `_follower()` -- no
+    route is registered, so `http_mock`'s `assert_all_called=True` can't fail
+    on one that never fires. `following_instances()` still needs an Instance
+    row, an inbox, and a member on it (app/models.py:842-851) for a count of
+    0 to prove the guard fired rather than that the query was empty.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    inst = make_instance('follower.example', software='lemmy')
+    inst.inbox = PEER_INBOX
+    member = make_user(inst, 'member_follower')
+    make_community_member(member, s.community)
+    s.community.private = True
+    db.session.commit()
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
 def test_a_user_banned_from_the_community_sends_no_vote(db_session, http_mock):
     """`:63-65`. `session.query(CommunityBan).filter_by(...).first()` runs on
     send_vote's OWN task session (`:56`), so the ban row must be committed --
