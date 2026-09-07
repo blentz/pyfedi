@@ -630,12 +630,22 @@ def test_both_responses_are_closed(db_session, monkeypatch):
 
 def test_a_database_failure_rolls_back_and_re_raises(db_session, monkeypatch):
     """`:84-85`'s except arm and `:87-88`'s finally, reached WITHOUT a faked
-    exception in the task body.
+    exception anywhere in the task's own logic.
 
-    `get_task_session` is replaced by one whose `execute` raises, which is the
-    nearest natural analogue to the database rejecting the UPDATE. The
-    recorded ORDER fixes `finally` running after `except`, which a
-    `raises`-only test cannot observe.
+    `get_task_session` is replaced by one whose `execute` raises
+    unconditionally. VERIFIED BY TRACEBACK (not assumed): under this
+    project's pinned `sqlalchemy~=2.0.0`, `session.query(UserRegistration)
+    .get(application_id)` at `:17` funnels through `Session.execute()` on
+    the identity-map miss that a freshly constructed `Session` always has,
+    so THE RAISE FIRES AT `:17`, before `:18`'s guard, before the domain
+    loop, and before either HTTP leg would be reached. This is why there is
+    no `set_setting('ban_check_servers', ...)`, no `_no_sleep`/
+    `_lowest_randint`, and no `_recording_client` here: none of that
+    machinery is ever consulted, and scripting it would misstate the
+    mechanism to the next reader. What the test actually proves is
+    unaffected by exactly which statement inside `:16`'s `try` raises --
+    the except/finally structure and the recorded `['rollback', 'close']`
+    order are the same regardless.
 
     THE PATCH TARGET IS THE USERS MODULE. `app/shared/tasks/users.py:10`
     imports `get_task_session` into the users namespace and `:15` resolves it
@@ -647,10 +657,6 @@ def test_a_database_failure_rolls_back_and_re_raises(db_session, monkeypatch):
     import app.shared.tasks.users as users_module
 
     s = _seed()
-    set_setting('ban_check_servers', 'real.example')
-    _no_sleep(monkeypatch)
-    _lowest_randint(monkeypatch)
-    _recording_client(monkeypatch, (200, [True]), (200, [True]))
 
     calls = []
 
