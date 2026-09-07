@@ -529,10 +529,14 @@ def test_a_remote_lock_keeps_its_context(db_session, http_mock):
 
 def test_a_remote_undo_wraps_a_context_free_lock(db_session, http_mock):
     """`:143-145` with is_undo: the Undo is top-level, and `:107` stripped the
-    Lock's `@context` before `:113` nested it. `:122` never runs on this path
-    -- it sits behind `community.is_local()`, which is false here -- but its
-    absence is unobservable since `:107` already removed the key it would
-    have deleted from a different object (the Undo, not the Lock).
+    Lock's `@context` before `:113` nested it. `:122` never runs on this path,
+    for two independent reasons: STRUCTURALLY, it sits inside
+    `if community.is_local():` at `:120`, which is false here, so that block
+    never executes at all. And EVEN IF IT RAN, `undo` is the TOP-LEVEL object
+    on this path -- no Announce wraps it -- so `signature.py:100-101`'s
+    reinjection would reach it, making any assertion on `undo['@context']`
+    non-discriminating for the same reason given in
+    `test_a_remote_lock_keeps_its_context`'s docstring above.
 
     THIS IS THE REMOTE PATH'S DISCRIMINATING ASSERTION. The Undo's own
     `@context` proves nothing (reinjection would supply it), but the nested
