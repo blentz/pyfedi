@@ -618,17 +618,20 @@ def test_an_instance_without_an_inbox_is_skipped_and_the_loop_continues(
 
     THE ACTIVITYPUBLOG COUNT IS WHAT MAKES `if instance.inbox and ...`
     DISCRIMINATE FROM `if True and ...`. `send_post_request` -> `post_request`
-    (app/activitypub/signature.py:104-106) adds and commits an ActivityPubLog
-    row for EVERY call, even one whose `uri` is `None` -- it merely marks that
-    row `result='failure', exception_message='empty uri'`
-    (signature.py:107-109) rather than raising or making an httpx request.
-    respx's `assert_all_called=True` never sees the dud's call at all, so a
-    delivered-inboxes assertion alone (which two other mutation-instrument runs
-    for this file showed passes unchanged whether the mutant is applied or
-    not) cannot tell a truthful skip from a mutated one that still short-circuits
-    before the network. The row count can: one row for the real delivery,
-    zero for a correctly-skipped dud, one MORE if the dud's request is
-    mistakenly attempted.
+    adds an ActivityPubLog row at `signature.py:105` for EVERY call, even one
+    whose `uri` is `None`, and commits it much later at `:151` -- the two are
+    far apart, and that separation is exactly why the row survives even a
+    call that goes on to fail. Guarded by the `if uri is None or uri == '':`
+    check at `signature.py:109`, a `None`-uri call merely marks that same row
+    `result='failure', exception_message='empty uri'` (`:110-111`) rather than
+    raising or making an httpx request. respx's `assert_all_called=True` never
+    sees the dud's call at all, so a delivered-inboxes assertion alone (which
+    this test's own M6 mutation-instrument run showed passing unchanged with
+    the mutant applied, before this row-count assertion existed) cannot tell a
+    truthful skip from a mutated one that still short-circuits before the
+    network. The row count can: one row for the real delivery, zero for a
+    correctly-skipped dud, one MORE if the dud's request is mistakenly
+    attempted.
     """
     s = _seed(with_keys=True)
     _make_deliverable(s)
