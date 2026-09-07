@@ -1,6 +1,6 @@
 """`check_user_application` -- the cross-instance ban check.
 
-`app/shared/tasks/users.py:14-87`, one function, 58 statements and 20 branches.
+`app/shared/tasks/users.py:14-88`, one function, 58 statements and 20 branches.
 THIS IS THE FIRST TARGET IN THE CAMPAIGN THAT IS NOT FEDERATION-SHAPED, and
 nothing from the `app/shared/tasks/` Flag and Announce harnesses transfers. It
 makes outbound HTTP with `httpx_client`, sleeps between requests, and randomises
@@ -59,7 +59,7 @@ def _seed(ip=APPLICANT_IP, email=APPLICANT_EMAIL):
     `ip_address` AND `email` ARE SET HERE AND MUST STAY SET.
     `make_user` (tests/factories.py:40) sets `email` but leaves `ip_address`
     None, and `:36` inserts it into a list that `:39` passes to `','.join`.
-    A None member raises TypeError INSIDE the `try` at `:27`, which `:75`
+    A None member raises TypeError INSIDE the `try` at `:27`, which `:76`
     catches, logs and continues past -- so `num_banned` stays 0, no warning is
     written, and a test asserting "no warning" PASSES FOR THE WRONG REASON.
     `test_the_seed_supplies_an_ip_address` below exists to make that
@@ -120,7 +120,7 @@ class _Response:
 
 class _RaisingPayload:
     """A payload whose `json()` raises, standing in for a decode failure
-    inside `:27`'s try. Reaching `:75`'s handler by a NATURAL raise rather
+    inside `:27`'s try. Reaching `:76`'s handler by a NATURAL raise rather
     than an injected one keeps the test on the same path a real transport or
     decode error would take."""
 
@@ -216,7 +216,7 @@ def test_the_seed_supplies_an_ip_address(db_session):
     """A guard on the fixture, not on the code.
 
     If `_seed` stops setting `ip_address`, `:39`'s `','.join` raises TypeError
-    inside `:27`'s try, `:75` swallows it, and several tests in this file go
+    inside `:27`'s try, `:76` swallows it, and several tests in this file go
     green while proving nothing. This test makes that regression loud and
     names the reason.
     """
@@ -279,12 +279,12 @@ def test_a_banned_ip_at_the_real_index_counts(db_session, monkeypatch):
     email leg is scripted clean here, so the 1 can only have come from the IP
     leg.
 
-    Written against D319, a real production defect where `:80-81` passed the
+    Written against D319, a real production defect where `:81-82` passed the
     params dict as a second positional argument to `text()` instead of to
-    `session.execute()`, so reaching `num_banned > 0` at `:79` raised
+    `session.execute()`, so reaching `num_banned > 0` at `:80` raised
     `TypeError: text() takes 1 positional argument but 2 were given` and the
     `warning` column was never written. This test was marked to expect that
-    failure until Task 10 fixed `:80-81`; it now passes for real, and the
+    failure until Task 10 fixed `:81-82`; it now passes for real, and the
     warning text it asserts is the proof the write happened.
     """
     s = _seed()
@@ -307,7 +307,7 @@ def test_a_non_200_ip_response_counts_nothing(db_session, monkeypatch):
     order `:37` then `:63` impose. Without this, a regression that makes
     `:27`'s try raise before `httpx_client.post` is ever reached -- a None
     `ip_address` breaking `:39`'s `','.join` is the known example, but not
-    the only possible one -- would be swallowed by `:75`'s `except`, skip
+    the only possible one -- would be swallowed by `:76`'s `except`, skip
     both legs, leave `warning` at None, and this test would pass having made
     ZERO requests while claiming to exercise `:43`.
     """
@@ -405,10 +405,10 @@ def test_a_banned_email_counts(db_session, monkeypatch):
     """`:69`, `:72` and `:73` taken on the email leg, with the IP leg clean --
     so the count of 1 in the warning text can only have come from email.
 
-    `num_banned` reaches 1, so `:79`'s true arm runs `:80-81` -- see
+    `num_banned` reaches 1, so `:80`'s true arm runs `:81-82` -- see
     `test_a_banned_ip_at_the_real_index_counts` for D319, the defect this
     test was originally written against and marked to expect failure on.
-    Task 10 fixed `:80-81`, and this test now passes, asserting the warning
+    Task 10 fixed `:81-82`, and this test now passes, asserting the warning
     was actually persisted for the email leg.
     """
     s = _seed()
@@ -507,10 +507,10 @@ def test_both_legs_banned_counts_twice(db_session, monkeypatch):
     The warning text names 2, which no single-leg test can produce -- this is
     what proves `:47` and `:73` increment the same counter.
 
-    `num_banned` reaches 2, so `:79`'s true arm runs `:80-81` -- see
+    `num_banned` reaches 2, so `:80`'s true arm runs `:81-82` -- see
     `test_a_banned_ip_at_the_real_index_counts` for D319, the defect this
     test was originally written against and marked to expect failure on.
-    Task 10 fixed `:80-81`, and this test now passes, asserting both legs'
+    Task 10 fixed `:81-82`, and this test now passes, asserting both legs'
     counts landed in the one persisted warning.
     """
     s = _seed()
@@ -527,14 +527,14 @@ def test_both_legs_banned_counts_twice(db_session, monkeypatch):
 
 
 def test_a_failing_domain_does_not_stop_the_next_one(db_session, monkeypatch):
-    """`:75-77`: an exception inside one domain's body is logged and the loop
+    """`:76-78`: an exception inside one domain's body is logged and the loop
     CONTINUES to the next domain.
 
     THE SECOND DOMAIN'S REQUESTS ARE THE OBSERVATION. A handler that logged
     and then broke out of the loop would leave `client.posts` holding only
     broken.example's single attempt, and this assertion separates the two
     behaviours. Nothing propagates out of `check_user_application` here --
-    `:75` is `except Exception` and swallowing IS the behaviour under test --
+    `:76` is `except Exception` and swallowing IS the behaviour under test --
     so there is no `pytest.raises` around the call.
 
     Note that broken.example makes ONE request and working.example makes TWO:
@@ -561,12 +561,12 @@ def test_a_failing_domain_does_not_stop_the_next_one(db_session, monkeypatch):
 
 
 def test_the_warning_update_binds_its_parameters(db_session, monkeypatch):
-    """D319. `:80-81` passed the params dict as a SECOND POSITIONAL ARGUMENT
+    """D319. `:81-82` passed the params dict as a SECOND POSITIONAL ARGUMENT
     TO `text()` rather than as the second argument to `session.execute()`.
     `sqlalchemy.text` takes one positional parameter, so every run reaching
-    `:79`'s true arm raised
+    `:80`'s true arm raised
     `TypeError: text() takes 1 positional argument but 2 were given`,
-    `:83` rolled back and re-raised, and the `warning` column was NEVER
+    `:84` rolled back and re-raised, and the `warning` column was NEVER
     WRITTEN. Measured at SQLAlchemy 2.0.52.
 
     THE ASSERTION IS THE PERSISTED COLUMN, read back after the task. Asserting
@@ -585,3 +585,25 @@ def test_the_warning_update_binds_its_parameters(db_session, monkeypatch):
     db.session.expire_all()
     persisted = db.session.query(UserRegistration).get(s.application.id)
     assert persisted.warning == '2 instances have banned this account.'
+
+
+def test_both_responses_are_closed(db_session, monkeypatch):
+    """D320. `ip_response.close()` at `:48` had no counterpart on the email
+    leg, so every email response was left unclosed.
+
+    THE DOUBLE'S `closed` LIST IS THE SUBJECT, and it exists because respx
+    cannot observe this: the `Response` never leaves the function, and a
+    respx-mocked response may already report `is_closed == True` before
+    `close()` is called -- an `is_closed` assertion would pass identically
+    before and after the fix. Before the fix this list holds ONE entry; after,
+    TWO.
+    """
+    s = _seed()
+    set_setting('ban_check_servers', 'real.example')
+    _no_sleep(monkeypatch)
+    _lowest_randint(monkeypatch)
+    client = _recording_client(monkeypatch, (200, [False]), (200, [False]))
+
+    check_user_application(s.application.id)
+
+    assert len(client.closed) == 2

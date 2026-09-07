@@ -71,6 +71,7 @@ def check_user_application(application_id, send_async=True):
                     # Check the result at the index where real email was inserted
                     if email_results and len(email_results) > email_index and email_results[email_index]:
                         num_banned += 1
+                email_response.close()
 
             except Exception as e:
                 current_app.logger.error(f"Error checking bans on {domain}: {str(e)}")
