@@ -2822,3 +2822,142 @@ def test_edit_post_rolls_back_and_closes_when_send_post_raises(
         edit_post(None, s.post.id + 1000)
 
     assert record.calls == ['rollback', 'close']
+
+
+# ---------------------------------------------------------------------------
+# Task 8 mutation record -- move_object/move_post/make_post guards
+#
+# As-of commit 93e705ea745825cc9068aab57b0aecfec3d5ba37 ("test: cover
+# make_post and edit_post's rollback arms"), this file has 85 passing tests
+# against app/shared/tasks/pages.py (435 lines). Line numbers below were
+# re-derived against that tree (ast.parse + FunctionDef.end_lineno:
+# make_post 63-72, move_post 373-387, move_object 390-435) immediately
+# before this record was written. A later sub-project re-running any of
+# these against a larger file should read line-number drift as growth, not
+# as a disagreement with this record.
+#
+# Protocol per mutation: dry-run the sed WITHOUT -i and read the produced
+# line; apply with one targeted single-line sed; run ONLY
+# `./run_tests.sh tests/test_shared_tasks_send_post.py -q`; restore with
+# `git checkout -- app/`; assert `git diff -- app/` empty AND
+# `wc -l app/shared/tasks/pages.py` == 435 before the next mutation.
+# All 9 mutations below were applied, tested, and reverted one at a time;
+# the tree was confirmed clean and at 435 lines after every one.
+#
+# No survivors and no equivalent mutants were found: every mutation below
+# was killed by at least one existing test.
+#
+# M1 -- :393 `and` -> `or` in the isinstance guard
+#   sed -i '393s/) and isinstance(/) or isinstance(/'
+#   Produced: `if isinstance(origin, Community) or isinstance(target, Community):`
+#   Result: MULTI-KILL, 3 tests failed (not the 2 the brief predicted):
+#     - test_a_non_community_origin_raises_task_error -- CRASH-kill
+#       (AttributeError: 'Post' object has no attribute 'local_only' at
+#       :398, escaping pytest.raises(TaskError) unmatched)
+#     - test_a_non_community_target_raises_task_error -- ASSERTION-kill
+#       (`Failed: DID NOT RAISE TaskError`)
+#     - test_move_post_rolls_back_and_re_raises_on_a_bad_community --
+#       CRASH-kill (AttributeError: 'NoneType' object has no attribute
+#       'public_url' at :411, escaping pytest.raises(TaskError) unmatched)
+#   FINDING (worth flagging per the brief's "M1 is the one to watch"):
+#   because it is a multi-kill of 3, not a sole kill, BOTH of Task 3's
+#   isinstance tests are pulling their weight -- neither is redundant.
+#   The third kill is a side effect worth naming: :393's guard is also
+#   exercised indirectly through move_post's rollback test, which passes a
+#   real Community as `origin` and a missing (None) `target`; under the
+#   `or` mutant the guard now passes on `origin` alone and the function
+#   proceeds to crash deeper in, rather than raising TaskError at :396.
+#
+# M2 -- :398 drop the `private` conjunct
+#   sed -i '398s/ or community.private//'
+#   Produced: `if community.local_only or not community.instance.online():`
+#   Result: SOLE assertion-kill of
+#     test_a_private_community_does_not_federate_the_move (`assert 1 == 0`).
+#   Matches the predicted result exactly.
+#
+# M3 -- :398 drop the `online()` conjunct
+#   sed -i '398s/ or not community.instance.online()//'
+#   Produced: `if community.local_only or community.private:`
+#   Result: SOLE assertion-kill of
+#     test_a_dormant_instance_does_not_receive_the_move (`assert 1 == 0`).
+#
+# M4 -- :416 invert `is_local()`
+#   sed -i '416s/if community.is_local():/if not community.is_local():/'
+#   Produced: `if not community.is_local():`
+#   Result: MULTI-KILL, 9 tests failed, mixing kill types as predicted:
+#     ASSERTION-kills (4): test_a_remote_community_receives_the_bare_move
+#       (`assert False` on route.called), test_a_local_community_with_no_
+#       followers_sends_no_move (`assert 1 == 0`), test_a_following_
+#       instance_without_an_inbox_gets_no_move (`assert 1 == 0`),
+#       test_one_following_instance_is_skipped_while_another_receives_the_
+#       move (`assert 0 == 1`)
+#     CRASH-kills (5): test_the_remote_move_carries_its_full_key_set_and_
+#       keeps_its_context, test_the_remote_move_is_signed_as_the_user,
+#       test_a_local_community_announces_the_move_and_strips_its_inner_
+#       context, test_the_announced_move_is_signed_as_the_community,
+#       test_move_post_delivers_a_move -- all via
+#       `IndexError: list index out of range` in the test helpers
+#       _sent_activity/_key_id_of, because the mutant sends the activity to
+#       a different route than the one the test's respx mock captured.
+#     Plus 8 "ERROR at teardown" entries from respx's assert_all_called
+#     tripping on the now-uncalled mocked routes -- these are secondary to
+#     the FAILED results above, not separate kills.
+#   FINDING: the brief predicted the crash-kills would die "reaching
+#   following_instances()"; the actual crash locus is IndexError in the
+#   test-side capture helpers (no request reached the expected mock route),
+#   not inside production code. The overall shape -- multi-kill mixing
+#   assertion and crash kills -- matches as predicted; the specific crash
+#   site does not, and is recorded here as the disagreement worth noting.
+#
+# M5 -- :417 comment out `del move['@context']`
+#   sed -i '417s\|^\|#\|'   <- AS WRITTEN IN THE BRIEF, THIS ERRORS:
+#     "sed: -e expression #1, char 12: unknown option to `s'"
+#   The working equivalent used instead: sed -i '417s|^|#|'
+#   Produced: `#        del move['@context']`
+#   Result: SOLE assertion-kill of
+#     test_a_local_community_announces_the_move_and_strips_its_inner_context
+#     (`AssertionError: assert '@context' not in {...}`).
+#   Matches the predicted result exactly, once the sed is corrected.
+#
+# M6 -- :432 drop the `inbox` conjunct
+#   sed -i '432s/instance.inbox and //'
+#   Produced: `if instance.online() and not user.has_blocked_instance(instance.id) and not instance_banned(instance.domain):`
+#   Result: MULTI-KILL, 2 tests failed, both ASSERTION-kills:
+#     - test_a_following_instance_without_an_inbox_gets_no_move
+#       (`assert 1 == 0`)
+#     - test_one_following_instance_is_skipped_while_another_receives_the_move
+#       (`assert 2 == 1`)
+#
+# M7 -- :379 drop the `deleted` conjunct
+#   sed -i '379s/ and not post.deleted//'
+#   Produced: `if post:`
+#   Result: SOLE assertion-kill of
+#     test_move_post_does_nothing_when_the_post_is_deleted (`assert 1 == 0`).
+#
+# The following two mutations are not in the Task 8 brief's M1-M7 table,
+# but were called out by name as already mutation-tested during Tasks 2-3
+# and re-run here for a complete record, per the same protocol:
+#
+# M8 -- :384 `session.rollback()` -> `pass` (inside move_post's except arm)
+#   sed -i '384s/session\.rollback()/pass/'
+#   Produced: `            pass`
+#   Result: SOLE assertion-kill of
+#     test_move_post_rolls_back_and_re_raises_on_a_bad_community
+#     (`assert ['close'] == ['rollback', 'close']`).
+#   Matches the predicted result exactly.
+#
+# M9 -- :69 `session.rollback()` -> `pass` (inside make_post's except arm)
+#   sed -i '69s/session\.rollback()/pass/'
+#   Produced: `        pass`
+#   Result: SOLE assertion-kill of
+#     test_make_post_rolls_back_and_closes_when_send_post_raises
+#     (`assert ['close'] == ['rollback', 'close']`).
+#   Matches the predicted result exactly.
+#
+# Summary: 9/9 mutations killed, 0 survivors, 0 equivalent mutants, 1 no-op
+# substitution found in the brief's own M5 sed literal (corrected above,
+# not a finding about the tests). Two disagreements with the predicted
+# results are recorded above and are both about SHAPE, not about coverage:
+# M1 kills one more test than predicted (3, not 2) and M4's crash-kills
+# land in test-helper IndexErrors rather than inside following_instances().
+# ---------------------------------------------------------------------------
