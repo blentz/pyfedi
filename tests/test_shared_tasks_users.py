@@ -212,3 +212,126 @@ def test_the_seed_supplies_an_ip_address(db_session):
 
     assert s.user.ip_address == APPLICANT_IP
     assert s.user.email == APPLICANT_EMAIL
+
+
+def test_a_blank_line_in_the_setting_is_skipped(db_session, monkeypatch):
+    """`:24`'s `if not domain.strip()` reaching `:25`'s continue, with a real
+    domain after it proving the loop CONTINUES rather than aborting.
+
+    One response is scripted for the IP leg and one for the email leg of the
+    single real domain. A second domain's worth of requests would exhaust the
+    script and raise.
+    """
+    s = _seed()
+    set_setting('ban_check_servers', '\n   \nreal.example')
+    _no_sleep(monkeypatch)
+    _lowest_randint(monkeypatch)
+    client = _recording_client(monkeypatch, (200, [False]), (200, [False]))
+
+    check_user_application(s.application.id)
+
+    assert [url for url, _data in client.posts] == [
+        'https://real.example/api/is_ip_banned',
+        'https://real.example/api/is_email_banned',
+    ]
+
+
+def test_the_real_ip_is_hidden_among_three_fakes(db_session, monkeypatch):
+    """`:29-36`. Three fake IPs are generated and the real one INSERTED at
+    `ip_index`, so the request carries four addresses and the server cannot
+    tell which is under test.
+
+    With `_lowest_randint` the index is 0, so the real address is first.
+    """
+    s = _seed()
+    set_setting('ban_check_servers', 'real.example')
+    _no_sleep(monkeypatch)
+    _lowest_randint(monkeypatch)
+    client = _recording_client(monkeypatch, (200, [False]), (200, [False]))
+
+    check_user_application(s.application.id)
+
+    _url, data = client.posts[0]
+    submitted = data['ip_addresses'].split(',')
+    assert len(submitted) == 4
+    assert submitted[0] == APPLICANT_IP
+
+
+@pytest.mark.xfail(strict=True, reason='D319, fixed in Task 10')
+def test_a_banned_ip_at_the_real_index_counts(db_session, monkeypatch):
+    """`:43`, `:46` and `:47` all taken: status 200, results truthy and long
+    enough, and the element at `ip_index` true.
+
+    THE ASSERTION IS THE WARNING TEXT, not merely that a warning exists. The
+    text names the count, so it distinguishes one ban from two -- which is
+    what separates this test from `test_both_legs_banned_counts_twice`. The
+    email leg is scripted clean here, so the 1 can only have come from the IP
+    leg.
+
+    EXPECTED TO FAIL: reaching `num_banned > 0` at `:79` runs `:80-81`, where
+    the params dict is passed as a second positional argument to `text()`
+    instead of to `session.execute()` -- `TypeError: text() takes 1
+    positional argument but 2 were given`. This is D319, a real production
+    defect fixed in Task 10; do not fix `app/` here.
+    """
+    s = _seed()
+    set_setting('ban_check_servers', 'real.example')
+    _no_sleep(monkeypatch)
+    _lowest_randint(monkeypatch)
+    _recording_client(monkeypatch, (200, [True]), (200, [False]))
+
+    check_user_application(s.application.id)
+
+    db.session.expire_all()
+    assert db.session.query(UserRegistration).get(
+        s.application.id).warning == '1 instances have banned this account.'
+
+
+def test_a_non_200_ip_response_counts_nothing(db_session, monkeypatch):
+    """`:43`'s false arm. A 500 skips the whole result block."""
+    s = _seed()
+    set_setting('ban_check_servers', 'real.example')
+    _no_sleep(monkeypatch)
+    _lowest_randint(monkeypatch)
+    _recording_client(monkeypatch, (500, None), (200, [False]))
+
+    check_user_application(s.application.id)
+
+    db.session.expire_all()
+    assert db.session.query(UserRegistration).get(s.application.id).warning is None
+
+
+def test_an_empty_ip_result_list_counts_nothing(db_session, monkeypatch):
+    """`:46`'s `if ip_results` guard, and its `len(ip_results) > ip_index`
+    conjunct: an empty list is falsy AND too short. Both fail together here,
+    which is why the next test exists to separate them.
+    """
+    s = _seed()
+    set_setting('ban_check_servers', 'real.example')
+    _no_sleep(monkeypatch)
+    _lowest_randint(monkeypatch)
+    _recording_client(monkeypatch, (200, []), (200, [False]))
+
+    check_user_application(s.application.id)
+
+    db.session.expire_all()
+    assert db.session.query(UserRegistration).get(s.application.id).warning is None
+
+
+def test_a_false_result_at_the_real_index_counts_nothing(db_session, monkeypatch):
+    """`:46`'s last conjunct alone: the list is truthy and long enough, but
+    the element at `ip_index` is False.
+
+    SEPARATES the third conjunct from the first two, which the empty-list test
+    above fails simultaneously.
+    """
+    s = _seed()
+    set_setting('ban_check_servers', 'real.example')
+    _no_sleep(monkeypatch)
+    _lowest_randint(monkeypatch)
+    _recording_client(monkeypatch, (200, [False, True, True, True]), (200, [False]))
+
+    check_user_application(s.application.id)
+
+    db.session.expire_all()
+    assert db.session.query(UserRegistration).get(s.application.id).warning is None
