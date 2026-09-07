@@ -832,3 +832,127 @@ def test_unsticky_post_closes_the_session_on_the_happy_path(
     unsticky_post(None, s.user.id, s.post.id)
 
     assert record.calls == ['close']
+
+
+# ---------------------------------------------------------------------------
+# Mutation-testing record (sub-project 23, Task 7)
+#
+# Both twins (app/shared/tasks/adds.py, app/shared/tasks/removes.py) were
+# mutated one line at a time, one file at a time, and run against this file
+# alone (35 tests collected as of this commit). Each mutation was applied
+# with a single targeted `sed -i` to one file, tested, then reverted with
+# `git checkout -- app/` before the next mutation; `git diff -- app/` was
+# confirmed empty and both files confirmed at 100 lines after every restore.
+#
+# Columns: line = pre-mutation source line; sed = the exact substitution
+# applied; result = kill/survivor/equivalent/no-op, sole (one failing test)
+# or multi (several), and assertion-kill (AssertionError) vs crash-kill
+# (uncaught exception, reported by pytest as ERROR).
+#
+# M1  :58  invert the `community_id` test
+#     sed -i '58s/if not community_id:/if community_id:/'
+#     -> produced: "    if community_id:"
+#     adds.py:    KILL, multi (16 failed / 19 passed, mixes assertion and
+#                 crash kills -- 10 of the 16 also errored in teardown/setup)
+#     removes.py: KILL, multi (16 failed / 19 passed, same mix) -- symmetric
+#
+# M2  :63  drop the `private` conjunct
+#     sed -i '63s/ or community.private//'
+#     -> produced: "    if community.local_only or not community.instance.online():"
+#     adds.py:    KILL, sole assertion-kill (1 failed / 34 passed)
+#                 test_a_private_community_does_not_federate_the_add
+#     removes.py: KILL, sole assertion-kill (1 failed / 34 passed)
+#                 test_a_private_community_does_not_federate_the_remove
+#     Matches the previously-recorded twin-specific result from Tasks 2-6
+#     (each twin's reversion is caught only by that twin's own test).
+#
+# M3  :63  drop the `local_only` conjunct
+#     sed -i '63s/community.local_only or //'
+#     -> produced: "    if community.private or not community.instance.online():"
+#     adds.py:    KILL, sole assertion-kill (1 failed / 34 passed)
+#                 test_a_local_only_community_does_not_federate_the_add
+#     removes.py: KILL, sole assertion-kill (1 failed / 34 passed)
+#                 test_a_local_only_community_does_not_federate_the_remove
+#     Re-dry-run against the post-Task-2 (three-conjunct) line as required;
+#     not a no-op here -- symmetric across twins.
+#
+# M4  :63  drop the `online()` conjunct
+#     sed -i '63s/ or not community.instance.online()//'
+#     -> produced: "    if community.local_only or community.private: "
+#     adds.py:    KILL, sole assertion-kill (1 failed / 34 passed)
+#                 test_a_dormant_instance_does_not_receive_the_add
+#     removes.py: KILL, sole assertion-kill (1 failed / 34 passed)
+#                 test_a_dormant_instance_does_not_receive_the_remove
+#     Re-dry-run against the post-Task-2 line as required; not a no-op here
+#     -- symmetric across twins.
+#
+# M5  :74  swap the ternary's arms
+#     sed -i '74s/ap_moderators_url if community_id else community.ap_featured_url/ap_featured_url if community_id else community.ap_moderators_url/'
+#     -> produced: "      'target': community.ap_featured_url if community_id else community.ap_moderators_url,"
+#     adds.py:    KILL, multi assertion-kill, no crashes (5 failed / 30 passed)
+#                 test_a_remote_community_receives_the_bare_add
+#                 test_the_add_without_a_community_id_targets_the_featured_url
+#                 test_the_add_with_a_community_id_targets_the_moderators_url
+#                 test_sticky_post_delivers_an_add_targeting_featured
+#                 test_add_mod_delivers_an_add_targeting_moderators
+#     removes.py: KILL, multi assertion-kill, no crashes (5 failed / 30 passed)
+#                 test_a_remote_community_receives_the_bare_remove
+#                 test_the_remove_without_a_community_id_targets_the_featured_url
+#                 test_the_remove_with_a_community_id_targets_the_moderators_url
+#                 test_unsticky_post_delivers_a_remove_targeting_featured
+#                 test_remove_mod_delivers_a_remove_targeting_moderators
+#     This is the mutation that matters most: it is the only check that the
+#     :74 ternary's two arms are genuinely discriminated by the seeded data
+#     (coverage alone cannot see this). Both twins killed it cleanly.
+#
+# M6  :81  invert `is_local()`
+#     sed -i '81s/if community.is_local():/if not community.is_local():/'
+#     -> produced: "    if not community.is_local():"
+#     adds.py:    KILL, multi, mixing assertion and crash kills
+#                 (11 failed / 24 passed, 10 errors; 12 unique tests touched)
+#     removes.py: KILL, multi, mixing assertion and crash kills
+#                 (11 failed / 24 passed, 10 errors; 12 unique tests touched)
+#     Expected shape per the plan: flipping the local/remote branch for
+#     every test at once produces both failed assertions and tests that
+#     crash trying to reach following_instances()/ap_inbox_url on the wrong
+#     kind of community. Symmetric across twins.
+#
+# M7  :82  comment out the inner `del`
+#     sed -i '82s|^|#|'
+#     -> produced: "#        del add['@context']"  (adds.py)
+#                  "#        del remove['@context']"  (removes.py)
+#     adds.py:    KILL, sole assertion-kill (1 failed / 34 passed)
+#                 test_a_local_community_announces_the_add_and_strips_its_inner_context
+#     removes.py: KILL, sole assertion-kill (1 failed / 34 passed)
+#                 test_a_local_community_announces_the_remove_and_strips_its_inner_context
+#     Note: the first run against removes.py under this mutation reported an
+#     extra, unrelated failure/error on an *adds* test
+#     (test_one_instance_is_skipped_while_another_receives_the_add), which
+#     cannot be caused by a removes.py-only change. Re-running the identical
+#     mutation reproduced only the expected sole kill above, confirming the
+#     first result was a transient flake (not a mutation effect, not a real
+#     twin asymmetry) rather than a genuine divergence.
+#
+# M8  :97  drop the `inbox` conjunct
+#     sed -i '97s/instance.inbox and //'
+#     -> produced: "            if instance.online() and not user.has_blocked_instance(instance.id) and not instance_banned(instance.domain):"
+#     adds.py:    KILL, multi assertion-kill, no crashes (2 failed / 33 passed)
+#                 test_a_following_instance_without_an_inbox_gets_no_add
+#                 test_one_instance_is_skipped_while_another_receives_the_add
+#     removes.py: KILL, multi assertion-kill, no crashes (2 failed / 33 passed)
+#                 test_a_following_instance_without_an_inbox_gets_no_remove
+#                 test_one_instance_is_skipped_while_another_receives_the_remove
+#
+# Summary: 8/8 mutations x 2 twins = 16/16 runs, all KILLS. Zero survivors,
+# zero equivalent mutants, zero no-op substitutions (M2/M3/M4 were re-dry-run
+# against the post-Task-2 :63 line, as required, and all three mutated it
+# correctly this time). No twin asymmetry was found: every mutation killed
+# both twins with the same shape (same kill count, same kill type, mirrored
+# test names). Counts above are as-of this commit, against the 35-test file;
+# a later re-run against a larger file should read higher pass counts as
+# growth, not as a discrepancy with this record.
+#
+# Tree state after every mutation cycle: `git diff -- app/` empty and both
+# app/shared/tasks/adds.py and app/shared/tasks/removes.py at 100 lines,
+# verified before starting the next mutation.
+# ---------------------------------------------------------------------------
