@@ -180,17 +180,36 @@ def test_an_application_without_a_user_returns_without_requests(
 
     `UserRegistration.user` is a relationship on `user_id`
     (app/models.py:3641), so clearing the FK empties it.
+
+    A REAL DOMAIN IS CONFIGURED, and the logger is the assertion, not just
+    `client.posts`. Dropping the `or not application.user` disjunct alone
+    does not change `client.posts` here: with no domain configured the loop
+    body never runs either way, and even WITH a domain configured a mutant
+    that removed the disjunct would proceed into the loop, dereference
+    `application.user.ip_address` at `:36`, raise AttributeError on the
+    `None`, and have that swallowed by `:76-78`'s per-domain `except` before
+    any request is sent -- so `client.posts == []` would hold under the
+    mutant too. The `errors` list is what actually distinguishes "returned
+    before the loop" (no log call) from "entered the loop and failed inside
+    it" (one log call), so it is what makes this test kill that mutant.
     """
+    import app.shared.tasks.users as users_module
+
     s = _seed()
     s.application.user_id = None
     db.session.commit()
+    set_setting('ban_check_servers', 'real.example')
     _no_sleep(monkeypatch)
     _lowest_randint(monkeypatch)
     client = _recording_client(monkeypatch)
+    errors = []
+    monkeypatch.setattr(users_module.current_app.logger, 'error',
+                         lambda msg: errors.append(msg))
 
     check_user_application(s.application.id)
 
     assert client.posts == []
+    assert errors == []
 
 
 def test_no_ban_check_servers_configured_makes_no_requests(
@@ -607,3 +626,99 @@ def test_both_responses_are_closed(db_session, monkeypatch):
     check_user_application(s.application.id)
 
     assert len(client.closed) == 2
+
+
+def test_a_database_failure_rolls_back_and_re_raises(db_session, monkeypatch):
+    """`:84-85`'s except arm and `:87-88`'s finally, reached WITHOUT a faked
+    exception in the task body.
+
+    `get_task_session` is replaced by one whose `execute` raises, which is the
+    nearest natural analogue to the database rejecting the UPDATE. The
+    recorded ORDER fixes `finally` running after `except`, which a
+    `raises`-only test cannot observe.
+
+    THE PATCH TARGET IS THE USERS MODULE. `app/shared/tasks/users.py:10`
+    imports `get_task_session` into the users namespace and `:15` resolves it
+    there; patching `app.utils.get_task_session` would apply cleanly and
+    observe nothing.
+    """
+    from app import db as _db
+    from sqlalchemy.orm import Session as _Session
+    import app.shared.tasks.users as users_module
+
+    s = _seed()
+    set_setting('ban_check_servers', 'real.example')
+    _no_sleep(monkeypatch)
+    _lowest_randint(monkeypatch)
+    _recording_client(monkeypatch, (200, [True]), (200, [True]))
+
+    calls = []
+
+    def _make():
+        session = _Session(bind=_db.engine)
+        real_rollback, real_close = session.rollback, session.close
+
+        def rollback():
+            calls.append('rollback')
+            return real_rollback()
+
+        def close():
+            calls.append('close')
+            return real_close()
+
+        def execute(*_args, **_kwargs):
+            raise RuntimeError('database refused the update')
+
+        session.rollback = rollback
+        session.close = close
+        session.execute = execute
+        return session
+
+    monkeypatch.setattr(users_module, 'get_task_session', _make)
+
+    with pytest.raises(RuntimeError):
+        check_user_application(s.application.id)
+
+    assert calls == ['rollback', 'close']
+
+
+def test_the_session_is_closed_on_the_happy_path(db_session, monkeypatch):
+    """`:87-88`'s finally on the SUCCESS path -- `close` with no `rollback`.
+
+    The control for the test above: without it, `finally` running is only ever
+    observed alongside an exception, and a handler that closed only in the
+    `except` arm would pass every other test in this file.
+    """
+    from app import db as _db
+    from sqlalchemy.orm import Session as _Session
+    import app.shared.tasks.users as users_module
+
+    s = _seed()
+    set_setting('ban_check_servers', 'real.example')
+    _no_sleep(monkeypatch)
+    _lowest_randint(monkeypatch)
+    _recording_client(monkeypatch, (200, [False]), (200, [False]))
+
+    calls = []
+
+    def _make():
+        session = _Session(bind=_db.engine)
+        real_rollback, real_close = session.rollback, session.close
+
+        def rollback():
+            calls.append('rollback')
+            return real_rollback()
+
+        def close():
+            calls.append('close')
+            return real_close()
+
+        session.rollback = rollback
+        session.close = close
+        return session
+
+    monkeypatch.setattr(users_module, 'get_task_session', _make)
+
+    check_user_application(s.application.id)
+
+    assert calls == ['close']
