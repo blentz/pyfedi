@@ -464,3 +464,200 @@ def test_a_remote_community_receives_the_bare_undo(db_session, http_mock):
     assert undo['type'] == 'Undo'
     assert undo['object']['type'] == 'Like'
     assert '@context' not in undo['object']
+
+
+def test_a_piefed_follower_is_batched_rather_than_sent(db_session, http_mock):
+    """`:141` routes a `piefed` peer into the batch arm instead of the send
+    arms; `:142-143` write the `ActivityBatch` row and commit it, inside the
+    loop, with no HTTP request involved.
+
+    NO ROUTE IS REGISTERED for this instance, and that is the point: under
+    `http_mock`'s `assert_all_called=True` a registered-but-unfired route
+    would fail this test for the wrong reason, while an unexpected send would
+    surface as an unmatched request instead. So the assertion pair is "one
+    batch row" and "zero ActivityPubLog rows".
+
+    The batch payload is `payload_copy` -- the context-free inner object
+    built at `:110-115`, not the Announce built around it at `:122-130` --
+    which is what `assert '@context' not in batches[0].payload` pins down.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    inst = make_instance('piefed.example', software='piefed')
+    inst.inbox = PEER_INBOX
+    member = make_user(inst, 'member_piefed')
+    make_community_member(member, s.community)
+    db.session.commit()
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+
+    batches = db.session.query(ActivityBatch).all()
+    assert len(batches) == 1
+    assert batches[0].instance_id == inst.id
+    assert batches[0].community_id == s.community.id
+    assert batches[0].payload['type'] == 'Like'
+    assert '@context' not in batches[0].payload
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_pylova_follower_is_batched_too(db_session, http_mock):
+    """`:141`'s second literal, `'pylova'`. Written out separately from the
+    `piefed` test above because `or` short-circuits: a mutation deleting the
+    `pylova` comparison would leave that test passing regardless.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    inst = make_instance('pylova.example', software='pylova')
+    inst.inbox = PEER_INBOX
+    member = make_user(inst, 'member_pylova')
+    make_community_member(member, s.community)
+    db.session.commit()
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+
+    assert db.session.query(ActivityBatch).count() == 1
+
+
+def test_a_notif_server_publishes_to_redis_instead_of_sending(
+        db_session, http_mock, monkeypatch):
+    """`:145` selects the async arm when `current_app.config['NOTIF_SERVER']`
+    is truthy; `:146-149` signs the announce and appends it to `send_async`;
+    `:157-159` then publishes it to redis after the loop ends, rather than
+    sending it over HTTP.
+
+    THE CAPTURE. `:155` does `from app import redis_client` INSIDE the
+    function, so the name resolves at call time and patching `app.redis_client`
+    before the call intercepts it -- the idiom `tests/README.md` already
+    records for this client. The double records `(channel, payload)` so this
+    can assert on WHAT was published; asserting merely that publish was
+    called would pass against a payload carrying the wrong urls.
+
+    NO ROUTE IS REGISTERED -- the whole point is that nothing goes out over
+    HTTP on this path -- so an accidental send surfaces as an unmatched
+    request under `http_mock`.
+    """
+    published = []
+
+    class _Redis:
+        def publish(self, channel, payload):
+            published.append((channel, payload))
+
+    monkeypatch.setattr('app.redis_client', _Redis())
+    monkeypatch.setitem(current_app.config, 'NOTIF_SERVER', 'notifs.example')
+
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    inst = make_instance('follower.example', software='lemmy')
+    inst.inbox = PEER_INBOX
+    member = make_user(inst, 'member_follower')
+    make_community_member(member, s.community)
+    db.session.commit()
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+
+    assert len(published) == 1
+    channel, payload = published[0]
+    assert channel == 'http_posts:activity'
+    body = json.loads(payload)
+    assert body['urls'] == [PEER_INBOX]
+    assert json.loads(body['data'])['type'] == 'Announce'
+
+
+def test_no_notif_server_sends_directly(db_session, http_mock, monkeypatch):
+    """`:150-152`'s else arm, and the control for the test above: without it,
+    a direct send is never distinguished from an unconditional one.
+
+    `NOTIF_SERVER` defaults to `''` (config.py:131), so this is the default
+    path -- but set it explicitly rather than relying on the default, so the
+    test still means what it says if the default ever changes.
+    """
+    monkeypatch.setitem(current_app.config, 'NOTIF_SERVER', '')
+
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+
+    assert _delivered_inboxes(route) == {PEER_INBOX}
+
+
+def test_a_follower_without_an_inbox_is_skipped_and_the_loop_continues(
+        db_session, http_mock):
+    """`:136`'s `instance.inbox` conjunct, inverted into a `continue` at
+    `:139`.
+
+    The inboxless follower is created FIRST so it takes the lower id and is
+    returned first by `following_instances()`'s unordered `.distinct().all()`
+    (app/models.py:842-851). If that query-plan assumption ever breaks, this
+    test degrades to LAX -- it would still pass under a loop that aborted on
+    the skip instead of continuing past it -- never to FLAKY. Creating the
+    good follower first would let such an aborting loop deliver once and pass,
+    which is the defect this ordering avoids.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    dud = make_instance('inboxless.example', software='lemmy')
+    dud.inbox = None
+    dud_member = make_user(dud, 'member_inboxless')
+    make_community_member(dud_member, s.community)
+    db.session.commit()
+    route, _good = _follower(s, http_mock, inbox=OTHER_INBOX,
+                             domain='good.example')
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+
+    assert _delivered_inboxes(route) == {OTHER_INBOX}
+    assert len(route.calls) == 1
+
+
+def test_a_blocked_follower_is_skipped_and_the_loop_continues(
+        db_session, http_mock):
+    """`:137`'s `not user.has_blocked_instance(instance.id)` conjunct,
+    inverted into a `continue` at `:139`.
+
+    The blocked follower is created FIRST, for the same lower-id,
+    LAX-not-FLAKY reason `test_a_follower_without_an_inbox_is_skipped...`
+    gives.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    blocked = make_instance('blocked.example', software='lemmy')
+    blocked.inbox = PEER_INBOX
+    blocked_member = make_user(blocked, 'member_blocked')
+    make_community_member(blocked_member, s.community)
+    make_instance_block(s.user, blocked)
+    db.session.commit()
+    route, _good = _follower(s, http_mock, inbox=OTHER_INBOX,
+                             domain='good.example')
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+
+    assert _delivered_inboxes(route) == {OTHER_INBOX}
+
+
+def test_a_banned_follower_is_skipped_and_the_loop_continues(
+        db_session, http_mock):
+    """`:138`'s `not instance_banned(instance.domain)` conjunct, inverted
+    into a `continue` at `:139`. `instance_banned` (app/utils.py:2336) opens
+    its own task session, so the `BannedInstances` row must be committed to
+    be visible to it.
+
+    The banned follower is created FIRST, for the same lower-id,
+    LAX-not-FLAKY reason `test_a_follower_without_an_inbox_is_skipped...`
+    gives.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    banned = make_instance('banned.example', software='lemmy')
+    banned.inbox = PEER_INBOX
+    banned_member = make_user(banned, 'member_banned')
+    make_community_member(banned_member, s.community)
+    make_banned_instance('banned.example')
+    db.session.commit()
+    route, _good = _follower(s, http_mock, inbox=OTHER_INBOX,
+                             domain='good.example')
+
+    vote_for_post(None, s.user.id, s.post.id, None, 'upvote')
+
+    assert _delivered_inboxes(route) == {OTHER_INBOX}
