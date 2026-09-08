@@ -41,9 +41,10 @@ import socket
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy.orm.exc import NoResultFound
 
 from app import db
-from app.models import ActivityPubLog
+from app.models import ActivityPubLog, Language
 from app.shared.tasks.groups import edit_community
 from tests.factories import (
     make_community, make_community_member, make_file, make_instance, make_user,
@@ -123,6 +124,55 @@ def _delivered_inboxes(*routes):
     """The SET of inboxes that received a request. Never a list, never ordered
     -- `following_instances()` ends in an unordered `.distinct().all()`."""
     return {str(r.calls[i].request.url) for r in routes for i in range(len(r.calls))}
+
+
+def _recording_task_session(monkeypatch):
+    """Make `get_task_session` hand back a GENUINE Session that records
+    `rollback()` and `close()`.
+
+    THE EIGHTH COPY of a helper that also lives in
+    tests/test_shared_tasks_flags.py, test_shared_tasks_likes.py,
+    test_shared_tasks_locks.py, test_shared_tasks_send_answer.py,
+    test_shared_tasks_add_remove.py, test_shared_tasks_send_reply.py and
+    test_shared_tasks_send_post.py. Duplicated rather than imported: this
+    campaign keeps its test modules independent so a helper can be edited for
+    one function's needs without silently changing another's assertions.
+
+    The session is real -- only the observation is added, by wrapping the two
+    methods rather than replacing the object. A fake session would prove the
+    wrapper calls methods on a mock; this proves it calls them on the session
+    the function actually used.
+
+    THE PATCH TARGET IS THE GROUPS MODULE, NOT `app.utils`. `groups.py:4`
+    imports `get_task_session` into the groups namespace and `edit_community`
+    resolves it there (`:54`). Patching `app.utils.get_task_session` would
+    apply cleanly, observe nothing, and leave the assertion trivially true
+    against an empty list.
+    """
+    from app import db as _db
+    from sqlalchemy.orm import Session as _Session
+    import app.shared.tasks.groups as groups_module
+
+    record = SimpleNamespace(calls=[])
+
+    def _make():
+        session = _Session(bind=_db.engine)
+        real_rollback, real_close = session.rollback, session.close
+
+        def rollback():
+            record.calls.append('rollback')
+            return real_rollback()
+
+        def close():
+            record.calls.append('close')
+            return real_close()
+
+        session.rollback = rollback
+        session.close = close
+        return session
+
+    monkeypatch.setattr(groups_module, 'get_task_session', _make)
+    return record
 
 
 def _seed(local_community=True, with_keys=False):
@@ -468,3 +518,107 @@ def test_no_icon_or_header_omits_both_keys(db_session, http_mock):
     group = _sent_activity(route)['object']['object']
     assert 'icon' not in group
     assert 'image' not in group
+
+
+def test_a_community_with_no_languages_sends_an_empty_language_list(
+        db_session, http_mock):
+    """`:112`'s loop over zero iterations. `make_community` attaches no
+    languages, so `group['language']` is built and left empty rather than
+    omitted -- which is what distinguishes this from the optional fields at
+    `:85-110`, where absence means the key is missing entirely."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+
+    edit_community(None, s.user.id, s.community.id)
+
+    group = _sent_activity(route)['object']['object']
+    assert group['language'] == []
+
+
+def test_each_community_language_becomes_an_identifier_and_name(
+        db_session, http_mock):
+    """`:113`, the loop body. Two languages so the arc back to the top of the
+    loop is taken, which one language would not prove.
+
+    SET-BASED, because `community.languages` is a relationship whose ordering
+    this test does not control."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+    en = Language(name='English', code='en')
+    de = Language(name='German', code='de')
+    db.session.add_all([en, de])
+    db.session.commit()
+    s.community.languages.append(en)
+    s.community.languages.append(de)
+    db.session.commit()
+
+    edit_community(None, s.user.id, s.community.id)
+
+    group = _sent_activity(route)['object']['object']
+    assert {(l['identifier'], l['name']) for l in group['language']} == {
+        ('en', 'English'), ('de', 'German')}
+
+
+def test_a_follower_without_an_inbox_is_skipped_and_the_loop_continues(
+        db_session, http_mock):
+    """`:141`'s `instance.inbox` conjunct, with a second follower proving the
+    loop CONTINUES rather than aborting.
+
+    THE ActivityPubLog COUNT IS WHAT MAKES THIS DISCRIMINATE. An instance with
+    a None inbox reaches `send_post_request(None, ...)`, and `post_request`
+    takes the `if uri is None` arm at `app/activitypub/signature.py:109`,
+    marking its already-written row `empty uri` at `:110-111` WITHOUT making an
+    httpx call. So respx sees nothing and a delivered-inboxes assertion alone
+    cannot tell a truthful skip from a mutated one. The row count can: one row
+    for the real delivery, none for a correctly skipped instance.
+
+    THE INBOXLESS FOLLOWER IS CREATED FIRST so it takes the lower id. This
+    relies on Postgres returning a small unordered join in ascending id, which
+    is an assumption about the query plan rather than a guarantee. If it ever
+    breaks, this test degrades to LAX -- it would pass under an aborting loop
+    too -- never to FLAKY: no direction exists in which a correct, continuing
+    loop starts failing.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    dud = make_instance('inboxless.example', software='lemmy')
+    dud.inbox = None
+    dud_member = make_user(dud, 'member_inboxless')
+    make_community_member(dud_member, s.community)
+    db.session.commit()
+    route, _good = _follower(s, http_mock, inbox=OTHER_INBOX,
+                             domain='good.example')
+
+    edit_community(None, s.user.id, s.community.id)
+
+    assert _delivered_inboxes(route) == {OTHER_INBOX}
+    assert db.session.query(ActivityPubLog).count() == 1
+
+
+def test_a_missing_community_raises_NoResultFound_and_rolls_back(
+        db_session, monkeypatch):
+    """`:58`'s `.filter_by(id=community_id).one()` against an absent id,
+    which is what reaches the bare `except Exception:` at `:145` and its body
+    at `:146-147` -- the only three statements Step 1's tests leave
+    uncovered, since every other test in this file only ever exercises the
+    success path through `:148-149`'s `finally`.
+
+    NOT PART OF THIS TASK'S ORIGINAL STEP 1 LIST. It was added after
+    measuring coverage and finding `:145-147` still missing with the floor
+    set to 100 -- the `Files` section of this task's brief permits editing
+    this test file "only if coverage shows gaps," and this is that gap.
+
+    THE RECORDED ORDER is what proves `rollback` runs before `close` rather
+    than merely that both eventually run; a bare `pytest.raises` would satisfy
+    statement coverage without discriminating a handler that swallowed the
+    exception or closed the session before rolling it back.
+    """
+    s = _seed(with_keys=True)
+    record = _recording_task_session(monkeypatch)
+
+    with pytest.raises(NoResultFound):
+        edit_community(None, s.user.id, s.community.id + 1000)
+
+    assert record.calls == ['rollback', 'close']
