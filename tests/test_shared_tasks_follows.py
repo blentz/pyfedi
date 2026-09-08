@@ -566,7 +566,6 @@ def test_leaving_a_remote_feed_sends_an_undo(db_session, http_mock):
     """
     s = _seed(with_keys=True)
     peer = make_instance('peer.example', software='lemmy')
-    peer.inbox = PEER_INBOX
     feed = make_feed(peer, 'peerfeed')
     feed.ap_inbox_url = PEER_INBOX
     db.session.commit()
