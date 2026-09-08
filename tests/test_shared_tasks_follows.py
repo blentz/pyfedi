@@ -190,3 +190,49 @@ def test_following_a_remote_user_sends_a_follow(db_session, http_mock):
     follow = _sent_activity(route)
     assert follow['type'] == 'Follow'
     assert follow['object'] == target.public_url()
+
+
+def test_joining_a_local_community_sends_nothing(db_session, http_mock):
+    """`:74`'s first conjunct. A local community joins instantly: no
+    `CommunityJoinRequest` row, no Follow.
+
+    The oracle is the `ActivityPubLog` count, not the absence of a route:
+    `signature.py:143` swallows respx's unmatched-request assertion into a
+    failure row, so a send here would be invisible to a call count.
+    """
+    s = _seed(with_keys=True)
+
+    result = join_community(None, s.user.id, s.community.id, SRC_API)
+
+    assert db.session.query(CommunityJoinRequest).count() == 0
+    assert db.session.query(ActivityPubLog).count() == 0
+    assert result is True
+
+
+def test_joining_an_offline_remote_community_sends_nothing(db_session, http_mock):
+    """`:74`'s second conjunct, `community.instance.online()`. A remote
+    community on a dormant instance also joins instantly.
+
+    Separated from the local test because the two conjuncts fail
+    independently, and coverage.py records one arc pair for the whole `if`.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_online(s, online=False)
+
+    result = join_community(None, s.user.id, s.community.id, SRC_API)
+
+    assert db.session.query(CommunityJoinRequest).count() == 0
+    assert db.session.query(ActivityPubLog).count() == 0
+    assert result is True
+
+
+def test_joining_returns_the_preload_status_for_src_pld(db_session, http_mock):
+    """`:100-101`'s `SRC_PLD` arm. The dict is the only thing distinguishing
+    this arm from `SRC_API`'s `return True` at `:103`, and under
+    `task_always_eager` the wrapper hands the value back directly (fact 146).
+    """
+    s = _seed(with_keys=True)
+
+    result = join_community(None, s.user.id, s.community.id, SRC_PLD)
+
+    assert result == {'status': 'joined'}
