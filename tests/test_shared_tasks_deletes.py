@@ -47,7 +47,7 @@ from app.shared.tasks.deletes import (
     delete_reply, restore_community, restore_post, restore_reply,
 )
 from tests.factories import (
-    make_banned_instance, make_community, make_community_member,
+    make_banned_instance, make_community, make_community_member, make_follow,
     make_instance, make_instance_block, make_notification, make_post,
     make_post_reply, make_user,
 )
@@ -772,3 +772,150 @@ def test_restore_reply_sends_an_undo_of_a_reply_delete(db_session, http_mock):
     announce = _sent_activity(route)
     assert announce['object']['type'] == 'Undo'
     assert announce['object']['object']['object'] == reply.public_url()
+
+
+def _personal_follower(s, http_mock, inbox=OTHER_INBOX, domain='fan.example'):
+    """A remote instance the FOLLOWER fan-out at `:212-216` will return.
+
+    A DIFFERENT SHAPE FROM `_follower`. That one needs a `CommunityMember`
+    because `following_instances()` joins it; this one needs a `UserFollower`
+    row whose `local_user_id` is the deleting user, because `:212` joins
+    `Instance -> User -> UserFollower` and filters on
+    `UserFollower.local_user_id == user.id`. A recipient built by one helper
+    produces zero deliveries on the other's path, under assertions that still
+    pass.
+
+    `is_inward=True` is the honest shape: these are people who follow US, which
+    is what `local_user_id == user.id` with `remote_user_id` as the recipient
+    means in production.
+
+    Returns `(route, instance, follower_user)`.
+    """
+    inst = make_instance(domain, software='lemmy')
+    inst.inbox = inbox
+    fan = make_user(inst, f'fan_{domain.split(".")[0]}')
+    make_follow(s.user, fan, is_inward=True)
+    db.session.commit()
+    return http_mock.post(inbox).respond(200, json={}), inst, fan
+
+
+def _personal_follower_without_a_mocked_route(s, inbox=OTHER_INBOX, domain='fan.example'):
+    """Same DB shape as `_personal_follower` -- an Instance, an inbox, and a
+    `UserFollower` row -- but with NO route registered on `http_mock`.
+
+    Mirrors `_following_instance_without_a_mocked_route` above for the same
+    reason: `http_mock` is `assert_all_called=True` (conftest.py:336-342), so a
+    route built with `_personal_follower` for a test whose guard is SUPPOSED to
+    stop the fan-out would sit uncalled and fail at teardown for the wrong
+    reason. An unexpected send instead falls through to the session-scoped
+    empty router and is caught by `post_request`, which still writes the
+    `ActivityPubLog` failure row -- so a fan-out regression is still caught by
+    the row count.
+
+    Returns `(instance, follower_user)`.
+    """
+    inst = make_instance(domain, software='lemmy')
+    inst.inbox = inbox
+    fan = make_user(inst, f'fan_{domain.split(".")[0]}')
+    make_follow(s.user, fan, is_inward=True)
+    db.session.commit()
+    return inst, fan
+
+
+def test_a_post_delete_reaches_the_authors_own_followers(db_session, http_mock):
+    """`:216`, the follower fan-out, on a REMOTE community so the Announce loop
+    does not also run and the two deliveries stay distinguishable.
+
+    `:211` appends each follower's actor URL to the payload's `cc`, so the
+    delivered activity carries the follower -- that is the assertion that
+    proves the loop at `:210` ran, rather than merely that a request arrived.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    community_route = http_mock.post(PEER_INBOX).respond(200, json={})
+    fan_route, _inst, fan = _personal_follower(s, http_mock)
+
+    delete_post(None, s.user.id, s.post.id)
+
+    assert _delivered_inboxes(fan_route) == {OTHER_INBOX}
+    assert fan.public_url() in _sent_activity(fan_route)['cc']
+    assert len(community_route.calls) == 1
+
+
+def test_a_reply_delete_does_not_reach_the_authors_followers(db_session, http_mock):
+    """`:206`'s `is_post` conjunct. The fan-out is for posts only; a reply
+    delete goes to the community and stops."""
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    community_route = http_mock.post(PEER_INBOX).respond(200, json={})
+    _inst, _fan = _personal_follower_without_a_mocked_route(s)
+    reply = make_post_reply(s.post, s.user)
+    db.session.commit()
+
+    delete_reply(None, s.user.id, reply.id)
+
+    assert len(community_route.calls) == 1
+    assert db.session.query(ActivityPubLog).count() == 1
+
+
+def test_a_moderated_post_delete_skips_the_follower_fanout(db_session, http_mock):
+    """`:206`'s `not reason` conjunct, added by this sub-project's PC3.
+
+    The moderator's Delete still reaches the community; it is the AUTHOR'S
+    personal followers who are not told. Task 2 proved the same change frees
+    the notification cleanup; this proves it did not also free the fan-out.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    community_route = http_mock.post(PEER_INBOX).respond(200, json={})
+    _inst, _fan = _personal_follower_without_a_mocked_route(s)
+
+    delete_post(None, s.user.id, s.post.id, reason='spam')
+
+    assert len(community_route.calls) == 1
+    assert db.session.query(ActivityPubLog).count() == 1
+
+
+def test_a_follower_on_an_already_notified_domain_is_not_sent_to_twice(
+        db_session, http_mock):
+    """`:214`'s `if instance.domain not in domains_sent_to`. The follower lives
+    on the SAME instance as the remote community, which `:203` already added to
+    `domains_sent_to`, so the fan-out skips it.
+
+    ONE delivery, not two, and the row count is what says so -- a second send
+    to the same registered route would leave `_delivered_inboxes` unchanged."""
+    s = _seed(local_community=False, with_keys=True)
+    peer = _make_deliverable(s)
+    s.community.ap_domain = peer.domain
+    db.session.commit()
+    route = http_mock.post(PEER_INBOX).respond(200, json={})
+    fan = make_user(peer, 'fan_same_domain')
+    peer.inbox = PEER_INBOX
+    make_follow(s.user, fan, is_inward=True)
+    db.session.commit()
+
+    delete_post(None, s.user.id, s.post.id)
+
+    assert db.session.query(ActivityPubLog).count() == 1
+
+
+def test_a_local_only_community_still_reaches_the_authors_followers(
+        db_session, http_mock):
+    """`:130`'s `not followers` conjunct, which exists to let this case through.
+
+    A `local_only` community normally stops a delete at `:127` or `:130`. But
+    `:130` returns only when the author has NO followers -- so a POST delete by
+    an author who DOES have followers passes both guards and goes on to reach
+    them. That is the one state in which `:127` and `:130` differ from each
+    other, and no other test in this file constructs it.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    community_route = http_mock.post(PEER_INBOX).respond(200, json={})
+    fan_route, _inst, _fan = _personal_follower(s, http_mock)
+    s.community.local_only = True
+    db.session.commit()
+
+    delete_post(None, s.user.id, s.post.id)
+
+    assert _delivered_inboxes(fan_route) == {OTHER_INBOX}
