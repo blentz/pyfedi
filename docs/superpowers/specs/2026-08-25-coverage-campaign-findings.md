@@ -8904,7 +8904,7 @@ takes it.
 `docs/superpowers/specs/2026-09-08-coverage-deletes-27-design.md` and
 `docs/superpowers/plans/2026-09-08-coverage-deletes-27.md` (design and plan;
 the per-task briefs and reports live in `.superpowers/sdd/2026-09-08-coverage-deletes-27/`),
-on branch `blentz`, from base `20e4575c`. Twelve tasks closed
+on branch `blentz`, from base `0d291daf`. Twelve tasks closed
 `app/shared/tasks/deletes.py` (318 lines, six `@celery.task` wrappers
 delegating to `delete_object:118` and `delete_pm`/`restore_pm` delegating to
 `delete_message:291`) to 100% statement and 100% branch coverage (199
@@ -9048,7 +9048,7 @@ rather than a `TypeError` at the call (151). Stating a citation rule does
 not prevent breaking it; only a reader re-deriving citations against the
 tree does (152).
 
-**Next free number: D338.** D333-D335 were taken by this round -- D333
+**Next free number: D336.** D333-D335 were taken by this round -- D333
 `delete_posts_with_blocked_images`'s missing `session`, fixed; D334 the
 notification-cleanup asymmetry, fixed; D335 the follower fan-out's missing
 `dormant`/`inbox` guards, registered as D321's shape in a third file, not
@@ -9063,7 +9063,7 @@ recounted from 9/6 to 10/7 real copies of its two helpers. Two further
 findings -- the aliased `cc` list and `:211`'s post-send mutation on the
 local path -- were registered in prose, in this section, taking no number,
 on the same terms sub-project 26's `_key_id_of` finding did. No entry was
-renumbered or moved, and no family index was extended. If you take D338,
+renumbered or moved, and no family index was extended. If you take D336,
 say so here in the change that takes it.
 
 ## Ratchet gotchas
