@@ -91,14 +91,19 @@ def _make_deliverable(s, online=True):
 
     Transferred from this campaign's other AP-sender harnesses, where an
     equivalent helper puts the community's OWN instance into the state a
-    same-shaped online/offline gate reads before delivery. `edit_community`
-    has NO such gate -- it never inspects `community.instance` at all, only
-    `local_only` (`:59`) and `is_moderator` (`:62`) before building the
-    envelope, and the loop at `:140` checks each FOLLOWING instance's
-    `.online()`, never the community's own. So this helper's effect is inert
-    with respect to every assertion in this file; it is kept only for parity
-    with the shared harness shape, and for the `online=False` toggle in case
-    a later test in this file needs it.
+    same-shaped online/offline gate reads before delivery. THIS DOCSTRING WAS
+    WRONG ABOUT THAT FOR `edit_community` AND HAS BEEN CORRECTED: at the time
+    it was written, `:59` read only `if community.local_only:` and never
+    dereferenced `community.instance` at all, making this helper's
+    `online=False` toggle genuinely inert here. Commit `16604e72` then added
+    `not community.instance.online()` to `:59` -- the same fix this module's
+    own docstring at `:16-26` describes -- so the helper is now LOAD-BEARING:
+    `:59` reads `community.instance.online()` before `is_moderator` (`:62`)
+    ever runs, and `test_an_offline_community_instance_sends_nothing` exists
+    solely to exercise this helper's `online=False` toggle against that
+    guard. The loop at `:140` still checks each FOLLOWING instance's
+    `.online()` separately, never the community's own -- that part of the
+    original claim stands unchanged.
 
     `Instance.online()` (app/models.py:118-119) is exactly
     `not (self.dormant or self.gone_forever)`, so `online=False` sets both.
@@ -124,6 +129,25 @@ def _delivered_inboxes(*routes):
     """The SET of inboxes that received a request. Never a list, never ordered
     -- `following_instances()` ends in an unordered `.distinct().all()`."""
     return {str(r.calls[i].request.url) for r in routes for i in range(len(r.calls))}
+
+
+def _key_id_of(route, index=-1):
+    """The `keyId` the captured request was signed under.
+
+    The only observable separating `:142`'s signer (the COMMUNITY, on the
+    local-Announce path) from `:144`'s (the USER, on the remote-community
+    path). respx never verifies a signature, so the key material leaves no
+    trace on the wire -- only the declared keyId does. This works even though
+    `_seed(with_keys=True)` copies the user's keypair onto the community
+    (`community.private_key = user.private_key`): the key MATERIAL is
+    identical, but `user.public_url()` and `community.public_url()` differ, so
+    the keyId still discriminates which actor `send_post_request` was told to
+    sign as.
+
+    A second copy of `tests/test_shared_tasks_add_remove.py:203`, kept
+    independent for the same reason `_recording_task_session` above is.
+    """
+    return route.calls[index].request.headers['signature'].split('"')[1]
 
 
 def _recording_task_session(monkeypatch):
@@ -234,7 +258,8 @@ def test_edit_community_announces_an_update_to_a_following_instance(
         db_session, http_mock):
     """`edit_community` end to end on a LOCAL community: both guards passed,
     the Group envelope built at `:68-116`, the Update at `:120-128`, and the
-    Announce at `:130-138` delivered at `:142`.
+    Announce at `:130-138` delivered at `:142`, signed with the COMMUNITY's
+    key rather than the user's.
 
     The nested `@context` absence is the discriminating assertion. The
     `update` dict built at `:120-128` never sets an `@context` key at all --
@@ -258,6 +283,7 @@ def test_edit_community_announces_an_update_to_a_following_instance(
     assert '@context' not in announce['object']
     assert announce['object']['object']['type'] == 'Group'
     assert announce['object']['object']['preferredUsername'] == s.community.name
+    assert _key_id_of(route) == s.community.public_url() + '#main-key'
 
 
 def test_a_remote_community_receives_the_update_unwrapped(
@@ -265,6 +291,12 @@ def test_a_remote_community_receives_the_update_unwrapped(
     """`:143-144`'s else arm: no Announce, the Update goes straight to
     `community.ap_inbox_url` signed with the USER's key rather than the
     community's.
+
+    THE KEYID IS THE ONLY OBSERVABLE THAT DISCRIMINATES `:144`'s signer.
+    `_seed(with_keys=True)` copies the user's key MATERIAL onto the
+    community, so the signature bytes are identical whichever actor
+    `send_post_request` was told to sign as -- only the declared `keyId`
+    (`user.public_url()` vs `community.public_url()`) tells the two apart.
 
     NO `@context` ASSERTION BELONGS ON THE UPDATE ITSELF HERE. It is the
     top-level object on this path, so `signature.py:100-101` reinjects a
@@ -282,6 +314,7 @@ def test_a_remote_community_receives_the_update_unwrapped(
     update = _sent_activity(route)
     assert update['type'] == 'Update'
     assert update['object']['type'] == 'Group'
+    assert _key_id_of(route) == s.user.public_url() + '#main-key'
 
 
 def test_a_non_moderator_sends_nothing(db_session, http_mock):
