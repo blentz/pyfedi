@@ -385,7 +385,7 @@ def test_no_description_omits_the_source(db_session, http_mock):
 def test_an_absolute_icon_url_is_sent_unchanged(db_session, http_mock):
     """`:91-94`, the true arm of `:90`.
 
-    `Community.icon_image()` (app/models.py:658-681) returns `file_path`
+    `Community.icon_image()` (app/models.py:659-683) returns `file_path`
     unchanged when it does not start with `app/`, so an https path reaches
     `:90`'s `startswith('http')` as True and is used as-is.
     """
