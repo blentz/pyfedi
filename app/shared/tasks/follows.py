@@ -123,6 +123,7 @@ def leave_community(send_async, user_id, community_id):
                 return
 
             join_request = session.query(CommunityJoinRequest).filter_by(user_id=user_id, community_id=community_id).first()
+            join_request_uuid = join_request.uuid
             session.delete(join_request)
             session.commit()
 
@@ -131,7 +132,7 @@ def leave_community(send_async, user_id, community_id):
                instance_banned(community.instance.domain)):
                 return
 
-            follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{join_request.uuid}"
+            follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{join_request_uuid}"
             follow = {
               'id': follow_id,
               'type': 'Follow',
