@@ -1110,16 +1110,29 @@ def make_user_registration(user: User, answer: str = 'why', status: int = 0) -> 
 
 
 def make_file(file_path: str = None, source_url: str = None) -> File:
-    """A File row, for controlling what `Community.icon_image()` returns.
+    """A File row, for controlling what `Community.icon_image()` OR
+    `Community.header_image()` returns -- these are two DIFFERENT methods
+    reading two different columns, and which one a File feeds depends on
+    which community column the caller assigns it to.
 
-    `icon_image()` (app/models.py:659-671) prefers `file_path` over
-    `source_url`, and rewrites either one that starts with `app/` into a
-    `/`-rooted path. So a caller wanting an ABSOLUTE url passes
-    `file_path='https://cdn.example/icon.png'`, and one wanting a RELATIVE path
-    passes `file_path='/static/icon.png'` -- neither starts with `app/`, so
-    both are returned unchanged and the difference is only the scheme.
+    `icon_image()` (app/models.py:659-671) reads `community.icon_id` /
+    `community.icon` and prefers `file_path` over `source_url`.
+    `header_image()` (app/models.py:686-698) reads `community.image_id` /
+    `community.image` and does the same. Both rewrite either field that
+    starts with `app/` into a `/`-rooted path.
 
-    That distinction is what `app/shared/tasks/groups.py:90` and `:101`
+    So a caller wanting `groups.py:90`'s branch (`icon_image()`) must set
+    `community.icon_id`/`community.icon` to a File this factory built; a
+    caller wanting `:101`'s branch (`header_image()`) must set
+    `community.image_id`/`community.image` instead -- setting `icon_id` and
+    expecting `:101` to fire (or vice versa) silently exercises the wrong
+    branch.
+
+    Within either method, a caller wanting an ABSOLUTE url passes
+    `file_path='https://cdn.example/icon.png'`, and one wanting a RELATIVE
+    path passes `file_path='/static/icon.png'` -- neither starts with
+    `app/`, so both are returned unchanged and the difference is only the
+    scheme. That scheme distinction is what `groups.py:90` and `:101` each
     branch on.
     """
     f = File(file_path=file_path, source_url=source_url)
