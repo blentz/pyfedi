@@ -450,3 +450,147 @@ def test_an_offline_community_instance_sends_no_delete(db_session, http_mock):
     delete_post(None, s.user.id, s.post.id)
 
     assert db.session.query(ActivityPubLog).count() == 0
+
+
+def _recording_task_session(monkeypatch):
+    """Make `get_task_session` hand back a GENUINE Session that records
+    `rollback()` and `close()`.
+
+    THE TENTH COPY of a helper that also lives in
+    tests/test_shared_tasks_flags.py, test_shared_tasks_likes.py,
+    test_shared_tasks_locks.py, test_shared_tasks_send_answer.py,
+    test_shared_tasks_add_remove.py, test_shared_tasks_send_reply.py,
+    test_shared_tasks_send_post.py, test_shared_tasks_groups.py and
+    test_shared_tasks_blocks.py. Duplicated rather than imported: this
+    campaign keeps its test modules independent so a helper can be edited for
+    one function's needs without silently changing another's assertions.
+
+    The session is real -- only the observation is added, by wrapping the two
+    methods rather than replacing the object. A fake session would prove the
+    wrapper calls methods on a mock; this proves it calls them on the session
+    the function actually used.
+
+    THE PATCH TARGET IS THE DELETES MODULE, NOT `app.utils`. `deletes.py:5`
+    imports `get_task_session` into the deletes namespace and every wrapper
+    resolves it there. Patching `app.utils.get_task_session` would apply
+    cleanly, observe nothing, and leave the assertion trivially true against
+    an empty list.
+
+    Matches tests/test_shared_tasks_groups.py's `_recording_task_session`
+    construction exactly: `get_task_session` itself is replaced with a
+    factory that builds a fresh `Session(bind=db.engine)` per call and wraps
+    that instance's `rollback`/`close`, rather than fetching one real session
+    up front and handing back the same object every time. There is no
+    `db.create_scoped_session` call in the sibling to match.
+    """
+    from app import db as _db
+    from sqlalchemy.orm import Session as _Session
+    import app.shared.tasks.deletes as deletes_module
+
+    record = SimpleNamespace(calls=[])
+
+    def _make():
+        session = _Session(bind=_db.engine)
+        real_rollback, real_close = session.rollback, session.close
+
+        def rollback():
+            record.calls.append('rollback')
+            return real_rollback()
+
+        def close():
+            record.calls.append('close')
+            return real_close()
+
+        session.rollback = rollback
+        session.close = close
+        return session
+
+    monkeypatch.setattr(deletes_module, 'get_task_session', _make)
+    return record
+
+
+@pytest.mark.parametrize('task, kwarg', [
+    (delete_reply, 'reply_id'),
+    (restore_reply, 'reply_id'),
+    (delete_post, 'post_id'),
+    (restore_post, 'post_id'),
+    (delete_community, 'community_id'),
+    (restore_community, 'community_id'),
+])
+def test_each_wrapper_rolls_back_and_reraises(db_session, monkeypatch, task, kwarg):
+    """All six wrappers' `except Exception: session.rollback(); raise` --
+    `:37` (`delete_reply`), `:52` (`restore_reply`), `:67` (`delete_post`),
+    `:82` (`restore_post`), `:97` (`delete_community`), `:112`
+    (`restore_community`).
+
+    An id that does not exist makes the wrapper's own query raise -- `:34`,
+    `:49`, `:94` and `:109`'s `.one()` raises `NoResultFound` for the reply
+    and community wrappers, and `:64`/`:79`'s `.get()` returns `None` for the
+    post wrappers, whose `delete_object` then raises `AttributeError` on
+    `:123`'s `object.community`. Both propagate through the same `except`.
+
+    `record.calls == ['rollback', 'close']` IS THE ASSERTION. A
+    `pytest.raises` alone passes just as well when `session.rollback()` is
+    replaced by `pass`, which is exactly the defect sub-project 26 shipped in
+    four tests and had to fix in a later round.
+    """
+    record = _recording_task_session(monkeypatch)
+
+    with pytest.raises(Exception):
+        task(None, 1, **{kwarg: 999999})
+
+    assert record.calls == ['rollback', 'close']
+
+
+def test_restore_post_sends_an_undo(db_session, http_mock):
+    """`restore_post:74` -> `is_restore=True`. `:160-172` wraps the Delete in
+    an Undo, and on the LOCAL path `:178` strips the Undo's `@context` and
+    `:161` has already stripped the Delete's, so the Announce's own
+    `@context` at `:192` is the only level that carries one.
+
+    BOTH nested absences are asserted and both fail independently -- this is
+    the campaign's first activity with `@context` absences at two depths.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+
+    restore_post(None, s.user.id, s.post.id)
+
+    announce = _sent_activity(route)
+    assert announce['object']['type'] == 'Undo'
+    assert '@context' not in announce['object']
+    assert announce['object']['object']['type'] == 'Delete'
+    assert '@context' not in announce['object']['object']
+
+
+def test_delete_community_addresses_the_community_itself(db_session, http_mock):
+    """`delete_community:89`, whose object IS the community -- `:120-121`
+    takes the `isinstance(object, Community)` arm rather than `:123`'s
+    `object.community`."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+
+    delete_community(None, s.user.id, s.community.id)
+
+    announce = _sent_activity(route)
+    assert announce['object']['object'] == s.community.public_url()
+
+
+def test_restore_reply_sends_an_undo_of_a_reply_delete(db_session, http_mock):
+    """`restore_reply:44`, the `is_restore` arm on a NON-post. Distinguishes
+    `:123`'s `object.community` -- the else arm reached from the reply
+    wrappers, as opposed to `:121`'s `isinstance(object, Community)` arm the
+    community wrappers take instead."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+    reply = make_post_reply(s.post, s.user)
+    db.session.commit()
+
+    restore_reply(None, s.user.id, reply.id)
+
+    announce = _sent_activity(route)
+    assert announce['object']['type'] == 'Undo'
+    assert announce['object']['object']['object'] == reply.public_url()
