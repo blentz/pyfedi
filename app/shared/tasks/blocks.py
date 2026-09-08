@@ -186,5 +186,5 @@ def ban_person(session, user_id, mod_id, community_id, expiry, reason: str, remo
             sent_to.add(instance.id)
             if instance.inbox and instance.online():
                 send_post_request(instance.inbox, announce, community.private_key, community.public_url() + '#main-key')
-        if user.instance_id not in sent_to:     # community.following_instances() excludes instances where banned people are the only follower and they've just been banned so they may be no other followers from that instance.
+        if user.instance_id not in sent_to and user.instance and user.instance.inbox and user.instance.online():     # community.following_instances() excludes instances where banned people are the only follower and they've just been banned so they may be no other followers from that instance.
             send_post_request(user.instance.inbox, announce, community.private_key, community.public_url() + '#main-key')
