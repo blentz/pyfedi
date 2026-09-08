@@ -85,7 +85,7 @@ def _seed(local_community=True, with_keys=False):
     `user` both authors the content and performs the deletion, which is the
     author-delete shape; moderator deletes differ only by passing `reason`.
     `delete_object:119` loads the user and signs with their key on the remote
-    and follower paths (`:202`, `:218`), and with the COMMUNITY's key on the
+    and follower paths (`:202`, `:216`), and with the COMMUNITY's key on the
     local Announce path (`:198`) -- so `with_keys=True` supplies both.
     """
     instance = make_instance('test.piefed.local', software='piefed')
@@ -149,7 +149,7 @@ def _follower(s, http_mock, inbox=PEER_INBOX, domain='follower.example'):
     `:196`'s loop never runs, and every delivery assertion passes against zero
     deliveries.
 
-    THIS IS NOT THE FIXTURE PATH 3 NEEDS. The follower fan-out at `:214-218`
+    THIS IS NOT THE FIXTURE PATH 3 NEEDS. The follower fan-out at `:212-216`
     joins `UserFollower`, not `CommunityMember`, so a recipient built here is
     invisible to it and vice versa. Task 9 builds that one separately.
 
@@ -207,7 +207,7 @@ def test_a_remote_community_delete_is_sent_direct(db_session, http_mock):
 
 
 def test_a_moderator_delete_still_clears_notifications(db_session, http_mock):
-    """`:221-228`'s cleanup, which `:205-206`'s early return used to skip.
+    """`:219-226`'s cleanup, which `:205-206`'s early return used to skip.
 
     A moderator delete passes `reason`; an author delete does not. Before this
     commit the `reason` return at `:205` fired first, so a moderated removal
@@ -246,10 +246,11 @@ def test_an_author_delete_clears_notifications_too(db_session, http_mock):
 
 
 def test_a_report_notification_survives_the_delete(db_session, http_mock):
-    """`:225-226`'s `continue`, the one arm of the cleanup loop that keeps a
-    row. Two notifications on the same post, one of them a report: the report
-    survives and the other does not, so a mutation removing the `continue`
-    fails on the count rather than on which row happens to remain."""
+    """`:224`'s `continue`, guarded by `:223`'s report check -- the one arm of
+    the cleanup loop that keeps a row. Two notifications on the same post, one
+    of them a report: the report survives and the other does not, so a
+    mutation removing the `continue` fails on the count rather than on which
+    row happens to remain."""
     s = _seed(with_keys=True)
     _make_deliverable(s)
     route, _inst = _follower(s, http_mock)
