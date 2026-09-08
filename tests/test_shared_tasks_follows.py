@@ -1,0 +1,178 @@
+"""The five follow and unfollow tasks -- AP Follow and Undo senders.
+
+`app/shared/tasks/follows.py`, 277 lines. Five `@celery.task` functions:
+`join_community:39`, `leave_community:112`, `leave_feed:161`,
+`follow_user:214` and `unfollow_user:242`.
+
+NO FAN-OUT ANYWHERE IN THIS MODULE, which is what separates it from every
+module this campaign has closed since sub-project 24. Each task sends AT MOST
+ONE request, directly, to a single actor's inbox. There is no
+`following_instances()`, no recipient guard, no Announce, no `domains_sent_to`.
+
+WHAT IT HAS INSTEAD IS STATE. `CommunityJoinRequest`, `FeedJoinRequest` and
+`UserFollowRequest` rows are created, read for their `uuid`, and deleted, and
+the module's defects are all in the ordering of those operations against
+`session.commit()`. A test that asserts only on the wire misses half of what
+each task does: assert the row AND the request.
+
+`join_community` FORKS THREE WAYS ON `src` INSIDE EACH OF TWO GUARDS.
+`SRC_WEB` flashes and returns None, `SRC_PLD` returns a dict, `SRC_API` raises.
+Under `task_always_eager` the wrapper returns the value directly (fact 146), so
+the return value is observable -- and it is the only thing distinguishing two
+of the three arms.
+
+`flash()` NEEDS A REQUEST CONTEXT AND THE `app` FIXTURE DOES NOT PUSH ONE.
+tests/conftest.py:112 pushes only `application.app_context()`. A test touching
+a `SRC_WEB` arm must push its own request context -- and doing so DISABLES
+`patch_db_session`, because app/utils.py:3685 returns early inside a request
+context. Those tests must assert through fresh queries, never on attributes of
+objects the task touched.
+"""
+
+import json
+import socket
+from types import SimpleNamespace
+
+import pytest
+from flask import current_app
+
+from app import db
+from app.constants import SRC_API, SRC_PLD, SRC_WEB
+from app.models import ActivityPubLog, CommunityJoinRequest, UserFollowRequest
+from app.shared.tasks.follows import (
+    follow_user, join_community, leave_community, leave_feed, unfollow_user,
+)
+from tests.factories import (
+    make_community, make_community_join_request, make_feed, make_instance,
+    make_user, make_user_follow_request,
+)
+
+PEER_INBOX = 'https://peer.example/inbox'
+OTHER_INBOX = 'https://other.example/inbox'
+
+_REAL_GETADDRINFO = socket.getaddrinfo
+_EXAMPLE_TLD_ADDRESS = '93.184.216.34'
+
+
+def _getaddrinfo_without_the_network(host, *args, **kwargs):
+    """`socket.getaddrinfo`, answering for `.example` hosts without a resolver.
+
+    Everything else is delegated to the real function unchanged.
+    """
+    if isinstance(host, str) and (host == 'example' or host.endswith('.example')):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, '',
+                 (_EXAMPLE_TLD_ADDRESS, 0))]
+    return _REAL_GETADDRINFO(host, *args, **kwargs)
+
+
+@pytest.fixture(autouse=True)
+def _peer_example_resolves_without_a_resolver(monkeypatch):
+    """Keep delivery off the machine's DNS resolver.
+
+    THIS IS NOT OPTIONAL AND MUST NOT BE DELETED AS UNNECESSARY. Signing runs
+    `is_invalid_get_request_uri`, which reaches `socket.getaddrinfo` at
+    app/utils.py:5520 for POST as well as GET, and FAILS OPEN at :5521-5522.
+    On a machine whose resolver hijacks NXDOMAIN into a wildcard A record,
+    these tests start failing at app/utils.py:5530's `is_global` check instead.
+    """
+    monkeypatch.setattr(socket, 'getaddrinfo', _getaddrinfo_without_the_network)
+
+
+def _seed(local_community=True, with_keys=False):
+    """instance, user, community -- committed.
+
+    `user` is the person joining or leaving. `join_community:88` and
+    `leave_community:152` sign with the USER's key, so `with_keys=True` is
+    required for any test that reaches a send.
+    """
+    instance = make_instance('test.piefed.local', software='piefed')
+    user = make_user(instance, 'joiner', local=True, with_keys=with_keys)
+    community = make_community('c1')
+    if not local_community:
+        community.ap_id = 'c1@peer.example'
+        community.ap_profile_id = 'https://peer.example/c/c1'
+        community.ap_public_url = 'https://peer.example/c/c1'
+        community.ap_inbox_url = PEER_INBOX
+        community.ap_domain = 'peer.example'
+    db.session.commit()
+    return SimpleNamespace(instance=instance, user=user, community=community)
+
+
+def _make_online(s, online=True):
+    """Move the community onto a real peer Instance and set its state.
+
+    `join_community:74` and `leave_community:129` both dereference
+    `community.instance`, so a community left on instance 1 -- which
+    `make_instance` gives no inbox -- reaches those checks with the local row.
+    `Instance.online()` is exactly `not (self.dormant or self.gone_forever)`
+    (app/models.py:118-119). Returns the peer.
+    """
+    peer = make_instance('peer.example', software='lemmy')
+    peer.inbox = PEER_INBOX
+    if not online:
+        peer.dormant = True
+        peer.gone_forever = True
+    s.community.instance_id = peer.id
+    db.session.commit()
+    return peer
+
+
+def _peer_route(http_mock, inbox=PEER_INBOX):
+    """A respx route for a delivery this test EXPECTS to happen.
+
+    Do not register one for a test asserting nothing is sent: `http_mock` uses
+    `respx.mock(assert_all_called=True)` (tests/conftest.py:342), so a
+    registered route that never fires fails the test for the wrong reason.
+    """
+    return http_mock.post(inbox).respond(200, json={})
+
+
+def _sent_activity(route, index=-1):
+    """The JSON body of the request `route` captured, decoded from the bytes
+    that were actually sent. Defaults to the most recent call.
+    """
+    return json.loads(route.calls[index].request.content)
+
+
+def test_joining_a_remote_community_sends_a_follow(db_session, http_mock):
+    """`join_community:74-89` end to end: the remote-and-online arm, the
+    `CommunityJoinRequest` written at `:76`, and the Follow built at `:80-87`.
+
+    THE ROW AND THE REQUEST ARE BOTH ASSERTED. `:75-77` writes the join
+    request and `:88` sends the Follow; a test checking only one of the two
+    would pass with the other silently broken, and the `uuid` written at `:76`
+    is what `:79` puts in the activity id.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_online(s)
+    route = _peer_route(http_mock)
+
+    join_community(None, s.user.id, s.community.id, SRC_API)
+
+    assert db.session.query(CommunityJoinRequest).count() == 1
+    follow = _sent_activity(route)
+    assert follow['type'] == 'Follow'
+    assert follow['actor'] == s.user.public_url()
+    assert follow['object'] == s.community.public_url()
+
+
+def test_following_a_remote_user_sends_a_follow(db_session, http_mock):
+    """`follow_user:214-237`. A `UserFollowRequest` at `:220-222`, then one
+    Follow to the target's own inbox at `:233`.
+
+    Signed with the FOLLOWER's key, not the target's -- `:233` passes
+    `user.private_key`, where `user` is the follower loaded at `:218`.
+    """
+    s = _seed(with_keys=True)
+    peer = make_instance('peer.example', software='lemmy')
+    target = make_user(peer, 'target')
+    target.ap_inbox_url = PEER_INBOX
+    db.session.commit()
+    route = _peer_route(http_mock)
+
+    follow_user(target.id, s.user.id, send_async=False)
+
+    assert db.session.query(UserFollowRequest).count() == 1
+    follow = _sent_activity(route)
+    assert follow['type'] == 'Follow'
+    assert follow['object'] == target.public_url()
