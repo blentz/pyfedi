@@ -20,10 +20,11 @@ from flask_login import login_user
 
 from app import db
 from app.activitypub.signature import RsaKeys
+from app.constants import NOTIF_POST, NOTIF_REPORT
 from app.models import (ActivityPubLog, BannedInstances, ChatMessage, Community, CommunityBan, CommunityBlock,
                         CommunityFlair, CommunityFlairBlock, CommunityJoinRequest, CommunityMember, Conversation,
                         Domain, DomainBlock, Feed, FeedItem, FeedJoinRequest, FeedMember, File, Instance, InstanceBan,
-                        InstanceBlock, NotificationSubscription, Poll, PollChoice, Post, PostReply,
+                        InstanceBlock, Notification, NotificationSubscription, Poll, PollChoice, Post, PostReply,
                         PostReplyBookmark, PostReplyVote, PostVote, Role, RolePermission, Site, User, UserBlock,
                         UserFollower, UserFollowRequest, UserRegistration, hidden_posts, read_posts, user_role,
                         utcnow)
@@ -509,6 +510,30 @@ def make_notification_subscription(user: User, entity_id: int, type_: int,
     db.session.add(subscription)
     db.session.commit()
     return subscription
+
+
+def make_notification(user: User, post: Post, notif_type: int = NOTIF_POST,
+                      title: str = 'a notification') -> Notification:
+    """A Notification whose `targets` names `post`, the shape
+    `delete_object`'s cleanup query reads.
+
+    That query is `Notification.targets.op("->>")("post_id").cast(Integer) ==
+    object.id`, so `targets` must be a JSON object carrying `post_id` -- a
+    plain integer column would not match, and neither would a nested shape.
+    `notif_type` matters because the cleanup SKIPS `NOTIF_REPORT` and
+    `NOTIF_REPORT_ESCALATION` rows, so a test pinning the skip passes one of
+    those and a test pinning the delete passes anything else.
+    """
+    notification = Notification(
+        title=title,
+        user_id=user.id,
+        author_id=user.id,
+        notif_type=notif_type,
+        targets={'post_id': post.id},
+    )
+    db.session.add(notification)
+    db.session.commit()
+    return notification
 
 
 def make_user_block(blocker: User, blocked: User) -> UserBlock:
