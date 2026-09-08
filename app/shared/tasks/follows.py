@@ -249,9 +249,10 @@ def unfollow_user(to_follow_id, user_id, send_async=True):
             join_request = session.query(UserFollowRequest).filter(UserFollowRequest.user_id == int(user_id),
                                                                    UserFollowRequest.follow_id == int(to_follow_id)).first()
             if join_request:
+                join_request_uuid = join_request.uuid
                 session.delete(join_request)
                 session.commit()
-                to_follow_ap_id = f"{current_app.config['SERVER_URL']}/activities/follow_user/{join_request.uuid}"
+                to_follow_ap_id = f"{current_app.config['SERVER_URL']}/activities/follow_user/{join_request_uuid}"
             else:
                 to_follow_ap_id = f"{current_app.config['SERVER_URL']}/activities/follow_user/{gibberish(15)}"
             undo_id = f"{current_app.config['SERVER_URL']}/activities/undo/" + gibberish(15)
