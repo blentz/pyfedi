@@ -50,7 +50,8 @@ from app.shared.tasks.follows import (
     follow_user, join_community, leave_community, leave_feed, unfollow_user,
 )
 from tests.factories import (
-    make_community, make_community_join_request, make_feed, make_instance,
+    make_banned_instance, make_community, make_community_ban,
+    make_community_join_request, make_feed, make_instance, make_instance_block,
     make_user, make_user_follow_request,
 )
 
@@ -261,3 +262,118 @@ def test_joining_flashes_and_returns_none_for_src_web(db_session, http_mock):
 
     assert result is None
     assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_banned_user_cannot_join_and_raises_for_src_api(db_session, http_mock):
+    """`:57`'s raise, guarded by `:56`'s `src == SRC_API`, inside `:48`'s
+    banned check.
+
+    `pytest.raises` matches on the message because all three `SRC_API` raises
+    in this module are bare `Exception`; matching the type alone would not
+    distinguish this guard from `:71`'s.
+    """
+    s = _seed(with_keys=True)
+    make_community_ban(s.user, s.community)
+
+    with pytest.raises(Exception, match='banned_from_community'):
+        join_community(None, s.user.id, s.community.id, SRC_API)
+
+    assert db.session.query(CommunityJoinRequest).count() == 0
+
+
+def test_a_banned_user_gets_the_preload_flag_for_src_pld(db_session, http_mock):
+    """`:54`'s `pre_load_message['user_banned'] = True`, guarded by `:53`'s
+    `elif src == SRC_PLD`."""
+    s = _seed(with_keys=True)
+    make_community_ban(s.user, s.community)
+
+    result = join_community(None, s.user.id, s.community.id, SRC_PLD)
+
+    assert result == {'user_banned': True}
+
+
+def test_a_banned_user_joining_async_returns_without_a_message(db_session, http_mock):
+    """`:58`'s bare `return`, reached when `send_async` is truthy so `:49`'s
+    `if not send_async:` is False and the whole `src` fork (`:50`-`:57`) is
+    skipped.
+
+    This is the arm an async caller takes, and it returns None rather than a
+    message, which is why the preload and API callers pass `send_async` False.
+    """
+    s = _seed(with_keys=True)
+    make_community_ban(s.user, s.community)
+
+    result = join_community(True, s.user.id, s.community.id, SRC_PLD)
+
+    assert result is None
+    assert db.session.query(CommunityJoinRequest).count() == 0
+
+
+def test_a_community_on_a_user_blocked_instance_cannot_be_joined(db_session, http_mock):
+    """`:61`'s `user.has_blocked_instance(...)` disjunct, inside `:60`'s
+    `not community.is_local()` conjunct. Per-user `InstanceBlock`, not a
+    site-wide ban -- `:62`'s `instance_banned` reads a different table.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    peer = _make_online(s)
+    make_instance_block(s.user, peer)
+    db.session.commit()
+
+    result = join_community(None, s.user.id, s.community.id, SRC_PLD)
+
+    assert result == {'community_on_banned_or_blocked_instance': True}
+    assert db.session.query(CommunityJoinRequest).count() == 0
+
+
+def test_a_community_on_a_site_banned_instance_cannot_be_joined(db_session, http_mock):
+    """`:62`'s `instance_banned(...)` disjunct. Site-wide `BannedInstances`
+    keyed by domain, which is a different table and a different scope from
+    `:61`'s per-user block."""
+    s = _seed(local_community=False, with_keys=True)
+    _make_online(s)
+    make_banned_instance('peer.example')
+    db.session.commit()
+
+    result = join_community(None, s.user.id, s.community.id, SRC_PLD)
+
+    assert result == {'community_on_banned_or_blocked_instance': True}
+
+
+def test_a_blocked_instance_raises_for_src_api(db_session, http_mock):
+    """`:71`'s raise, guarded by `:70`. Distinguished from `:57`'s by message."""
+    s = _seed(local_community=False, with_keys=True)
+    peer = _make_online(s)
+    make_instance_block(s.user, peer)
+    db.session.commit()
+
+    with pytest.raises(Exception, match='community_on_banned_or_blocked_instance'):
+        join_community(None, s.user.id, s.community.id, SRC_API)
+
+
+def test_a_banned_user_gets_a_flash_for_src_web(db_session, http_mock):
+    """`:52`'s `return`, guarded by `:50`'s `src == SRC_WEB`. The flash at
+    `:51` needs a request context, and pushing one disables
+    `patch_db_session` -- see `test_joining_flashes_and_returns_none_for_src_web`
+    for why that matters.
+    """
+    s = _seed(with_keys=True)
+    make_community_ban(s.user, s.community)
+
+    with current_app.test_request_context('/'):
+        result = join_community(None, s.user.id, s.community.id, SRC_WEB)
+
+    assert result is None
+    assert db.session.query(CommunityJoinRequest).count() == 0
+
+
+def test_a_blocked_instance_gets_a_flash_for_src_web(db_session, http_mock):
+    """`:66`'s `return`, guarded by `:64`."""
+    s = _seed(local_community=False, with_keys=True)
+    peer = _make_online(s)
+    make_instance_block(s.user, peer)
+    db.session.commit()
+
+    with current_app.test_request_context('/'):
+        result = join_community(None, s.user.id, s.community.id, SRC_WEB)
+
+    assert result is None
