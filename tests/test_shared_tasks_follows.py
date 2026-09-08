@@ -470,3 +470,88 @@ def test_unfollowing_sends_an_undo_carrying_the_original_follow_id(db_session, h
     assert undo['type'] == 'Undo'
     assert undo['object']['type'] == 'Follow'
     assert undo['object']['id'].endswith(expected_uuid)
+
+
+def test_leaving_a_local_community_sends_nothing(db_session, http_mock):
+    """`:123`'s return, guarded by `:122`'s `community.is_local()`. Reached
+    after the cache invalidation at `:119-120`, which runs for every caller.
+    """
+    s = _seed(with_keys=True)
+    make_community_join_request(s.user, s.community)
+    db.session.commit()
+
+    leave_community(None, s.user.id, s.community.id)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+    assert db.session.query(CommunityJoinRequest).count() == 1
+
+
+def test_leaving_an_offline_community_deletes_the_request_but_sends_nothing(
+        db_session, http_mock):
+    """`:133`'s return, guarded by `:130`'s `not community.instance.online()`.
+
+    THE ROW IS STILL DELETED. `:127`'s delete and `:128`'s commit run before
+    the guard, so leaving an offline instance removes the local record and
+    simply does not tell the remote end. Asserting only "nothing was sent"
+    would miss that.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_online(s, online=False)
+    make_community_join_request(s.user, s.community)
+    db.session.commit()
+
+    leave_community(None, s.user.id, s.community.id)
+
+    assert db.session.query(CommunityJoinRequest).count() == 0
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_leaving_a_community_on_a_blocked_instance_sends_nothing(
+        db_session, http_mock):
+    """`:131`'s `user.has_blocked_instance(...)` disjunct."""
+    s = _seed(local_community=False, with_keys=True)
+    peer = _make_online(s)
+    make_instance_block(s.user, peer)
+    make_community_join_request(s.user, s.community)
+    db.session.commit()
+
+    leave_community(None, s.user.id, s.community.id)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_leaving_a_community_on_a_banned_instance_sends_nothing(
+        db_session, http_mock):
+    """`:132`'s `instance_banned(...)` disjunct -- the site-wide table, not
+    `:131`'s per-user one."""
+    s = _seed(local_community=False, with_keys=True)
+    _make_online(s)
+    make_banned_instance('peer.example')
+    make_community_join_request(s.user, s.community)
+    db.session.commit()
+
+    leave_community(None, s.user.id, s.community.id)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_unfollowing_with_no_request_row_sends_a_gibberish_follow_id(
+        db_session, http_mock):
+    """`:257`'s else arm, taken when `:251`'s `if join_request:` is False.
+
+    The Undo still goes out, carrying a fabricated Follow id. Whether a remote
+    end can match it is not this test's claim -- the claim is that the arm
+    exists and sends.
+    """
+    s = _seed(with_keys=True)
+    peer = make_instance('peer.example', software='lemmy')
+    target = make_user(peer, 'target')
+    target.ap_inbox_url = PEER_INBOX
+    db.session.commit()
+    route = _peer_route(http_mock)
+
+    unfollow_user(target.id, s.user.id, send_async=False)
+
+    undo = _sent_activity(route)
+    assert undo['type'] == 'Undo'
+    assert undo['object']['type'] == 'Follow'
