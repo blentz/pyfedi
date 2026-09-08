@@ -328,7 +328,24 @@ def test_a_remote_community_delete_is_sent_direct(db_session, http_mock):
 
 def test_the_announce_is_signed_by_the_community(db_session, http_mock):
     """`:198`. The local path signs as the COMMUNITY, because the Announce is
-    the community's activity even though the Delete inside it is the user's."""
+    the community's activity even though the Delete inside it is the user's.
+
+    NO SEPARATE "the two paths sign differently" TEST IS ADDED HERE, and none
+    should be. The keyId is a URL, and `Community.public_url()`
+    (app/models.py:791-793) builds `/c/{name}` while `User.public_url()`
+    (app/models.py:1458-1459) builds `/u/{user_name}` -- the two are
+    structurally distinct regardless of what any given test seeds, so they
+    cannot converge. `_seed(with_keys=True)` copies `private_key`/`public_key`
+    onto the community; it never touches `ap_public_url`, `name`, or
+    `user_name`, so it cannot make them converge either. A test asserting
+    `_key_id_of(route) != s.user.public_url() + '#main-key'` on this same
+    route is therefore already implied by this test's exact-equality
+    assertion -- it cannot fail unless this one already has, and empirically,
+    no mutation to `:198` or `:202` was found that kills such a test while
+    sparing both this test and `test_the_remote_delete_is_signed_by_the_user`
+    below. Adding one back would look like rigour while proving nothing past
+    what these two already establish.
+    """
     s = _seed(with_keys=True)
     _make_deliverable(s)
     route, _inst = _follower(s, http_mock)
@@ -347,19 +364,6 @@ def test_the_remote_delete_is_signed_by_the_user(db_session, http_mock):
     delete_post(None, s.user.id, s.post.id)
 
     assert _key_id_of(route) == s.user.public_url() + '#main-key'
-
-
-def test_the_two_paths_sign_differently(db_session, http_mock):
-    """The discriminator for the pair above. Without it, a mutation swapping
-    BOTH signers at once would leave each test above passing against the other
-    site's actor if the two URLs ever converged."""
-    s = _seed(with_keys=True)
-    _make_deliverable(s)
-    route, _inst = _follower(s, http_mock)
-
-    delete_post(None, s.user.id, s.post.id)
-
-    assert _key_id_of(route) != s.user.public_url() + '#main-key'
 
 
 def test_a_moderator_delete_still_clears_notifications(db_session, http_mock):
