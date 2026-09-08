@@ -473,9 +473,14 @@ def test_a_piefed_follower_is_batched_rather_than_sent(db_session, http_mock):
 
     NO ROUTE IS REGISTERED for this instance, and that is the point: under
     `http_mock`'s `assert_all_called=True` a registered-but-unfired route
-    would fail this test for the wrong reason, while an unexpected send would
-    surface as an unmatched request instead. So the assertion pair is "one
-    batch row" and "zero ActivityPubLog rows".
+    would fail this test for the wrong reason. But an unexpected send here
+    would NOT surface as an unmatched request failing the suite:
+    `post_request`'s `except Exception as e:`
+    (`app/activitypub/signature.py:143`) catches respx's unmatched-request
+    assertion exactly as it would a real transport error, and records an
+    `ActivityPubLog` failure row instead of propagating. So the assertion
+    pair is "one batch row" and "zero ActivityPubLog rows" -- the row count
+    below is the oracle that would actually catch a spurious send.
 
     The batch payload is `payload_copy` -- the context-free inner object
     built at `:110-115`, not the Announce built around it at `:122-130` --

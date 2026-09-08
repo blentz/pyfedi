@@ -4984,6 +4984,41 @@ the working tree would have been left dirty with a live behavioural change in
 anything else, including reporting results, rather than batching the restore
 to the end of a set of runs.
 
+**146. `task_selector`'s TWO DISPATCH ARMS ARE INDISTINGUISHABLE UNDER
+`task_always_eager` EXCEPT BY RETURN VALUE.** `app/shared/tasks/__init__.py:66`
+calls `.delay()` and falls off the end returning `None`; `:68` calls the task
+directly and returns its value. A test asserting only that the task executed
+passes under either arm. The technique that works: patch the task's own
+module attribute with a stub returning a sentinel -- `task_selector` imports
+inside its own body (`:6-18`), so the names resolve at call time and the
+stub reaches the freshly-built `tasks` dict. The stub cannot exercise `:66`,
+which needs a real Celery task for `.delay()` to be a valid attribute at all.
+
+**147. A SITE-WIDE FAN-OUT AND A COMMUNITY FAN-OUT NEED DIFFERENT FIXTURES.**
+`app/shared/tasks/blocks.py:159` queries `Instance` directly with only a
+`software` filter, so a site-ban recipient needs no `CommunityMember` row --
+while every `Community.following_instances()` path does (fact 141). A helper
+built for one will silently produce zero recipients for the other.
+
+**148. A `respx` UNMATCHED REQUEST CANNOT FAIL A FEDERATION TEST IN THIS
+SUITE -- IT BECOMES AN `ActivityPubLog` ROW INSTEAD.** `post_request`'s
+`except Exception as e:` (`app/activitypub/signature.py:143`) catches
+respx's own unmatched-request assertion exactly as it would a real transport
+error, and records an `ActivityPubLog` failure row rather than propagating
+(`tests/conftest.py:314-316` already states this design choice in prose).
+**Consequence: a spurious or misrouted send is invisible to
+`_delivered_inboxes(...)` and to `len(route.calls)`, both of which read only
+the routes a test itself registers -- it is visible ONLY to an
+`ActivityPubLog` row count.** Proven by mutation twice in
+`tests/test_shared_tasks_blocks.py` (dropping `:159`'s
+`Instance.software != 'mastodon'` filter and, separately, `:161`'s
+`instance.id != 1` conjunct: both SURVIVED against docstrings that claimed
+an unmatched request would fail the test instead), and found independently
+written into two other sub-projects' files besides, one of them sitting
+right next to a sibling test that already used the correct idiom. **Route
+and delivered-inbox assertions prove what WAS sent; only a row count can
+catch what should NOT have been.**
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not

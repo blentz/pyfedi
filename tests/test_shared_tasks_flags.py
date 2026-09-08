@@ -446,9 +446,20 @@ def test_only_the_named_instances_receive_the_flag(db_session, http_mock):
     """`:73`'s `Instance.id.in_(instance_ids)` filter. An instance that exists
     and has an inbox but is NOT named receives nothing.
 
-    Its route is deliberately not registered: under
-    `http_mock(assert_all_called=True)` an unregistered inbox that IS posted
-    to fails the test as an unmatched request, which is the observation.
+    Its route is deliberately not registered -- but posting to it would NOT
+    surface as an unmatched request failing the suite: `post_request`'s
+    `except Exception as e:` (`app/activitypub/signature.py:143`) catches
+    respx's unmatched-request assertion exactly as it would a real transport
+    error, and records an `ActivityPubLog` failure row instead of
+    propagating. `_delivered_inboxes` reads only the route this test itself
+    registered, so it cannot see a spurious send to `unnamed`'s inbox either.
+    The row count is the oracle: dropping `:73`'s filter entirely would still
+    query only two rows here (a bare `session.query(Instance)` returns every
+    row in the table, and `_seed`'s local instance and `_make_deliverable`'s
+    peer both have `inbox is None`), so it would deliver to BOTH `named_id`
+    and `unnamed` -- one real send and one that dies as an unmatched request
+    caught into a second failure row -- for a count of 2 where the correct,
+    filtered path produces 1.
     """
     s = _seed(with_keys=True)
     _make_deliverable(s)
@@ -460,6 +471,7 @@ def test_only_the_named_instances_receive_the_flag(db_session, http_mock):
     report_post(None, s.user.id, s.post.id, 'spam', [named_id])
 
     assert _delivered_inboxes(route) == {PEER_INBOX}
+    assert db.session.query(ActivityPubLog).count() == 1
 
 
 def test_an_instance_without_an_inbox_is_skipped(db_session, http_mock):
