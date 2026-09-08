@@ -325,3 +325,146 @@ def test_an_offline_community_instance_sends_nothing(db_session, http_mock):
     edit_community(None, s.user.id, s.community.id)
 
     assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_description_html_becomes_the_summary(db_session, http_mock):
+    """`:86`, guarded by `:85`."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+    s.community.description_html = '<p>hello</p>'
+    db.session.commit()
+
+    edit_community(None, s.user.id, s.community.id)
+
+    group = _sent_activity(route)['object']['object']
+    assert group['summary'] == '<p>hello</p>'
+
+
+def test_no_description_html_omits_the_summary(db_session, http_mock):
+    """`:85`'s false arm. The control for the test above: without it,
+    `summary` being present is never distinguished from it being
+    unconditional."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+
+    edit_community(None, s.user.id, s.community.id)
+
+    group = _sent_activity(route)['object']['object']
+    assert 'summary' not in group
+
+
+def test_a_description_becomes_the_markdown_source(db_session, http_mock):
+    """`:88`, guarded by `:87`. `source` carries the raw markdown alongside
+    the rendered `summary`."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+    s.community.description = 'hello'
+    db.session.commit()
+
+    edit_community(None, s.user.id, s.community.id)
+
+    group = _sent_activity(route)['object']['object']
+    assert group['source'] == {'content': 'hello', 'mediaType': 'text/markdown'}
+
+
+def test_no_description_omits_the_source(db_session, http_mock):
+    """`:87`'s false arm."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+
+    edit_community(None, s.user.id, s.community.id)
+
+    group = _sent_activity(route)['object']['object']
+    assert 'source' not in group
+
+
+def test_an_absolute_icon_url_is_sent_unchanged(db_session, http_mock):
+    """`:91-94`, the true arm of `:90`.
+
+    `Community.icon_image()` (app/models.py:658-681) returns `file_path`
+    unchanged when it does not start with `app/`, so an https path reaches
+    `:90`'s `startswith('http')` as True and is used as-is.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+    s.community.icon_id = make_file(file_path='https://cdn.example/icon.png').id
+    db.session.commit()
+
+    edit_community(None, s.user.id, s.community.id)
+
+    group = _sent_activity(route)['object']['object']
+    assert group['icon'] == {'type': 'Image',
+                             'url': 'https://cdn.example/icon.png'}
+
+
+def test_a_relative_icon_url_is_prefixed_with_the_server_url(
+        db_session, http_mock):
+    """`:96-99`, the false arm of `:90`. A path with no scheme is joined to
+    SERVER_URL, which is what makes a locally-stored icon resolvable to a
+    remote reader."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+    s.community.icon_id = make_file(file_path='/static/icon.png').id
+    db.session.commit()
+
+    edit_community(None, s.user.id, s.community.id)
+
+    group = _sent_activity(route)['object']['object']
+    assert group['icon']['url'].endswith('/static/icon.png')
+    assert group['icon']['url'].startswith('https://test.piefed.local')
+
+
+def test_an_absolute_header_url_is_sent_unchanged(db_session, http_mock):
+    """`:102-105`, the true arm of `:101`. Written out separately from the
+    icon's because they are different branches on different columns -- a
+    regression could drop either."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+    s.community.image_id = make_file(file_path='https://cdn.example/hdr.png').id
+    db.session.commit()
+
+    edit_community(None, s.user.id, s.community.id)
+
+    group = _sent_activity(route)['object']['object']
+    assert group['image'] == {'type': 'Image',
+                              'url': 'https://cdn.example/hdr.png'}
+
+
+def test_a_relative_header_url_is_prefixed_with_the_server_url(
+        db_session, http_mock):
+    """`:107-110`, the false arm of `:101`."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+    s.community.image_id = make_file(file_path='/static/hdr.png').id
+    db.session.commit()
+
+    edit_community(None, s.user.id, s.community.id)
+
+    group = _sent_activity(route)['object']['object']
+    assert group['image']['url'].endswith('/static/hdr.png')
+    assert group['image']['url'].startswith('https://test.piefed.local')
+
+
+def test_no_icon_or_header_omits_both_keys(db_session, http_mock):
+    """`:89`'s and `:100`'s false arms, together. They are separate branches
+    but neither has any interaction with the other, so one control covers
+    both -- and the two smoke tests already exercise this state incidentally,
+    which is why this test asserts the ABSENCE explicitly rather than relying
+    on that."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+
+    edit_community(None, s.user.id, s.community.id)
+
+    group = _sent_activity(route)['object']['object']
+    assert 'icon' not in group
+    assert 'image' not in group
