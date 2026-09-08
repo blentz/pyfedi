@@ -1,4 +1,4 @@
-"""`delete_object` and its eight wrappers -- the AP Delete and Undo senders.
+"""`delete_object` and its nine wrappers -- the AP Delete and Undo senders.
 
 `app/shared/tasks/deletes.py`, 318 lines. Six `@celery.task` wrappers
 (`delete_reply:29`, `restore_reply:44`, `delete_post:59`, `restore_post:74`,
@@ -30,7 +30,15 @@ unconditional statement, is where it had to go. D309's last site, closed.
 `:197` CARRIES FOUR CONJUNCTS AND COVERAGE.PY SEES ONE ARC PAIR:
 `instance.inbox`, `instance.online()`, `not user.has_blocked_instance(...)` and
 `not instance_banned(...)`. Branch coverage reads 100% with three of them
-untested. Every one is pinned by its own test and its own mutation.
+untested. THREE OF THE FOUR are pinned by their own test and their own
+mutation; `instance.online()` is pinned by neither and provably cannot be --
+`community.following_instances()` (`:196`'s call) has already filtered every
+row it can return to `dormant == False` and `gone_forever == False`, and
+`Instance.online()` is exactly `not (self.dormant or self.gone_forever)`
+(app/models.py:118-119), so the conjunct is unreachable-false at this call
+site and a mutation deleting it is an EQUIVALENT MUTANT that no test using
+this loop can kill. See `test_a_dormant_following_instance_is_skipped`'s
+docstring, `:217-238`, for the measured confirmation.
 """
 
 import json
@@ -380,8 +388,11 @@ def test_a_moderator_delete_still_clears_notifications(db_session, http_mock):
     a stale notification matters.
 
     THE ROW COUNT IS OVER `Notification`, NOT `ActivityPubLog`. The delivery
-    assertion here would pass either way: `:205` returns after both the
-    Announce loop and the direct send have already run.
+    assertion here would pass either way: `:196-199`'s Announce loop and
+    `:201-203`'s direct send both run before `:206`'s fan-out guard is even
+    reached, whether or not `reason` is set -- `:205` is a blank line today,
+    not a return; only the fan-out and the cleanup below it are conditional
+    on `reason`.
     """
     s = _seed(with_keys=True)
     _make_deliverable(s)
@@ -459,6 +470,20 @@ def test_a_local_only_community_sends_no_reply_delete(db_session, http_mock):
     """`:127`'s guard, reached only for a NON-post -- `not is_post` is its first
     conjunct, so a post never returns here.
 
+    THE AUTHOR HAS A `UserFollower` ROW HERE, DELIBERATELY, SO `:130` CANNOT
+    ALSO EXPLAIN A ZERO COUNT. `:130`'s `not followers and
+    community.local_only` returns whenever the author has NO followers,
+    regardless of `:127` -- so with zero followers (this test's shape before
+    this correction), `:127` is not the sole guard stopping the send: `:130`
+    stops it independently, and a mutation deleting `:127` alone still
+    passes. Confirmed empirically: replacing `:127` with `if False:` against
+    the zero-follower fixture left all 41 tests passing. Adding a follower
+    (`_personal_follower_without_a_mocked_route`, the same `UserFollower`
+    shape `:212-216`'s fan-out reads) makes `:130`'s own check False, so
+    `:127` becomes the sole guard between this REPLY delete and the Announce
+    loop at `:196-199` -- reached because `:127`'s `not is_post` conjunct is
+    the only one this function tests against a non-post.
+
     Zero deliveries, so the oracle is the `ActivityPubLog` count: `post_request`
     writes its row at `signature.py:105` before the transport, and a
     delivered-inboxes assertion cannot see a send that respx never matched
@@ -467,16 +492,20 @@ def test_a_local_only_community_sends_no_reply_delete(db_session, http_mock):
     A `following_instances()` row is deliberately added here (the brief's
     version omits it): without one, `community.is_local()`'s Announce loop at
     `:196` iterates zero times regardless of whether `:127` fires, so the
-    assertion would hold even with the guard deleted -- confirmed empirically,
-    see task-3-report.md. `_follower` itself is not used because it registers
-    an `http_mock` route that this test, if the guard fires correctly as
-    expected, never calls; `http_mock` is `assert_all_called=True`, so an
-    uncalled route fails at teardown. See
+    Announce loop would have nothing to send through even with the guard
+    deleted. That is still necessary -- it is what lets a deleted `:127`
+    reach a real send at all -- but, as the paragraph above corrects, it was
+    never sufficient by itself to make this test discriminate `:127`; the
+    follower row is what does that. `_follower` itself is not used because it
+    registers an `http_mock` route that this test, if the guard fires
+    correctly as expected, never calls; `http_mock` is `assert_all_called=True`,
+    so an uncalled route fails at teardown. See
     `_following_instance_without_a_mocked_route`.
     """
     s = _seed(with_keys=True)
     peer = _make_deliverable(s)
     _following_instance_without_a_mocked_route(s)
+    _personal_follower_without_a_mocked_route(s)
     reply = make_post_reply(s.post, s.user)
     s.community.local_only = True
     db.session.commit()
@@ -533,6 +562,20 @@ def test_a_private_community_sends_no_delete(db_session, http_mock):
     test here gives the community a real, non-null instance
     (`_make_deliverable`), so a reordering to `not community.instance.online()
     or community.private` would still pass all four.
+
+    `:133`'s `return` ALSO SKIPS THE NOTIFICATION CLEANUP AT `:219-226`, NOT
+    JUST FEDERATION -- and NO TEST HERE PINS IT. This test deletes a POST by
+    an author with followers, which is exactly the shape that reaches `:133`
+    (`:127` needs `not is_post`, false for a post; `:130` needs no followers,
+    false here) rather than returning earlier. So a post deleted in a
+    `private` community now correctly federates nothing AND, as an
+    undocumented side effect of where the guard had to go, no longer clears
+    its own notifications either -- the same coupling `:205-206`'s old
+    `if reason: return` created for `reason` and this sub-project's own
+    `ace0c89a` removed, re-created here for `private` instead. This test's
+    only oracle is `ActivityPubLog.count() == 0`, which cannot see a
+    `Notification` row either way, so the consequence is documented rather
+    than asserted.
     """
     s = _seed(with_keys=True)
     _make_deliverable(s)
@@ -646,25 +689,36 @@ def test_the_blocked_image_batch_recalculates_cross_posts_and_removes_the_file(
     s.post.cross_posts = [other.id]
     fd, real_file_path = tempfile.mkstemp(suffix='.png')
     os.close(fd)
-    assert os.path.isfile(real_file_path)
-    image = make_file(file_path=real_file_path)
-    s.post.url = 'https://test.piefed.local/image.png'
-    s.post.image_id = image.id
-    db.session.commit()
+    try:
+        assert os.path.isfile(real_file_path)
+        image = make_file(file_path=real_file_path)
+        s.post.url = 'https://test.piefed.local/image.png'
+        s.post.image_id = image.id
+        db.session.commit()
 
-    delete_posts_with_blocked_images([s.post.id], s.user.id, False)
+        delete_posts_with_blocked_images([s.post.id], s.user.id, False)
 
-    # See the comment in test_the_blocked_image_batch_deletes_every_post above:
-    # the task writes through a separate session for post.deleted, though
-    # calculate_cross_posts and delete_from_disk act through db.session
-    # directly and so are already visible without an expire.
-    db.session.expire_all()
+        # See the comment in test_the_blocked_image_batch_deletes_every_post
+        # above: patch_db_session(session) makes db.session the task's own
+        # session for the duration of the call, so calculate_cross_posts'
+        # writes go through it exactly as post.deleted does, and the
+        # cross_posts assertions below genuinely depend on this
+        # expire_all() (only the os.path.isfile check at the end is
+        # expire-independent, since it reads the filesystem).
+        db.session.expire_all()
 
-    assert s.post.deleted is True
-    assert len(route.calls) == 1
-    assert s.post.cross_posts == []
-    assert other.cross_posts == []
-    assert not os.path.isfile(real_file_path)
+        assert s.post.deleted is True
+        assert len(route.calls) == 1
+        assert s.post.cross_posts == []
+        assert other.cross_posts == []
+        assert not os.path.isfile(real_file_path)
+    finally:
+        # Belt and suspenders: the assertion above already expects
+        # delete_from_disk() to have removed this file. This only cleans up
+        # the container's own /tmp on an early failure -- fact 154
+        # (tests/README.md) documents the gap this closes.
+        if os.path.isfile(real_file_path):
+            os.remove(real_file_path)
 
 
 def test_the_blocked_image_batch_rolls_back_when_the_image_delete_fails(
@@ -894,7 +948,7 @@ def test_restore_community_sends_an_undo_of_a_community_delete(db_session, http_
 def test_restore_reply_sends_an_undo_of_a_reply_delete(db_session, http_mock):
     """`restore_reply:44`, the `is_restore` arm on a NON-post. Distinguishes
     `:123`'s `object.community` -- the else arm reached from the reply
-    wrappers, as opposed to `:121`'s `isinstance(object, Community)` arm the
+    wrappers, as opposed to `:120`'s `isinstance(object, Community)` arm the
     community wrappers take instead."""
     s = _seed(with_keys=True)
     _make_deliverable(s)
