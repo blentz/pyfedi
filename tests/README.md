@@ -5088,7 +5088,7 @@ hypothetical: Task 4 of sub-project 27 shipped
 `s.post.deleted is True` immediately after calling
 `delete_posts_with_blocked_images`, and it failed with `assert False is
 True` for exactly this reason before `db.session.expire_all()`
-(`tests/test_shared_tasks_deletes.py:571`) was added.
+(`tests/test_shared_tasks_deletes.py:614`) was added.
 
 **154. A TEST THAT NEEDS A REAL FILE ON DISK MUST CREATE IT INSIDE THE TEST
 PROCESS.** `compose.test.yaml`'s `test-runner` service declares exactly one
@@ -5101,7 +5101,7 @@ outside the bind mount in the other direction -- invisible to the host and
 to `git status` -- but is the one location both the test and the code
 under test can see. Worked case:
 `test_the_blocked_image_batch_recalculates_cross_posts_and_removes_the_file`
-(`tests/test_shared_tasks_deletes.py:597`) needs `File.delete_from_disk()`
+(`tests/test_shared_tasks_deletes.py:640`) needs `File.delete_from_disk()`
 to do observable work, and `make_file()` called with no arguments leaves
 `file_path`, `thumbnail_path` and `source_url` all `None`
 (`tests/factories.py:1137`), under which `delete_from_disk()`'s three
@@ -5110,12 +5110,18 @@ genuine no-op regardless of whether the caller under test even reached it
 -- confirmed by two mutations that survived against an earlier, path-less
 version of this test before the real file was added. The test calls
 `tempfile.mkstemp(suffix='.png')` directly and passes the resulting path to
-`make_file(file_path=...)`. **The test carries no `try`/`finally` around
-the temp file**, so a failure before the code under test unlinks it (the
-assertion this test makes at its own end) leaks the file inside the
-container's own `/tmp` -- contained, and cleared when the container is
-torn down, but real, and worth stating so the next person writing one
-knows the gap is known rather than overlooked.
+`make_file(file_path=...)`. **The test originally carried no `try`/`finally`
+around the temp file**, so a failure before the code under test unlinks it
+(the assertion this test makes at its own end) leaked the file inside the
+container's own `/tmp` -- contained, and cleared when the container is torn
+down, but real. Closed by sub-project 27's final whole-branch review: the
+body from the file's creation onward is now wrapped in a `try`/`finally`
+whose `finally` removes the file if it still exists, so an early assertion
+failure no longer leaves it behind. The gap this fact records is historical
+rather than live in this file now, and is kept here because the pattern --
+a real file created for a test, with no cleanup on the failure path -- is
+worth a future test author checking for on sight, not only in this one
+case.
 
 ## Known noise
 
