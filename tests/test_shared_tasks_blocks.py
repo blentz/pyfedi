@@ -28,6 +28,7 @@ just banned, so their home instance would otherwise never learn of the ban.
 Any change to that line has to preserve that case.
 """
 
+import datetime
 import json
 import socket
 from types import SimpleNamespace
@@ -490,3 +491,159 @@ def test_a_banned_users_offline_instance_is_not_posted_to(
     ban_from_community(None, s.user.id, s.mod.id, s.community.id, None, 'spam')
 
     assert db.session.query(ActivityPubLog).count() == 1
+
+
+def test_a_null_expiry_becomes_the_year_2100(db_session, http_mock):
+    """`:98`, guarded by `:97`. A ban with no expiry is federated as one
+    expiring in 2100 rather than as one with no `endTime` -- the wire format
+    has no way to say "never", so the code picks a date far enough out to mean
+    it."""
+    s = _seed(with_keys=True)
+    route, _inst = _site_instance(http_mock)
+
+    ban_from_site(None, s.user.id, s.mod.id, None, 'spam', False)
+
+    block = _sent_activity(route)
+    assert block['endTime'].startswith('2100-01-01')
+    assert block['expires'] == block['endTime']
+
+
+def test_an_explicit_expiry_is_used_unchanged(db_session, http_mock):
+    """`:97`'s false arm. The control for the test above: without it, the 2100
+    default is never distinguished from an unconditional one."""
+    s = _seed(with_keys=True)
+    route, _inst = _site_instance(http_mock)
+    expiry = datetime.datetime(year=2030, month=6, day=1)
+
+    ban_from_site(None, s.user.id, s.mod.id, expiry, 'spam', False)
+
+    block = _sent_activity(route)
+    assert block['endTime'].startswith('2030-06-01')
+
+
+def test_remove_data_is_carried_on_the_wire(db_session, http_mock):
+    """`:127`'s `removeData` with a True value. `ban_from_site` is the only
+    wrapper that passes it through -- the other three hardcode False at `:60`,
+    `:74` and `:88` -- so this is the one path where a caller's choice
+    reaches the activity."""
+    s = _seed(with_keys=True)
+    route, _inst = _site_instance(http_mock)
+
+    ban_from_site(None, s.user.id, s.mod.id, None, 'spam', True)
+
+    assert _sent_activity(route)['removeData'] is True
+
+
+def test_remove_data_false_is_carried_too(db_session, http_mock):
+    """The other arm of the same field. Asserting `is False` rather than
+    falsiness, because a missing key would also read as falsy."""
+    s = _seed(with_keys=True)
+    route, _inst = _site_instance(http_mock)
+
+    ban_from_site(None, s.user.id, s.mod.id, None, 'spam', False)
+
+    assert _sent_activity(route)['removeData'] is False
+
+
+def test_a_community_undo_carries_the_communitys_audience(
+        db_session, http_mock):
+    """`:148`, guarded by `:147`. The Undo gets an `audience` only on the
+    community fork; the site fork leaves it off entirely."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+
+    unban_from_community(None, s.user.id, s.mod.id, s.community.id, None, 'ok')
+
+    undo = _sent_activity(route)['object']
+    assert undo['audience'] == s.community.public_url()
+
+
+def test_a_site_undo_carries_no_audience(db_session, http_mock):
+    """`:147`'s false arm. The control: without it, `audience` being present
+    on a community undo is never distinguished from it being unconditional."""
+    s = _seed(with_keys=True)
+    route, _inst = _site_instance(http_mock)
+
+    unban_from_site(None, s.user.id, s.mod.id, None, 'appealed')
+
+    assert 'audience' not in _sent_activity(route)
+
+
+def test_a_community_follower_without_an_inbox_is_skipped(
+        db_session, http_mock):
+    """`:187`'s `instance.inbox` conjunct, with a second follower proving the
+    loop CONTINUES.
+
+    THE ActivityPubLog COUNT IS THE DISCRIMINATING ASSERTION, for the reason
+    Task 9's inbox test gives: a send to a None inbox produces a row at
+    `app/activitypub/signature.py:105` and takes the `if uri is None` arm at
+    `:109` WITHOUT making an httpx request, so respx sees nothing and a
+    delivered-inboxes assertion alone cannot see the difference.
+
+    The inboxless follower is created FIRST so it takes the lower id. If that
+    query-plan assumption breaks, this test degrades to LAX -- passing under an
+    aborting loop -- never to FLAKY.
+
+    The banned user is put on the good follower's instance so the fallback at
+    `:189` does not fire and add a second row this assertion would have to
+    account for.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    dud = make_instance('inboxless.example', software='lemmy')
+    dud.inbox = None
+    dud_member = make_user(dud, 'member_inboxless')
+    make_community_member(dud_member, s.community)
+    db.session.commit()
+    route, good = _follower(s, http_mock, inbox=OTHER_INBOX,
+                            domain='good.example')
+    s.user.instance_id = good.id
+    db.session.commit()
+
+    ban_from_community(None, s.user.id, s.mod.id, s.community.id, None, 'spam')
+
+    assert _delivered_inboxes(route) == {OTHER_INBOX}
+    assert db.session.query(ActivityPubLog).count() == 1
+
+
+def test_ban_from_site_rolls_back_and_reraises_on_error(db_session, http_mock):
+    """`:47-49`. A nonexistent `user_id` leaves `user` as `None`
+    (`Session.get` on a missing row, `:99`), so `user.public_url()` at `:120`
+    raises `AttributeError` before any send is attempted. The wrapper's
+    `except Exception:` must roll the session back and re-raise rather than
+    swallow it."""
+    s = _seed(with_keys=True)
+
+    with pytest.raises(AttributeError):
+        ban_from_site(None, 9999999, s.mod.id, None, 'spam', False)
+
+
+def test_unban_from_site_rolls_back_and_reraises_on_error(db_session, http_mock):
+    """`:61-63`, the same shape on the undo wrapper."""
+    s = _seed(with_keys=True)
+
+    with pytest.raises(AttributeError):
+        unban_from_site(None, 9999999, s.mod.id, None, 'appealed')
+
+
+def test_ban_from_community_rolls_back_and_reraises_on_error(
+        db_session, http_mock):
+    """`:75-77`. `s.community` is local, not private, on an online instance,
+    so the guard at `:104` does not fire and `ban_person` reaches `:120`'s
+    `user.public_url()` with `user` still `None`."""
+    s = _seed(with_keys=True)
+
+    with pytest.raises(AttributeError):
+        ban_from_community(None, 9999999, s.mod.id, s.community.id, None,
+                           'spam')
+
+
+def test_unban_from_community_rolls_back_and_reraises_on_error(
+        db_session, http_mock):
+    """`:89-91`, the same shape on the undo wrapper."""
+    s = _seed(with_keys=True)
+
+    with pytest.raises(AttributeError):
+        unban_from_community(None, 9999999, s.mod.id, s.community.id, None,
+                             'ok')
