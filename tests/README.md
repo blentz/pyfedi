@@ -5019,6 +5019,49 @@ right next to a sibling test that already used the correct idiom. **Route
 and delivered-inbox assertions prove what WAS sent; only a row count can
 catch what should NOT have been.**
 
+**149. A GUARD SPLIT ACROSS SEVERAL STATEMENTS IS INVISIBLE TO A
+CITATION-LEVEL CHECK.** `app/shared/tasks/deletes.py:127-134` reads as three
+separate `if` blocks: two carry `local_only` (`:127`, `:130`) and the third
+carries `online()` (`:133`). A register entry quoting `:127` and `:130`
+correctly still concluded the wrong thing about the function as a whole,
+because the conjunct it was looking for (`private`) turned out to belong on
+`:133`, a line the entry never opened. Both cited lines were quoted
+accurately; the claim about the guard they belong to was false anyway. When
+a claim is about a GUARD, the unit to open is the block the guard spans, not
+merely the line or lines the claim happens to cite.
+
+**150. THE FOLLOWER FAN-OUT AND THE COMMUNITY FAN-OUT NEED DIFFERENT
+FIXTURES, AND NEITHER IS INTERCHANGEABLE.** `app/shared/tasks/deletes.py:212`
+joins `Instance -> User -> UserFollower`, filtered on `local_user_id`;
+`Community.following_instances()` (fact 141) joins `CommunityMember`
+instead. A recipient row built for one produces zero deliveries on the
+other, under assertions that still pass -- the same shape fact 147 records
+for `blocks.py:159`, now confirmed a third time in a third package.
+
+**151. A `session=None` DEFAULT ON AN INTERNAL HELPER TURNS A MISSING
+KEYWORD INTO AN `AttributeError` AT THE FIRST QUERY RATHER THAN A
+`TypeError` AT THE CALL.** `delete_object`'s `session` parameter defaults to
+`None` (`app/shared/tasks/deletes.py:118`) and `:119`'s
+`session.query(User).get(user_id)` dereferences it immediately. The single
+call site that forgot `session=` (`delete_posts_with_blocked_images`'s call
+into `delete_object`, `:250`) had been raising on every invocation since it
+was written, because no test reached the function at all -- a keyword
+default that looks defensive instead converts a call-site typo a linter or
+a `TypeError` would catch immediately into a runtime crash three lines into
+the callee, after any of the callee's own preceding side effects have
+already committed.
+
+**152. STATING THE CITE-THE-STATEMENT-NOT-THE-GUARD RULE DOES NOT PREVENT
+BREAKING IT.** The plan that produced this file's current shape stated the
+rule in its Global Constraints and repeated it in every task dispatch, and
+five separate docstrings written for that same plan still cited a guard
+where they meant its statement: `:120` for `:123`, `:210` for `:208`, `:214`
+for `:215`, `:292` for `:293`, and `signature.py:109` for `:111`. Every one
+was caught by a reader opening the line, never by the rule's presence. The
+working countermeasure is a reader re-deriving citations against the tree;
+the rule's value is in telling that reader what to look for, not in
+preventing the error before it is written.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not

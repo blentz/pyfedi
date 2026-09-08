@@ -184,7 +184,7 @@ def _follower(s, http_mock, inbox=PEER_INBOX, domain='follower.example'):
 
 def test_a_following_instance_without_an_inbox_is_skipped(db_session, http_mock):
     """`:197`'s FIRST conjunct. A send to a None inbox takes
-    `signature.py:109`'s `empty uri` arm: it writes an `ActivityPubLog` row and
+    `signature.py:109-111`'s `empty uri` arm: it writes an `ActivityPubLog` row and
     makes NO httpx request, so respx sees nothing and only the row count can
     tell the two cases apart.
 
@@ -336,9 +336,10 @@ def test_the_announce_is_signed_by_the_community(db_session, http_mock):
     NO SEPARATE "the two paths sign differently" TEST IS ADDED HERE, and none
     should be. The keyId is a URL, and `Community.public_url()`
     (app/models.py:791-793) builds `/c/{name}` while `User.public_url()`
-    (app/models.py:1458-1459) builds `/u/{user_name}` -- the two are
-    structurally distinct regardless of what any given test seeds, so they
-    cannot converge. `_seed(with_keys=True)` copies `private_key`/`public_key`
+    (app/models.py:1458-1459) builds `/u/{user_name}` -- the two build from
+    different prefixes and different model methods, though a test that set
+    both `ap_public_url` fields to the same string would converge them.
+    `_seed(with_keys=True)` copies `private_key`/`public_key`
     onto the community; it never touches `ap_public_url`, `name`, or
     `user_name`, so it cannot make them converge either. A test asserting
     `_key_id_of(route) != s.user.public_url() + '#main-key'` on this same
