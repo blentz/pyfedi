@@ -721,6 +721,27 @@ def test_restore_post_sends_an_undo(db_session, http_mock):
     assert '@context' not in announce['object']['object']
 
 
+def test_a_remote_restore_nests_a_context_free_delete(db_session, http_mock):
+    """The fourth shape. `:161` strips the Delete's `@context` before `:167`
+    nests it, and `:178`'s strip of the Undo's own never runs because it sits
+    inside the `is_local()` branch -- so the Undo keeps `:168`'s.
+
+    ONLY THE NESTED ABSENCE IS ASSERTED. The Undo is the top-level object here,
+    exactly where `signature.py:100-101` reinjects, so any assertion about its
+    own `@context` would hold whether or not `:168` existed.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    route = http_mock.post(PEER_INBOX).respond(200, json={})
+
+    restore_post(None, s.user.id, s.post.id)
+
+    undo = _sent_activity(route)
+    assert undo['type'] == 'Undo'
+    assert undo['object']['type'] == 'Delete'
+    assert '@context' not in undo['object']
+
+
 def test_delete_community_addresses_the_community_itself(db_session, http_mock):
     """`delete_community:89`, whose object IS the community -- `:120-121`
     takes the `isinstance(object, Community)` arm rather than `:123`'s
