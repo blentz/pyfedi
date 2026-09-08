@@ -43,8 +43,8 @@ from app import db
 from app.constants import NOTIF_REPORT
 from app.models import ActivityPubLog, Notification
 from app.shared.tasks.deletes import (
-    delete_community, delete_post, delete_reply, restore_community,
-    restore_post, restore_reply,
+    delete_community, delete_post, delete_posts_with_blocked_images,
+    delete_reply, restore_community, restore_post, restore_reply,
 )
 from tests.factories import (
     make_community, make_community_member, make_instance, make_notification,
@@ -382,6 +382,55 @@ def test_a_private_community_sends_no_delete(db_session, http_mock):
     delete_post(None, s.user.id, s.post.id)
 
     assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_the_blocked_image_batch_deletes_every_post(db_session, http_mock):
+    """`delete_posts_with_blocked_images:231`, which raised `AttributeError` on
+    EVERY call before this commit.
+
+    TWO posts, because the crash was partial rather than total: the loop
+    commits the first post's deletion at `:248` and unlinks its file at `:247`
+    before `:250` raises, so a one-post batch would have shown a deleted post
+    and a raised task -- the same visible state a successful delete of one post
+    leaves. The second post is what distinguishes them.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+    second = make_post(s.community, s.user, 'https://test.piefed.local/post/2')
+    db.session.commit()
+
+    delete_posts_with_blocked_images([s.post.id, second.id], s.user.id, False)
+
+    # `delete_posts_with_blocked_images` writes through `get_task_session()`, a
+    # SEPARATE `Session(bind=db.engine)` from this test's `db.session`. Its
+    # commits expire objects in ITS OWN identity map, not this one's, so
+    # `s.post`/`second` -- already loaded here before the task ran -- would
+    # otherwise still show their pre-task Python-level cached attributes.
+    db.session.expire_all()
+
+    assert s.post.deleted is True
+    assert second.deleted is True
+    assert _delivered_inboxes(route) == {PEER_INBOX}
+    assert len(route.calls) == 2
+
+
+def test_the_blocked_image_batch_skips_a_missing_post(db_session, http_mock):
+    """`:238`'s `if post:` false arm. A post id that no longer exists is
+    skipped rather than raising, and the surviving id is still processed."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+
+    delete_posts_with_blocked_images([999999, s.post.id], s.user.id, False)
+
+    # See the comment in test_the_blocked_image_batch_deletes_every_post above:
+    # the task writes through a separate session, so this session's cached
+    # `s.post` needs an explicit expire before it will show the update.
+    db.session.expire_all()
+
+    assert s.post.deleted is True
+    assert len(route.calls) == 1
 
 
 def test_an_offline_community_instance_sends_no_delete(db_session, http_mock):

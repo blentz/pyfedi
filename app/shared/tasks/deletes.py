@@ -247,7 +247,7 @@ def delete_posts_with_blocked_images(post_ids, user_id, send_async):
                             file.delete_from_disk()
                         session.commit()
 
-                        delete_object(user_id, post, is_post=True, reason='Contains blocked image')
+                        delete_object(user_id, post, is_post=True, reason='Contains blocked image', session=session)
         except Exception:
             session.rollback()
             raise
