@@ -22,7 +22,7 @@ from app import db
 from app.activitypub.signature import RsaKeys
 from app.models import (ActivityPubLog, BannedInstances, ChatMessage, Community, CommunityBan, CommunityBlock,
                         CommunityFlair, CommunityFlairBlock, CommunityJoinRequest, CommunityMember, Conversation,
-                        Domain, DomainBlock, Feed, FeedItem, FeedJoinRequest, FeedMember, Instance, InstanceBan,
+                        Domain, DomainBlock, Feed, FeedItem, FeedJoinRequest, FeedMember, File, Instance, InstanceBan,
                         InstanceBlock, NotificationSubscription, Poll, PollChoice, Post, PostReply,
                         PostReplyBookmark, PostReplyVote, PostVote, Role, RolePermission, Site, User, UserBlock,
                         UserFollower, UserFollowRequest, UserRegistration, hidden_posts, read_posts, user_role,
@@ -1107,6 +1107,25 @@ def make_user_registration(user: User, answer: str = 'why', status: int = 0) -> 
     db.session.add(application)
     db.session.commit()
     return application
+
+
+def make_file(file_path: str = None, source_url: str = None) -> File:
+    """A File row, for controlling what `Community.icon_image()` returns.
+
+    `icon_image()` (app/models.py:659-671) prefers `file_path` over
+    `source_url`, and rewrites either one that starts with `app/` into a
+    `/`-rooted path. So a caller wanting an ABSOLUTE url passes
+    `file_path='https://cdn.example/icon.png'`, and one wanting a RELATIVE path
+    passes `file_path='/static/icon.png'` -- neither starts with `app/`, so
+    both are returned unchanged and the difference is only the scheme.
+
+    That distinction is what `app/shared/tasks/groups.py:90` and `:101`
+    branch on.
+    """
+    f = File(file_path=file_path, source_url=source_url)
+    db.session.add(f)
+    db.session.commit()
+    return f
 
 
 def make_banned_instance(domain: str) -> BannedInstances:
