@@ -44,7 +44,7 @@ import pytest
 from flask import current_app, get_flashed_messages
 
 from app import db
-from app.constants import SRC_API, SRC_PLD, SRC_WEB
+from app.constants import SRC_API, SRC_PLD, SRC_PLG, SRC_WEB
 from app.models import ActivityPubLog, CommunityJoinRequest, FeedJoinRequest, UserFollowRequest
 from app.shared.tasks.follows import (
     follow_user, join_community, leave_community, leave_feed, unfollow_user,
@@ -192,6 +192,37 @@ def test_following_a_remote_user_sends_a_follow(db_session, http_mock):
     follow = _sent_activity(route)
     assert follow['type'] == 'Follow'
     assert follow['object'] == target.public_url()
+
+
+def test_following_a_local_user_sends_nothing(db_session, http_mock):
+    """`:221`'s `not to_follow.is_local()` conjunct False -- the `221->240`
+    arc, never taken by any other test in this module. `is_local()` short
+    circuits the whole condition before `to_follow.instance.online()` is
+    ever evaluated, so no `UserFollowRequest` is written and nothing is sent.
+    """
+    s = _seed(with_keys=True)
+    target = make_user(s.instance, 'localtarget', local=True)
+    db.session.commit()
+
+    follow_user(target.id, s.user.id, send_async=False)
+
+    assert db.session.query(UserFollowRequest).count() == 0
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_follow_user_reraises_rather_than_swallowing(db_session, http_mock):
+    """`:236-238`'s `except Exception:` / `rollback()` / `raise`, never
+    reached by any other test in this module.
+
+    A `to_follow_id` that does not exist makes `:219`'s `.get()` return
+    `None`, so `:221`'s `to_follow.is_local()` raises `AttributeError` --
+    the cheapest way to reach the handler, same idiom as
+    `test_leave_feed_reraises_rather_than_swallowing`.
+    """
+    s = _seed(with_keys=True)
+
+    with pytest.raises(Exception):
+        follow_user(999999, s.user.id, send_async=False)
 
 
 def test_joining_a_local_community_sends_nothing(db_session, http_mock):
@@ -387,6 +418,64 @@ def test_a_blocked_instance_gets_a_flash_for_src_web(db_session, http_mock):
     assert result is None
 
 
+def test_a_banned_user_with_an_unrecognized_src_falls_through_to_bare_return(
+        db_session, http_mock):
+    """`:56`'s `elif src == SRC_API:` False, with none of `:50`/`:53`/`:56`
+    matching -- the `56->58` arc coverage.py otherwise never takes.
+
+    `SRC_PLG` (plugin-sourced calls) is a real `src` value this guard's
+    three-way fork does not special-case; passing it falls out of the
+    `if`/`elif` chain at `:56` and reaches `:58`'s bare `return` directly,
+    the same statement `send_async` truthy already reaches by a different
+    arc (`49->58`, covered by
+    `test_a_banned_user_joining_async_returns_without_a_message`).
+    """
+    s = _seed(with_keys=True)
+    make_community_ban(s.user, s.community)
+
+    result = join_community(None, s.user.id, s.community.id, SRC_PLG)
+
+    assert result is None
+    assert db.session.query(CommunityJoinRequest).count() == 0
+
+
+def test_a_blocked_instance_join_async_returns_without_a_message(db_session, http_mock):
+    """`:63`'s `if not send_async:` False -- the `63->72` arc, symmetrical to
+    `:49`'s `49->58` arc already covered for the banned-user guard, but never
+    exercised for this second guard until now.
+
+    `send_async` truthy skips the whole `:64-71` src fork and lands directly
+    on `:72`'s bare `return`.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    peer = _make_online(s)
+    make_instance_block(s.user, peer)
+    db.session.commit()
+
+    result = join_community(True, s.user.id, s.community.id, SRC_PLD)
+
+    assert result is None
+    assert db.session.query(CommunityJoinRequest).count() == 0
+
+
+def test_a_blocked_instance_with_an_unrecognized_src_falls_through_to_bare_return(
+        db_session, http_mock):
+    """`:70`'s `elif src == SRC_API:` False, with none of `:64`/`:67`/`:70`
+    matching -- the `70->72` arc, symmetrical to
+    `test_a_banned_user_with_an_unrecognized_src_falls_through_to_bare_return`'s
+    `56->58` arc but for the blocked-instance guard.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    peer = _make_online(s)
+    make_instance_block(s.user, peer)
+    db.session.commit()
+
+    result = join_community(None, s.user.id, s.community.id, SRC_PLG)
+
+    assert result is None
+    assert db.session.query(CommunityJoinRequest).count() == 0
+
+
 def test_leaving_a_remote_community_sends_an_undo(db_session, http_mock):
     """`:135-153`. Leaving a remote community deletes the join request and
     sends an Undo wrapping the original Follow.
@@ -536,6 +625,21 @@ def test_leaving_a_community_on_a_banned_instance_sends_nothing(
     assert db.session.query(ActivityPubLog).count() == 0
 
 
+def test_leave_community_reraises_rather_than_swallowing(db_session, http_mock):
+    """`:154-156`'s `except Exception:` / `rollback()` / `raise`, never
+    reached by any other test in this module.
+
+    A community id that does not exist makes `:117`'s `.one()` raise
+    `NoResultFound` before the function does anything else observable --
+    the cheapest way to reach the handler, same idiom as
+    `test_leave_feed_reraises_rather_than_swallowing`.
+    """
+    s = _seed(with_keys=True)
+
+    with pytest.raises(Exception):
+        leave_community(None, s.user.id, 999999)
+
+
 def test_unfollowing_with_no_request_row_sends_a_gibberish_follow_id(
         db_session, http_mock):
     """`:258`'s else arm, taken when `:252`'s `if join_request:` is False.
@@ -556,6 +660,38 @@ def test_unfollowing_with_no_request_row_sends_a_gibberish_follow_id(
     undo = _sent_activity(route)
     assert undo['type'] == 'Undo'
     assert undo['object']['type'] == 'Follow'
+
+
+def test_unfollowing_a_local_user_sends_nothing(db_session, http_mock):
+    """`:249`'s `not to_follow.is_local()` conjunct False -- the `249->280`
+    arc, never taken by any other test in this module. Symmetrical to
+    `test_following_a_local_user_sends_nothing`: `is_local()` short circuits
+    the condition before `to_follow.instance.online()` is evaluated, so no
+    row is queried, deleted, or sent.
+    """
+    s = _seed(with_keys=True)
+    target = make_user(s.instance, 'localtarget', local=True)
+    db.session.commit()
+
+    unfollow_user(target.id, s.user.id, send_async=False)
+
+    assert db.session.query(UserFollowRequest).count() == 0
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_unfollow_user_reraises_rather_than_swallowing(db_session, http_mock):
+    """`:276-278`'s `except Exception:` / `rollback()` / `raise`, never
+    reached by any other test in this module.
+
+    A `to_follow_id` that does not exist makes `:247`'s `.get()` return
+    `None`, so `:249`'s `to_follow.is_local()` raises `AttributeError` --
+    the cheapest way to reach the handler, same idiom as
+    `test_leave_feed_reraises_rather_than_swallowing`.
+    """
+    s = _seed(with_keys=True)
+
+    with pytest.raises(Exception):
+        unfollow_user(999999, s.user.id, send_async=False)
 
 
 def test_leaving_a_remote_feed_sends_an_undo(db_session, http_mock):
@@ -591,6 +727,48 @@ def test_leaving_a_local_feed_sends_nothing(db_session, http_mock):
 
     leave_feed(None, s.user.id, feed.id)
 
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_leaving_an_offline_feed_with_no_pending_request_sends_nothing(
+        db_session, http_mock):
+    """`:177`'s `if join_request:` False -- the `177->179` arc, taken when no
+    `FeedJoinRequest` row exists for this user/feed pair, so `:178`'s uuid
+    capture never runs.
+
+    THE INSTANCE MUST ALSO BE OFFLINE, and that is not incidental. If the
+    guard at `:182-184` passed instead, execution would reach `:189`'s
+    `f"...{uuid}"` with `uuid` never assigned -- an `UnboundLocalError`. Going
+    offline routes through `:185`'s `return` first, which is also this
+    test's real target: the `182->185` arc, never taken by any other test in
+    this module because every other `leave_feed` test either has a pending
+    request (`:178` already assigns `uuid`) or is local (`:173` returns
+    before reaching this guard at all).
+
+    PROOF THAT `:188`'S FALSE ARM IS UNREACHABLE (marked `# pragma: no
+    branch` in `follows.py`, not tested here). `Instance.online()` is
+    exactly `not (self.dormant or self.gone_forever)` (app/models.py:
+    118-119). Passing this test's own guard at `:182` requires `not
+    feed.instance.online()` to be False, i.e. `online()` True, which by that
+    definition requires `gone_forever` to already be False -- there is no
+    session write, commit, or refresh of `feed.instance` between `:182` and
+    `:188` that could change it in between. So by the time `:188`'s `if not
+    feed.instance.gone_forever:` runs, `gone_forever` is guaranteed False and
+    the condition is always True; the `188->212` arc coverage.py reports
+    missing is not merely untested, it is provably dead given `online()`'s
+    own definition -- the same shape of proof this campaign has used before
+    for a conjunct made redundant by an earlier filter.
+    """
+    peer = make_instance('peer.example', software='lemmy')
+    peer.dormant = True
+    feed = make_feed(peer, 'peerfeed')
+    feed.ap_inbox_url = PEER_INBOX
+    db.session.commit()
+    s = _seed(with_keys=True)
+
+    leave_feed(None, s.user.id, feed.id)
+
+    assert db.session.query(FeedJoinRequest).count() == 0
     assert db.session.query(ActivityPubLog).count() == 0
 
 
