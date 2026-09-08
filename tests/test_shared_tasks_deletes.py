@@ -34,7 +34,9 @@ untested. Every one is pinned by its own test and its own mutation.
 """
 
 import json
+import os
 import socket
+import tempfile
 from types import SimpleNamespace
 
 import pytest
@@ -596,23 +598,55 @@ def test_the_blocked_image_batch_recalculates_cross_posts_and_removes_the_file(
     """`:239`'s `if post.url:` true arm and `:245-247`'s `if post.image_id:`
     true arm, both unexercised by
     `test_the_blocked_image_batch_deletes_every_post` above because that post
-    has neither a `url` nor an `image_id`.
+    has neither a `url` nor an `image_id`, and both made to pin an actual
+    OBSERVABLE CONSEQUENCE rather than merely being reached.
 
-    `calculate_cross_posts(delete_only=True)` (app/models.py:2346) skips its
-    own `if self.cross_posts and (url_changed or delete_only):` guard
-    (app/models.py:2350) -- this post's `cross_posts` is left at its column
-    default, which is falsy -- and returns at its own `if delete_only:
-    return` (app/models.py:2359-2360), so `:240`'s call is exercised without
-    seeding any actual cross-post rows. `File.delete_from_disk()`
-    (app/models.py:421-469) is likewise a safe no-op when `file_path`,
-    `thumbnail_path` and `source_url` are all `None`, exactly what
-    `make_file()` with no arguments builds, so `:247` is reached without
-    touching disk or S3.
+    An earlier version of this test gave the post a `url` and an `image_id`
+    but left `cross_posts` empty and the `File` with every path column
+    `None` -- `calculate_cross_posts(delete_only=True)`'s own
+    `if self.cross_posts and (url_changed or delete_only):` guard
+    (app/models.py:2350) and `File.delete_from_disk()`'s three `if
+    self.<x>_path:` guards (app/models.py:424, 436, 449) made BOTH calls true
+    no-ops, so deleting `:239`'s guard entirely (skipping the call) or
+    deleting `:247` (skipping the disk unlink) left every assertion here
+    passing regardless. Confirmed empirically: both mutations were run
+    against that version and both survived. Seeding `cross_posts` with a
+    mutual reference and giving the `File` a REAL path fixes that -- see the
+    two mutations recorded in task-11-report.md's "Fix round 1" section,
+    both of which now fail against this version.
+
+    MUTUAL `cross_posts`, NOT ONE-DIRECTIONAL: `calculate_cross_posts`
+    (app/models.py:2346-2358) clears `self.cross_posts` unconditionally once
+    past its guard, then walks `old_cross_posts` (the posts `self.cross_posts`
+    named) removing `self.id` from EACH of THEIR `cross_posts` lists -- so
+    `other.cross_posts` must already contain `s.post.id` for the second half
+    of the effect to be observable at all; a one-directional reference would
+    only prove the first half.
+
+    A REAL FILE, NOT `make_file()`'s bare `File()`: `File.delete_from_disk`
+    only touches disk via `os.path.isfile(self.file_path)` (app/models.py:429),
+    so a `None` or fictitious path is a guaranteed no-op regardless of
+    whether `:247` runs. The file is created with `tempfile.mkstemp()`
+    INSIDE THIS TEST PROCESS rather than by this agent's own host-side
+    scratchpad tooling, because `compose.test.yaml`'s `test-runner` service
+    mounts only `./:/app` -- a file written by a host-side Bash command
+    outside that one bind mount is invisible to the container process that
+    actually runs `delete_from_disk()`. `tempfile.mkstemp()` called from
+    inside the test creates the file in the CONTAINER's own `/tmp`, which
+    satisfies the same intent (a throwaway file outside the repository) in
+    the one location both the test and the code under test can actually see.
     """
     s = _seed(with_keys=True)
     _make_deliverable(s)
     route, _inst = _follower(s, http_mock)
-    image = make_file()
+    other = make_post(s.community, s.user, 'https://test.piefed.local/post/cross')
+    db.session.commit()
+    other.cross_posts = [s.post.id]
+    s.post.cross_posts = [other.id]
+    fd, real_file_path = tempfile.mkstemp(suffix='.png')
+    os.close(fd)
+    assert os.path.isfile(real_file_path)
+    image = make_file(file_path=real_file_path)
     s.post.url = 'https://test.piefed.local/image.png'
     s.post.image_id = image.id
     db.session.commit()
@@ -620,11 +654,16 @@ def test_the_blocked_image_batch_recalculates_cross_posts_and_removes_the_file(
     delete_posts_with_blocked_images([s.post.id], s.user.id, False)
 
     # See the comment in test_the_blocked_image_batch_deletes_every_post above:
-    # the task writes through a separate session.
+    # the task writes through a separate session for post.deleted, though
+    # calculate_cross_posts and delete_from_disk act through db.session
+    # directly and so are already visible without an expire.
     db.session.expire_all()
 
     assert s.post.deleted is True
     assert len(route.calls) == 1
+    assert s.post.cross_posts == []
+    assert other.cross_posts == []
+    assert not os.path.isfile(real_file_path)
 
 
 def test_the_blocked_image_batch_rolls_back_when_the_image_delete_fails(
