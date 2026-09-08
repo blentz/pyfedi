@@ -207,6 +207,7 @@ def leave_feed(send_async, user_id, feed_id):
 
     except Exception:
         session.rollback()
+        raise
     finally:
         session.close()
 

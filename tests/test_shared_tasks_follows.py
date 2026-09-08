@@ -1,8 +1,8 @@
 """The five follow and unfollow tasks -- AP Follow and Undo senders.
 
-`app/shared/tasks/follows.py`, 279 lines. Five `@celery.task` functions:
+`app/shared/tasks/follows.py`, 280 lines. Five `@celery.task` functions:
 `join_community:39`, `leave_community:112`, `leave_feed:162`,
-`follow_user:215` and `unfollow_user:243`.
+`follow_user:216` and `unfollow_user:244`.
 
 NO FAN-OUT ANYWHERE IN THIS MODULE, which is what separates it from every
 module this campaign has closed since sub-project 24. Each task sends AT MOST
@@ -30,7 +30,7 @@ objects the task touched.
 
 THIS MODULE NEVER READS `Instance.inbox`. Every send in it targets an
 ACTOR-level url instead -- `community.ap_inbox_url` (`:88`, `:153`),
-`feed.ap_inbox_url` (`:205`), `to_follow.ap_inbox_url` (`:234`, `:274`). The
+`feed.ap_inbox_url` (`:205`), `to_follow.ap_inbox_url` (`:235`, `:275`). The
 four fan-out modules this campaign closed before it all deliver to
 `instance.inbox`, so their harnesses set that field; a helper copied from one
 of them into this module's tests would set a field nothing here consumes.
@@ -45,14 +45,15 @@ from flask import current_app, get_flashed_messages
 
 from app import db
 from app.constants import SRC_API, SRC_PLD, SRC_WEB
-from app.models import ActivityPubLog, CommunityJoinRequest, UserFollowRequest
+from app.models import ActivityPubLog, CommunityJoinRequest, FeedJoinRequest, UserFollowRequest
 from app.shared.tasks.follows import (
     follow_user, join_community, leave_community, leave_feed, unfollow_user,
 )
 from tests.factories import (
     make_banned_instance, make_community, make_community_ban,
-    make_community_join_request, make_feed, make_instance, make_instance_block,
-    make_user, make_user_follow_request,
+    make_community_join_request, make_feed, make_feed_join_request,
+    make_instance, make_instance_block, make_local_feed, make_user,
+    make_user_follow_request,
 )
 
 PEER_INBOX = 'https://peer.example/inbox'
@@ -172,11 +173,11 @@ def test_joining_a_remote_community_sends_a_follow(db_session, http_mock):
 
 
 def test_following_a_remote_user_sends_a_follow(db_session, http_mock):
-    """`follow_user:215-239`. A `UserFollowRequest` at `:221-223`, then one
-    Follow to the target's own inbox at `:234`.
+    """`follow_user:216-240`. A `UserFollowRequest` at `:222-224`, then one
+    Follow to the target's own inbox at `:235`.
 
-    Signed with the FOLLOWER's key, not the target's -- `:234` passes
-    `user.private_key`, where `user` is the follower loaded at `:219`.
+    Signed with the FOLLOWER's key, not the target's -- `:235` passes
+    `user.private_key`, where `user` is the follower loaded at `:220`.
     """
     s = _seed(with_keys=True)
     peer = make_instance('peer.example', software='lemmy')
@@ -427,19 +428,19 @@ def test_leaving_a_remote_community_sends_an_undo(db_session, http_mock):
 
 
 def test_unfollowing_sends_an_undo_carrying_the_original_follow_id(db_session, http_mock):
-    """`:251-255`. Unfollowing a remote user deletes the `UserFollowRequest`
+    """`:252-256`. Unfollowing a remote user deletes the `UserFollowRequest`
     and sends an Undo wrapping the original Follow.
 
-    SAME DEFECT, SAME FIX, AS `leave_community:126`. `:255`'s
-    `to_follow_ap_id` is built from the uuid captured at `:252`, before
-    `:253`'s `session.delete` -- so the remote end can match the Undo to the
+    SAME DEFECT, SAME FIX, AS `leave_community:126`. `:256`'s
+    `to_follow_ap_id` is built from the uuid captured at `:253`, before
+    `:254`'s `session.delete` -- so the remote end can match the Undo to the
     Follow it originally received. `leave_feed:178` already captures first
     too; `unfollow_user` was the only one of the three left with the wrong
-    order, and the `if join_request:` guard at `:251` was never the problem
+    order, and the `if join_request:` guard at `:252` was never the problem
     here -- only the ordering under it was.
 
     THIS TEST DOES NOT OBSERVE A CRASH -- it passes both before and after
-    the `:252` capture was added. Before that line existed, `:255`'s
+    the `:253` capture was added. Before that line existed, `:256`'s
     equivalent read `join_request.uuid` directly off the
     already-deleted-and-committed instance; per the container probe run for
     `leave_community` (task-5-report.md), that read succeeds rather than
@@ -537,7 +538,7 @@ def test_leaving_a_community_on_a_banned_instance_sends_nothing(
 
 def test_unfollowing_with_no_request_row_sends_a_gibberish_follow_id(
         db_session, http_mock):
-    """`:257`'s else arm, taken when `:251`'s `if join_request:` is False.
+    """`:258`'s else arm, taken when `:252`'s `if join_request:` is False.
 
     The Undo still goes out, carrying a fabricated Follow id. Whether a remote
     end can match it is not this test's claim -- the claim is that the arm
@@ -555,3 +556,59 @@ def test_unfollowing_with_no_request_row_sends_a_gibberish_follow_id(
     undo = _sent_activity(route)
     assert undo['type'] == 'Undo'
     assert undo['object']['type'] == 'Follow'
+
+
+def test_leaving_a_remote_feed_sends_an_undo(db_session, http_mock):
+    """`:187-206`. `leave_feed` captures the uuid at `:178` BEFORE deleting at
+    `:179`, which is the ordering `leave_community` and `unfollow_user` lacked
+    until this sub-project fixed them. The correct idiom was always in this
+    file, one function below the first defect.
+    """
+    s = _seed(with_keys=True)
+    peer = make_instance('peer.example', software='lemmy')
+    peer.inbox = PEER_INBOX
+    feed = make_feed(peer, 'peerfeed')
+    feed.ap_inbox_url = PEER_INBOX
+    db.session.commit()
+    request = make_feed_join_request(s.user, feed)
+    expected_uuid = str(request.uuid)
+    db.session.commit()
+    route = _peer_route(http_mock)
+
+    leave_feed(None, s.user.id, feed.id)
+
+    assert db.session.query(FeedJoinRequest).count() == 0
+    undo = _sent_activity(route)
+    assert undo['type'] == 'Undo'
+    assert undo['object']['id'].endswith(expected_uuid)
+
+
+def test_leaving_a_local_feed_sends_nothing(db_session, http_mock):
+    """`:174`'s return, guarded by `:173`'s `feed.is_local()`, after the three
+    cache invalidations at `:169-171`."""
+    s = _seed(with_keys=True)
+    feed = make_local_feed('localfeed')
+    db.session.commit()
+
+    leave_feed(None, s.user.id, feed.id)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_leave_feed_reraises_rather_than_swallowing(db_session, http_mock):
+    """`:210`'s `raise`, added by this sub-project.
+
+    Before this commit `:208-209` was `except Exception:` / `rollback()` with
+    no re-raise, alone among the five tasks in this module. A failure inside
+    `leave_feed` was swallowed: the caller saw success, Celery recorded
+    nothing, and the user's feed membership silently failed to leave.
+
+    A feed id that does not exist makes `:167`'s `.one()` raise
+    `NoResultFound`, which is the cheapest way to reach the handler --
+    `:166`'s `User.get(user_id)` does not raise on a missing row, and the
+    user in this test exists anyway.
+    """
+    s = _seed(with_keys=True)
+
+    with pytest.raises(Exception):
+        leave_feed(None, s.user.id, 999999)
