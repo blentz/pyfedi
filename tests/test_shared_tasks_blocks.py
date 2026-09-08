@@ -331,8 +331,15 @@ def test_a_mastodon_instance_receives_no_site_ban(db_session, http_mock):
 
     NO ROUTE IS REGISTERED for the mastodon instance -- under
     `assert_all_called=True` a registered route that never fires would fail
-    this test for the wrong reason, while an unexpected send would surface as
-    an unmatched request.
+    this test for the wrong reason. But an unexpected send here would NOT
+    surface as an unmatched respx request: `post_request`'s
+    `except Exception as e:` (`signature.py:143`) catches respx's
+    unmatched-request assertion exactly as it would a real transport error,
+    and records an `ActivityPubLog` failure row instead of propagating. That
+    row is the only observable trace of a spurious send -- `_delivered_inboxes`
+    reads only the route this test itself registered, so it cannot see it.
+    The `ActivityPubLog` count is the oracle: one row for the real delivery
+    to `PEER_INBOX`, and a second if the mastodon instance is also sent to.
     """
     s = _seed(with_keys=True)
     masto = make_instance('masto.example', software='mastodon')
@@ -343,6 +350,7 @@ def test_a_mastodon_instance_receives_no_site_ban(db_session, http_mock):
     ban_from_site(None, s.user.id, s.mod.id, None, 'spam', False)
 
     assert _delivered_inboxes(route) == {PEER_INBOX}
+    assert db.session.query(ActivityPubLog).count() == 1
 
 
 def test_the_local_instance_receives_no_site_ban(db_session, http_mock):
@@ -354,9 +362,15 @@ def test_the_local_instance_receives_no_site_ban(db_session, http_mock):
     nothing about `id != 1`. This test assigns `LOCAL_INBOX` to that instance
     deliberately, so the first two conjuncts (`instance.inbox`,
     `instance.online()`) both pass and `id != 1` is the only thing left to
-    exclude it. `LOCAL_INBOX` is registered with no route: if `id != 1` ever
-    stopped excluding this row, the send would hit an unmatched request under
-    `assert_all_called=True` rather than silently succeeding.
+    exclude it. `LOCAL_INBOX` is registered with no route -- but if `id != 1`
+    ever stopped excluding this row, the send would NOT surface as an
+    unmatched request failing the suite: `post_request`'s
+    `except Exception as e:` (`signature.py:143`) catches respx's
+    unmatched-request assertion exactly as it would a real transport error,
+    and records an `ActivityPubLog` failure row instead of propagating --
+    invisible to `_delivered_inboxes` and to `len(route.calls)`, both of
+    which read only the route this test itself registered. The row-count
+    assertion below is what would actually catch it.
 
     The sequence reset in tests/conftest.py (see the comment at :189-190)
     makes `_seed`'s first instance id 1, which this test confirms explicitly
@@ -372,6 +386,7 @@ def test_the_local_instance_receives_no_site_ban(db_session, http_mock):
 
     assert _delivered_inboxes(route) == {PEER_INBOX}
     assert len(route.calls) == 1
+    assert db.session.query(ActivityPubLog).count() == 1
 
 
 def test_the_banned_users_own_instance_is_told_even_when_not_a_follower(
@@ -454,8 +469,12 @@ def test_a_banned_users_offline_instance_is_not_posted_to(
     instance.online()`; the fallback at `:190` guarded neither. NO ROUTE IS
     REGISTERED for the home instance: under `assert_all_called=True` a
     registered route that never fires would fail this test for the wrong
-    reason, so before the guard this fails as an unmatched respx request
-    rather than as a count mismatch.
+    reason. But a send to it would not itself surface as an unmatched respx
+    request failing the suite: `post_request`'s `except Exception as e:`
+    (`signature.py:143`) catches respx's unmatched-request assertion exactly
+    as it would a real transport error, and records an `ActivityPubLog`
+    failure row instead of propagating. So before the guard, this test fails
+    as `assert 2 == 1` on the line below, not as an unmatched respx request.
     """
     s = _seed(with_keys=True)
     _make_deliverable(s)
