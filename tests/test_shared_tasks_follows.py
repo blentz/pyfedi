@@ -1,8 +1,8 @@
 """The five follow and unfollow tasks -- AP Follow and Undo senders.
 
-`app/shared/tasks/follows.py`, 277 lines. Five `@celery.task` functions:
-`join_community:39`, `leave_community:112`, `leave_feed:161`,
-`follow_user:214` and `unfollow_user:242`.
+`app/shared/tasks/follows.py`, 278 lines. Five `@celery.task` functions:
+`join_community:39`, `leave_community:112`, `leave_feed:162`,
+`follow_user:215` and `unfollow_user:243`.
 
 NO FAN-OUT ANYWHERE IN THIS MODULE, which is what separates it from every
 module this campaign has closed since sub-project 24. Each task sends AT MOST
@@ -29,8 +29,8 @@ context. Those tests must assert through fresh queries, never on attributes of
 objects the task touched.
 
 THIS MODULE NEVER READS `Instance.inbox`. Every send in it targets an
-ACTOR-level url instead -- `community.ap_inbox_url` (`:88`, `:152`),
-`feed.ap_inbox_url` (`:204`), `to_follow.ap_inbox_url` (`:233`, `:272`). The
+ACTOR-level url instead -- `community.ap_inbox_url` (`:88`, `:153`),
+`feed.ap_inbox_url` (`:205`), `to_follow.ap_inbox_url` (`:234`, `:273`). The
 four fan-out modules this campaign closed before it all deliver to
 `instance.inbox`, so their harnesses set that field; a helper copied from one
 of them into this module's tests would set a field nothing here consumes.
@@ -90,7 +90,7 @@ def _seed(local_community=True, with_keys=False):
     """instance, user, community -- committed.
 
     `user` is the person joining or leaving. `join_community:88` and
-    `leave_community:152` sign with the USER's key, so `with_keys=True` is
+    `leave_community:153` sign with the USER's key, so `with_keys=True` is
     required for any test that reaches a send.
     """
     instance = make_instance('test.piefed.local', software='piefed')
@@ -112,7 +112,7 @@ def _make_online(s, online=True):
     Two things this buys, neither of them an inbox: `make_community` hardcodes
     `instance_id=1` (tests/factories.py:141), and `_seed` creates
     `test.piefed.local` first, so id 1 is already a real, non-dormant instance
-    before this runs -- `online=True` is not what makes `:74`'s and `:129`'s
+    before this runs -- `online=True` is not what makes `:74`'s and `:130`'s
     `community.instance.online()` true. What `online=False` DOES do is the only
     way to reach those checks' offline arms, since instance 1's `dormant` and
     `gone_forever` both default `False` and nothing else in `_seed` touches
@@ -172,11 +172,11 @@ def test_joining_a_remote_community_sends_a_follow(db_session, http_mock):
 
 
 def test_following_a_remote_user_sends_a_follow(db_session, http_mock):
-    """`follow_user:214-238`. A `UserFollowRequest` at `:220-222`, then one
-    Follow to the target's own inbox at `:233`.
+    """`follow_user:215-239`. A `UserFollowRequest` at `:221-223`, then one
+    Follow to the target's own inbox at `:234`.
 
-    Signed with the FOLLOWER's key, not the target's -- `:233` passes
-    `user.private_key`, where `user` is the follower loaded at `:218`.
+    Signed with the FOLLOWER's key, not the target's -- `:234` passes
+    `user.private_key`, where `user` is the follower loaded at `:219`.
     """
     s = _seed(with_keys=True)
     peer = make_instance('peer.example', software='lemmy')
@@ -384,3 +384,43 @@ def test_a_blocked_instance_gets_a_flash_for_src_web(db_session, http_mock):
         result = join_community(None, s.user.id, s.community.id, SRC_WEB)
 
     assert result is None
+
+
+def test_leaving_a_remote_community_sends_an_undo(db_session, http_mock):
+    """`:135-153`. Leaving a remote community deletes the join request and
+    sends an Undo wrapping the original Follow.
+
+    THE FOLLOW ID INSIDE THE UNDO IS THE POINT. `:135`'s `follow_id` is built
+    from the uuid captured at `:126`, before `:127`'s `session.delete` -- so
+    the remote end can match the Undo to the Follow it originally received.
+    An Undo carrying a fresh or missing id is not an Undo of anything.
+
+    THIS TEST DOES NOT OBSERVE A CRASH -- it passes both before and after the
+    `:126` capture was added. Before that line existed, `:135`'s equivalent
+    read `join_request.uuid` directly off the already-deleted-and-committed
+    instance; a container probe (see task-5-report.md) showed that read
+    succeeding rather than raising `ObjectDeletedError`, because
+    `Session.commit()` EXPUNGES a just-deleted instance instead of expiring
+    it -- `inspect(join_request)` showed `persistent=False, deleted=False,
+    detached=True, expired=False` right after the commit, and a detached
+    object's attributes are whatever was already loaded, no reload, no error.
+    So the pre-fix code already produced the right uuid, by accident of that
+    undocumented detach-not-expire behaviour. This test's value is pinning
+    the id's PROVENANCE -- asserting it against the uuid captured before
+    `leave_community` ever touches the row -- not catching a crash that does
+    not occur.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_online(s)
+    request = make_community_join_request(s.user, s.community)
+    expected_uuid = str(request.uuid)
+    db.session.commit()
+    route = _peer_route(http_mock)
+
+    leave_community(None, s.user.id, s.community.id)
+
+    assert db.session.query(CommunityJoinRequest).count() == 0
+    undo = _sent_activity(route)
+    assert undo['type'] == 'Undo'
+    assert undo['object']['type'] == 'Follow'
+    assert undo['object']['id'].endswith(expected_uuid)
