@@ -45,7 +45,7 @@ from app.shared.tasks.deletes import (
 )
 from tests.factories import (
     make_community, make_community_member, make_instance, make_notification,
-    make_post, make_user,
+    make_post, make_post_reply, make_user,
 )
 
 PEER_INBOX = 'https://peer.example/inbox'
@@ -262,3 +262,130 @@ def test_a_report_notification_survives_the_delete(db_session, http_mock):
     assert db.session.query(Notification).count() == 1
     assert db.session.query(Notification).one().notif_type == NOTIF_REPORT
     assert len(route.calls) == 1
+
+
+def _following_instance_without_a_mocked_route(s, inbox=PEER_INBOX, domain='follower.example'):
+    """Same DB shape as `_follower` -- an Instance, an inbox, and a member
+    User -- so `community.following_instances()` returns a real row, but with
+    NO route registered on `http_mock`.
+
+    This is deliberate, not an oversight. `http_mock` is `assert_all_called=True`
+    (conftest.py:336-342): a route registered but never hit fails at teardown.
+    The four tests below assert on a guard that is SUPPOSED to stop delivery,
+    so a route built with `_follower` would sit uncalled and turn a correct
+    pass into a spurious teardown error. Registering nothing instead lets an
+    unexpected send fall through to the session-scoped empty router
+    (conftest.py's `assert_all_called=False` one), which raises for the
+    unmatched request exactly as a real network failure would; `post_request`
+    catches that and still writes the `ActivityPubLog` failure row
+    (`signature.py:105` before the transport, `:143`'s `except Exception`
+    after). So a guard regression is caught by the row count either way, and a
+    correctly-firing guard leaves both the count and the router's bookkeeping
+    clean.
+    """
+    inst = make_instance(domain, software='lemmy')
+    inst.inbox = inbox
+    member_user = make_user(inst, f'member_{domain.split(".")[0]}')
+    make_community_member(member_user, s.community)
+    db.session.commit()
+    return inst
+
+
+def test_a_local_only_community_sends_no_reply_delete(db_session, http_mock):
+    """`:127`'s guard, reached only for a NON-post -- `not is_post` is its first
+    conjunct, so a post never returns here.
+
+    Zero deliveries, so the oracle is the `ActivityPubLog` count: `post_request`
+    writes its row at `signature.py:105` before the transport, and a
+    delivered-inboxes assertion cannot see a send that respx never matched
+    (`signature.py:143` swallows it).
+
+    A `following_instances()` row is deliberately added here (the brief's
+    version omits it): without one, `community.is_local()`'s Announce loop at
+    `:196` iterates zero times regardless of whether `:127` fires, so the
+    assertion would hold even with the guard deleted -- confirmed empirically,
+    see task-3-report.md. `_follower` itself is not used because it registers
+    an `http_mock` route that this test, if the guard fires correctly as
+    expected, never calls; `http_mock` is `assert_all_called=True`, so an
+    uncalled route fails at teardown. See
+    `_following_instance_without_a_mocked_route`.
+    """
+    s = _seed(with_keys=True)
+    peer = _make_deliverable(s)
+    _following_instance_without_a_mocked_route(s)
+    reply = make_post_reply(s.post, s.user)
+    s.community.local_only = True
+    db.session.commit()
+
+    delete_reply(None, s.user.id, reply.id)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_local_only_community_sends_no_post_delete_without_followers(
+        db_session, http_mock):
+    """`:130`'s guard. A POST passes `:127` (its `not is_post` conjunct is
+    False) and is stopped here instead, because the author has no
+    `UserFollower` rows and the community is `local_only`.
+
+    The pair `:127`/`:130` is why this function contributes two lines to D309
+    and counts once as a site.
+
+    A `following_instances()` row is deliberately added here (the brief's
+    version omits it): see the note on
+    `test_a_local_only_community_sends_no_reply_delete` above."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    _following_instance_without_a_mocked_route(s)
+    s.community.local_only = True
+    db.session.commit()
+
+    delete_post(None, s.user.id, s.post.id)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_private_community_sends_no_delete(db_session, http_mock):
+    """D309's TWELFTH AND FINAL SITE.
+
+    `private` is seeded with `local_only` deliberately left False -- with it
+    True the test would pass on `:127`/`:130`'s pre-existing conjuncts and
+    prove nothing about the new one. That is the same trap every earlier D309
+    site's test was built to avoid, and `app/admin/routes.py:1388` makes the
+    uncoupled state reachable today: it writes `community.local_only` from the
+    admin form without touching `community.private`.
+
+    A `following_instances()` row is deliberately added here (the brief's
+    version omits it): see the note on
+    `test_a_local_only_community_sends_no_reply_delete` above -- without it
+    this test passes vacuously before the fix too, which is exactly what was
+    observed and is recorded in task-3-report.md.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    _following_instance_without_a_mocked_route(s)
+    s.community.private = True
+    db.session.commit()
+
+    delete_post(None, s.user.id, s.post.id)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_an_offline_community_instance_sends_no_delete(db_session, http_mock):
+    """`:133`'s other disjunct, the one that was already there. Separated from
+    the `private` test because the two fail independently.
+
+    A `following_instances()` row is deliberately added here (the brief's
+    version omits it): see the note on
+    `test_a_local_only_community_sends_no_reply_delete` above. Here it also
+    demonstrates that `:133` checks `community.instance`, the community's OWN
+    host, not the following instance's -- the following instance stays online
+    throughout."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s, online=False)
+    _following_instance_without_a_mocked_route(s)
+
+    delete_post(None, s.user.id, s.post.id)
+
+    assert db.session.query(ActivityPubLog).count() == 0
