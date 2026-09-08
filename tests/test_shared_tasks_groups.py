@@ -6,11 +6,24 @@ campaign has closed. Most of that density is `:85-116`, where four optional
 fields each add an arm and two of them branch AGAIN on whether the stored
 image url is absolute (`:90`, `:101`).
 
-TWO EARLY RETURNS, AND THE SECOND IS ONLY REACHABLE PAST THE FIRST. `:59-60`
-returns if the community is `local_only`; `:62-63` returns unless the acting
-user moderates the community. `Community.is_moderator` (app/models.py:736-740)
-checks `moderator.user_id == user.id` over `self.moderators()`. So every test
-past the guards needs a moderator, which `_seed` supplies.
+TWO EARLY RETURNS, AND THE SECOND IS ONLY REACHABLE PAST THE FIRST. `:59`
+returns if the community is `local_only`, `private`, or its instance is not
+`online()`; `:62-63` returns unless the acting user moderates the community.
+`Community.is_moderator` (app/models.py:736-740) checks `moderator.user_id ==
+user.id` over `self.moderators()`. So every test past the guards needs a
+moderator, which `_seed` supplies.
+
+`:59` DEREFERENCES `community.instance` -- THE FIRST TIME THIS MODULE EVER
+HAS. `Community.instance_id` is a nullable FK, so a community row with no
+instance would raise `AttributeError` on `not community.instance.online()`
+where it previously federated without incident. `private` is ordered before
+the `online()` call precisely so a PRIVATE such community still returns at
+the guard via short-circuit rather than reaching the dereference; a non-private
+community with a null `instance_id`, however, would still raise. No test in
+this file constructs that state -- every seeded community gets a real
+instance via `make_community`/`_make_deliverable` -- so this is a new crash
+surface being registered, not one being tested here, and it is expected to be
+rare in practice since every known creation path sets `instance_id`.
 
 DELIVERY REQUIRES COMMUNITY MEMBERSHIP, NOT MERELY AN INSTANCE ROW.
 `Community.following_instances()` (app/models.py:842-851) joins
@@ -219,3 +232,96 @@ def test_a_remote_community_receives_the_update_unwrapped(
     update = _sent_activity(route)
     assert update['type'] == 'Update'
     assert update['object']['type'] == 'Group'
+
+
+def test_a_non_moderator_sends_nothing(db_session, http_mock):
+    """`:62`'s true arm. Reached only past `:59`, so the community must be
+    neither local_only nor (post-fix) private.
+
+    NO ROUTE IS REGISTERED -- `http_mock` uses `assert_all_called=True`, so a
+    route that never fires would fail this test for the wrong reason. The
+    follower is built inline WITHOUT a route so the loop has a candidate,
+    which is what makes the zero count mean "the guard returned" rather than
+    "the query was empty".
+
+    `post_request` writes its ActivityPubLog row at
+    app/activitypub/signature.py:105 before any network attempt, so a count of
+    0 distinguishes a guard return from a failed delivery.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    outsider = make_user(s.instance, 'outsider', local=True)
+    inst = make_instance('follower.example', software='lemmy')
+    inst.inbox = PEER_INBOX
+    member = make_user(inst, 'member_follower')
+    make_community_member(member, s.community)
+    db.session.commit()
+
+    edit_community(None, outsider.id, s.community.id)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_local_only_community_sends_nothing(db_session, http_mock):
+    """`:59`'s first disjunct."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    inst = make_instance('follower.example', software='lemmy')
+    inst.inbox = PEER_INBOX
+    member = make_user(inst, 'member_follower')
+    make_community_member(member, s.community)
+    s.community.local_only = True
+    db.session.commit()
+
+    edit_community(None, s.user.id, s.community.id)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_private_community_sends_nothing(db_session, http_mock):
+    """D309's site in this module, FIRST of the two conjuncts this fix adds.
+
+    Before this commit `:59` read `if community.local_only:` alone -- it
+    omitted `private` AND the `instance.online()` check that every other member
+    of this family already carried. That makes this a WIDER gap than the eight
+    sites closed before it.
+
+    `private` is placed BEFORE the `online()` call: `Community.instance_id` is
+    a nullable FK and `or` short-circuits left to right, so a private community
+    with no instance row returns at the guard rather than raising
+    AttributeError. That is a side effect this test does not assert --
+    reordering would reopen the crash without failing it.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    inst = make_instance('follower.example', software='lemmy')
+    inst.inbox = PEER_INBOX
+    member = make_user(inst, 'member_follower')
+    make_community_member(member, s.community)
+    s.community.private = True
+    db.session.commit()
+
+    edit_community(None, s.user.id, s.community.id)
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_an_offline_community_instance_sends_nothing(db_session, http_mock):
+    """The SECOND conjunct this fix adds. `Instance.online()`
+    (app/models.py:118-119) is exactly `not (self.dormant or
+    self.gone_forever)`, so `_make_deliverable(s, online=False)` sets both.
+
+    Separated from the private test because the two fail independently and one
+    test could not say which conjunct returned.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s, online=False)
+    inst = make_instance('follower.example', software='lemmy')
+    inst.inbox = PEER_INBOX
+    member = make_user(inst, 'member_follower')
+    make_community_member(member, s.community)
+    db.session.commit()
+
+    edit_community(None, s.user.id, s.community.id)
+
+    assert db.session.query(ActivityPubLog).count() == 0
