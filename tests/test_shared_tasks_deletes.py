@@ -41,15 +41,16 @@ import pytest
 
 from app import db
 from app.constants import NOTIF_REPORT
-from app.models import ActivityPubLog, Notification
+from app.models import ActivityPubLog, File, Notification, UserFollower
 from app.shared.tasks.deletes import (
     delete_community, delete_pm, delete_post, delete_posts_with_blocked_images,
     delete_reply, restore_community, restore_pm, restore_post, restore_reply,
 )
 from tests.factories import (
     make_banned_instance, make_chat_message, make_community,
-    make_community_member, make_follow, make_instance, make_instance_block,
-    make_notification, make_post, make_post_reply, make_user,
+    make_community_member, make_file, make_follow, make_instance,
+    make_instance_block, make_notification, make_post, make_post_reply,
+    make_user,
 )
 
 PEER_INBOX = 'https://peer.example/inbox'
@@ -590,6 +591,75 @@ def test_the_blocked_image_batch_skips_a_missing_post(db_session, http_mock):
     assert len(route.calls) == 1
 
 
+def test_the_blocked_image_batch_recalculates_cross_posts_and_removes_the_file(
+        db_session, http_mock):
+    """`:239`'s `if post.url:` true arm and `:245-247`'s `if post.image_id:`
+    true arm, both unexercised by
+    `test_the_blocked_image_batch_deletes_every_post` above because that post
+    has neither a `url` nor an `image_id`.
+
+    `calculate_cross_posts(delete_only=True)` (app/models.py:2346) skips its
+    own `if self.cross_posts and (url_changed or delete_only):` guard
+    (app/models.py:2350) -- this post's `cross_posts` is left at its column
+    default, which is falsy -- and returns at its own `if delete_only:
+    return` (app/models.py:2359-2360), so `:240`'s call is exercised without
+    seeding any actual cross-post rows. `File.delete_from_disk()`
+    (app/models.py:421-469) is likewise a safe no-op when `file_path`,
+    `thumbnail_path` and `source_url` are all `None`, exactly what
+    `make_file()` with no arguments builds, so `:247` is reached without
+    touching disk or S3.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+    image = make_file()
+    s.post.url = 'https://test.piefed.local/image.png'
+    s.post.image_id = image.id
+    db.session.commit()
+
+    delete_posts_with_blocked_images([s.post.id], s.user.id, False)
+
+    # See the comment in test_the_blocked_image_batch_deletes_every_post above:
+    # the task writes through a separate session.
+    db.session.expire_all()
+
+    assert s.post.deleted is True
+    assert len(route.calls) == 1
+
+
+def test_the_blocked_image_batch_rolls_back_when_the_image_delete_fails(
+        db_session, monkeypatch):
+    """`:251-253`'s `except Exception: session.rollback(); raise` in
+    `delete_posts_with_blocked_images:231`, unexercised by any test above
+    because none of them makes anything inside the loop raise.
+
+    `File.delete_from_disk` is monkeypatched to raise, rather than pointing
+    `post.image_id` at a nonexistent id: `image_id` carries a real FK to
+    `file.id` (app/models.py, `Post.image_id`), so a dangling id would fail at
+    THIS TEST's own `commit()` with an `IntegrityError`, never reaching the
+    task at all. A disk or S3 failure inside `delete_from_disk` is the
+    realistic way this line raises in production.
+
+    `record.calls == ['rollback', 'close']` is the same oracle
+    `test_each_wrapper_rolls_back_and_reraises` uses above, extended to this
+    task, which that parametrize does not cover.
+    """
+    def _boom(self, *args, **kwargs):
+        raise RuntimeError('disk unavailable')
+    monkeypatch.setattr(File, 'delete_from_disk', _boom)
+    record = _recording_task_session(monkeypatch)
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    image = make_file()
+    s.post.image_id = image.id
+    db.session.commit()
+
+    with pytest.raises(RuntimeError):
+        delete_posts_with_blocked_images([s.post.id], s.user.id, False)
+
+    assert record.calls == ['rollback', 'close']
+
+
 def test_an_offline_community_instance_sends_no_delete(db_session, http_mock):
     """`:133`'s other disjunct, the one that was already there. Separated from
     the `private` test because the two fail independently.
@@ -756,6 +826,31 @@ def test_delete_community_addresses_the_community_itself(db_session, http_mock):
     assert announce['object']['object'] == s.community.public_url()
 
 
+def test_restore_community_sends_an_undo_of_a_community_delete(db_session, http_mock):
+    """`restore_community:104` -> `:110`'s `delete_object(..., is_restore=True,
+    ...)` call. Before this test the only coverage of `restore_community` came
+    from `test_each_wrapper_rolls_back_and_reraises` above's six-wrapper
+    exception-path parametrize, whose deliberately bad id raises at `:109`'s
+    `.one()` before `:110` is ever reached -- so the happy path through `:110`
+    itself was unexercised.
+
+    `:120-121` takes the `isinstance(object, Community)` arm, same as
+    `test_delete_community_addresses_the_community_itself` above, with
+    `is_restore` layered on top so the object is wrapped in an Undo the same
+    way `test_restore_reply_sends_an_undo_of_a_reply_delete` below checks for
+    a reply.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+
+    restore_community(None, s.user.id, s.community.id)
+
+    announce = _sent_activity(route)
+    assert announce['object']['type'] == 'Undo'
+    assert announce['object']['object']['object'] == s.community.public_url()
+
+
 def test_restore_reply_sends_an_undo_of_a_reply_delete(db_session, http_mock):
     """`restore_reply:44`, the `is_restore` arm on a NON-post. Distinguishes
     `:123`'s `object.community` -- the else arm reached from the reply
@@ -849,6 +944,34 @@ def test_a_post_delete_reaches_the_authors_own_followers(db_session, http_mock):
     assert fan.public_url() in _sent_activity(fan_route)['cc']
     assert len(community_route.calls) == 1
     assert db.session.query(ActivityPubLog).count() == 2
+
+
+def test_a_follower_row_with_no_resolvable_account_is_skipped_in_the_cc_list(
+        db_session, http_mock):
+    """`:210`'s FALSE arm. `UserFollower.remote_user_id` is a nullable FK
+    (`app/models.py:3568`), so `:209`'s `session.query(User).get(...)` can
+    return `None` for a row the `:129` query still returns -- `:211`'s `cc`
+    append is skipped and the loop falls through to `:208` for the next
+    follower rather than raising on the `None`.
+
+    A real, deliverable follower is seeded alongside the null-remote row so
+    the loop's CONTINUATION is what is being checked, not merely that nothing
+    raises -- if `:210`'s false arm aborted the loop instead of skipping past
+    it, `fan`'s delivery below would not happen either.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    community_route = http_mock.post(PEER_INBOX).respond(200, json={})
+    fan_route, _inst, fan = _personal_follower(s, http_mock)
+    ghost = UserFollower(local_user_id=s.user.id, remote_user_id=None,
+                          is_accepted=True, is_inward=True)
+    db.session.add(ghost)
+    db.session.commit()
+
+    delete_post(None, s.user.id, s.post.id)
+
+    assert fan.public_url() in _sent_activity(fan_route)['cc']
+    assert len(community_route.calls) == 1
 
 
 def test_a_reply_delete_does_not_reach_the_authors_followers(db_session, http_mock):
@@ -981,6 +1104,32 @@ def test_restore_pm_wraps_the_delete_in_an_undo(db_session, http_mock):
     assert undo['type'] == 'Undo'
     assert undo['object']['type'] == 'Delete'
     assert '@context' not in undo['object']
+
+
+def test_delete_pm_rolls_back_and_reraises_on_a_missing_message(db_session, monkeypatch):
+    """`:268-270`'s `except Exception: session.rollback(); raise` in
+    `delete_pm:260`, unexercised by the six-wrapper
+    `test_each_wrapper_rolls_back_and_reraises` parametrize above, which only
+    covers the reply/post/community wrappers.
+
+    A nonexistent `message_id` makes `:265`'s `.one()` raise
+    `NoResultFound`, caught by the same `except Exception` shape."""
+    record = _recording_task_session(monkeypatch)
+
+    with pytest.raises(Exception):
+        delete_pm(None, 999999)
+
+    assert record.calls == ['rollback', 'close']
+
+
+def test_restore_pm_rolls_back_and_reraises_on_a_missing_message(db_session, monkeypatch):
+    """`:284-286`, `restore_pm:276`'s counterpart to the test above."""
+    record = _recording_task_session(monkeypatch)
+
+    with pytest.raises(Exception):
+        restore_pm(None, 999999)
+
+    assert record.calls == ['rollback', 'close']
 
 
 def test_a_pm_to_a_local_recipient_sends_nothing(db_session, http_mock):
