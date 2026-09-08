@@ -24,9 +24,16 @@ of the three arms.
 `flash()` NEEDS A REQUEST CONTEXT AND THE `app` FIXTURE DOES NOT PUSH ONE.
 tests/conftest.py:112 pushes only `application.app_context()`. A test touching
 a `SRC_WEB` arm must push its own request context -- and doing so DISABLES
-`patch_db_session`, because app/utils.py:3685 returns early inside a request
+`patch_db_session`, because app/utils.py:3688 returns early inside a request
 context. Those tests must assert through fresh queries, never on attributes of
 objects the task touched.
+
+THIS MODULE NEVER READS `Instance.inbox`. Every send in it targets an
+ACTOR-level url instead -- `community.ap_inbox_url` (`:88`, `:152`),
+`feed.ap_inbox_url` (`:204`), `to_follow.ap_inbox_url` (`:233`, `:272`). The
+four fan-out modules this campaign closed before it all deliver to
+`instance.inbox`, so their harnesses set that field; a helper copied from one
+of them into this module's tests would set a field nothing here consumes.
 """
 
 import json
@@ -101,14 +108,21 @@ def _seed(local_community=True, with_keys=False):
 def _make_online(s, online=True):
     """Move the community onto a real peer Instance and set its state.
 
-    `join_community:74` and `leave_community:129` both dereference
-    `community.instance`, so a community left on instance 1 -- which
-    `make_instance` gives no inbox -- reaches those checks with the local row.
+    Two things this buys, neither of them an inbox: `make_community` hardcodes
+    `instance_id=1` (tests/factories.py:141), and `_seed` creates
+    `test.piefed.local` first, so id 1 is already a real, non-dormant instance
+    before this runs -- `online=True` is not what makes `:74`'s and `:129`'s
+    `community.instance.online()` true. What `online=False` DOES do is the only
+    way to reach those checks' offline arms, since instance 1's `dormant` and
+    `gone_forever` both default `False` and nothing else in `_seed` touches
+    them. And moving the community here at all puts it on a DOMAIN --
+    `peer.example` -- that later tasks need so `instance_banned('peer.example')`
+    can match; `test.piefed.local` never can, being the local instance.
+
     `Instance.online()` is exactly `not (self.dormant or self.gone_forever)`
     (app/models.py:118-119). Returns the peer.
     """
     peer = make_instance('peer.example', software='lemmy')
-    peer.inbox = PEER_INBOX
     if not online:
         peer.dormant = True
         peer.gone_forever = True
@@ -157,7 +171,7 @@ def test_joining_a_remote_community_sends_a_follow(db_session, http_mock):
 
 
 def test_following_a_remote_user_sends_a_follow(db_session, http_mock):
-    """`follow_user:214-237`. A `UserFollowRequest` at `:220-222`, then one
+    """`follow_user:214-238`. A `UserFollowRequest` at `:220-222`, then one
     Follow to the target's own inbox at `:233`.
 
     Signed with the FOLLOWER's key, not the target's -- `:233` passes
