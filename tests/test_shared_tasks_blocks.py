@@ -372,3 +372,102 @@ def test_the_local_instance_receives_no_site_ban(db_session, http_mock):
 
     assert _delivered_inboxes(route) == {PEER_INBOX}
     assert len(route.calls) == 1
+
+
+def test_the_banned_users_own_instance_is_told_even_when_not_a_follower(
+        db_session, http_mock):
+    """`:189-190`'s fallback, and the behaviour the comment there exists to
+    protect.
+
+    The banned user is on an instance that is NOT among the community's
+    followers, so `following_instances()` never returns it and `sent_to` never
+    gains its id -- yet it must still learn of the ban. This test is written
+    BEFORE the guard is added and must keep passing after it.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    follower_route, _f = _follower(s, http_mock)
+    home = make_instance('home.example', software='lemmy')
+    home.inbox = OTHER_INBOX
+    db.session.commit()
+    s.user.instance_id = home.id
+    db.session.commit()
+    home_route = http_mock.post(OTHER_INBOX).respond(200, json={})
+
+    ban_from_community(None, s.user.id, s.mod.id, s.community.id, None, 'spam')
+
+    assert _delivered_inboxes(follower_route, home_route) == {PEER_INBOX,
+                                                              OTHER_INBOX}
+
+
+def test_a_banned_user_with_no_instance_row_does_not_crash(
+        db_session, http_mock):
+    """`:190`'s first unguarded dereference. `User.instance_id` is a nullable
+    FK, so `None not in sent_to` is True and `user.instance.inbox` raises
+    AttributeError on None.
+
+    This test FAILS before the guard with that AttributeError propagating out
+    of the wrapper, and passes after.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _f = _follower(s, http_mock)
+    s.user.instance_id = None
+    db.session.commit()
+
+    ban_from_community(None, s.user.id, s.mod.id, s.community.id, None, 'spam')
+
+    assert _delivered_inboxes(route) == {PEER_INBOX}
+
+
+def test_a_banned_users_instance_without_an_inbox_is_not_posted_to(
+        db_session, http_mock):
+    """`:190`'s second unguarded dereference. With an instance row whose inbox
+    is null, the send goes to None, which `post_request` records at
+    `signature.py:109-111` as an `empty uri` failure WITHOUT making an httpx
+    request.
+
+    THE ROW COUNT IS THE ASSERTION, not the delivered inboxes. A send to None
+    leaves the inbox set unchanged and the route call count unchanged, so only
+    the ActivityPubLog count can see it: one row for the real follower, and a
+    second for the None-inbox attempt if the guard is missing.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _f = _follower(s, http_mock)
+    home = make_instance('home.example', software='lemmy')
+    home.inbox = None
+    db.session.commit()
+    s.user.instance_id = home.id
+    db.session.commit()
+
+    ban_from_community(None, s.user.id, s.mod.id, s.community.id, None, 'spam')
+
+    assert db.session.query(ActivityPubLog).count() == 1
+
+
+def test_a_banned_users_offline_instance_is_not_posted_to(
+        db_session, http_mock):
+    """The guard's third conjunct, `user.instance.online()`.
+
+    `:187` guards every other recipient with `instance.inbox and
+    instance.online()`; the fallback at `:190` guarded neither. NO ROUTE IS
+    REGISTERED for the home instance: under `assert_all_called=True` a
+    registered route that never fires would fail this test for the wrong
+    reason, so before the guard this fails as an unmatched respx request
+    rather than as a count mismatch.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _f = _follower(s, http_mock)
+    home = make_instance('home.example', software='lemmy')
+    home.inbox = OTHER_INBOX
+    home.dormant = True
+    home.gone_forever = True
+    db.session.commit()
+    s.user.instance_id = home.id
+    db.session.commit()
+
+    ban_from_community(None, s.user.id, s.mod.id, s.community.id, None, 'spam')
+
+    assert db.session.query(ActivityPubLog).count() == 1
