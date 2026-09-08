@@ -18,11 +18,14 @@ more signer than any module this campaign has closed:
       the SENDER key, after `:293`'s local-recipient early return.
 
 THE GUARD AT `:127-134` IS SPLIT ACROSS THREE STATEMENTS, which is why this
-site was misread by the campaign's own register. `:127` returns for a non-post
-in a `local_only` community, `:130` returns for a `local_only` community when
-the user has no followers, and `:133` returns for an offline instance. Only
-`Community.private` is missing, so this is D309's NARROW shape and not the wide
-one -- a distinction that survives only because the guard is read as a block.
+site was misread by the campaign's own register as omitting `online()` --
+`:133` had carried that check all along. `:127` returns for a non-post in a
+`local_only` community, `:130` returns for a `local_only` community when the
+user has no followers, and `:133` now returns for a `private` community too,
+ahead of the pre-existing online check it shares its line with. `private`
+could not join the two `local_only` checks above it -- those are conditional
+on `is_post` and on `followers` respectively -- so `:133`, this guard's only
+unconditional statement, is where it had to go. D309's last site, closed.
 
 `:197` CARRIES FOUR CONJUNCTS AND COVERAGE.PY SEES ONE ARC PAIR:
 `instance.inbox`, `instance.online()`, `not user.has_blocked_instance(...)` and
@@ -360,6 +363,15 @@ def test_a_private_community_sends_no_delete(db_session, http_mock):
     `test_a_local_only_community_sends_no_reply_delete` above -- without it
     this test passes vacuously before the fix too, which is exactly what was
     observed and is recorded in task-3-report.md.
+
+    `private` goes FIRST in `:133`'s `or`. `Community.instance_id` is a
+    nullable FK (`app/models.py:575`), and `or` short-circuits left to right,
+    so a private community with no instance row returns at the guard rather
+    than raising `AttributeError` on `None.online()`. NO TEST ASSERTS THIS --
+    it is a property of the ordering, not something this suite pins: every
+    test here gives the community a real, non-null instance
+    (`_make_deliverable`), so a reordering to `not community.instance.online()
+    or community.private` would still pass all four.
     """
     s = _seed(with_keys=True)
     _make_deliverable(s)
