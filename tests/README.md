@@ -5062,6 +5062,61 @@ working countermeasure is a reader re-deriving citations against the tree;
 the rule's value is in telling that reader what to look for, not in
 preventing the error before it is written.
 
+**153. A TASK WRITES THROUGH ITS OWN `Session`, SO A TEST ASSERTING ON AN
+ORM OBJECT'S ATTRIBUTES AFTER THE TASK RUNS READS STALE IN-MEMORY STATE.**
+`get_task_session()` returns `Session(bind=db.engine)`
+(`app/utils.py:3673-3675`) with its own identity map, separate from the
+test's `db.session`. `patch_db_session` only swaps the global `db.session`
+pointer for the duration of the call and restores it in a `finally`; it
+never touches attribute state on objects the test already holds. **This is
+the inverse of fact 58, and the two must be read together, because a
+reader who has internalised 58 is exactly the reader who will get this
+wrong.** Fact 58 says `app/__init__.py:81` never overrides
+`expire_on_commit`, so it stays default-`True` -- and concludes that when
+the function under test commits ON THE TEST'S OWN `db.session`, that
+commit already expires the objects the test holds, making an added
+`db.session.refresh(obj)` usually redundant. Here the commit happens on a
+DIFFERENT session (the task's own), so `expire_on_commit`'s default `True`
+applies to that session's objects, not the test's -- nothing expires the
+test's copy, and the exact refresh fact 58 calls usually-redundant becomes
+load-bearing. Assertions that issue a fresh query (`db.session.query(X).count()`)
+are immune, because they never consult the stale in-memory attribute at
+all; attribute reads on an object the test built earlier (`obj.attr`) are
+not, and `db.session.expire_all()` before the assertion is the fix. Not
+hypothetical: Task 4 of sub-project 27 shipped
+`test_the_blocked_image_batch_deletes_every_post` asserting
+`s.post.deleted is True` immediately after calling
+`delete_posts_with_blocked_images`, and it failed with `assert False is
+True` for exactly this reason before `db.session.expire_all()`
+(`tests/test_shared_tasks_deletes.py:571`) was added.
+
+**154. A TEST THAT NEEDS A REAL FILE ON DISK MUST CREATE IT INSIDE THE TEST
+PROCESS.** `compose.test.yaml`'s `test-runner` service declares exactly one
+volume, `- ./:/app:z` (`compose.test.yaml:67`), and neither it, `.env.test`
+nor the `Dockerfile` sets a `TMPDIR` override. A file written by a host-side
+command outside that one bind mount is invisible to the container process
+that actually runs the code under test; `tempfile.mkstemp()` called FROM
+INSIDE the test process lands in the container's own `/tmp`, which is
+outside the bind mount in the other direction -- invisible to the host and
+to `git status` -- but is the one location both the test and the code
+under test can see. Worked case:
+`test_the_blocked_image_batch_recalculates_cross_posts_and_removes_the_file`
+(`tests/test_shared_tasks_deletes.py:597`) needs `File.delete_from_disk()`
+to do observable work, and `make_file()` called with no arguments leaves
+`file_path`, `thumbnail_path` and `source_url` all `None`
+(`tests/factories.py:1137`), under which `delete_from_disk()`'s three
+`if self.<x>_path:` guards (`app/models.py:424`, `:436`, `:449`) make it a
+genuine no-op regardless of whether the caller under test even reached it
+-- confirmed by two mutations that survived against an earlier, path-less
+version of this test before the real file was added. The test calls
+`tempfile.mkstemp(suffix='.png')` directly and passes the resulting path to
+`make_file(file_path=...)`. **The test carries no `try`/`finally` around
+the temp file**, so a failure before the code under test unlinks it (the
+assertion this test makes at its own end) leaks the file inside the
+container's own `/tmp` -- contained, and cleared when the container is
+torn down, but real, and worth stating so the next person writing one
+knows the gap is known rather than overlooked.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
