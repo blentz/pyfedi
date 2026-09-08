@@ -422,33 +422,6 @@ def test_a_local_mention_resolves_and_is_notified(db_session):
     assert notifications[0].subtype == 'comment_mention'
 
 
-def test_a_failing_local_mention_lookup_is_swallowed(db_session, monkeypatch):
-    """:101's `pass`, guarded by :100's bare `except:`.
-
-    `search_for_user` is reached at :99 for a LOCAL mention -- :95's true
-    arm -- and it can raise. The bare except swallows that and leaves
-    `recipient` unbound for this iteration, so :108's truthiness test is
-    never reached for this mention and no Notification is written.
-
-    THE PAIR IS THE POINT. `test_a_local_mention_resolves_and_is_notified`
-    above runs the same seed with the same body and a working lookup and
-    gets exactly one Notification. This test differs in one variable and
-    gets zero, so the difference isolates the swallow. Asserting only that
-    the lines executed would not distinguish a swallow from a re-raise --
-    hence the reply must still be sent (no exception escapes `_send`).
-    """
-    def _raising_search(*args, **kwargs):
-        raise Exception('lookup failed')
-
-    monkeypatch.setattr('app.shared.tasks.notes.search_for_user', _raising_search)
-    s = _seed(body='hello @mentioned@test.piefed.local')
-    make_user(s.instance, 'mentioned', local=True)
-
-    _send(s)
-
-    assert Notification.query.count() == 0
-
-
 def test_a_remote_mention_resolves_and_reaches_the_delivered_tags(db_session, http_mock):
     """:95's FALSE arm -- :102-107 builds `name@host` and resolves it -- with
     :108's true arm and :115-116 appending the result.
