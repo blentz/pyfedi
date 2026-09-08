@@ -43,13 +43,13 @@ from app import db
 from app.constants import NOTIF_REPORT
 from app.models import ActivityPubLog, Notification
 from app.shared.tasks.deletes import (
-    delete_community, delete_post, delete_posts_with_blocked_images,
-    delete_reply, restore_community, restore_post, restore_reply,
+    delete_community, delete_pm, delete_post, delete_posts_with_blocked_images,
+    delete_reply, restore_community, restore_pm, restore_post, restore_reply,
 )
 from tests.factories import (
-    make_banned_instance, make_community, make_community_member, make_follow,
-    make_instance, make_instance_block, make_notification, make_post,
-    make_post_reply, make_user,
+    make_banned_instance, make_chat_message, make_community,
+    make_community_member, make_follow, make_instance, make_instance_block,
+    make_notification, make_post, make_post_reply, make_user,
 )
 
 PEER_INBOX = 'https://peer.example/inbox'
@@ -940,3 +940,61 @@ def test_a_local_only_community_still_reaches_the_authors_followers(
     assert _delivered_inboxes(fan_route) == {OTHER_INBOX}
     assert len(community_route.calls) == 1
     assert db.session.query(ActivityPubLog).count() == 2
+
+
+def test_delete_pm_sends_a_delete_to_the_remote_recipient(db_session, http_mock):
+    """`delete_pm:260` -> `delete_message:291` -> `:318`. Signed by the message
+    SENDER, which is a third distinct signer in this module."""
+    s = _seed(with_keys=True)
+    peer = make_instance('pm.example', software='lemmy')
+    recipient = make_user(peer, 'recipient')
+    recipient.ap_inbox_url = OTHER_INBOX
+    db.session.commit()
+    message = make_chat_message(s.user, recipient, 'https://test.piefed.local/pm/1')
+    db.session.commit()
+    route = http_mock.post(OTHER_INBOX).respond(200, json={})
+
+    delete_pm(None, message.id)
+
+    delete = _sent_activity(route)
+    assert delete['type'] == 'Delete'
+    assert delete['object'] == message.ap_id
+    assert _key_id_of(route) == s.user.public_url() + '#main-key'
+
+
+def test_restore_pm_wraps_the_delete_in_an_undo(db_session, http_mock):
+    """`restore_pm:276` -> `is_restore=True`. `:306` strips the Delete's
+    `@context` before `:312` nests it; the Undo keeps `:313`'s, and the Undo is
+    top-level, so only the NESTED absence discriminates."""
+    s = _seed(with_keys=True)
+    peer = make_instance('pm.example', software='lemmy')
+    recipient = make_user(peer, 'recipient')
+    recipient.ap_inbox_url = OTHER_INBOX
+    db.session.commit()
+    message = make_chat_message(s.user, recipient, 'https://test.piefed.local/pm/1')
+    db.session.commit()
+    route = http_mock.post(OTHER_INBOX).respond(200, json={})
+
+    restore_pm(None, message.id)
+
+    undo = _sent_activity(route)
+    assert undo['type'] == 'Undo'
+    assert undo['object']['type'] == 'Delete'
+    assert '@context' not in undo['object']
+
+
+def test_a_pm_to_a_local_recipient_sends_nothing(db_session, http_mock):
+    """`:293`'s early return, guarded by `:292`'s `recipient.is_local()`. Both
+    parties local, so there is nobody to tell.
+
+    The row count is the oracle: no route is registered, and an unmatched
+    request would be swallowed into a failure row rather than failing here."""
+    s = _seed(with_keys=True)
+    recipient = make_user(s.instance, 'local_recipient', local=True)
+    db.session.commit()
+    message = make_chat_message(s.user, recipient, 'https://test.piefed.local/pm/1')
+    db.session.commit()
+
+    delete_pm(None, message.id)
+
+    assert db.session.query(ActivityPubLog).count() == 0
