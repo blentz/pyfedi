@@ -1115,7 +1115,7 @@ def make_file(file_path: str = None, source_url: str = None) -> File:
     reading two different columns, and which one a File feeds depends on
     which community column the caller assigns it to.
 
-    `icon_image()` (app/models.py:659-671) reads `community.icon_id` /
+    `icon_image()` (app/models.py:659-683) reads `community.icon_id` /
     `community.icon` and prefers `file_path` over `source_url`.
     `header_image()` (app/models.py:686-698) reads `community.image_id` /
     `community.image` and does the same. Both rewrite either field that
