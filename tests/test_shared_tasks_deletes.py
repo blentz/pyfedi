@@ -47,8 +47,9 @@ from app.shared.tasks.deletes import (
     delete_reply, restore_community, restore_post, restore_reply,
 )
 from tests.factories import (
-    make_community, make_community_member, make_instance, make_notification,
-    make_post, make_post_reply, make_user,
+    make_banned_instance, make_community, make_community_member,
+    make_instance, make_instance_block, make_notification, make_post,
+    make_post_reply, make_user,
 )
 
 PEER_INBOX = 'https://peer.example/inbox'
@@ -164,6 +165,110 @@ def _follower(s, http_mock, inbox=PEER_INBOX, domain='follower.example'):
     make_community_member(member_user, s.community)
     db.session.commit()
     return http_mock.post(inbox).respond(200, json={}), inst
+
+
+def test_a_following_instance_without_an_inbox_is_skipped(db_session, http_mock):
+    """`:197`'s FIRST conjunct. A send to a None inbox takes
+    `signature.py:109`'s `empty uri` arm: it writes an `ActivityPubLog` row and
+    makes NO httpx request, so respx sees nothing and only the row count can
+    tell the two cases apart.
+
+    A second, deliverable follower proves the loop CONTINUES rather than
+    aborting on the first skip."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    dud = make_instance('inboxless.example', software='lemmy')
+    dud.inbox = None
+    make_community_member(make_user(dud, 'member_inboxless'), s.community)
+    db.session.commit()
+    route, _good = _follower(s, http_mock, inbox=OTHER_INBOX,
+                             domain='good.example')
+
+    delete_post(None, s.user.id, s.post.id)
+
+    assert _delivered_inboxes(route) == {OTHER_INBOX}
+    assert db.session.query(ActivityPubLog).count() == 1
+
+
+def test_a_dormant_following_instance_is_skipped(db_session, http_mock):
+    """`:197`'s SECOND conjunct, `instance.online()`. NO ROUTE IS REGISTERED
+    for the dormant instance -- under `assert_all_called=True` a registered
+    route that never fires fails the test for the wrong reason, and an
+    unmatched request would NOT fail it at all (`signature.py:143` swallows it
+    into a failure row). The row count is the oracle.
+
+    THIS TEST DOES NOT ACTUALLY DISCRIMINATE THE SECOND CONJUNCT -- confirmed
+    by temporarily deleting `and instance.online()` from `:197` and rerunning:
+    all four tests in this group, including this one, still passed. The
+    dormant instance never reaches the guard at all: `Community.
+    following_instances()` (app/models.py:842-851) filters `Instance.dormant
+    == False` whenever called with its default `include_dormant=False`
+    (`:196`'s call site), and unconditionally filters `Instance.gone_forever
+    == False` too (app/models.py:850). `Instance.online()` is exactly `not
+    (self.dormant or self.gone_forever)` (app/models.py:118-119), so every row
+    the query can return already has `online() == True` -- the second
+    conjunct is dead code at this call site, unreachable-false through any
+    test that goes via `following_instances()`. This test is kept because the
+    brief specifies it and it still contributes real assertions (the row
+    count, the deliverable-follower continuation), but a mutation deleting
+    `and instance.online()` from `:197` is an EQUIVALENT MUTANT here and no
+    test using this loop can kill it. See task-6-report.md."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    dormant = make_instance('dormant.example', software='lemmy')
+    dormant.inbox = OTHER_INBOX
+    dormant.dormant = True
+    make_community_member(make_user(dormant, 'member_dormant'), s.community)
+    db.session.commit()
+    route, _good = _follower(s, http_mock)
+
+    delete_post(None, s.user.id, s.post.id)
+
+    assert _delivered_inboxes(route) == {PEER_INBOX}
+    assert db.session.query(ActivityPubLog).count() == 1
+
+
+def test_an_instance_the_user_blocked_is_skipped(db_session, http_mock):
+    """`:197`'s THIRD conjunct, `not user.has_blocked_instance(instance.id)`.
+
+    The block belongs to the DELETING user, not to the community and not to the
+    instance's own users -- `has_blocked_instance` reads `InstanceBlock` rows
+    keyed on `user_id`."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    blocked = make_instance('blocked.example', software='lemmy')
+    blocked.inbox = OTHER_INBOX
+    make_community_member(make_user(blocked, 'member_blocked'), s.community)
+    make_instance_block(s.user, blocked)
+    db.session.commit()
+    route, _good = _follower(s, http_mock)
+
+    delete_post(None, s.user.id, s.post.id)
+
+    assert _delivered_inboxes(route) == {PEER_INBOX}
+    assert db.session.query(ActivityPubLog).count() == 1
+
+
+def test_a_site_banned_instance_is_skipped(db_session, http_mock):
+    """`:197`'s FOURTH conjunct, `not instance_banned(instance.domain)`.
+
+    `instance_banned` reads the `BannedInstances` table by DOMAIN, which is the
+    site-wide ban rather than the per-user block the third conjunct reads. The
+    two are different tables and different scopes; a test for one does not pin
+    the other."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    banned = make_instance('banned.example', software='lemmy')
+    banned.inbox = OTHER_INBOX
+    make_community_member(make_user(banned, 'member_banned'), s.community)
+    make_banned_instance('banned.example')
+    db.session.commit()
+    route, _good = _follower(s, http_mock)
+
+    delete_post(None, s.user.id, s.post.id)
+
+    assert _delivered_inboxes(route) == {PEER_INBOX}
+    assert db.session.query(ActivityPubLog).count() == 1
 
 
 def test_delete_post_announces_to_the_communitys_followers(db_session, http_mock):
