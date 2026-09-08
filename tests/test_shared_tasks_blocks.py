@@ -35,6 +35,7 @@ from types import SimpleNamespace
 import pytest
 
 from app import db
+from app.models import ActivityPubLog
 from app.shared.tasks.blocks import ban_from_community, ban_from_site
 from tests.factories import (
     make_community, make_community_member, make_instance, make_user,
@@ -202,3 +203,60 @@ def test_ban_from_community_announces_to_the_communitys_followers(
     assert announce['type'] == 'Announce'
     assert announce['object']['type'] == 'Block'
     assert '@context' not in announce['object']
+
+
+def test_a_local_only_community_ban_sends_nothing(db_session, http_mock):
+    """`:104`'s first disjunct, reached only via the community fork at `:101`."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    inst = make_instance('follower.example', software='lemmy')
+    inst.inbox = PEER_INBOX
+    member = make_user(inst, 'member_follower')
+    make_community_member(member, s.community)
+    s.community.local_only = True
+    db.session.commit()
+
+    ban_from_community(None, s.user.id, s.mod.id, s.community.id, None, 'spam')
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_a_private_community_ban_sends_nothing(db_session, http_mock):
+    """D309's site in this module, FIRST of two conjuncts this fix adds.
+
+    Before this commit `:104` read `if community.local_only:` alone, omitting
+    `private` AND the `instance.online()` check every other site in this family
+    already carried -- a WIDER gap than the eight closed before it.
+
+    `private` sits before the `online()` call: `Community.instance_id` is a
+    nullable FK and `or` short-circuits left to right, so a private community
+    with no instance row returns at the guard rather than raising. This test
+    does not assert that; reordering would reopen it without failing here.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    inst = make_instance('follower.example', software='lemmy')
+    inst.inbox = PEER_INBOX
+    member = make_user(inst, 'member_follower')
+    make_community_member(member, s.community)
+    s.community.private = True
+    db.session.commit()
+
+    ban_from_community(None, s.user.id, s.mod.id, s.community.id, None, 'spam')
+
+    assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_an_offline_community_instance_ban_sends_nothing(db_session, http_mock):
+    """The SECOND conjunct. Separated because the two fail independently."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s, online=False)
+    inst = make_instance('follower.example', software='lemmy')
+    inst.inbox = PEER_INBOX
+    member = make_user(inst, 'member_follower')
+    make_community_member(member, s.community)
+    db.session.commit()
+
+    ban_from_community(None, s.user.id, s.mod.id, s.community.id, None, 'spam')
+
+    assert db.session.query(ActivityPubLog).count() == 0
