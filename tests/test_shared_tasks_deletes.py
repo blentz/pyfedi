@@ -143,6 +143,18 @@ def _delivered_inboxes(*routes):
     return {str(r.calls[i].request.url) for r in routes for i in range(len(r.calls))}
 
 
+def _key_id_of(route, index=-1):
+    """The `keyId` the captured request was signed under.
+
+    The only observable separating `:198`'s signer (the COMMUNITY) from
+    `:202`'s and `:216`'s (the USER) and `:318`'s (the message SENDER). respx
+    never verifies a signature, so the key material leaves no trace on the
+    wire -- only the declared keyId does, which is why `_seed` copying the
+    user's keypair onto the community does not make these assertions vacuous.
+    """
+    return route.calls[index].request.headers['signature'].split('"')[1]
+
+
 def _follower(s, http_mock, inbox=PEER_INBOX, domain='follower.example'):
     """A remote instance `following_instances()` will actually return.
 
@@ -312,6 +324,42 @@ def test_a_remote_community_delete_is_sent_direct(db_session, http_mock):
     assert delete['type'] == 'Delete'
     assert delete['actor'] == s.user.public_url()
     assert delete['audience'] == s.community.public_url()
+
+
+def test_the_announce_is_signed_by_the_community(db_session, http_mock):
+    """`:198`. The local path signs as the COMMUNITY, because the Announce is
+    the community's activity even though the Delete inside it is the user's."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+
+    delete_post(None, s.user.id, s.post.id)
+
+    assert _key_id_of(route) == s.community.public_url() + '#main-key'
+
+
+def test_the_remote_delete_is_signed_by_the_user(db_session, http_mock):
+    """`:202`. No Announce is built, so the USER signs their own Delete."""
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    route = http_mock.post(PEER_INBOX).respond(200, json={})
+
+    delete_post(None, s.user.id, s.post.id)
+
+    assert _key_id_of(route) == s.user.public_url() + '#main-key'
+
+
+def test_the_two_paths_sign_differently(db_session, http_mock):
+    """The discriminator for the pair above. Without it, a mutation swapping
+    BOTH signers at once would leave each test above passing against the other
+    site's actor if the two URLs ever converged."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+
+    delete_post(None, s.user.id, s.post.id)
+
+    assert _key_id_of(route) != s.user.public_url() + '#main-key'
 
 
 def test_a_moderator_delete_still_clears_notifications(db_session, http_mock):
