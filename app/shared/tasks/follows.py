@@ -185,7 +185,7 @@ def leave_feed(send_async, user_id, feed_id):
                 return
 
             # This code is based on feed.feed_unsubscribe and leave_community above
-            if not feed.instance.gone_forever:
+            if not feed.instance.gone_forever:  # pragma: no branch -- see proof in test_shared_tasks_follows.py
                 follow_id = f"{current_app.config['SERVER_URL']}/activities/follow/{uuid}"
                 undo_id = f"{current_app.config['SERVER_URL']}/activities/undo/" + gibberish(15)
                 follow = {
