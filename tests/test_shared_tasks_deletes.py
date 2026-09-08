@@ -1,10 +1,10 @@
 """`delete_object` and its eight wrappers -- the AP Delete and Undo senders.
 
-`app/shared/tasks/deletes.py`, 320 lines. Six `@celery.task` wrappers
+`app/shared/tasks/deletes.py`, 318 lines. Six `@celery.task` wrappers
 (`delete_reply:29`, `restore_reply:44`, `delete_post:59`, `restore_post:74`,
 `delete_community:89`, `restore_community:104`) delegating to
-`delete_object:118`, plus `delete_posts_with_blocked_images:233` and a PM pair
-(`delete_pm:262`, `restore_pm:278`) over `delete_message:293`.
+`delete_object:118`, plus `delete_posts_with_blocked_images:231` and a PM pair
+(`delete_pm:260`, `restore_pm:276`) over `delete_message:291`.
 
 FOUR DELIVERY PATHS AND THREE SIGNING ACTORS, which is one more path and one
 more signer than any module this campaign has closed:
@@ -12,10 +12,10 @@ more signer than any module this campaign has closed:
       passing the FOUR-conjunct guard at `:197`, signed with the COMMUNITY key.
   `:201-203` remote community -- one direct send to `ap_inbox_url`, signed with
       the USER key.
-  `:214-218` the author's own followers -- a raw `Instance` join, signed with
+  `:212-216` the author's own followers -- a raw `Instance` join, signed with
       the USER key, skipping any domain already in `domains_sent_to`.
-  `:320` private messages -- one send to `recipient.ap_inbox_url`, signed with
-      the SENDER key, after `:294`'s local-recipient early return.
+  `:318` private messages -- one send to `recipient.ap_inbox_url`, signed with
+      the SENDER key, after `:293`'s local-recipient early return.
 
 THE GUARD AT `:127-134` IS SPLIT ACROSS THREE STATEMENTS, which is why this
 site was misread by the campaign's own register. `:127` returns for a non-post
@@ -37,13 +37,15 @@ from types import SimpleNamespace
 import pytest
 
 from app import db
-from app.models import ActivityPubLog
+from app.constants import NOTIF_REPORT
+from app.models import ActivityPubLog, Notification
 from app.shared.tasks.deletes import (
     delete_community, delete_post, delete_reply, restore_community,
     restore_post, restore_reply,
 )
 from tests.factories import (
-    make_community, make_community_member, make_instance, make_post, make_user,
+    make_community, make_community_member, make_instance, make_notification,
+    make_post, make_user,
 )
 
 PEER_INBOX = 'https://peer.example/inbox'
@@ -202,3 +204,60 @@ def test_a_remote_community_delete_is_sent_direct(db_session, http_mock):
     assert delete['type'] == 'Delete'
     assert delete['actor'] == s.user.public_url()
     assert delete['audience'] == s.community.public_url()
+
+
+def test_a_moderator_delete_still_clears_notifications(db_session, http_mock):
+    """`:221-228`'s cleanup, which `:205-206`'s early return used to skip.
+
+    A moderator delete passes `reason`; an author delete does not. Before this
+    commit the `reason` return at `:205` fired first, so a moderated removal
+    left its notifications pointing at content that no longer exists -- the
+    asymmetry running the wrong way, since moderated removals are exactly where
+    a stale notification matters.
+
+    THE ROW COUNT IS OVER `Notification`, NOT `ActivityPubLog`. The delivery
+    assertion here would pass either way: `:205` returns after both the
+    Announce loop and the direct send have already run.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+    make_notification(s.user, s.post)
+
+    delete_post(None, s.user.id, s.post.id, reason='spam')
+
+    assert db.session.query(Notification).count() == 0
+    assert len(route.calls) == 1
+
+
+def test_an_author_delete_clears_notifications_too(db_session, http_mock):
+    """The control. Without it, the test above cannot distinguish "the reason
+    return no longer blocks the cleanup" from "the cleanup runs
+    unconditionally and always did"."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+    make_notification(s.user, s.post)
+
+    delete_post(None, s.user.id, s.post.id)
+
+    assert db.session.query(Notification).count() == 0
+    assert len(route.calls) == 1
+
+
+def test_a_report_notification_survives_the_delete(db_session, http_mock):
+    """`:225-226`'s `continue`, the one arm of the cleanup loop that keeps a
+    row. Two notifications on the same post, one of them a report: the report
+    survives and the other does not, so a mutation removing the `continue`
+    fails on the count rather than on which row happens to remain."""
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+    make_notification(s.user, s.post)
+    make_notification(s.user, s.post, notif_type=NOTIF_REPORT)
+
+    delete_post(None, s.user.id, s.post.id)
+
+    assert db.session.query(Notification).count() == 1
+    assert db.session.query(Notification).one().notif_type == NOTIF_REPORT
+    assert len(route.calls) == 1

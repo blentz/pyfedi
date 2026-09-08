@@ -202,10 +202,8 @@ def delete_object(user_id, object, is_post=False, is_restore=False, reason=None,
         send_post_request(community.ap_inbox_url, payload, user.private_key, user.public_url() + '#main-key')
         domains_sent_to.append(community.instance.domain)
 
-    if reason:
-        return
 
-    if is_post and followers:
+    if is_post and followers and not reason:
         payload = undo if is_restore else delete
         for follower in followers:
             user_details = session.query(User).get(follower.remote_user_id)
