@@ -41,7 +41,7 @@ import socket
 from types import SimpleNamespace
 
 import pytest
-from flask import current_app
+from flask import current_app, get_flashed_messages
 
 from app import db
 from app.constants import SRC_API, SRC_PLD, SRC_WEB
@@ -250,18 +250,25 @@ def test_joining_flashes_and_returns_none_for_src_web(db_session, http_mock):
     failure looks like a bug in the task rather than in the test.
 
     Second, pushing that context DISABLES `patch_db_session`:
-    `app/utils.py:3685` is `if has_request_context(): yield; return`. So
+    `app/utils.py:3685-3688` is `if has_request_context(): yield; return`. So
     `db.session` is NOT the task's session here, and every assertion below
     goes through a fresh query for that reason. An attribute read on an object
     this test built earlier would see the test's own session, not the task's.
+
+    `get_flashed_messages` is read inside the same request context, before
+    the context is popped -- flashed messages live in the request/session
+    machinery, not in anything either fixture's teardown would preserve.
     """
     s = _seed(with_keys=True)
 
     with current_app.test_request_context('/'):
         result = join_community(None, s.user.id, s.community.id, SRC_WEB)
+        messages = get_flashed_messages()
 
     assert result is None
     assert db.session.query(ActivityPubLog).count() == 0
+    assert len(messages) == 1
+    assert s.community.display_name() in messages[0]
 
 
 def test_a_banned_user_cannot_join_and_raises_for_src_api(db_session, http_mock):
