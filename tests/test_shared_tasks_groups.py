@@ -6,7 +6,7 @@ campaign has closed. Most of that density is `:85-116`, where four optional
 fields each add an arm and two of them branch AGAIN on whether the stored
 image url is absolute (`:90`, `:101`).
 
-TWO EARLY RETURNS, AND THE SECOND IS ONLY REACHABLE PAST THE FIRST. `:59`
+TWO EARLY RETURNS, AND THE SECOND IS ONLY REACHABLE PAST THE FIRST. `:59-60`
 returns if the community is `local_only`, `private`, or its instance is not
 `online()`; `:62-63` returns unless the acting user moderates the community.
 `Community.is_moderator` (app/models.py:736-740) checks `moderator.user_id ==
