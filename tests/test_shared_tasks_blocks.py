@@ -36,12 +36,16 @@ import pytest
 
 from app import db
 from app.models import ActivityPubLog
-from app.shared.tasks.blocks import ban_from_community, ban_from_site
+from app.shared.tasks.blocks import (
+    ban_from_community, ban_from_site, unban_from_community, unban_from_site,
+)
 from tests.factories import (
     make_community, make_community_member, make_instance, make_user,
 )
 
 PEER_INBOX = 'https://peer.example/inbox'
+OTHER_INBOX = 'https://other.example/inbox'
+LOCAL_INBOX = 'https://test.piefed.local/inbox'
 
 _REAL_GETADDRINFO = socket.getaddrinfo
 _EXAMPLE_TLD_ADDRESS = '93.184.216.34'
@@ -260,3 +264,111 @@ def test_an_offline_community_instance_ban_sends_nothing(db_session, http_mock):
     ban_from_community(None, s.user.id, s.mod.id, s.community.id, None, 'spam')
 
     assert db.session.query(ActivityPubLog).count() == 0
+
+
+def test_unban_from_site_wraps_the_block_in_an_undo(db_session, http_mock):
+    """`unban_from_site:55` -> `is_undo=True` on the instance fork.
+
+    `:136` strips the Block's `@context` before `:142` nests it; `:151` strips
+    the Undo's own. On this path the Undo is the top-level object, so the
+    reinjection at `signature.py:100-101` supplies one anyway -- which is why
+    the NESTED absence is the assertion that discriminates and the top-level
+    presence is not asserted at all.
+    """
+    s = _seed(with_keys=True)
+    route, _inst = _site_instance(http_mock)
+
+    unban_from_site(None, s.user.id, s.mod.id, None, 'appealed')
+
+    undo = _sent_activity(route)
+    assert undo['type'] == 'Undo'
+    assert undo['object']['type'] == 'Block'
+    assert '@context' not in undo['object']
+
+
+def test_unban_from_community_announces_a_nested_undo(db_session, http_mock):
+    """`unban_from_community:83` on a local community: three levels, with
+    `@context` at the top only.
+
+    `:136` strips the Block, `:151` strips the Undo, and `:180` gives the
+    Announce its own. Both inner absences fail independently.
+    """
+    s = _seed(with_keys=True)
+    _make_deliverable(s)
+    route, _inst = _follower(s, http_mock)
+
+    unban_from_community(None, s.user.id, s.mod.id, s.community.id, None, 'ok')
+
+    announce = _sent_activity(route)
+    assert announce['object']['type'] == 'Undo'
+    assert '@context' not in announce['object']
+    assert announce['object']['object']['type'] == 'Block'
+    assert '@context' not in announce['object']['object']
+
+
+def test_a_remote_community_ban_is_sent_direct(db_session, http_mock):
+    """`:166-168`. `community.is_local()` is False, so no Announce is built and
+    the Block goes straight to the community's own inbox signed with the MOD's
+    key rather than the community's.
+
+    `:103` sets `communities = []` for a non-local community, which is why the
+    loop at `:172` would have nothing to iterate even if `:168` did not return
+    first.
+    """
+    s = _seed(local_community=False, with_keys=True)
+    _make_deliverable(s)
+    route = http_mock.post(PEER_INBOX).respond(200, json={})
+
+    ban_from_community(None, s.user.id, s.mod.id, s.community.id, None, 'spam')
+
+    block = _sent_activity(route)
+    assert block['type'] == 'Block'
+    assert block['audience'] == s.community.public_url()
+
+
+def test_a_mastodon_instance_receives_no_site_ban(db_session, http_mock):
+    """`:159`'s `Instance.software != 'mastodon'` filter.
+
+    NO ROUTE IS REGISTERED for the mastodon instance -- under
+    `assert_all_called=True` a registered route that never fires would fail
+    this test for the wrong reason, while an unexpected send would surface as
+    an unmatched request.
+    """
+    s = _seed(with_keys=True)
+    masto = make_instance('masto.example', software='mastodon')
+    masto.inbox = OTHER_INBOX
+    db.session.commit()
+    route, _inst = _site_instance(http_mock)
+
+    ban_from_site(None, s.user.id, s.mod.id, None, 'spam', False)
+
+    assert _delivered_inboxes(route) == {PEER_INBOX}
+
+
+def test_the_local_instance_receives_no_site_ban(db_session, http_mock):
+    """`:161`'s `instance.id != 1` conjunct, isolated from the other two.
+
+    `_seed`'s local instance is built by `make_instance`, which never sets
+    `inbox` (tests/factories.py:33-37) -- so left alone it would already be
+    excluded by `:161`'s FIRST conjunct, `instance.inbox`, discriminating
+    nothing about `id != 1`. This test assigns `LOCAL_INBOX` to that instance
+    deliberately, so the first two conjuncts (`instance.inbox`,
+    `instance.online()`) both pass and `id != 1` is the only thing left to
+    exclude it. `LOCAL_INBOX` is registered with no route: if `id != 1` ever
+    stopped excluding this row, the send would hit an unmatched request under
+    `assert_all_called=True` rather than silently succeeding.
+
+    The sequence reset in tests/conftest.py (see the comment at :189-190)
+    makes `_seed`'s first instance id 1, which this test confirms explicitly
+    rather than assuming.
+    """
+    s = _seed(with_keys=True)
+    s.instance.inbox = LOCAL_INBOX
+    db.session.commit()
+    assert s.instance.id == 1
+    route, _inst = _site_instance(http_mock)
+
+    ban_from_site(None, s.user.id, s.mod.id, None, 'spam', False)
+
+    assert _delivered_inboxes(route) == {PEER_INBOX}
+    assert len(route.calls) == 1
