@@ -828,7 +828,15 @@ def test_a_post_delete_reaches_the_authors_own_followers(db_session, http_mock):
 
     `:211` appends each follower's actor URL to the payload's `cc`, so the
     delivered activity carries the follower -- that is the assertion that
-    proves the loop at `:210` ran, rather than merely that a request arrived.
+    proves the loop at `:208` ran, rather than merely that a request arrived.
+
+    THE ROW COUNT, NOT JUST THE SET. `_delivered_inboxes` is a set: a
+    regression that sent to `fan_route` TWICE would still show `{OTHER_INBOX}`
+    and pass silently. Exactly two sends happen on this path -- the remote
+    community's direct Delete at `:202` and the one fan-out send at `:216` --
+    so `ActivityPubLog.count() == 2` is the oracle a duplicate send cannot
+    slip past (`signature.py:105` writes one row per `post_request` call,
+    unconditionally, before the transport).
     """
     s = _seed(local_community=False, with_keys=True)
     _make_deliverable(s)
@@ -840,6 +848,7 @@ def test_a_post_delete_reaches_the_authors_own_followers(db_session, http_mock):
     assert _delivered_inboxes(fan_route) == {OTHER_INBOX}
     assert fan.public_url() in _sent_activity(fan_route)['cc']
     assert len(community_route.calls) == 1
+    assert db.session.query(ActivityPubLog).count() == 2
 
 
 def test_a_reply_delete_does_not_reach_the_authors_followers(db_session, http_mock):
@@ -878,7 +887,7 @@ def test_a_moderated_post_delete_skips_the_follower_fanout(db_session, http_mock
 
 def test_a_follower_on_an_already_notified_domain_is_not_sent_to_twice(
         db_session, http_mock):
-    """`:214`'s `if instance.domain not in domains_sent_to`. The follower lives
+    """`:215`'s `if instance.domain not in domains_sent_to`. The follower lives
     on the SAME instance as the remote community, which `:203` already added to
     `domains_sent_to`, so the fan-out skips it.
 
@@ -908,6 +917,16 @@ def test_a_local_only_community_still_reaches_the_authors_followers(
     an author who DOES have followers passes both guards and goes on to reach
     them. That is the one state in which `:127` and `:130` differ from each
     other, and no other test in this file constructs it.
+
+    THE ROW COUNT COVERS BOTH SENDS, NOT JUST THE FAN-OUT. `local_only` does
+    not touch the remote-community branch at `:200-203` -- this test never
+    previously asserted anything about `community_route` or the total number
+    of sends, so a regression sending the community's own Delete twice (or the
+    fan-out twice) would have passed. As in the sibling test above, exactly
+    two sends happen here -- the remote community's direct Delete at `:202`
+    and the fan-out send at `:216` -- so `ActivityPubLog.count() == 2`, not
+    the `_delivered_inboxes` set, is what a duplicate of either send cannot
+    slip past.
     """
     s = _seed(local_community=False, with_keys=True)
     _make_deliverable(s)
@@ -919,3 +938,5 @@ def test_a_local_only_community_still_reaches_the_authors_followers(
     delete_post(None, s.user.id, s.post.id)
 
     assert _delivered_inboxes(fan_route) == {OTHER_INBOX}
+    assert len(community_route.calls) == 1
+    assert db.session.query(ActivityPubLog).count() == 2
