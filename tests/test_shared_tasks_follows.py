@@ -236,3 +236,28 @@ def test_joining_returns_the_preload_status_for_src_pld(db_session, http_mock):
     result = join_community(None, s.user.id, s.community.id, SRC_PLD)
 
     assert result == {'status': 'joined'}
+
+
+def test_joining_flashes_and_returns_none_for_src_web(db_session, http_mock):
+    """`:96-98`'s `flash`, guarded by `:95`'s `src == SRC_WEB`.
+
+    TWO THINGS ABOUT THIS TEST ARE LOAD-BEARING AND NEITHER IS OBVIOUS.
+
+    First, `flash()` requires a request context and `tests/conftest.py:112`
+    pushes only an app context, so the test pushes its own. Without it the
+    task raises `RuntimeError: Working outside of request context` and the
+    failure looks like a bug in the task rather than in the test.
+
+    Second, pushing that context DISABLES `patch_db_session`:
+    `app/utils.py:3685` is `if has_request_context(): yield; return`. So
+    `db.session` is NOT the task's session here, and every assertion below
+    goes through a fresh query for that reason. An attribute read on an object
+    this test built earlier would see the test's own session, not the task's.
+    """
+    s = _seed(with_keys=True)
+
+    with current_app.test_request_context('/'):
+        result = join_community(None, s.user.id, s.community.id, SRC_WEB)
+
+    assert result is None
+    assert db.session.query(ActivityPubLog).count() == 0
