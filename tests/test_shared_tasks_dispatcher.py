@@ -1,6 +1,6 @@
 """`task_selector` -- the dispatcher every task in this package routes through.
 
-`app/shared/tasks/__init__.py:61-68`. Twenty statements, and until this file
+`app/shared/tasks/__init__.py:62-68`. Twenty statements, and until this file
 existed it sat at 83.3333% with two missing: `:63`'s debug override and `:68`'s
 SYNCHRONOUS dispatch arm.
 

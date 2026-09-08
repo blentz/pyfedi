@@ -20,7 +20,10 @@ THREE DELIVERY PATHS, AND ONLY THE THIRD USES `following_instances()`:
   `:172-190` local communities -- an Announce per community, delivered to each
       `following_instances()` row passing `instance.inbox and
       instance.online()`, plus a FALLBACK send at `:190` to the banned user's
-      own instance when it was not already covered.
+      own instance, guarded by all FOUR conjuncts at `:189-190` --
+      `user.instance_id not in sent_to and user.instance and
+      user.instance.inbox and user.instance.online()` -- not merely by whether
+      it was already covered by the Announce loop.
 
 THE FALLBACK EXISTS FOR A REASON THE COMMENT AT `:189` STATES:
 `following_instances()` excludes instances whose only follower was the person
@@ -106,6 +109,75 @@ def _delivered_inboxes(*routes):
     return {str(r.calls[i].request.url) for r in routes for i in range(len(r.calls))}
 
 
+def _key_id_of(route, index=-1):
+    """The `keyId` the captured request was signed under.
+
+    The only observable separating the MOD's signer (`:162`'s site fan-out,
+    `:167`'s remote-community send) from the COMMUNITY's (`:188`'s Announce,
+    `:190`'s fallback). respx never verifies a signature, so the key material
+    leaves no trace on the wire -- only the declared keyId does. This works
+    even though `_seed(with_keys=True)` copies the mod's keypair onto the
+    community (`community.private_key = mod.private_key`): the key MATERIAL is
+    identical, but `mod.public_url()` and `community.public_url()` differ, so
+    the keyId still discriminates which actor `send_post_request` was told to
+    sign as.
+
+    Adapted from `tests/test_shared_tasks_add_remove.py:203`.
+    """
+    return route.calls[index].request.headers['signature'].split('"')[1]
+
+
+def _recording_task_session(monkeypatch):
+    """Make `get_task_session` hand back a GENUINE Session that records
+    `rollback()` and `close()`.
+
+    THE NINTH COPY of a helper that also lives in
+    tests/test_shared_tasks_add_remove.py, test_shared_tasks_flags.py,
+    test_shared_tasks_groups.py, test_shared_tasks_likes.py,
+    test_shared_tasks_locks.py, test_shared_tasks_send_answer.py,
+    test_shared_tasks_send_post.py and test_shared_tasks_send_reply.py.
+    Duplicated rather than imported: this campaign keeps its test modules
+    independent so a helper can be edited for one function's needs without
+    silently changing another's assertions.
+
+    The session is real -- only the observation is added, by wrapping the two
+    methods rather than replacing the object. A fake session would prove the
+    wrapper calls methods on a mock; this proves it calls them on the session
+    the function actually used.
+
+    THE PATCH TARGET IS THE BLOCKS MODULE, NOT `app.utils`. `blocks.py:6`
+    imports `get_task_session` into the blocks namespace and each of
+    `ban_from_site`, `unban_from_site`, `ban_from_community` and
+    `unban_from_community` resolves it there (`:43`, `:57`, `:71`, `:85`).
+    Patching `app.utils.get_task_session` would apply cleanly, observe
+    nothing, and leave the assertion trivially true against an empty list.
+    """
+    from app import db as _db
+    from sqlalchemy.orm import Session as _Session
+    import app.shared.tasks.blocks as blocks_module
+
+    record = SimpleNamespace(calls=[])
+
+    def _make():
+        session = _Session(bind=_db.engine)
+        real_rollback, real_close = session.rollback, session.close
+
+        def rollback():
+            record.calls.append('rollback')
+            return real_rollback()
+
+        def close():
+            record.calls.append('close')
+            return real_close()
+
+        session.rollback = rollback
+        session.close = close
+        return session
+
+    monkeypatch.setattr(blocks_module, 'get_task_session', _make)
+    return record
+
+
 def _seed(local_community=True, with_keys=False):
     """instance, user, mod, community -- committed.
 
@@ -171,8 +243,8 @@ def _site_instance(http_mock, domain='peer.example', software='lemmy',
 def test_ban_from_site_fans_out_to_every_non_mastodon_instance(
         db_session, http_mock):
     """`ban_from_site:41` end to end: the instance-ban fork at `:108-112`, the
-    Block envelope at `:116-129`, `:133`'s audience, and the site fan-out at
-    `:158-163`.
+    Block envelope at `:116-129`, `:133`'s audience, the site fan-out at
+    `:158-163`, and `:162`'s signer -- the MOD's key, not the community's.
 
     The Block goes out UNWRAPPED on this path -- there is no Announce -- so no
     `@context` assertion belongs on it: `signature.py:100-101` reinjects at the
@@ -188,12 +260,15 @@ def test_ban_from_site_fans_out_to_every_non_mastodon_instance(
     assert block['object'] == s.user.public_url()
     assert block['actor'] == s.mod.public_url()
     assert block['target'].endswith('/')
+    assert block['audience'] == block['target']
+    assert _key_id_of(route) == s.mod.public_url() + '#main-key'
 
 
 def test_ban_from_community_announces_to_the_communitys_followers(
         db_session, http_mock):
     """`ban_from_community:69` on a LOCAL community: the community fork at
-    `:102-107`, `:131`'s audience, and the Announce loop at `:172-188`.
+    `:102-107`, `:131`'s audience, the Announce loop at `:172-188`, and
+    `:188`'s signer -- the COMMUNITY's key, not the mod's.
 
     The nested `@context` absence discriminates -- `:154` deletes it from the
     Block before `:179` nests it, and the reinjection never reaches inside.
@@ -208,6 +283,7 @@ def test_ban_from_community_announces_to_the_communitys_followers(
     assert announce['type'] == 'Announce'
     assert announce['object']['type'] == 'Block'
     assert '@context' not in announce['object']
+    assert _key_id_of(route) == s.community.public_url() + '#main-key'
 
 
 def test_a_local_only_community_ban_sends_nothing(db_session, http_mock):
@@ -312,6 +388,15 @@ def test_a_remote_community_ban_is_sent_direct(db_session, http_mock):
     the Block goes straight to the community's own inbox signed with the MOD's
     key rather than the community's.
 
+    THE KEYID IS THE ONLY OBSERVABLE THAT DISCRIMINATES `:167`'s signer.
+    `:131` sets `block['audience']` to `community.public_url()` on EVERY
+    community-ban path, so an assertion on `audience` alone cannot tell this
+    test apart from one where `:167` signed with the community's key instead
+    of the mod's -- `_seed(with_keys=True)` even copies the mod's key MATERIAL
+    onto the community, so the signature bytes are identical either way. Only
+    the declared `keyId` -- `mod.public_url()` vs `community.public_url()` --
+    tells the two apart.
+
     `:103` sets `communities = []` for a non-local community, which is why the
     loop at `:172` would have nothing to iterate even if `:168` did not return
     first.
@@ -325,6 +410,7 @@ def test_a_remote_community_ban_is_sent_direct(db_session, http_mock):
     block = _sent_activity(route)
     assert block['type'] == 'Block'
     assert block['audience'] == s.community.public_url()
+    assert _key_id_of(route) == s.mod.public_url() + '#main-key'
 
 
 def test_a_mastodon_instance_receives_no_site_ban(db_session, http_mock):
@@ -393,7 +479,9 @@ def test_the_local_instance_receives_no_site_ban(db_session, http_mock):
 def test_the_banned_users_own_instance_is_told_even_when_not_a_follower(
         db_session, http_mock):
     """`:189-190`'s fallback, and the behaviour the comment there exists to
-    protect.
+    protect. Also pins `:190`'s signer -- the COMMUNITY's key, not the mod's,
+    the same as the Announce loop's own `:188` since both sends are the same
+    `announce` object built once at `:175-183` and re-signed per recipient.
 
     The banned user is on an instance that is NOT among the community's
     followers, so `following_instances()` never returns it and `sent_to` never
@@ -414,6 +502,7 @@ def test_the_banned_users_own_instance_is_told_even_when_not_a_follower(
 
     assert _delivered_inboxes(follower_route, home_route) == {PEER_INBOX,
                                                               OTHER_INBOX}
+    assert _key_id_of(home_route) == s.community.public_url() + '#main-key'
 
 
 def test_a_banned_user_with_no_instance_row_does_not_crash(
@@ -607,43 +696,66 @@ def test_a_community_follower_without_an_inbox_is_skipped(
     assert db.session.query(ActivityPubLog).count() == 1
 
 
-def test_ban_from_site_rolls_back_and_reraises_on_error(db_session, http_mock):
+def test_ban_from_site_rolls_back_and_reraises_on_error(
+        db_session, http_mock, monkeypatch):
     """`:47-49`. A nonexistent `user_id` leaves `user` as `None`
     (`Session.get` on a missing row, `:99`), so `user.public_url()` at `:120`
     raises `AttributeError` before any send is attempted. The wrapper's
     `except Exception:` must roll the session back and re-raise rather than
-    swallow it."""
+    swallow it.
+
+    THE RECORDED ORDER is what proves `rollback` runs before `close` rather
+    than merely that both eventually run; a bare `pytest.raises` (this test's
+    entire assertion before this fix) would be satisfied by a handler that
+    swallowed the exception, or that closed the session before rolling it
+    back, or that never touched the session at all -- see this file's Task
+    26 fix-round finding: replacing `session.rollback()` with `pass` at
+    `:48`, `:62`, `:76` and `:90` left the un-fixed version of this test
+    passing."""
     s = _seed(with_keys=True)
+    record = _recording_task_session(monkeypatch)
 
     with pytest.raises(AttributeError):
         ban_from_site(None, 9999999, s.mod.id, None, 'spam', False)
 
+    assert record.calls == ['rollback', 'close']
 
-def test_unban_from_site_rolls_back_and_reraises_on_error(db_session, http_mock):
+
+def test_unban_from_site_rolls_back_and_reraises_on_error(
+        db_session, http_mock, monkeypatch):
     """`:61-63`, the same shape on the undo wrapper."""
     s = _seed(with_keys=True)
+    record = _recording_task_session(monkeypatch)
 
     with pytest.raises(AttributeError):
         unban_from_site(None, 9999999, s.mod.id, None, 'appealed')
 
+    assert record.calls == ['rollback', 'close']
+
 
 def test_ban_from_community_rolls_back_and_reraises_on_error(
-        db_session, http_mock):
+        db_session, http_mock, monkeypatch):
     """`:75-77`. `s.community` is local, not private, on an online instance,
     so the guard at `:104` does not fire and `ban_person` reaches `:120`'s
     `user.public_url()` with `user` still `None`."""
     s = _seed(with_keys=True)
+    record = _recording_task_session(monkeypatch)
 
     with pytest.raises(AttributeError):
         ban_from_community(None, 9999999, s.mod.id, s.community.id, None,
                            'spam')
 
+    assert record.calls == ['rollback', 'close']
+
 
 def test_unban_from_community_rolls_back_and_reraises_on_error(
-        db_session, http_mock):
+        db_session, http_mock, monkeypatch):
     """`:89-91`, the same shape on the undo wrapper."""
     s = _seed(with_keys=True)
+    record = _recording_task_session(monkeypatch)
 
     with pytest.raises(AttributeError):
         unban_from_community(None, 9999999, s.mod.id, s.community.id, None,
                              'ok')
+
+    assert record.calls == ['rollback', 'close']
