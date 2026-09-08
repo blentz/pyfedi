@@ -1,6 +1,6 @@
 """The five follow and unfollow tasks -- AP Follow and Undo senders.
 
-`app/shared/tasks/follows.py`, 278 lines. Five `@celery.task` functions:
+`app/shared/tasks/follows.py`, 279 lines. Five `@celery.task` functions:
 `join_community:39`, `leave_community:112`, `leave_feed:162`,
 `follow_user:215` and `unfollow_user:243`.
 
@@ -30,7 +30,7 @@ objects the task touched.
 
 THIS MODULE NEVER READS `Instance.inbox`. Every send in it targets an
 ACTOR-level url instead -- `community.ap_inbox_url` (`:88`, `:153`),
-`feed.ap_inbox_url` (`:205`), `to_follow.ap_inbox_url` (`:234`, `:273`). The
+`feed.ap_inbox_url` (`:205`), `to_follow.ap_inbox_url` (`:234`, `:274`). The
 four fan-out modules this campaign closed before it all deliver to
 `instance.inbox`, so their harnesses set that field; a helper copied from one
 of them into this module's tests would set a field nothing here consumes.
@@ -420,6 +420,52 @@ def test_leaving_a_remote_community_sends_an_undo(db_session, http_mock):
     leave_community(None, s.user.id, s.community.id)
 
     assert db.session.query(CommunityJoinRequest).count() == 0
+    undo = _sent_activity(route)
+    assert undo['type'] == 'Undo'
+    assert undo['object']['type'] == 'Follow'
+    assert undo['object']['id'].endswith(expected_uuid)
+
+
+def test_unfollowing_sends_an_undo_carrying_the_original_follow_id(db_session, http_mock):
+    """`:251-255`. Unfollowing a remote user deletes the `UserFollowRequest`
+    and sends an Undo wrapping the original Follow.
+
+    SAME DEFECT, SAME FIX, AS `leave_community:126`. `:255`'s
+    `to_follow_ap_id` is built from the uuid captured at `:252`, before
+    `:253`'s `session.delete` -- so the remote end can match the Undo to the
+    Follow it originally received. `leave_feed:178` already captures first
+    too; `unfollow_user` was the only one of the three left with the wrong
+    order, and the `if join_request:` guard at `:251` was never the problem
+    here -- only the ordering under it was.
+
+    THIS TEST DOES NOT OBSERVE A CRASH -- it passes both before and after
+    the `:252` capture was added. Before that line existed, `:255`'s
+    equivalent read `join_request.uuid` directly off the
+    already-deleted-and-committed instance; per the container probe run for
+    `leave_community` (task-5-report.md), that read succeeds rather than
+    raising `ObjectDeletedError`, because `Session.commit()` EXPUNGES a
+    just-deleted instance instead of expiring it -- a detached object's
+    attributes are whatever was already loaded, no reload, no error. So the
+    pre-fix code already produced the right uuid here too, by accident of
+    that undocumented detach-not-expire behaviour. This test's value is
+    pinning the id's PROVENANCE -- asserting it against the uuid captured
+    before `unfollow_user` ever touches the row -- not catching a crash that
+    does not occur. This is defensive hardening against relying on that
+    undocumented behaviour, not a crash fix.
+    """
+    s = _seed(with_keys=True)
+    peer = make_instance('peer.example', software='lemmy')
+    target = make_user(peer, 'target')
+    target.ap_inbox_url = PEER_INBOX
+    db.session.commit()
+    request = make_user_follow_request(s.user, target)
+    expected_uuid = str(request.uuid)
+    db.session.commit()
+    route = _peer_route(http_mock)
+
+    unfollow_user(target.id, s.user.id, send_async=False)
+
+    assert db.session.query(UserFollowRequest).count() == 0
     undo = _sent_activity(route)
     assert undo['type'] == 'Undo'
     assert undo['object']['type'] == 'Follow'
