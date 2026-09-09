@@ -113,3 +113,95 @@ class TestCleanupSendQueue:
 
         with pytest.raises(RuntimeError, match='the task itself failed'):
             cleanup_send_queue()
+
+
+class TestCleanupOldNotifications:
+    """`cleanup_old_notifications:25` -- TWO tables, TWO cutoffs.
+
+    `:29-30` deletes Notification rows older than 90 days; `:33-34` deletes
+    RevokedToken rows older than 365 days. The docstring at `:26` names only
+    the first, which is registered as a finding rather than fixed.
+    """
+
+    def test_a_notification_older_than_ninety_days_is_removed(self, db_session):
+        _, user, _, post = _seed()
+        old = make_notification(user, post)
+        old.created_at = utcnow() - timedelta(days=91)
+        db.session.commit()
+
+        cleanup_old_notifications()
+
+        assert db.session.query(Notification).count() == 0
+
+    def test_a_notification_inside_ninety_days_survives(self, db_session):
+        _, user, _, post = _seed()
+        fresh = make_notification(user, post)
+        fresh.created_at = utcnow() - timedelta(days=89)
+        db.session.commit()
+
+        cleanup_old_notifications()
+
+        assert db.session.query(Notification).count() == 1
+
+    def test_the_two_cutoffs_are_different(self, db_session):
+        """A RevokedToken 100 days old outlives a Notification 100 days old.
+
+        This is the assertion that fails if `:33`'s 365 is changed to 90, or
+        if the RevokedToken delete is dropped onto the notification cutoff.
+        Neither of the two single-table tests above can see that.
+        """
+        _, user, _, post = _seed()
+        notification = make_notification(user, post)
+        notification.created_at = utcnow() - timedelta(days=100)
+        token = RevokedToken(jti='a-hundred-days-old',
+                             revoked_at=utcnow() - timedelta(days=100))
+        db.session.add(token)
+        db.session.commit()
+
+        cleanup_old_notifications()
+
+        assert db.session.query(Notification).count() == 0
+        assert db.session.query(RevokedToken).count() == 1
+
+    def test_a_revoked_token_older_than_a_year_is_removed(self, db_session):
+        token = RevokedToken(jti='old', revoked_at=utcnow() - timedelta(days=366))
+        db.session.add(token)
+        db.session.commit()
+
+        cleanup_old_notifications()
+
+        assert db.session.query(RevokedToken).count() == 0
+
+    def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch):
+        monkeypatch.setattr('app.shared.tasks.maintenance.utcnow', _boom)
+
+        with pytest.raises(RuntimeError, match='the task itself failed'):
+            cleanup_old_notifications()
+
+
+class TestCleanupOldActivityPubLogs:
+    """`cleanup_old_activitypub_logs:872` -- logs older than three days."""
+
+    def test_a_log_older_than_three_days_is_removed(self, db_session):
+        log = make_activitypub_log('https://peer.example/activities/create/1')
+        log.created_at = utcnow() - timedelta(days=4)
+        db.session.commit()
+
+        cleanup_old_activitypub_logs()
+
+        assert db.session.query(ActivityPubLog).count() == 0
+
+    def test_a_log_inside_three_days_survives(self, db_session):
+        log = make_activitypub_log('https://peer.example/activities/create/2')
+        log.created_at = utcnow() - timedelta(days=2)
+        db.session.commit()
+
+        cleanup_old_activitypub_logs()
+
+        assert db.session.query(ActivityPubLog).count() == 1
+
+    def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch):
+        monkeypatch.setattr('app.shared.tasks.maintenance.utcnow', _boom)
+
+        with pytest.raises(RuntimeError, match='the task itself failed'):
+            cleanup_old_activitypub_logs()
