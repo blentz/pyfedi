@@ -384,3 +384,123 @@ class TestUpdateHashtagCounts:
 
         with pytest.raises(RuntimeError, match='the task itself failed'):
             update_hashtag_counts()
+
+
+class TestCleanupOldVotingData:
+    """`cleanup_old_voting_data:327` -- four DELETEs behind two config guards.
+
+    `:334`'s `if local_months != -1` and `:359`'s `if remote_months != -1` read
+    `KEEP_LOCAL_VOTE_DATA_TIME` and `KEEP_REMOTE_VOTE_DATA_TIME`
+    (config.py:177-178, both defaulting to 6). The cutoff is 28 days per month,
+    so at the default a vote older than 168 days goes and one younger stays.
+
+    LOCAL AND REMOTE ARE `instance_id = 1` AND `instance_id != 1`. The
+    `db_session` fixture resets sequences, so the first `make_instance` in a
+    test receives id 1; a test that wants both kinds of voter builds two
+    instances and takes the first as local.
+    """
+
+    def _two_voters_with_votes(self, age_days):
+        """A local voter and a remote voter, each with a post vote and a reply
+        vote of the given age. Returns (local_user, remote_user)."""
+        local_instance = make_instance('local.example')
+        remote_instance = make_instance('remote.example')
+        assert local_instance.id == 1
+        local_user = make_user(local_instance, 'homebody', local=True)
+        remote_user = make_user(remote_instance, 'visitor')
+        community = make_community()
+        post = make_post(community, local_user, 'https://local.example/p/1')
+        reply = make_post_reply(post, local_user)
+        stamp = utcnow() - timedelta(days=age_days)
+        for voter in (local_user, remote_user):
+            post_vote = make_post_vote(voter, post, 1.0)
+            reply_vote = make_post_reply_vote(voter, reply, 1.0)
+            post_vote.created_at = stamp
+            reply_vote.created_at = stamp
+        db.session.commit()
+        return local_user, remote_user
+
+    def _vote_counts(self):
+        return (
+            db.session.execute(db.text('SELECT COUNT(*) FROM post_vote')).scalar(),
+            db.session.execute(db.text('SELECT COUNT(*) FROM post_reply_vote')).scalar(),
+        )
+
+    def test_old_votes_from_both_kinds_of_voter_are_removed(self, db_session):
+        self._two_voters_with_votes(age_days=28 * 6 + 1)
+
+        cleanup_old_voting_data()
+
+        assert self._vote_counts() == (0, 0)
+
+    def test_recent_votes_survive(self, db_session):
+        self._two_voters_with_votes(age_days=28 * 6 - 1)
+
+        cleanup_old_voting_data()
+
+        assert self._vote_counts() == (2, 2)
+
+    def test_minus_one_for_local_keeps_local_votes_and_drops_remote(self, db_session, app):
+        """`:334`'s false arm. -1 means "keep local vote data forever".
+
+        The remote deletes still run, so this test also proves the two guards
+        are independent rather than one guard read twice. The survivor is
+        named by `user_id` rather than just counted, so the test fails if the
+        task drops the local vote and keeps the remote one instead.
+        """
+        local_user, remote_user = self._two_voters_with_votes(age_days=28 * 6 + 1)
+        app.config['KEEP_LOCAL_VOTE_DATA_TIME'] = -1
+
+        try:
+            cleanup_old_voting_data()
+        finally:
+            app.config['KEEP_LOCAL_VOTE_DATA_TIME'] = 6
+
+        surviving_post_voters = set(db.session.execute(db.text(
+            'SELECT user_id FROM post_vote')).scalars().all())
+        surviving_reply_voters = set(db.session.execute(db.text(
+            'SELECT user_id FROM post_reply_vote')).scalars().all())
+        assert surviving_post_voters == {local_user.id}
+        assert surviving_reply_voters == {local_user.id}
+
+    def test_minus_one_for_remote_keeps_remote_votes_and_drops_local(self, db_session, app):
+        """`:359`'s false arm, the mirror of the test above.
+
+        The survivor is named by `user_id` rather than just counted, so the
+        test fails if the task drops the remote vote and keeps the local one
+        instead.
+        """
+        local_user, remote_user = self._two_voters_with_votes(age_days=28 * 6 + 1)
+        app.config['KEEP_REMOTE_VOTE_DATA_TIME'] = -1
+
+        try:
+            cleanup_old_voting_data()
+        finally:
+            app.config['KEEP_REMOTE_VOTE_DATA_TIME'] = 6
+
+        surviving_post_voters = set(db.session.execute(db.text(
+            'SELECT user_id FROM post_vote')).scalars().all())
+        surviving_reply_voters = set(db.session.execute(db.text(
+            'SELECT user_id FROM post_reply_vote')).scalars().all())
+        assert surviving_post_voters == {remote_user.id}
+        assert surviving_reply_voters == {remote_user.id}
+
+    def test_minus_one_for_both_deletes_nothing(self, db_session, app):
+        """Both false arms at once -- the task becomes a no-op."""
+        self._two_voters_with_votes(age_days=28 * 6 + 1)
+        app.config['KEEP_LOCAL_VOTE_DATA_TIME'] = -1
+        app.config['KEEP_REMOTE_VOTE_DATA_TIME'] = -1
+
+        try:
+            cleanup_old_voting_data()
+        finally:
+            app.config['KEEP_LOCAL_VOTE_DATA_TIME'] = 6
+            app.config['KEEP_REMOTE_VOTE_DATA_TIME'] = 6
+
+        assert self._vote_counts() == (2, 2)
+
+    def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch):
+        monkeypatch.setattr('app.shared.tasks.maintenance.utcnow', _boom)
+
+        with pytest.raises(RuntimeError, match='the task itself failed'):
+            cleanup_old_voting_data()
