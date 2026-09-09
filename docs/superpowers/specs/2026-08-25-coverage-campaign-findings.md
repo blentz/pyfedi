@@ -9087,6 +9087,187 @@ in this section, taking no number, on the same terms sub-project 26's
 or moved, and no family index was extended beyond D309 and D336. If you
 take D337, say so here in the change that takes it.
 
+## Sub-project 28: closing `app/shared/tasks/follows.py`, and a predicted crash that never happened
+
+`docs/superpowers/specs/2026-09-08-coverage-follows-28-design.md` and
+`docs/superpowers/plans/2026-09-08-coverage-follows-28.md` (design and plan;
+the per-task briefs and reports live in
+`.superpowers/sdd/2026-09-08-coverage-follows-28/`), on branch `blentz`, from
+base `de056c47`. Twelve tasks closed `app/shared/tasks/follows.py` (280
+lines, five `@celery.task` functions: `join_community:39`,
+`leave_community:112`, `leave_feed:162`, `follow_user:216` and
+`unfollow_user:244`) to 100% statement and 100% branch coverage (155
+statements, 0 missing; 44 branches, 0 partial). Tests live in
+`tests/test_shared_tasks_follows.py` (**33 tests**, 791 lines). Twelve
+mutations were run one at a time against the closed module; ten were killed
+by a named test and two -- moving the uuid capture item 1 below describes
+back to after its own site's `session.delete()`/`session.commit()` --
+SURVIVED, as genuine equivalent mutants under the SQLAlchemy version this
+app runs today.
+
+The same round also closed `app/shared/tasks/pages.py`'s last three branch
+residuals with `# pragma: no branch` (raising its floor 98 -> 99, commit
+`145f0c09`) and attempted, then withdrew, a closing test for
+`app/shared/tasks/notes.py` (commit `94dc3374`, reverted by `daf05a26`,
+floor left at 99) -- see items 3 and 4.
+
+**Three production changes landed against `app/shared/tasks/follows.py`,
+numstat `6 3` total across four commits (`2 1`, `2 1`, `1 0`, and `1 1` for a
+same-line pragma comment in the coverage-closing commit) -- not the `5 2`
+the dispatching brief predicted; see this task's own report for the
+reconciliation:**
+
+1. `app/shared/tasks/follows.py:126` gained a uuid capture ahead of
+   `leave_community`'s delete+commit (commit `bb322862`) -- **D337's first
+   site.**
+2. `app/shared/tasks/follows.py:253` gained the same capture in
+   `unfollow_user` (commit `16804cf7`) -- **D337's second site.**
+3. `app/shared/tasks/follows.py:210` gained a `raise` inside `leave_feed`'s
+   `except Exception:` (commit `314802a2`) -- **D338, fixed.**
+
+### 1. A predicted crash disproven, fixed anyway as hardening -- D337
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D337 | the join-request uuid read after `session.delete()`+`session.commit()`, at two sibling sites in `app/shared/tasks/follows.py` -- `leave_community` (`:125-127`) and `unfollow_user` (`:252-256`) | **The predicted crash did not happen, and this cell says so before it says what was fixed.** The design's question was whether `join_request.uuid`, read after the row's own `session.delete()`+`session.commit()`, raises SQLAlchemy's `ObjectDeletedError`. A container probe against the live app/db stack (raw `get_task_session()`, no pytest, no `patch_db_session`) showed it does not: `inspect()` on the deleted-and-committed instance reported `persistent=False, deleted=False, detached=True, expired=False` -- a just-deleted, just-committed row is EXPUNGED at commit, not expired, and a detached instance's attribute read never triggers a reload, so it returns whatever `uuid` the `.first()` query that found the row had already loaded. Confirmed twice, independently, once per site: each site's pre-fix test passed against unmodified `follows.py`, both before and after a type bug in the test's own snippet was corrected (`str(request.uuid)`, not a bare `request.uuid`), and passed identically on repeated runs. **Fixed anyway, as defensive/consistency hardening rather than a crash fix, and the commit messages and test docstrings at both sites say so explicitly** (commits `bb322862`, `16804cf7`): each site's uuid is now captured into a local BEFORE the delete/commit rather than read off the instance after, matching the idiom `leave_feed` (`:176-179`) already used correctly, one function below `leave_community` in the file -- the correct idiom was one function away the whole time, D332's shape (the campaign's earlier case of a correct idiom sitting right next to sites that lacked it). **Proven equivalent, not merely argued.** A scripted mutation moving each capture back to after its own delete+commit (M6 at `leave_community`, M7 at `unfollow_user`, in the closing sub-project's mutation run) left all 33 tests passing at both sites -- a genuine equivalent mutant given this app's SQLAlchemy version, which is exactly why the fix is worth keeping despite proving nothing broke: it stops depending on an undocumented expunge-not-expire behaviour a future SQLAlchemy release could change | fixed (hardening, not a crash fix -- see harness fact 155) | container probe transcript and both sites' pre-fix/post-fix runs: `.superpowers/sdd/2026-09-08-coverage-follows-28/task-5-report.md`, `task-6-report.md`; the surviving M6/M7 mutations: `task-9-report.md` |
+
+### 2. The one real defect this round found -- D338
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D338 | `leave_feed`'s swallowed exception, `app/shared/tasks/follows.py:208-210` (pre-fix: `except Exception: session.rollback()`, no `raise`) | **Fixed, and the only one of this round's three production changes with an observed pre-fix failure.** Alone among the module's five tasks, `leave_feed`'s `except Exception:` rolled back and returned silently instead of re-raising -- `join_community`, `leave_community`, `follow_user` and `unfollow_user` all re-raise after rollback, and did so before this sub-project began. Consequence: a Celery caller (the ordinary `send_async=True` path) saw the task complete successfully with no record of failure, nothing was written to Celery's own result/log, and a feed membership could silently fail to leave with no signal anywhere that it happened. Fixed by adding `raise` after `session.rollback()` (`:210`), commit `314802a2`. **Genuine red-green cycle**: `test_leave_feed_reraises_rather_than_swallowing` failed pre-fix with `Failed: DID NOT RAISE Exception` (forcing `feed_id=999999` into the `.one()` at `:167`) and passed after | fixed | pre-fix failure transcript and post-fix pass: `task-8-report.md`; `git show 314802a2` |
+
+### 3. Four branches proven unreachable, and the standard a pragma had to clear
+
+Four branch arms across two files were closed with `# pragma: no branch`
+rather than a test, because no test can reach them: `app/shared/tasks/follows.py:188`
+(`if not feed.instance.gone_forever:`), and three in
+`app/shared/tasks/pages.py` -- `:270` and `:333` (both `if not community.local_only:`)
+and `:312` (`if 'name' in page:`). Each proof is written out in full where
+the pragma lives (`tests/test_shared_tasks_follows.py`,
+`tests/test_shared_tasks_send_post.py`), not merely asserted:
+
+- `follows.py:188` -- reaching it at all requires `feed.instance.online()`
+  True at the guard two lines above (`:182`), and `Instance.online()` is
+  exactly `not (self.dormant or self.gone_forever)` (`app/models.py:118-119`),
+  so `gone_forever` is already False by construction; nothing between `:182`
+  and `:188` writes, commits, or refreshes `feed.instance`.
+- `pages.py:270` and `:333` -- `community` is bound once at `:91` and never
+  reassigned inside `send_post`; `:153-154` returns early whenever
+  `community.local_only or community.private`, before the builder that
+  reaches `:270`/`:333` even runs, so by the time either line executes
+  `community.local_only` is guaranteed already False. (D309's own cell
+  already notes these two lines are not a *`Community.private`-family* site,
+  for the separate reason that the check they'd need is already counted at
+  `:153`; this entry is the different claim that their FALSE arm is
+  unreachable at all, not that they duplicate a counted site.)
+- `pages.py:312` -- `page`'s dict literal (`:183-208`) writes `'name'`
+  unconditionally; the only `del page['name']` in the function is `:313`,
+  strictly inside `:312`'s TRUE arm, so nothing between the write and the
+  guard can make the key absent.
+
+**The standard applied, not just the outcome.** Each proof was
+independently attacked by a reviewer trying to defeat it -- searching for a
+rebinding, an intervening commit or refresh, an alternate entry path into
+the guarded block, or a deletion of the key the guard tests -- and each
+survived that attempt. **A pragma earning this idiom is not the author
+believing the branch is dead; it is a reviewer having tried to prove it
+alive and failed.** Precedent for the idiom itself predates this campaign
+(`app/request_hooks.py:137`, `if 'session' in dir(flask):  # pragma: no
+branch`); this round is the first time the campaign's own register records
+its use, at these four sites. Registers no D-number of its own -- see
+harness fact 160 for the general rule. Evidence: `task-9-report.md`
+(`follows.py:188`), `task-11-report.md` (`pages.py:270`, `:312`, `:333`).
+
+### 4. An attempt withdrawn, and the rule it establishes
+
+`notes.py:100-101` is `send_reply`'s LOCAL-mention arm: `try: recipient =
+search_for_user(user_name) / except: pass`. This round wrote a test that
+forced it by monkeypatching `search_for_user` to raise, and raised
+`app/shared/tasks/notes.py`'s floor 99 -> 100 on the strength of it (commit
+`94dc3374`). **That was wrong, and it was withdrawn** (commit `daf05a26`,
+floor restored to 99, the test removed byte-for-byte). `tests/test_shared_tasks_send_answer.py:977-989`
+already recorded a sub-project 20 finding that these two lines are
+UNREACHABLE, not merely untested: `search_for_user`'s only `raise`
+(`app/user/utils.py:98`) sits inside `if server:`; the LOCAL call at
+`notes.py:96` passes `user_name`, the bare-name half of the mention with no
+`@`, so inside the callee `'@' in address` is False, `server = ''`, and
+`if server:` never runs. A mock can force the statement to execute; it
+proves only that a mock raises, not that production can, and the 100%
+floor it bought was a number sitting in direct contradiction with an
+already-registered finding.
+
+**The asymmetry is the transferable half.** `notes.py:105-107`, the REMOTE
+twin, is the same three tokens (`try: recipient = search_for_user(ap_id) /
+except: pass`) and is LIVE: the REMOTE call passes `name@host`, giving
+`search_for_user` a non-empty `server`, so `if server:`'s `BannedInstances`
+check -- and its `raise` -- run for real, on an entirely ordinary production
+event (a mention of a user on a banned instance). Two clauses that look
+identical are not, and harness fact 111 already states exactly this shape
+for `pages.py:107-108`/`:113-114` -- extended here (see the harness facts
+section below) to cross-reference `notes.py`'s identical pair rather than
+duplicate the explanation.
+
+**The rule this attempt-and-withdrawal establishes: before closing a
+residual, check whether an earlier round already proved it unreachable --
+the proof may live in another sub-project's test file rather than in this
+register.** `tests/test_shared_tasks_send_answer.py` carried the proof the
+whole time; this round did not check it before writing a test against the
+premise it contradicts, and only found it because the coordinator rejected
+the closing commit. See harness fact 159. Registers no new D-number; the
+underlying finding is sub-project 20's, already on record via
+`tests/test_shared_tasks_send_answer.py:977-989` and `coverage_floors.ini`'s
+unmoved `notes.py = 99`. Evidence: commits `94dc3374` (the withdrawn
+attempt) and `daf05a26` (the withdrawal); `app/user/utils.py:85-99`;
+`notes.py:95-107`.
+
+### 5. Three more numbers, none fixed -- D339-D341
+
+| # | function | defect | status | evidence |
+|---|---|---|---|---|
+| D339 | `leave_community`'s unguarded `.first()`, `app/shared/tasks/follows.py:125` | **Not fixed, registered only, deliberately out of this round's scope.** `join_request = session.query(CommunityJoinRequest).filter_by(...).first()` returns `None` when no matching row exists, and `:127`'s `session.delete(join_request)` -- `Session.delete(None)` -- raises. No `if join_request:` guard exists here, unlike `leave_feed`'s equivalent read at `:176-177` and `unfollow_user`'s at `:250-252`, both of which check before touching the row. Left alone so that D337's uuid-ordering fix made exactly one claim rather than two: adding a guard here changes what happens on a double-leave or a race, a different, unproven claim this round did not investigate | not fixed, registered only | read from source at this commit: `follows.py:125-128`, contrasted against `leave_feed:176-177` and `unfollow_user:250-252` |
+| D340 | `leave_feed`'s possibly-unbound `uuid`, `app/shared/tasks/follows.py:178` (assignment) vs. `:189` (use) | **Not fixed, registered only, and this round's coverage work did NOT prove the crash path reachable -- it proved the opposite, and routed around it on purpose.** `:177`'s `if join_request: uuid = join_request.uuid` only assigns `uuid` when a `FeedJoinRequest` row exists; `:189`'s `f"...{uuid}"`, inside the `:188` pragma'd guard, reads it unconditionally. If the row is already absent AND the feed's instance is online, not blocked, and not banned, execution reaches `:189` with `uuid` never assigned, raising `UnboundLocalError`. This round's own `test_leaving_an_offline_feed_with_no_pending_request_sends_nothing` (`tests/test_shared_tasks_follows.py:733`) constructs the no-pending-request half and says so in its own docstring, then deliberately makes the instance OFFLINE too, so execution returns at `:185` before ever reaching `:189` -- closing the coverage arc without ever executing the unbound read. No test in this module exercises the online, no-pending-request combination | not fixed, registered only | `follows.py:176-189`, read at this commit; the routing-around is documented in `tests/test_shared_tasks_follows.py:733-761`'s own docstring; `task-9-report.md` |
+| D341 | `follow_user` and `unfollow_user` never call `patch_db_session`, `app/shared/tasks/follows.py:216-280` | **Not fixed, registered as a named instance of D312/D314's shape, and confirmed inert for this pair.** `join_community`, `leave_community` and `leave_feed` all wrap their bodies in `with patch_db_session(session):`; `follow_user` and `unfollow_user` do not -- both are two of the 21 functions D314's `ast` census (sub-project 22) counted but did not name. Unlike `send_answer` (D312), where the omission lets two reads run on the request-scoped `db.session` instead of the task's own session, `follow_user` and `unfollow_user` never reference `db.session` anywhere: every read and write in both goes through the local `session` from `get_task_session()`, and every helper they call is pure with respect to it -- `User.is_local()` (`app/models.py:1251`) and `Instance.online()` (`app/models.py:118-119`) read only attributes already loaded, and `send_post_request`/`post_request` (`app/activitypub/signature.py:82-100`) is itself a separate `@celery.task` with its own `get_task_session()`, never `db.session`. **The omission is inert for this pair specifically, and the entry says so rather than implying a latent bug**: nothing downstream of either function reads `db.session` while one of these tasks runs, so `patch_db_session`'s absence changes no observable behaviour today | not fixed, registered only (inert) | `follows.py:216-280`, read at this commit; `grep -n 'db\.session' app/shared/tasks/follows.py` returns zero matches; `app/models.py:1251`, `:118-119`; `app/activitypub/signature.py:82-100`; D312, D314 (sub-project 21, 22 sections) for the shape |
+
+**Facts 155-160 carried into `tests/README.md`.** A deleted-then-committed
+SQLAlchemy instance is expunged, not expired, so a post-delete attribute
+read returns the pre-delete value rather than raising (155). `flash()`
+needs a request context the `app` fixture does not push (156), and pushing
+one disables `patch_db_session` (157), so the two compose against each
+other on any `SRC_WEB` arm. A module's coverage cannot be measured from one
+test file when its functions are split across two, and there is a
+mechanical way to tell whether that risk applies to a given module (158).
+Before closing a residual, check whether an earlier round already proved it
+unreachable -- the proof may live in another sub-project's test file (159).
+A `# pragma: no branch` on a proven-unreachable arm earns the idiom only
+once a reviewer has tried to defeat the proof and failed (160).
+
+**Next free number: D342.** D337-D341 were taken by this round -- **D337**
+the join-request uuid-read-after-delete ordering, closed at its remaining
+two sites (`leave_community`, `unfollow_user`), fixed as hardening rather
+than a crash fix, the predicted `ObjectDeletedError` disproven by a
+container probe and by two independently-surviving equivalent mutants;
+**D338** `leave_feed`'s swallowed exception, the round's one genuine
+red-green defect, fixed; **D339** `leave_community`'s unguarded `.first()`,
+registered only, deliberately out of scope; **D340** `leave_feed`'s
+possibly-unbound `uuid`, registered only, and NOT proven reachable -- this
+round's own coverage test routes around it on purpose, which the cell
+states rather than glosses over; **D341** `follow_user`/`unfollow_user`'s
+missing `patch_db_session`, D312/D314's shape at a fourth named site,
+registered as inert rather than as a latent bug. No entry from an earlier
+section was edited in place by this round; **D309**'s existing cell already
+correctly excludes `pages.py:270`/`:333` from its own family count, for a
+different reason than item 3 above states, and this round's entry
+cross-references rather than restates that. **The one production change
+outside `follows.py`** landed at `app/shared/tasks/pages.py:270`, `:312`,
+`:333` (three `# pragma: no branch` comments, commit `145f0c09`, item 3
+above) and raised that module's floor 98 -> 99; it registers no new D-number
+because it is a coverage-completeness proof, not a defect. **One attempted
+production-adjacent change was withdrawn in full** (item 4 above,
+`94dc3374`/`daf05a26`) and registers no D-number of its own, the underlying
+finding being sub-project 20's. If you take D342, say so here in the change
+that takes it.
+
 ## Ratchet gotchas
 
 - `percent_covered` is a **blended statement+branch figure**. This matters for

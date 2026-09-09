@@ -4097,6 +4097,20 @@ was banned, or the name matched the author so `app/shared/tasks/pages.py:104`
 docstring), not merely on the empty `recipients` list; and see fact 75's cause 8
 before trying to kill a mutation of the dead one.
 
+**`app/shared/tasks/notes.py:100-101`/`:105-107` is the identical shape a
+second time, and a closing attempt against it was written and withdrawn.**
+`send_reply`'s LOCAL arm (`try: recipient = search_for_user(user_name) /
+except: pass` at `:98-101`) is unreachable for the same reason as `pages.py`'s
+LOCAL arm above -- `user_name` carries no `@`, so `search_for_user`'s `server`
+is always `''` and its one `raise` (`app/user/utils.py:98`) never runs; the
+REMOTE arm (`:102-107`) passes an `@`-qualified address and is live. A
+sub-project 28 task wrote a mock-forced test against the LOCAL arm anyway,
+raised the module's floor 99 -> 100 on it, and had the change rejected and
+reverted once `tests/test_shared_tasks_send_answer.py:977-989`'s
+already-registered proof of unreachability was found -- see the campaign
+register's sub-project 28 section, item 4, for the full withdrawal and the
+process rule it establishes.
+
 **112. `Community.is_local()` IS A DISJUNCTION, SO CLEARING OR SETTING `ap_id`
 ALONE DOES NOT MAKE A FACTORY COMMUNITY REMOTE.** `app/models.py:795-796` is
 `return self.ap_id is None or self.profile_id().startswith(f"{SERVER_URL}")`.
@@ -5122,6 +5136,97 @@ rather than live in this file now, and is kept here because the pattern --
 a real file created for a test, with no cleanup on the failure path -- is
 worth a future test author checking for on sight, not only in this one
 case.
+
+**155. A DELETED-THEN-COMMITTED SQLALCHEMY INSTANCE IS EXPUNGED, NOT
+EXPIRED -- A THIRD CASE, DISTINCT FROM FACTS 58 AND 153, AND THE TWO MUST
+NOT BE READ AS COVERING IT.** Fact 58 says a commit inside the function
+under test expires the session's objects, so a later attribute read on the
+TEST's own copy re-fetches. Fact 153 says a commit on the TASK's own,
+separate session leaves the test's in-memory copy stale, because that
+commit's `expire_on_commit` applies to the task session's objects, not the
+test's. Neither is what happens when the object itself is the one
+`session.delete()`d: a container probe against the live app/db stack
+(`get_task_session()`, no pytest) showed that after
+`session.delete(join_request); session.commit()`, `inspect(join_request)`
+reports `persistent=False, deleted=False, detached=True, expired=False`.
+`Session.commit()`'s default `expire_on_commit` expires attributes only on
+instances that remain PERSISTENT after the flush; an instance that was
+deleted and then committed is EXPUNGED instead -- it becomes detached, and a
+detached object's attribute read never triggers a reload (there is no
+session left to reload it with), so it returns whatever value was already
+sitting in its Python `__dict__` from the query that originally loaded it.
+`app/shared/tasks/follows.py`'s `leave_community` and `unfollow_user` both
+read `join_request.uuid` after their own `session.delete()`+`session.commit()`
+without crashing for exactly this reason
+(`docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md`,
+sub-project 28, item 1/D337) -- true regardless of `expire_on_commit`'s
+setting, and true independent of facts 58 and 153, which both describe a
+surviving, still-persistent object rather than one the code itself deleted.
+
+**156. `flash()` NEEDS A REQUEST CONTEXT, AND THE `app` FIXTURE DOES NOT
+PUSH ONE.** `tests/conftest.py:112` is `with application.app_context():` --
+an app context only. A test reaching a `SRC_WEB` arm that calls `flash()`
+must push its own request context, `with current_app.test_request_context('/'):`,
+around the call and read `get_flashed_messages()` before that context is
+popped (flashed messages live in the request/session, not after it ends).
+Worked case: `tests/test_shared_tasks_follows.py:296`.
+
+**157. PUSHING A REQUEST CONTEXT DISABLES `patch_db_session`, SO FACT 156's
+FIX AND `patch_db_session` COMPOSE BADLY.** `app/utils.py:3685` is `if
+has_request_context():`, and `:3688` is the `return` inside it -- `yield`
+then `return` with no patching applied. Fact 3 already states this guard's
+effect for a different module's request/no-request asymmetry; the
+composition specific to fact 156 is that a test which pushes
+`current_app.test_request_context('/')` to make `flash()` work thereby ALSO
+stops `db.session` from being the task's own session for the duration of
+that context. Such a test cannot assert on attributes of objects the task
+touched through `db.session` -- it must assert through a fresh query
+instead, exactly as fact 153 already prescribes for the task's-own-session
+case, but for a different underlying reason.
+
+**158. A MODULE'S COVERAGE CANNOT BE MEASURED FROM ONE TEST FILE WHEN ITS
+FUNCTIONS ARE SPLIT ACROSS TWO.** `app/shared/tasks/notes.py` holds both
+`send_reply`/`make_reply`/`edit_reply` (tested in
+`tests/test_shared_tasks_send_reply.py`) and
+`send_answer`/`choose_answer`/`unchoose_answer` (tested in
+`tests/test_shared_tasks_send_answer.py`); measuring
+`--cov=app.shared.tasks.notes` against the first file alone reports 79% and
+cannot support a 100% claim, only a run including both files can.
+`app/shared/tasks/pages.py` does not have this problem: every function it
+defines (`make_post`, `edit_post`, `send_post`, `move_post`, `move_object`)
+is exercised inside the single `tests/test_shared_tasks_send_post.py`.
+**The mechanical way to tell which case a module is in**: list the module's
+own top-level `def`/`@celery.task` names
+(`grep -n '^def \|^@celery.task' module.py`), then `grep -rl` each name
+across `tests/`; if every name resolves to the same one file, a single-file
+coverage run is sufficient, and if the file set has more than one member,
+the module's true percentage is only the union run's.
+
+**159. BEFORE CLOSING A RESIDUAL, CHECK WHETHER AN EARLIER ROUND ALREADY
+PROVED IT UNREACHABLE -- THE PROOF MAY LIVE IN ANOTHER SUB-PROJECT'S TEST
+FILE RATHER THAN IN THE REGISTER.** A sub-project 28 task wrote a
+mock-forced test against `app/shared/tasks/notes.py:100-101` (a bare
+`except: pass`) and raised that module's floor 99 -> 100 on it, without
+first checking `tests/test_shared_tasks_send_answer.py:977-989`, which
+already recorded a sub-project 20 finding that those exact two lines are
+UNREACHABLE, not merely untested. The commit was rejected and reverted.
+Forcing an unreachable statement with a mock proves the mock can raise, not
+that production can; a passing test built on it buys a floor number that
+contradicts an already-registered fact. See fact 111's extension for the
+mechanism, and the campaign register's sub-project 28 section, item 4, for
+the full withdrawal.
+
+**160. A `# pragma: no branch` ON A PROVEN-UNREACHABLE ARM EARNS THE IDIOM
+ONLY ONCE A REVIEWER HAS TRIED TO DEFEAT THE PROOF AND FAILED -- NOT MERELY
+ONCE THE AUTHOR BELIEVES IT.** Applied at four sites in one round:
+`app/shared/tasks/follows.py:188` and `app/shared/tasks/pages.py:270`,
+`:312` and `:333`. Each proof was independently attacked by searching for a
+rebinding of the tested variable, an intervening commit or refresh, an
+alternate entry path into the guarded block, and (for `:312`) a deletion of
+the key the guard tests -- and each survived. The idiom predates this
+campaign (`app/request_hooks.py:137`); this is the first round the
+campaign's own register records using it, and the standard it records is
+the reviewer's attempt, not the author's confidence.
 
 ## Known noise
 
