@@ -377,3 +377,110 @@ class TestAddRemoteCommunityFromPost:
         add_remote_community_from_post({'body': '!books@peer.example'})
 
         assert called == ['!books@peer.example']
+
+
+class TestAddRemoteCommunities:
+    """`add_remote_communities:1070` -- import new communities from a feed.
+
+    `:1072` fetches lemmy.world's newcommunities listing; `:1080` proceeds only
+    on 200; `:1087` walks the posts oldest-first; `:1089` skips stickied posts
+    and `:1092` skips ids already imported; `:1095` hands each survivor to
+    `add_remote_community_from_post` and `:1098` records the high-water mark.
+
+    THIS FUNCTION HAS NO SESSION. `:1085`'s `get_setting` and `:1098`'s
+    `set_setting` both go through `db.session` (`app/utils.py:203-222`), with no
+    `get_task_session()` and no `patch_db_session` -- alone among this module's
+    tasks. That is this round's PC2 and is NOT fixed by these tests.
+
+    An unmatched respx request DOES fail a test here: `:1077` catches only
+    `httpx.HTTPError`, and respx raises an `AssertionError`.
+    """
+
+    LISTING = 'https://lemmy.world/api/v3/post/list'
+
+    def _posts(self, *posts):
+        return {'posts': [{'post': p} for p in posts]}
+
+    def test_a_new_post_is_handed_over_and_recorded(self, db_session, monkeypatch, http_mock):
+        recorder = _Recorder()
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.add_remote_community_from_post', recorder)
+        http_mock.get(url__startswith=self.LISTING).respond(
+            200, json=self._posts({'id': 7, 'featured_community': False,
+                                   'url': 'https://peer.example/c/books'}))
+
+        add_remote_communities()
+
+        assert [c[0][0]['id'] for c in recorder.calls] == [7]
+        from app.utils import get_setting
+        assert get_setting('last_successful_import', 0) == 7
+
+    def test_a_stickied_post_is_skipped(self, db_session, monkeypatch, http_mock):
+        """`:1089`'s `featured_community` guard."""
+        recorder = _Recorder()
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.add_remote_community_from_post', recorder)
+        http_mock.get(url__startswith=self.LISTING).respond(
+            200, json=self._posts({'id': 8, 'featured_community': True,
+                                   'url': 'https://peer.example/c/books'}))
+
+        add_remote_communities()
+
+        assert recorder.calls == []
+
+    def test_an_already_imported_post_is_skipped(self, db_session, monkeypatch, http_mock):
+        """`:1092`'s high-water mark.
+
+        `set_setting` is called directly to establish the mark, because the
+        task only writes it after a successful hand-over and this test needs it
+        set beforehand.
+        """
+        from app.utils import set_setting
+        set_setting('last_successful_import', 20)
+        recorder = _Recorder()
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.add_remote_community_from_post', recorder)
+        http_mock.get(url__startswith=self.LISTING).respond(
+            200, json=self._posts({'id': 15, 'featured_community': False,
+                                   'url': 'https://peer.example/c/books'}))
+
+        add_remote_communities()
+
+        assert recorder.calls == []
+
+    def test_a_non_200_response_does_nothing(self, db_session, monkeypatch, http_mock):
+        """`:1080`'s false arm.
+
+        A non-200 status returns without retrying -- unlike a transport error,
+        which would send `get_request` into `app/utils.py:173-177`'s handler and
+        cost a 3-to-10-second sleep.
+        """
+        recorder = _Recorder()
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.add_remote_community_from_post', recorder)
+        http_mock.get(url__startswith=self.LISTING).respond(503)
+
+        add_remote_communities()
+
+        assert recorder.calls == []
+
+    def test_posts_are_processed_oldest_first(self, db_session, monkeypatch, http_mock):
+        """`:1087`'s `reversed(...)`.
+
+        The listing is sorted newest-first, so the task reverses it to walk
+        forward in time -- otherwise the high-water mark at `:1098` would be set
+        to the newest id on the first iteration and every older post would then
+        be skipped by `:1092`. This is call order, not planner order, so
+        comparing a list is legitimate here.
+        """
+        recorder = _Recorder()
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.add_remote_community_from_post', recorder)
+        http_mock.get(url__startswith=self.LISTING).respond(
+            200, json=self._posts(
+                {'id': 9, 'featured_community': False, 'url': 'https://peer.example/c/b'},
+                {'id': 8, 'featured_community': False, 'url': 'https://peer.example/c/a'}))
+
+        add_remote_communities()
+
+        assert [c[0][0]['id'] for c in recorder.calls] == [8, 9]
