@@ -607,6 +607,52 @@ class TestRefreshInstanceChooser:
         assert db.session.query(InstanceChooser).filter_by(
             domain='peer.example').first() is None
 
+    def test_a_chooser_404_with_no_existing_row_logs_nothing(
+            self, db_session, http_mock, monkeypatch, app):
+        """`:1043`'s guard, false arm -- a 404 for a domain with no existing
+        row.
+
+        DATABASE STATE AND EXCEPTION PROPAGATION CANNOT DISCRIMINATE THIS
+        GUARD. If `:1043`'s `if existing:` were deleted so `:1044`'s
+        `session.delete(existing)` always ran, `session.delete(None)` raises
+        `UnmappedInstanceError` from inside the `:1018-1044` body -- but
+        `:1046`'s OUTER handler catches exactly that, performs the identical
+        guarded query-and-delete itself, finds nothing (there was never a
+        row), and continues. The end state -- no row for the domain -- and
+        the fact that nothing propagates out of `refresh_instance_chooser()`
+        are the same whether `:1043`'s guard exists or not, so neither is a
+        valid oracle for this branch.
+
+        THE LOG IS A DIFFERENT ORACLE. `:1046`'s handler only runs, and only
+        logs its "Error processing domain" warning, when it actually catches
+        something. The guarded original takes `:1043`'s false arm cleanly
+        and never enters that handler, so nothing is logged. The mutated
+        version enters it via the manufactured `UnmappedInstanceError`, and
+        logs.
+
+        The empty-recorder assertion is NOT sufficient alone: if the 404
+        route were never reached at all (a routing typo, an unmatched
+        `http_mock` route swallowed by the wrong handler), the warning would
+        also stay silent, for an unrelated reason, and this test would pass
+        while proving nothing about `:1043`. The companion assertion --
+        that no row exists for the domain afterwards -- only holds if
+        `refresh_instance_chooser` actually walked the node and took the
+        404 path, so together the two assertions pin down the branch this
+        test claims to cover.
+        """
+        recorder = []
+        monkeypatch.setattr(
+            app.logger, 'warning', lambda *a, **kw: recorder.append((a, kw)))
+        http_mock.post(self.OBSERVER).respond(200, json=self._nodes('peer.example'))
+        http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(404)
+
+        refresh_instance_chooser()
+
+        db.session.expire_all()
+        assert db.session.query(InstanceChooser).filter_by(
+            domain='peer.example').first() is None
+        assert recorder == []
+
     def test_a_domain_the_observer_dropped_is_pruned(self, db_session, http_mock):
         """`:1056-1058` -- rows for domains absent from the observer response."""
         db.session.add(InstanceChooser(domain='gone.example'))
