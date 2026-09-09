@@ -27,9 +27,12 @@ determines how much work it is:
 | **A** (this round) | `cleanup_old_notifications`, `cleanup_old_read_posts`, `cleanup_send_queue`, `cleanup_old_activitypub_logs`, `cleanup_old_voting_data`, `update_hashtag_counts`, `update_community_stats`, `unban_expired_users`, `recalculate_user_attitudes`, `calculate_community_activity_stats` | 151 | nothing — rows and clock only |
 | **B** | `process_expired_bans`, `remove_old_community_content`, `remove_old_bot_content`, `delete_old_soft_deleted_content`, `archive_old_posts`, `archive_old_users`, `archive_user`, `pwn_bots` | 154 | federation sends, `delete_post` |
 | **C** | `check_instance_health`, `monitor_healthy_instances`, `sync_defederation_subscriptions` | 196 | nodeinfo negotiation over `httpx` |
-| **D** | `refresh_instance_chooser`, `add_remote_communities`, `add_remote_community_from_post`, `delete_from_s3`, `clean_up_tmp` | 119 | `httpx`, `boto3`, the filesystem |
+| **D** | `refresh_instance_chooser`, `add_remote_communities`, `add_remote_community_from_post`, `delete_from_s3`, `clean_up_tmp` | 120 | `httpx`, `boto3`, the filesystem |
 
-Sixteen further statements are module-level imports.
+Fifteen further statements are module-level imports. (Both figures on this
+line and in Group D's row above were wrong as written pre-round -- 119 and
+sixteen respectively -- not made wrong by this round; corrected here to match
+the findings register.)
 
 Group A goes first because it needs no transport at all. Establishing the
 cron-task harness against real Postgres, with no network to mock, is the
