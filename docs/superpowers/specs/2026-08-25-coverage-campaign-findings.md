@@ -9312,7 +9312,7 @@ functions; twenty were killed and one -- deleting `unban_expired_users`'s
 mutant under SQL's three-valued NULL comparison logic (harness fact 170).
 
 **Three production changes landed, numstat `5 7` total across three commits
-(`1 1`, `0 2`, `4 4`) -- each a repair with an observed pre-fix failure or a
+(`1 1`, `4 4`, `0 2`) -- each a repair with an observed pre-fix failure or a
 grep-proven dead read, none hardening-mislabelled-as-repair:**
 
 1. `app/shared/tasks/maintenance.py:317` (`update_community_stats`)'s commit
@@ -9376,7 +9376,7 @@ against Group A's own total. Group A (this round) covered 151 statements at
 three groups the campaign has not yet opened, each needing a transport this
 round never had to mock.
 
-**Facts 161-170 carried into `tests/README.md`.** `calculate_community_activity_stats()`
+**Facts 161-171 carried into `tests/README.md`.** `calculate_community_activity_stats()`
 ran without raising and its temp table was gone afterward under the ordinary
 `db_session` fixture, so no special fixture is needed for `ON COMMIT DROP`
 tasks in this harness (161). `db_session` DELETEs and commits rather than
@@ -9401,7 +9401,10 @@ ran from one a test would miss when its only effect is a row in a temp table
 an aggregate later de-duplicates (169). Deleting `unban_expired_users`'s
 `AND banned_until is not null` conjunct is a proven equivalent mutant under
 SQL's three-valued NULL comparison, run and demonstrated rather than merely
-asserted (170).
+asserted (170). When a mutation survives, check the site against the test
+the plan named as its killer before recording an equivalent mutant -- a
+survivor at the wrong site looks exactly like a survivor at the right one
+(171).
 
 **Next free number: D349.** D342-D348 were taken by this round -- **D342**
 `update_community_stats`'s in-loop commit, fixed as a repair with both
