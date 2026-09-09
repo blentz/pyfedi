@@ -4100,16 +4100,22 @@ before trying to kill a mutation of the dead one.
 **`app/shared/tasks/notes.py:100-101`/`:106-107` is the identical shape a
 second time, and a closing attempt against it was written and withdrawn.**
 `send_reply`'s LOCAL arm (`try: recipient = search_for_user(user_name) /
-except: pass` at `:98-101`) is unreachable for the same reason as `pages.py`'s
-LOCAL arm above -- `user_name` carries no `@`, so `search_for_user`'s `server`
-is always `''` and its one `raise` (`app/user/utils.py:98`) never runs; the
-REMOTE arm (`:102-107`) passes an `@`-qualified address and is live. A
-sub-project 28 task wrote a mock-forced test against the LOCAL arm anyway,
-raised the module's floor 99 -> 100 on it, and had the change rejected and
-reverted once `tests/test_shared_tasks_send_answer.py:977-989`'s
-already-registered proof of unreachability was found -- see the campaign
-register's sub-project 28 section, item 4, for the full withdrawal and the
-process rule it establishes.
+except: pass` at `:98-101`) cannot be reached BY THE RAISE, for the same
+reason as `pages.py`'s LOCAL arm above -- `user_name` carries no `@`, so
+`search_for_user`'s `server` is always `''` and its one `raise`
+(`app/user/utils.py:98`) never runs. **That is narrower than calling the
+clause unreachable outright**: `if server:`'s `else` branch still runs a
+database call, `already_exists = db.session.query(User).filter_by(
+user_name=name, ap_id=None).first()` (`app/user/utils.py:101`), inside the
+same bare `try`, and a DB-layer exception there would still land in this
+`except: pass` -- unreachable-by-the-raise, not unreachable. The REMOTE arm
+(`:102-107`) passes an `@`-qualified address and is live. A sub-project 28
+task wrote a mock-forced test against the LOCAL arm anyway, raised the
+module's floor 99 -> 100 on it, and had the change rejected and reverted
+once `tests/test_shared_tasks_send_answer.py:977-989`'s already-registered
+proof of raise-unreachability was found -- see the campaign register's
+sub-project 28 section, item 4, for the full withdrawal and the process rule
+it establishes.
 
 **112. `Community.is_local()` IS A DISJUNCTION, SO CLEARING OR SETTING `ap_id`
 ALONE DOES NOT MAKE A FACTORY COMMUNITY REMOTE.** `app/models.py:795-796` is
@@ -5195,12 +5201,24 @@ cannot support a 100% claim, only a run including both files can.
 `app/shared/tasks/pages.py` does not have this problem: every function it
 defines (`make_post`, `edit_post`, `send_post`, `move_post`, `move_object`)
 is exercised inside the single `tests/test_shared_tasks_send_post.py`.
-**The mechanical way to tell which case a module is in**: list the module's
-own top-level `def`/`@celery.task` names
-(`grep -n '^def \|^@celery.task' module.py`), then `grep -rl` each name
-across `tests/`; if every name resolves to the same one file, a single-file
-coverage run is sufficient, and if the file set has more than one member,
-the module's true percentage is only the union run's.
+**The mechanical way to tell which case a module is in is NOT to grep for the
+module's own function names -- a name collision with something else in
+`tests/` silently misclassifies the "not split" case as split.**
+`pages.py`'s own `make_post` is also a factory, `tests/factories.py:294`,
+so `grep -rl make_post tests/` returns 57 files (every test that builds a
+post) and the not-split module fails the recipe's own test. **Grep for how
+the module is IMPORTED instead**: `grep -rl` for
+`from app\.shared\.tasks\.<module> import` and
+`import app\.shared\.tasks\.<module>` (e.g.
+`grep -rlE 'app\.shared\.tasks\.pages\b' tests/*.py`); if every match is the
+same one file, a single-file coverage run is sufficient, and if the file set
+has more than one member, the module's true percentage is only the union
+run's. Verified against both modules named above: the import grep resolves
+`pages.py` to exactly `tests/test_shared_tasks_send_post.py` (which even
+aliases its own import, `make_post as make_post_task`, to dodge the same
+collision) and resolves `notes.py` to exactly the two files already named,
+`tests/test_shared_tasks_send_answer.py` and
+`tests/test_shared_tasks_send_reply.py`.
 
 **159. BEFORE CLOSING A RESIDUAL, CHECK WHETHER AN EARLIER ROUND ALREADY
 PROVED IT UNREACHABLE -- THE PROOF MAY LIVE IN ANOTHER SUB-PROJECT'S TEST
@@ -5208,13 +5226,15 @@ FILE RATHER THAN IN THE REGISTER.** A sub-project 28 task wrote a
 mock-forced test against `app/shared/tasks/notes.py:100-101` (a bare
 `except: pass`) and raised that module's floor 99 -> 100 on it, without
 first checking `tests/test_shared_tasks_send_answer.py:977-989`, which
-already recorded a sub-project 20 finding that those exact two lines are
-UNREACHABLE, not merely untested. The commit was rejected and reverted.
-Forcing an unreachable statement with a mock proves the mock can raise, not
-that production can; a passing test built on it buys a floor number that
-contradicts an already-registered fact. See fact 111's extension for the
-mechanism, and the campaign register's sub-project 28 section, item 4, for
-the full withdrawal.
+already recorded a sub-project 20 finding that the explicit `raise` inside
+that clause cannot be reached from this arm -- narrower than saying the two
+lines are UNREACHABLE outright, since a DB-layer exception out of
+`app/user/utils.py:101` still lands in the same bare `except:`. The commit
+was rejected and reverted regardless: forcing the unreachable `raise` with a
+mock proves the mock can raise, not that production's `raise` can, and a
+passing test built on it still buys a floor number that contradicts an
+already-registered fact. See fact 111's extension for the mechanism, and the
+campaign register's sub-project 28 section, item 4, for the full withdrawal.
 
 **160. A `# pragma: no branch` ON A PROVEN-UNREACHABLE ARM EARNS THE IDIOM
 ONLY ONCE A REVIEWER HAS TRIED TO DEFEAT THE PROOF AND FAILED -- NOT MERELY
