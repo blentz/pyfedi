@@ -956,3 +956,38 @@ class TestCalculateCommunityActivityStats:
 
         with pytest.raises(RuntimeError, match='the task itself failed'):
             calculate_community_activity_stats()
+
+
+class TestCommunityActivityStatsAreNotStale:
+    """PC1: a quiet community now reads zero instead of keeping stale counts.
+
+    `:843-856`'s UPDATE runs once per row `:825-837` returns. That SELECT used
+    to read FROM the temp table with an INNER JOIN onto `community`, so a
+    community with no post, reply or vote in six months contributed no row,
+    the join dropped it, and its four columns kept whatever they last held.
+    `:825-837` now drives the SELECT from `community` with a LEFT JOIN onto
+    the temp table (`:832-833`), so an inactive-but-eligible community still
+    produces a row -- with its CASE/COUNT expressions counting no matching
+    `tca` rows -- and gets its four columns overwritten with zero. The
+    eligibility filter at `:834-835` is unchanged: a banned community, or one
+    whose `last_active` has fallen outside six months, is excluded from the
+    SELECT entirely and keeps its stale numbers regardless. Nothing else in
+    app/ writes these four columns -- app/cli.py:788 is a separate command.
+    """
+
+    def test_a_community_that_went_quiet_reads_zero(self, db_session):
+        _, user, community, post = _seed()
+        post.posted_at = utcnow() - timedelta(weeks=40)
+        community.last_active = utcnow()
+        community.active_daily = 5
+        community.active_weekly = 5
+        community.active_monthly = 5
+        community.active_6monthly = 5
+        db.session.commit()
+
+        calculate_community_activity_stats()
+
+        db.session.expire_all()
+        refreshed = db.session.get(Community, community.id)
+        assert (refreshed.active_daily, refreshed.active_weekly,
+                refreshed.active_monthly, refreshed.active_6monthly) == (0, 0, 0, 0)
