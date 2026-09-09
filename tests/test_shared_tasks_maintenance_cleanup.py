@@ -656,12 +656,13 @@ class TestUpdateCommunityStats:
 
 
 class TestUpdateCommunityStatsIsAtomic:
-    """PC2: `:317`'s commit inside the loop at `:292`.
+    """PC2: `:317`'s commit used to sit inside the loop opened at `:292`.
 
-    With the commit inside the loop, a failure at community N leaves
-    communities 1..N-1 committed, and `:319-321`'s handler rolls back only the
-    current unit of work. The rollback READS as though it protects the task's
-    whole effect. It does not.
+    Before this task's fix, a failure at community N left communities 1..N-1
+    committed, because `:319-321`'s handler rolls back only the current unit
+    of work -- it did not protect the task's whole effect, despite reading as
+    though it did. `:317` now runs once after the loop, so the two tests below
+    fail if the commit is ever moved back inside it.
     """
 
     def test_a_failure_partway_through_leaves_no_partial_writes(self, db_session, monkeypatch):
@@ -675,7 +676,7 @@ class TestUpdateCommunityStatsIsAtomic:
         second.subscriptions_count = 0
         db.session.commit()
 
-        # Each community costs two text() calls, at `:311` and `:315`. Letting
+        # Each community costs two text() calls, at `:309` and `:313`. Letting
         # two through and failing on the third puts the failure inside the
         # SECOND community, after the first has been fully processed.
         real_text = maintenance.text
@@ -698,13 +699,22 @@ class TestUpdateCommunityStatsIsAtomic:
         assert counts == {'microblogs': 0, 'second': 0}
 
     def test_the_number_of_community_selects_does_not_scale_with_the_loop(self, db_session):
-        """PC2's second consequence: `expire_on_commit` forces a re-SELECT.
+        """PC2's second consequence: `expire_on_commit` forced a re-SELECT.
 
-        `expire_on_commit` defaults to True (fact 58), so each commit inside the
-        loop expires every loaded Community and the next iteration's first
-        attribute read reloads its row. Counting statements on `db.engine`
-        catches the task's own connection, because `get_task_session()` binds to
-        that same engine (app/utils.py:3673-3675).
+        `expire_on_commit` defaults to True (fact 58), so before this task's
+        fix each commit inside the loop expired every loaded Community and the
+        next iteration's first attribute read reloaded its row. Counting
+        statements on `db.engine` catches the task's own connection, because
+        `get_task_session()` binds to that same engine (app/utils.py:3673-3675).
+
+        With 4 eligible communities the unmodified code produced exactly 4
+        matching statements: the one eligibility query at `:287-290`, plus one
+        re-SELECT by primary key at the top of each of iterations 2, 3 and 4,
+        on the Community object the previous iteration's commit had just
+        expired -- for N communities the mechanism predicts N. After the fix
+        it predicts exactly 1: the eligibility query alone, since with no
+        in-loop commit nothing is ever expired and autoflush emits UPDATEs,
+        not SELECTs, for the pending attribute changes.
         """
         import re
 
