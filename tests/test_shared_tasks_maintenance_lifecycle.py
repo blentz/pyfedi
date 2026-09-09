@@ -56,7 +56,13 @@ from tests.factories import (
 
 
 def _boom(*args, **kwargs):
-    """Raise from inside a task's `try`, to reach its `except` arm."""
+    """Raise when patched in for a symbol used inside a task's `try`.
+
+    Reaching the task's `except` arm this way is the caller's responsibility:
+    pick a symbol the task actually calls from inside its `try`. `pwn_bots` is
+    the case where the obvious choice -- `utcnow` -- does not work, because it
+    computes its cutoff one line above the `try`.
+    """
     raise RuntimeError('the task itself failed')
 
 
@@ -154,7 +160,23 @@ class TestPwnBots:
         assert db.session.get(BotChallenge, challenge.id).is_a_bot is False
 
     def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch):
-        monkeypatch.setattr('app.shared.tasks.maintenance.utcnow', _boom)
+        """`:1174-1176`'s handler, reached through `:1167`.
+
+        NOT through `utcnow`. `:1164` computes the cutoff one line ABOVE
+        `:1165`'s `try:`, so patching the clock raises before the handler
+        exists and would pass even if the whole `except` clause were deleted.
+        `pwn_bots` is the only task in this group that orders those two
+        statements that way.
+
+        A challenge must be seeded, because `:1167`'s `text(...)` is inside the
+        loop and an empty result set never reaches it.
+        """
+        instance, user, _, _ = _seed()
+        challenge = BotChallenge(uuid='c4', user_id=user.id,
+                                 sent_at=utcnow() - timedelta(days=2))
+        db.session.add(challenge)
+        db.session.commit()
+        monkeypatch.setattr('app.shared.tasks.maintenance.text', _boom)
 
         with pytest.raises(RuntimeError, match='the task itself failed'):
             pwn_bots()
