@@ -5250,8 +5250,8 @@ the reviewer's attempt, not the author's confidence.
 
 **161. `CREATE TEMPORARY TABLE ... ON COMMIT DROP` NEEDS NO SPECIAL FIXTURE
 UNDER THIS HARNESS.** A probe run as a temporary pytest test called
-`calculate_community_activity_stats()` (`app/shared/tasks/maintenance.py:748`,
-which creates `temp_community_activity` `ON COMMIT DROP` at `:764-769`) under
+`calculate_community_activity_stats()` (`app/shared/tasks/maintenance.py:749`,
+which creates `temp_community_activity` `ON COMMIT DROP` at `:765-770`) under
 the ordinary `db_session` fixture and it ran to completion with no error;
 `db.session.execute(db.text("SELECT to_regclass('temp_community_activity')")).scalar()`
 returned `None` afterward, confirming no catalog object was left behind.
@@ -5300,12 +5300,12 @@ PLUS ONE PER-PRIMARY-KEY RE-SELECT PER SURVIVING ROW, AND THE OBSERVED COUNT
 CONFIRMS IT EXACTLY.** Counting `SELECT ... FROM community` statements
 (word-boundary regex, not a substring match -- `' FROM community' in
 s.lower()` also matches `FROM community_member`, which
-`app/shared/tasks/maintenance.py:294-302`'s
+`app/shared/tasks/maintenance.py:295-303`'s
 `select(func.count()).select_from(CommunityMember)` emits) across four
 communities driving `update_community_stats`'s pre-fix per-iteration commit
-(`:317`, inside the loop opened at `:292`) read `assert 4 == 1`: one
+(`:318`, inside the loop opened at `:293`) read `assert 4 == 1`: one
 statement for the initial `communities = session.query(Community).filter(...).all()`
-at `:287-290`, plus three more, one per community at the top of iterations
+at `:288-291`, plus three more, one per community at the top of iterations
 2 through 4, because `expire_on_commit` (default True, fact 58) expires
 every loaded `Community` after each in-loop commit and the next iteration's
 first attribute access re-SELECTs it by primary key. After the fix moved
@@ -5391,7 +5391,7 @@ from its own freshly retrieved JSON with an exact match.
 **169. COVERAGE CANNOT DISTINGUISH AN INSERT THAT RAN FROM ONE A TEST WOULD
 MISS IF IT WERE DELETED.** `calculate_community_activity_stats` populates
 `temp_community_activity` with four separate `INSERT` statements (posts,
-post replies, post votes, post reply votes; `app/shared/tasks/maintenance.py:772-814`),
+post replies, post votes, post reply votes; `app/shared/tasks/maintenance.py:773-815`),
 and the downstream aggregate counts `COUNT(DISTINCT ... user_id)` per
 community. A test seeding one actor per source drove all four `INSERT`s to
 execute and add a row apiece -- 100% coverage on all four -- but because the
@@ -5408,7 +5408,7 @@ reply-vote sources their own distinct actor, which is what let the
 aggregate see all four independently.
 
 **170. A PROVEN EQUIVALENT MUTANT: DELETING `unban_expired_users`'S `AND
-banned_until is not null` CONJUNCT.** `app/shared/tasks/maintenance.py:397`'s
+banned_until is not null` CONJUNCT.** `app/shared/tasks/maintenance.py:398`'s
 UPDATE predicate is `banned is true AND banned_until < :cutoff AND
 banned_until is not null`. Deleting the trailing conjunct survived all 53
 tests, 0 failures, and this is a genuine equivalent mutant rather than an
@@ -5443,6 +5443,200 @@ own commit at `:317`, where it killed cleanly. Had this check not been made,
 the round would have recorded a false equivalence: not a hole in the tests,
 but a hole in the mutation record itself, indistinguishable from a real one
 without re-deriving the site against the test the plan said would catch it.
+
+**172. A CONFLICTING UNCOMMITTED WRITE DEADLOCKS POSTGRES, AND
+`pytest-timeout` CANNOT INTERRUPT IT -- TWO INDEPENDENT REASONS, BOTH
+LOAD-BEARING.** A probe holding an uncommitted write on a row another
+session also touches (one candidate approach to discriminating a
+read/write session split) deadlocked live Postgres rather than returning a
+pass or fail. The configured 60s signal-based `pytest-timeout` ceiling did
+not fire; `pg_stat_activity` showed the blocked backend's `dur` climbing
+past several minutes. **Halfway to Postgres:** libpq's blocking-mode
+readiness wait, inside `pqWait`/`pqSocketPoll`, has a `poll()`/`select()`
+loop that `continue`s UNCONDITIONALLY on `EINTR` -- it is not a `read(2)`
+that "commonly retries"; the wait itself never treats an arriving signal as
+a reason to return control. **Halfway to Python:** psycopg2 releases the
+GIL around that libpq call, so the process's C-level `SIGALRM` handler (set
+by `pytest-timeout`) fires while the interpreter holds no GIL and is not
+between bytecode instructions -- it does the minimum a signal handler must
+(sets a flag, writes the interpreter's wakeup file descriptor), and the
+Python-level handler that actually raises `pytest-timeout`'s `Failed`
+cannot run until the eval loop next checks for pending signals, which
+cannot happen until the blocked C call returns. Both halves have to hold
+for the timeout to fail to fire; either alone would not explain it.
+**Recovery**: `podman exec <db-container> psql ... -c "SELECT pid, state,
+wait_event_type, wait_event, query, now()-query_start AS dur FROM
+pg_stat_activity WHERE datname='<db>';"` to find the blocked/blocking
+backends, `SELECT pg_terminate_backend(<pid>), ...` for every backend
+involved (blocker and blockee both -- terminating only the blocker can
+still leave the blockee's client-side state, and the test's own
+connection, inconsistent), and `./run_tests.sh --down` before trusting
+anything the recycled stack reports next, since a forcibly-terminated
+backend can leave cascading errors (an `IntegrityError` from a skipped
+per-test teardown, observed here) in whatever test runs immediately after.
+The run does not recover on its own; it stays wedged until acted on.
+
+**173. COVERAGE.PY RECORDS ONE ARC PAIR PER `if`, SO IT CANNOT SEE THAT A
+COMPOUND'S SUB-CONDITION WAS NEVER INDEPENDENTLY EXERCISED ONCE ANY PATH
+TAKES THE DECISION'S FALSE ARC BY ANOTHER ROUTE -- ONLY MUTATION CAN.**
+`delete_old_soft_deleted_content:255`'s `if post and (post.image_id is
+None or post.image_id not in images_used_by_many_posts):` reads as FULLY
+covered in `missing_branches` -- no `(255, ...)` entry appears anywhere in
+the whole-module JSON -- because an existing test takes the compound's
+false arc through the reachable route (`post` truthy, but the `image_id`
+sub-clause excludes it), not through the `post is None` sub-condition a
+structural proof shows is unreachable single-threaded. Decision coverage is
+satisfied the moment ANY path takes the false arc; it has no mechanism to
+attribute that arc to a particular sub-term, so a fully-covered decision
+can still contain an entirely untested conjunct and the coverage report
+gives no signal that this happened. A scripted mutation dropping the
+`post and ` conjunct (row 15b) is what surfaces it: the mutation survived
+all 56 tests, proving the sub-condition's absence is invisible to the
+whole suite, not merely to the coverage tool. No statement number or
+branch number, read on its own, can ever reveal this class of gap; only
+running the mutation can.
+
+**174. THE ERROR-PATH IDIOM (`monkeypatch` A CLOCK OR HELPER TO RAISE, TO
+REACH A TASK'S `except` ARM) FAILS ON TWO INDEPENDENT AXES, AND BOTH
+APPEARED IN THIS MODULE.** A patched symbol must be reachable on two
+counts: it must sit INSIDE the `try`, and it must be in a statement that
+ACTUALLY EXECUTES given the test's own seeded data. `pwn_bots` failed the
+first axis -- its cutoff (`cut_off = utcnow() - timedelta(days=1)`) is
+computed one line ABOVE the `try:`, so patching `utcnow` raised before the
+handler was ever entered; the test passed and would have kept passing had
+the whole `except` clause been deleted. `remove_old_community_content`
+failed the second axis -- its `utcnow()` call is inside a `for community in
+communities:` loop over communities with `content_retention > 0`, and the
+first attempt at this test seeded no such community, so the loop body
+never ran and the patched clock never fired: the test failed LOUDLY
+(`DID NOT RAISE`) rather than passing for the wrong reason. Both failure
+modes produce a test that looks like it exercises an error path and does
+not; the first passes silently, the second fails loudly, and only the
+second is self-revealing.
+
+**175. `ObjectDeletedError` DEPENDS ON WHICH SESSION DELETED THE ROW --
+READ THIS BESIDE FACT 155, NOT IN PLACE OF IT.** Fact 155 established that
+a deleted-then-committed SQLAlchemy instance is EXPUNGED, not expired, so a
+post-delete attribute read on that SAME instance returns the pre-delete
+value rather than raising. This is the opposite case, observed in the same
+sub-project: when a DIFFERENT session deletes and commits a row while the
+test's own session still holds an instance for that row as PERSISTENT
+(never itself deleted or expunged), the test session's next refresh of
+that instance finds nothing to reload and raises `ObjectDeletedError`.
+Same exception class, opposite session relationship to the deleting
+transaction -- one raises because the instance was refreshed after being
+orphaned by someone else's commit, the other returns cleanly because the
+instance was the very thing deleted and is already gone from its own
+session's bookkeeping. Confirmed directly: a test whose OWN session called
+`archive_user` (matching fact 155's shape) saw a clean `None` on
+`db.session.get()`; a test where deletion happened through the task's
+`get_task_session()` session while the test asserted through `db.session`
+raised, and was fixed by capturing the id into a local variable before the
+delete rather than re-fetching the ORM instance afterward.
+
+**176. A `@celery.task`-DECORATED FUNCTION CALLED AS A BARE `foo()` RUNS
+SYNCHRONOUSLY IN-PROCESS REGARDLESS OF EAGER MODE, BY ORDINARY CELERY
+`Task.__call__` SEMANTICS.** This is not a property of this harness's test
+configuration (`CELERY_ALWAYS_EAGER` or similar) -- it holds in production
+too. Adding `@celery.task` to a function two of whose only call sites both
+invoke it as a plain function call (never `.delay()` or `.apply_async()`)
+therefore changes nothing observable at either call site: the decorator
+makes the function DISPATCHABLE (callable via `.delay()` from elsewhere),
+it does not make an existing bare call route through the broker. Anywhere
+in this codebase a decorated task is called bare, that call was already
+running synchronously before the decorator existed and continues to after.
+
+**177. `File.delete_from_disk` (`app/models.py:421-434`) TOLERATES A
+NONEXISTENT PATH, AND A `/static/...`-ROOTED PATH CANNOT TAKE THE S3
+BRANCH ABOVE IT.** `:429`'s `elif os.path.isfile(self.file_path):` gates
+the `os.unlink()` call -- when the path does not exist on disk, the
+condition is simply False and the unlink is skipped with no exception, no
+monkeypatch needed to test it. Confirmed directly by reading `:421-434`,
+not inferred. The branch above it, `:425`, needs
+`self.file_path.startswith(f'https://{current_app.config["S3_PUBLIC_URL"]}')`
+AND `_store_files_in_s3()` to be true; a `file_path` beginning with
+`/static/...` (the shape every locally-stored file uses) can never satisfy
+the `startswith` half regardless of the S3 config flags or setting, so a
+test constructing such a path exercises `:429`'s branch for the right
+reason rather than merely by the S3 arm failing to trigger for an
+unrelated reason.
+
+**178. A SWEEP CLAIMED COMPLETE CAN STILL BE WRONG, AND CAN STILL BE
+WRONG A SECOND TIME.** Two consecutive rounds in the same sub-project each
+swept a file for stale citations after a line-shifting edit, reported the
+sweep complete, and were wrong: the first round's "every remaining
+citation already matched" claim left two more stale citations undetected,
+caught only when a reviewer ran its OWN independent sweep rather than
+trusting the claim; the second round's fix, corrected those two, again
+claimed completeness, and a further reviewer's independent full sweep
+found none remaining -- the third attempt was the one done to the
+standard the constraint asks for, and it was independently re-verified
+rather than merely re-asserted. **A sweep's completeness claim is worth
+exactly as much as the check that verified it was complete, and stating
+"every citation was checked" is a claim to verify, not a fact simply
+because it was written down.**
+
+**179. THE `_Recorder` IDIOM FOR A CALLABLE BELONGING TO ANOTHER MODULE
+REPLACES IT IN THE CALLING MODULE'S OWN NAMESPACE, NOT THE CALLEE'S, SO
+THE TEST ASSERTS ON THE HANDOVER RATHER THAN ON THE CALLEE'S OWN
+BEHAVIOUR.** `delete_post` belongs to `app/shared/post.py`, a separately
+floored module with its own federation behaviour this round does not test.
+Its call sites in `app/shared/tasks/maintenance.py` are patched via
+`monkeypatch.setattr('app.shared.tasks.maintenance.delete_post', recorder)`
+-- the NAME bound inside `maintenance`'s own module namespace by its
+`from app.shared.post import delete_post` import -- rather than
+`app.shared.post.delete_post`, which would also work but tests a
+different claim. `_Recorder.calls` then holds one positional-argument
+tuple per invocation, letting a test assert on WHICH ids and WHAT
+arguments reached the boundary between the two modules, without asserting
+anything about what `delete_post` itself does with them once called.
+
+**180. A `before_cursor_execute` LISTENER ON `db.engine`, RECORDING
+`id(conn.connection)` PER STATEMENT, DISCRIMINATES WHICH DBAPI CONNECTION
+CHECKOUT ISSUED EACH STATEMENT.** This is the technique that produced a
+usable, deterministic result when other candidate approaches to testing a
+read/write session split either could not run at all (a conflicting write
+held across sessions deadlocked Postgres -- fact 172) or were never
+attempted (whether wrapping the body changed any EXISTING test's
+behaviour; whether data written on one session was visible through the
+other, the harness's own premise rather than something it had proven).
+Partitioning recorded statements by connection-checkout identity shows
+directly whether a read and the writes that follow it share one
+transaction or two, deterministically in both directions rather than by
+pool-order luck: when a `db.session` read opens a transaction that stays
+open across subsequent writes on a separate session object, the two
+checkouts cannot coincide by accident, so a genuine split reads as two
+distinct ids and a wrapped, single-session body reads as one.
+
+**181. CONSTRUCTING A `boto3` CLIENT MAKES NO NETWORK CALL, SO AN
+S3-CONFIGURED ARM CAN BE TAKEN IN A TEST WITHOUT CONTACTING AN ENDPOINT.**
+`boto3.session.Session().client(service_name='s3', ...)` builds a client
+object and validates its arguments locally; it does not open a connection
+or perform any handshake against `endpoint_url` until a request method is
+actually called on the client. A test setting all three of
+`S3_ACCESS_KEY`, `S3_ACCESS_SECRET` and `S3_ENDPOINT` non-empty (so
+`store_files_in_s3()` reads True) and then observing that the client
+object is passed to the function under test can therefore run to
+completion with no mocked transport and no real network access, confirmed
+directly: such a test passed in this harness with no `http_mock` or
+respx involvement.
+
+**182. `PostReply.has_replies` (`app/models.py:3287-3292`) READS THROUGH
+`db.session`, SO IT ONLY SEES A TASK'S OWN ROWS BECAUSE THE CALLER WRAPPED
+THE BODY IN `patch_db_session` -- A HELPER WHOSE CORRECTNESS DEPENDS
+ENTIRELY ON ITS CALLER'S WRAPPER.** Both of `has_replies`'s query branches
+(`include_deleted` True or False) query through the bare `db.session`
+name, not through any session passed as an argument. Inside
+`delete_old_soft_deleted_content`, `:272`'s
+`post_reply.has_replies(include_deleted=True)` call sees the task's own
+uncommitted work ONLY because `:221`'s `with patch_db_session(session):`
+has already replaced `db.session` for the duration of the `with` block --
+without that wrapper (outside a Flask request context, per fact 157's
+`has_request_context()` short-circuit), `db.session` would resolve to a
+separate, unrelated session that has not seen any of the task's own writes.
+The helper itself is correct and needs no change; its correctness for this
+caller is entirely borrowed from the caller's own `patch_db_session`
+wrapper, not intrinsic to the helper.
 
 ## Known noise
 
