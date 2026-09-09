@@ -327,7 +327,15 @@ class TestAddRemoteCommunityFromPost:
             '!books@peer.example', '!film@other.example'}
 
     def test_a_body_with_no_match_looks_up_nothing(self, db_session, monkeypatch):
-        """`:1110`'s false arm."""
+        """`:1107`'s regex, guarded against a false-positive match.
+
+        This takes `:1110`'s false arm for coverage, but it CANNOT discriminate
+        that guard: invert it and control enters the branch, reaches `:1112`'s
+        `for cl in set(community_lookup):`, and iterates zero times over the
+        empty list, so no lookup happens either way. `:1110` is a cheap skip
+        over `:1111`'s import, not a correctness guard, and nothing here kills
+        a mutation of it.
+        """
         recorder = _Recorder()
         monkeypatch.setattr('app.community.util.search_for_community', recorder)
 
@@ -350,12 +358,22 @@ class TestAddRemoteCommunityFromPost:
 
         This is fact 111's shape, which the campaign has reasoned about twice in
         `notes.py` and `pages.py`. The test asserts the swallow -- the task
-        continues to the next candidate rather than aborting -- and does not
-        claim the swallow is correct.
+        returns rather than propagating -- and does not claim the swallow is
+        correct.
+
+        The `called` list is what makes the swallow observable. Without it the
+        test would pass identically if the patch never took effect and
+        `search_for_community` was never reached, which would exercise no
+        handler at all.
         """
+        called = []
+
         def _raise(*args, **kwargs):
+            called.append(args[0])
             raise RuntimeError('lookup exploded')
 
         monkeypatch.setattr('app.community.util.search_for_community', _raise)
 
         add_remote_community_from_post({'body': '!books@peer.example'})
+
+        assert called == ['!books@peer.example']
