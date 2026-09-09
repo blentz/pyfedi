@@ -5341,23 +5341,27 @@ SUFFICIENT ON ITS OWN, THREE TIMES IN ONE ROUND.** A moved commit: dedenting
 it made `TestUpdateCommunityStatsIsAtomic`'s own class docstring ("the
 rollback READS as though it protects the task's whole effect. It does not")
 and a sibling comment false the instant the fix landed -- caught by a
-reviewer, not the implementer. A two-line deletion: removing
-`recalculate_user_attitudes`'s dead `processed = 0`/`processed += 1`
-shifted every citation below it by one or two lines, and the task's own
-report had already derived and written down the exact shift table before
-committing -- but did not apply it to the docstrings the same task had
-written two steps earlier, leaving five stale citations in its own new test
-class plus three more in two earlier tasks' docstrings that happened to cite
-lines below the deletion; a reviewer opening the cited lines caught all of
-it. An INNER-to-LEFT join: rewriting `calculate_community_activity_stats`'s
-SELECT to drive from `community` with a LEFT JOIN, instead of from the temp
-table with an INNER JOIN, made a present-tense docstring description of the
-INNER JOIN false -- this time the IMPLEMENTER caught it before committing,
-by re-reading its own docstring for tense and rewriting the bug in past
-tense and the fix in present tense. Three occurrences, two caught by
-review and one caught by self-review; the instruction to re-derive after
-the diff is final was present in every dispatch this round and was not, by
-itself, enough to prevent any of the three.
+reviewer, not the implementer. Fixed by commit `a949d824`. A two-line
+deletion: removing `recalculate_user_attitudes`'s dead `processed = 0`/
+`processed += 1` shifted every citation below it by one or two lines, and
+the task's own report had already derived and written down the exact shift
+table before committing -- but did not apply it to the docstrings the same
+task had written two steps earlier, leaving five stale citations in its own
+new test class plus three more in two earlier tasks' docstrings that
+happened to cite lines below the deletion; a reviewer opening the cited
+lines caught all of it. Fixed by commit `f58d5d3a`. An INNER-to-LEFT join:
+rewriting `calculate_community_activity_stats`'s SELECT to drive from
+`community` with a LEFT JOIN, instead of from the temp table with an INNER
+JOIN, made a present-tense docstring description of the INNER JOIN false --
+this time the IMPLEMENTER caught it before committing, by re-reading its own
+docstring for tense and rewriting the bug in past tense and the fix in
+present tense. **No fix commit exists for this third instance because it
+never shipped stale** -- the correction landed inside the same commit
+(`1e5916f5`) that made the join change, before review ever saw it. Three
+occurrences, two caught by review and one caught by self-review; the
+instruction to re-derive after the diff is final was present in every
+dispatch this round and was not, by itself, enough to prevent any of the
+three.
 
 **167. A COVERAGE RUN LEAVES ITS JSON IN THE HOST REPO ROOT, NOT ONLY IN
 THE CONTAINER.** `compose.test.yaml`'s `test-runner` service bind-mounts the
@@ -5419,6 +5423,26 @@ extra conjunct is unconditionally true and changes nothing. Run and
 demonstrated in the mutation transcript with the full three-valued-logic
 argument written out, not merely asserted from background knowledge of SQL
 NULL semantics.
+
+**171. WHEN A MUTATION SURVIVES, CHECK THE SITE AGAINST THE TEST THE PLAN
+NAMED AS ITS KILLER BEFORE RECORDING AN EQUIVALENT MUTANT -- A SURVIVOR AT
+THE WRONG SITE LOOKS EXACTLY LIKE A SURVIVOR AT THE RIGHT ONE.** Mutation 14
+was specified against "PC2," and the implementer first applied it to
+`calculate_community_activity_stats` (re-indenting its post-loop commit at
+what was then line 859 back inside the loop) because that function also
+loops and commits once after the loop, the same shape `update_community_stats`
+has. That mutation ran clean, 53 passed, 0 failed -- a result indistinguishable
+from a genuine equivalent mutant. Instead of banking it as one, the
+implementer traced the brief's own named killer test,
+`test_a_failure_partway_through_leaves_no_partial_writes`, found it lives in
+`TestUpdateCommunityStatsIsAtomic` and patches `text()` to fail mid-loop
+specifically against `update_community_stats`'s `:309`/`:313` calls -- a
+function the first mutation never touched -- concluded the site was wrong,
+restored, and re-ran the same mutation against `update_community_stats`'s
+own commit at `:317`, where it killed cleanly. Had this check not been made,
+the round would have recorded a false equivalence: not a hole in the tests,
+but a hole in the mutation record itself, indistinguishable from a real one
+without re-deriving the site against the test the plan said would catch it.
 
 ## Known noise
 
