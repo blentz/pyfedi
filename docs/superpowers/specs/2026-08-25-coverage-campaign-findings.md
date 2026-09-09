@@ -9773,12 +9773,31 @@ this commit (Group D's closure shifted nothing inside C -- `wc -l` moved
 
 | Group | Functions (current line numbers) | Stmts | Branch points | What a test must fake |
 |-------|-----------|-------|-------|-----------------------|
-| **C** | `sync_defederation_subscriptions:409`, `check_instance_health:427`, `monitor_healthy_instances:509` | 196 | 47 | nodeinfo negotiation over `httpx` |
+| **C** | `sync_defederation_subscriptions:409-425`, `check_instance_health:427-507`, `monitor_healthy_instances:509-711` | 193 | 47 | nodeinfo negotiation over `httpx` |
 
-Two-thirds of Group C's 196 statements sit in one function
-(`monitor_healthy_instances`), carried forward unchanged from sub-project
-29's measurement -- neither this round's two production changes nor its test
-additions touch Group C.
+**193 statements, measured this round, not carried forward.** An earlier
+sub-project's figure of 196 (repeated at this document's Group C/D "remain"
+sections for sub-projects 29 and 30) is **superseded by this measurement,
+not silently overwritten** -- a future reader tracing where 196 came from
+should find this correction rather than a gap. Measured with a
+`--cov-branch` run over all three `maintenance.py` test files, dotted
+`--cov=app.shared.tasks.maintenance` form, JSON written outside the repo:
+`sync_defederation_subscriptions:409-425` = 11 statements,
+`check_instance_health:427-507` = 48, `monitor_healthy_instances:509-711` =
+134 -- 11 + 48 + 134 = **193**, with `monitor_healthy_instances` alone
+carrying 134 of the 193, a shape the next round should scope around rather
+than split evenly across the group's three functions. The **47 branch-point
+figure is confirmed, not changed**: 94 missing branch arcs at two arcs per
+decision point is 47 points, every one of them entirely uncovered, exactly
+what a group with no tests at all should show. Corroborated by the module
+total: `num_statements` reads **639** where the design spec's original count
+was 637 -- exactly the two statements this round's two production changes
+added (`clean_up_tmp`'s `if directory is None:` and `delete_from_s3`'s
+`try:`), confirming the measurement is of the current tree rather than a
+stale artifact. Recorded so the next round has the denominator without
+re-deriving it: `app/shared/tasks/maintenance.py` measures
+**639 statements, 204 branches, `percent_covered` 65.00593119810202%**
+overall (module-wide, all groups combined) as of this commit.
 
 **Facts 183-186 carried into `tests/README.md`.** `respx`'s
 `AllMockedAssertionError` descends from `AssertionError`, not
