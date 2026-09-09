@@ -267,7 +267,7 @@ def send_post(post_id, edit=False, session=None):
     # if the community is local, and remote instance is something like Mastodon, Announce creates (so the community Boosts it), but send updates directly and from the user
     # Announce of Poll doesn't work for Mastodon, so don't add domain to domains_sent_to, so they receive it if they're also following the User or they get Mentioned
     # if the community is remote, send activity directly
-    if not community.local_only:
+    if not community.local_only:  # pragma: no branch -- see proof in test_shared_tasks_send_post.py
         if community.is_local():
             del create['@context']
 
@@ -309,7 +309,7 @@ def send_post(post_id, edit=False, session=None):
     # amend copy of the Create, for anyone Mentioned in post body or who is following the user, to a format more likely to be understood by Mastodon
     if '@context' not in create:
         create['@context'] = default_context()
-    if 'name' in page:
+    if 'name' in page:  # pragma: no branch -- see proof in test_shared_tasks_send_post.py
         del page['name']
     note = page
     note['content'] = ''
@@ -330,7 +330,7 @@ def send_post(post_id, edit=False, session=None):
         note['contentMap'] = {post.language_code(): note['content']}
     note['inReplyTo'] = None
     create['object'] = note
-    if not community.local_only:
+    if not community.local_only:  # pragma: no branch -- see proof in test_shared_tasks_send_post.py
         for recipient in recipients:
             if recipient.instance.domain not in domains_sent_to:
                 send_post_request(recipient.instance.inbox, create, user.private_key, user.public_url() + '#main-key')

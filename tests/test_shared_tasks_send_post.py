@@ -1334,14 +1334,17 @@ def test_the_delivered_object_type_follows_the_post_type(db_session, http_mock,
 # ---------------------------------------------------------------------------
 # FOUR UNREACHABLE ITEMS, and why no test here chases them.
 #
-# Three are branch arms; the fourth is a pair of STATEMENTS. Together they are
-# the whole of what `send_post` (:88-352) leaves unmeasured -- coverage reports
-# exactly the lines 107-108 and exactly the arcs (270, 310), (312, 314) and
-# (333, 339) as missing inside the function, and nothing else.
+# Three are branch arms; the fourth is a pair of STATEMENTS. Together they were
+# the whole of what `send_post` (:88-352) left unmeasured before Task 11 --
+# coverage reported exactly the lines 107-108 and exactly the arcs (270, 310),
+# (312, 314) and (333, 339) as missing inside the function, and nothing else.
+# Task 11 (see the note near :3074, "TASK 11 CLOSED THE THREE BRANCH ARMS")
+# marked all three arcs `# pragma: no branch` in `pages.py`, on the strength of
+# the same proofs argued below; only :107-108 is still a live residual.
 #
 # (1) AND (2): THE FALSE ARMS OF :270 AND :333, both `if not
 # community.local_only:` -- the arcs (270, 310) and (333, 339). They will stay
-# missing.
+# missing from any test's coverage, and are now excluded via pragma instead.
 #
 # `community` is bound once, at :91 (`community = post.community`), and is
 # never reassigned anywhere in :88-352. And :153-154 is
@@ -3067,6 +3070,29 @@ def test_edit_post_rolls_back_and_closes_when_send_post_raises(
 #              establisher.
 #   (312, 314) :312's FALSE arm. Establisher: an EARLIER WRITE in the same
 #              function -- see :1809 above.
+#
+# TASK 11 CLOSED THE THREE BRANCH ARMS, NOT THE STATEMENT PAIR. The three
+# proofs above -- (270, 310), (333, 339) and (312, 314) -- are each an
+# invariant established earlier IN THE SAME FUNCTION, which is exactly what
+# coverage.py's own `# pragma: no branch` exists for (the same idiom Task 9
+# used on `follows.py:188`, "see proof in test_shared_tasks_follows.py"), so
+# `pages.py` now carries that pragma on all three `if` lines, each pointing
+# back at this file. `:107-108` got no such mark: its establisher is the
+# CALLEE's behavior for every input `send_post` can construct, not an
+# invariant `pages.py` enforces on itself, and `# pragma: no branch` covers a
+# branch arm, not a pair of STATEMENTS -- there is no statement-level pragma
+# authorized for this task, and forcing the pair with a mock on
+# `search_for_user` would replay the exact mistake this file's mention-section
+# tests above already made and reversed once (see
+# `test_a_banned_remote_host_mention_is_skipped_via_the_remote_except`'s
+# docstring) and that `notes.py`'s identical site independently repeats
+# (`tests/test_shared_tasks_send_answer.py`'s sub-project 20 finding,
+# `tests/README.md` fact 111): a test that can only pass by replacing the
+# real callee proves a mock raises, not that `send_post` does anything new.
+# So `:107-108` stays the module's one honest residual, `pages.py` measures
+# 99.46091644204851% (243 statements, 2 missing; 128 branches, 0 partial) with
+# the pragmas applied, and the floor moves from 98 to 99, not 100 -- matching
+# `notes.py`'s own floor of 99 for the same shape of leftover.
 #
 # THE SIXTH ITEM IS NOT IN THE RESIDUAL AND THAT IS THE POINT: :432's
 # REDUNDANT `instance.online()` CONJUNCT.
