@@ -165,7 +165,7 @@ grep over the function's whole range rather than by observation.
   cutoff is whatever the setting holds. Registered rather than fixed — the
   approved production scope is three changes, and a docstring correction that
   rides along unapproved is the shape of sub-project 28's fourth edit.
-- **Raw `text()` DELETEs bypass the identity map.** `cleanup_old_read_posts:52`
+- **Raw `text()` DELETEs bypass the identity map.** `cleanup_old_read_posts:51`
   and `cleanup_old_voting_data`'s four DELETEs remove rows the session may hold
   loaded instances for. Harmless as written, because `get_task_session()`
   sessions are short-lived and these tasks load nothing first. Recorded so the
