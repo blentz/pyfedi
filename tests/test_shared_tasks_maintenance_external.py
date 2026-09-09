@@ -24,7 +24,14 @@ GET_REQUEST SLEEPS ON RETRY. `app/utils.py:158-162` and `:173-177` each
 `sleep(random.randint(3, 10))` before retrying, so a test driving `get_request`
 into either handler costs 3-10 seconds. No test here does. Failure paths are
 reached through the caller's own handler, or by returning a non-200 status,
-which does not retry.
+which does not retry. `get_request` is imported at module scope
+(`maintenance.py:19`) and called as a bare name at `:1009` and `:1072`, so
+`add_remote_communities:1077`'s `except httpx.HTTPError` and
+`refresh_instance_chooser:1010`'s bare `except Exception` are both reached
+below by replacing `get_request` itself with a raising stand-in
+(`monkeypatch.setattr('app.shared.tasks.maintenance.get_request', ...)`) --
+REPLACING the real function costs nothing, unlike DRIVING it into its own
+retry logic. Neither handler is left open in this file.
 
 `random.shuffle` AT `:999` makes node order nondeterministic. No test asserts on
 processing order; the oracle is the resulting set of rows.
@@ -34,6 +41,18 @@ HELPERS BELONGING TO OTHER MODULES ARE ARRANGED, NOT EXERCISED --
 (`app/activitypub/util.py:384`) and `boto3.session.Session`. Each is replaced in
 THIS module's namespace with a recorder, so the tests assert on the handover
 rather than on another module's behaviour (fact 179).
+
+NOT EVERY PATCH BELOW IS NAMESPACE-LOCAL THE WAY THE PARAGRAPH ABOVE
+DESCRIBES. `'app.shared.tasks.maintenance.os.remove'`,
+`'...maintenance.os.path.exists'` and `'...maintenance.random.shuffle'`
+resolve through `maintenance.os` and `maintenance.random`, which ARE the
+stdlib `os` and `random` modules themselves (plain `import os` / `import
+random`, not a name rebound in this module) -- so those three patches set
+`os.remove`, `posixpath.exists` and `random.shuffle` process-wide for the
+duration of the test, not merely inside `maintenance`'s own namespace.
+`monkeypatch` reverts each one and nothing else runs concurrently inside the
+call, so there is no live bug; the distinction matters only if a future
+target is shared more widely than this module's tests are.
 """
 
 import os
@@ -41,6 +60,7 @@ import tempfile
 import time
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from app import db
@@ -54,9 +74,15 @@ from app.shared.tasks.maintenance import (
 class _Recorder:
     """Replace a module-level callable and remember how it was called.
 
-    `calls` holds one tuple of positional arguments per invocation. Used for
-    helpers belonging to other modules, so a test asserts on what was handed
-    over rather than on what the callee then did (fact 179).
+    `calls` holds one `(args, kwargs)` 2-tuple per invocation -- the full
+    positional-args tuple and the keyword-args dict, not positional
+    arguments alone. Callers index `[0]` first to reach the positional args
+    tuple, then `[0]` again for the first positional argument specifically
+    (`c[0][0]` at, e.g., `:414`, `:424`, `:514`, `:615`;
+    `recorder.calls[0][0]` at `:880`, indexing the same two levels without
+    the comprehension). Used for helpers belonging to other modules, so a
+    test asserts on what was handed over rather than on what the callee then
+    did (fact 179).
     """
 
     def __init__(self, result=None):
@@ -175,6 +201,39 @@ class TestDeleteFromS3:
 
         assert client.closed is True
 
+    def test_the_client_is_built_from_s3_config_and_targets_the_configured_bucket(
+            self, db_session, monkeypatch, app):
+        """`:1128-1132`'s five configuration reads and `:1135`'s `Bucket=`.
+
+        Every test above patches `boto3` but never reads
+        `_StubBoto3Session.client_kwargs` (`:103`) or `_patch_boto3`'s return
+        value (`:129`), so `:1128-1132` and `:1135` were executed by all four
+        but asserted by none -- swapping `S3_BUCKET` for `S3_REGION` at
+        `:1135` survived the whole suite. It would still survive here too if
+        the five `S3_*` settings shared their common empty-string test
+        default, since a swap between two identical values is unobservable;
+        this test gives each one a distinct value through the `app` fixture
+        so a swap of any pair is caught.
+        """
+        monkeypatch.setitem(app.config, 'S3_REGION', 'test-region')
+        monkeypatch.setitem(app.config, 'S3_ENDPOINT', 'https://s3.example.test')
+        monkeypatch.setitem(app.config, 'S3_ACCESS_KEY', 'test-access-key')
+        monkeypatch.setitem(app.config, 'S3_ACCESS_SECRET', 'test-access-secret')
+        monkeypatch.setitem(app.config, 'S3_BUCKET', 'test-bucket')
+        client = _StubS3()
+        stub = self._patch_boto3(monkeypatch, client)
+
+        delete_from_s3(['a.png'])
+
+        assert stub.client_kwargs == {
+            'service_name': 's3',
+            'region_name': 'test-region',
+            'endpoint_url': 'https://s3.example.test',
+            'aws_access_key_id': 'test-access-key',
+            'aws_secret_access_key': 'test-access-secret',
+        }
+        assert client.deleted[0]['Bucket'] == 'test-bucket'
+
 
 class TestCleanUpTmp:
     """`clean_up_tmp:1141` -- delete stale media from the tmp directory.
@@ -226,7 +285,17 @@ class TestCleanUpTmp:
         assert os.path.exists(path)
 
     def test_the_extension_check_is_case_insensitive(self, db_session):
-        """`:1155` lowercases the filename before splitting, so .JPG matches."""
+        """The extension fold makes `.JPG` match, but not attributably to
+        either single line. `:1155` lowercases the whole filename before
+        `os.path.splitext`, and `:1156` lowercases `ext` again before the
+        `DELETABLE_EXTENSIONS` membership test -- by the time `:1156` runs,
+        `ext` is already lowercase because of `:1155`, so mutation proved
+        (D370) that dropping EITHER single `.lower()` alone survives every
+        test in this file: the other line's fold still makes `ext` lowercase
+        either way. This test cannot attribute the case-insensitivity to one
+        line over the other; it only pins that the fold happens somewhere in
+        `:1152-1156`.
+        """
         directory = tempfile.mkdtemp()
         path = self._stale(directory, 'OLD.JPG', 25 * 60 * 60)
 
@@ -423,6 +492,8 @@ class TestAddRemoteCommunities:
 
     An unmatched respx request DOES fail a test here: `:1077` catches only
     `httpx.HTTPError`, and respx raises an `AssertionError`.
+    `test_a_transport_failure_is_swallowed` below reaches `:1077`'s `except`
+    directly, by replacing `get_request` itself rather than via respx.
     """
 
     LISTING = 'https://lemmy.world/api/v3/post/list'
@@ -493,6 +564,35 @@ class TestAddRemoteCommunities:
 
         assert recorder.calls == []
 
+    def test_a_transport_failure_is_swallowed(self, db_session, monkeypatch):
+        """`:1077`'s `except httpx.HTTPError: return` (`:1078`).
+
+        No respx and no real transport are involved. `get_request` is
+        imported at module scope (`maintenance.py:19`) and called as a bare
+        name at `:1072`, so `monkeypatch.setattr(
+        'app.shared.tasks.maintenance.get_request', ...)` reaches this arm
+        directly, at no runtime cost -- there is no need to drive the real
+        `get_request` into its retry handlers (`app/utils.py:158-177`, each a
+        3-to-10-second `sleep`) to reach a caller's OWN exception handler.
+
+        The stand-in raises `httpx.HTTPError` itself, so this discriminates
+        the `except` clause rather than anything inside `get_request`.
+        `add_remote_community_from_post` is patched with a recorder so the
+        test can assert the task handed nothing over and never reached
+        `:1085`'s `get_setting` read.
+        """
+        def _raise(*args, **kwargs):
+            raise httpx.HTTPError('simulated transport failure')
+
+        monkeypatch.setattr('app.shared.tasks.maintenance.get_request', _raise)
+        recorder = _Recorder()
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.add_remote_community_from_post', recorder)
+
+        add_remote_communities()
+
+        assert recorder.calls == []
+
     def test_posts_are_processed_oldest_first(self, db_session, monkeypatch, http_mock):
         """`:1087`'s `reversed(...)`.
 
@@ -521,8 +621,9 @@ class TestRefreshInstanceChooser:
     `:984` asks fediverse.observer for PieFed nodes; `:986` and `:991` bail on a
     bad status or shape; `:999` shuffles; `:1002` walks the nodes, asking each
     for its own chooser document; `:1026` creates or updates a row; `:1040`'s
-    else and `:1010`'s handler delete one; `:1056` prunes rows for domains the
-    observer no longer lists.
+    else and `:1010`'s handler delete one; `:1056`'s `for` head walks the
+    existing rows and `:1057-1058` prunes those for domains the observer no
+    longer lists.
 
     A TEST HERE THAT FORGETS A ROUTE DOES NOT FAIL -- IT SILENTLY TESTS THE
     FAILURE PATH. `:1010`'s bare `except Exception` catches respx's
@@ -533,14 +634,24 @@ class TestRefreshInstanceChooser:
     `:999`'s `random.shuffle` makes processing order nondeterministic; no test
     asserts on it. The oracle is the resulting set of rows.
 
-    `:1010`'s inner handler is left deliberately untested for the reason
-    above -- a test that forgets a route is indistinguishable from a test
-    that exercises this path on purpose. `:1046`'s OUTER per-domain handler
-    is a different arm: it sits outside the inner `try`/`except`, so it is
-    reached by something in the `:1018-1044` body raising, not by a missing
-    route. `find_language_or_create` (patched at module scope, `:1032`) makes
-    a convenient raise site for that, and is exercised below for both arms of
-    `:1050`'s existing-row guard.
+    `:1010`'s inner handler IS tested below
+    (`test_a_connection_failure_deletes_an_existing_row_and_continues`), by
+    replacing `get_request` itself at module scope rather than by forgetting
+    a respx route or driving the real function into its 3-10-second retry.
+    `get_request` is imported at module scope (`maintenance.py:19`) and
+    called as a bare name at `:1009`, so
+    `monkeypatch.setattr('app.shared.tasks.maintenance.get_request', ...)`
+    reaches it directly and at no runtime cost. A deliberate replacement is
+    NOT indistinguishable from a forgotten route: the raising stand-in below
+    uses a dedicated exception class, and the second, healthy domain in that
+    same test is fetched through a genuine respx route bound by
+    `assert_all_called=True`, so a route that really was forgotten would
+    ERROR at teardown rather than pass silently. `:1046`'s OUTER per-domain
+    handler is a different arm: it sits outside the inner `try`/`except`, so
+    it is reached by something in the `:1018-1044` body raising, not by a
+    missing route. `find_language_or_create` (patched at module scope,
+    `:1032`) makes a convenient raise site for that, and is exercised below
+    for both arms of `:1050`'s existing-row guard.
     """
 
     OBSERVER = 'https://api.fediverse.observer/'
@@ -551,7 +662,16 @@ class TestRefreshInstanceChooser:
             for d in domains]}}
 
     def _chooser(self):
-        return {'nsfw': False, 'newbie_friendly': True, 'name': 'Peer'}
+        """`newbie_friendly` is `False` deliberately, NOT the more obvious
+        `True`: `InstanceChooser.newbie_friendly`'s column default is `True`
+        (`app/models.py:4365`), identical to `:1035`'s `chooser_data.get(
+        'newbie_friendly', True)` fallback -- so a document that also says
+        `True` leaves `:1035` covered but unobserved, indistinguishable from
+        deleting the line entirely or reading the wrong key. Returning
+        `False` here makes `:1035` discriminated wherever a test checks the
+        stored value against the column default.
+        """
+        return {'nsfw': False, 'newbie_friendly': False, 'name': 'Peer'}
 
     def test_a_listed_domain_gets_a_row(self, db_session, http_mock):
         http_mock.post(self.OBSERVER).respond(200, json=self._nodes('peer.example'))
@@ -580,8 +700,15 @@ class TestRefreshInstanceChooser:
         assert row.data['monthsmonitored'] == 12
 
     def test_an_existing_row_is_updated_rather_than_duplicated(self, db_session, http_mock):
-        """`:1026`'s false arm -- the row already exists."""
-        db.session.add(InstanceChooser(domain='peer.example', nsfw=True))
+        """`:1026`'s false arm -- the row already exists.
+
+        Also discriminates `:1034`'s `nsfw` and `:1035`'s `newbie_friendly`
+        writes: both are seeded opposite to what `_chooser()`'s document
+        supplies, so a row that merely keeps its pre-existing values, or
+        that reads `:1035`'s update from the wrong key, would leave either
+        assertion below failing.
+        """
+        db.session.add(InstanceChooser(domain='peer.example', nsfw=True, newbie_friendly=True))
         db.session.commit()
         http_mock.post(self.OBSERVER).respond(200, json=self._nodes('peer.example'))
         http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(
@@ -593,6 +720,7 @@ class TestRefreshInstanceChooser:
         rows = db.session.query(InstanceChooser).filter_by(domain='peer.example').all()
         assert len(rows) == 1
         assert rows[0].nsfw is False
+        assert rows[0].newbie_friendly is False
 
     def test_a_chooser_404_removes_an_existing_row(self, db_session, http_mock):
         """`:1040`'s else arm and `:1043`'s guard."""
@@ -674,6 +802,61 @@ class TestRefreshInstanceChooser:
         refresh_instance_chooser()
 
         db.session.expire_all()
+        assert {r.domain for r in db.session.query(InstanceChooser).all()} == {'peer.example'}
+
+    def test_a_connection_failure_deletes_an_existing_row_and_continues(
+            self, db_session, http_mock, monkeypatch):
+        """`:1010`'s inner `except Exception as e:` (`:1010-1016`), both arms
+        of `:1014`'s `if existing:` guard.
+
+        No respx and no real transport are involved. `get_request` is
+        imported at module scope (`maintenance.py:19`) and called as a bare
+        name at `:1009`, so replacing it in `maintenance`'s own namespace
+        reaches this handler directly -- there is no need to drive the real
+        `get_request` into `app/utils.py:158-177`'s retry logic, which sleeps
+        3-10 seconds per call.
+
+        `:1010` catches a bare `Exception`, so any exception type reaches
+        it. `_SimulatedOutage` is a dedicated class raised only for URLs
+        containing `down`, which makes this deliberately-raised failure
+        impossible to confuse with a test that merely forgot to register a
+        respx route: `peer.example` goes through the REAL `get_request`
+        (captured before patching) and a genuine respx route bound by
+        `assert_all_called=True` (`tests/conftest.py:339-342`), so a
+        forgotten route there would ERROR at teardown rather than pass.
+
+        Three domains distinguish every arm the block has:
+        `down.example` has an existing row and fails -- `:1014`'s true arm,
+        the row is deleted; `newly-down.example` has no row and fails --
+        `:1014`'s false arm, `:1015`'s delete is skipped and nothing raises
+        on the `None` lookup; `peer.example` succeeds, proving `:1016`'s
+        `continue` returns control to the loop rather than aborting the run.
+        """
+        class _SimulatedOutage(Exception):
+            pass
+
+        from app.utils import get_request as _real_get_request
+
+        def _get_request(uri, *args, **kwargs):
+            if 'down' in uri:
+                raise _SimulatedOutage('simulated-instance-chooser-outage')
+            return _real_get_request(uri, *args, **kwargs)
+
+        monkeypatch.setattr('app.shared.tasks.maintenance.get_request', _get_request)
+        db.session.add(InstanceChooser(domain='down.example'))
+        db.session.commit()
+        http_mock.post(self.OBSERVER).respond(
+            200, json=self._nodes('down.example', 'newly-down.example', 'peer.example'))
+        http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(
+            200, json=self._chooser())
+
+        refresh_instance_chooser()
+
+        db.session.expire_all()
+        assert db.session.query(InstanceChooser).filter_by(
+            domain='down.example').first() is None
+        assert db.session.query(InstanceChooser).filter_by(
+            domain='newly-down.example').first() is None
         assert {r.domain for r in db.session.query(InstanceChooser).all()} == {'peer.example'}
 
     def test_a_language_in_the_document_is_resolved(self, db_session, http_mock, monkeypatch):
