@@ -939,7 +939,7 @@ def archive_old_users():
             sql = '''
                     SELECT u.id
                     FROM "user" u
-                    WHERE u.avatar_id IS NOT NULL AND u.cover_id IS NOT NULL AND u.ap_id IS NOT NULL
+                    WHERE (u.avatar_id IS NOT NULL OR u.cover_id IS NOT NULL) AND u.ap_id IS NOT NULL
                       AND u.last_seen < :cutoff
                       
                 '''

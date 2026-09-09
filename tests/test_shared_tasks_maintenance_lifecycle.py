@@ -710,8 +710,10 @@ class TestArchiveUser:
     """`archive_user:957` -- drop a user's avatar and cover.
 
     `:959` and `:964` guard the two images INDEPENDENTLY, so this helper
-    handles a user with only one. `archive_old_users:942`'s query does not --
-    that mismatch is this round's PC1 and is NOT fixed here.
+    handles a user with only one. `archive_old_users:942`'s query used to
+    require BOTH -- that mismatch was this round's PC1, fixed by widening
+    `:942` to an `OR`; `TestArchiveOldUsersReachesOneImageUsers` covers the
+    widened query, not this class, which exercises the helper directly.
 
     Step 1 probed `File.delete_from_disk(purge_cdn=False)` (called at `:962`
     and `:967`) against a `make_file(file_path='/static/avatar.png')` row,
@@ -739,8 +741,10 @@ class TestArchiveUser:
         assert db.session.get(File, cover.id) is None
 
     def test_a_user_with_only_an_avatar_is_handled(self, db_session):
-        """`:959` true, `:964` false. The helper copes; `archive_old_users`'
-        query is what never sends it such a user.
+        """`:959` true, `:964` false. The helper copes; before this round's
+        PC1 fix, `archive_old_users`'s query never sent it such a user --
+        `TestArchiveOldUsersReachesOneImageUsers` covers that the widened
+        query now does.
         """
         instance, user, _, _ = _seed()
         avatar = make_file(file_path='/static/avatar.png')
@@ -854,3 +858,35 @@ class TestArchiveOldUsers:
                 archive_old_users()
         finally:
             app.config['ARCHIVE_POSTS'] = original
+
+
+class TestArchiveOldUsersReachesOneImageUsers:
+    """PC1: `:942` used to require BOTH images; `archive_user` requires either.
+
+    Before this round's fix, `:942` filtered on
+    `u.avatar_id IS NOT NULL AND u.cover_id IS NOT NULL`, while
+    `archive_user:959` and `:964` guard the two images independently. A
+    remote user with an avatar and no cover was never selected, however long
+    they had been idle, though the helper that processes them handles that
+    case. `:942` now filters on `(u.avatar_id IS NOT NULL OR u.cover_id IS
+    NOT NULL)`, and this test covers that a one-image user is reached.
+    """
+
+    def test_an_idle_remote_user_with_only_an_avatar_is_archived(self, db_session, app):
+        make_instance('local.example')
+        remote_instance = make_instance('remote.example')
+        user = make_user(remote_instance, 'oneimage')
+        avatar = make_file(file_path='/static/one-a.png')
+        user.avatar_id = avatar.id
+        user.last_seen = utcnow() - timedelta(days=6 * 28 + 1)
+        db.session.commit()
+        original = app.config['ARCHIVE_POSTS']
+        app.config['ARCHIVE_POSTS'] = 6
+
+        try:
+            archive_old_users()
+        finally:
+            app.config['ARCHIVE_POSTS'] = original
+
+        db.session.expire_all()
+        assert db.session.get(User, user.id).avatar_id is None
