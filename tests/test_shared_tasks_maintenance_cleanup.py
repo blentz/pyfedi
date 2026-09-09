@@ -797,3 +797,109 @@ class TestRecalculateUserAttitudes:
 
         with pytest.raises(RuntimeError, match='the task itself failed'):
             recalculate_user_attitudes()
+
+
+class TestCalculateCommunityActivityStats:
+    """`calculate_community_activity_stats:748` -- four activity sources.
+
+    `:763-769` builds a temporary table, `:772-814` fills it from posts, post
+    replies, post votes and post reply votes, `:817-819` indexes it, `:825-837`
+    aggregates over four windows, and `:843-856` writes the four columns back.
+
+    EACH INSERT HAS ITS OWN BOT EXCLUSION: `from_bot = False` for posts and
+    replies, `u.bot = False` for the two vote sources. A test that seeds only
+    posts executes every statement while pinning one quarter of the behaviour,
+    so these tests seed all four and then remove them one kind at a time.
+    """
+
+    def _community_with_one_activity_of_each_kind(self, when):
+        instance, author, community, post = _seed()
+        voter = make_user(instance, 'voter', local=True)
+        replier = make_user(instance, 'replier', local=True)
+        reply = make_post_reply(post, replier)
+        post_vote = make_post_vote(voter, post, 1.0)
+        reply_vote = make_post_reply_vote(voter, reply, 1.0)
+        post.posted_at = when
+        reply.posted_at = when
+        post_vote.created_at = when
+        reply_vote.created_at = when
+        community.last_active = utcnow()
+        db.session.commit()
+        return community, {author.id, replier.id, voter.id}
+
+    def test_activity_inside_a_day_counts_in_every_window(self, db_session):
+        community, actors = self._community_with_one_activity_of_each_kind(
+            utcnow() - timedelta(hours=1))
+
+        calculate_community_activity_stats()
+
+        db.session.expire_all()
+        refreshed = db.session.get(Community, community.id)
+        assert (refreshed.active_daily, refreshed.active_weekly,
+                refreshed.active_monthly, refreshed.active_6monthly) == (
+            len(actors), len(actors), len(actors), len(actors))
+
+    def test_activity_older_than_a_day_counts_only_in_the_wider_windows(self, db_session):
+        community, actors = self._community_with_one_activity_of_each_kind(
+            utcnow() - timedelta(days=2))
+
+        calculate_community_activity_stats()
+
+        db.session.expire_all()
+        refreshed = db.session.get(Community, community.id)
+        assert refreshed.active_daily == 0
+        assert (refreshed.active_weekly, refreshed.active_monthly,
+                refreshed.active_6monthly) == (len(actors), len(actors), len(actors))
+
+    def test_a_bot_author_is_excluded(self, db_session):
+        """`:777`'s `p.from_bot = False`, on the post INSERT."""
+        instance, author, community, post = _seed()
+        post.from_bot = True
+        post.posted_at = utcnow() - timedelta(hours=1)
+        community.last_active = utcnow()
+        db.session.commit()
+
+        calculate_community_activity_stats()
+
+        db.session.expire_all()
+        assert db.session.get(Community, community.id).active_daily == 0
+
+    def test_a_bot_voter_is_excluded(self, db_session):
+        """`:799`'s `u.bot = False`, on the post-vote INSERT.
+
+        The post itself is seeded outside the window so the only candidate
+        activity is the vote, which makes the assertion about the vote rather
+        than about whatever else happens to be in range.
+        """
+        instance, author, community, post = _seed()
+        bot = make_user(instance, 'botty', local=True)
+        bot.bot = True
+        vote = make_post_vote(bot, post, 1.0)
+        vote.created_at = utcnow() - timedelta(hours=1)
+        post.posted_at = utcnow() - timedelta(weeks=40)
+        community.last_active = utcnow()
+        db.session.commit()
+
+        calculate_community_activity_stats()
+
+        db.session.expire_all()
+        assert db.session.get(Community, community.id).active_daily == 0
+
+    def test_a_banned_community_is_not_updated(self, db_session):
+        """`:834`'s `c.banned = FALSE`."""
+        community, _ = self._community_with_one_activity_of_each_kind(
+            utcnow() - timedelta(hours=1))
+        community.banned = True
+        community.active_daily = 77
+        db.session.commit()
+
+        calculate_community_activity_stats()
+
+        db.session.expire_all()
+        assert db.session.get(Community, community.id).active_daily == 77
+
+    def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch):
+        monkeypatch.setattr('app.shared.tasks.maintenance.utcnow', _boom)
+
+        with pytest.raises(RuntimeError, match='the task itself failed'):
+            calculate_community_activity_stats()
