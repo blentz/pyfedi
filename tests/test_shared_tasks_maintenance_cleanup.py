@@ -1,6 +1,6 @@
 """Group A of `app/shared/tasks/maintenance.py` -- the ten pure-database tasks.
 
-`maintenance.py` is 1179 lines and 636 statements, three times the largest
+`maintenance.py` is 1179 lines and 634 statements, three times the largest
 module this campaign has closed in one round, so it is split by TESTING
 SURFACE rather than by subject. Group A is the ten tasks that need no
 transport at all:
@@ -28,7 +28,7 @@ immune and is what most tests here do.
 
 THE ERROR PATHS ARE THE SAME TEST TEN TIMES. Every task in this group wraps
 its body in `try / except Exception: session.rollback(); raise / finally:
-session.close()`, which is about thirty of the group's 151 statements. Nine of
+session.close()`, which is about thirty of the group's 149 statements. Nine of
 the ten call `utcnow()` inside the `try`, and `utcnow` is bound into this
 module's namespace at `app/shared/tasks/maintenance.py:16`, so monkeypatching
 `app.shared.tasks.maintenance.utcnow` raises inside the `try` without touching
