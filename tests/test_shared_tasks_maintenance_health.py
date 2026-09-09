@@ -24,8 +24,8 @@ BUT THE HAZARD STILL EXISTS FOR A TEST THAT FORGETS THE PATCH.
 it routes it into the failure path while the test believes it tested success.
 Task 1 established this by observation.
 
-THE IDENTITY HALF IS OUT OF SCOPE. `monitor_healthy_instances:606` needs
-`instance.software` in {'lemmy', 'piefed', 'pylova'} and `:667` needs 'mbin'.
+THE IDENTITY HALF IS OUT OF SCOPE. `monitor_healthy_instances:610` needs
+`instance.software` in {'lemmy', 'piefed', 'pylova'} and `:671` needs 'mbin'.
 Every fixture here uses `make_instance`'s default, 'mastodon', so neither body
 runs. Both `if` statements still evaluate, so this file covers their FALSE arms
 and sub-project 33 owns the true ones.
@@ -297,13 +297,18 @@ class TestMonitorHealthyInstances:
         assert fresh.gone_forever is False
 
     def test_a_raising_helper_does_not_end_the_whole_sweep(self, db_session, monkeypatch):
-        """DC2: `:561` closes `nodeinfo`, which `:533` may never have bound.
+        """DC2: a raising `get_request_instance` no longer ends the sweep.
 
-        If `get_request_instance` raises, the `except` at `:557` catches it and
-        then the `finally` at `:560-561` raises `UnboundLocalError` -- which
-        that handler has already run and cannot catch. It escapes to `:705`,
-        rolls back and re-raises, so one instance's failure ends the sweep for
-        every other instance.
+        Before the guard, `:563` closed `nodeinfo`, which `:534` might never
+        have bound: if `get_request_instance` raised, the `except` at `:558`
+        caught it and then the `finally` at `:561-563` raised
+        `UnboundLocalError` -- which that handler had already run and could
+        not catch. It escaped to `:709`, rolled back and re-raised, so one
+        instance's failure ended the sweep for every other instance. The
+        `nodeinfo = None` / `node = None` bindings ahead of each `try` and the
+        `is not None` guards on `.close()` fix that: the `except` arm's own
+        `instance.failures += 1` runs instead, and the loop continues to the
+        next instance.
 
         The oracle is that BOTH instances were touched, compared as a set:
         `:515` returns planner-ordered rows and this file asserts no order over
