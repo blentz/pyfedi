@@ -630,15 +630,25 @@ class TestRefreshInstanceChooser:
         version enters it via the manufactured `UnmappedInstanceError`, and
         logs.
 
-        The empty-recorder assertion is NOT sufficient alone: if the 404
-        route were never reached at all (a routing typo, an unmatched
-        `http_mock` route swallowed by the wrong handler), the warning would
-        also stay silent, for an unrelated reason, and this test would pass
-        while proving nothing about `:1043`. The companion assertion --
-        that no row exists for the domain afterwards -- only holds if
-        `refresh_instance_chooser` actually walked the node and took the
-        404 path, so together the two assertions pin down the branch this
-        test claims to cover.
+        `recorder == []` is the discriminator for `:1043` itself -- it is
+        what the guard-removal mutation above flips to non-empty.
+
+        The row assertion below is a CONSISTENCY CHECK, not proof the 404
+        path ran: no row is ever seeded for `peer.example`, and only the
+        200-status branch (`:1024-1028`) creates one, so
+        `.filter_by(domain='peer.example').first() is None` would hold
+        trivially even if `refresh_instance_chooser` never touched this
+        domain at all. It rules out a mutation that wrongly creates a row on
+        this path, but it cannot by itself show the path executed.
+
+        What actually guarantees the domain was processed is `http_mock`'s
+        `assert_all_called=True` (`tests/conftest.py:339-342`): this test
+        registers the 404 GET route for `peer.example`, and if
+        `refresh_instance_chooser` never made that request, respx raises at
+        fixture teardown and the test ERRORS rather than passing vacuously.
+        That is the mechanism that rules out "the 404 route was never
+        reached at all" -- not the empty-recorder assertion, which would
+        stay empty either way if the route went unhit.
         """
         recorder = []
         monkeypatch.setattr(
