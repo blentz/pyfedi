@@ -523,12 +523,12 @@ class TestUpdateCommunityStats:
     `is_local()`, `total_subscriptions_count is None`, and
     `total_subscriptions_count < subscriptions_count`.
 
-    KNOWN DEFECT, NOT FIXED HERE: `:317`'s `session.commit()` sits inside the
-    `for` loop opened at `:292`, committing once per community rather than
-    once after the loop. Every test below only ever seeds one eligible
-    community, so none of them can distinguish a commit-per-iteration from a
-    single commit after the loop -- that distinction is Task 6's to test,
-    once `:317` is dedented.
+    `:317`'s `session.commit()` used to sit inside the `for` loop opened at
+    `:292`, committing once per community rather than once after the loop.
+    Every test below only ever seeds one eligible community, so none of them
+    can distinguish a commit-per-iteration from a single commit after the
+    loop -- `TestUpdateCommunityStatsIsAtomic`, below, is what tests that
+    distinction, and `:317` is now dedented to commit once after the loop.
     """
 
     def test_subscriptions_count_excludes_bots_and_banned_members(self, db_session):
@@ -653,3 +653,84 @@ class TestUpdateCommunityStats:
 
         with pytest.raises(RuntimeError, match='the task itself failed'):
             update_community_stats()
+
+
+class TestUpdateCommunityStatsIsAtomic:
+    """PC2: `:317`'s commit inside the loop at `:292`.
+
+    With the commit inside the loop, a failure at community N leaves
+    communities 1..N-1 committed, and `:319-321`'s handler rolls back only the
+    current unit of work. The rollback READS as though it protects the task's
+    whole effect. It does not.
+    """
+
+    def test_a_failure_partway_through_leaves_no_partial_writes(self, db_session, monkeypatch):
+        import app.shared.tasks.maintenance as maintenance
+
+        _, user, first, _ = _seed()
+        second = make_community(name='second')
+        make_community_member(user, first)
+        make_community_member(user, second)
+        first.subscriptions_count = 0
+        second.subscriptions_count = 0
+        db.session.commit()
+
+        # Each community costs two text() calls, at `:311` and `:315`. Letting
+        # two through and failing on the third puts the failure inside the
+        # SECOND community, after the first has been fully processed.
+        real_text = maintenance.text
+        calls = {'n': 0}
+
+        def _text_that_fails_on_the_second_community(sql):
+            calls['n'] += 1
+            if calls['n'] > 2:
+                raise RuntimeError('the task itself failed')
+            return real_text(sql)
+
+        monkeypatch.setattr(maintenance, 'text', _text_that_fails_on_the_second_community)
+
+        with pytest.raises(RuntimeError, match='the task itself failed'):
+            update_community_stats()
+
+        db.session.expire_all()
+        counts = {c.name: c.subscriptions_count
+                  for c in db.session.query(Community).all()}
+        assert counts == {'microblogs': 0, 'second': 0}
+
+    def test_the_number_of_community_selects_does_not_scale_with_the_loop(self, db_session):
+        """PC2's second consequence: `expire_on_commit` forces a re-SELECT.
+
+        `expire_on_commit` defaults to True (fact 58), so each commit inside the
+        loop expires every loaded Community and the next iteration's first
+        attribute read reloads its row. Counting statements on `db.engine`
+        catches the task's own connection, because `get_task_session()` binds to
+        that same engine (app/utils.py:3673-3675).
+        """
+        import re
+
+        from sqlalchemy import event
+
+        _, user, first, _ = _seed()
+        for name in ('second', 'third', 'fourth'):
+            make_community(name=name)
+        db.session.commit()
+
+        statements = []
+
+        def _record(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement)
+
+        event.listen(db.engine, 'before_cursor_execute', _record)
+        try:
+            update_community_stats()
+        finally:
+            event.remove(db.engine, 'before_cursor_execute', _record)
+
+        # A WORD BOUNDARY, not a substring. `:294-302`'s
+        # `select(func.count()).select_from(CommunityMember)` emits
+        # `FROM community_member`, which `' FROM community' in s.lower()` would
+        # match -- an oracle that counts a statement it did not name.
+        selects = [s for s in statements
+                   if s.lstrip().upper().startswith('SELECT')
+                   and re.search(r'\bfrom\s+community\b', s, re.IGNORECASE)]
+        assert len(selects) == 1
