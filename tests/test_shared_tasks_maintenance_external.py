@@ -484,3 +484,163 @@ class TestAddRemoteCommunities:
         add_remote_communities()
 
         assert [c[0][0]['id'] for c in recorder.calls] == [8, 9]
+
+
+class TestRefreshInstanceChooser:
+    """`refresh_instance_chooser:975` -- rebuild the instance-chooser table.
+
+    `:984` asks fediverse.observer for PieFed nodes; `:986` and `:991` bail on a
+    bad status or shape; `:999` shuffles; `:1002` walks the nodes, asking each
+    for its own chooser document; `:1026` creates or updates a row; `:1040`'s
+    else and `:1010`'s handler delete one; `:1056` prunes rows for domains the
+    observer no longer lists.
+
+    A TEST HERE THAT FORGETS A ROUTE DOES NOT FAIL -- IT SILENTLY TESTS THE
+    FAILURE PATH. `:1010`'s bare `except Exception` catches respx's
+    `AllMockedAssertionError` (an `AssertionError`, not an `httpx.HTTPError`),
+    logs "Failed to connect", deletes the row and continues. Every success-path
+    test below registers both routes for that reason.
+
+    `:999`'s `random.shuffle` makes processing order nondeterministic; no test
+    asserts on it. The oracle is the resulting set of rows.
+    """
+
+    OBSERVER = 'https://api.fediverse.observer/'
+
+    def _nodes(self, *domains):
+        return {'data': {'nodes': [
+            {'domain': d, 'uptime_alltime': 99, 'monthsmonitored': 12}
+            for d in domains]}}
+
+    def _chooser(self):
+        return {'nsfw': False, 'newbie_friendly': True, 'name': 'Peer'}
+
+    def test_a_listed_domain_gets_a_row(self, db_session, http_mock):
+        http_mock.post(self.OBSERVER).respond(200, json=self._nodes('peer.example'))
+        http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(
+            200, json=self._chooser())
+
+        refresh_instance_chooser()
+
+        db.session.expire_all()
+        rows = db.session.query(InstanceChooser).all()
+        assert {r.domain for r in rows} == {'peer.example'}
+
+    def test_the_uptime_and_months_are_folded_into_the_stored_data(self, db_session, http_mock):
+        """`:1021-1022` copy two fields off the observer node into the chooser
+        document before `:1038` stores the whole thing.
+        """
+        http_mock.post(self.OBSERVER).respond(200, json=self._nodes('peer.example'))
+        http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(
+            200, json=self._chooser())
+
+        refresh_instance_chooser()
+
+        db.session.expire_all()
+        row = db.session.query(InstanceChooser).filter_by(domain='peer.example').first()
+        assert row.data['uptime'] == 99
+        assert row.data['monthsmonitored'] == 12
+
+    def test_an_existing_row_is_updated_rather_than_duplicated(self, db_session, http_mock):
+        """`:1026`'s false arm -- the row already exists."""
+        db.session.add(InstanceChooser(domain='peer.example', nsfw=True))
+        db.session.commit()
+        http_mock.post(self.OBSERVER).respond(200, json=self._nodes('peer.example'))
+        http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(
+            200, json=self._chooser())
+
+        refresh_instance_chooser()
+
+        db.session.expire_all()
+        rows = db.session.query(InstanceChooser).filter_by(domain='peer.example').all()
+        assert len(rows) == 1
+        assert rows[0].nsfw is False
+
+    def test_a_chooser_404_removes_an_existing_row(self, db_session, http_mock):
+        """`:1040`'s else arm and `:1043`'s guard."""
+        db.session.add(InstanceChooser(domain='peer.example'))
+        db.session.commit()
+        http_mock.post(self.OBSERVER).respond(200, json=self._nodes('peer.example'))
+        http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(404)
+
+        refresh_instance_chooser()
+
+        db.session.expire_all()
+        assert db.session.query(InstanceChooser).filter_by(
+            domain='peer.example').first() is None
+
+    def test_a_domain_the_observer_dropped_is_pruned(self, db_session, http_mock):
+        """`:1056-1058` -- rows for domains absent from the observer response."""
+        db.session.add(InstanceChooser(domain='gone.example'))
+        db.session.commit()
+        http_mock.post(self.OBSERVER).respond(200, json=self._nodes('peer.example'))
+        http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(
+            200, json=self._chooser())
+
+        refresh_instance_chooser()
+
+        db.session.expire_all()
+        assert {r.domain for r in db.session.query(InstanceChooser).all()} == {'peer.example'}
+
+    def test_a_language_in_the_document_is_resolved(self, db_session, http_mock, monkeypatch):
+        """`:1031`'s true arm. `find_language_or_create` is imported at module
+        scope (`maintenance.py:13`), so the namespace idiom reaches it.
+        """
+        recorder = _Recorder(result=type('L', (), {'id': 42})())
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.find_language_or_create', recorder)
+        doc = self._chooser()
+        doc['language'] = {'id': 1, 'code': 'en', 'name': 'English'}
+        http_mock.post(self.OBSERVER).respond(200, json=self._nodes('peer.example'))
+        http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(
+            200, json=doc)
+
+        refresh_instance_chooser()
+
+        db.session.expire_all()
+        row = db.session.query(InstanceChooser).filter_by(domain='peer.example').first()
+        assert row.language_id == 42
+        assert recorder.calls[0][0] == ('en', 'English')
+
+    def test_an_observer_non_200_returns_early(self, db_session, http_mock):
+        """`:986`'s true arm. No chooser route is registered, and none is
+        requested -- if one were, `assert_all_called=True` would fail the test.
+        """
+        db.session.add(InstanceChooser(domain='kept.example'))
+        db.session.commit()
+        http_mock.post(self.OBSERVER).respond(503)
+
+        refresh_instance_chooser()
+
+        db.session.expire_all()
+        assert db.session.query(InstanceChooser).filter_by(
+            domain='kept.example').first() is not None
+
+    def test_a_malformed_observer_response_returns_early(self, db_session, http_mock):
+        """`:991`'s shape check -- 200 with no `data.nodes`."""
+        db.session.add(InstanceChooser(domain='kept.example'))
+        db.session.commit()
+        http_mock.post(self.OBSERVER).respond(200, json={'unexpected': True})
+
+        refresh_instance_chooser()
+
+        db.session.expire_all()
+        assert db.session.query(InstanceChooser).filter_by(
+            domain='kept.example').first() is not None
+
+    def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch, http_mock):
+        """`:1062-1064`'s handler.
+
+        Reached by making `random.shuffle` raise -- it is called at `:999`,
+        inside `:977`'s `try` and before the per-domain loop, so the outer
+        handler is the one that catches it. Patching a symbol used inside the
+        loop would instead be swallowed by `:1046`.
+        """
+        def _boom(*args, **kwargs):
+            raise RuntimeError('the task itself failed')
+
+        monkeypatch.setattr('app.shared.tasks.maintenance.random.shuffle', _boom)
+        http_mock.post(self.OBSERVER).respond(200, json=self._nodes('peer.example'))
+
+        with pytest.raises(RuntimeError, match='the task itself failed'):
+            refresh_instance_chooser()
