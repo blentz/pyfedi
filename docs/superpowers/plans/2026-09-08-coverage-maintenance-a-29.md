@@ -1169,7 +1169,7 @@ class TestCalculateCommunityActivityStats:
     def _community_with_one_activity_of_each_kind(self, when):
         instance, author, community, post = _seed()
         voter = make_user(instance, 'voter', local=True)
-        reply_voter = make_user(instance, 'replyvoter', local=True)
+        reply_voter = make_user(instance, 'reply_voter', local=True)
         replier = make_user(instance, 'replier', local=True)
         reply = make_post_reply(post, replier)
         post_vote = make_post_vote(voter, post, 1.0)
@@ -1236,6 +1236,50 @@ class TestCalculateCommunityActivityStats:
         vote = make_post_vote(bot, post, 1.0)
         vote.created_at = utcnow() - timedelta(hours=1)
         post.posted_at = utcnow() - timedelta(weeks=40)
+        community.last_active = utcnow()
+        db.session.commit()
+
+        calculate_community_activity_stats()
+
+        db.session.expire_all()
+        assert db.session.get(Community, community.id).active_daily == 0
+
+    def test_a_bot_replier_is_excluded(self, db_session):
+        """`:787`'s `pr.from_bot = False`, on the post-replies INSERT.
+
+        The post is seeded outside the six-month window so the reply is the
+        only candidate row; without that isolation the post would enter the
+        temp table and the assertion would say nothing about the reply.
+        """
+        instance, author, community, post = _seed()
+        replier = make_user(instance, 'replier', local=True)
+        reply = make_post_reply(post, replier)
+        reply.from_bot = True
+        reply.posted_at = utcnow() - timedelta(hours=1)
+        post.posted_at = utcnow() - timedelta(weeks=40)
+        community.last_active = utcnow()
+        db.session.commit()
+
+        calculate_community_activity_stats()
+
+        db.session.expire_all()
+        assert db.session.get(Community, community.id).active_daily == 0
+
+    def test_a_bot_reply_voter_is_excluded(self, db_session):
+        """`:812`'s `u.bot = False`, on the post-reply-votes INSERT.
+
+        Both the post and the reply are seeded outside the six-month window,
+        so the reply vote is the only candidate row.
+        """
+        instance, author, community, post = _seed()
+        replier = make_user(instance, 'replier', local=True)
+        reply = make_post_reply(post, replier)
+        bot = make_user(instance, 'botty_reply_voter', local=True)
+        bot.bot = True
+        vote = make_post_reply_vote(bot, reply, 1.0)
+        vote.created_at = utcnow() - timedelta(hours=1)
+        post.posted_at = utcnow() - timedelta(weeks=40)
+        reply.posted_at = utcnow() - timedelta(weeks=40)
         community.last_active = utcnow()
         db.session.commit()
 
