@@ -1,6 +1,6 @@
 """Group A of `app/shared/tasks/maintenance.py` -- the ten pure-database tasks.
 
-`maintenance.py` is 1181 lines and 636 statements, three times the largest
+`maintenance.py` is 1179 lines and 636 statements, three times the largest
 module this campaign has closed in one round, so it is split by TESTING
 SURFACE rather than by subject. Group A is the ten tasks that need no
 transport at all:
@@ -991,3 +991,29 @@ class TestCommunityActivityStatsAreNotStale:
         refreshed = db.session.get(Community, community.id)
         assert (refreshed.active_daily, refreshed.active_weekly,
                 refreshed.active_monthly, refreshed.active_6monthly) == (0, 0, 0, 0)
+
+    def test_a_community_dormant_beyond_the_window_keeps_its_stale_numbers(self, db_session):
+        """`:835`'s `c.last_active > :half_year` -- the other half of the filter.
+
+        Before this rewrite, a community six months dormant was dropped by the
+        old INNER JOIN regardless of this clause, so it was belt-and-braces.
+        Now it is the only thing stopping such a community's stats from being
+        zeroed by the new outer join. This pins the scope limit: a community
+        the eligibility filter excludes keeps whatever it last held, same as
+        a banned one does in `test_a_banned_community_is_not_updated` above.
+        """
+        _, user, community, post = _seed()
+        post.posted_at = utcnow() - timedelta(weeks=40)
+        community.last_active = utcnow() - timedelta(weeks=40)
+        community.active_daily = 5
+        community.active_weekly = 5
+        community.active_monthly = 5
+        community.active_6monthly = 5
+        db.session.commit()
+
+        calculate_community_activity_stats()
+
+        db.session.expire_all()
+        refreshed = db.session.get(Community, community.id)
+        assert (refreshed.active_daily, refreshed.active_weekly,
+                refreshed.active_monthly, refreshed.active_6monthly) == (5, 5, 5, 5)
