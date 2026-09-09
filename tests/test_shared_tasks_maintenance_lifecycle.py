@@ -442,6 +442,25 @@ class TestRemoveOldCommunityContent:
 
         assert recorder.calls == []
 
+    def test_a_community_with_a_zero_retention_is_skipped(self, db_session, monkeypatch):
+        """`:138`'s `> 0` boundary, not just its FALSE arm at -1.
+
+        A `content_retention` of exactly 0 must ALSO fail the filter -- a
+        mutant widening it to `>= 0` opens the gate at zero and, via `:142`'s
+        `cut_off = utcnow() - timedelta(days=0)`, would hand every post in
+        the community to `delete_post` regardless of age.
+        """
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.delete_post', recorder)
+        instance, user, community, post = _seed()
+        community.content_retention = 0
+        post.posted_at = utcnow() - timedelta(days=400)
+        db.session.commit()
+
+        remove_old_community_content()
+
+        assert recorder.calls == []
+
     def test_a_sticky_or_already_deleted_post_is_skipped(self, db_session, monkeypatch):
         """`:143-147`'s `deleted=False, sticky=False` filter.
 
@@ -582,6 +601,29 @@ class TestRemoveOldBotContent:
         db.session.commit()
         original = app.config['BOT_CONTENT_RETENTION']
         app.config['BOT_CONTENT_RETENTION'] = -1
+
+        try:
+            remove_old_bot_content()
+        finally:
+            app.config['BOT_CONTENT_RETENTION'] = original
+
+        assert recorder.calls == []
+
+    def test_a_retention_of_zero_also_disables_the_task(self, db_session, monkeypatch, app):
+        """`:168`'s `> 0` boundary, not just its FALSE arm at -1.
+
+        A `BOT_CONTENT_RETENTION` of exactly 0 must ALSO fail the gate -- a
+        mutant widening it to `>= 0` opens the gate at zero and, via `:169`'s
+        `cut_off = utcnow() - timedelta(days=28 * 0)` (i.e. now), would hand
+        every replyless bot post to `delete_post` regardless of age.
+        """
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.delete_post', recorder)
+        instance, user, community, post = _seed()
+        self._bot_post(community, user, 'https://peer.example/p/2', 28 * 6 + 1)
+        db.session.commit()
+        original = app.config['BOT_CONTENT_RETENTION']
+        app.config['BOT_CONTENT_RETENTION'] = 0
 
         try:
             remove_old_bot_content()
