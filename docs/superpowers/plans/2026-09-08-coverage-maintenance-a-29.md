@@ -1169,17 +1169,22 @@ class TestCalculateCommunityActivityStats:
     def _community_with_one_activity_of_each_kind(self, when):
         instance, author, community, post = _seed()
         voter = make_user(instance, 'voter', local=True)
+        reply_voter = make_user(instance, 'replyvoter', local=True)
         replier = make_user(instance, 'replier', local=True)
         reply = make_post_reply(post, replier)
         post_vote = make_post_vote(voter, post, 1.0)
-        reply_vote = make_post_reply_vote(voter, reply, 1.0)
+        # A DIFFERENT actor from `voter`, deliberately. If one user casts both
+        # votes, COUNT(DISTINCT tca.user_id) counts them once and EITHER vote
+        # INSERT can be deleted outright with every test still green -- the
+        # source is executed but not verified.
+        reply_vote = make_post_reply_vote(reply_voter, reply, 1.0)
         post.posted_at = when
         reply.posted_at = when
         post_vote.created_at = when
         reply_vote.created_at = when
         community.last_active = utcnow()
         db.session.commit()
-        return community, {author.id, replier.id, voter.id}
+        return community, {author.id, replier.id, voter.id, reply_voter.id}
 
     def test_activity_inside_a_day_counts_in_every_window(self, db_session):
         community, actors = self._community_with_one_activity_of_each_kind(
@@ -1264,7 +1269,7 @@ class TestCalculateCommunityActivityStats:
 ```bash
 ./run_tests.sh tests/test_shared_tasks_maintenance_cleanup.py -v
 ```
-Expected: 49 passed.
+Expected: 51 passed.
 
 The two window tests assert on `len(actors)` rather than a literal, because how many distinct users the four INSERTs contribute is a property of the seed rather than of the task. If the counts come out different from `len(actors)`, do not adjust the expectation to match — find out which source did not contribute and say so in your report.
 
@@ -1350,7 +1355,7 @@ The eligibility filter is untouched: a banned community, or one whose `last_acti
 ```bash
 ./run_tests.sh tests/test_shared_tasks_maintenance_cleanup.py -v
 ```
-Expected: 50 passed. Task 8's `test_a_banned_community_is_not_updated` is the one most at risk from this rewrite — it asserts a banned community keeps `active_daily = 77`, which the new `WHERE c.banned = FALSE` still guarantees. If it fails, the rewrite went wider than intended.
+Expected: 52 passed. Task 8's `test_a_banned_community_is_not_updated` is the one most at risk from this rewrite — it asserts a banned community keeps `active_daily = 77`, which the new `WHERE c.banned = FALSE` still guarantees. If it fails, the rewrite went wider than intended.
 
 - [ ] **Step 4: Commit**
 
