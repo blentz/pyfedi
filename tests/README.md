@@ -4097,7 +4097,7 @@ was banned, or the name matched the author so `app/shared/tasks/pages.py:104`
 docstring), not merely on the empty `recipients` list; and see fact 75's cause 8
 before trying to kill a mutation of the dead one.
 
-**`app/shared/tasks/notes.py:100-101`/`:105-107` is the identical shape a
+**`app/shared/tasks/notes.py:100-101`/`:106-107` is the identical shape a
 second time, and a closing attempt against it was written and withdrawn.**
 `send_reply`'s LOCAL arm (`try: recipient = search_for_user(user_name) /
 except: pass` at `:98-101`) is unreachable for the same reason as `pages.py`'s

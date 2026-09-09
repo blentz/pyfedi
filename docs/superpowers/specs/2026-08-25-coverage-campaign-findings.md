@@ -9107,9 +9107,12 @@ app runs today.
 
 The same round also closed `app/shared/tasks/pages.py`'s last three branch
 residuals with `# pragma: no branch` (raising its floor 98 -> 99, commit
-`145f0c09`) and attempted, then withdrew, a closing test for
-`app/shared/tasks/notes.py` (commit `94dc3374`, reverted by `daf05a26`,
-floor left at 99) -- see items 3 and 4.
+`145f0c09`, numstat `3 3` -- three same-line trailing-comment modifications,
+no line added or removed, `wc -l` unchanged at 435) and attempted, then
+withdrew, a closing test for `app/shared/tasks/notes.py` (commit `94dc3374`,
+reverted by `daf05a26`, floor left at 99) -- see items 3 and 4. Combined
+with `follows.py`'s `6 3` below, the sub-project's whole `app/` diff is `9 6`
+across the two files (`git diff --numstat de056c47..145f0c09 -- app/`).
 
 **Three production changes landed against `app/shared/tasks/follows.py`,
 numstat `6 3` total across four commits (`2 1`, `2 1`, `1 0`, and `1 1` for a
@@ -9175,8 +9178,14 @@ believing the branch is dead; it is a reviewer having tried to prove it
 alive and failed.** Precedent for the idiom itself predates this campaign
 (`app/request_hooks.py:137`, `if 'session' in dir(flask):  # pragma: no
 branch`); this round is the first time the campaign's own register records
-its use, at these four sites. Registers no D-number of its own -- see
-harness fact 160 for the general rule. Evidence: `task-9-report.md`
+its use, at these four sites. **Registers no D-number of its own, on the
+same terms sub-project 27 used for its unnumbered prose treatment of
+`delete_object`'s aliased `cc` list and its `:211` post-send mutation
+ordering** (sub-project 27 section, "Two more findings, in-place, no new
+numbers"): both are reading-level statements about the code's current,
+correct behaviour rather than a defect claim, registered once at the site
+the proof lives rather than given a family number to extend. See harness
+fact 160 for the general rule. Evidence: `task-9-report.md`
 (`follows.py:188`), `task-11-report.md` (`pages.py:270`, `:312`, `:333`).
 
 ### 4. An attempt withdrawn, and the rule it establishes
@@ -9197,16 +9206,17 @@ proves only that a mock raises, not that production can, and the 100%
 floor it bought was a number sitting in direct contradiction with an
 already-registered finding.
 
-**The asymmetry is the transferable half.** `notes.py:105-107`, the REMOTE
-twin, is the same three tokens (`try: recipient = search_for_user(ap_id) /
-except: pass`) and is LIVE: the REMOTE call passes `name@host`, giving
-`search_for_user` a non-empty `server`, so `if server:`'s `BannedInstances`
-check -- and its `raise` -- run for real, on an entirely ordinary production
-event (a mention of a user on a banned instance). Two clauses that look
-identical are not, and harness fact 111 already states exactly this shape
-for `pages.py:107-108`/`:113-114` -- extended here (see the harness facts
-section below) to cross-reference `notes.py`'s identical pair rather than
-duplicate the explanation.
+**The asymmetry is the transferable half.** `notes.py:105`'s
+`search_for_user(ap_id)` call, under `except: pass` at `:106-107`, is the
+REMOTE twin -- the same three tokens as the LOCAL arm's `:99` call under
+`except: pass` at `:100-101` -- and is LIVE: the REMOTE call passes
+`name@host`, giving `search_for_user` a non-empty `server`, so `if
+server:`'s `BannedInstances` check -- and its `raise` -- run for real, on
+an entirely ordinary production event (a mention of a user on a banned
+instance). Two clauses that look identical are not, and harness fact 111
+already states exactly this shape for `pages.py:107-108`/`:113-114` --
+extended here (see the harness facts section below) to cross-reference
+`notes.py`'s identical pair rather than duplicate the explanation.
 
 **The rule this attempt-and-withdrawal establishes: before closing a
 residual, check whether an earlier round already proved it unreachable --
@@ -9226,8 +9236,8 @@ attempt) and `daf05a26` (the withdrawal); `app/user/utils.py:85-99`;
 | # | function | defect | status | evidence |
 |---|---|---|---|---|
 | D339 | `leave_community`'s unguarded `.first()`, `app/shared/tasks/follows.py:125` | **Not fixed, registered only, deliberately out of this round's scope.** `join_request = session.query(CommunityJoinRequest).filter_by(...).first()` returns `None` when no matching row exists, and `:127`'s `session.delete(join_request)` -- `Session.delete(None)` -- raises. No `if join_request:` guard exists here, unlike `leave_feed`'s equivalent read at `:176-177` and `unfollow_user`'s at `:250-252`, both of which check before touching the row. Left alone so that D337's uuid-ordering fix made exactly one claim rather than two: adding a guard here changes what happens on a double-leave or a race, a different, unproven claim this round did not investigate | not fixed, registered only | read from source at this commit: `follows.py:125-128`, contrasted against `leave_feed:176-177` and `unfollow_user:250-252` |
-| D340 | `leave_feed`'s possibly-unbound `uuid`, `app/shared/tasks/follows.py:178` (assignment) vs. `:189` (use) | **Not fixed, registered only, and this round's coverage work did NOT prove the crash path reachable -- it proved the opposite, and routed around it on purpose.** `:177`'s `if join_request: uuid = join_request.uuid` only assigns `uuid` when a `FeedJoinRequest` row exists; `:189`'s `f"...{uuid}"`, inside the `:188` pragma'd guard, reads it unconditionally. If the row is already absent AND the feed's instance is online, not blocked, and not banned, execution reaches `:189` with `uuid` never assigned, raising `UnboundLocalError`. This round's own `test_leaving_an_offline_feed_with_no_pending_request_sends_nothing` (`tests/test_shared_tasks_follows.py:733`) constructs the no-pending-request half and says so in its own docstring, then deliberately makes the instance OFFLINE too, so execution returns at `:185` before ever reaching `:189` -- closing the coverage arc without ever executing the unbound read. No test in this module exercises the online, no-pending-request combination | not fixed, registered only | `follows.py:176-189`, read at this commit; the routing-around is documented in `tests/test_shared_tasks_follows.py:733-761`'s own docstring; `task-9-report.md` |
-| D341 | `follow_user` and `unfollow_user` never call `patch_db_session`, `app/shared/tasks/follows.py:216-280` | **Not fixed, registered as a named instance of D312/D314's shape, and confirmed inert for this pair.** `join_community`, `leave_community` and `leave_feed` all wrap their bodies in `with patch_db_session(session):`; `follow_user` and `unfollow_user` do not -- both are two of the 21 functions D314's `ast` census (sub-project 22) counted but did not name. Unlike `send_answer` (D312), where the omission lets two reads run on the request-scoped `db.session` instead of the task's own session, `follow_user` and `unfollow_user` never reference `db.session` anywhere: every read and write in both goes through the local `session` from `get_task_session()`, and every helper they call is pure with respect to it -- `User.is_local()` (`app/models.py:1251`) and `Instance.online()` (`app/models.py:118-119`) read only attributes already loaded, and `send_post_request`/`post_request` (`app/activitypub/signature.py:82-100`) is itself a separate `@celery.task` with its own `get_task_session()`, never `db.session`. **The omission is inert for this pair specifically, and the entry says so rather than implying a latent bug**: nothing downstream of either function reads `db.session` while one of these tasks runs, so `patch_db_session`'s absence changes no observable behaviour today | not fixed, registered only (inert) | `follows.py:216-280`, read at this commit; `grep -n 'db\.session' app/shared/tasks/follows.py` returns zero matches; `app/models.py:1251`, `:118-119`; `app/activitypub/signature.py:82-100`; D312, D314 (sub-project 21, 22 sections) for the shape |
+| D340 | `leave_feed`'s possibly-unbound `uuid`, `app/shared/tasks/follows.py:178` (assignment) vs. `:189` (use) | **Not fixed, registered only, and this round's coverage work did NOT prove the crash path reachable -- it proved the opposite, and routed around it on purpose.** `:177`'s `if join_request:` guards `:178`'s `uuid = join_request.uuid`, so the assignment only runs when a `FeedJoinRequest` row exists; `:189`'s `f"...{uuid}"`, inside the `:188` pragma'd guard, reads it unconditionally. If the row is already absent AND the feed's instance is online, not blocked, and not banned, execution reaches `:189` with `uuid` never assigned, raising `UnboundLocalError`. This round's own `test_leaving_an_offline_feed_with_no_pending_request_sends_nothing` (`tests/test_shared_tasks_follows.py:733`) constructs the no-pending-request half and says so in its own docstring, then deliberately makes the instance OFFLINE too, so execution returns at `:185` before ever reaching `:189` -- closing the coverage arc without ever executing the unbound read. No test in this module exercises the online, no-pending-request combination | not fixed, registered only | `follows.py:176-189`, read at this commit; the routing-around is documented in `tests/test_shared_tasks_follows.py:733-761`'s own docstring; `task-9-report.md` |
+| D341 | `follow_user` and `unfollow_user` never call `patch_db_session`, `app/shared/tasks/follows.py:216-280` | **Not fixed. D314 already named both of these -- this entry corrects what to credit it with, and measures what D314 left unmeasured.** D314's own cell (sub-project 22) lists its census's six specifically-named functions as "`follow_user` (`follows.py:214-238`), `unfollow_user` (`:242-277`), `send_vote`..., `vote_for_poll`..., `send_answer`... and `check_user_application`..." -- both of this entry's functions are named there, with line ranges (pre-this-round numbering), not merely counted among the 21. What D314 did NOT do for either of them, unlike four of its other five named carriers, is measure whether the omission has any consequence: `send_answer` is D312 itself; `send_vote` was "measured... directly" by sub-project 25; `check_user_application` was measured by sub-project 24; `vote_for_poll` was at least "read from source" as a single-session carrier. `follow_user` and `unfollow_user` are the two of the six that reached this round still unmeasured. **This entry supplies that measurement, and the answer is that the omission is inert for this pair.** `join_community`, `leave_community` and `leave_feed` all wrap their bodies in `with patch_db_session(session):`; `follow_user` and `unfollow_user` do not. But neither function references `db.session` anywhere: every read and write in both goes through the local `session` from `get_task_session()`, and every helper they call is pure with respect to it -- `User.is_local()` (`app/models.py:1251`) and `Instance.online()` (`app/models.py:118-119`) read only attributes already loaded, and `send_post_request`/`post_request` (`app/activitypub/signature.py:82-100`) is itself a separate `@celery.task` with its own `get_task_session()`, never `db.session`. **The omission is inert for this pair specifically, and the entry says so rather than implying a latent bug**: nothing downstream of either function reads `db.session` while one of these tasks runs, so `patch_db_session`'s absence changes no observable behaviour today | not fixed, registered only (inert) | `follows.py:216-280`, read at this commit; D314's own cell (sub-project 22 section), re-read for its exact list of six named functions before this entry was written; `grep -n 'db\.session' app/shared/tasks/follows.py` returns zero matches; `app/models.py:1251`, `:118-119`; `app/activitypub/signature.py:82-100`; D312 for the one named carrier already measured under its own number |
 
 **Facts 155-160 carried into `tests/README.md`.** A deleted-then-committed
 SQLAlchemy instance is expunged, not expired, so a post-delete attribute
