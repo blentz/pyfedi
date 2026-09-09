@@ -449,12 +449,13 @@ class TestCleanupOldVotingData:
         task drops the local vote and keeps the remote one instead.
         """
         local_user, remote_user = self._two_voters_with_votes(age_days=28 * 6 + 1)
+        original = app.config['KEEP_LOCAL_VOTE_DATA_TIME']
         app.config['KEEP_LOCAL_VOTE_DATA_TIME'] = -1
 
         try:
             cleanup_old_voting_data()
         finally:
-            app.config['KEEP_LOCAL_VOTE_DATA_TIME'] = 6
+            app.config['KEEP_LOCAL_VOTE_DATA_TIME'] = original
 
         surviving_post_voters = set(db.session.execute(db.text(
             'SELECT user_id FROM post_vote')).scalars().all())
@@ -471,12 +472,13 @@ class TestCleanupOldVotingData:
         instead.
         """
         local_user, remote_user = self._two_voters_with_votes(age_days=28 * 6 + 1)
+        original = app.config['KEEP_REMOTE_VOTE_DATA_TIME']
         app.config['KEEP_REMOTE_VOTE_DATA_TIME'] = -1
 
         try:
             cleanup_old_voting_data()
         finally:
-            app.config['KEEP_REMOTE_VOTE_DATA_TIME'] = 6
+            app.config['KEEP_REMOTE_VOTE_DATA_TIME'] = original
 
         surviving_post_voters = set(db.session.execute(db.text(
             'SELECT user_id FROM post_vote')).scalars().all())
@@ -488,14 +490,16 @@ class TestCleanupOldVotingData:
     def test_minus_one_for_both_deletes_nothing(self, db_session, app):
         """Both false arms at once -- the task becomes a no-op."""
         self._two_voters_with_votes(age_days=28 * 6 + 1)
+        original_local = app.config['KEEP_LOCAL_VOTE_DATA_TIME']
+        original_remote = app.config['KEEP_REMOTE_VOTE_DATA_TIME']
         app.config['KEEP_LOCAL_VOTE_DATA_TIME'] = -1
         app.config['KEEP_REMOTE_VOTE_DATA_TIME'] = -1
 
         try:
             cleanup_old_voting_data()
         finally:
-            app.config['KEEP_LOCAL_VOTE_DATA_TIME'] = 6
-            app.config['KEEP_REMOTE_VOTE_DATA_TIME'] = 6
+            app.config['KEEP_LOCAL_VOTE_DATA_TIME'] = original_local
+            app.config['KEEP_REMOTE_VOTE_DATA_TIME'] = original_remote
 
         assert self._vote_counts() == (2, 2)
 
