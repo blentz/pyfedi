@@ -603,8 +603,12 @@ class TestRefreshInstanceChooser:
         assert recorder.calls[0][0] == ('en', 'English')
 
     def test_an_observer_non_200_returns_early(self, db_session, http_mock):
-        """`:986`'s true arm. No chooser route is registered, and none is
-        requested -- if one were, `assert_all_called=True` would fail the test.
+        """`:986`'s true arm. Deleting the check does not fall through
+        harmlessly: `:990`'s `response.json()` on the empty 503 body raises
+        `json.decoder.JSONDecodeError`, which is not caught until `:1062`'s
+        outer handler re-raises it, failing the test. That is what actually
+        binds this test to `:986` -- not a registered-route mismatch, since
+        no chooser route is registered on this path either way.
         """
         db.session.add(InstanceChooser(domain='kept.example'))
         db.session.commit()
