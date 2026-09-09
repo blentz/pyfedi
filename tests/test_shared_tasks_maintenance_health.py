@@ -330,6 +330,92 @@ class TestMonitorHealthyInstances:
         touched = {i.domain for i in db.session.query(Instance).all() if i.failures > 0}
         assert touched == {'one.example', 'two.example'}
 
+    def test_discovery_assigns_the_matching_href(self, db_session, monkeypatch):
+        """`:548-551`. A rel in the recognised set supplies the href and clears
+        the failure state.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(200, {'links': [
+                {'rel': NODEINFO_LINK, 'href': 'https://peer.example/nodeinfo/2.0'}]})))
+        instance = _seed_instance('peer.example')
+        instance.nodeinfo_href = None
+        instance.failures = 3
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='peer.example').first()
+        assert reloaded.nodeinfo_href == 'https://peer.example/nodeinfo/2.0'
+        assert reloaded.failures == 0
+
+    def test_a_non_dict_link_before_a_match_does_not_abort_discovery(self, db_session, monkeypatch):
+        """`:543`'s `isinstance` guard, taking its false arm on a bare string
+        that precedes a matching entry.
+
+        A single non-dict string with no entry after it cannot tell the
+        guard's presence from its absence: `isinstance(links, dict)`
+        short-circuits `'rel' in links` for any plain string that does not
+        itself contain the substring `'rel'`, so removing the guard changes
+        nothing observable for that shape alone. Here the leading entry IS the
+        string `'rel'` (so `'rel' in links` is True on a bare string once the
+        `isinstance` short-circuit is gone) and a genuine match follows it.
+        With the guard intact, `isinstance('rel', dict)` is False, the whole
+        condition short-circuits before `links['rel']` is ever evaluated, the
+        `else` arm counts one failure, and the loop moves on to match the
+        second entry. Without the guard, `'rel' in links` is True and
+        `links['rel']` is evaluated on a plain string, raising `TypeError`
+        (string indices must be integers) -- which escapes the `for` loop
+        entirely, so the second, matching entry is never reached and
+        `nodeinfo_href` stays unset. Verified by hand-negating `:543` (dropping
+        `isinstance(links, dict) and `): the loop then raises on the first
+        entry, the outer `except` at `:558-560` swallows it, and
+        `nodeinfo_href` stays `None` instead of being set to the second
+        entry's href.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(200, {'links': [
+                'rel',
+                {'rel': NODEINFO_LINK, 'href': 'https://odd.example/nodeinfo/2.0'},
+            ]})))
+        instance = _seed_instance('odd.example')
+        instance.nodeinfo_href = None
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        assert db.session.query(Instance).filter_by(
+            domain='odd.example').first().nodeinfo_href == 'https://odd.example/nodeinfo/2.0'
+
+    def test_a_non_200_discovery_counts_a_failure(self, db_session, monkeypatch):
+        """`:555`'s `elif` and its `:557` increment. A 404 is logged and
+        counted, not retried.
+
+        `failures` ends at 2, not merely nonzero: `:557` counts the non-200
+        discovery response, and because `nodeinfo_href` is still unset
+        afterward, `:566`'s `else` arm at `:600` counts a second failure
+        before the task's own commit. Asserting only `failures > 0` would not
+        discriminate `:557`'s increment from `:600`'s -- removing `:557` alone
+        still leaves `failures == 1 > 0`, so the loose assertion cannot fail on
+        that regression. The exact count of 2 is what ties this assertion to
+        `:557` specifically.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(404)))
+        instance = _seed_instance('missing.example')
+        instance.nodeinfo_href = None
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        assert db.session.query(Instance).filter_by(
+            domain='missing.example').first().failures == 2
+
 
 class TestCheckInstanceHealthGoneForever:
     """`check_instance_health:427` -- first loop, `:435-443`.
