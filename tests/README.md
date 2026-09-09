@@ -5662,19 +5662,34 @@ exception-hierarchy mismatch between what `respx` raises and what one of
 two structurally similar functions happens to catch.
 
 **184. `get_request` SLEEPS 3-10 SECONDS ON RETRY, AT TWO SEPARATE
-HANDLERS.** `app/utils.py:158-162` (the `httpx.ReadError` handler) and
-`:173-177` (the `httpx.HTTPError`/timeout handler) both call
-`sleep(random.randint(3, 10))` before retrying. A test that drives
-`get_request` into either handler pays that real wall-clock cost per
-invocation, not a mocked or patched delay -- reach a caller's own
-error-handling arm through the caller's own exception handler instead (a
-raised `httpx.HTTPError` from a mocked transport, or a non-200 status code
-the caller checks directly), which never enters `get_request`'s retry logic
-at all. This is why a round can leave a caller's own narrow `except`
-deliberately open rather than driven through a real retry: closing it the
-cheap way, through the caller's own handler, may be unavailable when the
-gap IS the caller's handler itself, and closing it the expensive way costs
-3-10 seconds per test run for no additional coverage.
+HANDLERS -- AND A `httpx.HTTPError` FROM A MOCKED TRANSPORT IS NOT A WAY TO
+AVOID THAT.** `app/utils.py:158-172` (the `httpx.ReadError` handler) and
+`:173-180` (the `httpx.HTTPError`/timeout handler) both call
+`sleep(random.randint(3, 10))` before retrying. **A mocked transport that
+raises `httpx.HTTPError` -- or any of its subclasses, including
+`httpx.ConnectError`, `httpx.ReadError` and `httpx.TransportError` --
+enters exactly `:173`'s `except httpx.HTTPError as read_timeout:` and pays
+the full sleep**; an earlier version of this fact said the opposite and was
+wrong. The exceptions that reach `get_request`'s caller WITHOUT sleeping are
+the ones `get_request` normalises immediately, with no retry: the
+`is_invalid_get_request_uri` check's direct `raise httpx.HTTPError(...)`
+(`:132-134`), `httpx.InvalidURL` (`:146`), a plain `ValueError` (`:155-157`),
+and `httpx.StreamError` (`:181`) -- none of the last three is itself an
+`httpx.HTTPError`, so none can be reached by raising `httpx.HTTPError` from
+a mock. **The actually-cheap way to reach a caller's own
+`except httpx.HTTPError` (or broader `except Exception`) arm is not to make
+the transport raise at all: it is to replace `get_request` itself**, via
+`monkeypatch.setattr('<caller's module>.get_request', ...)`, when
+`get_request` is imported at the caller's module scope and called there as
+a bare name (confirmed for `app/shared/tasks/maintenance.py:19`'s import,
+reached by both `:1009` and `:1072`). That patch never touches
+`get_request`'s own body, so none of its retry handlers, or its
+sleep-free normalisations, ever run -- the caller's handler is exercised
+directly, at zero cost, regardless of which real `get_request` exception
+it is meant to stand in for. Only when a test needs `get_request`'s OWN
+internal behaviour on a genuine transport failure -- not just a caller's
+reaction to `get_request` having failed -- does this shortcut not apply,
+and closing that gap really does cost the 3-10 second sleep.
 
 **185. A HELPER IMPORTED *INSIDE* A FUNCTION CANNOT BE PATCHED IN THE
 CALLING MODULE'S OWN NAMESPACE.** `search_for_community` is imported at
