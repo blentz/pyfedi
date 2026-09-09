@@ -134,7 +134,7 @@ transport at all:
   `cleanup_old_activitypub_logs:872`
 
 NONE OF THE FEDERATION ORACLES APPLY HERE. These tasks are invoked from cron
-entry points in `app/cli.py:813-925`, never from a route and never through
+entry points in `app/cli.py:808-947`, never from a route and never through
 `task_selector`. There is no `flash()`, no `SRC_`-forked return value, no
 delivered-inbox set, no `post_request`, and no `ActivityPubLog` row written by
 any of them. Fact 148's warning about respx swallowing unmatched requests is
@@ -190,7 +190,7 @@ def _seed():
 
     Every factory here commits, so the task's own connection can see these
     rows. `make_community` leaves `ap_id` None, which makes `is_local()` true
-    (app/models.py:795) -- a test that needs the false arm sets `ap_id` and
+    (app/models.py:796) -- a test that needs the false arm sets `ap_id` and
     `ap_profile_id` to a remote host and commits.
     """
     instance = make_instance('peer.example')
@@ -851,7 +851,7 @@ class TestUpdateCommunityStats:
         """`:305`'s first condition, `is_local()`, taking its false arm.
 
         `make_community` leaves `ap_id` None, which makes `is_local()` true at
-        app/models.py:795's first disjunct. Setting both `ap_id` and
+        app/models.py:796's first disjunct. Setting both `ap_id` and
         `ap_profile_id` to a remote host makes it false, and `profile_id()`
         (app/models.py:234) then returns a URI that does not start with
         SERVER_URL.

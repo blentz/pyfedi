@@ -39,7 +39,7 @@ cheapest place to learn this module's shape before Groups C and D bring
 ## What makes this group unlike sub-projects 24 through 28
 
 **There is no `task_selector` and no federation send.** Every task in Group A
-is invoked from a cron entry point in `app/cli.py` (`:813-925`), never from a
+is invoked from a cron entry point in `app/cli.py` (`:808-947`), never from a
 route and never through `app/shared/tasks/__init__.py`. The three oracles the
 last five rounds relied on — a `flash()`, a return value forked on `SRC_`, and a
 delivered-inbox set — all drop out. **The oracle here is a row count or a column
