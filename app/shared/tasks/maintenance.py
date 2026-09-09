@@ -314,7 +314,7 @@ def update_community_stats():
                 'SELECT COUNT(*) as c FROM post_reply WHERE deleted is false and community_id = :community_id'
             ), {'community_id': community.id}).scalar()
 
-            session.commit()
+        session.commit()
 
     except Exception:
         session.rollback()
