@@ -810,22 +810,30 @@ class TestCalculateCommunityActivityStats:
     replies, `u.bot = False` for the two vote sources. A test that seeds only
     posts executes every statement while pinning one quarter of the behaviour,
     so these tests seed all four and then remove them one kind at a time.
+
+    The two window tests below bound only the day threshold: both seeded ages
+    (-1h and -2d) fall on the same side of the week, month and half-year
+    thresholds, so they would not catch a mutation that merged the week
+    threshold into the month. Closing that residual needs a third seeded age
+    between one week and six months, which is outside this class's approved
+    scope.
     """
 
     def _community_with_one_activity_of_each_kind(self, when):
         instance, author, community, post = _seed()
         voter = make_user(instance, 'voter', local=True)
+        reply_voter = make_user(instance, 'reply_voter', local=True)
         replier = make_user(instance, 'replier', local=True)
         reply = make_post_reply(post, replier)
         post_vote = make_post_vote(voter, post, 1.0)
-        reply_vote = make_post_reply_vote(voter, reply, 1.0)
+        reply_vote = make_post_reply_vote(reply_voter, reply, 1.0)
         post.posted_at = when
         reply.posted_at = when
         post_vote.created_at = when
         reply_vote.created_at = when
         community.last_active = utcnow()
         db.session.commit()
-        return community, {author.id, replier.id, voter.id}
+        return community, {author.id, replier.id, voter.id, reply_voter.id}
 
     def test_activity_inside_a_day_counts_in_every_window(self, db_session):
         community, actors = self._community_with_one_activity_of_each_kind(
@@ -876,6 +884,51 @@ class TestCalculateCommunityActivityStats:
         bot.bot = True
         vote = make_post_vote(bot, post, 1.0)
         vote.created_at = utcnow() - timedelta(hours=1)
+        post.posted_at = utcnow() - timedelta(weeks=40)
+        community.last_active = utcnow()
+        db.session.commit()
+
+        calculate_community_activity_stats()
+
+        db.session.expire_all()
+        assert db.session.get(Community, community.id).active_daily == 0
+
+    def test_a_bot_replier_is_excluded(self, db_session):
+        """`:787`'s `pr.from_bot = False`, on the post-replies INSERT.
+
+        The post itself is seeded outside the window so the only candidate
+        activity is the reply, which makes the assertion about the reply
+        rather than about whatever else happens to be in range.
+        """
+        instance, author, community, post = _seed()
+        bot = make_user(instance, 'botty_replier', local=True)
+        reply = make_post_reply(post, bot)
+        reply.from_bot = True
+        reply.posted_at = utcnow() - timedelta(hours=1)
+        post.posted_at = utcnow() - timedelta(weeks=40)
+        community.last_active = utcnow()
+        db.session.commit()
+
+        calculate_community_activity_stats()
+
+        db.session.expire_all()
+        assert db.session.get(Community, community.id).active_daily == 0
+
+    def test_a_bot_reply_voter_is_excluded(self, db_session):
+        """`:812`'s `u.bot = False`, on the post-reply-votes INSERT.
+
+        The post is seeded outside the window so the only candidate activity
+        is the reply vote, which makes the assertion about the vote rather
+        than about whatever else happens to be in range.
+        """
+        instance, author, community, post = _seed()
+        replier = make_user(instance, 'replier', local=True)
+        reply = make_post_reply(post, replier)
+        bot = make_user(instance, 'botty_reply_voter', local=True)
+        bot.bot = True
+        vote = make_post_reply_vote(bot, reply, 1.0)
+        vote.created_at = utcnow() - timedelta(hours=1)
+        reply.posted_at = utcnow() - timedelta(weeks=40)
         post.posted_at = utcnow() - timedelta(weeks=40)
         community.last_active = utcnow()
         db.session.commit()
