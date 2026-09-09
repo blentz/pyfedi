@@ -857,7 +857,7 @@ class TestUpdateCommunityStats:
         `make_community` leaves `ap_id` None, which makes `is_local()` true at
         app/models.py:796's first disjunct. Setting both `ap_id` and
         `ap_profile_id` to a remote host makes it false, and `profile_id()`
-        (app/models.py:234) then returns a URI that does not start with
+        (app/models.py:787) then returns a URI that does not start with
         SERVER_URL.
         """
         instance, user, community, _ = _seed()
