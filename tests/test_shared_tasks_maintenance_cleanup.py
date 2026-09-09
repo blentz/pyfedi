@@ -9,8 +9,8 @@ transport at all:
   `cleanup_send_queue:61`          `update_hashtag_counts:194`
   `update_community_stats:283`     `cleanup_old_voting_data:327`
   `unban_expired_users:392`        `recalculate_user_attitudes:712`
-  `calculate_community_activity_stats:750`
-  `cleanup_old_activitypub_logs:872`
+  `calculate_community_activity_stats:748`
+  `cleanup_old_activitypub_logs:870`
 
 NONE OF THE FEDERATION ORACLES APPLY HERE. These tasks are invoked from cron
 entry points in `app/cli.py:808-947`, never from a route and never through
@@ -180,7 +180,7 @@ class TestCleanupOldNotifications:
 
 
 class TestCleanupOldActivityPubLogs:
-    """`cleanup_old_activitypub_logs:872` -- logs older than three days."""
+    """`cleanup_old_activitypub_logs:870` -- logs older than three days."""
 
     def test_a_log_older_than_three_days_is_removed(self, db_session):
         log = make_activitypub_log('https://peer.example/activities/create/1')
@@ -749,10 +749,10 @@ class TestUpdateCommunityStatsIsAtomic:
 class TestRecalculateUserAttitudes:
     """`recalculate_user_attitudes:712` -- recompute attitude and post stats.
 
-    `:721-723` selects users seen in the last day, `:728` batches them 100 at a
-    time (`:715`), and `:735-736` call `recalculate_attitude` and
+    `:720-722` selects users seen in the last day, `:727` batches them 100 at a
+    time (`:715`), and `:734-735` call `recalculate_attitude` and
     `recalculate_post_stats` on each. Both model methods read `db.session`
-    (app/models.py:1351, :1421), which is what `:719`'s `patch_db_session`
+    (app/models.py:1351, :1421), which is what `:718`'s `patch_db_session`
     redirects onto the task's own session.
     """
 
@@ -769,7 +769,7 @@ class TestRecalculateUserAttitudes:
         assert db.session.get(User, user.id).post_count == 2
 
     def test_a_user_not_seen_for_a_day_is_skipped(self, db_session):
-        """`:728`'s zero-iteration arm: no eligible users, no batches."""
+        """`:727`'s zero-iteration arm: no eligible users, no batches."""
         instance, user, community, post = _seed()
         user.last_seen = utcnow() - timedelta(days=2)
         user.post_count = 99
