@@ -713,7 +713,6 @@ def recalculate_user_attitudes():
     """Recalculate recent active user attitudes"""
     session = get_task_session()
     batch_size = 100
-    processed = 0
 
     try:
         with patch_db_session(session):
@@ -734,7 +733,6 @@ def recalculate_user_attitudes():
                 for user in users:
                     user.recalculate_attitude()
                     user.recalculate_post_stats()
-                    processed += 1
 
                 # Commit after each batch
                 session.commit()
