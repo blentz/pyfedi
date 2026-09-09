@@ -54,7 +54,9 @@
 
 **`archive_post` opens a THIRD session.** `app/utils.py:4946` calls `get_task_session()` again and `:4948` wraps its body in `patch_db_session`. Task 7 arranges around this rather than reasoning through it.
 
-**The error-path idiom, and the one task it does not fit.** Six of the eight tasks call `utcnow()` inside their `try` — `process_expired_bans:80`, `remove_old_community_content:142`, `remove_old_bot_content:168`, `delete_old_soft_deleted_content:222`, `archive_old_posts:890`, `archive_old_users:938`. **`pwn_bots` computes its cutoff at `:1164`, one line ABOVE `:1165`'s `try:`**, so patching the clock there raises outside the handler and the test would pass even with the whole `except` clause deleted; its error-path test patches `text` and seeds a row so `:1167` is reached. Check which side of the `try` your patched symbol sits on before writing an error-path test. `utcnow` is bound into this module's namespace at `app/shared/tasks/maintenance.py:16`, so monkeypatching `app.shared.tasks.maintenance.utcnow` raises inside the `try` without touching `tests/factories.py`, which reaches `utcnow` through `app.models` (fact 163). **`archive_user` is the exception** — it takes a session and calls no clock; its error path is reached by passing a `user_id` with no row, which makes `:958`'s `.get()` return `None` and `:959`'s attribute read raise `AttributeError`.
+**The error-path idiom, and the two ways it fails.** A patched symbol must be *reached*, which needs two things: it must sit inside the `try`, and the statement using it must actually execute. `pwn_bots` fails the first — its cutoff is above the `try`. `remove_old_community_content` fails the second — its `utcnow()` is inside a `for` loop over communities with a retention policy, so with none seeded the loop body never runs and the task returns normally. Check both before writing any error-path test.
+
+**Which task calls the clock where.** Six of the eight tasks call `utcnow()` inside their `try` — `process_expired_bans:80`, `remove_old_community_content:142`, `remove_old_bot_content:168`, `delete_old_soft_deleted_content:222`, `archive_old_posts:890`, `archive_old_users:938`. **`pwn_bots` computes its cutoff at `:1164`, one line ABOVE `:1165`'s `try:`**, so patching the clock there raises outside the handler and the test would pass even with the whole `except` clause deleted; its error-path test patches `text` and seeds a row so `:1167` is reached. Check which side of the `try` your patched symbol sits on before writing an error-path test. `utcnow` is bound into this module's namespace at `app/shared/tasks/maintenance.py:16`, so monkeypatching `app.shared.tasks.maintenance.utcnow` raises inside the `try` without touching `tests/factories.py`, which reaches `utcnow` through `app.models` (fact 163). **`archive_user` is the exception** — it takes a session and calls no clock; its error path is reached by passing a `user_id` with no row, which makes `:958`'s `.get()` return `None` and `:959`'s attribute read raise `AttributeError`.
 
 **Config gates need config, not mocks.** `ARCHIVE_POSTS` (`config.py:184`, default **0**) and `BOT_CONTENT_RETENTION` (`config.py:190`, default 6) are read from `current_app.config`. **Capture the original value, set it, restore the captured value in a `finally`** — never restore a hardcoded default. Sub-project 29 shipped that bug and needed a review round to fix it.
 
@@ -583,6 +585,18 @@ class TestRemoveOldCommunityContent:
         assert recorder.calls[0][1] is False
 
     def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch):
+        """`:142`'s cutoff, not `:138`'s query, is what must raise.
+
+        `utcnow` is read once per community INSIDE the `for` loop at `:141`, so
+        a community must be seeded with a retention policy or the loop body --
+        and therefore `_boom` -- is never reached, and the task returns
+        normally instead of propagating. This is the same trap as `pwn_bots`'
+        in a different shape: there the patched symbol sat above the `try`,
+        here it sits inside a loop that needs data to run.
+        """
+        instance, user, community, post = _seed()
+        community.content_retention = 7
+        db.session.commit()
         monkeypatch.setattr('app.shared.tasks.maintenance.utcnow', _boom)
 
         with pytest.raises(RuntimeError, match='the task itself failed'):
