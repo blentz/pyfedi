@@ -929,7 +929,7 @@ class TestUpdateCommunityStatsIsAtomic:
         second.subscriptions_count = 0
         db.session.commit()
 
-        # Each community costs two text() calls, at `:311` and `:315`. Letting
+        # Each community costs two text() calls, at `:309` and `:313`. Letting
         # two through and failing on the third puts the failure inside the
         # SECOND community, after the first has been fully processed.
         real_text = maintenance.text
