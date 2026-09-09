@@ -583,7 +583,7 @@ Subject: `test: cover the read-post, unban and hashtag maintenance tasks`
 - Consumes: `_seed()`, `_boom`.
 - Produces: nothing later tasks depend on.
 
-Two branch points, four arms: `:334`'s `if local_months != -1` and `:358`'s `if remote_months != -1`. Both read `current_app.config`, whose defaults are 6 and 6 (`config.py:177-178`). The `-1` arms are taken by setting the config values, not by patching.
+Two branch points, four arms: `:334`'s `if local_months != -1` and `:359`'s `if remote_months != -1`. Both read `current_app.config`, whose defaults are 6 and 6 (`config.py:177-178`). The `-1` arms are taken by setting the config values, not by patching.
 
 The task deletes from four tables. Local and remote are distinguished by `instance_id`: `= 1` for local, `!= 1` for remote. `make_user(instance, name, local=True)` still sets `instance_id` from the instance it is passed, so a genuinely local user must be built against an instance whose id is 1 — the `db_session` fixture resets sequences, so the first `make_instance` in a test gets id 1 and later ones do not. Build the local user against the FIRST instance created in the test.
 
@@ -593,7 +593,7 @@ The task deletes from four tables. Local and remote are distinguished by `instan
 class TestCleanupOldVotingData:
     """`cleanup_old_voting_data:327` -- four DELETEs behind two config guards.
 
-    `:334`'s `if local_months != -1` and `:358`'s `if remote_months != -1` read
+    `:334`'s `if local_months != -1` and `:359`'s `if remote_months != -1` read
     `KEEP_LOCAL_VOTE_DATA_TIME` and `KEEP_REMOTE_VOTE_DATA_TIME`
     (config.py:177-178, both defaulting to 6). The cutoff is 28 days per month,
     so at the default a vote older than 168 days goes and one younger stays.
@@ -661,7 +661,7 @@ class TestCleanupOldVotingData:
         assert self._vote_counts() == (1, 1)
 
     def test_minus_one_for_remote_keeps_remote_votes_and_drops_local(self, db_session, app):
-        """`:358`'s false arm, the mirror of the test above."""
+        """`:359`'s false arm, the mirror of the test above."""
         self._two_voters_with_votes(age_days=28 * 6 + 1)
         app.config['KEEP_REMOTE_VOTE_DATA_TIME'] = -1
 
