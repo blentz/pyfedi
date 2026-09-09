@@ -1138,12 +1138,13 @@ def delete_from_s3(s3_files_to_delete):
 
 
 @celery.task
-def clean_up_tmp():
+def clean_up_tmp(directory=None):
     DELETABLE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".mp3", ".mp4"}
     ONE_DAY = 24 * 60 * 60
 
     now = time.time()
-    directory = 'app/static/tmp'
+    if directory is None:
+        directory = os.path.join(current_app.root_path, 'static', 'tmp')
 
     if not os.path.exists(directory):
         return
