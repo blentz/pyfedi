@@ -76,7 +76,7 @@ put real rows in the container's Postgres and count them afterwards.
 (`app/utils.py:203-211`) and `User.recalculate_attitude()` read `db.session`
 rather than the task's session. Facts 156 and 157 bind directly: the harness
 pushes only an app context (`tests/conftest.py:112`), and pushing a request
-context would disable `patch_db_session` at `app/utils.py:3684`.
+context would disable `patch_db_session` at `app/utils.py:3685`.
 
 **Fact 153 binds throughout.** Each task writes through its own `Session` from
 `get_task_session()`. Any oracle that reads an ORM attribute off an object the
@@ -170,13 +170,14 @@ grep over the function's whole range rather than by observation.
   loaded instances for. Harmless as written, because `get_task_session()`
   sessions are short-lived and these tasks load nothing first. Recorded so the
   next round that adds a query above one of them knows the hazard exists.
-- **Facts 156 and 157 carry an off-by-one citation.** `tests/README.md:5181-5182`
-  says `app/utils.py:3685` is `if has_request_context():` and `:3688` is the
-  `return` inside it. At this tree `:3684` is the `if` and `:3687` is the
-  `return`. The tree has not moved since those facts were written, so the
-  citation was wrong when recorded. This round corrects both numbers in place —
-  a fact whose line number is wrong is worse than no fact, because a reader who
-  opens it finds a comment and concludes the fact is stale.
+- **Facts 156 and 157 are correct; an earlier draft of this spec said otherwise
+  and was wrong.** The draft claimed `tests/README.md:5181-5182`'s citations of
+  `app/utils.py:3685` and `:3688` were each off by one. They are not: `:3685`
+  is `if has_request_context():` and `:3688` is the `return` inside it. The
+  false claim came from counting output lines of an unnumbered
+  `sed -n 'A,Bp'` range instead of reading numbered output. Recorded because
+  the failure mode is worth more than the fact: this round nearly committed a
+  "correction" that would have broken two accurate citations.
 
 - **`cleanup_old_voting_data` hardcodes `'instance_id': 1`** in all four
   DELETEs. Consistent with fact 141's `Instance.id != 1` idiom rather than a
