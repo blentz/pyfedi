@@ -6,10 +6,10 @@ Sub-project 29 closed Group A in `tests/test_shared_tasks_maintenance_cleanup.py
 all. This file covers its first half:
 
   `sync_defederation_subscriptions:409`   `check_instance_health:427`
-  `monitor_healthy_instances:509`, HTTP half only
+  `monitor_healthy_instances:534`, HTTP half only
 
 THIS FILE USES NO RESPX. Every helper these tasks call is imported at module
-scope (`maintenance.py:13` and `:19`), so tests replace
+scope (`maintenance.py:19`), so tests replace
 `app.shared.tasks.maintenance.get_request_instance`, `.get_request`,
 `.instance_banned` and `.download_defeds` directly and hand back constructed
 `httpx.Response` objects. That avoids sub-project 31's central hazard and
@@ -24,13 +24,18 @@ BUT THE HAZARD STILL EXISTS FOR A TEST THAT FORGETS THE PATCH.
 it routes it into the failure path while the test believes it tested success.
 Task 1 established this by observation.
 
-THE IDENTITY HALF IS OUT OF SCOPE. `monitor_healthy_instances:612` needs
-`instance.software` in {'lemmy', 'piefed', 'pylova'} and `:673` needs 'mbin'.
-Every fixture here uses `make_instance`'s default, 'mastodon', so neither body
-runs. Both `if` statements still evaluate, so this file covers their FALSE arms
-and sub-project 33 owns the true ones.
+THE IDENTITY HALF IS MOSTLY OUT OF SCOPE. `monitor_healthy_instances:637` needs
+`instance.software` in {'lemmy', 'piefed', 'pylova'} and `:698` needs 'mbin'.
+Every fixture but one uses `make_instance`'s default, 'mastodon', so neither
+body runs for those. Both `if` statements still evaluate, so this file covers
+their FALSE arms and sub-project 33 owns the true ones. The one exception is
+DC4's `test_a_lemmy_point_release_above_nine_is_rediscovered`, which seeds
+`software='lemmy'` and therefore DOES enter `:637`'s block -- `get_request` is
+patched there to a harmless 404 (see that test's docstring) purely so an
+otherwise-unmocked call does not reach a transport; it exercises no assertion
+of its own.
 
-INSTANCE 1 IS RESERVED. `:449` and `:518` both filter `Instance.id != 1`, and
+INSTANCE 1 IS RESERVED. `:449` and `:543` both filter `Instance.id != 1`, and
 the `db_session` teardown resets every sequence with
 `SELECT setval(c.oid, 1, false)` (`tests/conftest.py:131`), so the FIRST
 instance a test seeds lands on exactly the id both tasks exclude. `_seed_instance`
@@ -52,6 +57,7 @@ from sqlalchemy import event
 from app import db
 from app.models import BannedInstances, DefederationSubscription, Instance, utcnow
 from app.shared.tasks.maintenance import (
+    _version_at_least,
     check_instance_health,
     monitor_healthy_instances,
     sync_defederation_subscriptions,
@@ -93,7 +99,7 @@ NODEINFO_LINK = 'http://nodeinfo.diaspora.software/ns/schema/2.0'
 def _seed_instance(domain, software='mastodon'):
     """Seed an instance the tasks will actually see.
 
-    `check_instance_health:449` and `monitor_healthy_instances:518` both filter
+    `check_instance_health:449` and `monitor_healthy_instances:543` both filter
     `Instance.id != 1`, and the `db_session` teardown resets every sequence with
     `SELECT setval(c.oid, 1, false)` (`tests/conftest.py:131`), so the FIRST
     instance a test seeds lands on exactly the id both tasks exclude. A test
@@ -207,12 +213,12 @@ class TestSyncDefederationSubscriptions:
 
 
 class TestMonitorHealthyInstances:
-    """`monitor_healthy_instances:509` -- HTTP half only (see module docstring).
+    """`monitor_healthy_instances:534` -- HTTP half only (see module docstring).
 
     DC1 asked whether the task's missing `patch_db_session` wrapper is an
     observable defect. `get_request_instance` (`app/utils.py:189-196`)
     mutates and commits its `instance` argument through Flask-SQLAlchemy's
-    `db.session`, not through the task's own `session` (`:511`).
+    `db.session`, not through the task's own `session` (`:536`).
     `check_instance_health` wraps its body in `patch_db_session(session)` so
     that helper's writes land on the task's connection; `monitor_healthy_instances`
     does not.
@@ -299,11 +305,11 @@ class TestMonitorHealthyInstances:
     def test_a_raising_helper_does_not_end_the_whole_sweep(self, db_session, monkeypatch):
         """DC2: a raising `get_request_instance` no longer ends the sweep.
 
-        Before the guard, `:565` closed `nodeinfo`, which `:534` might never
-        have bound: if `get_request_instance` raised, the `except` at `:560`
-        caught it and then the `finally` at `:563-565` raised
+        Before the guard, `:590` closed `nodeinfo`, which `:559` might never
+        have bound: if `get_request_instance` raised, the `except` at `:585`
+        caught it and then the `finally` at `:588-590` raised
         `UnboundLocalError` -- which that handler had already run and could
-        not catch. It escaped to `:711`, rolled back and re-raised, so one
+        not catch. It escaped to `:736`, rolled back and re-raised, so one
         instance's failure ended the sweep for every other instance. The
         `nodeinfo = None` / `node = None` bindings ahead of each `try` and the
         `is not None` guards on `.close()` fix that: the `except` arm's own
@@ -311,7 +317,7 @@ class TestMonitorHealthyInstances:
         next instance.
 
         The oracle is that BOTH instances were touched, compared as a set:
-        `:515` returns planner-ordered rows and this file asserts no order over
+        `:540` returns planner-ordered rows and this file asserts no order over
         those.
         """
         def _raise(*args, **kwargs):
@@ -331,7 +337,7 @@ class TestMonitorHealthyInstances:
         assert touched == {'one.example', 'two.example'}
 
     def test_discovery_assigns_the_matching_href(self, db_session, monkeypatch):
-        """`:549-552`. A rel in the recognised set supplies the href and clears
+        """`:574-577`. A rel in the recognised set supplies the href and clears
         the failure state.
         """
         monkeypatch.setattr(
@@ -351,7 +357,7 @@ class TestMonitorHealthyInstances:
         assert reloaded.failures == 0
 
     def test_a_non_dict_link_before_a_match_does_not_abort_discovery(self, db_session, monkeypatch):
-        """`:544`'s `isinstance` guard, taking its false arm on a bare string
+        """`:569`'s `isinstance` guard, taking its false arm on a bare string
         that precedes a matching entry.
 
         A single non-dict string with no entry after it cannot tell the
@@ -368,9 +374,9 @@ class TestMonitorHealthyInstances:
         `links['rel']` is evaluated on a plain string, raising `TypeError`
         (string indices must be integers) -- which escapes the `for` loop
         entirely, so the second, matching entry is never reached and
-        `nodeinfo_href` stays unset. Verified by hand-negating `:544` (dropping
+        `nodeinfo_href` stays unset. Verified by hand-negating `:569` (dropping
         `isinstance(links, dict) and `): the loop then raises on the first
-        entry, the outer `except` at `:560-562` swallows it, and
+        entry, the outer `except` at `:585-587` swallows it, and
         `nodeinfo_href` stays `None` instead of being set to the second
         entry's href.
         """
@@ -391,17 +397,17 @@ class TestMonitorHealthyInstances:
             domain='odd.example').first().nodeinfo_href == 'https://odd.example/nodeinfo/2.0'
 
     def test_a_non_200_discovery_counts_a_failure(self, db_session, monkeypatch):
-        """`:557`'s `elif` and its `:559` increment. A 404 is logged and
+        """`:582`'s `elif` and its `:584` increment. A 404 is logged and
         counted, not retried.
 
-        `failures` ends at 2, not merely nonzero: `:559` counts the non-200
+        `failures` ends at 2, not merely nonzero: `:584` counts the non-200
         discovery response, and because `nodeinfo_href` is still unset
-        afterward, `:568`'s `else` arm at `:602` counts a second failure
+        afterward, `:593`'s `else` arm at `:627` counts a second failure
         before the task's own commit. Asserting only `failures > 0` would not
-        discriminate `:559`'s increment from `:602`'s -- removing `:559` alone
+        discriminate `:584`'s increment from `:627`'s -- removing `:584` alone
         still leaves `failures == 1 > 0`, so the loose assertion cannot fail on
         that regression. The exact count of 2 is what ties this assertion to
-        `:559` specifically.
+        `:584` specifically.
         """
         monkeypatch.setattr(
             'app.shared.tasks.maintenance.get_request_instance',
@@ -417,11 +423,17 @@ class TestMonitorHealthyInstances:
             domain='missing.example').first().failures == 2
 
     def test_an_unmatched_document_counts_one_failure_not_one_per_link(self, db_session, monkeypatch):
-        """DC3: the increment sits INSIDE `:543`'s per-link loop.
+        """DC3: before the fix, the increment sat INSIDE the per-link loop
+        (`:568-579`), firing once per unrelated link instead of once per
+        document.
 
-        Three unrelated links record three failures, so a document's shape --
-        not the instance's reachability -- drives `update_dormant_gone`'s
-        thresholds (`app/models.py:146-150`: dormant above 2, gone above 7).
+        Three unrelated links would have recorded three failures under that
+        defect, so a document's shape -- not the instance's reachability --
+        would have driven `update_dormant_gone`'s thresholds
+        (`app/models.py:146-150`: dormant above 2, gone above 7). The
+        `matched` flag (`:567`, set `:578`) fixed it: the increment now runs
+        at `:580-581`, after the loop, at most once regardless of how many
+        links a document lists.
 
         Two increments are expected in total: one for the unmatched document,
         and one from the no-href arm below the fetch block.
@@ -443,6 +455,42 @@ class TestMonitorHealthyInstances:
         db.session.expire_all()
         assert db.session.query(Instance).filter_by(
             domain='noisy.example').first().failures == 2
+
+    def test_a_lemmy_point_release_above_nine_is_rediscovered(self, db_session, monkeypatch):
+        """DC4: the version check compares strings.
+
+        `'0.19.10' >= '0.19.4'` is False lexically, so exactly the newer Lemmy
+        instances this check exists to catch keep their stale
+        `nodeinfo/2.0.json` href instead of rediscovering it.
+
+        The oracle is the rewritten href. Asserting the instance is merely
+        'healthy' would hold on both sides of the fix.
+
+        A seeded lemmy instance is online (`dormant`/`gone_forever` default
+        False) by construction, so `:637`'s admin-role block IS entered
+        regardless of this defect -- observed directly, contrary to an
+        earlier assumption that a lemmy fixture here would not reach it.
+        `get_request` (not `get_request_instance`) is patched to a harmless
+        404 purely so that unrelated, already-mocked-away block does not
+        attempt a real HTTP call; it has no bearing on the DC4 assertion
+        below, which depends only on `get_request_instance`'s recorder.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(200, {'links': [
+                {'rel': NODEINFO_LINK, 'href': 'https://lemmy.example/nodeinfo/2.1'}]})))
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request', _Recorder(result=_response(404)))
+        instance = _seed_instance('lemmy.example', software='lemmy')
+        instance.version = '0.19.10'
+        instance.nodeinfo_href = 'https://lemmy.example/nodeinfo/2.0.json'
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        assert db.session.query(Instance).filter_by(
+            domain='lemmy.example').first().nodeinfo_href == 'https://lemmy.example/nodeinfo/2.1'
 
 
 class TestCheckInstanceHealthGoneForever:
@@ -726,3 +774,23 @@ class TestCheckInstanceHealthRecheck:
         check_instance_health()
 
         assert set(attempted) == {'bad-one.example', 'bad-two.example'}
+
+
+class TestVersionAtLeast:
+    """`_version_at_least` -- the comparison DC4 introduced."""
+
+    def test_a_double_digit_patch_outranks_a_single_digit_one(self):
+        """The defect that motivated the helper: lexically '0.19.10' < '0.19.4'."""
+        assert _version_at_least('0.19.10', '0.19.4') is True
+
+    def test_an_older_release_does_not_qualify(self):
+        assert _version_at_least('0.18.9', '0.19.4') is False
+
+    def test_an_exact_match_qualifies(self):
+        assert _version_at_least('0.19.4', '0.19.4') is True
+
+    def test_a_missing_segment_is_treated_as_zero(self):
+        assert _version_at_least('1', '1.0.0') is True
+
+    def test_a_non_numeric_suffix_does_not_raise(self):
+        assert _version_at_least('1.2.3-rc1', '1.2.3') is True

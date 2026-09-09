@@ -505,6 +505,31 @@ def check_instance_health():
         session.close()
 
 
+def _version_at_least(version: str, minimum: str) -> bool:
+    """Compare dotted numeric versions numerically rather than lexically.
+
+    `'0.19.10' >= '0.19.4'` is False as strings, which is backwards for every
+    caller that means "this release or newer". Non-numeric suffixes compare as
+    0 rather than raising, so a version like '1.2.3-rc1' does not end a sweep.
+    """
+    def _parts(value):
+        parts = []
+        for chunk in value.split('.'):
+            digits = ''
+            for char in chunk:
+                if not char.isdigit():
+                    break
+                digits += char
+            parts.append(int(digits) if digits else 0)
+        return parts
+
+    left, right = _parts(version), _parts(minimum)
+    width = max(len(left), len(right))
+    left += [0] * (width - len(left))
+    right += [0] * (width - len(right))
+    return left >= right
+
+
 @celery.task
 def monitor_healthy_instances():
     """Check healthy instances to see if still healthy"""
@@ -524,7 +549,7 @@ def monitor_healthy_instances():
 
             nodeinfo_href = instance.nodeinfo_href
             if (instance.software == 'lemmy' and instance.version is not None and
-                    instance.version >= '0.19.4' and instance.nodeinfo_href and
+                    _version_at_least(instance.version, '0.19.4') and instance.nodeinfo_href and
                     instance.nodeinfo_href.endswith('nodeinfo/2.0.json')):
                 nodeinfo_href = None
 
