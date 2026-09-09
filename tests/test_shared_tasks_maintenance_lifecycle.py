@@ -341,3 +341,219 @@ class TestProcessExpiredBans:
 
         with pytest.raises(RuntimeError, match='the task itself failed'):
             process_expired_bans()
+
+
+class TestRemoveOldCommunityContent:
+    """`remove_old_community_content:134` -- honour per-community retention.
+
+    `:138` selects communities with `content_retention > 0` (the column
+    defaults to -1, app/models.py:581), `:143-147` picks their posts older than
+    the cutoff that are neither deleted nor sticky, and `:150` hands each id to
+    `delete_post`.
+
+    `delete_post` IS REPLACED BY A RECORDER IN THESE TESTS. It belongs to
+    `app/shared/post.py`, a floored module at 40% with its own federation
+    behaviour, and this round tests which ids reach it rather than what it then
+    does.
+    """
+
+    def test_a_post_older_than_the_retention_window_is_handed_over(self, db_session, monkeypatch):
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.delete_post', recorder)
+        instance, user, community, post = _seed()
+        community.content_retention = 7
+        post.posted_at = utcnow() - timedelta(days=8)
+        db.session.commit()
+
+        remove_old_community_content()
+
+        assert [c[0] for c in recorder.calls] == [post.id]
+
+    def test_a_post_inside_the_window_is_left_alone(self, db_session, monkeypatch):
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.delete_post', recorder)
+        instance, user, community, post = _seed()
+        community.content_retention = 7
+        post.posted_at = utcnow() - timedelta(days=6)
+        db.session.commit()
+
+        remove_old_community_content()
+
+        assert recorder.calls == []
+
+    def test_a_community_with_no_retention_policy_is_skipped(self, db_session, monkeypatch):
+        """`:138`'s filter. The column's default of -1 means "keep forever"."""
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.delete_post', recorder)
+        instance, user, community, post = _seed()
+        post.posted_at = utcnow() - timedelta(days=400)
+        db.session.commit()
+
+        remove_old_community_content()
+
+        assert recorder.calls == []
+
+    def test_a_sticky_or_already_deleted_post_is_skipped(self, db_session, monkeypatch):
+        """`:143-147`'s `deleted=False, sticky=False` filter.
+
+        Both are asserted in one test because each alone would leave the other
+        conjunct unexercised, and the task's behaviour for both is the same.
+        """
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.delete_post', recorder)
+        instance, user, community, post = _seed()
+        community.content_retention = 7
+        post.posted_at = utcnow() - timedelta(days=8)
+        post.sticky = True
+        gone = make_post(community, user, 'https://peer.example/p/2')
+        gone.posted_at = utcnow() - timedelta(days=8)
+        gone.deleted = True
+        db.session.commit()
+
+        remove_old_community_content()
+
+        assert recorder.calls == []
+
+    def test_the_deletion_is_not_federated(self, db_session, monkeypatch):
+        """`:150` passes False for `delete_post`'s SECOND parameter, which is
+        `federate_deletion` (app/shared/post.py:755) and not a locality flag.
+
+        A retention-policy deletion is deliberately not federated, so remote
+        instances keep the post. `remove_old_bot_content:184` passes a different
+        value for the same parameter; the two are separate policies, not an
+        inconsistency.
+        """
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.delete_post', recorder)
+        instance, user, community, post = _seed()
+        community.content_retention = 7
+        post.posted_at = utcnow() - timedelta(days=8)
+        db.session.commit()
+
+        remove_old_community_content()
+
+        assert recorder.calls[0][1] is False
+
+    def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch):
+        """`:142`'s cutoff, not `:138`'s query, is what must raise.
+
+        `utcnow` is read once per community inside the `for` loop (`:142`), so
+        a community must be seeded WITH a retention policy or the loop body --
+        and therefore `_boom` -- is never reached, and the task returns
+        normally instead of propagating.
+        """
+        instance, user, community, post = _seed()
+        community.content_retention = 7
+        db.session.commit()
+        monkeypatch.setattr('app.shared.tasks.maintenance.utcnow', _boom)
+
+        with pytest.raises(RuntimeError, match='the task itself failed'):
+            remove_old_community_content()
+
+
+class TestRemoveOldBotContent:
+    """`remove_old_bot_content:160` -- delete replyless bot posts.
+
+    `:167`'s `if bot_retention > 0:` gates the whole body on
+    `BOT_CONTENT_RETENTION` (config.py:190, default 6, with -1 documented as
+    "forever, no deletion"), and `:168`'s cutoff is 28 days per unit.
+    `:170-175` selects non-deleted, non-sticky, replyless posts by bots, and
+    `:179`'s loop batches them 100 at a time.
+
+    THIS FUNCTION HAS NO `@celery.task` DECORATOR and never commits. Both are
+    registered findings of this round; neither is fixed by these tests.
+    """
+
+    def _bot_post(self, community, user, ap_id, age_days):
+        post = make_post(community, user, ap_id)
+        post.from_bot = True
+        post.reply_count = 0
+        post.posted_at = utcnow() - timedelta(days=age_days)
+        return post
+
+    def test_an_old_replyless_bot_post_is_handed_over(self, db_session, monkeypatch):
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.delete_post', recorder)
+        instance, user, community, post = _seed()
+        bot_post = self._bot_post(community, user, 'https://peer.example/p/2',
+                                  28 * 6 + 1)
+        db.session.commit()
+
+        remove_old_bot_content()
+
+        assert [c[0] for c in recorder.calls] == [bot_post.id]
+
+    def test_a_recent_bot_post_is_left_alone(self, db_session, monkeypatch):
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.delete_post', recorder)
+        instance, user, community, post = _seed()
+        self._bot_post(community, user, 'https://peer.example/p/2', 28 * 6 - 1)
+        db.session.commit()
+
+        remove_old_bot_content()
+
+        assert recorder.calls == []
+
+    def test_a_bot_post_with_replies_is_left_alone(self, db_session, monkeypatch):
+        """`:174`'s `reply_count=0`."""
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.delete_post', recorder)
+        instance, user, community, post = _seed()
+        bot_post = self._bot_post(community, user, 'https://peer.example/p/2',
+                                  28 * 6 + 1)
+        bot_post.reply_count = 3
+        db.session.commit()
+
+        remove_old_bot_content()
+
+        assert recorder.calls == []
+
+    def test_a_human_post_is_left_alone(self, db_session, monkeypatch):
+        """`:173`'s `from_bot=True`."""
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.delete_post', recorder)
+        instance, user, community, post = _seed()
+        post.posted_at = utcnow() - timedelta(days=28 * 6 + 1)
+        post.reply_count = 0
+        db.session.commit()
+
+        remove_old_bot_content()
+
+        assert recorder.calls == []
+
+    def test_a_retention_of_minus_one_disables_the_task(self, db_session, monkeypatch, app):
+        """`:167`'s FALSE arm. -1 is documented as "forever, no deletion"."""
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.delete_post', recorder)
+        instance, user, community, post = _seed()
+        self._bot_post(community, user, 'https://peer.example/p/2', 28 * 6 + 1)
+        db.session.commit()
+        original = app.config['BOT_CONTENT_RETENTION']
+        app.config['BOT_CONTENT_RETENTION'] = -1
+
+        try:
+            remove_old_bot_content()
+        finally:
+            app.config['BOT_CONTENT_RETENTION'] = original
+
+        assert recorder.calls == []
+
+    def test_the_deletion_federates_for_a_local_author(self, db_session, monkeypatch):
+        """`:184` passes `post.author.is_local()` for `federate_deletion`,
+        where `remove_old_community_content:150` passes a constant False.
+        """
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.delete_post', recorder)
+        instance, user, community, post = _seed()
+        self._bot_post(community, user, 'https://peer.example/p/2', 28 * 6 + 1)
+        db.session.commit()
+
+        remove_old_bot_content()
+
+        assert recorder.calls[0][1] is True
+
+    def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch):
+        monkeypatch.setattr('app.shared.tasks.maintenance.utcnow', _boom)
+
+        with pytest.raises(RuntimeError, match='the task itself failed'):
+            remove_old_bot_content()
