@@ -162,11 +162,12 @@ rather than on another module's behaviour (fact 179).
 import os
 import tempfile
 import time
+from types import SimpleNamespace
 
 import pytest
 
 from app import db
-from app.models import InstanceChooser, Settings, utcnow
+from app.models import InstanceChooser
 from app.shared.tasks.maintenance import (
     add_remote_communities, add_remote_community_from_post, clean_up_tmp,
     delete_from_s3, refresh_instance_chooser,
@@ -240,9 +241,16 @@ class TestDeleteFromS3:
     """
 
     def _patch_boto3(self, monkeypatch, client):
+        """Replace `boto3` in THIS module's namespace with a stand-in.
+
+        `:1126` reads `boto3.session.Session()`, so the stand-in needs a
+        `session` attribute carrying a `Session` callable. `_StubBoto3Session`
+        returns itself when called, so `Session()` yields the object whose
+        `client(...)` hands back the stub.
+        """
         stub = _StubBoto3Session(client)
         monkeypatch.setattr('app.shared.tasks.maintenance.boto3',
-                            type('B', (), {'session': type('S', (), {'Session': stub})})())
+                            SimpleNamespace(session=SimpleNamespace(Session=stub)))
         return stub
 
     def test_the_keys_are_sent_as_a_delete_payload(self, db_session, monkeypatch):
