@@ -413,3 +413,202 @@ class TestCheckInstanceHealthGoneForever:
         reloaded = db.session.query(Instance).filter_by(domain='live.example').first()
         assert reloaded.gone_forever is False
         assert reloaded.failures == 0
+
+
+class TestCheckInstanceHealthRecheck:
+    """`check_instance_health`'s second loop, `:446-497`.
+
+    `:446-450` selects dormant instances that are not yet gone and are not
+    instance 1. `:453` skips banned domains and the flipboard.com literal.
+    `:458` forks on whether a `nodeinfo_href` is already known: with one,
+    `:459` fetches it and `:463-467` revives the instance; without, `:473`
+    discovers one and `:481-491` walks the links. `:494-497` catches whatever
+    either path raises, rolls back and counts a failure.
+
+    `:469-470` and `:492-493` are `finally` blocks that close the response.
+    Unlike `monitor_healthy_instances`, both names are bound before the `try`
+    they belong to, so DC2's defect does not exist here.
+    """
+
+    def _dormant(self, domain, href=None):
+        instance = _seed_instance(domain)
+        instance.dormant = True
+        instance.gone_forever = False
+        instance.start_trying_again = utcnow() + timedelta(days=1)
+        instance.nodeinfo_href = href
+        return instance
+
+    def test_a_known_href_returning_software_revives_the_instance(self, db_session, monkeypatch):
+        """`:464-467`. Deleting `:467` leaves the instance dormant."""
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(200, {'software': {'name': 'PieFed', 'version': '1.2.3'}})))
+        self._dormant('back.example', href='https://back.example/nodeinfo/2.0')
+        db.session.commit()
+
+        check_instance_health()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='back.example').first()
+        assert reloaded.dormant is False
+        assert reloaded.software == 'piefed'
+        assert reloaded.version == '1.2.3'
+        assert reloaded.failures == 0
+
+    def test_a_document_without_software_leaves_the_instance_dormant(self, db_session, monkeypatch):
+        """`:463`'s false arm. A 200 alone is not enough to revive.
+
+        `failures == 0` is what actually binds this to `:463`: with the guard
+        intact, `'software' in node_json` is False and nothing past `:463`
+        runs, so `failures` stays 0. Negate the guard and `node_json['software']`
+        raises `KeyError` (confirmed: the payload has no `'software'` key), the
+        outer `except` at `:494` catches it, and `:496` makes `failures` 1 --
+        while `dormant` alone stays `True` either way, since `:467` is never
+        reached on either path. Checked by hand-negating `:463` (see task-5
+        report/commit for the verbatim failure) and confirming `dormant is True`
+        does NOT fail but `failures == 0` DOES.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(200, {'unexpected': True})))
+        self._dormant('quiet.example', href='https://quiet.example/nodeinfo/2.0')
+        db.session.commit()
+
+        check_instance_health()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='quiet.example').first()
+        assert reloaded.dormant is True
+        assert reloaded.failures == 0
+
+    def test_a_non_200_leaves_the_instance_dormant(self, db_session, monkeypatch):
+        """`:460`'s false arm.
+
+        The 503 carries a valid `{'software': ...}` body on purpose: with
+        `:460` intact, the body is never parsed and `dormant` stays `True`.
+        Negate `:460` (treat 503 as if it were 200) and the same valid body
+        parses cleanly, `:463`'s guard is satisfied, and `:467` sets
+        `dormant = False` -- no crash intervenes, because this body (unlike an
+        empty 503) is exactly the shape `:464-467` expects. That is what makes
+        this bind to `:460` specifically, rather than only proving the row was
+        selected.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(503, {'software': {'name': 'PieFed', 'version': '1.2.3'}})))
+        self._dormant('down.example', href='https://down.example/nodeinfo/2.0')
+        db.session.commit()
+
+        check_instance_health()
+
+        db.session.expire_all()
+        assert db.session.query(Instance).filter_by(
+            domain='down.example').first().dormant is True
+
+    def test_discovery_finds_an_href_and_revives_the_instance(self, db_session, monkeypatch):
+        """`:471`'s else arm and `:487-490`. The instance has no known href, so
+        `:473` asks well-known/nodeinfo and `:482`'s rel match supplies one.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(200, {'links': [
+                {'rel': NODEINFO_LINK, 'href': 'https://found.example/nodeinfo/2.0'}]})))
+        self._dormant('found.example', href=None)
+        db.session.commit()
+
+        check_instance_health()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='found.example').first()
+        assert reloaded.nodeinfo_href == 'https://found.example/nodeinfo/2.0'
+        assert reloaded.dormant is False
+
+    def test_a_link_list_with_no_match_leaves_the_instance_dormant(self, db_session, monkeypatch):
+        """`:482`'s false arm, taken for every link. `:481`'s loop ends without
+        a break and nothing is assigned.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(200, {'links': [
+                {'rel': 'https://example.invalid/other', 'href': 'https://x.example/y'}]})))
+        self._dormant('nomatch.example', href=None)
+        db.session.commit()
+
+        check_instance_health()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='nomatch.example').first()
+        assert reloaded.nodeinfo_href is None
+        assert reloaded.dormant is True
+
+    def test_a_banned_domain_is_skipped_before_any_request(self, db_session, monkeypatch):
+        """`:453`'s true arm. The oracle is that no request was made at all --
+        asserting only that the instance stayed dormant would hold anyway.
+        """
+        recorder = _Recorder(result=_response(200, {'software': {'name': 'PieFed', 'version': '1.0'}}))
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance', recorder)
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.instance_banned', lambda domain: True)
+        self._dormant('banned.example', href='https://banned.example/nodeinfo/2.0')
+        db.session.commit()
+
+        check_instance_health()
+
+        assert recorder.calls == []
+
+    def test_a_raising_request_counts_a_failure(self, db_session, monkeypatch):
+        """`:496`'s increment, on the single-instance path where it survives.
+
+        One instance only. With two, `:495`'s rollback discards the first
+        instance's uncommitted increment before the second reaches `:499`'s
+        commit -- see the sweep test below, and the register entry for the
+        batched commit.
+        """
+        def _raise(*args, **kwargs):
+            raise RuntimeError('recheck exploded')
+
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance', _raise)
+        self._dormant('bad-one.example', href='https://bad-one.example/nodeinfo/2.0')
+        db.session.commit()
+
+        check_instance_health()
+
+        db.session.expire_all()
+        assert db.session.query(Instance).filter_by(
+            domain='bad-one.example').first().failures == 1
+
+    def test_a_raising_request_does_not_end_the_sweep(self, db_session, monkeypatch):
+        """`:494`'s handler lets the loop continue to the next instance.
+
+        The oracle is which domains were ATTEMPTED, not what was persisted.
+        `:499` commits once after the whole loop and `:495` rolls back inside
+        it, so with two raisers only the last one's `:496` increment survives
+        -- a real defect, registered by this round rather than fixed. Asserting
+        over `failures` here would lock that behaviour in as though it were the
+        contract.
+
+        `get_request_instance(uri, instance: Instance, params=None,
+        headers=None)` (`app/utils.py:189`) and the call site at `:459` passes
+        `instance` by keyword (`get_request_instance(instance.nodeinfo_href,
+        headers=HEADERS, instance=instance)`), so it never lands in `args`
+        past index 0 -- the recorder reads `kwargs['instance']`.
+
+        A set comparison: `:446` returns planner-ordered rows.
+        """
+        attempted = []
+
+        def _raise(*args, **kwargs):
+            attempted.append(args[1].domain if len(args) > 1 else kwargs['instance'].domain)
+            raise RuntimeError('recheck exploded')
+
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance', _raise)
+        self._dormant('bad-one.example', href='https://bad-one.example/nodeinfo/2.0')
+        self._dormant('bad-two.example', href='https://bad-two.example/nodeinfo/2.0')
+        db.session.commit()
+
+        check_instance_health()
+
+        assert set(attempted) == {'bad-one.example', 'bad-two.example'}
