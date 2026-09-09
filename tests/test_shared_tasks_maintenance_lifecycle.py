@@ -5,9 +5,9 @@ Sub-project 29 closed Group A, the ten tasks that need no transport, in
 move or destroy content:
 
   `process_expired_bans:76`            `remove_old_community_content:134`
-  `remove_old_bot_content:160`         `delete_old_soft_deleted_content:215`
-  `archive_old_posts:885`              `archive_old_users:933`
-  `archive_user:957`                   `pwn_bots:1161`
+  `remove_old_bot_content:161`         `delete_old_soft_deleted_content:216`
+  `archive_old_posts:886`              `archive_old_users:934`
+  `archive_user:958`                   `pwn_bots:1163`
 
 TWENTY-THREE BRANCH POINTS AGAINST GROUP A'S SEVEN. Group A was straight-line
 SQL in a repeated try/except skeleton. Group B branches on config values, on
@@ -15,15 +15,15 @@ whether a row still exists, on whether an image is shared between posts, and on
 whether object storage is configured.
 
 TWO TASKS DELETE THROUGH `app/shared/post.py`. `remove_old_community_content:150`
-and `remove_old_bot_content:184` both call `delete_post`
+and `remove_old_bot_content:185` both call `delete_post`
 (`app/shared/post.py:755`), which is a floored module at 40% with its own
 federation behaviour. THIS FILE DOES NOT TEST `delete_post`. It tests which post
 ids these two tasks hand over, by replacing `delete_post` in this module's
 namespace with a recorder. Asserting on federation here would be testing another
 module through a keyhole.
 
-ONE TASK BUILDS A boto3 CLIENT. `archive_old_posts:911-918` constructs one when
-`:910`'s `store_files_in_s3()` is true and passes it to `archive_post`. The
+ONE TASK BUILDS A boto3 CLIENT. `archive_old_posts:912-919` constructs one when
+`:911`'s `store_files_in_s3()` is true and passes it to `archive_post`. The
 oracle is whether `archive_post` receives a client or `None` -- no S3 endpoint is
 contacted, and `archive_post` is replaced by a recorder for the same reason
 `delete_post` is.
@@ -100,14 +100,14 @@ class _Recorder:
 
 
 class TestPwnBots:
-    """`pwn_bots:1161` -- everyone who ignored a bot challenge for 24h is a bot.
+    """`pwn_bots:1163` -- everyone who ignored a bot challenge for 24h is a bot.
 
-    `:1167` iterates challenges older than the cutoff whose `is_a_bot` is still
-    NULL, `:1168` marks the user, and `:1171` marks the challenge. One branch
+    `:1169` iterates challenges older than the cutoff whose `is_a_bot` is still
+    NULL, `:1170` marks the user, and `:1173` marks the challenge. One branch
     point, the loop.
 
-    `:1167` used to READ THROUGH `BotChallenge.query`, WHICH IS `db.session`,
-    while `:1168` and `:1171` write through the task's own session, with the
+    `:1169` used to READ THROUGH `BotChallenge.query`, WHICH IS `db.session`,
+    while `:1170` and `:1173` write through the task's own session, with the
     body NOT wrapped in `patch_db_session` -- this round's PC2. Task 8 spent a
     bounded effort trying to observe that split from a test and, unlike PC2 in
     sub-project 29, found one:
@@ -115,7 +115,7 @@ class TestPwnBots:
     instruments `db.engine`'s `before_cursor_execute` and asserts the SELECT
     and the two UPDATEs run on the same connection checkout. It FAILS against the
     unpatched body (the SELECT runs on a connection distinct from the task's
-    own) and PASSES once `:1166` gains `with patch_db_session(session):`,
+    own) and PASSES once `:1168` gains `with patch_db_session(session):`,
     which is why `pwn_bots` now has that wrapper.
     """
 
@@ -148,7 +148,7 @@ class TestPwnBots:
         assert db.session.get(BotChallenge, challenge.id).is_a_bot is None
 
     def test_an_answered_challenge_is_left_alone(self, db_session):
-        """`:1167`'s `is_a_bot == None` conjunct.
+        """`:1169`'s `is_a_bot == None` conjunct.
 
         A challenge someone answered has a non-NULL `is_a_bot`, and must not be
         reprocessed however old it is.
@@ -167,15 +167,15 @@ class TestPwnBots:
         assert db.session.get(BotChallenge, challenge.id).is_a_bot is False
 
     def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch):
-        """`:1175-1177`'s handler, reached through `:1168`.
+        """`:1177-1179`'s handler, reached through `:1170`.
 
-        NOT through `utcnow`. `:1164` computes the cutoff one line ABOVE
-        `:1165`'s `try:`, so patching the clock raises before the handler
+        NOT through `utcnow`. `:1166` computes the cutoff one line ABOVE
+        `:1167`'s `try:`, so patching the clock raises before the handler
         exists and would pass even if the whole `except` clause were deleted.
         `pwn_bots` is the only task in this group that orders those two
         statements that way.
 
-        A challenge must be seeded, because `:1168`'s `text(...)` is inside the
+        A challenge must be seeded, because `:1170`'s `text(...)` is inside the
         loop and an empty result set never reaches it.
         """
         instance, user, _, _ = _seed()
@@ -191,8 +191,8 @@ class TestPwnBots:
     def test_the_read_and_the_writes_share_one_connection_once_wrapped(self, db_session):
         """PC2's discriminator: which connection checkout issues each statement.
 
-        `BotChallenge.query` at `:1167` and `session.execute` at `:1168`/
-        `:1171` are two different session objects when the body is not
+        `BotChallenge.query` at `:1169` and `session.execute` at `:1170`/
+        `:1173` are two different session objects when the body is not
         wrapped in `patch_db_session`. Of Task 8's three candidate probes,
         only this one produced a result: a conflicting uncommitted write held
         during the task (candidate 1) deadlocked Postgres and was abandoned
@@ -468,7 +468,7 @@ class TestRemoveOldCommunityContent:
         `federate_deletion` (app/shared/post.py:755) and not a locality flag.
 
         A retention-policy deletion is deliberately not federated, so remote
-        instances keep the post. `remove_old_bot_content:184` passes a different
+        instances keep the post. `remove_old_bot_content:185` passes a different
         value for the same parameter; the two are separate policies, not an
         inconsistency.
         """
@@ -501,16 +501,19 @@ class TestRemoveOldCommunityContent:
 
 
 class TestRemoveOldBotContent:
-    """`remove_old_bot_content:160` -- delete replyless bot posts.
+    """`remove_old_bot_content:161` -- delete replyless bot posts.
 
-    `:167`'s `if bot_retention > 0:` gates the whole body on
+    `:168`'s `if bot_retention > 0:` gates the whole body on
     `BOT_CONTENT_RETENTION` (config.py:190, default 6, with -1 documented as
-    "forever, no deletion"), and `:168`'s cutoff is 28 days per unit.
-    `:170-175` selects non-deleted, non-sticky, replyless posts by bots, and
-    `:179`'s loop batches them 100 at a time.
+    "forever, no deletion"), and `:169`'s cutoff is 28 days per unit.
+    `:171-176` selects non-deleted, non-sticky, replyless posts by bots, and
+    `:180`'s loop batches them 100 at a time.
 
-    THIS FUNCTION HAS NO `@celery.task` DECORATOR and never commits. Both are
-    registered findings of this round; neither is fixed by these tests.
+    THIS FUNCTION NEVER COMMITS -- a registered finding of this round, not
+    fixed by these tests. It gained a `@celery.task` decorator this round
+    (PC3), making it dispatchable with `.delay()`; nothing in the tree calls
+    it that way, and `app/cli.py`'s synchronous `daily_maintenance` command,
+    its only caller, is unchanged.
     """
 
     def _bot_post(self, community, user, ap_id, age_days):
@@ -544,7 +547,7 @@ class TestRemoveOldBotContent:
         assert recorder.calls == []
 
     def test_a_bot_post_with_replies_is_left_alone(self, db_session, monkeypatch):
-        """`:174`'s `reply_count=0`."""
+        """`:175`'s `reply_count=0`."""
         recorder = _Recorder()
         monkeypatch.setattr('app.shared.tasks.maintenance.delete_post', recorder)
         instance, user, community, post = _seed()
@@ -558,7 +561,7 @@ class TestRemoveOldBotContent:
         assert recorder.calls == []
 
     def test_a_human_post_is_left_alone(self, db_session, monkeypatch):
-        """`:173`'s `from_bot=True`."""
+        """`:174`'s `from_bot=True`."""
         recorder = _Recorder()
         monkeypatch.setattr('app.shared.tasks.maintenance.delete_post', recorder)
         instance, user, community, post = _seed()
@@ -571,7 +574,7 @@ class TestRemoveOldBotContent:
         assert recorder.calls == []
 
     def test_a_retention_of_minus_one_disables_the_task(self, db_session, monkeypatch, app):
-        """`:167`'s FALSE arm. -1 is documented as "forever, no deletion"."""
+        """`:168`'s FALSE arm. -1 is documented as "forever, no deletion"."""
         recorder = _Recorder()
         monkeypatch.setattr('app.shared.tasks.maintenance.delete_post', recorder)
         instance, user, community, post = _seed()
@@ -588,7 +591,7 @@ class TestRemoveOldBotContent:
         assert recorder.calls == []
 
     def test_the_deletion_federates_for_a_local_author(self, db_session, monkeypatch):
-        """`:184` passes `post.author.is_local()` for `federate_deletion`,
+        """`:185` passes `post.author.is_local()` for `federate_deletion`,
         where `remove_old_community_content:150` passes a constant False.
         """
         recorder = _Recorder()
@@ -609,16 +612,16 @@ class TestRemoveOldBotContent:
 
 
 class TestDeleteOldSoftDeletedContent:
-    """`delete_old_soft_deleted_content:215` -- hard-delete after seven days.
+    """`delete_old_soft_deleted_content:216` -- hard-delete after seven days.
 
-    `:225-236` selects soft-deleted posts past the cutoff that are unbookmarked
+    `:226-237` selects soft-deleted posts past the cutoff that are unbookmarked
     and either mod-deleted, retention-deleted (`deleted_by = 1`) or replyless.
-    `:242-250` collects image ids shared by more than one post. `:254`'s
+    `:243-251` collects image ids shared by more than one post. `:255`'s
     compound then skips any post whose image is shared, because the cascade
-    would fail -- the source comment at `:238-241` says so and defers the real
+    would fail -- the source comment at `:239-242` says so and defers the real
     fix.
 
-    `:254` IS THREE CONDITIONS IN ONE ARC PAIR. coverage.py does not decompose
+    `:255` IS THREE CONDITIONS IN ONE ARC PAIR. coverage.py does not decompose
     conjunctions (fact 142), so branch coverage reads 100% with two of them
     untested. Each has its own test below.
 
@@ -655,7 +658,7 @@ class TestDeleteOldSoftDeletedContent:
         assert db.session.query(Post).filter_by(id=gone_id).first() is None
 
     def test_a_recently_deleted_post_survives(self, db_session):
-        """The BOUNDARY -- `:228`'s `p.posted_at < :cutoff`, seven days."""
+        """The BOUNDARY -- `:229`'s `p.posted_at < :cutoff`, seven days."""
         instance, user, community, post = _seed()
         recent = self._soft_deleted_post(community, user,
                                          'https://peer.example/p/2', age_days=6)
@@ -667,10 +670,10 @@ class TestDeleteOldSoftDeletedContent:
         assert db.session.get(Post, recent.id) is not None
 
     def test_a_post_whose_image_is_shared_survives(self, db_session):
-        """`:254`'s third condition, and the reason `:242-250` exists.
+        """`:255`'s third condition, and the reason `:243-251` exists.
 
         Two posts referencing one File make the delete cascade fail, so the
-        task deliberately skips them. The source comment at `:238-241` records
+        task deliberately skips them. The source comment at `:239-242` records
         that this is a workaround rather than a fix.
         """
         instance, user, community, post = _seed()
@@ -687,7 +690,7 @@ class TestDeleteOldSoftDeletedContent:
         assert db.session.get(Post, first.id) is not None
 
     def test_a_post_with_its_own_image_is_deleted(self, db_session):
-        """`:254`'s second condition taking its false arm while the third takes
+        """`:255`'s second condition taking its false arm while the third takes
         its true arm -- the image exists but is not shared.
         """
         instance, user, community, post = _seed()
@@ -703,7 +706,7 @@ class TestDeleteOldSoftDeletedContent:
         assert db.session.query(Post).filter_by(id=gone_id).first() is None
 
     def test_a_bookmarked_post_survives(self, db_session):
-        """`:229-233`'s NOT EXISTS against post_bookmark."""
+        """`:230-234`'s NOT EXISTS against post_bookmark."""
         instance, user, community, post = _seed()
         kept = self._soft_deleted_post(community, user, 'https://peer.example/p/2')
         db.session.commit()
@@ -716,7 +719,7 @@ class TestDeleteOldSoftDeletedContent:
         assert db.session.get(Post, kept.id) is not None
 
     def test_an_old_soft_deleted_reply_is_hard_deleted(self, db_session):
-        """`:260-273`'s second pass, which no post test reaches."""
+        """`:261-274`'s second pass, which no post test reaches."""
         instance, user, community, post = _seed()
         reply = make_post_reply(post, user)
         reply.deleted = True
@@ -730,7 +733,7 @@ class TestDeleteOldSoftDeletedContent:
         assert db.session.query(PostReply).filter_by(id=reply_id).first() is None
 
     def test_a_reply_with_children_survives(self, db_session):
-        """`:271`'s `if not post_reply.has_replies(include_deleted=True):`.
+        """`:272`'s `if not post_reply.has_replies(include_deleted=True):`.
 
         A deleted reply that still has children is kept, because removing it
         would orphan them.
@@ -756,16 +759,16 @@ class TestDeleteOldSoftDeletedContent:
 
 
 class TestArchiveUser:
-    """`archive_user:957` -- drop a user's avatar and cover.
+    """`archive_user:958` -- drop a user's avatar and cover.
 
-    `:959` and `:964` guard the two images INDEPENDENTLY, so this helper
-    handles a user with only one. `archive_old_users:942`'s query used to
+    `:960` and `:965` guard the two images INDEPENDENTLY, so this helper
+    handles a user with only one. `archive_old_users:943`'s query used to
     require BOTH -- that mismatch was this round's PC1, fixed by widening
-    `:942` to an `OR`; `TestArchiveOldUsersReachesOneImageUsers` covers the
+    `:943` to an `OR`; `TestArchiveOldUsersReachesOneImageUsers` covers the
     widened query, not this class, which exercises the helper directly.
 
-    Step 1 probed `File.delete_from_disk(purge_cdn=False)` (called at `:962`
-    and `:967`) against a `make_file(file_path='/static/avatar.png')` row,
+    Step 1 probed `File.delete_from_disk(purge_cdn=False)` (called at `:963`
+    and `:968`) against a `make_file(file_path='/static/avatar.png')` row,
     whose path points nowhere. It passed unpatched: `delete_from_disk`
     (app/models.py:421) only reaches `os.unlink` behind
     `os.path.isfile(self.file_path)` (app/models.py:429), which is False for
@@ -790,7 +793,7 @@ class TestArchiveUser:
         assert db.session.get(File, cover.id) is None
 
     def test_a_user_with_only_an_avatar_is_handled(self, db_session):
-        """`:959` true, `:964` false. The helper copes; before this round's
+        """`:960` true, `:965` false. The helper copes; before this round's
         PC1 fix, `archive_old_users`'s query never sent it such a user --
         `TestArchiveOldUsersReachesOneImageUsers` covers that the widened
         query now does.
@@ -806,7 +809,7 @@ class TestArchiveUser:
         assert db.session.get(User, user.id).avatar_id is None
 
     def test_a_user_with_only_a_cover_is_handled(self, db_session):
-        """`:959` false, `:964` true."""
+        """`:960` false, `:965` true."""
         instance, user, _, _ = _seed()
         cover = make_file(file_path='/static/cover.png')
         user.cover_id = cover.id
@@ -819,11 +822,11 @@ class TestArchiveUser:
 
 
 class TestArchiveOldUsers:
-    """`archive_old_users:933` -- strip images from idle remote users.
+    """`archive_old_users:934` -- strip images from idle remote users.
 
-    `:935` gates the whole body on `ARCHIVE_POSTS` (config.py:184, default 0),
-    and `:938`'s cutoff is that value times 28 days. `:939-945` selects remote
-    users idle past the cutoff, and `:947` hands each to `archive_user`.
+    `:936` gates the whole body on `ARCHIVE_POSTS` (config.py:184, default 0),
+    and `:939`'s cutoff is that value times 28 days. `:940-946` selects remote
+    users idle past the cutoff, and `:948` hands each to `archive_user`.
     """
 
     def _idle_remote_user(self, name, *, avatar=True, cover=True, age_days=None):
@@ -853,7 +856,7 @@ class TestArchiveOldUsers:
         assert (refreshed.avatar_id, refreshed.cover_id) == (None, None)
 
     def test_a_recently_seen_user_is_skipped(self, db_session, app):
-        """The BOUNDARY -- `:943`'s `u.last_seen < :cutoff`."""
+        """The BOUNDARY -- `:944`'s `u.last_seen < :cutoff`."""
         make_instance('local.example')
         user = self._idle_remote_user('recent', age_days=6 * 28 - 1)
         original = app.config['ARCHIVE_POSTS']
@@ -868,7 +871,7 @@ class TestArchiveOldUsers:
         assert db.session.get(User, user.id).avatar_id is not None
 
     def test_archiving_off_by_default_makes_the_task_a_no_op(self, db_session):
-        """`:935`'s false arm. ARCHIVE_POSTS defaults to 0 (config.py:184), so
+        """`:936`'s false arm. ARCHIVE_POSTS defaults to 0 (config.py:184), so
         this test sets no config at all -- the default IS the false arm.
         """
         make_instance('local.example')
@@ -880,7 +883,7 @@ class TestArchiveOldUsers:
         assert db.session.get(User, user.id).avatar_id is not None
 
     def test_a_local_user_is_skipped(self, db_session, app):
-        """`:942`'s `u.ap_id IS NOT NULL`. A local user has no ap_id."""
+        """`:943`'s `u.ap_id IS NOT NULL`. A local user has no ap_id."""
         instance, user, _, _ = _seed()
         user.avatar_id = make_file(file_path='/static/local-a.png').id
         user.cover_id = make_file(file_path='/static/local-c.png').id
@@ -910,14 +913,14 @@ class TestArchiveOldUsers:
 
 
 class TestArchiveOldUsersReachesOneImageUsers:
-    """PC1: `:942` used to require BOTH images; `archive_user` requires either.
+    """PC1: `:943` used to require BOTH images; `archive_user` requires either.
 
-    Before this round's fix, `:942` filtered on
+    Before this round's fix, `:943` filtered on
     `u.avatar_id IS NOT NULL AND u.cover_id IS NOT NULL`, while
-    `archive_user:959` and `:964` guard the two images independently. A
+    `archive_user:960` and `:965` guard the two images independently. A
     remote user with an avatar and no cover was never selected, however long
     they had been idle, though the helper that processes them handles that
-    case. `:942` now filters on `(u.avatar_id IS NOT NULL OR u.cover_id IS
+    case. `:943` now filters on `(u.avatar_id IS NOT NULL OR u.cover_id IS
     NOT NULL)`, and this test covers that a one-image user is reached.
     """
 
@@ -942,13 +945,13 @@ class TestArchiveOldUsersReachesOneImageUsers:
 
 
 class TestArchiveOldPosts:
-    """`archive_old_posts:885` -- archive old posts out of the main tables.
+    """`archive_old_posts:886` -- archive old posts out of the main tables.
 
-    `:887` gates the body on ARCHIVE_POSTS (config.py:184, default 0).
-    `:891-907`'s query excludes stickied posts, private and unarchivable
-    communities, and each community's hundred most recent posts. `:910` decides
-    whether an S3 client is built, `:920` hands each id to `archive_post`, and
-    `:923` closes the client.
+    `:888` gates the body on ARCHIVE_POSTS (config.py:184, default 0).
+    `:892-908`'s query excludes stickied posts, private and unarchivable
+    communities, and each community's hundred most recent posts. `:911` decides
+    whether an S3 client is built, `:921` hands each id to `archive_post`, and
+    `:924` closes the client.
 
     `archive_post` IS REPLACED BY A RECORDER. The real one opens its own task
     session (app/utils.py:4946) and moves files; this round tests which ids
@@ -958,12 +961,12 @@ class TestArchiveOldPosts:
     def _past_the_recency_window(self, community, user):
         """Fill the community's hundred-most-recent window, then add one old post.
 
-        `:900-906` excludes each community's hundred most recent posts by
+        `:901-907` excludes each community's hundred most recent posts by
         `created_at`. A community with a hundred posts or fewer therefore has
         NOTHING archivable, and every "this post is skipped" assertion below
         would pass whatever the task did. These tests seed a hundred recent
         posts to fill that window and one post old enough to fall outside it
-        AND past `:896`'s cutoff.
+        AND past `:897`'s cutoff.
 
         The hundred fillers are staggered a day apart so the ordering has no
         ties, and they are added in one `add_all` rather than a hundred
@@ -1007,7 +1010,7 @@ class TestArchiveOldPosts:
         assert [c[0] for c in recorder.calls] == [old.id]
 
     def test_a_community_inside_the_recency_window_archives_nothing(self, db_session, monkeypatch, app):
-        """`:900-906`'s exclusion, and the test that stops the three filter
+        """`:901-907`'s exclusion, and the test that stops the three filter
         tests below from passing vacuously.
 
         The same old post, in a community with only a handful of others, is not
@@ -1032,7 +1035,7 @@ class TestArchiveOldPosts:
         assert recorder.calls == []
 
     def test_archiving_off_by_default_makes_the_task_a_no_op(self, db_session, monkeypatch):
-        """`:887`'s false arm, which is the default configuration."""
+        """`:888`'s false arm, which is the default configuration."""
         recorder = _Recorder()
         monkeypatch.setattr('app.shared.tasks.maintenance.archive_post', recorder)
         instance, user, community, post = _seed()
@@ -1043,7 +1046,7 @@ class TestArchiveOldPosts:
         assert recorder.calls == []
 
     def test_a_sticky_post_is_skipped(self, db_session, monkeypatch, app):
-        """`:897`'s `p.sticky = false`."""
+        """`:898`'s `p.sticky = false`."""
         recorder = _Recorder()
         monkeypatch.setattr('app.shared.tasks.maintenance.archive_post', recorder)
         instance, user, community, post = _seed()
@@ -1061,7 +1064,7 @@ class TestArchiveOldPosts:
         assert recorder.calls == []
 
     def test_a_post_in_an_unarchivable_community_is_skipped(self, db_session, monkeypatch, app):
-        """`:898`'s `c.can_be_archived = true` (app/models.py:588)."""
+        """`:899`'s `c.can_be_archived = true` (app/models.py:588)."""
         recorder = _Recorder()
         monkeypatch.setattr('app.shared.tasks.maintenance.archive_post', recorder)
         instance, user, community, post = _seed()
@@ -1079,7 +1082,7 @@ class TestArchiveOldPosts:
         assert recorder.calls == []
 
     def test_a_post_in_a_private_community_is_skipped(self, db_session, monkeypatch, app):
-        """`:899`'s `c.private = false` (app/models.py:611)."""
+        """`:900`'s `c.private = false` (app/models.py:611)."""
         recorder = _Recorder()
         monkeypatch.setattr('app.shared.tasks.maintenance.archive_post', recorder)
         instance, user, community, post = _seed()
@@ -1097,10 +1100,10 @@ class TestArchiveOldPosts:
         assert recorder.calls == []
 
     def test_no_s3_client_is_built_when_object_storage_is_off(self, db_session, monkeypatch, app):
-        """`:910`'s FALSE arm, which is the default configuration
+        """`:911`'s FALSE arm, which is the default configuration
         (config.py:103-107 default all three S3 settings to '').
 
-        `archive_post` receives None, and `:922`'s `if s3:` is false so `:923`
+        `archive_post` receives None, and `:923`'s `if s3:` is false so `:924`
         never runs.
         """
         recorder = _Recorder()
@@ -1119,7 +1122,7 @@ class TestArchiveOldPosts:
         assert all(c[1] is None for c in recorder.calls)
 
     def test_an_s3_client_is_built_and_passed_when_configured(self, db_session, monkeypatch, app):
-        """`:910`'s TRUE arm, and `:922`'s.
+        """`:911`'s TRUE arm, and `:923`'s.
 
         Constructing a boto3 client makes no network call, so setting the three
         config values is enough and no endpoint is contacted. The oracle is
