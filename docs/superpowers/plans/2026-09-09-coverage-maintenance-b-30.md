@@ -1554,10 +1554,10 @@ Mutations run **one at a time**: dry-run without `-i` and read the line, apply, 
 | 5 | `process_expired_bans`' locality conjunct | delete `and blocked.is_local()` | killed |
 | 5b | `process_expired_bans`' ban deletion | re-indent `session.delete(expired_ban)` INTO the `if community_membership_record:` block above it | killed by `test_a_ban_with_no_membership_row_still_clears` -- an indentation mutant, which leaves the ban uncleared whenever no membership row exists |
 | 6 | `process_expired_bans`' instance-ban null conjunct | delete `InstanceBan.banned_until != None,` | **expected to SURVIVE — equivalent.** `banned_until < utcnow()` already yields UNKNOWN for NULL. Record the proof. |
-| 7 | `remove_old_community_content`'s retention filter | `Community.content_retention > 0` → `>= 0` | killed |
+| 7 | `remove_old_community_content`'s retention filter | `Community.content_retention > 0` → `>= 0` | **EXPECTED TO SURVIVE.** No test sets `content_retention` to exactly 0 — every value used is the -1 default or 7, and `-1 >= 0` is false either way, so the mutation changes nothing observable to the current tests. It is NOT an equivalent mutant: with `>= 0` a community whose retention is 0 would have every post past a zero-day cutoff deleted. Write the killing test — a community at `content_retention = 0` whose posts survive. |
 | 8 | `remove_old_community_content`'s sticky filter | `sticky=False` → `sticky=True` | killed |
 | 9 | `remove_old_community_content`'s federation flag | `delete_post(post_id, False, ...)` → `True` | killed |
-| 10 | `remove_old_bot_content`'s gate | `if bot_retention > 0:` → `>= 0` | killed |
+| 10 | `remove_old_bot_content`'s gate | `if bot_retention > 0:` → `>= 0` | **EXPECTED TO SURVIVE**, for the same reason as row 7. No test sets `BOT_CONTENT_RETENTION` to exactly 0; the values used are the default 6 and -1. Not equivalent: at 0 the mutated gate opens and `:168`'s cutoff becomes `utcnow()`, deleting every replyless bot post. Write the killing test. |
 | 11 | `remove_old_bot_content`'s cutoff multiplier | `28 * bot_retention` → `280 * bot_retention` | killed |
 | 12 | `remove_old_bot_content`'s reply filter | `reply_count=0` → `reply_count=1` | killed |
 | 13 | `remove_old_bot_content`'s federation flag | `post.author.is_local()` → `False` | killed |
@@ -1571,6 +1571,8 @@ Mutations run **one at a time**: dry-run without `-i` and read the line, apply, 
 | 21 | PC1's widened filter | the `OR` back to `AND` | killed by Task 6's test |
 | 22 | `archive_user`'s avatar guard | `if user.avatar_id:` → `if not user.avatar_id:` | killed |
 | 23 | `archive_user`'s cover guard | `if user.cover_id:` → `if not user.cover_id:` | killed |
+
+**Two rows are marked EXPECTED TO SURVIVE.** Rows 7 and 10 probe a `> 0` versus `>= 0` boundary that no test in this file exercises, because no test sets either retention value to exactly 0. Their survival is a hole, not an equivalence, and each names the test that closes it. A reviewer of Task 3 predicted this before the mutations were run; do not treat a survivor there as anomalous.
 
 - [ ] **Step 2: For every survivor, decide which of two things it is**
 
