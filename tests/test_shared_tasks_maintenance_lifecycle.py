@@ -337,9 +337,9 @@ class TestProcessExpiredBans:
         """`:94`'s false arm, via `is_local()`.
 
         `make_user` with `local=False` sets `ap_id`, and `User.is_local()`
-        (app/models.py:1251-1252) is false once `ap_id` is set and does not
-        start with SERVER_URL. The ban is still deleted -- only the
-        notification is skipped.
+        (app/models.py:1251-1252) is false once `ap_id` is set and
+        `ap_profile_id` does not start with SERVER_URL. The ban is still
+        deleted -- only the notification is skipped.
         """
         local_instance = make_instance('local.example')
         remote_instance = make_instance('remote.example')
@@ -897,6 +897,37 @@ class TestArchiveOldUsers:
         refreshed = db.session.get(User, user.id)
         assert (refreshed.avatar_id, refreshed.cover_id) == (None, None)
 
+    def test_two_idle_remote_users_are_both_archived(self, db_session, app):
+        """The multi-row path, D354.
+
+        `:947`'s `user_ids = session.execute(text(sql), {'cutoff':
+        cutoff}).scalars()` is not materialized, and `:948`'s loop calls
+        `archive_user`, which commits once per user at `:971`. Every other
+        test in this class seeds exactly one archivable user, so no test
+        actually runs the loop for more than one iteration. D354 argues this
+        is safe because psycopg2's default client-side cursor has already
+        transferred the whole result set before the loop's first commit, but
+        that argument had never been executed by a test. This seeds two idle
+        remote users and asserts both are archived, running the path D354
+        only argues about.
+        """
+        make_instance('local.example')
+        first = self._idle_remote_user('firstuser')
+        second = self._idle_remote_user('seconduser')
+        original = app.config['ARCHIVE_POSTS']
+        app.config['ARCHIVE_POSTS'] = 6
+
+        try:
+            archive_old_users()
+        finally:
+            app.config['ARCHIVE_POSTS'] = original
+
+        db.session.expire_all()
+        refreshed_first = db.session.get(User, first.id)
+        refreshed_second = db.session.get(User, second.id)
+        assert (refreshed_first.avatar_id, refreshed_first.cover_id) == (None, None)
+        assert (refreshed_second.avatar_id, refreshed_second.cover_id) == (None, None)
+
     def test_a_recently_seen_user_is_skipped(self, db_session, app):
         """The BOUNDARY -- `:944`'s `u.last_seen < :cutoff`."""
         make_instance('local.example')
@@ -963,7 +994,8 @@ class TestArchiveOldUsersReachesOneImageUsers:
     remote user with an avatar and no cover was never selected, however long
     they had been idle, though the helper that processes them handles that
     case. `:943` now filters on `(u.avatar_id IS NOT NULL OR u.cover_id IS
-    NOT NULL)`, and this test covers that a one-image user is reached.
+    NOT NULL)`, and these two tests cover that a one-image user is reached
+    from either side of that `OR`.
     """
 
     def test_an_idle_remote_user_with_only_an_avatar_is_archived(self, db_session, app):
@@ -984,6 +1016,43 @@ class TestArchiveOldUsersReachesOneImageUsers:
 
         db.session.expire_all()
         assert db.session.get(User, user.id).avatar_id is None
+
+    def test_an_idle_remote_user_with_only_a_cover_is_archived(self, db_session, app):
+        """Pins the other half of `:943`'s `OR`.
+
+        `TestArchiveOldUsers._idle_remote_user` takes an `avatar=False`
+        keyword written for exactly this case, but it is an instance method
+        on `TestArchiveOldUsers`, not on this class, and this class does not
+        inherit from it (inheriting would also inherit that class's own
+        tests, double-counting them here) -- so it is not reachable from
+        `self` in this class. Rather than duplicate the helper as its own
+        method, this inlines the same seeding the avatar-only test above
+        does, swapped to cover-only.
+
+        Every other test that drives `archive_old_users`' selection query
+        gives the seeded user an avatar, so a mutant dropping the cover
+        disjunct -- narrowing `:943` back to `u.avatar_id IS NOT NULL) AND
+        ...` -- survived all 56 tests before this one existed. Without this
+        test, a remote user with only a cover would never be selected for
+        archiving, however long they had been idle.
+        """
+        make_instance('local.example')
+        remote_instance = make_instance('remote.example')
+        user = make_user(remote_instance, 'coveronly')
+        cover = make_file(file_path='/static/one-c.png')
+        user.cover_id = cover.id
+        user.last_seen = utcnow() - timedelta(days=6 * 28 + 1)
+        db.session.commit()
+        original = app.config['ARCHIVE_POSTS']
+        app.config['ARCHIVE_POSTS'] = 6
+
+        try:
+            archive_old_users()
+        finally:
+            app.config['ARCHIVE_POSTS'] = original
+
+        db.session.expire_all()
+        assert db.session.get(User, user.id).cover_id is None
 
 
 class TestArchiveOldPosts:
