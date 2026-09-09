@@ -113,7 +113,7 @@ class TestPwnBots:
     sub-project 29, found one:
     `test_the_read_and_the_writes_share_one_connection_once_wrapped` below
     instruments `db.engine`'s `before_cursor_execute` and asserts the SELECT
-    and the two UPDATEs run on the same DBAPI connection. It FAILS against the
+    and the two UPDATEs run on the same connection checkout. It FAILS against the
     unpatched body (the SELECT runs on a connection distinct from the task's
     own) and PASSES once `:1166` gains `with patch_db_session(session):`,
     which is why `pwn_bots` now has that wrapper.
@@ -167,7 +167,7 @@ class TestPwnBots:
         assert db.session.get(BotChallenge, challenge.id).is_a_bot is False
 
     def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch):
-        """`:1175-1177`'s handler, reached through `:1167`.
+        """`:1175-1177`'s handler, reached through `:1168`.
 
         NOT through `utcnow`. `:1164` computes the cutoff one line ABOVE
         `:1165`'s `try:`, so patching the clock raises before the handler
@@ -175,7 +175,7 @@ class TestPwnBots:
         `pwn_bots` is the only task in this group that orders those two
         statements that way.
 
-        A challenge must be seeded, because `:1167`'s `text(...)` is inside the
+        A challenge must be seeded, because `:1168`'s `text(...)` is inside the
         loop and an empty result set never reaches it.
         """
         instance, user, _, _ = _seed()
@@ -189,19 +189,23 @@ class TestPwnBots:
             pwn_bots()
 
     def test_the_read_and_the_writes_share_one_connection_once_wrapped(self, db_session):
-        """PC2's discriminator: which DBAPI connection issues each statement.
+        """PC2's discriminator: which connection checkout issues each statement.
 
         `BotChallenge.query` at `:1167` and `session.execute` at `:1168`/
         `:1171` are two different session objects when the body is not
-        wrapped in `patch_db_session`, and Task 8's three candidate probes
-        established that most differences a test can observe -- data
-        visibility, a conflicting write, existing test behaviour -- are
-        invisible in-process because `tests/conftest.py` pushes one app
-        context both sessions share. Which physical connection each
-        statement runs on is not invisible: a `before_cursor_execute`
-        listener on `db.engine` records `id(conn.connection)` per statement,
-        and the SELECT lands on a different connection than the two UPDATEs
-        whenever the two sessions are actually different objects.
+        wrapped in `patch_db_session`. Of Task 8's three candidate probes,
+        only this one produced a result: a conflicting uncommitted write held
+        during the task (candidate 1) deadlocked Postgres and was abandoned
+        before it returned a verdict; checking whether wrapping changed any
+        existing test's behaviour (candidate 3) was never run, because this
+        probe already answered the question; and whether the two sessions see
+        different data was never probed at all -- that is the brief's
+        premise, not something established here. Which connection checkout
+        each statement runs on is what this probe measures: a
+        `before_cursor_execute` listener on `db.engine` records
+        `id(conn.connection)` per statement, and the SELECT lands on a
+        different checkout than the two UPDATEs whenever the two sessions are
+        actually different objects.
         """
         instance, user, _, _ = _seed()
         challenge = BotChallenge(uuid='c5', user_id=user.id,
