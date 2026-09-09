@@ -508,3 +508,148 @@ class TestCleanupOldVotingData:
 
         with pytest.raises(RuntimeError, match='the task itself failed'):
             cleanup_old_voting_data()
+
+
+class TestUpdateCommunityStats:
+    """`update_community_stats:283` -- recount subscribers, posts and replies.
+
+    `:288-290` selects communities that are not banned and were active in the
+    last three days. `:303` writes `subscriptions_count` from a join that
+    excludes banned members and bots; `:309` and `:313` write `post_count` and
+    `post_reply_count` from raw counts that exclude deleted rows.
+
+    `:305-306` IS THREE CONDITIONS IN ONE ARC PAIR. Branch coverage reads 100%
+    with two of them untested (fact 142), so each gets its own test:
+    `is_local()`, `total_subscriptions_count is None`, and
+    `total_subscriptions_count < subscriptions_count`.
+
+    KNOWN DEFECT, NOT FIXED HERE: `:317`'s `session.commit()` sits inside the
+    `for` loop opened at `:292`, committing once per community rather than
+    once after the loop. Every test below only ever seeds one eligible
+    community, so none of them can distinguish a commit-per-iteration from a
+    single commit after the loop -- that distinction is Task 6's to test,
+    once `:317` is dedented.
+    """
+
+    def test_subscriptions_count_excludes_bots_and_banned_members(self, db_session):
+        instance, user, community, _ = _seed()
+        bot = make_user(instance, 'botty', local=True)
+        bot.bot = True
+        banned = make_user(instance, 'outcast', local=True)
+        db.session.commit()
+        make_community_member(user, community)
+        make_community_member(bot, community)
+        banned_membership = make_community_member(banned, community)
+        banned_membership.is_banned = True
+        db.session.commit()
+
+        update_community_stats()
+
+        db.session.expire_all()
+        assert db.session.get(Community, community.id).subscriptions_count == 1
+
+    def test_post_and_reply_counts_exclude_deleted_rows(self, db_session):
+        instance, user, community, post = _seed()
+        deleted_post = make_post(community, user, 'https://peer.example/p/2')
+        deleted_post.deleted = True
+        reply = make_post_reply(post, user)
+        deleted_reply = make_post_reply(post, user)
+        deleted_reply.deleted = True
+        db.session.commit()
+
+        update_community_stats()
+
+        db.session.expire_all()
+        refreshed = db.session.get(Community, community.id)
+        assert (refreshed.post_count, refreshed.post_reply_count) == (1, 1)
+
+    def test_a_banned_community_is_skipped(self, db_session):
+        _, user, community, _ = _seed()
+        community.banned = True
+        community.post_count = 99
+        db.session.commit()
+
+        update_community_stats()
+
+        db.session.expire_all()
+        assert db.session.get(Community, community.id).post_count == 99
+
+    def test_a_community_idle_for_more_than_three_days_is_skipped(self, db_session):
+        _, user, community, _ = _seed()
+        community.last_active = utcnow() - timedelta(days=4)
+        community.post_count = 99
+        db.session.commit()
+
+        update_community_stats()
+
+        db.session.expire_all()
+        assert db.session.get(Community, community.id).post_count == 99
+
+    def test_a_local_community_with_no_total_gets_one(self, db_session):
+        """`:305-306`'s second condition: total_subscriptions_count is None."""
+        instance, user, community, _ = _seed()
+        make_community_member(user, community)
+        community.total_subscriptions_count = None
+        db.session.commit()
+
+        update_community_stats()
+
+        db.session.expire_all()
+        assert db.session.get(Community, community.id).total_subscriptions_count == 1
+
+    def test_a_local_community_whose_total_lags_is_raised(self, db_session):
+        """`:305-306`'s third condition: total < subscriptions."""
+        instance, user, community, _ = _seed()
+        make_community_member(user, community)
+        community.total_subscriptions_count = 0
+        db.session.commit()
+
+        update_community_stats()
+
+        db.session.expire_all()
+        assert db.session.get(Community, community.id).total_subscriptions_count == 1
+
+    def test_a_local_community_whose_total_already_leads_is_left_alone(self, db_session):
+        """The false arm of `:305-306`'s third condition.
+
+        A local community's total counts remote subscribers too, so a total
+        ABOVE the local count is the normal state and must not be pulled down.
+        """
+        instance, user, community, _ = _seed()
+        make_community_member(user, community)
+        community.total_subscriptions_count = 50
+        db.session.commit()
+
+        update_community_stats()
+
+        db.session.expire_all()
+        assert db.session.get(Community, community.id).total_subscriptions_count == 50
+
+    def test_a_remote_community_keeps_its_total_untouched(self, db_session):
+        """`:305`'s first condition, `is_local()`, taking its false arm.
+
+        `make_community` leaves `ap_id` None, which makes `is_local()` true at
+        app/models.py:796's first disjunct. Setting both `ap_id` and
+        `ap_profile_id` to a remote host makes it false, and `profile_id()`
+        (app/models.py:787) then returns a URI that does not start with
+        SERVER_URL.
+        """
+        instance, user, community, _ = _seed()
+        make_community_member(user, community)
+        community.ap_id = 'microblogs@peer.example'
+        community.ap_profile_id = 'https://peer.example/c/microblogs'
+        community.total_subscriptions_count = 0
+        db.session.commit()
+
+        update_community_stats()
+
+        db.session.expire_all()
+        refreshed = db.session.get(Community, community.id)
+        assert refreshed.subscriptions_count == 1
+        assert refreshed.total_subscriptions_count == 0
+
+    def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch):
+        monkeypatch.setattr('app.shared.tasks.maintenance.utcnow', _boom)
+
+        with pytest.raises(RuntimeError, match='the task itself failed'):
+            update_community_stats()
