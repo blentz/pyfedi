@@ -267,14 +267,24 @@ deleted nor detached, so the general rule should hold — but "should hold" is
 what sub-project 28 said too. Observe it with a query count before changing
 anything.
 
-**`CREATE TEMPORARY TABLE ... ON COMMIT DROP` inside the test transaction.**
-`tests/conftest.py`'s session fixture runs each test in a transaction it rolls
-back. A temp table declared `ON COMMIT DROP` interacts with that, and
-`calculate_community_activity_stats` commits at `:860` — inside a test, that
-commit lands against the fixture's transaction. Whether the task can run at all
-under the harness is the first thing the plan's first task must establish, before
-any test of its behaviour is written. If it cannot, the plan needs a different
-fixture for that one function and must say which.
+**`CREATE TEMPORARY TABLE ... ON COMMIT DROP` and the harness.** An earlier
+draft of this spec said the temp table has to survive a fixture transaction
+that `tests/conftest.py` rolls back. That premise is wrong and the correction
+matters, because a plan built on it would have specified a fixture the round
+does not need. `tests/conftest.py:137-202`'s `db_session` fixture does **not**
+wrap a test in a transaction: it yields `db.session`, then DELETEs every row and
+commits (`:160-202`, and the comment at `:162-167` says why DELETE rather than
+TRUNCATE). Commits inside a test are real.
+
+What remains true is that `get_task_session()` hands the task a `Session` on its
+own connection. So the temp table lives in the task's own transaction, is
+dropped by the task's own commit at `:861`, and is never visible to the test's
+`db.session` at all. Two consequences the plan must carry: rows a test seeds
+have to be **committed** before the task runs or the task's connection cannot
+see them, and any post-run assertion reads through a fresh query or after
+`db.session.expire_all()`. Whether `ON COMMIT DROP` behaves under this
+arrangement is still the first thing to establish, but the question is now
+narrow enough to answer with one run of the task against an empty database.
 
 **The suite's session timeout.** `pytest.ini:28` caps a session at 600s and the
 suite has hit it when the container stack accumulates state across consecutive
