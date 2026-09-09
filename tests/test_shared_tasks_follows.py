@@ -17,9 +17,14 @@ each task does: assert the row AND the request.
 
 `join_community` FORKS THREE WAYS ON `src` INSIDE EACH OF TWO GUARDS.
 `SRC_WEB` flashes and returns None, `SRC_PLD` returns a dict, `SRC_API` raises.
-Under `task_always_eager` the wrapper returns the value directly (fact 146), so
-the return value is observable -- and it is the only thing distinguishing two
-of the three arms.
+Every test in this file calls the task object directly --
+`join_community(None, ...)`, never `.delay()` -- which goes through Celery's
+`Task.__call__` straight into `run()` and hands back whatever the function
+returns, independent of `task_always_eager`. Fact 146 is about
+`task_selector`'s two DISPATCH arms (`app/shared/tasks/__init__.py:66` calls
+`.delay()`, `:68` calls the task directly) and does not apply here, since
+this module is never called through `task_selector`. So the return value is
+observable -- and it is the only thing distinguishing two of the three arms.
 
 `flash()` NEEDS A REQUEST CONTEXT AND THE `app` FIXTURE DOES NOT PUSH ONE.
 tests/conftest.py:112 pushes only `application.app_context()`. A test touching
@@ -57,7 +62,6 @@ from tests.factories import (
 )
 
 PEER_INBOX = 'https://peer.example/inbox'
-OTHER_INBOX = 'https://other.example/inbox'
 
 _REAL_GETADDRINFO = socket.getaddrinfo
 _EXAMPLE_TLD_ADDRESS = '93.184.216.34'
@@ -261,8 +265,11 @@ def test_joining_an_offline_remote_community_sends_nothing(db_session, http_mock
 
 def test_joining_returns_the_preload_status_for_src_pld(db_session, http_mock):
     """`:100-101`'s `SRC_PLD` arm. The dict is the only thing distinguishing
-    this arm from `SRC_API`'s `return True` at `:103`, and under
-    `task_always_eager` the wrapper hands the value back directly (fact 146).
+    this arm from `SRC_API`'s `return True` at `:103`. The value is
+    observable here because this test calls the task object directly rather
+    than `.delay()`, going straight through `Task.__call__` into `run()`;
+    fact 146 concerns `task_selector`'s dispatch arms, not this call path,
+    and does not apply.
     """
     s = _seed(with_keys=True)
 
@@ -394,19 +401,37 @@ def test_a_banned_user_gets_a_flash_for_src_web(db_session, http_mock):
     `:51` needs a request context, and pushing one disables
     `patch_db_session` -- see `test_joining_flashes_and_returns_none_for_src_web`
     for why that matters.
+
+    `get_flashed_messages` is read inside the same request context, before
+    the context is popped, and the message's own text is asserted rather than
+    merely its presence -- `result is None` alone does not distinguish this
+    flash existing from `:51` being deleted outright, and `len(messages) == 1`
+    alone would not distinguish this flash from `:65`'s.
     """
     s = _seed(with_keys=True)
     make_community_ban(s.user, s.community)
 
     with current_app.test_request_context('/'):
         result = join_community(None, s.user.id, s.community.id, SRC_WEB)
+        messages = get_flashed_messages()
 
     assert result is None
     assert db.session.query(CommunityJoinRequest).count() == 0
+    assert len(messages) == 1
+    assert messages[0] == 'You cannot join this community'
 
 
 def test_a_blocked_instance_gets_a_flash_for_src_web(db_session, http_mock):
-    """`:66`'s `return`, guarded by `:64`."""
+    """`:66`'s `return`, guarded by `:64`.
+
+    `result is None` alone is the identical observable already asserted by
+    `test_a_blocked_instance_join_async_returns_without_a_message` and
+    `test_a_blocked_instance_with_an_unrecognized_src_falls_through_to_bare_return`,
+    so it cannot by itself distinguish this arm from either of those. As in
+    `test_a_banned_user_gets_a_flash_for_src_web`, `get_flashed_messages` is
+    read inside the still-open request context and the message's own text is
+    asserted.
+    """
     s = _seed(local_community=False, with_keys=True)
     peer = _make_online(s)
     make_instance_block(s.user, peer)
@@ -414,8 +439,11 @@ def test_a_blocked_instance_gets_a_flash_for_src_web(db_session, http_mock):
 
     with current_app.test_request_context('/'):
         result = join_community(None, s.user.id, s.community.id, SRC_WEB)
+        messages = get_flashed_messages()
 
     assert result is None
+    assert len(messages) == 1
+    assert messages[0] == 'Community is on banned or blocked instance'
 
 
 def test_a_banned_user_with_an_unrecognized_src_falls_through_to_bare_return(
