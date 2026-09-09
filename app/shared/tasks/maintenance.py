@@ -1163,12 +1163,13 @@ def pwn_bots():
     session = get_task_session()
     cut_off = utcnow() - timedelta(days=1)
     try:
-        for expired_challenge in BotChallenge.query.filter(BotChallenge.sent_at < cut_off, BotChallenge.is_a_bot == None).all():
-            session.execute(text('UPDATE "user" SET bot = true, bot_override = true, suppress_crossposts = true WHERE id = :user_id'), {
-                'user_id': expired_challenge.user_id
-            })
-            session.execute(text('UPDATE "bot_challenge" SET is_a_bot = true WHERE id = :id'),
-                            {'id': expired_challenge.id})
+        with patch_db_session(session):
+            for expired_challenge in BotChallenge.query.filter(BotChallenge.sent_at < cut_off, BotChallenge.is_a_bot == None).all():
+                session.execute(text('UPDATE "user" SET bot = true, bot_override = true, suppress_crossposts = true WHERE id = :user_id'), {
+                    'user_id': expired_challenge.user_id
+                })
+                session.execute(text('UPDATE "bot_challenge" SET is_a_bot = true WHERE id = :id'),
+                                {'id': expired_challenge.id})
         session.commit()
 
     except Exception:

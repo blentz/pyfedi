@@ -37,6 +37,7 @@ unless the test calls `db.session.expire_all()` first (fact 153).
 from datetime import timedelta
 
 import pytest
+from sqlalchemy import event
 
 from app import db
 from app.constants import NOTIF_UNBAN
@@ -101,15 +102,21 @@ class _Recorder:
 class TestPwnBots:
     """`pwn_bots:1161` -- everyone who ignored a bot challenge for 24h is a bot.
 
-    `:1166` iterates challenges older than the cutoff whose `is_a_bot` is still
-    NULL, `:1167` marks the user, and `:1170` marks the challenge. One branch
+    `:1167` iterates challenges older than the cutoff whose `is_a_bot` is still
+    NULL, `:1168` marks the user, and `:1171` marks the challenge. One branch
     point, the loop.
 
-    `:1166` READS THROUGH `BotChallenge.query`, WHICH IS `db.session`, while
-    `:1167` and `:1170` write through the task's own session, and the body is
-    not wrapped in `patch_db_session`. That split is this round's PC2 and is
-    NOT fixed by these tests -- they pass either way, which is itself the point
-    Task 8 has to establish.
+    `:1167` used to READ THROUGH `BotChallenge.query`, WHICH IS `db.session`,
+    while `:1168` and `:1171` write through the task's own session, with the
+    body NOT wrapped in `patch_db_session` -- this round's PC2. Task 8 spent a
+    bounded effort trying to observe that split from a test and, unlike PC2 in
+    sub-project 29, found one:
+    `test_the_read_and_the_writes_share_one_connection_once_wrapped` below
+    instruments `db.engine`'s `before_cursor_execute` and asserts the SELECT
+    and the two UPDATEs run on the same DBAPI connection. It FAILS against the
+    unpatched body (the SELECT runs on a connection distinct from the task's
+    own) and PASSES once `:1166` gains `with patch_db_session(session):`,
+    which is why `pwn_bots` now has that wrapper.
     """
 
     def test_a_challenge_ignored_past_the_cutoff_marks_the_user_a_bot(self, db_session):
@@ -180,6 +187,44 @@ class TestPwnBots:
 
         with pytest.raises(RuntimeError, match='the task itself failed'):
             pwn_bots()
+
+    def test_the_read_and_the_writes_share_one_connection_once_wrapped(self, db_session):
+        """PC2's discriminator: which DBAPI connection issues each statement.
+
+        `BotChallenge.query` at `:1167` and `session.execute` at `:1168`/
+        `:1171` are two different session objects when the body is not
+        wrapped in `patch_db_session`, and Task 8's three candidate probes
+        established that most differences a test can observe -- data
+        visibility, a conflicting write, existing test behaviour -- are
+        invisible in-process because `tests/conftest.py` pushes one app
+        context both sessions share. Which physical connection each
+        statement runs on is not invisible: a `before_cursor_execute`
+        listener on `db.engine` records `id(conn.connection)` per statement,
+        and the SELECT lands on a different connection than the two UPDATEs
+        whenever the two sessions are actually different objects.
+        """
+        instance, user, _, _ = _seed()
+        challenge = BotChallenge(uuid='c5', user_id=user.id,
+                                 sent_at=utcnow() - timedelta(days=2))
+        db.session.add(challenge)
+        db.session.commit()
+
+        seen = []
+
+        def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+            kind = statement.strip().split(None, 1)[0].upper()
+            seen.append((id(conn.connection), kind))
+
+        event.listen(db.engine, 'before_cursor_execute', before_cursor_execute)
+        try:
+            pwn_bots()
+        finally:
+            event.remove(db.engine, 'before_cursor_execute', before_cursor_execute)
+
+        select_conns = {c for c, k in seen if k == 'SELECT'}
+        update_conns = {c for c, k in seen if k == 'UPDATE'}
+        assert select_conns and update_conns
+        assert select_conns == update_conns
 
 
 class TestProcessExpiredBans:
