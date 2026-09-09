@@ -1626,6 +1626,12 @@ The plan says D351 and fact 172; verify rather than trusting it.
 - **`process_expired_bans` invalidates six memoized caches** (`:111-114`, `:121-122`) and no test asserts on them, deliberately — asserting on a shared Flask-Caching instance would couple this file to another subsystem.
 - **Groups C and D remain**, with their function lists and statement counts from the spec, so the next round does not re-derive them.
 
+- [ ] **Step 2b: Correct `tests/README.md`'s stale citations into `maintenance.py`**
+
+Task 9 added two decorator lines, shifting every line below `:160` by one and every line below `:1161` by two. It swept both test files. **`tests/README.md` also cites `maintenance.py` line numbers and was out of that task's scope** — Task 9 reported them rather than fixing them, which was correct, and you are the task that owns this file.
+
+Find every citation into `app/shared/tasks/maintenance.py` in `tests/README.md`, check each against the tree with numbered output, and correct the stale ones. **Do not shift them arithmetically** — open each line. A citation corrected by prediction rather than observation is how this round produced a confident wrong correction in an earlier sub-project.
+
 - [ ] **Step 3: Write the new facts, from 172**
 
 At minimum:
