@@ -160,3 +160,16 @@ class TestDeleteFromS3:
         delete_from_s3(['a.png'])
 
         assert client.closed is True
+
+    def test_the_client_is_closed_when_the_delete_raises(self, db_session, monkeypatch):
+        """PC3: `:1135`'s `s3.close()` is the body's last statement, not a
+        `finally`, so a raise from `:1134` skips it and leaks the client's
+        connection pool.
+        """
+        client = _StubS3(raise_on_delete=RuntimeError('s3 is down'))
+        self._patch_boto3(monkeypatch, client)
+
+        with pytest.raises(RuntimeError, match='s3 is down'):
+            delete_from_s3(['a.png'])
+
+        assert client.closed is True
