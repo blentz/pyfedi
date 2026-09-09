@@ -148,7 +148,7 @@ class TestPwnBots:
         assert db.session.get(BotChallenge, challenge.id).is_a_bot is None
 
     def test_an_answered_challenge_is_left_alone(self, db_session):
-        """`:1166`'s `is_a_bot == None` conjunct.
+        """`:1167`'s `is_a_bot == None` conjunct.
 
         A challenge someone answered has a non-NULL `is_a_bot`, and must not be
         reprocessed however old it is.
@@ -167,7 +167,7 @@ class TestPwnBots:
         assert db.session.get(BotChallenge, challenge.id).is_a_bot is False
 
     def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch):
-        """`:1174-1176`'s handler, reached through `:1167`.
+        """`:1175-1177`'s handler, reached through `:1167`.
 
         NOT through `utcnow`. `:1164` computes the cutoff one line ABOVE
         `:1165`'s `try:`, so patching the clock raises before the handler
