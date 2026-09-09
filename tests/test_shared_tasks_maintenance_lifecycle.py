@@ -704,3 +704,153 @@ class TestDeleteOldSoftDeletedContent:
 
         with pytest.raises(RuntimeError, match='the task itself failed'):
             delete_old_soft_deleted_content()
+
+
+class TestArchiveUser:
+    """`archive_user:957` -- drop a user's avatar and cover.
+
+    `:959` and `:964` guard the two images INDEPENDENTLY, so this helper
+    handles a user with only one. `archive_old_users:942`'s query does not --
+    that mismatch is this round's PC1 and is NOT fixed here.
+
+    Step 1 probed `File.delete_from_disk(purge_cdn=False)` (called at `:962`
+    and `:967`) against a `make_file(file_path='/static/avatar.png')` row,
+    whose path points nowhere. It passed unpatched: `delete_from_disk`
+    (app/models.py:421) only reaches `os.unlink` behind
+    `os.path.isfile(self.file_path)` (app/models.py:429), which is False for
+    a nonexistent path, so the branch is skipped rather than raising. No
+    monkeypatch of `File.delete_from_disk` is needed in this class.
+    """
+
+    def test_both_images_are_removed(self, db_session):
+        instance, user, _, _ = _seed()
+        avatar = make_file(file_path='/static/avatar.png')
+        cover = make_file(file_path='/static/cover.png')
+        user.avatar_id = avatar.id
+        user.cover_id = cover.id
+        db.session.commit()
+
+        archive_user(user.id, db.session)
+
+        db.session.expire_all()
+        refreshed = db.session.get(User, user.id)
+        assert (refreshed.avatar_id, refreshed.cover_id) == (None, None)
+        assert db.session.get(File, avatar.id) is None
+        assert db.session.get(File, cover.id) is None
+
+    def test_a_user_with_only_an_avatar_is_handled(self, db_session):
+        """`:959` true, `:964` false. The helper copes; `archive_old_users`'
+        query is what never sends it such a user.
+        """
+        instance, user, _, _ = _seed()
+        avatar = make_file(file_path='/static/avatar.png')
+        user.avatar_id = avatar.id
+        db.session.commit()
+
+        archive_user(user.id, db.session)
+
+        db.session.expire_all()
+        assert db.session.get(User, user.id).avatar_id is None
+
+    def test_a_user_with_only_a_cover_is_handled(self, db_session):
+        """`:959` false, `:964` true."""
+        instance, user, _, _ = _seed()
+        cover = make_file(file_path='/static/cover.png')
+        user.cover_id = cover.id
+        db.session.commit()
+
+        archive_user(user.id, db.session)
+
+        db.session.expire_all()
+        assert db.session.get(User, user.id).cover_id is None
+
+
+class TestArchiveOldUsers:
+    """`archive_old_users:933` -- strip images from idle remote users.
+
+    `:935` gates the whole body on `ARCHIVE_POSTS` (config.py:184, default 0),
+    and `:938`'s cutoff is that value times 28 days. `:939-945` selects remote
+    users idle past the cutoff, and `:947` hands each to `archive_user`.
+    """
+
+    def _idle_remote_user(self, name, *, avatar=True, cover=True, age_days=None):
+        remote_instance = make_instance(f'{name}.example')
+        user = make_user(remote_instance, name)
+        if avatar:
+            user.avatar_id = make_file(file_path=f'/static/{name}-a.png').id
+        if cover:
+            user.cover_id = make_file(file_path=f'/static/{name}-c.png').id
+        user.last_seen = utcnow() - timedelta(days=age_days if age_days else 6 * 28 + 1)
+        db.session.commit()
+        return user
+
+    def test_an_idle_remote_user_with_both_images_is_archived(self, db_session, app):
+        make_instance('local.example')
+        user = self._idle_remote_user('visitor')
+        original = app.config['ARCHIVE_POSTS']
+        app.config['ARCHIVE_POSTS'] = 6
+
+        try:
+            archive_old_users()
+        finally:
+            app.config['ARCHIVE_POSTS'] = original
+
+        db.session.expire_all()
+        refreshed = db.session.get(User, user.id)
+        assert (refreshed.avatar_id, refreshed.cover_id) == (None, None)
+
+    def test_a_recently_seen_user_is_skipped(self, db_session, app):
+        """The BOUNDARY -- `:943`'s `u.last_seen < :cutoff`."""
+        make_instance('local.example')
+        user = self._idle_remote_user('recent', age_days=6 * 28 - 1)
+        original = app.config['ARCHIVE_POSTS']
+        app.config['ARCHIVE_POSTS'] = 6
+
+        try:
+            archive_old_users()
+        finally:
+            app.config['ARCHIVE_POSTS'] = original
+
+        db.session.expire_all()
+        assert db.session.get(User, user.id).avatar_id is not None
+
+    def test_archiving_off_by_default_makes_the_task_a_no_op(self, db_session):
+        """`:935`'s false arm. ARCHIVE_POSTS defaults to 0 (config.py:184), so
+        this test sets no config at all -- the default IS the false arm.
+        """
+        make_instance('local.example')
+        user = self._idle_remote_user('untouched')
+
+        archive_old_users()
+
+        db.session.expire_all()
+        assert db.session.get(User, user.id).avatar_id is not None
+
+    def test_a_local_user_is_skipped(self, db_session, app):
+        """`:942`'s `u.ap_id IS NOT NULL`. A local user has no ap_id."""
+        instance, user, _, _ = _seed()
+        user.avatar_id = make_file(file_path='/static/local-a.png').id
+        user.cover_id = make_file(file_path='/static/local-c.png').id
+        user.last_seen = utcnow() - timedelta(days=6 * 28 + 1)
+        db.session.commit()
+        original = app.config['ARCHIVE_POSTS']
+        app.config['ARCHIVE_POSTS'] = 6
+
+        try:
+            archive_old_users()
+        finally:
+            app.config['ARCHIVE_POSTS'] = original
+
+        db.session.expire_all()
+        assert db.session.get(User, user.id).avatar_id is not None
+
+    def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch, app):
+        monkeypatch.setattr('app.shared.tasks.maintenance.utcnow', _boom)
+        original = app.config['ARCHIVE_POSTS']
+        app.config['ARCHIVE_POSTS'] = 6
+
+        try:
+            with pytest.raises(RuntimeError, match='the task itself failed'):
+                archive_old_users()
+        finally:
+            app.config['ARCHIVE_POSTS'] = original
