@@ -9363,7 +9363,7 @@ grep-proven dead read, none hardening-mislabelled-as-repair:**
 | # | site | defect | status | evidence |
 |---|---|---|---|---|
 | D349 | `test_the_number_of_community_selects_does_not_scale_with_the_loop`, `tests/test_shared_tasks_maintenance_cleanup.py:701-746`, against `Community.last_active`'s column default, `app/models.py:578` (`default=utcnow`) | **Registered, not fixed -- the same shape as D348: an oracle that only looks N-sensitive from the outside.** The test seeds four eligible communities and asserts `len(selects) == 1` (the eligibility-query-only prediction post-fix), but asserts nothing about four communities actually having been processed -- no per-community stat is read back, no loop-iteration count is taken. Eligibility for `update_community_stats`'s query (`app/shared/tasks/maintenance.py:287-290`, `Community.banned == False AND Community.last_active > now - 3 days`) rests entirely on `Community.last_active`'s column default, which the test's `make_community` calls never override. If that default changed to fall outside the 3-day window, or the window itself narrowed below the time between fixture creation and assertion, zero communities would be eligible, the `for` loop would never execute, and `selects` would hold only the one eligibility query -- `len(selects) == 1` would still pass. Pre-fix, when N eligible communities produced N matching statements, the oracle was N-sensitive by necessity; post-fix, reading exactly 1 regardless of N >= 1, it is not. Do not fix the test -- registered as the same shape as D348 | registered, not fixed (same shape as D348) | `tests/test_shared_tasks_maintenance_cleanup.py:701-746` read at this commit; `app/shared/tasks/maintenance.py:287-290`; `app/models.py:578` |
-| D350 | The ten clones of `test_a_failure_inside_the_task_propagates`, `tests/test_shared_tasks_maintenance_cleanup.py:111,175,203,283,333,382,506,651,795,954` (one per Group A task), against each task's `except Exception: session.rollback(); raise / finally: session.close()` | **Registered as an open question, explicitly not proven -- not fixed, and not claimed equivalent.** Each of the ten clones asserts only that the forced exception propagates (`pytest.raises(RuntimeError, ...)`); none reads back any state to confirm `session.rollback()` itself ran. Deleting `session.rollback()` from nine of the ten tasks' `except` blocks would leave all 53 tests green, because `finally: session.close()` closes the session regardless -- only `update_community_stats` has a test that observes the rollback's effect directly, `test_a_failure_partway_through_leaves_no_partial_writes` (`:668-699`), which reads back committed state after a forced mid-loop failure and finds no partial write. It is probably an equivalent mutant for the other nine, since closing an uncommitted session in `finally` should discard its pending transaction whether or not `rollback()` ran first -- but this round did not run that mutation against any of the nine and did not establish it. "Asserted, never run" is exactly the gap this round already caught once, for mutation 21 (`unban_expired_users`'s `AND banned_until is not null` conjunct, fact 170) -- there the mutation WAS run and proved equivalent; here it was not run at all, so the equivalence is a plausible inference, not a demonstrated fact. Left open for a future round to run the nine mutations and either confirm equivalence or find a live gap | open question, not proven (registered, not fixed) | `tests/test_shared_tasks_maintenance_cleanup.py:111,175,203,283,333,382,506,651,795,954` (the ten clones) and `:668-699` (`update_community_stats`'s rollback-observing test) read at this commit; fact 170 for the contrast with a mutation actually run |
+| D350 | The ten clones of `test_a_failure_inside_the_task_propagates`, `tests/test_shared_tasks_maintenance_cleanup.py:111,175,203,283,333,382,506,651,795,954` (one per Group A task), against each task's `except Exception: session.rollback(); raise / finally: session.close()` | **Registered as an open question, explicitly not proven -- not fixed, and not claimed equivalent.** Each of the ten clones asserts only that the forced exception propagates (`pytest.raises(RuntimeError, ...)`); none reads back any state to confirm `session.rollback()` itself ran. Deleting `session.rollback()` from nine of the ten tasks' `except` blocks would leave all 53 tests green, because `finally: session.close()` closes the session regardless -- only `update_community_stats` has a test that observes the rollback's effect directly, `test_a_failure_partway_through_leaves_no_partial_writes` (`:668-699`), which reads back committed state after a forced mid-loop failure and finds no partial write. It is probably an equivalent mutant for the other nine, since closing an uncommitted session in `finally` should discard its pending transaction whether or not `rollback()` ran first -- but this round did not run that mutation against any of the nine and did not establish it. "Asserted, never run" is exactly the gap this round already caught once, for mutation 21 (`unban_expired_users`'s `AND banned_until is not null` conjunct, fact 170) -- there the mutation WAS run and proved equivalent; here it was not run at all, so the equivalence is a plausible inference, not a demonstrated fact. Left open for a future round to run the nine mutations and either confirm equivalence or find a live gap. **Extended by sub-project 30 rather than given a new number, same shape, a second test module.** Group B's own error-path tests carry the identical clone at seven of Group B's eight sites -- every task with its own `try`/`except`; `archive_user` has neither and carries none -- `tests/test_shared_tasks_maintenance_lifecycle.py:169` (`TestPwnBots`), `:388` (`TestProcessExpiredBans`), `:505` (`TestRemoveOldCommunityContent`), `:649` (`TestRemoveOldBotContent`), `:796` (`TestDeleteOldSoftDeletedContent`), `:945` (`TestArchiveOldUsers`), `:1195` (`TestArchiveOldPosts`), each asserting only that the forced exception propagates and none reading back state to confirm `session.rollback()` ran. Group B has no analogue of Group A's one exception either -- no Group B task's suite reads back state after a forced failure the way `update_community_stats`'s does -- so the extension finds the same gap, not a narrower one. Still not run against any of the now seventeen total sites across both modules, and still not established | open question, not proven (registered, not fixed; extended, not closed, by sub-project 30) | `tests/test_shared_tasks_maintenance_cleanup.py:111,175,203,283,333,382,506,651,795,954` (Group A's ten clones) and `:668-699` (`update_community_stats`'s rollback-observing test) read at this commit; `tests/test_shared_tasks_maintenance_lifecycle.py:169,388,505,649,796,945,1195` (Group B's seven clones) read at this commit; fact 170 for the contrast with a mutation actually run |
 
 ### 7. Groups B, C and D, for the next round -- no new number
 
@@ -9446,6 +9446,198 @@ closure also gave `maintenance.py` its first `coverage_floors.ini` entry
 (`= 24`) and ran 21 mutations, 20 killed and 1 proven equivalent
 (D-numberless; see fact 170). If you take D351, say so here in the change
 that takes it.
+
+## Sub-project 30: `app/shared/tasks/maintenance.py` Group B -- the content-lifecycle tasks that call `delete_post`
+
+`docs/superpowers/specs/2026-09-09-coverage-maintenance-b-30-design.md` and
+`docs/superpowers/plans/2026-09-09-coverage-maintenance-b-30.md` (design and
+plan; the per-task briefs and reports live in
+`.superpowers/sdd/2026-09-09-coverage-maintenance-b-30/`), on branch `blentz`,
+from base `d204427d`. Continuing sub-project 29's split of `maintenance.py` by
+TESTING SURFACE, this round took Group B -- the eight functions whose tests
+must fake federation sends or `delete_post` (sub-project 29's own
+description of this group): `process_expired_bans:76`,
+`remove_old_community_content:134`, `remove_old_bot_content:161`,
+`delete_old_soft_deleted_content:216`, `archive_old_posts:886`,
+`archive_old_users:934`, `archive_user:958`, `pwn_bots:1163` (154 statements
+before this round) -- to 0 missing statements and, in Group B, exactly one
+partial branch (`delete_old_soft_deleted_content:270`'s `if post_reply:`,
+already proven unreachable by sub-project 29's Task 4 review and left open on
+purpose). Tests live in `tests/test_shared_tasks_maintenance_lifecycle.py`
+(**56 tests**, 1204 lines). The module's `coverage_floors.ini` entry rose
+24 -> 47 (`percent_covered` 47.07985697258641%, statements 336/637, branches
+59/202). Twenty-six mutations were run one at a time against the closed
+functions; twenty-two were killed, two closed genuine holes with a new test
+apiece (rows 7 and 10, both a `> 0`/`>= 0` retention-gate boundary predicted
+in advance by a Task 3 review), and two survived as proven equivalent mutants
+(row 6, `process_expired_bans`' instance-ban null conjunct, SQL three-valued
+logic; row 15b, `delete_old_soft_deleted_content`'s `post`-truthy conjunct,
+see item 5 below).
+
+**Three production changes landed, numstat `10 7` total across three commits
+(`1 1`, `7 6`, `2 0`) -- `git diff --numstat d204427d..3b4707a2 -- app/`:**
+
+1. `app/shared/tasks/maintenance.py:943` (`archive_old_users`'s WHERE clause,
+   widened from requiring both images to requiring either) -- commit
+   `4fbe5646` -- **D351.**
+2. `app/shared/tasks/maintenance.py:1168` (`pwn_bots`' body wrapped in
+   `with patch_db_session(session):`) -- commit `aa775bfd` -- **D352.**
+3. `app/shared/tasks/maintenance.py:160` and `:1162` (two `@celery.task`
+   decorators added, above `remove_old_bot_content` and `pwn_bots`) --
+   commit `448f1c94` -- **D353.**
+
+### 1. The one-image archiving gap, observed failing against unmodified code -- D351
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D351 | `archive_old_users`'s selection query, `app/shared/tasks/maintenance.py:943` (`WHERE (u.avatar_id IS NOT NULL OR u.cover_id IS NOT NULL) AND u.ap_id IS NOT NULL`, pre-fix: `avatar_id IS NOT NULL AND cover_id IS NOT NULL AND ap_id IS NOT NULL`), against `archive_user:960` (`if user.avatar_id:`) and `:965` (`if user.cover_id:`) | **Fixed, and observed failing against unmodified code.** `TestArchiveOldUsersReachesOneImageUsers::test_an_idle_remote_user_with_only_an_avatar_is_archived` seeded a remote user idle past the cutoff with an avatar and no cover, ran `archive_old_users()`, and read `assert db.session.get(User, user.id).avatar_id is None`, which FAILED against the unmodified query with `assert 1 is None` -- the user's avatar survived because the pre-fix `AND` required both images before the user was even selected, even though the task's own docstring says its purpose is to remove images from old remote users. Fixed by widening the conjunction to `OR`, with parentheses so it binds only to the two image conditions rather than to the whole `WHERE` clause -- an unparenthesised `OR` would have let LOCAL users with any image through regardless of `ap_id`, which the pre-existing canary `test_a_local_user_is_skipped` (kept in the suite as the regression guard) would have caught. **The scope limit stated in the commit and carried here: `:960` and `:965` are unchanged.** `archive_user`'s own per-image guards, which decide what happens to a SELECTED user, are untouched -- the fix widens only which users the query selects, not what is done to a selected user once it runs. 44 tests pass after the fix, including the canary | fixed (repair, observed failing pre-fix) | `task-6-report.md` (the FAILED transcript verbatim: `assert 1 is None`, `tests/test_shared_tasks_maintenance_lifecycle.py:885`); commit `4fbe5646`; `app/shared/tasks/maintenance.py:940-946`, `:958-971` read at this commit |
+
+### 2. The split-session read the spec predicted would be untestable in-process, and the prediction was wrong -- D352
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D352 | `pwn_bots`' read/write session split, `app/shared/tasks/maintenance.py:1169` (`BotChallenge.query`, resolving through Flask-SQLAlchemy's `db.session`) against `:1170`/`:1173` (`session.execute(UPDATE ...)`, the task's own `get_task_session()` session) -- fixed by wrapping the body in `with patch_db_session(session):` at `:1168` | **Fixed, and the design spec's own prediction that this would be untestable in-process was WRONG, stated here rather than left to imply otherwise.** Every sibling task in this file that reads and writes across the same request (`remove_old_community_content`, `remove_old_bot_content`, `delete_old_soft_deleted_content`) already guards this split with `patch_db_session`; `pwn_bots` did not. Of three candidate probes, only the second produced a result: a `before_cursor_execute` listener registered on `db.engine`, recording `id(conn.connection)` per statement, showed the SELECT and the two UPDATEs land on two DIFFERENT DBAPI connection checkouts against the unpatched body, and on the SAME checkout once wrapped -- deterministic in both directions (unpatched, `db.session`'s SELECT opens a transaction that stays open across both UPDATEs, so two concurrent checkouts cannot coincide by pool luck), confirmed by the task review. Encoded as `TestPwnBots::test_the_read_and_the_writes_share_one_connection_once_wrapped`. **The first candidate probe (a conflicting uncommitted write held across the two sessions) deadlocked live Postgres and was abandoned before returning a verdict -- see fact 172 for the incident itself.** It could not have discriminated PC2 regardless: it tests write/write row-lock contention, not which session a read resolves through. **The scope limit: `patch_db_session` (`app/utils.py:3679-3711`) short-circuits under `has_request_context()` (`:3685`, `yield` and `return` with no patch applied) -- so this fix is a no-op if `pwn_bots` is ever called during a web request**, exactly as for its already-patched siblings. **The caller was mis-sited by an earlier commit message and the record is corrected here, not there.** `pwn_bots`' ONLY caller is `app/cli.py:944`, inside `daily_maintenance()` (`app/cli.py:884-885`, `@app.cli.command('daily-maintenance')`) -- a synchronous CLI command, not a Celery worker task; `pwn_bots` carries no `@celery.task` decorator at the time this fix landed (D353 adds one in the same round, one task later) and is absent from `daily_maintenance_celery`'s import list (`app/cli.py:812-820`). Commit `aa775bfd`'s own message says "In a Celery worker with no Flask request context this split is real" -- wrong site, though the underlying claim survives for the actual caller: a CLI command has an app context and no request context, so `patch_db_session` does patch there and the split was real on that path. The commit message is left as committed; this cell is the corrected record | fixed (repair, observed failing pre-fix via the connection-checkout discriminator); scope limit and caller correction disclosed, not fixed | `task-8-report.md` (both probe attempts, the deadlock incident, the connection-identity transcript); commits `aa775bfd`, `10ce51ca`, `ba00ab29`; `app/utils.py:3679-3711`; `app/cli.py:812-820`, `:884-885`, `:944` read at this commit; facts 172, 174, 180 |
+
+### 3. Two decorators: dispatchable, not scheduled -- D353
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D353 | Two missing `@celery.task` decorators, `app/shared/tasks/maintenance.py:160` (above `remove_old_bot_content`) and `:1162` (above `pwn_bots`) | **Fixed (asymmetry closed), and the scope limit is the whole finding.** Every other module-level, zero-argument function in this file already carried `@celery.task`; these two did not (`archive_user` and `add_remote_community_from_post` remain undecorated correctly, since both take arguments and are helpers, not tasks). Fixed by adding the decorator above both, commit `448f1c94`. **The decorator makes each function DISPATCHABLE with `.delay()`. It does not SCHEDULE either one, and `app/cli.py` was not edited** -- `remove_old_bot_content` is still called only at `app/cli.py:911`, and `pwn_bots` only at `:944`, both inside the synchronous `daily_maintenance()` command; neither appears in `daily_maintenance_celery`'s import list (`app/cli.py:812-820`), confirmed by reading it directly. **The stronger fact a reviewer established, carried here as the one worth keeping: a `@celery.task`-decorated function called as a bare `foo()` executes synchronously in-process REGARDLESS OF EAGER MODE, by ordinary Celery `Task.__call__` semantics.** So this change alters nothing at either existing call site in production either, not merely under this harness's eager-mode test config -- see fact 176. Adding the two lines shifted every citation below `:160` by one and below `:1161` by a further one; both test files (this round's and sub-project 29's) were swept and independently re-verified by a reviewer against numbered tree output (over 180 citations, zero stale); `tests/README.md`'s own stale citations were correctly left to this task (Task 12, step 2b below) rather than fixed out of scope | fixed (asymmetry closed; behaviourally inert at both call sites) | commit `448f1c94`; `app/cli.py:812-820`, `:911`, `:944` read at this commit; `task-9-report.md`'s reviewer-verified citation sweep; fact 176 |
+
+### 4. Four in-loop commits of D342's shape, registered rather than fixed -- D354
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D354 | Four per-row/per-iteration commits inside a loop, D342's exact shape: `process_expired_bans:117` (`session.commit()` inside the `for expired_ban in expired_bans:` loop opened at `:82`), `delete_old_soft_deleted_content:258` and `:274` (`session.commit()` inside the `for post_id in post_ids:` loop at `:253` and the `for post_reply_id in post_reply_ids:` loop at `:268`, respectively), and `archive_user:971` (`session.commit()`, driven once per user by `archive_old_users:948`'s `for user_id in user_ids: archive_user(user_id, session)`) | **Registered, not fixed -- deliberately, and the reasoning is D342's own entry.** D342 (sub-project 29) fixed exactly this shape at `update_community_stats` and disclosed that the fix was not free: moving the commit outside the loop traded a partial-progress failure mode for an all-or-nothing one, where one persistently-failing row now starves every row in the batch rather than only those after it, plus a newly-possible cross-task deadlock and a concurrent-writer staleness cost. **These four sites are not that trade automatically, because they DELETE content rather than recompute counters** -- `update_community_stats`'s counters are idempotent and cheap to recompute on the next run regardless of where a failure lands, whereas a `CommunityBan`/`Post`/`PostReply`/`File` row already deleted and committed cannot be un-deleted by a later retry, and a partial run through these four leaves a well-defined, already-correct subset done rather than a batch of stale writes. Batching these commits outside their loops would risk losing all progress to one bad row in a function whose job is irreversible deletion -- a partial run failing differently, and worse to get wrong, than update_community_stats's recomputable counters. Left as-is on that basis; no test or production change made | registered, not fixed (deliberate, reasoning carried from D342) | `app/shared/tasks/maintenance.py:75-131`, `:216-281`, `:933-956`, `:958-972` read at this commit; D342 (sub-project 29 section) for the disclosed cost of fixing this shape |
+
+### 5. Two unreachable defensive guards, both with a proof that survived a reviewer's attack -- D355
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D355 | Two concurrency guards in `delete_old_soft_deleted_content`, neither exercisable single-threaded: `:270`'s `if post_reply:` (guarding `post_reply = session.query(PostReply).get(post_reply_id)` at `:269`, against the id list built at `:261-266`), and `:255`'s `post` truthy sub-condition of `if post and (post.image_id is None or post.image_id not in images_used_by_many_posts):` (guarding `post = session.query(Post).get(post_id)` at `:254`, against the id list built at `:226-237`) | **Neither reachable, neither `# pragma: no branch`, both left open on purpose. Both proofs were sent to a reviewer with an explicit instruction to try to defeat them, and both survived.** Both guard the same shape: a concurrent deletion of the row between the id-selecting query and the per-id fetch a few lines later, which cannot happen on a single thread within one function call. For `:270`, three facts combine: `PostReply.parent_id` (`app/models.py:2895`) is a bare `Column` with no `ForeignKey` and no relationship, so no cascade links a reply's own deletion to another reply; `PostReply.delete_dependencies()` (`app/models.py:3265-3282`, called on each processed reply at `:271`) touches only `Reminder`, `ModLog`, `Report` and its own `File`, never another `PostReply` row, so processing one reply within this SECOND loop cannot remove a different reply still waiting in the same `post_reply_ids` list; and the `cascade='all, delete-orphan'` relationships that DO reach `PostReply` are keyed on `community_id`, `user_id` and `post_id`, reachable only through the function's FIRST loop (over `post_ids`, deleting `Post` rows), which completes -- and, per D354, commits per iteration -- before the SECOND loop's `post_reply_ids` query (`:261-266`) even runs. So nothing the first loop does can still be in flight when the second loop selects its ids, and nothing the second loop does to one row can remove another row still ahead of it in the same list. For `:255`: every `post_id` in the list was returned by a `SELECT` (`:226-237`) executed moments earlier on the same single-threaded connection, and nothing in the function's own first loop can delete a different `Post` row before its own turn is reached -- proven by mutation rather than argued: row 15b (dropping the `post and ` conjunct) survived all 56 tests as a genuine equivalent mutant AT THIS CALL SITE, the same argument already accepted for `:270`. **Coverage and mutation see different halves of `:255`, and this is the finding worth carrying forward as its own shape (see fact 173).** `coverage.py` reports `:255` as FULLY covered, because it records one arc pair per `if` and an existing test (`test_a_post_whose_image_is_shared_survives`) takes the false arc through the OTHER route -- `post` truthy but `post.image_id` excluded by the `images_used_by_many_posts` check -- so the compound's decision-level coverage is satisfied without the `post is None` sub-condition ever running. No coverage number can surface that gap; mutation row 15b is the instrument that did | registered, not fixed (both proofs survived an attack; neither pragma'd) | `task-4-report.md` (the `:270` proof, the reviewer's defeat attempt, and the migration trace confirming no FK at the DB level either); `task-10-report.md` (the coverage-vs-condition distinction for `:255`, `missing_branches` confirmed to contain no `(255, ...)` entry); `task-11-report.md` (row 15b's survival and its equivalence argument); `app/models.py:2895`, `:3265-3282` read at this commit; facts 173, 155/175 for the related `ObjectDeletedError` distinction Task 4 also drew from this same function |
+
+### 6. `remove_old_bot_content` never commits, and `delete_post`'s two federation policies -- D356-D357
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D356 | `remove_old_bot_content`, `app/shared/tasks/maintenance.py:161-191` | **Correct as written, registered so a future edit knows.** No `session.commit()` appears anywhere in the function's body -- unlike `remove_old_community_content`, which commits once at `:152` after its loop, `remove_old_bot_content` relies entirely on `delete_post`'s own internal commits for every write it causes. This is not a defect: the function makes no write of its own outside of what `delete_post` already commits. It is registered because a future change adding a direct write to this function (a counter, a log row) would silently rely on an uncommitted session unless it either commits explicitly or continues to route the write through `delete_post` | correct as written, registered only | `app/shared/tasks/maintenance.py:161-191` read at this commit, no `session.commit()` present; contrasted against `remove_old_community_content:152` |
+| D357 | `delete_post`'s two call sites in this module pass different values for its second positional parameter: `remove_old_community_content:150` (`delete_post(post_id, False, SRC_WEB, None)`) and `remove_old_bot_content:185` (`delete_post(post.id, post.author.is_local(), SRC_WEB, None)`) | **Both defensible, and the finding is that they read as inconsistent to anyone who has not opened the callee's signature -- which is how this round first read them.** `delete_post`'s second parameter is named `federate_deletion` (`app/shared/post.py:755`, `def delete_post(post_id: int, federate_deletion, src, auth):`), not a locality flag as the call sites' shapes might suggest side by side. `remove_old_community_content` always passes `False` -- a moderator-driven retention policy deletion that this codebase does not federate outward. `remove_old_bot_content` passes `post.author.is_local()` -- whether to federate the deletion depends on whether the bot that authored the post is local to this instance, since a remote bot's post deletion is a different federation event than a local one's. Different call context, different correct value; neither is a bug | correct as written (both call sites), registered so the apparent inconsistency does not get "fixed" into a bug | `app/shared/post.py:755` read at this commit; `app/shared/tasks/maintenance.py:150`, `:185` read at this commit |
+
+### 7. `archive_old_posts`' vacuous-test trap, and `process_expired_bans`' six unasserted caches -- D358-D359
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D358 | `archive_old_posts`'s recency-window exclusion, `app/shared/tasks/maintenance.py:901-907` (`AND p.id NOT IN (SELECT p2.id FROM "post" p2 WHERE p2.community_id = p.community_id ORDER BY p2.created_at DESC LIMIT 100)`) | **Correct as written; registered for the TEST-DESIGN TRAP its shape creates, caught before it shipped rather than by a test.** A community's hundred most recent posts, by `created_at`, are excluded from archiving outright -- a community with a hundred posts or fewer has NOTHING archivable, regardless of age. This is a genuine trap for a test writer: three straightforward filter assertions (cutoff, sticky, `can_be_archived`/`private`) would each PASS VACUOUSLY against a community that had nothing archivable to begin with, since a task that archives nothing satisfies "did not archive the excluded post" for any reason at all. This round's OWN first draft (this task's dispatching brief, before the pre-flight conflict scan) contained exactly that trap: a two-post community with an assertion that one post was archived, which is impossible under this exclusion, plus three filter tests that could not fail whatever the filters did. Caught in the pre-flight scan (Ruling 1) and rewritten before dispatch to fill a community's recency window with a hundred staggered posts in one `add_all`, plus a dedicated test (`test_a_community_inside_the_recency_window_archives_nothing`) whose only job is to show a small community's exclusion comes from the recency window rather than the cutoff, so a reader can tell the other three filter tests measure something. Register the shape, not merely this instance of it -- a test seeded with too little data to have anything archivable is this campaign's most-registered defect class, applied here to a recency window rather than a simple filter | correct as written; registered for the trap shape, caught pre-dispatch rather than by a shipped test | `docs/superpowers/sdd/2026-09-09-coverage-maintenance-b-30/progress.md` Ruling 1; `app/shared/tasks/maintenance.py:892-908` read at this commit; `task-7-report.md` (the hundred-post seeding, the by-hand rank arithmetic a reviewer did to confirm the trap was genuinely defeated) |
+| D359 | `process_expired_bans`'s six memoized-cache invalidations, `app/shared/tasks/maintenance.py:111-114` (`cache.delete_memoized(communities_banned_from, ...)`, `(communities_banned_from_all_users)`, `(joined_communities, ...)`, `(moderating_communities, ...)`) and `:121-122` (`(banned_instances, ...)`, `(blocked_or_banned_instances, ...)`) | **Deliberately not asserted on by any test, and the deliberateness is the finding, not an oversight.** No test in `TestProcessExpiredBans` checks that any of these six caches was actually invalidated. Documented in the test class's own docstring: asserting on Flask-Caching's shared cache instance would couple this file's test suite to a different subsystem's implementation (which backend, whether `delete_memoized` succeeded, cache-key construction) rather than to `process_expired_bans`'s own behaviour, for a side effect this round judged not worth that coupling | registered, not fixed (deliberate; documented in the test file itself) | `app/shared/tasks/maintenance.py:109-114`, `:119-122` read at this commit; `tests/test_shared_tasks_maintenance_lifecycle.py`'s `TestProcessExpiredBans` class docstring |
+
+### 8. Groups C and D remain -- no new number
+
+Not a defect; recorded so the next round does not re-derive `maintenance.py`'s
+remaining decomposition from scratch, current line numbers verified against
+this commit (Group B's closure shifted nothing inside C or D -- both
+decorators D353 added sit at `:160` and `:1162`, inside Group B's own
+functions):
+
+| Group | Functions (current line numbers) | Stmts | What a test must fake |
+|-------|-----------|-------|-----------------------|
+| **C** | `sync_defederation_subscriptions:409`, `check_instance_health:427`, `monitor_healthy_instances:509` | 196 | nodeinfo negotiation over `httpx` |
+| **D** | `refresh_instance_chooser:975`, `add_remote_communities:1070`, `add_remote_community_from_post:1101`, `delete_from_s3:1121`, `clean_up_tmp:1139` | 120 | `httpx`, `boto3`, the filesystem |
+
+Statement counts (196, 120) are carried forward unchanged from sub-project
+29's measurement -- neither group's body was touched by this round's three
+production changes, both of which landed inside Group B's own functions.
+
+**Facts 172-182 carried into `tests/README.md`.** A probe holding an
+uncommitted conflicting write against a row another session touches
+deadlocks Postgres, and `pytest-timeout` cannot interrupt it -- libpq's
+blocking-mode wait retries unconditionally on `EINTR`, and psycopg2 releases
+the GIL across that call, so recovery needs `pg_stat_activity`,
+`pg_terminate_backend`, and `./run_tests.sh --down` rather than a timeout
+(172). Coverage records one arc pair per `if`, so it cannot see that a
+compound's sub-condition was never independently exercised once ANY path
+takes the decision's false arc by another route; only mutation can (173). A
+patched symbol must be reachable on two counts to test an error path -- inside
+the `try`, and in a statement that actually executes -- and both failure modes
+appeared in the same module: `pwn_bots` failed the first (cutoff computed
+above the `try`), `remove_old_community_content` failed the second (`utcnow`
+inside a loop needing seeded data) (174). `ObjectDeletedError` depends on
+WHICH session deleted the row -- read beside fact 155, not in place of it: when
+the test's own session deletes it, the instance is detached and
+`db.session.get()` returns `None` cleanly; when a DIFFERENT session deletes it
+while the test's session still holds it as persistent, the refresh finds
+nothing and raises. Same exception, opposite relationship (175). A
+`@celery.task`-decorated function called as a bare `foo()` runs synchronously
+in-process regardless of eager mode, by ordinary `Task.__call__` semantics --
+so decorating a function already called this way changes nothing behaviourally
+at any existing call site (176). `File.delete_from_disk` (`app/models.py:429`)
+tolerates a nonexistent path -- its `os.path.isfile()` gate skips the unlink
+rather than raising -- and a `/static/...`-rooted path can never take the S3
+branch above it, which needs `file_path.startswith('https://' +
+S3_PUBLIC_URL)` (177). A sweep claimed complete can still be wrong twice in a
+row: two consecutive citation sweeps in this sub-project each reported
+complete and were not, both caught only because a reviewer ran its own
+independent sweep rather than trusting the claim; the third was done to the
+standard and independently re-verified. A sweep's completeness claim is worth
+exactly as much as the check that verified it (178). The `_Recorder` idiom
+for a callable that belongs to another module replaces it in the CALLING
+module's own namespace (`monkeypatch.setattr('app.shared.tasks.maintenance.delete_post',
+recorder)`, not `app.shared.post.delete_post`), so the test asserts on the
+handover -- which ids reached the callee -- rather than on the callee's own
+behaviour, which belongs to that callee's own floored module (179). A
+`before_cursor_execute` listener registered on `db.engine`, recording
+`id(conn.connection)` per statement, discriminates which DBAPI connection
+checkout issued each statement -- the technique that produced PC2's result
+when a conflicting-write probe deadlocked and a data-visibility probe was
+never attempted (180). Constructing a `boto3` client makes no network call,
+so a `store_files_in_s3()`-gated arm can be taken in a test with all three S3
+settings configured, and observed to run to completion, without contacting
+an endpoint (181). `PostReply.has_replies` (`app/models.py:3287-3292`) reads
+through `db.session`, so it only sees a task's own uncommitted rows because
+the caller wrapped its body in `patch_db_session` --
+`delete_old_soft_deleted_content:221`'s `with patch_db_session(session):` is
+what makes `:272`'s `has_replies(include_deleted=True)` call see the task's
+own session rather than a separate, empty one; the helper's correctness here
+depends entirely on its caller's wrapper (182).
+
+**Next free number: D360.** D351-D359 were taken by this round -- **D351**
+`archive_old_users`'s one-image archiving gap, fixed, observed failing
+pre-fix (`assert 1 is None`), with the scope limit that `archive_user:960`/
+`:965` are unchanged; **D352** `pwn_bots`' split-session read, fixed against
+the design spec's own wrong prediction that it would be untestable
+in-process, discriminated by a `before_cursor_execute` connection-checkout
+listener after a conflicting-write probe deadlocked Postgres (fact 172), with
+the `has_request_context()` no-op scope limit disclosed and an earlier
+commit message's Celery-worker framing corrected to the real caller
+(`app/cli.py:944`, the synchronous `daily-maintenance` CLI command); **D353**
+the two missing `@celery.task` decorators, fixed (asymmetry closed), with
+`app/cli.py` left untouched and the stronger fact that a decorated function
+called bare runs synchronously regardless of eager mode, so nothing changed
+in production at either call site; **D354** four in-loop commits of D342's
+exact shape (`process_expired_bans:117`, `delete_old_soft_deleted_content:258`
+and `:274`, `archive_user:971`), registered rather than fixed because these
+four delete content rather than recompute counters, so D342's disclosed
+all-or-nothing starvation trade would fail worse here; **D355** two
+unreachable defensive guards in `delete_old_soft_deleted_content` (`:270`'s
+`if post_reply:` and `:255`'s `post` sub-condition), both proofs surviving a
+reviewer's attempt to defeat them, neither pragma'd, with the coverage-vs-
+mutation distinction at `:255` stated as its own shape; **D356**
+`remove_old_bot_content` never calls `session.commit()`, correct as written
+and registered for a future direct-write edit; **D357** `delete_post`'s two
+call sites in this module pass different, both-defensible values for
+`federate_deletion`; **D358** `archive_old_posts`'s hundred-most-recent
+exclusion, correct as written, registered for the vacuous-test trap shape it
+creates, one this round's own first draft fell into and the pre-flight scan
+caught before dispatch; **D359** `process_expired_bans`'s six memoized-cache
+invalidations, deliberately unasserted to avoid coupling this file's tests to
+Flask-Caching's own implementation. No entry from an earlier sub-project's
+section was edited in place by this round, except **D350** (sub-project 29's
+section), extended rather than given a new number: the same
+rollback-not-observed shape recurs at seven more sites in a second test
+module, `tests/test_shared_tasks_maintenance_lifecycle.py`, still not run and
+still not established. Group B's closure also raised `maintenance.py`'s
+`coverage_floors.ini` entry 24 -> 47 and ran 26 mutations, 22 killed, two
+holes closed and two proven equivalent. If you take D360, say so here in the
+change that takes it.
 
 ## Ratchet gotchas
 
