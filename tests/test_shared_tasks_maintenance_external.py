@@ -290,6 +290,35 @@ class TestCleanUpTmp:
 
         assert os.path.exists(path)
 
+    def test_the_default_directory_resolves_under_the_app_root(
+            self, db_session, app, monkeypatch):
+        """`:1146-1147`'s `if directory is None` branch -- the parameter's
+        default, exercised by calling with no argument at all.
+
+        This module's docstring records that the directory used to be a
+        hardcoded RELATIVE path, `'app/static/tmp'`. `os.path.exists` is
+        patched to record the path it is asked about and return False, so
+        `:1149` takes its early-return arm before any real directory is
+        touched -- this proves what `:1147` resolved to without depending on,
+        or disturbing, whatever is actually in the real tmp directory.
+
+        Reverting `:1147` to the old hardcoded relative string is a one-line
+        regression this catches directly: `seen` would hold
+        `'app/static/tmp'` instead of the absolute path built from
+        `app.root_path`.
+        """
+        seen = []
+
+        def _exists(path):
+            seen.append(path)
+            return False
+
+        monkeypatch.setattr('app.shared.tasks.maintenance.os.path.exists', _exists)
+
+        clean_up_tmp()
+
+        assert seen == [os.path.join(app.root_path, 'static', 'tmp')]
+
 
 class TestAddRemoteCommunityFromPost:
     """`add_remote_community_from_post:1101` -- turn a post into a lookup.
@@ -503,6 +532,15 @@ class TestRefreshInstanceChooser:
 
     `:999`'s `random.shuffle` makes processing order nondeterministic; no test
     asserts on it. The oracle is the resulting set of rows.
+
+    `:1010`'s inner handler is left deliberately untested for the reason
+    above -- a test that forgets a route is indistinguishable from a test
+    that exercises this path on purpose. `:1046`'s OUTER per-domain handler
+    is a different arm: it sits outside the inner `try`/`except`, so it is
+    reached by something in the `:1018-1044` body raising, not by a missing
+    route. `find_language_or_create` (patched at module scope, `:1032`) makes
+    a convenient raise site for that, and is exercised below for both arms of
+    `:1050`'s existing-row guard.
     """
 
     OBSERVER = 'https://api.fediverse.observer/'
@@ -631,6 +669,82 @@ class TestRefreshInstanceChooser:
         db.session.expire_all()
         assert db.session.query(InstanceChooser).filter_by(
             domain='kept.example').first() is not None
+
+    def test_a_failure_after_a_200_response_deletes_an_existing_row(
+            self, db_session, http_mock, monkeypatch):
+        """`:1046-1051`'s outer per-domain handler, true arm of `:1050`.
+
+        Unlike `:1010`'s inner handler (arm 2, deliberately left open -- see
+        the sub-project's report), this one sits OUTSIDE the inner
+        `try`/`except`, so only something raising from the `:1018-1044` body
+        reaches it. `find_language_or_create` is patched to raise once the
+        chooser document already carries a `language` key, so the response is
+        a normal 200 and the raise comes from inside that body, not from
+        `get_request`.
+
+        Narrowing `:1046` from `except Exception` to `except ValueError` is a
+        one-line regression this catches directly: the patched raise is a
+        `RuntimeError`, which the narrowed clause would no longer catch, so it
+        would propagate out of `refresh_instance_chooser()` and this call --
+        made with no `pytest.raises` -- would fail the test. (Verified: the
+        same narrowing does NOT fail the false-arm test below, since that
+        one's `json.decoder.JSONDecodeError` trigger is a `ValueError`
+        subclass -- each test's regression proof is specific to its own
+        trigger.)
+        """
+        db.session.add(InstanceChooser(domain='peer.example'))
+        db.session.commit()
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError('language lookup exploded')
+
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.find_language_or_create', _boom)
+        doc = self._chooser()
+        doc['language'] = {'id': 1, 'code': 'en', 'name': 'English'}
+        http_mock.post(self.OBSERVER).respond(200, json=self._nodes('peer.example'))
+        http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(
+            200, json=doc)
+
+        refresh_instance_chooser()
+
+        db.session.expire_all()
+        assert db.session.query(InstanceChooser).filter_by(
+            domain='peer.example').first() is None
+
+    def test_a_failure_after_a_200_response_with_no_existing_row_is_a_no_op(
+            self, db_session, http_mock):
+        """`:1046-1051`'s outer per-domain handler, false arm of `:1050`.
+
+        This CANNOT reuse the test above's `find_language_or_create` trigger.
+        That raise happens at `:1032`, after `:1025`'s query and `:1026-1028`'s
+        create-if-absent have already run -- so by the time the outer handler
+        queries at `:1049`, a new row for the domain is already staged in the
+        session and visible to the query (SQLAlchemy autoflushes before it),
+        making `existing` truthy even with no row committed beforehand.
+        Verified by instrumenting the handler directly: with no pre-existing
+        row, `existing` still came back as the just-created `InstanceChooser`.
+
+        A malformed JSON body makes `:1019`'s `chooser_response.json()` raise
+        instead, before `:1025` ever runs, so `:1049`'s query legitimately
+        finds nothing and `:1050`'s guard must take its false arm to skip
+        `:1051`'s delete.
+
+        If that guard were removed so `:1051` always ran, `session.delete(None)`
+        raises `UnmappedInstanceError` inside the handler itself; nothing
+        inside the loop catches that, so it reaches `:1062`'s outer handler,
+        which re-raises -- the same propagation path the `:986` test above
+        documents -- and fails this call, made with no `pytest.raises`.
+        """
+        http_mock.post(self.OBSERVER).respond(200, json=self._nodes('peer.example'))
+        http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(
+            200, content=b'not valid json')
+
+        refresh_instance_chooser()
+
+        db.session.expire_all()
+        assert db.session.query(InstanceChooser).filter_by(
+            domain='peer.example').first() is None
 
     def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch, http_mock):
         """`:1062-1064`'s handler.
