@@ -744,3 +744,56 @@ class TestUpdateCommunityStatsIsAtomic:
                    if s.lstrip().upper().startswith('SELECT')
                    and re.search(r'\bfrom\s+community\b', s, re.IGNORECASE)]
         assert len(selects) == 1
+
+
+class TestRecalculateUserAttitudes:
+    """`recalculate_user_attitudes:712` -- recompute attitude and post stats.
+
+    `:721-723` selects users seen in the last day, `:728` batches them 100 at a
+    time (`:715`), and `:735-736` call `recalculate_attitude` and
+    `recalculate_post_stats` on each. Both model methods read `db.session`
+    (app/models.py:1351, :1421), which is what `:719`'s `patch_db_session`
+    redirects onto the task's own session.
+    """
+
+    def test_a_recently_seen_user_has_post_stats_recomputed(self, db_session):
+        instance, user, community, post = _seed()
+        make_post(community, user, 'https://peer.example/p/2')
+        user.last_seen = utcnow()
+        user.post_count = 99
+        db.session.commit()
+
+        recalculate_user_attitudes()
+
+        db.session.expire_all()
+        assert db.session.get(User, user.id).post_count == 2
+
+    def test_a_user_not_seen_for_a_day_is_skipped(self, db_session):
+        """`:728`'s zero-iteration arm: no eligible users, no batches."""
+        instance, user, community, post = _seed()
+        user.last_seen = utcnow() - timedelta(days=2)
+        user.post_count = 99
+        db.session.commit()
+
+        recalculate_user_attitudes()
+
+        db.session.expire_all()
+        assert db.session.get(User, user.id).post_count == 99
+
+    def test_deleted_posts_do_not_count(self, db_session):
+        instance, user, community, post = _seed()
+        gone = make_post(community, user, 'https://peer.example/p/3')
+        gone.deleted = True
+        user.last_seen = utcnow()
+        db.session.commit()
+
+        recalculate_user_attitudes()
+
+        db.session.expire_all()
+        assert db.session.get(User, user.id).post_count == 1
+
+    def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch):
+        monkeypatch.setattr('app.shared.tasks.maintenance.utcnow', _boom)
+
+        with pytest.raises(RuntimeError, match='the task itself failed'):
+            recalculate_user_attitudes()
