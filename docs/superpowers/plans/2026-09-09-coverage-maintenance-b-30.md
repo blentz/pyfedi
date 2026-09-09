@@ -1565,6 +1565,7 @@ Mutations run **one at a time**: dry-run without `-i` and read the line, apply, 
 | 13 | `remove_old_bot_content`'s federation flag | `post.author.is_local()` → `False` | killed |
 | 14 | `delete_old_soft_deleted_content`'s cutoff | `days=7` → `days=70` | killed |
 | 15 | `delete_old_soft_deleted_content`'s shared-image conjunct | delete `post.image_id not in images_used_by_many_posts` | killed |
+| 15b | `delete_old_soft_deleted_content`'s post-truthy conjunct | delete `post and ` from the compound, leaving `if (post.image_id is None or ...)` | **EXPECTED TO SURVIVE.** Coverage cannot see this: the compound is one arc pair, its false arc is already taken by the image-shared post, and no branch or statement number can ever reveal that the `post is None` sub-condition is untested. Mutation is the only instrument that can. It is NOT equivalent -- a `None` post would raise `AttributeError` on `.image_id` -- but the guard is unreachable single-threaded for the same reason `:270`'s is, so record it as a proven equivalent AT THIS CALL SITE with that proof rather than writing a test. |
 | 16 | `delete_old_soft_deleted_content`'s child guard | `if not post_reply.has_replies(...)` → drop the `not` | killed |
 | 17 | `archive_old_posts`' config gate | `> 0` → `>= 0` | killed |
 | 18 | `archive_old_posts`' S3 guard | `if store_files_in_s3():` → `if not store_files_in_s3():` | killed |
