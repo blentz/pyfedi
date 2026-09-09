@@ -1419,6 +1419,8 @@ Subject: `test: cover archive_old_posts and both of its object-storage arms`
 
 **If you found a discriminating test:** it must FAIL against the unmodified code. Paste the failure, then wrap the body — `:1165`'s `try:` gains `with patch_db_session(session):` beneath it and the body indents one level — and re-run.
 
+**A probe to avoid.** Making the task's session hold an uncommitted conflicting write on a row another session then touches produces a genuine Postgres row-lock deadlock. `pytest-timeout`'s signal-based mechanism cannot interrupt a backend blocked on a lock, so the run wedges and the container stack stays wedged for every run after it — recovery means inspecting `pg_stat_activity`, calling `pg_terminate_backend` on the stuck backends, and `./run_tests.sh --down`. It also would not discriminate anything: it tests write/write lock contention, not which session a read resolves through.
+
 **If you could not:** stop. Do not add the wrapper. Write into your report exactly what you tried and why each attempt could not distinguish the two, and state that PC2 becomes a register-only finding. **This is the expected outcome and is not a failure of the task.** The round then lands two production changes rather than three, which the spec anticipates.
 
 Sub-project 29 hit this same wall with `patch_db_session` and recorded it honestly rather than pretending a test proved it; that episode is fact 163's neighbour and this task follows it.
