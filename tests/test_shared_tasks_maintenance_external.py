@@ -234,14 +234,34 @@ class TestCleanUpTmp:
 
         assert not os.path.exists(path)
 
-    def test_a_subdirectory_is_skipped(self, db_session):
-        """`:1154`'s `os.path.isfile` guard, taking its false arm."""
+    def test_a_subdirectory_is_skipped(self, db_session, monkeypatch):
+        """`:1154`'s `os.path.isfile` guard, taking its false arm.
+
+        The directory is backdated past the age window and named with a
+        deletable extension, so `:1154` is the only thing standing between it
+        and `:1160`'s `os.remove`. Asserting that it survives would prove
+        nothing: `os.remove` on a directory raises `IsADirectoryError`, which
+        `:1161`'s bare `except` swallows, so it survives with the guard
+        deleted too. The test records the removal attempts instead.
+        """
         directory = tempfile.mkdtemp()
         nested = os.path.join(directory, 'sub.jpg')
         os.mkdir(nested)
+        old = time.time() - 25 * 60 * 60
+        os.utime(nested, (old, old))
+
+        removed = []
+        real_remove = os.remove
+
+        def _record(path):
+            removed.append(path)
+            return real_remove(path)
+
+        monkeypatch.setattr('app.shared.tasks.maintenance.os.remove', _record)
 
         clean_up_tmp(directory)
 
+        assert removed == []
         assert os.path.isdir(nested)
 
     def test_a_missing_directory_returns_early(self, db_session):
