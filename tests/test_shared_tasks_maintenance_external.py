@@ -696,6 +696,39 @@ class TestRefreshInstanceChooser:
         assert row.language_id == 42
         assert recorder.calls[0][0] == ('en', 'English')
 
+    def test_a_language_without_an_id_is_not_resolved(
+            self, db_session, http_mock, monkeypatch):
+        """`:1031`'s SECOND conjunct, `'id' in chooser_data['language']`.
+
+        The test above sets a `language` dict that carries `id`, `code` and
+        `name` together, so it cannot discriminate a mutation that drops the
+        second conjunct: both the guard and the mutant take the same branch
+        for that document. This test's `language` dict has `code` and `name`
+        but no `id` -- the guard's true arm requires both conjuncts, so the
+        unmutated guard must take its FALSE arm and never call
+        `find_language_or_create`, leaving `language_id` at its column
+        default of `None`. Dropping the second conjunct would let a
+        `language`-shaped-but-`id`-less document through, calling
+        `find_language_or_create('en', 'English')` and setting `language_id`
+        to the patched return value's `id` -- both assertions below would
+        then fail.
+        """
+        recorder = _Recorder(result=type('L', (), {'id': 42})())
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.find_language_or_create', recorder)
+        doc = self._chooser()
+        doc['language'] = {'code': 'en', 'name': 'English'}
+        http_mock.post(self.OBSERVER).respond(200, json=self._nodes('peer.example'))
+        http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(
+            200, json=doc)
+
+        refresh_instance_chooser()
+
+        db.session.expire_all()
+        row = db.session.query(InstanceChooser).filter_by(domain='peer.example').first()
+        assert row.language_id is None
+        assert recorder.calls == []
+
     def test_an_observer_non_200_returns_early(self, db_session, http_mock):
         """`:986`'s true arm. Deleting the check does not fall through
         harmlessly: `:990`'s `response.json()` on the empty 503 body raises
@@ -719,6 +752,34 @@ class TestRefreshInstanceChooser:
         db.session.add(InstanceChooser(domain='kept.example'))
         db.session.commit()
         http_mock.post(self.OBSERVER).respond(200, json={'unexpected': True})
+
+        refresh_instance_chooser()
+
+        db.session.expire_all()
+        assert db.session.query(InstanceChooser).filter_by(
+            domain='kept.example').first() is not None
+
+    def test_a_response_with_data_but_no_nodes_returns_early(self, db_session, http_mock):
+        """`:991`'s THIRD disjunct, `'nodes' not in response_data['data']`.
+
+        The test above sends a body with no `data` key at all, which already
+        trips the guard's SECOND disjunct (`'data' not in response_data`) --
+        it cannot discriminate a mutation that deletes the third disjunct,
+        because with `data` absent entirely the second disjunct catches it
+        regardless of whether the third exists. This test supplies a `data`
+        key with a different shape, so only the third disjunct can catch it.
+
+        If the third disjunct were deleted, control would fall through past
+        `:991`'s early return to `:998`'s
+        `response_data['data']['nodes']`, which raises `KeyError` -- there is
+        no `nodes` key here. Nothing inside `refresh_instance_chooser` catches
+        a `KeyError` raised before the per-domain loop starts; it propagates
+        out of the function, which this call (made with no `pytest.raises`)
+        would then fail on.
+        """
+        db.session.add(InstanceChooser(domain='kept.example'))
+        db.session.commit()
+        http_mock.post(self.OBSERVER).respond(200, json={'data': {'unexpected': True}})
 
         refresh_instance_chooser()
 
