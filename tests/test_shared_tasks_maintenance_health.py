@@ -204,3 +204,94 @@ class TestSyncDefederationSubscriptions:
         assert recorder.calls == []
         assert db.session.query(BannedInstances).filter_by(
             domain='stale.example').first() is not None
+
+
+class TestMonitorHealthyInstances:
+    """`monitor_healthy_instances:509` -- HTTP half only (see module docstring).
+
+    DC1 asked whether the task's missing `patch_db_session` wrapper is an
+    observable defect. `get_request_instance` (`app/utils.py:189-196`)
+    mutates and commits its `instance` argument through Flask-SQLAlchemy's
+    `db.session`, not through the task's own `session` (`:511`).
+    `check_instance_health` wraps its body in `patch_db_session(session)` so
+    that helper's writes land on the task's connection; `monitor_healthy_instances`
+    does not.
+
+    NO PRODUCTION CHANGE WAS MADE. Two discriminator designs were tried
+    (task-2-report.md has the full record):
+
+    1. Counting distinct `id(conn.connection)` values across every
+       `before_cursor_execute` event whose statement mentions "instance" (the
+       brief's own design). This was NOISY, not a stable signal: the same
+       unmodified code produced 1 distinct connection in one harness and 2 in
+       another (the difference was an unrelated extra SELECT in `_seed_instance`
+       changing what was already idle in the pool at that point), and adding
+       the `patch_db_session` wrapper experimentally did NOT collapse the
+       count back to 1 in the harness that showed 2. Connection-pool checkout
+       identity depends on incidental pool state (what else recently checked
+       in and out), not on which Session object issued a given statement, so
+       it cannot discriminate this defect.
+    2. Reading back the actual persisted `Instance` row after the task
+       completes. This is deterministic and directly answers the question
+       that matters: does the value survive? It does, identically, whether or
+       not `patch_db_session` wraps the task. The reason is structural, not
+       incidental: `instance` in this test is loaded via the task's own
+       `session.query(Instance)` and is therefore only ever attached to that
+       session's identity map. `get_request_instance`'s `db.session.commit()`
+       -- even when `db.session` is Flask-SQLAlchemy's own, separate scoped
+       session -- has nothing of `instance`'s to flush, because `instance`
+       was never added to `db.session`'s identity map. The `failures += 1`
+       and `update_dormant_gone()` calls mutate the same Python object the
+       task already holds; that mutation is picked up and persisted by the
+       task's own later `session.commit()` regardless of which session
+       object's `.commit()` was called in between.
+
+    So the two writers are not racing over `instance`'s data: there is only
+    ever one attached session for the object either code path can mutate.
+    This is the same shape sub-project 31's PC2 investigated and correctly
+    left alone. The test below is design 2, kept as a standing check on this
+    invariant.
+    """
+
+    def test_the_failure_bookkeeping_survives_without_patch_db_session(self, db_session, monkeypatch):
+        """DC1 discriminator (design 2 of 2; see class docstring for design 1
+        and why it could not discriminate).
+
+        Forces `get_request_instance`'s exception path (`app/utils.py:190-196`)
+        so its `instance.failures += 1` / `update_dormant_gone()` /
+        `db.session.commit()` actually run, uncommitted through the task's own
+        session. Then reads the row back through an unrelated, freshly-expired
+        handle and checks the write actually landed -- the concrete
+        consequence a lost update would have.
+
+        Result: PASSES against unmodified code (no `patch_db_session` wrapper).
+        `failures` ends at 3, not lost or halved: `not nodeinfo_href` is true,
+        so the nodeinfo-discovery block runs, `get_request_instance` raises
+        internally and takes its except branch (+1, in-memory, on the same
+        object the task holds), the caller's `elif nodeinfo.status_code >= 300`
+        arm adds a second +1 (its status is the helper's synthetic
+        `httpx.Response(status_code=500)`), and because `instance.nodeinfo_href`
+        is still empty afterward, the second `if instance.nodeinfo_href` block's
+        `else` arm adds a third +1 before the task's own `session.commit()`
+        flushes the total. Neither threshold (5, then 12) is crossed, so
+        `dormant` and `gone_forever` stay `False`. This does not prove no
+        wrapper is ever needed elsewhere -- only that this call site's specific
+        writes are not lost -- but it is what "the defect matters" would have
+        to mean here, and it does not hold.
+        """
+        def _raise(*args, **kwargs):
+            raise httpx.HTTPError('transport down')
+
+        monkeypatch.setattr('app.utils.get_request', _raise)
+        instance = _seed_instance('peer.example')
+        instance.nodeinfo_href = None
+        db.session.commit()
+        instance_id = instance.id
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        fresh = db.session.query(Instance).filter_by(id=instance_id).first()
+        assert fresh.failures == 3
+        assert fresh.dormant is False
+        assert fresh.gone_forever is False
