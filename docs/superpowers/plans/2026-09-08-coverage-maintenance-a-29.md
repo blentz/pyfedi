@@ -54,7 +54,7 @@ Read these once. They are the difference between a test that measures something 
 1. Rows a test seeds must be **committed** before the task runs, or the task's connection cannot see them. Every `tests/factories.py` factory commits, so factory-built rows are fine; a column a test assigns afterwards is not, until the test commits it.
 2. After the task runs, an ORM attribute read on an object the test built earlier is **stale**. Read through a fresh query, or call `db.session.expire_all()` first (harness fact 153).
 
-**`patch_db_session` is live under this harness and load-bearing in two tasks.** `cleanup_old_read_posts:49` and `recalculate_user_attitudes:719` wrap their bodies in it, because `get_setting` (`app/utils.py:203-211`) and `User.recalculate_attitude` (`app/models.py:1348`) read `db.session` rather than the task's session. The harness pushes only an app context (`tests/conftest.py:112`); pushing a request context would disable `patch_db_session` at `app/utils.py:3684` and both tasks would then write through the wrong session.
+**`patch_db_session` is live under this harness and load-bearing in two tasks.** `cleanup_old_read_posts:49` and `recalculate_user_attitudes:719` wrap their bodies in it, because `get_setting` (`app/utils.py:203-211`) and `User.recalculate_attitude` (`app/models.py:1348`) read `db.session` rather than the task's session. The harness pushes only an app context (`tests/conftest.py:112`); pushing a request context would disable `patch_db_session` at `app/utils.py:3685` and both tasks would then write through the wrong session.
 
 **The uniform error-path idiom.** Nine of the ten tasks call `utcnow()` as their first or near-first statement inside the `try`. `utcnow` is bound into this module's namespace by `app/shared/tasks/maintenance.py:16`, so monkeypatching `app.shared.tasks.maintenance.utcnow` raises inside the `try` without touching the factories, which reach `utcnow` through `app.models`. `update_hashtag_counts` is the exception — it calls no clock — so its error-path test monkeypatches `app.shared.tasks.maintenance.text` instead.
 
@@ -1517,9 +1517,11 @@ One entry each, from D342:
 - **Raw `text()` DELETEs bypass the identity map** in `cleanup_old_read_posts` and `cleanup_old_voting_data`. Harmless as written because these tasks load nothing first; recorded so a future round that adds a query above one of them knows.
 - **`maintenance.py`'s remaining three groups** — B, C and D, with their function lists and statement counts from the spec, so the next round does not re-derive them.
 
-- [ ] **Step 3: Correct facts 156 and 157**
+- [ ] **Step 3: Verify facts 156 and 157 rather than correcting them**
 
-`tests/README.md:5181-5182` says `app/utils.py:3685` is `if has_request_context():` and `:3688` is the `return`. At this tree it is `:3684` and `:3687`. Re-derive both against the current tree — `app/utils.py` is not a file this round edits, so the numbers should be stable — and correct them in place.
+An earlier commit in this round claimed `tests/README.md:5181-5182`'s citations were off by one and "corrected" them in the plan and spec. **That claim was wrong and has been reverted.** `app/utils.py:3685` is `if has_request_context():` and `:3688` is the `return` inside it, exactly as facts 156 and 157 already say. The error came from reading an unnumbered `sed -n 'A,Bp'` range and counting output lines.
+
+Open both lines with numbered output — `awk 'NR==3685||NR==3688 {printf "%d\t[%s]\n",NR,$0}' app/utils.py` — confirm the facts stand, and make no change to them. Then record the episode itself as one of Step 4's new facts: a citation verified by counting lines in an unnumbered range is not verified, and this round produced a wrong "correction" that way before catching it.
 
 - [ ] **Step 4: Write the new facts, from 161**
 
