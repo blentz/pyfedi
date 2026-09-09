@@ -54,7 +54,7 @@
 
 **`archive_post` opens a THIRD session.** `app/utils.py:4946` calls `get_task_session()` again and `:4948` wraps its body in `patch_db_session`. Task 7 arranges around this rather than reasoning through it.
 
-**The uniform error-path idiom.** Seven of the eight tasks call `utcnow()` inside their `try`. `utcnow` is bound into this module's namespace at `app/shared/tasks/maintenance.py:16`, so monkeypatching `app.shared.tasks.maintenance.utcnow` raises inside the `try` without touching `tests/factories.py`, which reaches `utcnow` through `app.models` (fact 163). **`archive_user` is the exception** — it takes a session and calls no clock; its error path is reached by passing a `user_id` with no row, which makes `:958`'s `.get()` return `None` and `:959`'s attribute read raise `AttributeError`.
+**The error-path idiom, and the one task it does not fit.** Six of the eight tasks call `utcnow()` inside their `try` — `process_expired_bans:80`, `remove_old_community_content:142`, `remove_old_bot_content:168`, `delete_old_soft_deleted_content:222`, `archive_old_posts:890`, `archive_old_users:938`. **`pwn_bots` computes its cutoff at `:1164`, one line ABOVE `:1165`'s `try:`**, so patching the clock there raises outside the handler and the test would pass even with the whole `except` clause deleted; its error-path test patches `text` and seeds a row so `:1167` is reached. Check which side of the `try` your patched symbol sits on before writing an error-path test. `utcnow` is bound into this module's namespace at `app/shared/tasks/maintenance.py:16`, so monkeypatching `app.shared.tasks.maintenance.utcnow` raises inside the `try` without touching `tests/factories.py`, which reaches `utcnow` through `app.models` (fact 163). **`archive_user` is the exception** — it takes a session and calls no clock; its error path is reached by passing a `user_id` with no row, which makes `:958`'s `.get()` return `None` and `:959`'s attribute read raise `AttributeError`.
 
 **Config gates need config, not mocks.** `ARCHIVE_POSTS` (`config.py:184`, default **0**) and `BOT_CONTENT_RETENTION` (`config.py:190`, default 6) are read from `current_app.config`. **Capture the original value, set it, restore the captured value in a `finally`** — never restore a hardcoded default. Sub-project 29 shipped that bug and needed a review round to fix it.
 
@@ -135,7 +135,16 @@ from tests.factories import (
 
 
 def _boom(*args, **kwargs):
-    """Raise from inside a task's `try`, to reach its `except` arm."""
+    """Raise where a task will catch it, to reach its `except` arm.
+
+    THE CALLER PICKS THE SYMBOL, AND THE CHOICE MATTERS. Patching something
+    the task calls BEFORE its `try` raises outside the handler, and the test
+    then passes even if the whole `except` clause is deleted. Seven of Group
+    B's eight tasks compute their cutoff inside the try, so patching `utcnow`
+    reaches the handler; `pwn_bots` computes it at `:1164`, one line above
+    `:1165`'s `try:`, so its error-path test patches `text` instead and seeds a
+    row to make the loop body run.
+    """
     raise RuntimeError('the task itself failed')
 
 
@@ -236,7 +245,23 @@ class TestPwnBots:
         assert db.session.get(BotChallenge, challenge.id).is_a_bot is False
 
     def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch):
-        monkeypatch.setattr('app.shared.tasks.maintenance.utcnow', _boom)
+        """`:1174-1176`'s handler, reached through `:1167`.
+
+        NOT through `utcnow`. `:1164` computes the cutoff one line ABOVE
+        `:1165`'s `try:`, so patching the clock raises before the handler
+        exists and the test would pass even if the whole `except` clause were
+        deleted. `pwn_bots` is the only task in this group ordering those two
+        statements that way.
+
+        A challenge must be seeded, because `:1167`'s `text(...)` is inside the
+        loop and an empty result set never reaches it.
+        """
+        instance, user, _, _ = _seed()
+        challenge = BotChallenge(uuid='c4', user_id=user.id,
+                                 sent_at=utcnow() - timedelta(days=2))
+        db.session.add(challenge)
+        db.session.commit()
+        monkeypatch.setattr('app.shared.tasks.maintenance.text', _boom)
 
         with pytest.raises(RuntimeError, match='the task itself failed'):
             pwn_bots()
