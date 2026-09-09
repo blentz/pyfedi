@@ -9661,12 +9661,18 @@ SURFACE, this round took Group D -- the five functions whose tests must fake
 group): `refresh_instance_chooser:975`, `add_remote_communities:1070`,
 `add_remote_community_from_post:1101`, `delete_from_s3:1121`,
 `clean_up_tmp:1139` at the round's start (120 statements, carried forward
-unchanged from sub-project 29's measurement) -- to two missing-statement
-ranges left deliberately open (`refresh_instance_chooser:1010-1016`'s
-connection-failure trap and `add_remote_communities:1077-1078`'s
-`httpx.HTTPError` return, both reachable through the real retry path only at
-a cost of 3-10 seconds' real sleep) and two partial branches at
-`refresh_instance_chooser:1014`. Tests live in
+unchanged from sub-project 29's measurement) -- to, AS FIRST LANDED, two
+missing-statement ranges left deliberately open
+(`refresh_instance_chooser:1010-1016`'s connection-failure trap and
+`add_remote_communities:1077-1078`'s `httpx.HTTPError` return, recorded at the
+time as reachable through the real retry path only at a cost of 3-10 seconds'
+real sleep) and two missing branch arcs at `refresh_instance_chooser:1014`
+(`[1014, 1015]` and `[1014, 1016]`, both sitting inside the wholly-missing
+`1010-1016` block -- NOT "partial branches" as first recorded here:
+`num_partial_branches` measured 1 throughout this round, and that one
+partial arc is `[270, 268]`, in an unrelated Group A/B function; a "partial"
+branch is one with an executed and a missing arm, and `:1014` had neither
+arm executed). Tests initially lived in
 `tests/test_shared_tasks_maintenance_external.py` (**36 tests**, 881 lines).
 The module's `coverage_floors.ini` entry rose 47 -> 65 in two steps -- 64 on
 this round's first measurement, then 65 once a wrongly-dismissed gap was
@@ -9674,10 +9680,29 @@ reopened and closed (D371) -- `percent_covered` **65.00593119810202%**
 (`percent_statements_covered` read 69.014% on the same run, a nine-point gap,
 which is why the campaign reads `summary.percent_covered` rather than the
 statement-only figure). All three of `maintenance.py`'s test files together
-now run **147 tests**. Twenty-one mutations were run one at a time against
-the closed functions; seventeen were killed, two survived as proven
+initially ran **147 tests**. Twenty-one mutations were run one at a time
+against the closed functions; seventeen were killed, two survived as proven
 equivalent mutants (D370), and two closed genuine holes with a new test
 apiece (D372).
+
+**A final whole-branch review found both "deliberately open" ranges above
+were closable at zero runtime cost and closed them.** `get_request` is
+imported at module scope (`maintenance.py:19`) and called as a bare name at
+both `:1009` and `:1072`, so `monkeypatch.setattr('app.shared.tasks.
+maintenance.get_request', ...)` reaches both handlers directly -- no respx,
+no real transport, no sleep. The "reachable only through the real retry path
+at 3-10 seconds" reasoning above confused DRIVING the real `get_request`
+into its retry with REPLACING it; the second costs nothing. Two tests were
+added -- `test_a_transport_failure_is_swallowed` for
+`add_remote_communities:1077-1078` and
+`test_a_connection_failure_deletes_an_existing_row_and_continues` for
+`refresh_instance_chooser:1010-1016`, the latter also closing both of
+`:1014`'s branch arcs -- bringing the file to **38 tests** and the three
+`maintenance.py` test files together to **149 tests**. Both new tests were
+proven able to fail by mutation (applied, run, restored by hand). The
+module's `coverage_floors.ini` entry rose **65 -> 66**, `percent_covered`
+**66.19217081850533%**. See `.superpowers/sdd/2026-09-09-coverage-
+maintenance-d-31/final-fix-report.md` for the fix pass in full.
 
 **Two production changes landed, numstat `7 4` total across two commits --
 `git diff --numstat c1c75d09..7c5cfe4a -- app/`:**
@@ -9717,14 +9742,14 @@ provisional count of three.
 
 | # | site | defect | status | evidence |
 |---|---|---|---|---|
-| D363 | `archive_old_posts`'s S3 client, `app/shared/tasks/maintenance.py:923-924` (`if s3: / s3.close()`, at the end of the function's own `try` rather than in a `finally`) | **Registered, not fixed -- this function belongs to Group B, which sub-project 30 already closed.** The same shape as D362: `:923`'s `if s3:` and `:924`'s `s3.close()` sit inside the `try` opened earlier in the function and ending at `:926`'s `except Exception:`; the function's own `finally` (`:929-930`) closes only the database session (`session.close()`), never the S3 client. A raise from anything between the client's construction and `:924` skips the close, leaking the client's connection pool exactly as `delete_from_s3` did before D362's fix. Left unfixed here because `archive_old_posts` is outside this round's assigned Group D functions and re-opening a closed group's function was out of scope; recorded so a future round touching `archive_old_posts` does not have to rediscover it | registered, not fixed (out of this round's scope; belongs to Group B) | `app/shared/tasks/maintenance.py:892-930` read at this commit (re-derived after Tasks 2, 3 and 6 shifted the file; `:923`/`:924`/`:926`/`:929-930` unchanged from sub-project 30's own reading since none of this round's edits touch `archive_old_posts`) |
+| D363 | `archive_old_posts`'s S3 client, `app/shared/tasks/maintenance.py:923-924` (`if s3: / s3.close()`, at the end of the function's own `try` rather than in a `finally`) | **Registered, not fixed -- this function belongs to Group B, which sub-project 30 already closed.** The same shape as D362: `:923`'s `if s3:` and `:924`'s `s3.close()` sit inside the `try` opened earlier in the function and ending at `:926`'s `except Exception:`; the function's own `finally` (`:929-930`) closes only the database session (`session.close()`), never the S3 client. A raise from anything between the client's construction and `:924` skips the close, leaking the client's connection pool exactly as `delete_from_s3` did before D362's fix. Left unfixed here because `archive_old_posts` is outside this round's assigned Group D functions and re-opening a closed group's function was out of scope; recorded so a future round touching `archive_old_posts` does not have to rediscover it | registered, not fixed (out of this round's scope; belongs to Group B) | `app/shared/tasks/maintenance.py:886-930` read at this commit (re-derived after Tasks 2, 3 and 6 shifted the file; `:923`/`:924`/`:926`/`:929-930` unchanged from sub-project 30's own reading since none of this round's edits touch `archive_old_posts`; the function's `def` is `:886` -- `:892` sits inside the range only because it opens a multi-line SQL string literal, not because it is where the function starts) |
 
 ### 5. `refresh_instance_chooser`'s fifth in-loop commit, and its two nested handlers are not the redundancy they look like -- D364-D365
 
 | # | site | defect | status | evidence |
 |---|---|---|---|---|
 | D364 | `refresh_instance_chooser`'s per-domain commit, `app/shared/tasks/maintenance.py:1052` (`session.commit()`, inside the `for node in nodes:` loop opened at `:1002`) | **Registered, not fixed -- a fifth instance of D342/D354's shape, with one risk specific to this site.** Same reasoning as D354's four sites: batching this commit outside the loop would trade a partial-progress failure mode for an all-or-nothing one. **What is specific here: this loop's failure-path handlers (`:1010`, `:1046`) delete `InstanceChooser` rows, not merely recompute or leave counters stale**, so a persistently failing domain partway through a run leaves a table that is partly pruned rather than partly stale -- some domains' rows already reflect this run's deletions, others still carry a previous run's data, with nothing distinguishing which is which until the next full run completes. Not fixed because closing it carries D342's own disclosed cost and this round's approved scope did not include it | registered, not fixed (same shape as D342/D354; partial-prune risk specific to this site) | `app/shared/tasks/maintenance.py:1002-1052` read at this commit; D342 (sub-project 29) and D354 (sub-project 30) for the shared shape and its disclosed cost |
-| D365 | `refresh_instance_chooser`'s two nested exception handlers, `:1010`'s inner `except Exception as e:` (wrapping only `:1009`'s `get_request` call) and `:1046`'s outer `except Exception as e:` (wrapping the whole per-domain body from `:1007` to `:1044`) | **Correct as written; the apparent redundancy is not one.** Both handlers perform the identical guarded query-and-delete (`session.query(InstanceChooser).filter_by(domain=domain).first()`, delete if found), which reads as duplicated logic at a glance. It is not: `:1010`'s inner handler ends in `continue` (`:1016`), skipping the rest of the loop body -- including `:1052`'s per-domain commit -- for that iteration entirely, while `:1046`'s outer handler has no `continue` and falls through to `:1052`'s commit after logging and cleaning up. A connection failure and a processing failure inside the success branch are handled by different code paths with different control-flow consequences despite superficially identical bodies | correct as written, registered so a future "simplification" does not merge the two handlers and silently change which failures still reach `:1052`'s commit | `app/shared/tasks/maintenance.py:1006-1052` read at this commit |
+| D365 | `refresh_instance_chooser`'s two nested exception handlers, `:1010`'s inner `except Exception as e:` (wrapping only `:1009`'s `get_request` call) and `:1046`'s outer `except Exception as e:` (wrapping the whole per-domain body opened by `:1006`'s `try`, from `:1008`'s first statement -- `:1007` is a comment -- to `:1044`) | **Correct as written; the apparent redundancy is not one.** Both handlers perform the identical guarded query-and-delete (`session.query(InstanceChooser).filter_by(domain=domain).first()`, delete if found), which reads as duplicated logic at a glance. It is not: `:1010`'s inner handler ends in `continue` (`:1016`), skipping the rest of the loop body -- including `:1052`'s per-domain commit -- for that iteration entirely, while `:1046`'s outer handler has no `continue` and falls through to `:1052`'s commit after logging and cleaning up. A connection failure and a processing failure inside the success branch are handled by different code paths with different control-flow consequences despite superficially identical bodies | correct as written, registered so a future "simplification" does not merge the two handlers and silently change which failures still reach `:1052`'s commit | `app/shared/tasks/maintenance.py:1006-1052` read at this commit |
 
 ### 6. `add_remote_communities` and `add_remote_community_from_post`: a per-post cache invalidation, a third bare-except instance, and an intentionally narrow catch -- D366-D368
 
@@ -9773,31 +9798,48 @@ this commit (Group D's closure shifted nothing inside C -- `wc -l` moved
 
 | Group | Functions (current line numbers) | Stmts | Branch points | What a test must fake |
 |-------|-----------|-------|-------|-----------------------|
-| **C** | `sync_defederation_subscriptions:409-425`, `check_instance_health:427-507`, `monitor_healthy_instances:509-711` | 193 | 47 | nodeinfo negotiation over `httpx` |
+| **C** | `sync_defederation_subscriptions:409-425`, `check_instance_health:427-507`, `monitor_healthy_instances:509-711` | 196 | 47 | nodeinfo negotiation over `httpx` |
 
-**193 statements, measured this round, not carried forward.** An earlier
-sub-project's figure of 196 (repeated at this document's Group C/D "remain"
-sections for sub-projects 29 and 30) is **superseded by this measurement,
-not silently overwritten** -- a future reader tracing where 196 came from
-should find this correction rather than a gap. Measured with a
-`--cov-branch` run over all three `maintenance.py` test files, dotted
-`--cov=app.shared.tasks.maintenance` form, JSON written outside the repo:
+**196 statements, decorator-inclusive -- 196 was never stale, and a same-round
+correction to 193 was itself the error.** This document's final whole-branch
+review re-derived the figure from the coverage JSON and found two internally
+consistent statement counts for the same three functions, differing only in
+whether each function's `@celery.task` line is counted: from each `def` line,
 `sync_defederation_subscriptions:409-425` = 11 statements,
 `check_instance_health:427-507` = 48, `monitor_healthy_instances:509-711` =
-134 -- 11 + 48 + 134 = **193**, with `monitor_healthy_instances` alone
-carrying 134 of the 193, a shape the next round should scope around rather
-than split evenly across the group's three functions. The **47 branch-point
-figure is confirmed, not changed**: 94 missing branch arcs at two arcs per
-decision point is 47 points, every one of them entirely uncovered, exactly
-what a group with no tests at all should show. Corroborated by the module
-total: `num_statements` reads **639** where the design spec's original count
-was 637 -- exactly the two statements this round's two production changes
-added (`clean_up_tmp`'s `if directory is None:` and `delete_from_s3`'s
-`try:`), confirming the measurement is of the current tree rather than a
-stale artifact. Recorded so the next round has the denominator without
-re-deriving it: `app/shared/tasks/maintenance.py` measures
-**639 statements, 204 branches, `percent_covered` 65.00593119810202%**
-overall (module-wide, all groups combined) as of this commit.
+134, totalling **193**; from each preceding `@celery.task` decorator line
+(`:408`, `:426`, `:508`), the same three ranges measure 12, 49 and 135,
+totalling **196**. **The campaign's own convention, used throughout this
+document, is decorator-inclusive** -- `coverage.py` counts a `@celery.task`
+line as a statement like any other, and every other per-function figure in
+this document's Group D tables is counted the same way: `delete_from_s3` is
+recorded as 7 statements pre-fix and 8 post-fix (D362) where the `def`-only
+count is unchanged at 7 and the decorator-inclusive count is 8 -- 8 is the
+figure this round actually registered. Group D's own headline "120
+statements, carried forward unchanged from sub-project 29's measurement" is
+118 by the `def`-only count and 122 decorator-inclusive as of this commit;
+122 minus the two statements this round's two production changes added
+(`clean_up_tmp`'s `if directory is None:` and `delete_from_s3`'s `try:`) is
+exactly 120, so 120 was always the decorator-inclusive figure too. Three
+independent figures agree on the convention, which is why 196 -- not 193 --
+is Group C's correct entry. **This note exists so a future reader who
+re-derives 193 by counting from each `def` line does not "correct" 196
+again**: 193 is a real, reproducible number, it is simply the wrong
+convention for this document. `monitor_healthy_instances` alone carries 134
+of the 193 (135 of the 196), a shape the next round should scope around
+rather than split evenly across the group's three functions. The **47
+branch-point figure is confirmed, not changed**: 94 missing branch arcs at
+two arcs per decision point is 47 points, every one of them entirely
+uncovered, exactly what a group with no tests at all should show.
+Corroborated by the module total: `num_statements` reads **639** where the
+design spec's original count was 637 -- exactly the two statements this
+round's two production changes added, confirming the measurement is of the
+current tree rather than a stale artifact. Recorded so the next round has
+the denominator without re-deriving it: `app/shared/tasks/maintenance.py`
+measures **639 statements, 204 branches** overall (module-wide, all groups
+combined) as of this commit, before this final-review pass's own two
+additional tests raised `percent_covered` to 66.19217081850533% (floor 66;
+see the final-review fix report for the two closed gaps).
 
 **Facts 183-186 carried into `tests/README.md`.** `respx`'s
 `AllMockedAssertionError` descends from `AssertionError`, not
@@ -9806,7 +9848,11 @@ failure while a narrower `except httpx.HTTPError` lets it propagate --
 observed running the identical failure through two functions in the same
 module with opposite outcomes (183). `get_request` sleeps 3-10 seconds on
 retry at two separate handlers, a real per-invocation wall-clock cost a test
-should route around rather than pay (184). A helper imported inside a
+should route around rather than pay -- corrected by a later final-review
+pass to name the cheapest route explicitly: replacing `get_request` itself
+at its caller's module scope reaches a caller's own exception handler
+directly, at zero cost, without needing the transport to raise anything at
+all (184). A helper imported inside a
 function's own body, rather than at module scope, cannot be patched through
 the calling module's namespace, because that name is never bound there
 before the function runs -- the patch has to target the name's actual home
