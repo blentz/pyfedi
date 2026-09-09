@@ -1519,6 +1519,8 @@ Mutations run **one at a time**. For each: dry-run without `-i` and read the pro
 | 17 | `calculate_community_activity_stats`'s post bot filter | `p.from_bot = False` → `p.from_bot IS NOT NULL` | killed |
 | 18 | `calculate_community_activity_stats`'s voter bot filter | `u.bot = False` → `u.bot IS NOT NULL` (post-vote INSERT) | killed |
 | 19 | `recalculate_user_attitudes`'s window, `User.last_seen > utcnow() - timedelta(days=1)` | `days=1` → `days=100` | killed |
+| 20 | `update_hashtag_counts`'s correlated subquery | `WHERE post_tag.tag_id = tag.id` → `!= tag.id` | killed |
+| 21 | `unban_expired_users`'s null guard | delete `AND banned_until is not null` | **SURVIVES — equivalent mutant.** `banned_until < :cutoff` already yields NULL, and therefore false, for any row where `banned_until` is NULL, so the conjunct is dead weight and no test can kill it. Run it anyway and write the proof out; an equivalence asserted from a table is not an equivalence demonstrated. |
 
 - [ ] **Step 2: For every survivor, decide which of two things it is**
 
