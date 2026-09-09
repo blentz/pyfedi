@@ -970,6 +970,8 @@ Write this test and run it against the unmodified code, recording the count it p
         catches the task's own connection, because `get_task_session()` binds to
         that same engine (app/utils.py:3673-3675).
         """
+        import re
+
         from sqlalchemy import event
 
         _, user, first, _ = _seed()
@@ -988,9 +990,13 @@ Write this test and run it against the unmodified code, recording the count it p
         finally:
             event.remove(db.engine, 'before_cursor_execute', _record)
 
+        # A WORD BOUNDARY, not a substring. `:294-302`'s
+        # `select(func.count()).select_from(CommunityMember)` emits
+        # `FROM community_member`, which `' FROM community' in s.lower()` would
+        # match -- an oracle that counts a statement it did not name.
         selects = [s for s in statements
                    if s.lstrip().upper().startswith('SELECT')
-                   and ' FROM community' in s.lower()]
+                   and re.search(r'\bfrom\s+community\b', s, re.IGNORECASE)]
         assert len(selects) == 1
 ```
 
@@ -1433,6 +1439,8 @@ Body states the measured percentage, the number of Group A statements now covere
 - Consumes: the finished test file.
 - Produces: a transcript, one entry per mutation.
 
+**Every line number in the table below is advisory and pre-shift.** Tasks 6, 7 and 9 all edited `app/shared/tasks/maintenance.py` — Task 7 deleted two statements, so everything below them moved up by two. Re-derive each site against the tree as it stands now, and read the dry-run's produced line before applying anything.
+
 Mutations run **one at a time**. For each: dry-run without `-i` and read the produced line first, apply, run, restore, then assert an empty `git diff -- app/` and the expected `wc -l`. Restore before any point where you might stop and report. Paste every dry-run line and every failure.
 
 - [ ] **Step 1: Run these mutations, in this order**
@@ -1457,7 +1465,7 @@ Mutations run **one at a time**. For each: dry-run without `-i` and read the pro
 | 16 | `calculate_community_activity_stats`'s banned filter | `c.banned = FALSE` → `c.banned IS NOT NULL` | killed |
 | 17 | `calculate_community_activity_stats`'s post bot filter | `p.from_bot = False` → `p.from_bot IS NOT NULL` | killed |
 | 18 | `calculate_community_activity_stats`'s voter bot filter | `u.bot = False` → `u.bot IS NOT NULL` (post-vote INSERT) | killed |
-| 19 | `recalculate_user_attitudes`'s window at `:722` | `days=1` → `days=100` | killed |
+| 19 | `recalculate_user_attitudes`'s window, `User.last_seen > utcnow() - timedelta(days=1)` | `days=1` → `days=100` | killed |
 
 - [ ] **Step 2: For every survivor, decide which of two things it is**
 
