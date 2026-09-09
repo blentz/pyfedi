@@ -329,3 +329,75 @@ class TestMonitorHealthyInstances:
         db.session.expire_all()
         touched = {i.domain for i in db.session.query(Instance).all() if i.failures > 0}
         assert touched == {'one.example', 'two.example'}
+
+
+class TestCheckInstanceHealthGoneForever:
+    """`check_instance_health:427` -- first loop, `:435-443`.
+
+    `:435` computes the cutoff, `:436-439` selects dormant instances whose
+    `start_trying_again` is already past it, `:441-442` marks each
+    `gone_forever`, and `:443` commits.
+
+    The whole body sits inside `patch_db_session(session)` at `:431`, unlike
+    `monitor_healthy_instances`. That is DC1's subject and is why this task's
+    tests need no session gymnastics.
+    """
+
+    def _dormant(self, domain, days_ago):
+        instance = _seed_instance(domain)
+        instance.dormant = True
+        instance.gone_forever = False
+        instance.start_trying_again = utcnow() - timedelta(days=days_ago)
+        return instance
+
+    def test_a_long_dormant_instance_is_marked_gone(self, db_session, monkeypatch):
+        """`:442`'s assignment. The recheck loop is neutralised so this test
+        observes only the first loop: a raising helper would otherwise route
+        into `:494-497` and change `failures`.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(500)))
+        self._dormant('gone.example', days_ago=6)
+        db.session.commit()
+
+        check_instance_health()
+
+        db.session.expire_all()
+        assert db.session.query(Instance).filter_by(
+            domain='gone.example').first().gone_forever is True
+
+    def test_a_recently_dormant_instance_is_not_marked_gone(self, db_session, monkeypatch):
+        """The BOUNDARY at `:438`: `start_trying_again` must be older than the
+        five-day cutoff, not merely set.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(500)))
+        self._dormant('recent.example', days_ago=4)
+        db.session.commit()
+
+        check_instance_health()
+
+        db.session.expire_all()
+        assert db.session.query(Instance).filter_by(
+            domain='recent.example').first().gone_forever is False
+
+    def test_a_live_instance_is_untouched_by_the_sweep(self, db_session, monkeypatch):
+        """`:437`'s `dormant == True` filter. A live instance is not selected
+        by either loop -- `:447` requires dormant as well.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(500)))
+        instance = _seed_instance('live.example')
+        instance.dormant = False
+        instance.start_trying_again = utcnow() - timedelta(days=99)
+        db.session.commit()
+
+        check_instance_health()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='live.example').first()
+        assert reloaded.gone_forever is False
+        assert reloaded.failures == 0
