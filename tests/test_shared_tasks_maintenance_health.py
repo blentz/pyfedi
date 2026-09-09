@@ -24,8 +24,8 @@ BUT THE HAZARD STILL EXISTS FOR A TEST THAT FORGETS THE PATCH.
 it routes it into the failure path while the test believes it tested success.
 Task 1 established this by observation.
 
-THE IDENTITY HALF IS OUT OF SCOPE. `monitor_healthy_instances:610` needs
-`instance.software` in {'lemmy', 'piefed', 'pylova'} and `:671` needs 'mbin'.
+THE IDENTITY HALF IS OUT OF SCOPE. `monitor_healthy_instances:612` needs
+`instance.software` in {'lemmy', 'piefed', 'pylova'} and `:673` needs 'mbin'.
 Every fixture here uses `make_instance`'s default, 'mastodon', so neither body
 runs. Both `if` statements still evaluate, so this file covers their FALSE arms
 and sub-project 33 owns the true ones.
@@ -299,11 +299,11 @@ class TestMonitorHealthyInstances:
     def test_a_raising_helper_does_not_end_the_whole_sweep(self, db_session, monkeypatch):
         """DC2: a raising `get_request_instance` no longer ends the sweep.
 
-        Before the guard, `:563` closed `nodeinfo`, which `:534` might never
-        have bound: if `get_request_instance` raised, the `except` at `:558`
-        caught it and then the `finally` at `:561-563` raised
+        Before the guard, `:565` closed `nodeinfo`, which `:534` might never
+        have bound: if `get_request_instance` raised, the `except` at `:560`
+        caught it and then the `finally` at `:563-565` raised
         `UnboundLocalError` -- which that handler had already run and could
-        not catch. It escaped to `:709`, rolled back and re-raised, so one
+        not catch. It escaped to `:711`, rolled back and re-raised, so one
         instance's failure ended the sweep for every other instance. The
         `nodeinfo = None` / `node = None` bindings ahead of each `try` and the
         `is not None` guards on `.close()` fix that: the `except` arm's own
@@ -331,7 +331,7 @@ class TestMonitorHealthyInstances:
         assert touched == {'one.example', 'two.example'}
 
     def test_discovery_assigns_the_matching_href(self, db_session, monkeypatch):
-        """`:548-551`. A rel in the recognised set supplies the href and clears
+        """`:549-552`. A rel in the recognised set supplies the href and clears
         the failure state.
         """
         monkeypatch.setattr(
@@ -351,7 +351,7 @@ class TestMonitorHealthyInstances:
         assert reloaded.failures == 0
 
     def test_a_non_dict_link_before_a_match_does_not_abort_discovery(self, db_session, monkeypatch):
-        """`:543`'s `isinstance` guard, taking its false arm on a bare string
+        """`:544`'s `isinstance` guard, taking its false arm on a bare string
         that precedes a matching entry.
 
         A single non-dict string with no entry after it cannot tell the
@@ -362,15 +362,15 @@ class TestMonitorHealthyInstances:
         string `'rel'` (so `'rel' in links` is True on a bare string once the
         `isinstance` short-circuit is gone) and a genuine match follows it.
         With the guard intact, `isinstance('rel', dict)` is False, the whole
-        condition short-circuits before `links['rel']` is ever evaluated, the
-        `else` arm counts one failure, and the loop moves on to match the
+        condition short-circuits before `links['rel']` is ever evaluated, so
+        nothing happens for that entry, and the loop moves on to match the
         second entry. Without the guard, `'rel' in links` is True and
         `links['rel']` is evaluated on a plain string, raising `TypeError`
         (string indices must be integers) -- which escapes the `for` loop
         entirely, so the second, matching entry is never reached and
-        `nodeinfo_href` stays unset. Verified by hand-negating `:543` (dropping
+        `nodeinfo_href` stays unset. Verified by hand-negating `:544` (dropping
         `isinstance(links, dict) and `): the loop then raises on the first
-        entry, the outer `except` at `:558-560` swallows it, and
+        entry, the outer `except` at `:560-562` swallows it, and
         `nodeinfo_href` stays `None` instead of being set to the second
         entry's href.
         """
@@ -391,17 +391,17 @@ class TestMonitorHealthyInstances:
             domain='odd.example').first().nodeinfo_href == 'https://odd.example/nodeinfo/2.0'
 
     def test_a_non_200_discovery_counts_a_failure(self, db_session, monkeypatch):
-        """`:555`'s `elif` and its `:557` increment. A 404 is logged and
+        """`:557`'s `elif` and its `:559` increment. A 404 is logged and
         counted, not retried.
 
-        `failures` ends at 2, not merely nonzero: `:557` counts the non-200
+        `failures` ends at 2, not merely nonzero: `:559` counts the non-200
         discovery response, and because `nodeinfo_href` is still unset
-        afterward, `:566`'s `else` arm at `:600` counts a second failure
+        afterward, `:568`'s `else` arm at `:602` counts a second failure
         before the task's own commit. Asserting only `failures > 0` would not
-        discriminate `:557`'s increment from `:600`'s -- removing `:557` alone
+        discriminate `:559`'s increment from `:602`'s -- removing `:559` alone
         still leaves `failures == 1 > 0`, so the loose assertion cannot fail on
         that regression. The exact count of 2 is what ties this assertion to
-        `:557` specifically.
+        `:559` specifically.
         """
         monkeypatch.setattr(
             'app.shared.tasks.maintenance.get_request_instance',
@@ -415,6 +415,34 @@ class TestMonitorHealthyInstances:
         db.session.expire_all()
         assert db.session.query(Instance).filter_by(
             domain='missing.example').first().failures == 2
+
+    def test_an_unmatched_document_counts_one_failure_not_one_per_link(self, db_session, monkeypatch):
+        """DC3: the increment sits INSIDE `:543`'s per-link loop.
+
+        Three unrelated links record three failures, so a document's shape --
+        not the instance's reachability -- drives `update_dormant_gone`'s
+        thresholds (`app/models.py:146-150`: dormant above 2, gone above 7).
+
+        Two increments are expected in total: one for the unmatched document,
+        and one from the no-href arm below the fetch block.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(200, {'links': [
+                {'rel': 'https://example.invalid/a', 'href': 'https://x.example/a'},
+                {'rel': 'https://example.invalid/b', 'href': 'https://x.example/b'},
+                {'rel': 'https://example.invalid/c', 'href': 'https://x.example/c'},
+            ]})))
+        instance = _seed_instance('noisy.example')
+        instance.nodeinfo_href = None
+        instance.failures = 0
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        assert db.session.query(Instance).filter_by(
+            domain='noisy.example').first().failures == 2
 
 
 class TestCheckInstanceHealthGoneForever:

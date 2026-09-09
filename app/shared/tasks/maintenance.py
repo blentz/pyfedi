@@ -539,6 +539,7 @@ def monitor_healthy_instances():
 
                     if nodeinfo.status_code == 200:
                         nodeinfo_json = nodeinfo.json()
+                        matched = False
                         for links in nodeinfo_json['links']:
                             if isinstance(links, dict) and 'rel' in links and links['rel'] in [
                                 'http://nodeinfo.diaspora.software/ns/schema/2.0',
@@ -549,9 +550,10 @@ def monitor_healthy_instances():
                                 instance.failures = 0
                                 instance.dormant = False
                                 instance.gone_forever = False
+                                matched = True
                                 break
-                            else:
-                                instance.failures += 1
+                        if not matched:
+                            instance.failures += 1
                     elif nodeinfo.status_code >= 300:
                         current_app.logger.info(f"{instance.domain} has no well-known/nodeinfo response")
                         instance.failures += 1
