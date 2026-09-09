@@ -5248,6 +5248,178 @@ campaign (`app/request_hooks.py:137`); this is the first round the
 campaign's own register records using it, and the standard it records is
 the reviewer's attempt, not the author's confidence.
 
+**161. `CREATE TEMPORARY TABLE ... ON COMMIT DROP` NEEDS NO SPECIAL FIXTURE
+UNDER THIS HARNESS.** A probe run as a temporary pytest test called
+`calculate_community_activity_stats()` (`app/shared/tasks/maintenance.py:748`,
+which creates `temp_community_activity` `ON COMMIT DROP` at `:764-769`) under
+the ordinary `db_session` fixture and it ran to completion with no error;
+`db.session.execute(db.text("SELECT to_regclass('temp_community_activity')")).scalar()`
+returned `None` afterward, confirming no catalog object was left behind.
+Caveat carried forward honestly: that check ran from `db.session`, a
+different connection from the task's own `get_task_session()` connection
+(`app/utils.py:3673-3675`), and temp tables are invisible outside their
+creating session regardless of whether `ON COMMIT DROP` fired -- so the
+probe proves "ran cleanly end to end, no leftover global catalog object,"
+not a stronger "confirmed DROP fired before commit." The task closes and
+disposes its own session in a `finally` block, so the distinction does not
+change what a test needs to do: use the ordinary `db_session` fixture like
+any other task in this file.
+
+**162. `tests/conftest.py`'s `db_session` FIXTURE DOES NOT ROLL BACK -- A
+`commit()` INSIDE A TEST IS REAL.** `tests/conftest.py:137-202`: the fixture
+(`:137`) yields `db.session` (`:158`), then DELETEs every row via
+`_teardown_sql` (`:191`) and commits that teardown itself (`:192`) before
+closing the session (`:202`). Nothing in this fixture opens a nested
+transaction or issues a `SAVEPOINT` for the test to roll back to -- a test
+that calls `db.session.commit()` (or drives a task that commits through its
+own separate connection) has genuinely committed, and only the fixture's own
+end-of-test DELETE sweep removes the rows, not an automatic rollback. This
+round's own spec document carried the opposite belief in an early draft and
+was corrected before Task 1 shipped; a task report independently repeated
+the corrected-away version afterward, in prose only (gitignored, no effect
+on the shipped diff) -- evidence the belief is easy to hold even after
+seeing the fixture's own docstring say otherwise.
+
+**163. `monkeypatch.setattr('app.shared.tasks.maintenance.utcnow', _boom)`
+REACHES A TASK'S `except` ARM WITHOUT TOUCHING `tests/factories.py`, FOR
+NINE OF TEN GROUP A TASKS.** `utcnow` is bound into
+`app/shared/tasks/maintenance.py`'s own namespace by its import at `:16`
+(`from app.models import (..., utcnow, ...)`), so patching the name on the
+`maintenance` module -- not on `app.models`, which is what
+`tests/factories.py` reaches `utcnow` through -- makes the very next call to
+`utcnow()` inside a task's `try` raise, exercising the shared
+`except Exception: session.rollback(); raise` arm every one of these tasks
+carries. The one task this idiom does NOT work for is
+`update_hashtag_counts`: it calls no clock function anywhere in its body, so
+there is no `utcnow()` call to intercept. Its error-path test instead
+monkeypatches `app.shared.tasks.maintenance.text` to raise, reaching the
+same `except` arm through the function's own `text()` calls instead.
+
+**164. AN N+1 REGRESSION'S SELECT COUNT DECOMPOSES AS ONE ELIGIBILITY QUERY
+PLUS ONE PER-PRIMARY-KEY RE-SELECT PER SURVIVING ROW, AND THE OBSERVED COUNT
+CONFIRMS IT EXACTLY.** Counting `SELECT ... FROM community` statements
+(word-boundary regex, not a substring match -- `' FROM community' in
+s.lower()` also matches `FROM community_member`, which
+`app/shared/tasks/maintenance.py:294-302`'s
+`select(func.count()).select_from(CommunityMember)` emits) across four
+communities driving `update_community_stats`'s pre-fix per-iteration commit
+(`:317`, inside the loop opened at `:292`) read `assert 4 == 1`: one
+statement for the initial `communities = session.query(Community).filter(...).all()`
+at `:287-290`, plus three more, one per community at the top of iterations
+2 through 4, because `expire_on_commit` (default True, fact 58) expires
+every loaded `Community` after each in-loop commit and the next iteration's
+first attribute access re-SELECTs it by primary key. After the fix moved
+`:317`'s commit to run once after the loop, the same oracle read exactly 1 --
+the mechanism predicts N pre-fix and exactly 1 post-fix, not merely
+"smaller," and both numbers were observed rather than assumed.
+
+**165. A CITATION CHECKED BY COUNTING LINES IN AN UNNUMBERED `sed -n
+'X,Yp'` RANGE HAS NOT BEEN CHECKED -- AND NEITHER HAS ONE READ FROM `grep
+-n` OVER ALREADY-EXTRACTED OR PIPED OUTPUT.** Both failure modes produced a
+wrong citation in this round, from the same underlying mistake: treating a
+line number from a DERIVED view as though it were the file's own line
+number. First: a `sed -n '3683,3690p' app/utils.py` range prints no line
+numbers of its own; counting output lines to assign numbers came out short
+because two lines in the window are blank, producing a confident but WRONG
+claim that `app/utils.py:3685`/`:3688` were off by one and a "correction" of
+the plan and spec to `:3684`/`:3687` -- reverted once numbered output
+(`awk 'NR==3685||NR==3688 {printf "%d\t[%s]\n",NR,$0}' app/utils.py`)
+showed `:3685` is `if has_request_context():` and `:3688` is the `return`
+inside it, exactly as originally cited. Second: running `grep -n` over the
+output of a command that had ALREADY extracted a class body (rather than
+over the file itself) and reading those numbers as file line numbers
+produced a citation of `Community.profile_id` at `:234` (blank in the real
+file) instead of its true location, `app/models.py:787`. The check that
+works, used to close both: numbered output over the real file --
+`awk 'NR==X {...}'` or `grep -n` run directly against the file, never
+against another command's already-extracted or piped text.
+
+**166. AN EDIT CAN FALSIFY PROSE THE SAME TASK WROTE MINUTES EARLIER, AND
+THE STANDING INSTRUCTION TO RE-DERIVE AFTER THE DIFF IS FINAL WAS NOT
+SUFFICIENT ON ITS OWN, THREE TIMES IN ONE ROUND.** A moved commit: dedenting
+`update_community_stats`'s `session.commit()` from inside its loop to after
+it made `TestUpdateCommunityStatsIsAtomic`'s own class docstring ("the
+rollback READS as though it protects the task's whole effect. It does not")
+and a sibling comment false the instant the fix landed -- caught by a
+reviewer, not the implementer. A two-line deletion: removing
+`recalculate_user_attitudes`'s dead `processed = 0`/`processed += 1`
+shifted every citation below it by one or two lines, and the task's own
+report had already derived and written down the exact shift table before
+committing -- but did not apply it to the docstrings the same task had
+written two steps earlier, leaving five stale citations in its own new test
+class plus three more in two earlier tasks' docstrings that happened to cite
+lines below the deletion; a reviewer opening the cited lines caught all of
+it. An INNER-to-LEFT join: rewriting `calculate_community_activity_stats`'s
+SELECT to drive from `community` with a LEFT JOIN, instead of from the temp
+table with an INNER JOIN, made a present-tense docstring description of the
+INNER JOIN false -- this time the IMPLEMENTER caught it before committing,
+by re-reading its own docstring for tense and rewriting the bug in past
+tense and the fix in present tense. Three occurrences, two caught by
+review and one caught by self-review; the instruction to re-derive after
+the diff is final was present in every dispatch this round and was not, by
+itself, enough to prevent any of the three.
+
+**167. A COVERAGE RUN LEAVES ITS JSON IN THE HOST REPO ROOT, NOT ONLY IN
+THE CONTAINER.** `compose.test.yaml`'s `test-runner` service bind-mounts the
+whole repository (`./:/app:z`), so a coverage invocation's
+`--cov-report=json:/app/x.json` writes to a path that is simultaneously
+inside the container's filesystem and, via the bind mount, the host
+working tree -- the file appears in `git status` on the host, not only
+inside the container where `podman cp` would otherwise be needed to reach
+it. This refines the campaign's standing rule ("the coverage JSON lands
+inside the container, retrieve it with `podman cp`") rather than replacing
+it: retrieval still works that way, but a coverage run also leaves a stray
+artifact directly in the working tree that must be cleaned up (`rm` on the
+host, not only inside the container) before the tree is clean again.
+
+**168. `check_coverage_floors.py` COMPARES THE BLENDED `percent_covered`,
+NOT THE HIGHER, STATEMENTS-ONLY `percent_statements_covered`.** Both fields
+come from the same `--cov-branch` JSON summary, but they read differently:
+for `app/shared/tasks/maintenance.py`'s Group A closure, `percent_covered`
+(statements and branches combined) measured 24.641148325358852%, while
+`percent_statements_covered` (statements alone) measured 30.28% for the
+identical run. `check_coverage_floors.py` reads `entry['summary']['percent_covered']`,
+so a floor set from the statements-only field would be inflated and the
+ratchet could not hold it -- confirmed directly against the tree before the
+floor of 24 was written, and independently re-derived by the task review
+from its own freshly retrieved JSON with an exact match.
+
+**169. COVERAGE CANNOT DISTINGUISH AN INSERT THAT RAN FROM ONE A TEST WOULD
+MISS IF IT WERE DELETED.** `calculate_community_activity_stats` populates
+`temp_community_activity` with four separate `INSERT` statements (posts,
+post replies, post votes, post reply votes; `app/shared/tasks/maintenance.py:772-814`),
+and the downstream aggregate counts `COUNT(DISTINCT ... user_id)` per
+community. A test seeding one actor per source drove all four `INSERT`s to
+execute and add a row apiece -- 100% coverage on all four -- but because the
+post-vote and post-reply-vote sources both attributed to the SAME seeded
+user, the DISTINCT-user aggregate collapsed both contributions into one
+already-counted id. A reviewer's eight-cell matrix (per source: does
+deleting the INSERT fail a test; does removing its bot-exclusion filter fail
+a test) found two of the four cells genuinely empty in each direction --
+the post-vote and post-reply-vote INSERTs were each deletable outright, and
+each source's bot filter was each removable, with every test in the file
+still green. Statement execution proved the code ran; it did not prove
+anything would notice if it were gone. Closed by giving the vote and
+reply-vote sources their own distinct actor, which is what let the
+aggregate see all four independently.
+
+**170. A PROVEN EQUIVALENT MUTANT: DELETING `unban_expired_users`'S `AND
+banned_until is not null` CONJUNCT.** `app/shared/tasks/maintenance.py:397`'s
+UPDATE predicate is `banned is true AND banned_until < :cutoff AND
+banned_until is not null`. Deleting the trailing conjunct survived all 53
+tests, 0 failures, and this is a genuine equivalent mutant rather than an
+untested hole: SQL's comparison operators follow three-valued logic, so
+`banned_until < :cutoff` for a NULL `banned_until` evaluates to `UNKNOWN`,
+which a `WHERE`/`UPDATE ... WHERE` clause treats identically to `false` --
+excluding the row. There is therefore no row and no `:cutoff` value for
+which the three-conjunct predicate (with `is not null` removed) and the
+four-conjunct original diverge: when `banned_until IS NULL` the `<`
+comparison already excludes the row on its own; when it is not NULL the
+extra conjunct is unconditionally true and changes nothing. Run and
+demonstrated in the mutation transcript with the full three-valued-logic
+argument written out, not merely asserted from background knowledge of SQL
+NULL semantics.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
