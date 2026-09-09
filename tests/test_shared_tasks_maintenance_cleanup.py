@@ -205,3 +205,166 @@ class TestCleanupOldActivityPubLogs:
 
         with pytest.raises(RuntimeError, match='the task itself failed'):
             cleanup_old_activitypub_logs()
+
+
+class TestCleanupOldReadPosts:
+    """`cleanup_old_read_posts:45` -- a raw DELETE against an association table.
+
+    `:50` reads the cutoff from `get_setting('read_posts_cutoff', 180)`, which
+    goes through `db.session`; `:49`'s `patch_db_session(session)` is what
+    makes that read land on the task's own session. The harness leaves
+    `patch_db_session` live because `tests/conftest.py:112` pushes only an app
+    context (facts 156 and 157).
+    """
+
+    def test_a_read_post_older_than_the_cutoff_is_removed(self, db_session):
+        _, user, _, post = _seed()
+        db.session.execute(db.text(
+            'INSERT INTO read_posts (user_id, read_post_id, interacted_at) '
+            'VALUES (:u, :p, :t)'),
+            {'u': user.id, 'p': post.id, 't': utcnow() - timedelta(days=181)})
+        db.session.commit()
+
+        cleanup_old_read_posts()
+
+        assert db.session.execute(
+            db.text('SELECT COUNT(*) FROM read_posts')).scalar() == 0
+
+    def test_a_read_post_inside_the_cutoff_survives(self, db_session):
+        _, user, _, post = _seed()
+        db.session.execute(db.text(
+            'INSERT INTO read_posts (user_id, read_post_id, interacted_at) '
+            'VALUES (:u, :p, :t)'),
+            {'u': user.id, 'p': post.id, 't': utcnow() - timedelta(days=179)})
+        db.session.commit()
+
+        cleanup_old_read_posts()
+
+        assert db.session.execute(
+            db.text('SELECT COUNT(*) FROM read_posts')).scalar() == 1
+
+    def test_the_cutoff_comes_from_the_setting_not_the_default(self, db_session):
+        """A row 100 days old survives at the default and dies at a 90-day setting.
+
+        This is the test that proves `:50`'s `get_setting` call is load-bearing
+        rather than decorative -- and therefore that `:49`'s `patch_db_session`
+        is doing something, since `get_setting` reads `db.session`.
+        """
+        from app.utils import set_setting
+        _, user, _, post = _seed()
+        db.session.execute(db.text(
+            'INSERT INTO read_posts (user_id, read_post_id, interacted_at) '
+            'VALUES (:u, :p, :t)'),
+            {'u': user.id, 'p': post.id, 't': utcnow() - timedelta(days=100)})
+        set_setting('read_posts_cutoff', 90)
+        db.session.commit()
+
+        cleanup_old_read_posts()
+
+        assert db.session.execute(
+            db.text('SELECT COUNT(*) FROM read_posts')).scalar() == 0
+
+    def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch):
+        monkeypatch.setattr('app.shared.tasks.maintenance.utcnow', _boom)
+
+        with pytest.raises(RuntimeError, match='the task itself failed'):
+            cleanup_old_read_posts()
+
+
+class TestUnbanExpiredUsers:
+    """`unban_expired_users:392` -- one UPDATE with three conditions."""
+
+    def test_a_user_whose_ban_has_expired_is_unbanned(self, db_session):
+        instance, user, _, _ = _seed()
+        user.banned = True
+        user.banned_until = utcnow() - timedelta(days=1)
+        db.session.commit()
+
+        unban_expired_users()
+
+        db.session.expire_all()
+        assert db.session.get(User, user.id).banned is False
+
+    def test_a_user_whose_ban_has_not_expired_stays_banned(self, db_session):
+        instance, user, _, _ = _seed()
+        user.banned = True
+        user.banned_until = utcnow() + timedelta(days=1)
+        db.session.commit()
+
+        unban_expired_users()
+
+        db.session.expire_all()
+        assert db.session.get(User, user.id).banned is True
+
+    def test_a_permanent_ban_has_no_banned_until_and_survives(self, db_session):
+        """`:397`'s third condition, `banned_until is not null`.
+
+        Without it the NULL comparison would already exclude the row, so this
+        test cannot fail by deleting that conjunct alone -- it pins the
+        BEHAVIOUR (a permanent ban is not lifted) rather than the conjunct, and
+        the mutation transcript records that distinction.
+        """
+        instance, user, _, _ = _seed()
+        user.banned = True
+        user.banned_until = None
+        db.session.commit()
+
+        unban_expired_users()
+
+        db.session.expire_all()
+        assert db.session.get(User, user.id).banned is True
+
+    def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch):
+        monkeypatch.setattr('app.shared.tasks.maintenance.utcnow', _boom)
+
+        with pytest.raises(RuntimeError, match='the task itself failed'):
+            unban_expired_users()
+
+
+class TestUpdateHashtagCounts:
+    """`update_hashtag_counts:194` -- one correlated UPDATE, no clock at all.
+
+    This is the one task in Group A that never calls `utcnow()`, so its
+    error-path test patches `app.shared.tasks.maintenance.text` instead.
+    """
+
+    def test_a_tag_count_is_recomputed_from_post_tag(self, db_session):
+        _, user, community, post = _seed()
+        second = make_post(community, user, 'https://peer.example/p/2')
+        tag = Tag(name='solarstorm', display_as='SolarStorm', post_count=0)
+        db.session.add(tag)
+        db.session.commit()
+        db.session.execute(db.text(
+            'INSERT INTO post_tag (post_id, tag_id) VALUES (:p, :t)'),
+            {'p': post.id, 't': tag.id})
+        db.session.execute(db.text(
+            'INSERT INTO post_tag (post_id, tag_id) VALUES (:p, :t)'),
+            {'p': second.id, 't': tag.id})
+        db.session.commit()
+
+        update_hashtag_counts()
+
+        db.session.expire_all()
+        assert db.session.get(Tag, tag.id).post_count == 2
+
+    def test_a_tag_with_no_posts_is_set_to_zero(self, db_session):
+        """The UPDATE has no WHERE, so a stale count on an unused tag is reset.
+
+        This is the arm that distinguishes "recompute every tag" from
+        "recompute the tags that have posts", and nothing else in the file
+        covers it.
+        """
+        tag = Tag(name='stale', display_as='Stale', post_count=7)
+        db.session.add(tag)
+        db.session.commit()
+
+        update_hashtag_counts()
+
+        db.session.expire_all()
+        assert db.session.get(Tag, tag.id).post_count == 0
+
+    def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch):
+        monkeypatch.setattr('app.shared.tasks.maintenance.text', _boom)
+
+        with pytest.raises(RuntimeError, match='the task itself failed'):
+            update_hashtag_counts()
