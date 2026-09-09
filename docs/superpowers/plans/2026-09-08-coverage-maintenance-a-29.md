@@ -1138,7 +1138,7 @@ Two commits, because they are two different claims. First the tests, subject `te
 
 **Files:**
 - Modify: `tests/test_shared_tasks_maintenance_cleanup.py`
-- Read: `app/shared/tasks/maintenance.py:750-868`
+- Read: `app/shared/tasks/maintenance.py:748-866`
 
 **Interfaces:**
 - Consumes: `_seed()`, `_boom`, and Task 1's probe result.
@@ -1146,7 +1146,7 @@ Two commits, because they are two different claims. First the tests, subject `te
 
 **Do not change `app/shared/tasks/maintenance.py` in this task.** Task 9 owns PC1.
 
-The temp table is filled from four sources: posts at `:774-781`, post replies at `:784-791`, post votes at `:794-803`, and post reply votes at `:806-816`. Each carries its own bot exclusion — `from_bot = False` for the two content sources, `u.bot = False` for the two vote sources. A test that seeds only posts covers the statements while proving nothing about the other three INSERTs, so seed all four.
+The temp table is filled from four sources: posts at `:772-779`, post replies at `:782-789`, post votes at `:792-801`, and post reply votes at `:804-814`. Each carries its own bot exclusion — `from_bot = False` for the two content sources, `u.bot = False` for the two vote sources. A test that seeds only posts covers the statements while proving nothing about the other three INSERTs, so seed all four.
 
 If Task 1's probe reported that the task raises under this harness, stop and report rather than inventing a fixture.
 
@@ -1154,11 +1154,11 @@ If Task 1's probe reported that the task raises under this harness, stop and rep
 
 ```python
 class TestCalculateCommunityActivityStats:
-    """`calculate_community_activity_stats:750` -- four activity sources.
+    """`calculate_community_activity_stats:748` -- four activity sources.
 
-    `:765-771` builds a temporary table, `:774-816` fills it from posts, post
-    replies, post votes and post reply votes, `:819-821` indexes it, `:827-839`
-    aggregates over four windows, and `:845-858` writes the four columns back.
+    `:763-769` builds a temporary table, `:772-814` fills it from posts, post
+    replies, post votes and post reply votes, `:817-819` indexes it, `:825-837`
+    aggregates over four windows, and `:843-856` writes the four columns back.
 
     EACH INSERT HAS ITS OWN BOT EXCLUSION: `from_bot = False` for posts and
     replies, `u.bot = False` for the two vote sources. A test that seeds only
@@ -1206,7 +1206,7 @@ class TestCalculateCommunityActivityStats:
                 refreshed.active_6monthly) == (len(actors), len(actors), len(actors))
 
     def test_a_bot_author_is_excluded(self, db_session):
-        """`:779`'s `p.from_bot = False`, on the post INSERT."""
+        """`:777`'s `p.from_bot = False`, on the post INSERT."""
         instance, author, community, post = _seed()
         post.from_bot = True
         post.posted_at = utcnow() - timedelta(hours=1)
@@ -1219,7 +1219,7 @@ class TestCalculateCommunityActivityStats:
         assert db.session.get(Community, community.id).active_daily == 0
 
     def test_a_bot_voter_is_excluded(self, db_session):
-        """`:801`'s `u.bot = False`, on the post-vote INSERT.
+        """`:799`'s `u.bot = False`, on the post-vote INSERT.
 
         The post itself is seeded outside the window so the only candidate
         activity is the vote, which makes the assertion about the vote rather
@@ -1240,7 +1240,7 @@ class TestCalculateCommunityActivityStats:
         assert db.session.get(Community, community.id).active_daily == 0
 
     def test_a_banned_community_is_not_updated(self, db_session):
-        """`:836`'s `c.banned = FALSE`."""
+        """`:834`'s `c.banned = FALSE`."""
         community, _ = self._community_with_one_activity_of_each_kind(
             utcnow() - timedelta(hours=1))
         community.banned = True
@@ -1277,7 +1277,7 @@ Subject: `test: cover the four activity sources and four windows`
 ## Task 9: PC1 — observe the stale stats, then drive the aggregate from `community`
 
 **Files:**
-- Modify: `app/shared/tasks/maintenance.py:827-839`
+- Modify: `app/shared/tasks/maintenance.py:825-837`
 - Modify: `tests/test_shared_tasks_maintenance_cleanup.py`
 
 **Interfaces:**
@@ -1288,9 +1288,9 @@ Subject: `test: cover the four activity sources and four windows`
 
 ```python
 class TestCommunityActivityStatsAreNotStale:
-    """PC1: `:835`'s INNER JOIN drops communities with no activity.
+    """PC1: `:833`'s INNER JOIN drops communities with no activity.
 
-    `:845-858`'s UPDATE runs once per row `:827-839` returns, and that SELECT
+    `:843-856`'s UPDATE runs once per row `:825-837` returns, and that SELECT
     reads FROM the temp table. A community that had no post, reply or vote in
     six months contributes no row, so the join drops it and its four columns
     keep whatever they last held. Nothing else in app/ writes them --
@@ -1325,7 +1325,7 @@ Expected: FAIL, reading `(5, 5, 5, 5)`. **Paste the exact assertion output.** If
 
 - [ ] **Step 2: Make the change**
 
-Replace the SELECT at `:827-839` so it is driven from `community` and outer-joins the temp table. The four `COUNT(DISTINCT CASE ...)` expressions are unchanged; only the FROM, the join, and the GROUP BY move:
+Replace the SELECT at `:825-837` so it is driven from `community` and outer-joins the temp table. The four `COUNT(DISTINCT CASE ...)` expressions are unchanged; only the FROM, the join, and the GROUP BY move:
 
 ```python
         stats_results = session.execute(text('''
@@ -1399,7 +1399,7 @@ import json
 d = json.load(open('/tmp/.../coverage_maintenance.json'))
 f = d['files']['app/shared/tasks/maintenance.py']
 group_a = [(25,43),(45,59),(61,74),(194,213),(283,325),(327,390),
-           (392,406),(712,748),(750,868),(872,885)]
+           (392,406),(712,746),(748,866),(870,883)]
 def in_a(n):
     return any(a <= n <= b for a, b in group_a)
 print('missing statements in Group A:',
@@ -1410,7 +1410,7 @@ print('module percent_covered:', f['summary']['percent_covered'])
 EOF
 ```
 
-**Re-derive the ranges above against the current tree before running this.** Tasks 6, 7 and 9 all edited the file: Task 7 deleted two lines, so everything below `:737` has shifted up by two, and Task 9's SELECT rewrite changed the length of `calculate_community_activity_stats`. The ranges as written are pre-shift.
+**Re-derive the ranges above against the current tree before running this.** The ranges have already been shifted once, for Task 7's deletion of two statements at old `:716` and old `:737` — that is why the last three read `(712,746)`, `(748,866)` and `(870,883)` rather than their original values. Task 9's SELECT rewrite changes the length of `calculate_community_activity_stats` again, after these numbers were written. Derive every range from `grep -n '^def ' app/shared/tasks/maintenance.py` at the moment you run this, and treat the list above as a starting point rather than an answer.
 
 - [ ] **Step 4: Close whatever is left**
 
