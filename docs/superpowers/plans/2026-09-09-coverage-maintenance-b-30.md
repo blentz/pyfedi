@@ -1137,16 +1137,71 @@ class TestArchiveOldPosts:
     reach it and whether it got a client, not what it does with either.
     """
 
-    def _archivable_post(self, community, user, ap_id, age_days=6 * 28 + 1):
-        post = make_post(community, user, ap_id)
-        post.created_at = utcnow() - timedelta(days=age_days)
-        return post
+    def _past_the_recency_window(self, community, user):
+        """Fill the community's hundred-most-recent window, then add one old post.
 
-    def test_an_old_post_is_handed_to_archive_post(self, db_session, monkeypatch, app):
+        `:900-906` excludes each community's hundred most recent posts by
+        `created_at`. A community with a hundred posts or fewer therefore has
+        NOTHING archivable, and every "this post is skipped" assertion below
+        would pass whatever the task did. These tests seed a hundred recent
+        posts to fill that window and one post old enough to fall outside it
+        AND past `:896`'s cutoff.
+
+        The hundred fillers are staggered a day apart so the ordering has no
+        ties, and they are added in one `add_all` rather than a hundred
+        committing factory calls.
+
+        Returns the one post that is genuinely archivable.
+        """
+        now = utcnow()
+        fillers = [
+            Post(community_id=community.id, user_id=user.id,
+                 instance_id=user.instance_id, title='filler',
+                 ap_id=f'https://peer.example/fill/{i}',
+                 created_at=now - timedelta(days=i),
+                 posted_at=now - timedelta(days=i),
+                 last_active=now - timedelta(days=i))
+            for i in range(100)
+        ]
+        old = Post(community_id=community.id, user_id=user.id,
+                   instance_id=user.instance_id, title='old',
+                   ap_id='https://peer.example/old',
+                   created_at=now - timedelta(days=6 * 28 + 1),
+                   posted_at=now - timedelta(days=6 * 28 + 1),
+                   last_active=now - timedelta(days=6 * 28 + 1))
+        db.session.add_all(fillers + [old])
+        db.session.commit()
+        return old
+
+    def test_a_post_beyond_the_recency_window_is_handed_over(self, db_session, monkeypatch, app):
         recorder = _Recorder()
         monkeypatch.setattr('app.shared.tasks.maintenance.archive_post', recorder)
         instance, user, community, post = _seed()
-        old = self._archivable_post(community, user, 'https://peer.example/p/2')
+        old = self._past_the_recency_window(community, user)
+        original = app.config['ARCHIVE_POSTS']
+        app.config['ARCHIVE_POSTS'] = 6
+
+        try:
+            archive_old_posts()
+        finally:
+            app.config['ARCHIVE_POSTS'] = original
+
+        assert [c[0] for c in recorder.calls] == [old.id]
+
+    def test_a_community_inside_the_recency_window_archives_nothing(self, db_session, monkeypatch, app):
+        """`:900-906`'s exclusion, and the test that stops the three filter
+        tests below from passing vacuously.
+
+        The same old post, in a community with only a handful of others, is not
+        archived -- because it is still among that community's hundred most
+        recent. Without this test a reader could not tell whether the filter
+        tests below prove anything.
+        """
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.archive_post', recorder)
+        instance, user, community, post = _seed()
+        old = make_post(community, user, 'https://peer.example/old')
+        old.created_at = utcnow() - timedelta(days=6 * 28 + 1)
         db.session.commit()
         original = app.config['ARCHIVE_POSTS']
         app.config['ARCHIVE_POSTS'] = 6
@@ -1156,15 +1211,14 @@ class TestArchiveOldPosts:
         finally:
             app.config['ARCHIVE_POSTS'] = original
 
-        assert old.id in [c[0] for c in recorder.calls]
+        assert recorder.calls == []
 
     def test_archiving_off_by_default_makes_the_task_a_no_op(self, db_session, monkeypatch):
         """`:887`'s false arm, which is the default configuration."""
         recorder = _Recorder()
         monkeypatch.setattr('app.shared.tasks.maintenance.archive_post', recorder)
         instance, user, community, post = _seed()
-        self._archivable_post(community, user, 'https://peer.example/p/2')
-        db.session.commit()
+        self._past_the_recency_window(community, user)
 
         archive_old_posts()
 
@@ -1175,7 +1229,7 @@ class TestArchiveOldPosts:
         recorder = _Recorder()
         monkeypatch.setattr('app.shared.tasks.maintenance.archive_post', recorder)
         instance, user, community, post = _seed()
-        old = self._archivable_post(community, user, 'https://peer.example/p/2')
+        old = self._past_the_recency_window(community, user)
         old.sticky = True
         db.session.commit()
         original = app.config['ARCHIVE_POSTS']
@@ -1186,15 +1240,15 @@ class TestArchiveOldPosts:
         finally:
             app.config['ARCHIVE_POSTS'] = original
 
-        assert old.id not in [c[0] for c in recorder.calls]
+        assert recorder.calls == []
 
     def test_a_post_in_an_unarchivable_community_is_skipped(self, db_session, monkeypatch, app):
         """`:898`'s `c.can_be_archived = true` (app/models.py:588)."""
         recorder = _Recorder()
         monkeypatch.setattr('app.shared.tasks.maintenance.archive_post', recorder)
         instance, user, community, post = _seed()
+        self._past_the_recency_window(community, user)
         community.can_be_archived = False
-        old = self._archivable_post(community, user, 'https://peer.example/p/2')
         db.session.commit()
         original = app.config['ARCHIVE_POSTS']
         app.config['ARCHIVE_POSTS'] = 6
@@ -1211,8 +1265,8 @@ class TestArchiveOldPosts:
         recorder = _Recorder()
         monkeypatch.setattr('app.shared.tasks.maintenance.archive_post', recorder)
         instance, user, community, post = _seed()
+        self._past_the_recency_window(community, user)
         community.private = True
-        old = self._archivable_post(community, user, 'https://peer.example/p/2')
         db.session.commit()
         original = app.config['ARCHIVE_POSTS']
         app.config['ARCHIVE_POSTS'] = 6
@@ -1234,8 +1288,7 @@ class TestArchiveOldPosts:
         recorder = _Recorder()
         monkeypatch.setattr('app.shared.tasks.maintenance.archive_post', recorder)
         instance, user, community, post = _seed()
-        self._archivable_post(community, user, 'https://peer.example/p/2')
-        db.session.commit()
+        self._past_the_recency_window(community, user)
         original = app.config['ARCHIVE_POSTS']
         app.config['ARCHIVE_POSTS'] = 6
 
@@ -1257,8 +1310,7 @@ class TestArchiveOldPosts:
         recorder = _Recorder()
         monkeypatch.setattr('app.shared.tasks.maintenance.archive_post', recorder)
         instance, user, community, post = _seed()
-        self._archivable_post(community, user, 'https://peer.example/p/2')
-        db.session.commit()
+        self._past_the_recency_window(community, user)
         originals = {k: app.config[k] for k in
                      ('ARCHIVE_POSTS', 'S3_ACCESS_KEY', 'S3_ACCESS_SECRET',
                       'S3_ENDPOINT', 'S3_REGION')}
@@ -1294,9 +1346,9 @@ class TestArchiveOldPosts:
 ```bash
 ./run_tests.sh tests/test_shared_tasks_maintenance_lifecycle.py -v
 ```
-Expected: 52 passed.
+Expected: 53 passed.
 
-`:900-906`'s "hundred most recent posts per community" exclusion is not covered by these tests and seeding 101 posts to reach it is not worth the runtime. **Say so in the class docstring and in your report** rather than leaving the gap silent — an unstated gap is the defect this campaign keeps registering.
+**Do not shorten `_past_the_recency_window`.** A hundred filler posts looks like a lot to seed, and it is the whole reason these tests measure anything: `:900-906` excludes each community's hundred most recent posts, so with fewer than that NOTHING is archivable and every "is skipped" assertion passes against a task that archives nothing. `test_a_community_inside_the_recency_window_archives_nothing` exists to prove that is what would otherwise happen. One `add_all` of 101 rows is a single round trip.
 
 - [ ] **Step 3: Commit**
 
@@ -1426,7 +1478,7 @@ EOF
 
 Write the test that reaches each missing statement or partial branch. **Do not mark anything `# pragma: no branch` on your own judgment** — write the proof into your report and let a reviewer try to defeat it (fact 160). Before closing anything, check whether an earlier sub-project already proved it unreachable (fact 159).
 
-The known uncovered arm is `archive_old_posts:900-906`'s hundred-most-recent exclusion, which Task 7 deliberately left. If it shows as missing, say so and leave it — but the plan expects it to be *covered* as a statement (the SQL string is one statement) while its behaviour is unexercised, which is exactly the gap fact 169 describes.
+Task 7 covers `archive_old_posts:900-906`'s hundred-most-recent exclusion behaviourally, by seeding past it, so nothing in Group B is knowingly left unexercised going into this measurement.
 
 - [ ] **Step 5: Raise the floor**
 
@@ -1525,7 +1577,7 @@ The plan says D351 and fact 172; verify rather than trusting it.
 - **Four in-loop commits of D342's shape**, at `process_expired_bans:117`, `delete_old_soft_deleted_content:257` and `:273`, and `archive_user:970`. **Registered, not fixed**, with the reasoning: D342's own entry discloses that fixing that pattern cost an all-or-nothing starvation regression, and these four sites delete content rather than recompute counters, so a partial run fails differently and worse to get wrong.
 - **`remove_old_bot_content` never commits** — no `session.commit()` anywhere in its body; it relies entirely on `delete_post`'s internal commits. Correct as written; recorded so a future edit adding a direct write knows the write would be lost.
 - **The two `delete_post` call sites pass different federation policies, and both are defensible.** `delete_post`'s second parameter is `federate_deletion` (`app/shared/post.py:755`), not a locality flag. Recorded because the sites look inconsistent to a reader who has not opened the signature — which is how this round first read them.
-- **`archive_old_posts:900-906`'s hundred-most-recent exclusion is unexercised**, and seeding 101 posts to reach it was judged not worth the suite time. Registered rather than left silent.
+- **`archive_old_posts:900-906` makes a community with a hundred posts or fewer entirely unarchivable**, which is a correct reading of the exclusion and a trap for anyone testing this task: three filter assertions would pass vacuously against a community that had nothing archivable to begin with. The plan's first draft contained exactly that trap and it was caught in the pre-flight scan rather than by a test. Register the shape, not just the line.
 - **`process_expired_bans` invalidates six memoized caches** (`:111-114`, `:121-122`) and no test asserts on them, deliberately — asserting on a shared Flask-Caching instance would couple this file to another subsystem.
 - **Groups C and D remain**, with their function lists and statement counts from the spec, so the next round does not re-derive them.
 
