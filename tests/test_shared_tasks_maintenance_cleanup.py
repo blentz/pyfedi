@@ -211,10 +211,12 @@ class TestCleanupOldReadPosts:
     """`cleanup_old_read_posts:45` -- a raw DELETE against an association table.
 
     `:50` reads the cutoff from `get_setting('read_posts_cutoff', 180)`, which
-    goes through `db.session`; `:49`'s `patch_db_session(session)` is what
-    makes that read land on the task's own session. The harness leaves
-    `patch_db_session` live because `tests/conftest.py:112` pushes only an app
-    context (facts 156 and 157).
+    goes through `db.session`; `:49` wraps the body in
+    `patch_db_session(session)`. `tests/conftest.py:112` pushes only an app
+    context, so `has_request_context()` is false and the patch does apply
+    under this harness (facts 156 and 157) -- but see
+    `test_the_cutoff_comes_from_the_setting_not_the_default` for why no test
+    here can show that the patch matters.
     """
 
     def test_a_read_post_older_than_the_cutoff_is_removed(self, db_session):
@@ -246,9 +248,23 @@ class TestCleanupOldReadPosts:
     def test_the_cutoff_comes_from_the_setting_not_the_default(self, db_session):
         """A row 100 days old survives at the default and dies at a 90-day setting.
 
-        This is the test that proves `:50`'s `get_setting` call is load-bearing
-        rather than decorative -- and therefore that `:49`'s `patch_db_session`
-        is doing something, since `get_setting` reads `db.session`.
+        This proves `:50`'s `get_setting` return value is load-bearing -- the
+        cutoff comes from the setting, not a hardcoded 180 -- because the row
+        would have survived at the default and only dies once the setting is
+        lowered to 90.
+
+        It does NOT prove `:49`'s `patch_db_session` is necessary, and under
+        this harness no test can. `get_task_session()` opens a second
+        connection to the same database (`app/utils.py:3673-3675`); the
+        setting row this test writes is committed on `db.session` before the
+        task runs, so it is visible from either connection under READ
+        COMMITTED whether or not `get_setting` reads through the patched
+        session. Deleting `:49`'s `with patch_db_session(session):` would not
+        make this test fail. `patch_db_session` exists for a live Celery
+        worker, where `db.session` is not the session the task is writing
+        through -- a distinction this in-process harness cannot reproduce,
+        since it is the same app-context `db.session` that makes the
+        unpatched path work too.
         """
         from app.utils import set_setting
         _, user, _, post = _seed()
