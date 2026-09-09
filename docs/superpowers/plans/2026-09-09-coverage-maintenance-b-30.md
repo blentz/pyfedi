@@ -1538,6 +1538,7 @@ Mutations run **one at a time**: dry-run without `-i` and read the line, apply, 
 | 3 | `process_expired_bans`' comparison | `CommunityBan.ban_until < utcnow()` → `>` | killed |
 | 4 | `process_expired_bans`' membership guard | `if community_membership_record:` → `if not community_membership_record:` | killed |
 | 5 | `process_expired_bans`' locality conjunct | delete `and blocked.is_local()` | killed |
+| 5b | `process_expired_bans`' ban deletion | re-indent `session.delete(expired_ban)` INTO the `if community_membership_record:` block above it | killed by `test_a_ban_with_no_membership_row_still_clears` -- an indentation mutant, which leaves the ban uncleared whenever no membership row exists |
 | 6 | `process_expired_bans`' instance-ban null conjunct | delete `InstanceBan.banned_until != None,` | **expected to SURVIVE — equivalent.** `banned_until < utcnow()` already yields UNKNOWN for NULL. Record the proof. |
 | 7 | `remove_old_community_content`'s retention filter | `Community.content_retention > 0` → `>= 0` | killed |
 | 8 | `remove_old_community_content`'s sticky filter | `sticky=False` → `sticky=True` | killed |
