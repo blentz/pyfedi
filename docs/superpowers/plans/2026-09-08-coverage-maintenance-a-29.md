@@ -42,7 +42,7 @@
 | `app/shared/tasks/maintenance.py` | **Modify.** Three production changes: `calculate_community_activity_stats`'s outer join, `update_community_stats`'s commit placement, `recalculate_user_attitudes`'s dead counter. |
 | `coverage_floors.ini` | **Modify.** Gains `app/shared/tasks/maintenance.py` — 20 entries. |
 | `tests/README.md` | **Modify.** New facts from 161; corrects facts 156 and 157's off-by-one citation. |
-| `docs/superpowers/findings-register.md` | **Modify.** New findings from D342. |
+| `docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md` | **Modify.** New findings from D342. |
 
 ## Harness facts that bind every task
 
@@ -1544,7 +1544,7 @@ The transcript goes in your report file, which is gitignored. Nothing is committ
 ## Task 12: Register the findings and the facts
 
 **Files:**
-- Modify: `docs/superpowers/findings-register.md`
+- Modify: `docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md`
 - Modify: `tests/README.md`
 
 **Interfaces:**
@@ -1554,7 +1554,7 @@ The transcript goes in your report file, which is gitignored. Nothing is committ
 - [ ] **Step 1: Confirm the next free numbers**
 
 ```bash
-grep -o 'D3[0-9][0-9]' docs/superpowers/findings-register.md | sort -u | tail -3
+grep -o 'D3[0-9][0-9]' docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md | sort -u | tail -3
 grep -o '^\*\*1[0-9][0-9]\.' tests/README.md | tail -3
 ```
 
