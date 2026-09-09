@@ -384,12 +384,24 @@ class TestCheckInstanceHealthGoneForever:
             domain='recent.example').first().gone_forever is False
 
     def test_a_live_instance_is_untouched_by_the_sweep(self, db_session, monkeypatch):
-        """`:437`'s `dormant == True` filter. A live instance is not selected
-        by either loop -- `:447` requires dormant as well.
+        """`:437`'s `dormant == True` filter, and `:447`'s.
+
+        The instance's `start_trying_again` is 99 days past, so it satisfies
+        `:438`'s cutoff on its own and only `:437` keeps it out of the first
+        loop -- drop that filter and `gone_forever` is wrongly set.
+
+        The helper RAISES rather than returning a non-200, and that choice is
+        what makes the second assertion bind. `failures` is incremented only in
+        the recheck loop's `except` arm at `:494-497`, never on a non-2xx
+        branch, so a helper that merely returns a 500 would leave `failures` at
+        0 whether or not `:447` selected the row. Raising means selection is
+        observable.
         """
+        def _raise(*args, **kwargs):
+            raise RuntimeError('the live instance should never be rechecked')
+
         monkeypatch.setattr(
-            'app.shared.tasks.maintenance.get_request_instance',
-            _Recorder(result=_response(500)))
+            'app.shared.tasks.maintenance.get_request_instance', _raise)
         instance = _seed_instance('live.example')
         instance.dormant = False
         instance.start_trying_again = utcnow() - timedelta(days=99)
