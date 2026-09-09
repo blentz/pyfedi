@@ -824,16 +824,16 @@ def calculate_community_activity_stats():
         # This aggregates the data for each community and time interval
         stats_results = session.execute(text('''
             SELECT
-                tca.community_id,
+                c.id AS community_id,
                 COUNT(DISTINCT CASE WHEN tca.activity_date > :day THEN tca.user_id END) as active_daily,
                 COUNT(DISTINCT CASE WHEN tca.activity_date > :week THEN tca.user_id END) as active_weekly,
                 COUNT(DISTINCT CASE WHEN tca.activity_date > :month THEN tca.user_id END) as active_monthly,
                 COUNT(DISTINCT CASE WHEN tca.activity_date > :half_year THEN tca.user_id END) as active_6monthly
-            FROM temp_community_activity tca
-            INNER JOIN "community" c ON c.id = tca.community_id
+            FROM "community" c
+            LEFT JOIN temp_community_activity tca ON c.id = tca.community_id
             WHERE c.banned = FALSE
                 AND c.last_active > :half_year
-            GROUP BY tca.community_id
+            GROUP BY c.id
         '''), {'day': day, 'week': week, 'month': month, 'half_year': half_year})
 
         # Update communities with the calculated stats
