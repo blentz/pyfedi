@@ -5638,6 +5638,81 @@ The helper itself is correct and needs no change; its correctness for this
 caller is entirely borrowed from the caller's own `patch_db_session`
 wrapper, not intrinsic to the helper.
 
+**183. `respx`'s UNMATCHED-REQUEST FAILURE IS CAUGHT BY A BARE `except
+Exception`, AND TWO FUNCTIONS IN ONE MODULE CATCH IT DIFFERENTLY.**
+`respx.models.AllMockedAssertionError` descends from `AssertionError`, not
+`httpx.HTTPError`, confirmed by a probe run before any test in this round's
+file was written: driving an unmatched request through
+`refresh_instance_chooser` printed `REFRESH RETURNED NORMALLY` and the test
+PASSED -- `:1010`'s bare `except Exception as e:` swallowed the
+`AllMockedAssertionError` into its "Failed to connect to {domain}" branch
+exactly as an ordinary connection failure would be handled. Driving the
+identical unmatched request through `add_remote_communities` FAILED the
+test instead: the exception propagated straight through `get_request`
+(`app/utils.py:145`) and out of `add_remote_communities:1072`'s call,
+because `:1077`'s narrower `except httpx.HTTPError:` does not match an
+`AssertionError` subclass. **Two functions in the same module, given the
+identical unmatched-route failure, take opposite paths -- one swallows it
+into a documented trap, the other lets it kill the test -- and a test in
+the first that simply forgets to register a route silently exercises the
+failure path rather than failing loudly.** This is fact 148's shape (a
+test's own oracle silently exercising the wrong path) recurring through a
+different mechanism: there, an assertion too weak to notice; here, an
+exception-hierarchy mismatch between what `respx` raises and what one of
+two structurally similar functions happens to catch.
+
+**184. `get_request` SLEEPS 3-10 SECONDS ON RETRY, AT TWO SEPARATE
+HANDLERS.** `app/utils.py:158-162` (the `httpx.ReadError` handler) and
+`:173-177` (the `httpx.HTTPError`/timeout handler) both call
+`sleep(random.randint(3, 10))` before retrying. A test that drives
+`get_request` into either handler pays that real wall-clock cost per
+invocation, not a mocked or patched delay -- reach a caller's own
+error-handling arm through the caller's own exception handler instead (a
+raised `httpx.HTTPError` from a mocked transport, or a non-200 status code
+the caller checks directly), which never enters `get_request`'s retry logic
+at all. This is why a round can leave a caller's own narrow `except`
+deliberately open rather than driven through a real retry: closing it the
+cheap way, through the caller's own handler, may be unavailable when the
+gap IS the caller's handler itself, and closing it the expensive way costs
+3-10 seconds per test run for no additional coverage.
+
+**185. A HELPER IMPORTED *INSIDE* A FUNCTION CANNOT BE PATCHED IN THE
+CALLING MODULE'S OWN NAMESPACE.** `search_for_community` is imported at
+`app/shared/tasks/maintenance.py:1111`, inside
+`add_remote_community_from_post`'s own body, not at module scope -- so
+`app.shared.tasks.maintenance.search_for_community` never exists as an
+attribute of `maintenance`'s namespace at any point before the function
+actually runs, and `monkeypatch.setattr('app.shared.tasks.maintenance.search_for_community', ...)`
+raises `AttributeError` rather than patching anything. The patch has to
+target the name where it actually lives, `app.community.util.search_for_community`
+(confirmed module-level at `app/community/util.py:34`), re-resolved from
+that module's own namespace every time `:1111`'s `from ... import` line
+executes. Contrast `find_language_or_create`, imported at module scope in
+`maintenance.py:13` -- because that import runs once at module load and
+binds a name permanently inside `maintenance`'s own namespace, the usual
+`monkeypatch.setattr('app.shared.tasks.maintenance.find_language_or_create', ...)`
+idiom does reach it, and `refresh_instance_chooser`'s own tests use exactly
+that form.
+
+**186. `tempfile.mkdtemp()` IS THE REMEDY ONLY WHEN THE CODE UNDER TEST IS
+TOLD WHERE TO LOOK.** Fact 154 established that a file a test needs to see
+must be created inside the test process, typically via `tempfile.mkstemp()`
+or `tempfile.mkdtemp()`, because only that process's own filesystem view is
+guaranteed visible to both the test and the code under test. That advice
+does not by itself make a directory-sweeping task testable:
+`clean_up_tmp` hardcoded a relative path (`directory = 'app/static/tmp'`)
+with no parameter accepting a caller-supplied directory, so a test's own
+`tempfile.mkdtemp()` directory -- however correctly created -- had no way
+to reach the function under test at all.
+`test_a_stale_image_is_removed`'s first attempt to call
+`clean_up_tmp(directory)` against the unmodified function failed with
+`TypeError: clean_up_tmp() takes 0 positional arguments but 1 was given`.
+Fact 154's advice only became applicable once a production change added a
+`directory=None` parameter for the test to pass a `tempfile.mkdtemp()` path
+into. The distinction: `tempfile.mkdtemp()` solves WHERE a test-visible
+directory lives; it does nothing about WHETHER the code under test accepts
+being told where to look.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not

@@ -9649,6 +9649,202 @@ still not established. Group B's closure also raised `maintenance.py`'s
 holes closed and two proven equivalent. If you take D360, say so here in the
 change that takes it.
 
+## Sub-project 31: `app/shared/tasks/maintenance.py` Group D -- the external-service tasks
+
+`docs/superpowers/specs/2026-09-09-coverage-maintenance-d-31-design.md` and
+`docs/superpowers/plans/2026-09-09-coverage-maintenance-d-31.md` (design and
+plan; the per-task briefs and reports live in
+`.superpowers/sdd/2026-09-09-coverage-maintenance-d-31/`), on branch `blentz`,
+from base `c1c75d09`. Continuing the split of `maintenance.py` by TESTING
+SURFACE, this round took Group D -- the five functions whose tests must fake
+`httpx`, `boto3`, or the filesystem (sub-project 29's own description of this
+group): `refresh_instance_chooser:975`, `add_remote_communities:1070`,
+`add_remote_community_from_post:1101`, `delete_from_s3:1121`,
+`clean_up_tmp:1139` at the round's start (120 statements, carried forward
+unchanged from sub-project 29's measurement) -- to two missing-statement
+ranges left deliberately open (`refresh_instance_chooser:1010-1016`'s
+connection-failure trap and `add_remote_communities:1077-1078`'s
+`httpx.HTTPError` return, both reachable through the real retry path only at
+a cost of 3-10 seconds' real sleep) and two partial branches at
+`refresh_instance_chooser:1014`. Tests live in
+`tests/test_shared_tasks_maintenance_external.py` (**36 tests**, 881 lines).
+The module's `coverage_floors.ini` entry rose 47 -> 65 in two steps -- 64 on
+this round's first measurement, then 65 once a wrongly-dismissed gap was
+reopened and closed (D371) -- `percent_covered` **65.00593119810202%**
+(`percent_statements_covered` read 69.014% on the same run, a nine-point gap,
+which is why the campaign reads `summary.percent_covered` rather than the
+statement-only figure). All three of `maintenance.py`'s test files together
+now run **147 tests**. Twenty-one mutations were run one at a time against
+the closed functions; seventeen were killed, two survived as proven
+equivalent mutants (D370), and two closed genuine holes with a new test
+apiece (D372).
+
+**Two production changes landed, numstat `7 4` total across two commits --
+`git diff --numstat c1c75d09..7c5cfe4a -- app/`:**
+
+1. `app/shared/tasks/maintenance.py:1141` (`clean_up_tmp` gained a
+   `directory=None` parameter, resolving to
+   `os.path.join(current_app.root_path, 'static', 'tmp')` when unset) --
+   commit `aa3a83be` -- **D360.**
+2. `app/shared/tasks/maintenance.py:1134-1137` (`delete_from_s3`'s
+   `delete_objects` call wrapped in `try: ... finally: s3.close()`) --
+   commit `7f0bea99` -- **D362.**
+
+A third candidate production change, `add_remote_communities`' session
+handling, was investigated and did not reproduce -- see D361. **The round
+landed two production changes, not three,** against the design spec's
+provisional count of three.
+
+### 1. `clean_up_tmp`'s hardcoded directory: a testability fix, not a repair -- D360
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D360 | `clean_up_tmp`'s hardcoded sweep directory, `app/shared/tasks/maintenance.py:1146-1147` (pre-fix: `directory = 'app/static/tmp'`, a bare literal, no parameter) | **Fixed, and the fix is a testability change rather than a user-visible repair.** The observation that motivated it was a `TypeError`, not a wrong result: `test_a_stale_image_is_removed` called `clean_up_tmp(directory)` against the unmodified zero-argument function and FAILED with `TypeError: clean_up_tmp() takes 0 positional arguments but 1 was given` -- the pre-fix code was already correct for its only production callers (`app/cli.py`'s three call sites, all `clean_up_tmp()` with no argument); it was simply untestable without a filesystem fixture pointed at the live repository path. Fixed by adding `directory=None` and resolving the default with `os.path.join(current_app.root_path, 'static', 'tmp')` when unset. **Task 3 Step 1's container probe confirmed the default resolves to the identical absolute path the old literal reached by luck of `cwd`**: run from inside the live container, `relative resolves : /app/app/static/tmp` and `root_path default : /app/app/static/tmp` printed identically, so the fix changes no production behavior at any existing call site. It only removes a latent working-directory dependency that happened never to have been exercised from a different `cwd` -- the old literal depended on the process's `cwd` being the repo root at call time; `current_app.root_path` does not. Confirmed no `app/cli.py` call site passes an argument: imports at `:819`/`:893`, calls at `:851`, `:876` (via `.delay()`) and `:936`, all zero-argument | fixed (testability, not a repair; observed failing pre-fix via a `TypeError`, not a wrong assertion) | `task-3-report.md` (Step 1's container probe output verbatim, the `TypeError` transcript); commit `aa3a83be`; `app/shared/tasks/maintenance.py:1140-1147` read at this commit; `app/cli.py:819`, `:851`, `:876`, `:893`, `:936` |
+
+### 2. `add_remote_communities`' session split, investigated and not reproduced -- D361
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D361 | `add_remote_communities`' candidate read/write session split, `get_setting` at `:1085` against `set_setting` at `:1098` (both `app/shared/tasks/maintenance.py`) | **Investigated. The defect did not reproduce, and no production or test change was made.** A `before_cursor_execute` listener registered on `db.engine`, recording `id(conn.connection)` per statement matching `settings` (the technique that discriminated `pwn_bots`' split at D352), showed all three `settings`-table statements the task issues -- `get_setting`'s `SELECT`, `set_setting`'s own `SELECT`, and its `INSERT`/`UPDATE` -- landing on one identical connection checkout against the unmodified function, on the first and only discriminator attempt used of a bounded three. **The reason is NOT that no second session is reachable from this function -- one is.** `:1095` calls `add_remote_community_from_post`, which at `:1111` imports and calls `search_for_community` (`app/community/util.py:34`); `search_for_community`, at `:85`/`:87`, calls `retrieve_mods_and_backfill`, itself a `@celery.task` that opens `session = get_task_session()` at `app/community/util.py:95` and enters `with patch_db_session(session):` at `:97` -- a genuine second session, reachable through this function's own call graph, that this investigation's first draft missed because every test in the suite monkeypatches `add_remote_community_from_post` itself away, mocking out the only path that reaches it. **The real reason PC2 does not reproduce is scoping confinement, established by reading `patch_db_session` directly, not inferred from the absence of a second session.** `patch_db_session` (`app/utils.py:3679-3711`) is a `@contextmanager`: it saves `original_session = db.session` at `:3690`, installs a wrapper at `:3707`, and restores `db.session = original_session` in a `finally` at `:3711`. Because that restoration runs in a `finally`, the nested session opened inside `retrieve_mods_and_backfill` cannot outlive the dynamic extent of that call -- by the time control returns to `add_remote_community_from_post`'s frame, and from there to `add_remote_communities`' own frame, `db.session` is deterministically the original object again. `:1085` and `:1098` both execute in `add_remote_communities`' own frame, never inside the nested `with` block, so they are guaranteed to share one session regardless of whether the nested call is ever reached. **This conclusion is load-bearing on that `finally` and nothing else**: if `patch_db_session`'s restoration at `:3711` were ever removed, made conditional, or bypassed on an exception path, `:1085`/`:1098` could land on different sessions the next time this function's nested call chain runs, and PC2 would become a real, present defect rather than a structurally foreclosed one. A future round touching `patch_db_session` should re-run this discriminator without mocking `add_remote_community_from_post` away before assuming the confinement still holds | investigated, not reproduced; register-only, with the scoping dependency stated as a standing condition | `task-6-report.md` (both the connection-checkout run and its correction); `app/utils.py:3679-3711` read at this commit; `app/community/util.py:85-97` read at this commit; fact 180 for the discriminator technique itself |
+
+### 3. `delete_from_s3`'s client leaked on the failure path -- D362
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D362 | `delete_from_s3`'s S3 client, `app/shared/tasks/maintenance.py:1134-1135` pre-fix (`s3.delete_objects(...)` immediately followed by `s3.close()` as the body's last statement, no `try`) | **Fixed, observed failing pre-fix, and the scope is stated deliberately narrow.** `test_the_client_is_closed_when_the_delete_raises` stubbed `delete_objects` to raise `RuntimeError('s3 is down')` and asserted `client.closed is True` after catching it; against the unmodified body the assertion FAILED with `assert False is True`, because a raise from `delete_objects` skips the unconditional `close()` call that followed it textually but not structurally. Fixed by wrapping `:1135`'s `delete_objects` call in `try:` / `finally: s3.close()` (now `:1134-1137`). **No `except` clause was added -- nothing is logged, nothing is swallowed, and no retry was introduced; the raise still propagates to the caller exactly as before, only the client is now guaranteed to close first.** Coverage.py's own count changed as a direct consequence of the fix's shape, not a functional change: `delete_from_s3` measured 7 statements and 0 branches before the fix, 8 statements and 0 branches after -- coverage.py counts the added `try:` line as a statement but does not separately count the paired `finally:` line, and a `finally` introduces no branch since it always runs | fixed (repair, observed failing pre-fix: `assert False is True`); scope limit (no logging, swallowing or retry) stated in the commit and here | `task-2-report.md` (the pre-fix FAILED transcript, the AST-verified 7-to-8 statement recount); commit `7f0bea99`; `app/shared/tasks/maintenance.py:1121-1137` read at this commit |
+
+### 4. `archive_old_posts` leaks its S3 client the same way, registered into Group B's closed territory -- D363
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D363 | `archive_old_posts`'s S3 client, `app/shared/tasks/maintenance.py:923-924` (`if s3: / s3.close()`, at the end of the function's own `try` rather than in a `finally`) | **Registered, not fixed -- this function belongs to Group B, which sub-project 30 already closed.** The same shape as D362: `:923`'s `if s3:` and `:924`'s `s3.close()` sit inside the `try` opened earlier in the function and ending at `:926`'s `except Exception:`; the function's own `finally` (`:929-930`) closes only the database session (`session.close()`), never the S3 client. A raise from anything between the client's construction and `:924` skips the close, leaking the client's connection pool exactly as `delete_from_s3` did before D362's fix. Left unfixed here because `archive_old_posts` is outside this round's assigned Group D functions and re-opening a closed group's function was out of scope; recorded so a future round touching `archive_old_posts` does not have to rediscover it | registered, not fixed (out of this round's scope; belongs to Group B) | `app/shared/tasks/maintenance.py:892-930` read at this commit (re-derived after Tasks 2, 3 and 6 shifted the file; `:923`/`:924`/`:926`/`:929-930` unchanged from sub-project 30's own reading since none of this round's edits touch `archive_old_posts`) |
+
+### 5. `refresh_instance_chooser`'s fifth in-loop commit, and its two nested handlers are not the redundancy they look like -- D364-D365
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D364 | `refresh_instance_chooser`'s per-domain commit, `app/shared/tasks/maintenance.py:1052` (`session.commit()`, inside the `for node in nodes:` loop opened at `:1002`) | **Registered, not fixed -- a fifth instance of D342/D354's shape, with one risk specific to this site.** Same reasoning as D354's four sites: batching this commit outside the loop would trade a partial-progress failure mode for an all-or-nothing one. **What is specific here: this loop's failure-path handlers (`:1010`, `:1046`) delete `InstanceChooser` rows, not merely recompute or leave counters stale**, so a persistently failing domain partway through a run leaves a table that is partly pruned rather than partly stale -- some domains' rows already reflect this run's deletions, others still carry a previous run's data, with nothing distinguishing which is which until the next full run completes. Not fixed because closing it carries D342's own disclosed cost and this round's approved scope did not include it | registered, not fixed (same shape as D342/D354; partial-prune risk specific to this site) | `app/shared/tasks/maintenance.py:1002-1052` read at this commit; D342 (sub-project 29) and D354 (sub-project 30) for the shared shape and its disclosed cost |
+| D365 | `refresh_instance_chooser`'s two nested exception handlers, `:1010`'s inner `except Exception as e:` (wrapping only `:1009`'s `get_request` call) and `:1046`'s outer `except Exception as e:` (wrapping the whole per-domain body from `:1007` to `:1044`) | **Correct as written; the apparent redundancy is not one.** Both handlers perform the identical guarded query-and-delete (`session.query(InstanceChooser).filter_by(domain=domain).first()`, delete if found), which reads as duplicated logic at a glance. It is not: `:1010`'s inner handler ends in `continue` (`:1016`), skipping the rest of the loop body -- including `:1052`'s per-domain commit -- for that iteration entirely, while `:1046`'s outer handler has no `continue` and falls through to `:1052`'s commit after logging and cleaning up. A connection failure and a processing failure inside the success branch are handled by different code paths with different control-flow consequences despite superficially identical bodies | correct as written, registered so a future "simplification" does not merge the two handlers and silently change which failures still reach `:1052`'s commit | `app/shared/tasks/maintenance.py:1006-1052` read at this commit |
+
+### 6. `add_remote_communities` and `add_remote_community_from_post`: a per-post cache invalidation, a third bare-except instance, and an intentionally narrow catch -- D366-D368
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D366 | `add_remote_communities:1098` (`set_setting('last_successful_import', last_successful_import)`, inside the `for post in reversed(...)` loop opened at `:1087`) | **Correct as written; registered for its cost.** `set_setting` (`app/utils.py:215-222`) commits the session and calls `cache.delete_memoized(get_setting)` on every invocation. Because `:1098` sits inside the per-post loop rather than after it, a run processing a full page commits and invalidates this memoized cache up to 50 times (the feed request's own `'limit': '50'` at `:1075`), once per newly-imported post, rather than once per run. Not a correctness defect -- each commit durably advances the high-water mark in case a later post in the same run fails -- but a cost worth naming before a future round changes `set_setting`'s caching or batches this loop | correct as written, registered for its per-run cost | `app/shared/tasks/maintenance.py:1085-1098` read at this commit; `app/utils.py:215-222` read at this commit |
+| D367 | `add_remote_community_from_post:1116-1117` (`except Exception: / pass`, around the `search_for_community(cl)` call at `:1115`) | **Correct as written; registered as fact 111's shape, a third instance after `notes.py` and `pages.py`.** A bare `except Exception: pass` swallows any failure from a single community lookup -- a malformed remote actor document, a network error, anything `search_for_community` might raise -- with no logging, so a failing lookup is silent both to the operator and to the rest of the loop, which continues to the next candidate in `set(community_lookup)` regardless. Consistent with the campaign's prior findings of the same shape elsewhere in the codebase; recorded here as the third sighting rather than argued fresh | correct as written, registered (fact 111's shape, third instance) | `app/shared/tasks/maintenance.py:1110-1117` read at this commit; fact 111 |
+| D368 | `add_remote_communities:1077` (`except httpx.HTTPError:`, around `:1072-1076`'s `get_request` call) | **Correct as written if `get_request` raises nothing else; recorded as an assumption this site depends on.** Every sibling task in this file that calls `get_request` catches the broader `except Exception` (`refresh_instance_chooser:1010`, `:1046`); this is the only site in Group D that narrows the catch to `httpx.HTTPError` specifically. As written today this is not a defect -- `get_request` (`app/utils.py:131-145`) raises only `httpx`-family exceptions on the paths this function can reach -- but a future change widening what `get_request` can raise (a new validation step, a non-`httpx` exception on a malformed response) would silently start propagating out of this narrower catch where every sibling site would still swallow it. Recorded so that future round knows this site assumes a narrower contract than its siblings | correct as written, registered as a standing assumption for a future `get_request` change to respect | `app/shared/tasks/maintenance.py:1071-1078` read at this commit; contrasted against `refresh_instance_chooser:1010`, `:1046` |
+
+### 7. `delete_from_s3` does not guard an empty batch -- D369
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D369 | `delete_from_s3`'s payload construction, `app/shared/tasks/maintenance.py:1122-1125` (`delete_payload = {'Objects': [...], 'Quiet': True}`, built unconditionally from whatever `s3_files_to_delete` is) | **Correct as written for AWS S3's own API contract; registered because the function does nothing to prevent the empty-batch call.** `test_an_empty_list_still_issues_one_call` (Task 1) confirms the current behavior directly: an empty `s3_files_to_delete` still issues one `delete_objects` call with `{'Objects': [], 'Quiet': True}`. No branch in the function shortcuts an empty list before constructing and sending the payload. Whether every S3-compatible backend accepts a zero-object delete request without complaint is not verified here; recorded so a future caller passing an empty list, or a future backend swap, knows this path was never guarded, only observed to be exercised as-is | correct as written (per the existing test), registered because no guard exists | `app/shared/tasks/maintenance.py:1121-1133` read at this commit; `test_an_empty_list_still_issues_one_call` (`task-1-report.md`) |
+
+### 8. `clean_up_tmp` lowercases twice, and the plan's own prediction about it was wrong -- D370
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D370 | `clean_up_tmp`'s two case-folds, `app/shared/tasks/maintenance.py:1155` (`_, ext = os.path.splitext(filename.lower())`) and `:1156` (`if ext.lower() in DELETABLE_EXTENSIONS:`) | **Registered, not fixed -- and the finding is that this is not one redundant fold plus one operative one, as this round's own dispatching plan predicted, but two individually equivalent mutations that are jointly load-bearing.** The plan's mutation table predicted dropping `:1155`'s `.lower()` as an equivalent mutant (harmless, since `:1156` "really" does the fold) and dropping `:1156`'s as a kill (caught by `test_the_extension_check_is_case_insensitive`'s `'OLD.JPG'` case). Both halves of that prediction were tested by mutation and **both were wrong**: dropping `:1156`'s `.lower()` alone also survived all 34 tests, because `:1155` already lowercases the *entire filename* before `os.path.splitext` ever runs, so the `ext` it returns is provably already lowercase by the time `:1156`'s own `.lower()` would act on it -- that call can never observe a different value. Dropping either single line is an equivalent mutant; the code has two redundant lowerings, neither of which does unique work on its own. **This is a sharper instance of the campaign's existing point that a compound condition is one arc pair to `coverage.py`: here, single-line mutation testing cannot discriminate the pair by construction**, because no single-line mutant can isolate "the fold happens" from "line X specifically performs it" when two independent lines both guarantee the same outcome. Killing the underlying case-fold behavior would require dropping `.lower()` from both lines simultaneously, a two-line mutation outside this round's one-at-a-time catalog. Not fixed: removing one redundant `.lower()` is a change with no observable effect under any single-line test, and this round's approved production-change scope was three (realized as two -- D360, D362) | registered, not fixed (both single-line mutations proven equivalent; the plan's own prediction corrected) | `task-9-report.md` (mutations 6a and 6b, both dry-run, applied, and confirmed to survive all 34 tests); `app/shared/tasks/maintenance.py:1152-1162` read at this commit |
+
+### 9. A guard judged unobservable was reachable through a log side-channel, closed one review before it would have been retired for good -- D371
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D371 | `refresh_instance_chooser:1043`'s `if existing:` guard (the false arm of the 404-with-no-existing-row direction of `:1040-1044`'s `else` clause, paired with `:1046`'s outer handler) | **Fixed (a genuine hole closed), after first being judged unobservable and defeated in review -- registered as its own generalizable finding, not only as a closed gap.** This round's own first pass considered two oracles for `:1043`'s guard -- final database state, and whether an exception propagates out of `refresh_instance_chooser()` -- and both genuinely cannot discriminate its removal: `:1046`'s outer handler performs the identical guarded query-and-delete on the same `UnmappedInstanceError` that an unguarded `session.delete(None)` raises, so both oracles land in the same place whether the guard is there or not. On that reasoning the gap was judged unobservable and left open. **That verdict was wrong, and a review caught it before it shipped: a log call is a third oracle, and it is not symmetric the way database state and propagation are.** `:1046`'s handler calls `current_app.logger.warning(...)` only when it actually catches something; the guarded original takes `:1043`'s false arm cleanly and enters `:1046` never, so nothing is logged, while removing the guard makes `:1044`'s `session.delete(None)` raise into `:1046`'s handler, which does log. `test_a_chooser_404_with_no_existing_row_logs_nothing` asserts a monkeypatched `logger.warning` recorder stays empty; proved to bind by removing the guard by hand and observing the assertion fail on the exact `UnmappedInstanceError` warning text, then restoring the guard and re-verifying the recorder stays empty. Closing this raised the floor a second time, 64 -> 65 (`percent_covered` 64.88730723606169% -> 65.00593119810202%, the `[1043, 1052]` partial branch leaving Group D's remaining gaps). **The round came within one review of permanently retiring a real gap.** This generalizes past this one line: before calling a branch behaviorally unobservable, check whether the code path it guards writes to a channel besides the database and the call stack -- a guarded `except`/log/continue pattern has a log-call oracle that survives exactly the kind of guard removal that database state and exception propagation both absorb silently | fixed (hole closed via a log-warning oracle; the "unobservable" verdict corrected in review) | `task-8-report.md` ("Fix round 1: the `:1043` verdict was wrong", the guard-removal proof transcript, the before/after `percent_covered` figures); `app/shared/tasks/maintenance.py:1040-1052` read at this commit |
+
+### 10. Two compound-condition holes coverage could not see, closed by mutation -- D372
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D372 | Two compound guards in `refresh_instance_chooser`: `:991`'s third disjunct (`'nodes' not in response_data['data']`, in `if not response_data or 'data' not in response_data or 'nodes' not in response_data['data']:`) and `:1031`'s second conjunct (`'id' in chooser_data['language']`, in `if 'language' in chooser_data and 'id' in chooser_data['language']:`) | **Both fixed -- genuine holes found only by mutation, invisible to `coverage.py`'s branch report because an existing test satisfied the guard's decision-level coverage through the OTHER disjunct/conjunct.** At `:991`, dropping the third disjunct survived all 34 tests: the only existing test aimed at this guard, `test_a_malformed_observer_response_returns_early`, sends a body with no `data` key at all, which already trips the guard's SECOND disjunct (`'data' not in response_data`) and never reaches the third. `coverage.py` recorded the line as fully covered because some test takes the guard's true arm and some test takes its false arm -- it does not record that the third disjunct specifically was ever the one relied upon. Closed with `test_a_response_with_data_but_no_nodes_returns_early` (`data` key present, no `nodes` key), verified to pass on unmutated code and to fail with `KeyError: 'nodes'` when the mutation is reapplied. At `:1031`, dropping the second conjunct also survived all 34 tests: the only existing test touching this guard, `test_a_language_in_the_document_is_resolved`, always sets a `language` dict carrying `id`, `code` and `name` together, so both conjuncts are true simultaneously in every case it exercises. Closed with `test_a_language_without_an_id_is_not_resolved` (a `language` dict with `code`/`name` but no `id`), verified the same way. **Same shape as the campaign's existing rule that a compound's sub-condition can go unexercised once any test takes the decision's false arc by another route (fact 173) -- these are two fresh instances of it, not a new rule** | fixed (two holes closed, each with a new test verified against its own mutant) | `task-9-report.md` (mutations 16 and 19, both dry-run, applied, confirmed SURVIVED against the pre-existing suite, then closed and reverified); `app/shared/tasks/maintenance.py:991`, `:1031` read at this commit; fact 173 |
+
+### 11. Docstrings naming the wrong protective mechanism, in both directions -- D373
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D373 | Two test docstrings in `tests/test_shared_tasks_maintenance_external.py`: `test_an_observer_non_200_returns_early`'s (crediting `assert_all_called=True`) and `test_a_chooser_404_with_no_existing_row_logs_nothing`'s original wording (crediting its own row-state assertion) | **Both corrected -- the same defect class from opposite directions: a docstring naming a protective mechanism the author had not actually verified was the one doing the work.** `test_an_observer_non_200_returns_early`'s docstring claimed that if a chooser route were requested unexpectedly, `assert_all_called=True` would fail the test -- inherited verbatim from the dispatching brief. A reviewer found this unsound on two counts: `assert_all_called` only fires at context-exit for a route registered but never called, and this test registers no chooser route at all so there is no such route to fail on; and even if the chooser route WERE hit from inside the per-domain loop, that raise would land in `:1010`'s bare `except Exception`, which swallows exactly this class of error before any respx machinery could act on it -- so `assert_all_called=True` could never have been the mechanism protecting this test regardless. The test's actual protection is its own `is not None` assertion; the docstring named a mechanism that was never load-bearing. In the opposite direction, `test_a_chooser_404_with_no_existing_row_logs_nothing`'s first-draft docstring credited its `InstanceChooser` row-state assertion with proving the 404 path executed. That is also wrong, the other way: no row is ever seeded for the test's domain and only the 200-status branch ever creates one, so the row assertion (`is None`) holds trivially whether or not the function touched the domain at all. The mechanism that actually rules out "the route was never reached" is `http_mock`'s own `assert_all_called=True` (`tests/conftest.py:339-342`) -- here it IS the protection, in exactly the spot the other docstring wrongly credited it. Both docstrings were rewritten to name the mechanism actually verified rather than the one that sounded right | fixed (both docstrings corrected to name the mechanism actually load-bearing) | `task-7-review.md` finding 8 (the non-200 docstring's unsound credit); `task-8-report.md` "Fix round 2" (the 404 docstring's correction and the general lesson stated there); `tests/conftest.py:335-343` read at this commit |
+
+### 12. Group C remains -- no new number
+
+Not a defect; recorded so the next round does not re-derive `maintenance.py`'s
+remaining decomposition from scratch, current line numbers verified against
+this commit (Group D's closure shifted nothing inside C -- `wc -l` moved
+1182 -> 1185 entirely within Group D's own functions):
+
+| Group | Functions (current line numbers) | Stmts | Branch points | What a test must fake |
+|-------|-----------|-------|-------|-----------------------|
+| **C** | `sync_defederation_subscriptions:409`, `check_instance_health:427`, `monitor_healthy_instances:509` | 196 | 47 | nodeinfo negotiation over `httpx` |
+
+Two-thirds of Group C's 196 statements sit in one function
+(`monitor_healthy_instances`), carried forward unchanged from sub-project
+29's measurement -- neither this round's two production changes nor its test
+additions touch Group C.
+
+**Facts 183-186 carried into `tests/README.md`.** `respx`'s
+`AllMockedAssertionError` descends from `AssertionError`, not
+`httpx.HTTPError`, so a bare `except Exception` swallows an unmatched-route
+failure while a narrower `except httpx.HTTPError` lets it propagate --
+observed running the identical failure through two functions in the same
+module with opposite outcomes (183). `get_request` sleeps 3-10 seconds on
+retry at two separate handlers, a real per-invocation wall-clock cost a test
+should route around rather than pay (184). A helper imported inside a
+function's own body, rather than at module scope, cannot be patched through
+the calling module's namespace, because that name is never bound there
+before the function runs -- the patch has to target the name's actual home
+(185). `tempfile.mkdtemp()` only solves where a test-visible directory
+lives; it does nothing about whether the code under test accepts being told
+where to look, and `clean_up_tmp` needed a parameter added before fact 154's
+remedy applied at all (186).
+
+**Next free number: D374.** D360-D373 were taken by this round -- **D360**
+`clean_up_tmp`'s hardcoded directory, fixed as a testability change rather
+than a repair, observed failing pre-fix via a `TypeError`, with Task 3's
+container probe confirming the new default resolves to the identical path
+the old literal reached by luck of `cwd`; **D361** `add_remote_communities`'
+candidate session split, investigated and not reproduced, with the
+CORRECTED reasoning that a second session genuinely is reachable through
+`add_remote_community_from_post` -> `search_for_community` ->
+`retrieve_mods_and_backfill` but is confined to that call's dynamic extent
+by `patch_db_session`'s own `finally`, a conclusion that depends entirely on
+that `finally` continuing to run; **D362** `delete_from_s3`'s leaked client
+on the failure path, fixed with a bare `try`/`finally` and no logging,
+swallowing or retry added, observed failing pre-fix (`assert False is
+True`); **D363** `archive_old_posts:923-924` leaking its S3 client the same
+way, registered rather than fixed because the function belongs to Group B,
+already closed; **D364** a fifth in-loop commit at
+`refresh_instance_chooser:1052`, D342/D354's shape, registered rather than
+fixed with the added risk that this loop's failure handlers delete rows
+rather than merely leave counters stale, so a partial run leaves a
+partly-pruned table; **D365** the two nested exception handlers at `:1010`
+and `:1046`, correct as written despite their superficially duplicated
+bodies, because only the inner one `continue`s past `:1052`'s commit;
+**D366** `add_remote_communities:1098`'s per-post `set_setting` call,
+correct as written, registered for committing and invalidating a memoized
+cache up to fifty times per run; **D367** `:1116-1117`'s bare `except
+Exception: pass` around `search_for_community`, fact 111's shape, a third
+sighting; **D368** `add_remote_communities:1077`'s narrower `except
+httpx.HTTPError`, correct as written, registered as an assumption a future
+`get_request` change should respect; **D369** `delete_from_s3`'s missing
+empty-batch guard, correct as written per the existing test, registered
+because nothing prevents the call; **D370** `clean_up_tmp`'s two case-folds
+at `:1155`/`:1156`, registered rather than fixed, with the round's own
+mutation-table prediction corrected: BOTH single-line drops are proven
+equivalent mutants, not one redundant and one operative, because dropping
+either alone still leaves the other guaranteeing the fold; **D371**
+`refresh_instance_chooser:1043`'s guard, first judged behaviorally
+unobservable by database-state and exception-propagation oracles and then
+FIXED after a review found a third oracle -- the outer handler's log
+warning -- that the first two both missed, raising the floor a second time;
+**D372** two compound-condition holes coverage could not see and mutation
+did, `:991`'s third disjunct and `:1031`'s second conjunct, both closed with
+a new test apiece; **D373** two test docstrings crediting the wrong
+protective mechanism in opposite directions, both corrected to name the
+check actually verified. No entry from an earlier sub-project's section was
+edited in place by this round. Group D's closure also raised
+`maintenance.py`'s `coverage_floors.ini` entry 47 -> 65 (in two steps) and
+ran 21 mutations, 17 killed, two holes closed and two proven equivalent. If
+you take D374, say so here in the change that takes it.
+
 ## Ratchet gotchas
 
 - `percent_covered` is a **blended statement+branch figure**. This matters for
