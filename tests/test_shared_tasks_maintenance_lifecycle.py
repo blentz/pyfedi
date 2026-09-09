@@ -180,3 +180,164 @@ class TestPwnBots:
 
         with pytest.raises(RuntimeError, match='the task itself failed'):
             pwn_bots()
+
+
+class TestProcessExpiredBans:
+    """`process_expired_bans:76` -- lift community bans whose term has run out.
+
+    `:80` selects `CommunityBan` rows past `ban_until`; `:89` clears the
+    membership's `is_banned`; `:94`'s guard decides whether a notification is
+    written; `:116` deletes the ban row. A second loop at `:119-123` clears
+    expired `InstanceBan` rows.
+
+    `CommunityBan` has a COMPOSITE primary key (app/models.py:3576-3577) and no
+    `id` column, so these tests query by both keys rather than by an id the
+    factory never returned.
+
+    `:111-114` and `:121-122` call `cache.delete_memoized` six times between
+    them. These tests deliberately do not assert on those calls -- the cache is
+    a real Flask-Caching instance shared across the suite, and asserting on
+    invalidation would couple this file to another subsystem's internals.
+    """
+
+    def _expired_ban(self, user, community):
+        return make_community_ban(user, community,
+                                  ban_until=utcnow() - timedelta(days=1))
+
+    def _ban_row(self, user, community):
+        return db.session.query(CommunityBan).filter_by(
+            user_id=user.id, community_id=community.id).first()
+
+    def test_an_expired_ban_is_deleted(self, db_session):
+        instance, user, community, _ = _seed()
+        self._expired_ban(user, community)
+
+        process_expired_bans()
+
+        db.session.expire_all()
+        assert self._ban_row(user, community) is None
+
+    def test_a_ban_still_running_survives(self, db_session):
+        """The BOUNDARY -- `:80`'s `ban_until < utcnow()`."""
+        instance, user, community, _ = _seed()
+        make_community_ban(user, community,
+                           ban_until=utcnow() + timedelta(days=1))
+
+        process_expired_bans()
+
+        db.session.expire_all()
+        assert self._ban_row(user, community) is not None
+
+    def test_a_permanent_ban_has_no_ban_until_and_survives(self, db_session):
+        """`ban_until` is NULL for a permanent ban, and `NULL < timestamp` is
+        UNKNOWN, which `WHERE` treats as false. This test pins the BEHAVIOUR --
+        a permanent ban is not lifted -- rather than any one conjunct, and it
+        would still pass if the comparison were written another way that also
+        excluded NULLs.
+        """
+        instance, user, community, _ = _seed()
+        make_community_ban(user, community, ban_until=None)
+
+        process_expired_bans()
+
+        db.session.expire_all()
+        assert self._ban_row(user, community) is not None
+
+    def test_the_membership_is_unbanned(self, db_session):
+        """`:88`'s true arm -- a membership row exists, so `:89` clears it."""
+        instance, user, community, _ = _seed()
+        membership = make_community_member(user, community)
+        membership.is_banned = True
+        db.session.commit()
+        self._expired_ban(user, community)
+
+        process_expired_bans()
+
+        db.session.expire_all()
+        assert db.session.query(CommunityMember).filter_by(
+            user_id=user.id, community_id=community.id).first().is_banned is False
+
+    def test_a_ban_with_no_membership_row_still_clears(self, db_session):
+        """`:88`'s FALSE arm. A user banned without ever having joined has no
+        `CommunityMember` row, and the task must still delete the ban.
+        """
+        instance, user, community, _ = _seed()
+        self._expired_ban(user, community)
+
+        process_expired_bans()
+
+        db.session.expire_all()
+        assert self._ban_row(user, community) is None
+
+    def test_a_local_user_is_notified(self, db_session):
+        """`:94`'s true arm -- `:97-106` writes a NOTIF_UNBAN notification and
+        `:107` increments the unread counter.
+        """
+        instance, user, community, _ = _seed()
+        self._expired_ban(user, community)
+
+        process_expired_bans()
+
+        db.session.expire_all()
+        notifications = db.session.query(Notification).filter_by(
+            user_id=user.id, notif_type=NOTIF_UNBAN).all()
+        assert len(notifications) == 1
+        assert db.session.get(User, user.id).unread_notifications == 1
+
+    def test_a_remote_user_is_not_notified(self, db_session):
+        """`:94`'s false arm, via `is_local()`.
+
+        `make_user` with `local=False` sets `ap_id`, and `User.is_local()`
+        (app/models.py:1251-1252) is false once `ap_id` is set and does not
+        start with SERVER_URL. The ban is still deleted -- only the
+        notification is skipped.
+        """
+        local_instance = make_instance('local.example')
+        remote_instance = make_instance('remote.example')
+        remote_user = make_user(remote_instance, 'visitor')
+        community = make_community()
+        make_community_ban(remote_user, community,
+                           ban_until=utcnow() - timedelta(days=1))
+
+        process_expired_bans()
+
+        db.session.expire_all()
+        assert db.session.query(Notification).filter_by(
+            user_id=remote_user.id).count() == 0
+        assert db.session.query(CommunityBan).filter_by(
+            user_id=remote_user.id, community_id=community.id).first() is None
+
+    def test_an_expired_instance_ban_is_deleted(self, db_session):
+        """`:119-123`'s second loop, which no community-ban test reaches."""
+        instance, user, _, _ = _seed()
+        ban = make_instance_ban(user, instance)
+        ban.banned_until = utcnow() - timedelta(days=1)
+        db.session.commit()
+
+        process_expired_bans()
+
+        db.session.expire_all()
+        assert db.session.query(InstanceBan).filter_by(
+            user_id=user.id, instance_id=instance.id).first() is None
+
+    def test_a_permanent_instance_ban_survives(self, db_session):
+        """`:119`'s `banned_until != None` conjunct, which -- unlike the
+        community-ban case -- is written explicitly rather than left to SQL's
+        three-valued logic. This test pins the behaviour; it cannot by itself
+        prove the explicit conjunct is load-bearing, since the comparison beside
+        it would exclude NULLs anyway.
+        """
+        instance, user, _, _ = _seed()
+        make_instance_ban(user, instance)
+
+        process_expired_bans()
+
+        db.session.expire_all()
+        assert db.session.query(InstanceBan).filter_by(
+            user_id=user.id, instance_id=instance.id).first() is not None
+
+    def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch):
+        monkeypatch.setattr('app.shared.tasks.maintenance.utcnow', _boom)
+
+        with pytest.raises(RuntimeError, match='the task itself failed'):
+            process_expired_bans()
