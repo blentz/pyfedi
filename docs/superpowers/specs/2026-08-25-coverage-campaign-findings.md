@@ -9195,16 +9195,26 @@ search_for_user(user_name) / except: pass`. This round wrote a test that
 forced it by monkeypatching `search_for_user` to raise, and raised
 `app/shared/tasks/notes.py`'s floor 99 -> 100 on the strength of it (commit
 `94dc3374`). **That was wrong, and it was withdrawn** (commit `daf05a26`,
-floor restored to 99, the test removed byte-for-byte). `tests/test_shared_tasks_send_answer.py:977-989`
-already recorded a sub-project 20 finding that these two lines are
-UNREACHABLE, not merely untested: `search_for_user`'s only `raise`
-(`app/user/utils.py:98`) sits inside `if server:`; the LOCAL call at
-`notes.py:96` passes `user_name`, the bare-name half of the mention with no
-`@`, so inside the callee `'@' in address` is False, `server = ''`, and
-`if server:` never runs. A mock can force the statement to execute; it
-proves only that a mock raises, not that production can, and the 100%
-floor it bought was a number sitting in direct contradiction with an
-already-registered finding.
+floor restored to 99, the test removed byte-for-byte). **The withdrawal was
+right; the withdrawing commit's own message overstates why, and this
+register entry is the corrected record -- the commit message itself is
+history and is not being rewritten.** `daf05a26`'s message calls the two
+lines UNREACHABLE outright. `tests/test_shared_tasks_send_answer.py:977-989`'s
+sub-project 20 finding, re-verified against source, supports a narrower
+claim: `search_for_user`'s only `raise` (`app/user/utils.py:98`) sits inside
+`if server:`; the LOCAL call at `notes.py:99` passes `user_name`, the
+bare-name half of the mention with no `@`, so inside the callee `'@' in
+address` is False, `server = ''`, and `if server:` never runs -- so the
+explicit `raise` cannot be reached from this arm. But `if server:`'s `else`
+branch still runs a database call, `already_exists = db.session.query(User)
+.filter_by(user_name=name, ap_id=None).first()` (`app/user/utils.py:101`),
+inside the same bare `try`, and a DB-layer exception there would still land
+in the same `except: pass`. The two lines are unreachable BY THE RAISE, not
+unreachable outright. That narrower fact still fully supports the
+withdrawal: a mock forcing `search_for_user` to raise proves only that the
+mock raises, not that production's `raise` statement can, so the 100% floor
+it bought was still a number resting on a state production's `raise` cannot
+reach, in direct contradiction with an already-registered finding.
 
 **The asymmetry is the transferable half.** `notes.py:105`'s
 `search_for_user(ap_id)` call, under `except: pass` at `:106-107`, is the
