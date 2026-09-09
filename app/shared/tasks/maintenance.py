@@ -1131,8 +1131,10 @@ def delete_from_s3(s3_files_to_delete):
         aws_access_key_id=current_app.config['S3_ACCESS_KEY'],
         aws_secret_access_key=current_app.config['S3_ACCESS_SECRET'],
     )
-    s3.delete_objects(Bucket=current_app.config['S3_BUCKET'], Delete=delete_payload)
-    s3.close()
+    try:
+        s3.delete_objects(Bucket=current_app.config['S3_BUCKET'], Delete=delete_payload)
+    finally:
+        s3.close()
 
 
 @celery.task
