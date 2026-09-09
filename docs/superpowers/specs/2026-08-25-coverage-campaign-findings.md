@@ -9288,6 +9288,144 @@ production-adjacent change was withdrawn in full** (item 4 above,
 finding being sub-project 20's. If you take D342, say so here in the change
 that takes it.
 
+## Sub-project 29: `app/shared/tasks/maintenance.py` Group A -- the retention and counter tasks
+
+`docs/superpowers/specs/2026-09-08-coverage-maintenance-a-29-design.md` and
+`docs/superpowers/plans/2026-09-08-coverage-maintenance-a-29.md` (design and
+plan; the per-task briefs and reports live in
+`.superpowers/sdd/2026-09-08-coverage-maintenance-a-29/`), on branch `blentz`,
+from base `ec31ddd3`. `maintenance.py` (1181 lines before this round, 1179
+after D344's deletion) is three times the size of the largest module this
+campaign has previously closed in one round, so it is split by TESTING
+SURFACE rather than subject; this round took only Group A -- the ten
+functions needing no transport at all (`cleanup_old_notifications`,
+`cleanup_old_read_posts`, `cleanup_send_queue`, `cleanup_old_activitypub_logs`,
+`cleanup_old_voting_data`, `update_hashtag_counts`, `update_community_stats`,
+`unban_expired_users`, `recalculate_user_attitudes`,
+`calculate_community_activity_stats`; 151 statements) -- to 100% statement and
+branch coverage, and gave the whole module its first `coverage_floors.ini`
+entry (`= 24`, from a measured 24.641148325358852% `percent_covered`). Tests
+live in `tests/test_shared_tasks_maintenance_cleanup.py` (**53 tests**, 1019
+lines). Twenty-one mutations were run one at a time against the closed
+functions; twenty were killed and one -- deleting `unban_expired_users`'s
+`AND banned_until is not null` conjunct -- SURVIVED as a proven equivalent
+mutant under SQL's three-valued NULL comparison logic (harness fact 170).
+
+**Three production changes landed, numstat `5 7` total across three commits
+(`1 1`, `0 2`, `4 4`) -- each a repair with an observed pre-fix failure or a
+grep-proven dead read, none hardening-mislabelled-as-repair:**
+
+1. `app/shared/tasks/maintenance.py:317` (`update_community_stats`)'s commit
+   moved from inside the community loop to after it (commit `8c25972e`) --
+   **D342.**
+2. `app/shared/tasks/maintenance.py:825-837` (`calculate_community_activity_stats`)'s
+   aggregate SELECT now drives FROM `community` with a LEFT JOIN onto the temp
+   table instead of the reverse (commit `1e5916f5`) -- **D343.**
+3. `app/shared/tasks/maintenance.py:716`/`:737` (`recalculate_user_attitudes`)'s
+   dead `processed` counter, assignment and increment, deleted (commit
+   `666f59af`) -- **D344.**
+
+### 1. The in-loop commit's atomicity and N+1 defects, both observed -- D342
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D342 | `update_community_stats`'s per-community commit, `app/shared/tasks/maintenance.py:292` (the `for community in communities:` loop) against `:317` (`session.commit()`, pre-fix indented inside the loop body, post-fix dedented to the loop's own indentation -- one line, whitespace-only change) | **Fixed, and both predicted consequences were OBSERVED failing against unmodified code, not merely predicted.** Atomicity: `test_a_failure_partway_through_leaves_no_partial_writes` forced a failure on the second of two seeded communities and read back `assert {'second': 1, 'microblogs': 0} == {'microblogs': 0, 'second': 0}` -- one community's recount survived a task-level failure the outer `except`/`rollback` was supposed to undo. N+1: `test_the_number_of_community_selects_does_not_scale_with_the_loop` counted `SELECT ... FROM community` statements on a word-boundary regex (not a substring match, which would also catch `FROM community_member`) across four seeded communities and got `assert 4 == 1` -- decomposing as one eligibility query (`:287-290`) plus three per-primary-key re-SELECTs, one at the top of each of iterations 2-4, because `expire_on_commit` (default True, fact 58) expires every loaded `Community` after each in-loop commit. **The fix is NOT behaviour-preserving under concurrent writers, which the commit message understates.** Pre-fix, `expire_on_commit` reloaded each `Community` at the top of its own iteration, so `:305`'s `is_local()` and `:306`'s `total_subscriptions_count` comparison were read fresh at use; post-fix both come from the single `.all()` taken at `:287-290` before the loop starts, so a community whose `total_subscriptions_count` is raised by something else mid-run is now compared against a stale value already held in memory and can be overwritten with a lost update. Single-threaded the fix is behaviour-preserving; concurrently it is not. **The bigger omission: all-or-nothing progress starvation.** Pre-fix, a deterministic failure at community N left communities 1..N-1 committed with fresh stats every run -- partial progress. Post-fix, a failure anywhere in the loop saves nothing at all, so one persistently-failing community now starves every community in the batch of stat updates indefinitely, not only those after it -- a user-visible regression traded for the atomicity gain, and not merely a smaller blast radius as it might first read. The commit message's "holding each of their row locks for the full duration of the run" also overstates: autoflush emits community N's UPDATE during iteration N+1, so the lock on N is held from N+1 onward, not from the start of the run; the review additionally flagged deadlock risk from unordered lock acquisition across communities and a long transaction's xmin blocking autovacuum database-wide for the run's duration. Two costs the review ruled OUT rather than added: `statement_timeout` is per-statement so unaffected, and WAL is unchanged-to-better since the same rows are written under fewer commits. **Kept as approved despite the starvation cost**, because the atomicity defect was a confirmed, observed failure and reverting would discard it, and batching commits at a fixed interval would add an unapproved magic number this round did not investigate | fixed (repair, not hardening -- both consequences observed pre-fix) | `task-6-report.md` (both FAILED transcripts verbatim, the one-line diff, the 39/39 pass after); the transaction-size and starvation analysis is the task review's, verified independently before it was accepted; `app/shared/tasks/maintenance.py:283-323` read at this commit |
+
+### 2. The stale activity stats, and the scope limit the fix does not close -- D343
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D343 | `calculate_community_activity_stats`'s aggregate SELECT, `app/shared/tasks/maintenance.py:825-837`, specifically `:832-833` (FROM/JOIN) against `:834-835` (the eligibility filter, unchanged by the fix) | **Fixed, and observed failing against unmodified code.** `test_a_community_that_went_quiet_reads_zero` seeded a community with no post activity in 40 weeks but non-zero `active_daily`/`active_weekly`/`active_monthly`/`active_6monthly` columns already set, ran the task, and read back `assert (5, 5, 5, 5) == (0, 0, 0, 0)` -- the columns were untouched rather than zeroed. Pre-fix, the SELECT drove `FROM temp_community_activity tca INNER JOIN "community" c`, so a community contributing no row to the temp table (nothing recent enough to insert) was dropped by the join entirely and its four columns kept whatever they last held, however stale. Fixed by inverting the drive: `FROM "community" c LEFT JOIN temp_community_activity tca ON c.id = tca.community_id`, `GROUP BY c.id` -- every eligible community now produces a row even with zero matching `tca` rows, and its four `COUNT(DISTINCT CASE WHEN ...)` expressions correctly count to zero, so the UPDATE loop overwrites it with `(0, 0, 0, 0)` instead of skipping it. The SELECT's line span did not change (`:825-837`, 13 lines both before and after), so no citation below it shifted. **The scope limit the fix does not close**: `:834-835`'s eligibility filter, `WHERE c.banned = FALSE AND c.last_active > :half_year`, is untouched by this fix and still excludes rows from the SELECT entirely -- a banned community, or one whose `last_active` has fallen outside six months, is never reached by the rewritten join either, and keeps its stale numbers regardless. **`last_active` was promoted from a redundant guard into the sole gate.** Before the rewrite, the INNER JOIN's own filtering already excluded most inactive communities (no temp-table row to join), making `:835`'s clause largely redundant; after the rewrite, `:835` is the only thing standing between a dormant-but-not-explicitly-banned community and having its stats zeroed. A mutant deleting it survived all 52 tests when first tried; the round closed the gap in the same task's fix round with a dedicated test, so this is now pinned rather than merely noted. **Write-set cost**: the UPDATE's row set grows from "communities that had any activity" to "every eligible community," full stop. `app/cli.py:434` (inside the `lemmy-import` admin command, `existing_community.last_active = row.updated if row.updated else utcnow()`) is one such mechanism -- it bumps `last_active` on an imported community independent of any post, reply or vote against it -- so a community reached by it can sit inside the `last_active > :half_year` window with zero local activity and now take a same-value `(0, 0, 0, 0)` UPDATE every run where before they were skipped by the INNER JOIN. In Postgres, an UPDATE that changes nothing still writes a new tuple version, WAL, and a dead tuple for autovacuum to reclaim -- an identical-value write is not free. Neither `last_active` nor `banned` is indexed on `community`, so the query's driving side also moved from a scan of the (small, activity-only) temp table to a full scan of `community` | fixed (repair, PC1 -- scope-limited, see cell) | `task-9-report.md` (the FAILED transcript verbatim, the four-line diff, the 52/52 pass after, the mutant-15 kill trace for the join and the review's mutant proving `:835` load-bearing); `app/cli.py:434` read at this commit |
+
+### 3. The dead `processed` counter -- D344
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D344 | `recalculate_user_attitudes`'s unread batch counter, `app/shared/tasks/maintenance.py:716` (`processed = 0`, pre-deletion) and `:737` (`processed += 1`, pre-deletion) | **Fixed by deletion, and the one of this round's three production changes whose premise was decided by reading rather than by an observed failure -- appropriately so, since deadness is decidable by grep and does not need a runtime demonstration.** `awk 'NR>=712 && NR<=748' app/shared/tasks/maintenance.py \| grep -n 'processed'` returned exactly two hits, the assignment and the increment, and no read anywhere in the function or after it returns -- the value is computed and discarded every batch. Deleted both statements; `maintenance.py` shrank from 1181 to 1179 lines. The only remaining `processed` hits in the file after the deletion are unrelated comments in other functions (`:996`, `:1083`), confirmed by re-grepping post-deletion | fixed (dead-code deletion, PC3) | `task-7-report.md` (the grep transcript, the two-line diff, 43/43 passing before and after); `app/shared/tasks/maintenance.py:996`, `:1083` (the unrelated survivors) read at this commit |
+
+### 4. Two observations, neither a defect -- D345-D346
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D345 | `calculate_community_activity_stats` builds an index on its own temp table one aggregate scan reads, `app/shared/tasks/maintenance.py:817-819` (`CREATE INDEX idx_temp_activity ON temp_community_activity(community_id, activity_date)`) against `:825-837` (the sole SELECT that can use it) | **Not a defect, an observation.** The four `INSERT`s populating `temp_community_activity` (`:772-814`) run before the index is created; the index is created once (`:817-819`); exactly one `SELECT` reads the table afterward (`:825-837`), aggregating it in a single pass; the temp table (and its index with it) is dropped at the task's own commit (`ON COMMIT DROP`, `:764-769`). One index, built for one read, inside one task invocation. Whether that index earns its build cost against a single downstream scan is a question this round did not investigate or take a position on -- registered for a future round weighing the function's cost, not as something to fix here | observation, not fixed | `app/shared/tasks/maintenance.py:763-837` read at this commit |
+| D346 | Two docstrings contradict the code directly beneath them, `app/shared/tasks/maintenance.py:26` against `:33-34` (`cleanup_old_notifications`), and `:46` against `:50` (`cleanup_old_read_posts`) | **Registered, not fixed -- the round's approved production scope was exactly the three changes in items 1-3 above, and a docstring correction was not among them.** `cleanup_old_notifications`'s docstring at `:26`, `"""Remove notifications older than 90 days"""`, names only the `Notification` delete at `:29-30`; it says nothing of the second delete two lines later, `:33-34`'s `session.query(RevokedToken).filter(RevokedToken.revoked_at < cutoff2).delete()` against an independent 365-day cutoff -- the function clears two tables under two different retention windows and the docstring names one. `cleanup_old_read_posts`'s docstring at `:46`, `"""Remove read_posts entries older than 180 days"""`, states 180 as a fixed fact, but `:50`'s `get_setting('read_posts_cutoff', 180)` reads the cutoff from a runtime setting and 180 is only that setting's default -- `test_the_cutoff_comes_from_the_setting_not_the_default` (Task 3) demonstrates the configured value overrides it. Neither contradiction is load-bearing for any test in this round; both are recorded so a future docstring pass corrects them alongside other modules' | registered, not fixed | `app/shared/tasks/maintenance.py:25-41`, `:44-57` read at this commit; `tests/test_shared_tasks_maintenance_cleanup.py`'s `test_the_cutoff_comes_from_the_setting_not_the_default` |
+
+### 5. Raw DELETEs that bypass the identity map, and a test blind to its own subject -- D347-D348
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D347 | Five raw `text()` DELETEs run straight against Postgres with no ORM layer above them: `app/shared/tasks/maintenance.py:51` (`cleanup_old_read_posts`) and `:339-344`, `:349-355`, `:363-369`, `:374-380` (`cleanup_old_voting_data`'s four DELETEs) | **Harmless as written, registered for a future round that adds a query above one of these.** `session.execute(text("DELETE FROM ..."), ...)` deletes rows directly, bypassing SQLAlchemy's identity map entirely -- any already-loaded `ReadPost`/`PostVote`/`PostReplyVote` ORM instance in a session's identity map is not marked deleted, expired, or otherwise updated by these statements. Harmless today because neither function loads any ORM object before or after issuing its raw DELETEs -- both read nothing through the ORM, delete by raw SQL, and commit, so there is nothing in either function's own identity map for the DELETEs to desynchronize. The risk is prospective: a future change that adds an ORM query above one of these five DELETEs in the same task body, expecting the delete to be reflected in already-loaded objects, would not see it reflected without an explicit `expire`/`expire_all` | observation, harmless as written | `app/shared/tasks/maintenance.py:44-57`, `:326-388` read at this commit |
+| D348 | A test numerically blind to the exclusions it is named for, `tests/test_shared_tasks_maintenance_cleanup.py:534-549`'s `test_subscriptions_count_excludes_bots_and_banned_members`, against `app/shared/tasks/maintenance.py:299` (`CommunityMember.is_banned == False`) and `:300` (`User.bot == False`) | **Registered, not fixed -- no hole in this round's suite, but the named test cannot see the thing its own name promises.** The test seeds exactly three community members (one plain, one bot, one banned non-bot) and asserts `subscriptions_count == 1`. Under mutation 10 (`:300`'s `User.bot == False` flipped to `== True`) the query selects the bot member instead of the plain one -- still exactly one row, so `== 1` still holds and the test does not fail. Under mutation 11 (`:299`'s `CommunityMember.is_banned == False` flipped to `== True`) the query selects the banned member instead -- again exactly one row, same non-failure. The fixture happens to have exactly one member of each disqualifying kind, so flipping either exclusion swaps which single member is counted without changing the count read back. **Not a hole**: `test_a_local_community_with_no_total_gets_one`, `test_a_local_community_whose_total_lags_is_raised`, and `test_a_remote_community_keeps_its_total_untouched` all independently killed both mutations, so this round's suite has no gap at these two lines. But a test can be insensitive to its own subject and still look like coverage from the outside -- the name asserts something the assertion cannot detect | registered, not fixed (no hole; other tests cover it) | `task-11-report.md`'s mutation 10/11 transcripts and the register note appended after them; `tests/test_shared_tasks_maintenance_cleanup.py:534-549` read at this commit |
+
+### 6. Groups B, C and D, for the next round -- no new number
+
+Not a defect; recorded so the next round does not re-derive `maintenance.py`'s
+remaining decomposition from scratch. The twenty-four top-level functions
+divide by TESTING SURFACE, not subject matter (design spec, "Why this module
+is decomposed, and along which seam"):
+
+| Group | Functions | Stmts | What a test must fake |
+|-------|-----------|-------|-----------------------|
+| **B** | `process_expired_bans`, `remove_old_community_content`, `remove_old_bot_content`, `delete_old_soft_deleted_content`, `archive_old_posts`, `archive_old_users`, `archive_user`, `pwn_bots` | 154 | federation sends, `delete_post` |
+| **C** | `check_instance_health`, `monitor_healthy_instances`, `sync_defederation_subscriptions` | 196 | nodeinfo negotiation over `httpx` |
+| **D** | `refresh_instance_chooser`, `add_remote_communities`, `add_remote_community_from_post`, `delete_from_s3`, `clean_up_tmp` | 119 | `httpx`, `boto3`, the filesystem |
+
+Sixteen further statements are module-level imports, already counted once
+against Group A's own total. Group A (this round) covered 151 statements at
+7.52% module-wide before it started; B+C+D remain, 469 statements across
+three groups the campaign has not yet opened, each needing a transport this
+round never had to mock.
+
+**Facts 161-170 carried into `tests/README.md`.** `calculate_community_activity_stats()`
+ran without raising and its temp table was gone afterward under the ordinary
+`db_session` fixture, so no special fixture is needed for `ON COMMIT DROP`
+tasks in this harness (161). `db_session` DELETEs and commits rather than
+rolling back, so a `commit()` inside a test is real (162). Monkeypatching
+`app.shared.tasks.maintenance.utcnow` reaches nine of Group A's ten tasks'
+`except` arms without touching the factories; `update_hashtag_counts` is the
+one exception, reached by patching `text` instead (163). The N+1 select-count
+oracle decomposes as one eligibility query plus one per-primary-key re-SELECT
+per surviving community, observed at 4 for four communities pre-fix and
+exactly 1 post-fix (164). A citation checked by counting lines in an
+unnumbered `sed -n 'X,Yp'` range, or read from `grep -n` over already-derived
+or piped output, has not been checked -- this round produced a confident,
+wrong "correction" by the first method and a wrong citation by the second
+(165). An edit can falsify prose the same task wrote minutes earlier, and the
+"re-derive after the diff is final" instruction present every time was not
+sufficient alone to prevent it three times in one round (166). A coverage run
+leaves its JSON in the host repo root as well as the container, because
+`compose.test.yaml` bind-mounts the whole repo (167). `check_coverage_floors.py`
+reads the blended `percent_covered`, not the higher, statements-only
+`percent_statements_covered` (168). Coverage cannot distinguish an INSERT that
+ran from one a test would miss when its only effect is a row in a temp table
+an aggregate later de-duplicates (169). Deleting `unban_expired_users`'s
+`AND banned_until is not null` conjunct is a proven equivalent mutant under
+SQL's three-valued NULL comparison, run and demonstrated rather than merely
+asserted (170).
+
+**Next free number: D349.** D342-D348 were taken by this round -- **D342**
+`update_community_stats`'s in-loop commit, fixed as a repair with both
+predicted consequences (atomicity, N+1) observed failing pre-fix, carrying a
+disclosed concurrent-writer regression and an all-or-nothing starvation cost
+the commit message understates; **D343** `calculate_community_activity_stats`'s
+stale activity stats, fixed as a repair observed failing pre-fix, with the
+scope limit (banned or long-dormant communities still stale) and write-set
+cost stated rather than glossed; **D344** `recalculate_user_attitudes`'s dead
+`processed` counter, deleted on a grep-proven premise, the one of the three
+production changes needing no runtime observation; **D345**
+`calculate_community_activity_stats` indexing a temp table one aggregate scan
+reads, an observation with no fix attached; **D346** two docstrings
+contradicting the code beneath them, registered rather than fixed because the
+approved scope was exactly D342-D344; **D347** five raw `text()` DELETEs
+bypassing the identity map, harmless as written and registered for a future
+round that queries above one of them; **D348** a test numerically blind to
+the bot/banned exclusions its own name describes, registered as no hole
+because other tests cover both mutations. No entry from an earlier
+sub-project's section was edited in place by this round. Group A's closure
+also gave `maintenance.py` its first `coverage_floors.ini` entry (`= 24`) and
+ran 21 mutations, 20 killed and 1 proven equivalent (D-numberless; see fact
+170). If you take D349, say so here in the change that takes it.
+
 ## Ratchet gotchas
 
 - `percent_covered` is a **blended statement+branch figure**. This matters for
