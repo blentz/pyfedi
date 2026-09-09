@@ -295,3 +295,32 @@ class TestMonitorHealthyInstances:
         assert fresh.failures == 3
         assert fresh.dormant is False
         assert fresh.gone_forever is False
+
+    def test_a_raising_helper_does_not_end_the_whole_sweep(self, db_session, monkeypatch):
+        """DC2: `:561` closes `nodeinfo`, which `:533` may never have bound.
+
+        If `get_request_instance` raises, the `except` at `:557` catches it and
+        then the `finally` at `:560-561` raises `UnboundLocalError` -- which
+        that handler has already run and cannot catch. It escapes to `:705`,
+        rolls back and re-raises, so one instance's failure ends the sweep for
+        every other instance.
+
+        The oracle is that BOTH instances were touched, compared as a set:
+        `:515` returns planner-ordered rows and this file asserts no order over
+        those.
+        """
+        def _raise(*args, **kwargs):
+            raise RuntimeError('helper exploded')
+
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance', _raise)
+        for domain in ('one.example', 'two.example'):
+            instance = _seed_instance(domain)
+            instance.nodeinfo_href = None
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        touched = {i.domain for i in db.session.query(Instance).all() if i.failures > 0}
+        assert touched == {'one.example', 'two.example'}
