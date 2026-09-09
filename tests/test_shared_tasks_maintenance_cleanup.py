@@ -6,11 +6,11 @@ SURFACE rather than by subject. Group A is the ten tasks that need no
 transport at all:
 
   `cleanup_old_notifications:25`   `cleanup_old_read_posts:45`
-  `cleanup_send_queue:61`          `update_hashtag_counts:194`
-  `update_community_stats:283`     `cleanup_old_voting_data:327`
-  `unban_expired_users:392`        `recalculate_user_attitudes:712`
-  `calculate_community_activity_stats:748`
-  `cleanup_old_activitypub_logs:870`
+  `cleanup_send_queue:61`          `update_hashtag_counts:195`
+  `update_community_stats:284`     `cleanup_old_voting_data:328`
+  `unban_expired_users:393`        `recalculate_user_attitudes:713`
+  `calculate_community_activity_stats:749`
+  `cleanup_old_activitypub_logs:871`
 
 NONE OF THE FEDERATION ORACLES APPLY HERE. These tasks are invoked from cron
 entry points in `app/cli.py:808-947`, never from a route and never through
@@ -180,7 +180,7 @@ class TestCleanupOldNotifications:
 
 
 class TestCleanupOldActivityPubLogs:
-    """`cleanup_old_activitypub_logs:870` -- logs older than three days."""
+    """`cleanup_old_activitypub_logs:871` -- logs older than three days."""
 
     def test_a_log_older_than_three_days_is_removed(self, db_session):
         log = make_activitypub_log('https://peer.example/activities/create/1')
@@ -288,7 +288,7 @@ class TestCleanupOldReadPosts:
 
 
 class TestUnbanExpiredUsers:
-    """`unban_expired_users:392` -- one UPDATE with three conditions."""
+    """`unban_expired_users:393` -- one UPDATE with three conditions."""
 
     def test_a_user_whose_ban_has_expired_is_unbanned(self, db_session):
         instance, user, _, _ = _seed()
@@ -313,7 +313,7 @@ class TestUnbanExpiredUsers:
         assert db.session.get(User, user.id).banned is True
 
     def test_a_permanent_ban_has_no_banned_until_and_survives(self, db_session):
-        """`:397`'s third condition, `banned_until is not null`.
+        """`:398`'s third condition, `banned_until is not null`.
 
         Without it the NULL comparison would already exclude the row, so this
         test cannot fail by deleting that conjunct alone -- it pins the
@@ -338,7 +338,7 @@ class TestUnbanExpiredUsers:
 
 
 class TestUpdateHashtagCounts:
-    """`update_hashtag_counts:194` -- one correlated UPDATE, no clock at all.
+    """`update_hashtag_counts:195` -- one correlated UPDATE, no clock at all.
 
     This is the one task in Group A that never calls `utcnow()`, so its
     error-path test patches `app.shared.tasks.maintenance.text` instead.
@@ -387,9 +387,9 @@ class TestUpdateHashtagCounts:
 
 
 class TestCleanupOldVotingData:
-    """`cleanup_old_voting_data:327` -- four DELETEs behind two config guards.
+    """`cleanup_old_voting_data:328` -- four DELETEs behind two config guards.
 
-    `:334`'s `if local_months != -1` and `:359`'s `if remote_months != -1` read
+    `:335`'s `if local_months != -1` and `:360`'s `if remote_months != -1` read
     `KEEP_LOCAL_VOTE_DATA_TIME` and `KEEP_REMOTE_VOTE_DATA_TIME`
     (config.py:177-178, both defaulting to 6). The cutoff is 28 days per month,
     so at the default a vote older than 168 days goes and one younger stays.
@@ -441,7 +441,7 @@ class TestCleanupOldVotingData:
         assert self._vote_counts() == (2, 2)
 
     def test_minus_one_for_local_keeps_local_votes_and_drops_remote(self, db_session, app):
-        """`:334`'s false arm. -1 means "keep local vote data forever".
+        """`:335`'s false arm. -1 means "keep local vote data forever".
 
         The remote deletes still run, so this test also proves the two guards
         are independent rather than one guard read twice. The survivor is
@@ -465,7 +465,7 @@ class TestCleanupOldVotingData:
         assert surviving_reply_voters == {local_user.id}
 
     def test_minus_one_for_remote_keeps_remote_votes_and_drops_local(self, db_session, app):
-        """`:359`'s false arm, the mirror of the test above.
+        """`:360`'s false arm, the mirror of the test above.
 
         The survivor is named by `user_id` rather than just counted, so the
         test fails if the task drops the remote vote and keeps the local one
@@ -511,24 +511,24 @@ class TestCleanupOldVotingData:
 
 
 class TestUpdateCommunityStats:
-    """`update_community_stats:283` -- recount subscribers, posts and replies.
+    """`update_community_stats:284` -- recount subscribers, posts and replies.
 
-    `:288-290` selects communities that are not banned and were active in the
-    last three days. `:303` writes `subscriptions_count` from a join that
-    excludes banned members and bots; `:309` and `:313` write `post_count` and
+    `:289-291` selects communities that are not banned and were active in the
+    last three days. `:304` writes `subscriptions_count` from a join that
+    excludes banned members and bots; `:310` and `:314` write `post_count` and
     `post_reply_count` from raw counts that exclude deleted rows.
 
-    `:305-306` IS THREE CONDITIONS IN ONE ARC PAIR. Branch coverage reads 100%
+    `:306-307` IS THREE CONDITIONS IN ONE ARC PAIR. Branch coverage reads 100%
     with two of them untested (fact 142), so each gets its own test:
     `is_local()`, `total_subscriptions_count is None`, and
     `total_subscriptions_count < subscriptions_count`.
 
-    `:317`'s `session.commit()` used to sit inside the `for` loop opened at
-    `:292`, committing once per community rather than once after the loop.
+    `:318`'s `session.commit()` used to sit inside the `for` loop opened at
+    `:293`, committing once per community rather than once after the loop.
     Every test below only ever seeds one eligible community, so none of them
     can distinguish a commit-per-iteration from a single commit after the
     loop -- `TestUpdateCommunityStatsIsAtomic`, below, is what tests that
-    distinction, and `:317` is now dedented to commit once after the loop.
+    distinction, and `:318` is now dedented to commit once after the loop.
     """
 
     def test_subscriptions_count_excludes_bots_and_banned_members(self, db_session):
@@ -586,7 +586,7 @@ class TestUpdateCommunityStats:
         assert db.session.get(Community, community.id).post_count == 99
 
     def test_a_local_community_with_no_total_gets_one(self, db_session):
-        """`:305-306`'s second condition: total_subscriptions_count is None."""
+        """`:306-307`'s second condition: total_subscriptions_count is None."""
         instance, user, community, _ = _seed()
         make_community_member(user, community)
         community.total_subscriptions_count = None
@@ -598,7 +598,7 @@ class TestUpdateCommunityStats:
         assert db.session.get(Community, community.id).total_subscriptions_count == 1
 
     def test_a_local_community_whose_total_lags_is_raised(self, db_session):
-        """`:305-306`'s third condition: total < subscriptions."""
+        """`:306-307`'s third condition: total < subscriptions."""
         instance, user, community, _ = _seed()
         make_community_member(user, community)
         community.total_subscriptions_count = 0
@@ -610,7 +610,7 @@ class TestUpdateCommunityStats:
         assert db.session.get(Community, community.id).total_subscriptions_count == 1
 
     def test_a_local_community_whose_total_already_leads_is_left_alone(self, db_session):
-        """The false arm of `:305-306`'s third condition.
+        """The false arm of `:306-307`'s third condition.
 
         A local community's total counts remote subscribers too, so a total
         ABOVE the local count is the normal state and must not be pulled down.
@@ -626,7 +626,7 @@ class TestUpdateCommunityStats:
         assert db.session.get(Community, community.id).total_subscriptions_count == 50
 
     def test_a_remote_community_keeps_its_total_untouched(self, db_session):
-        """`:305`'s first condition, `is_local()`, taking its false arm.
+        """`:306`'s first condition, `is_local()`, taking its false arm.
 
         `make_community` leaves `ap_id` None, which makes `is_local()` true at
         app/models.py:796's first disjunct. Setting both `ap_id` and
@@ -656,12 +656,12 @@ class TestUpdateCommunityStats:
 
 
 class TestUpdateCommunityStatsIsAtomic:
-    """PC2: `:317`'s commit used to sit inside the loop opened at `:292`.
+    """PC2: `:318`'s commit used to sit inside the loop opened at `:293`.
 
     Before this task's fix, a failure at community N left communities 1..N-1
-    committed, because `:319-321`'s handler rolls back only the current unit
+    committed, because `:320-322`'s handler rolls back only the current unit
     of work -- it did not protect the task's whole effect, despite reading as
-    though it did. `:317` now runs once after the loop, so the two tests below
+    though it did. `:318` now runs once after the loop, so the two tests below
     fail if the commit is ever moved back inside it.
     """
 
@@ -676,7 +676,7 @@ class TestUpdateCommunityStatsIsAtomic:
         second.subscriptions_count = 0
         db.session.commit()
 
-        # Each community costs two text() calls, at `:309` and `:313`. Letting
+        # Each community costs two text() calls, at `:310` and `:314`. Letting
         # two through and failing on the third puts the failure inside the
         # SECOND community, after the first has been fully processed.
         real_text = maintenance.text
@@ -708,7 +708,7 @@ class TestUpdateCommunityStatsIsAtomic:
         `get_task_session()` binds to that same engine (app/utils.py:3673-3675).
 
         With 4 eligible communities the unmodified code produced exactly 4
-        matching statements: the one eligibility query at `:287-290`, plus one
+        matching statements: the one eligibility query at `:288-291`, plus one
         re-SELECT by primary key at the top of each of iterations 2, 3 and 4,
         on the Community object the previous iteration's commit had just
         expired -- for N communities the mechanism predicts N. After the fix
@@ -736,7 +736,7 @@ class TestUpdateCommunityStatsIsAtomic:
         finally:
             event.remove(db.engine, 'before_cursor_execute', _record)
 
-        # A WORD BOUNDARY, not a substring. `:294-302`'s
+        # A WORD BOUNDARY, not a substring. `:295-303`'s
         # `select(func.count()).select_from(CommunityMember)` emits
         # `FROM community_member`, which `' FROM community' in s.lower()` would
         # match -- an oracle that counts a statement it did not name.
@@ -747,12 +747,12 @@ class TestUpdateCommunityStatsIsAtomic:
 
 
 class TestRecalculateUserAttitudes:
-    """`recalculate_user_attitudes:712` -- recompute attitude and post stats.
+    """`recalculate_user_attitudes:713` -- recompute attitude and post stats.
 
-    `:720-722` selects users seen in the last day, `:727` batches them 100 at a
-    time (`:715`), and `:734-735` call `recalculate_attitude` and
+    `:721-723` selects users seen in the last day, `:728` batches them 100 at a
+    time (`:716`), and `:735-736` call `recalculate_attitude` and
     `recalculate_post_stats` on each. Both model methods read `db.session`
-    (app/models.py:1351, :1421), which is what `:718`'s `patch_db_session`
+    (app/models.py:1351, :1421), which is what `:719`'s `patch_db_session`
     redirects onto the task's own session.
     """
 
@@ -769,7 +769,7 @@ class TestRecalculateUserAttitudes:
         assert db.session.get(User, user.id).post_count == 2
 
     def test_a_user_not_seen_for_a_day_is_skipped(self, db_session):
-        """`:727`'s zero-iteration arm: no eligible users, no batches."""
+        """`:728`'s zero-iteration arm: no eligible users, no batches."""
         instance, user, community, post = _seed()
         user.last_seen = utcnow() - timedelta(days=2)
         user.post_count = 99
@@ -800,11 +800,11 @@ class TestRecalculateUserAttitudes:
 
 
 class TestCalculateCommunityActivityStats:
-    """`calculate_community_activity_stats:748` -- four activity sources.
+    """`calculate_community_activity_stats:749` -- four activity sources.
 
-    `:763-769` builds a temporary table, `:772-814` fills it from posts, post
-    replies, post votes and post reply votes, `:817-819` indexes it, `:825-837`
-    aggregates over four windows, and `:843-856` writes the four columns back.
+    `:764-770` builds a temporary table, `:773-815` fills it from posts, post
+    replies, post votes and post reply votes, `:818-820` indexes it, `:826-838`
+    aggregates over four windows, and `:844-857` writes the four columns back.
 
     EACH INSERT HAS ITS OWN BOT EXCLUSION: `from_bot = False` for posts and
     replies, `u.bot = False` for the two vote sources. A test that seeds only
@@ -860,7 +860,7 @@ class TestCalculateCommunityActivityStats:
                 refreshed.active_6monthly) == (len(actors), len(actors), len(actors))
 
     def test_a_bot_author_is_excluded(self, db_session):
-        """`:777`'s `p.from_bot = False`, on the post INSERT."""
+        """`:778`'s `p.from_bot = False`, on the post INSERT."""
         instance, author, community, post = _seed()
         post.from_bot = True
         post.posted_at = utcnow() - timedelta(hours=1)
@@ -873,7 +873,7 @@ class TestCalculateCommunityActivityStats:
         assert db.session.get(Community, community.id).active_daily == 0
 
     def test_a_bot_voter_is_excluded(self, db_session):
-        """`:799`'s `u.bot = False`, on the post-vote INSERT.
+        """`:800`'s `u.bot = False`, on the post-vote INSERT.
 
         The post itself is seeded outside the window so the only candidate
         activity is the vote, which makes the assertion about the vote rather
@@ -894,7 +894,7 @@ class TestCalculateCommunityActivityStats:
         assert db.session.get(Community, community.id).active_daily == 0
 
     def test_a_bot_replier_is_excluded(self, db_session):
-        """`:787`'s `pr.from_bot = False`, on the post-replies INSERT.
+        """`:788`'s `pr.from_bot = False`, on the post-replies INSERT.
 
         The post itself is seeded outside the window so the only candidate
         activity is the reply, which makes the assertion about the reply
@@ -915,7 +915,7 @@ class TestCalculateCommunityActivityStats:
         assert db.session.get(Community, community.id).active_daily == 0
 
     def test_a_bot_reply_voter_is_excluded(self, db_session):
-        """`:812`'s `u.bot = False`, on the post-reply-votes INSERT.
+        """`:813`'s `u.bot = False`, on the post-reply-votes INSERT.
 
         The post is seeded outside the window so the only candidate activity
         is the reply vote, which makes the assertion about the vote rather
@@ -939,7 +939,7 @@ class TestCalculateCommunityActivityStats:
         assert db.session.get(Community, community.id).active_daily == 0
 
     def test_a_banned_community_is_not_updated(self, db_session):
-        """`:834`'s `c.banned = FALSE`."""
+        """`:835`'s `c.banned = FALSE`."""
         community, _ = self._community_with_one_activity_of_each_kind(
             utcnow() - timedelta(hours=1))
         community.banned = True
@@ -961,15 +961,15 @@ class TestCalculateCommunityActivityStats:
 class TestCommunityActivityStatsAreNotStale:
     """PC1: a quiet community now reads zero instead of keeping stale counts.
 
-    `:843-856`'s UPDATE runs once per row `:825-837` returns. That SELECT used
+    `:844-857`'s UPDATE runs once per row `:826-838` returns. That SELECT used
     to read FROM the temp table with an INNER JOIN onto `community`, so a
     community with no post, reply or vote in six months contributed no row,
     the join dropped it, and its four columns kept whatever they last held.
-    `:825-837` now drives the SELECT from `community` with a LEFT JOIN onto
-    the temp table (`:832-833`), so an inactive-but-eligible community still
+    `:826-838` now drives the SELECT from `community` with a LEFT JOIN onto
+    the temp table (`:833-834`), so an inactive-but-eligible community still
     produces a row -- with its CASE/COUNT expressions counting no matching
     `tca` rows -- and gets its four columns overwritten with zero. The
-    eligibility filter at `:834-835` is unchanged: a banned community, or one
+    eligibility filter at `:835-836` is unchanged: a banned community, or one
     whose `last_active` has fallen outside six months, is excluded from the
     SELECT entirely and keeps its stale numbers regardless. Nothing else in
     app/ writes these four columns -- app/cli.py:788 is a separate command.
@@ -993,7 +993,7 @@ class TestCommunityActivityStatsAreNotStale:
                 refreshed.active_monthly, refreshed.active_6monthly) == (0, 0, 0, 0)
 
     def test_a_community_dormant_beyond_the_window_keeps_its_stale_numbers(self, db_session):
-        """`:835`'s `c.last_active > :half_year` -- the other half of the filter.
+        """`:836`'s `c.last_active > :half_year` -- the other half of the filter.
 
         Before this rewrite, a community six months dormant was dropped by the
         old INNER JOIN regardless of this clause, so it was belt-and-braces.

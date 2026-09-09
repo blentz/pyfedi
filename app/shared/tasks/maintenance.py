@@ -160,6 +160,7 @@ def remove_old_community_content():
         session.close()
 
 
+@celery.task
 def remove_old_bot_content():
     """Remove old posts by bots with no replies. Also microblogs"""
     session = get_task_session()
@@ -1273,6 +1274,7 @@ def clean_up_tmp():
                         pass
 
 
+@celery.task
 def pwn_bots():
     """ Everyone who has not responded to a reposter challenge within 24h is assumed to be a reposter"""
     session = get_task_session()
