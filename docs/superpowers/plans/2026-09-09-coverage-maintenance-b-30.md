@@ -1569,6 +1569,7 @@ Mutations run **one at a time**: dry-run without `-i` and read the line, apply, 
 | 19 | `archive_old_posts`' sticky filter | `p.sticky = false` → `p.sticky = true` | killed |
 | 20 | `archive_old_users`' config gate | `> 0` → `>= 0` | killed |
 | 21 | PC1's widened filter | the `OR` back to `AND` | killed by Task 6's test |
+| 21b | PC1's parentheses | drop them: `WHERE u.avatar_id IS NOT NULL OR u.cover_id IS NOT NULL AND u.ap_id IS NOT NULL` | killed by `test_a_local_user_is_skipped` and `test_a_recently_seen_user_is_skipped`. **This is the mutation the change's blast radius actually turns on.** Unparenthesised, `A OR B AND C AND D` parses as `A OR (B AND C AND D)`, so any user with an avatar is selected regardless of locality or idleness. Row 21 does not probe it — reverting to `AND` and dropping the parentheses are different mutations with different consequences. |
 | 22 | `archive_user`'s avatar guard | `if user.avatar_id:` → `if not user.avatar_id:` | killed |
 | 23 | `archive_user`'s cover guard | `if user.cover_id:` → `if not user.cover_id:` | killed |
 
