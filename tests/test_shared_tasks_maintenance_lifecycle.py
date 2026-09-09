@@ -890,3 +890,221 @@ class TestArchiveOldUsersReachesOneImageUsers:
 
         db.session.expire_all()
         assert db.session.get(User, user.id).avatar_id is None
+
+
+class TestArchiveOldPosts:
+    """`archive_old_posts:885` -- archive old posts out of the main tables.
+
+    `:887` gates the body on ARCHIVE_POSTS (config.py:184, default 0).
+    `:891-907`'s query excludes stickied posts, private and unarchivable
+    communities, and each community's hundred most recent posts. `:910` decides
+    whether an S3 client is built, `:920` hands each id to `archive_post`, and
+    `:923` closes the client.
+
+    `archive_post` IS REPLACED BY A RECORDER. The real one opens its own task
+    session (app/utils.py:4946) and moves files; this round tests which ids
+    reach it and whether it got a client, not what it does with either.
+    """
+
+    def _past_the_recency_window(self, community, user):
+        """Fill the community's hundred-most-recent window, then add one old post.
+
+        `:900-906` excludes each community's hundred most recent posts by
+        `created_at`. A community with a hundred posts or fewer therefore has
+        NOTHING archivable, and every "this post is skipped" assertion below
+        would pass whatever the task did. These tests seed a hundred recent
+        posts to fill that window and one post old enough to fall outside it
+        AND past `:896`'s cutoff.
+
+        The hundred fillers are staggered a day apart so the ordering has no
+        ties, and they are added in one `add_all` rather than a hundred
+        committing factory calls.
+
+        Returns the one post that is genuinely archivable.
+        """
+        now = utcnow()
+        fillers = [
+            Post(community_id=community.id, user_id=user.id,
+                 instance_id=user.instance_id, title='filler',
+                 ap_id=f'https://peer.example/fill/{i}',
+                 created_at=now - timedelta(days=i),
+                 posted_at=now - timedelta(days=i),
+                 last_active=now - timedelta(days=i))
+            for i in range(100)
+        ]
+        old = Post(community_id=community.id, user_id=user.id,
+                   instance_id=user.instance_id, title='old',
+                   ap_id='https://peer.example/old',
+                   created_at=now - timedelta(days=6 * 28 + 1),
+                   posted_at=now - timedelta(days=6 * 28 + 1),
+                   last_active=now - timedelta(days=6 * 28 + 1))
+        db.session.add_all(fillers + [old])
+        db.session.commit()
+        return old
+
+    def test_a_post_beyond_the_recency_window_is_handed_over(self, db_session, monkeypatch, app):
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.archive_post', recorder)
+        instance, user, community, post = _seed()
+        old = self._past_the_recency_window(community, user)
+        original = app.config['ARCHIVE_POSTS']
+        app.config['ARCHIVE_POSTS'] = 6
+
+        try:
+            archive_old_posts()
+        finally:
+            app.config['ARCHIVE_POSTS'] = original
+
+        assert [c[0] for c in recorder.calls] == [old.id]
+
+    def test_a_community_inside_the_recency_window_archives_nothing(self, db_session, monkeypatch, app):
+        """`:900-906`'s exclusion, and the test that stops the three filter
+        tests below from passing vacuously.
+
+        The same old post, in a community with only a handful of others, is not
+        archived -- because it is still among that community's hundred most
+        recent. Without this test a reader could not tell whether the filter
+        tests below prove anything.
+        """
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.archive_post', recorder)
+        instance, user, community, post = _seed()
+        old = make_post(community, user, 'https://peer.example/old')
+        old.created_at = utcnow() - timedelta(days=6 * 28 + 1)
+        db.session.commit()
+        original = app.config['ARCHIVE_POSTS']
+        app.config['ARCHIVE_POSTS'] = 6
+
+        try:
+            archive_old_posts()
+        finally:
+            app.config['ARCHIVE_POSTS'] = original
+
+        assert recorder.calls == []
+
+    def test_archiving_off_by_default_makes_the_task_a_no_op(self, db_session, monkeypatch):
+        """`:887`'s false arm, which is the default configuration."""
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.archive_post', recorder)
+        instance, user, community, post = _seed()
+        self._past_the_recency_window(community, user)
+
+        archive_old_posts()
+
+        assert recorder.calls == []
+
+    def test_a_sticky_post_is_skipped(self, db_session, monkeypatch, app):
+        """`:897`'s `p.sticky = false`."""
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.archive_post', recorder)
+        instance, user, community, post = _seed()
+        old = self._past_the_recency_window(community, user)
+        old.sticky = True
+        db.session.commit()
+        original = app.config['ARCHIVE_POSTS']
+        app.config['ARCHIVE_POSTS'] = 6
+
+        try:
+            archive_old_posts()
+        finally:
+            app.config['ARCHIVE_POSTS'] = original
+
+        assert recorder.calls == []
+
+    def test_a_post_in_an_unarchivable_community_is_skipped(self, db_session, monkeypatch, app):
+        """`:898`'s `c.can_be_archived = true` (app/models.py:588)."""
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.archive_post', recorder)
+        instance, user, community, post = _seed()
+        self._past_the_recency_window(community, user)
+        community.can_be_archived = False
+        db.session.commit()
+        original = app.config['ARCHIVE_POSTS']
+        app.config['ARCHIVE_POSTS'] = 6
+
+        try:
+            archive_old_posts()
+        finally:
+            app.config['ARCHIVE_POSTS'] = original
+
+        assert recorder.calls == []
+
+    def test_a_post_in_a_private_community_is_skipped(self, db_session, monkeypatch, app):
+        """`:899`'s `c.private = false` (app/models.py:611)."""
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.archive_post', recorder)
+        instance, user, community, post = _seed()
+        self._past_the_recency_window(community, user)
+        community.private = True
+        db.session.commit()
+        original = app.config['ARCHIVE_POSTS']
+        app.config['ARCHIVE_POSTS'] = 6
+
+        try:
+            archive_old_posts()
+        finally:
+            app.config['ARCHIVE_POSTS'] = original
+
+        assert recorder.calls == []
+
+    def test_no_s3_client_is_built_when_object_storage_is_off(self, db_session, monkeypatch, app):
+        """`:910`'s FALSE arm, which is the default configuration
+        (config.py:103-107 default all three S3 settings to '').
+
+        `archive_post` receives None, and `:922`'s `if s3:` is false so `:923`
+        never runs.
+        """
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.archive_post', recorder)
+        instance, user, community, post = _seed()
+        self._past_the_recency_window(community, user)
+        original = app.config['ARCHIVE_POSTS']
+        app.config['ARCHIVE_POSTS'] = 6
+
+        try:
+            archive_old_posts()
+        finally:
+            app.config['ARCHIVE_POSTS'] = original
+
+        assert recorder.calls
+        assert all(c[1] is None for c in recorder.calls)
+
+    def test_an_s3_client_is_built_and_passed_when_configured(self, db_session, monkeypatch, app):
+        """`:910`'s TRUE arm, and `:922`'s.
+
+        Constructing a boto3 client makes no network call, so setting the three
+        config values is enough and no endpoint is contacted. The oracle is
+        that `archive_post` received something other than None.
+        """
+        recorder = _Recorder()
+        monkeypatch.setattr('app.shared.tasks.maintenance.archive_post', recorder)
+        instance, user, community, post = _seed()
+        self._past_the_recency_window(community, user)
+        originals = {k: app.config[k] for k in
+                     ('ARCHIVE_POSTS', 'S3_ACCESS_KEY', 'S3_ACCESS_SECRET',
+                      'S3_ENDPOINT', 'S3_REGION')}
+        app.config['ARCHIVE_POSTS'] = 6
+        app.config['S3_ACCESS_KEY'] = 'key'
+        app.config['S3_ACCESS_SECRET'] = 'secret'
+        app.config['S3_ENDPOINT'] = 'https://s3.example'
+        app.config['S3_REGION'] = 'us-east-1'
+
+        try:
+            archive_old_posts()
+        finally:
+            for k, v in originals.items():
+                app.config[k] = v
+
+        assert recorder.calls
+        assert all(c[1] is not None for c in recorder.calls)
+
+    def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch, app):
+        monkeypatch.setattr('app.shared.tasks.maintenance.utcnow', _boom)
+        original = app.config['ARCHIVE_POSTS']
+        app.config['ARCHIVE_POSTS'] = 6
+
+        try:
+            with pytest.raises(RuntimeError, match='the task itself failed'):
+                archive_old_posts()
+        finally:
+            app.config['ARCHIVE_POSTS'] = original
