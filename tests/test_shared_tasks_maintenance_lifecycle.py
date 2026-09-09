@@ -557,3 +557,150 @@ class TestRemoveOldBotContent:
 
         with pytest.raises(RuntimeError, match='the task itself failed'):
             remove_old_bot_content()
+
+
+class TestDeleteOldSoftDeletedContent:
+    """`delete_old_soft_deleted_content:215` -- hard-delete after seven days.
+
+    `:225-236` selects soft-deleted posts past the cutoff that are unbookmarked
+    and either mod-deleted, retention-deleted (`deleted_by = 1`) or replyless.
+    `:242-250` collects image ids shared by more than one post. `:254`'s
+    compound then skips any post whose image is shared, because the cascade
+    would fail -- the source comment at `:238-241` says so and defers the real
+    fix.
+
+    `:254` IS THREE CONDITIONS IN ONE ARC PAIR. coverage.py does not decompose
+    conjunctions (fact 142), so branch coverage reads 100% with two of them
+    untested. Each has its own test below.
+
+    Three hard-delete assertions below capture the row's id into a local
+    (`gone_id`/`reply_id`) BEFORE the task runs, and then query
+    `db.session.query(...).filter_by(id=...).first() is None` rather than
+    `db.session.get(<obj>.id) is None`. The row a factory builds is already
+    in `db.session`'s identity map; once the task deletes it through its own
+    `get_task_session()` connection, EITHER touching the ORM object's
+    already-expired `.id` attribute OR calling `db.session.get()` against
+    that identity-mapped instance triggers SQLAlchemy's refresh-on-expired
+    path, which finds no row and raises `ObjectDeletedError` instead of
+    quietly returning `None`. Reading the id first and querying by that
+    plain value afterward avoids touching the stale instance at all.
+    """
+
+    def _soft_deleted_post(self, community, user, ap_id, age_days=8):
+        post = make_post(community, user, ap_id)
+        post.deleted = True
+        post.deleted_by = 1
+        post.reply_count = 0
+        post.posted_at = utcnow() - timedelta(days=age_days)
+        return post
+
+    def test_an_old_soft_deleted_post_is_hard_deleted(self, db_session):
+        instance, user, community, post = _seed()
+        gone = self._soft_deleted_post(community, user, 'https://peer.example/p/2')
+        db.session.commit()
+        gone_id = gone.id
+
+        delete_old_soft_deleted_content()
+
+        db.session.expire_all()
+        assert db.session.query(Post).filter_by(id=gone_id).first() is None
+
+    def test_a_recently_deleted_post_survives(self, db_session):
+        """The BOUNDARY -- `:228`'s `p.posted_at < :cutoff`, seven days."""
+        instance, user, community, post = _seed()
+        recent = self._soft_deleted_post(community, user,
+                                         'https://peer.example/p/2', age_days=6)
+        db.session.commit()
+
+        delete_old_soft_deleted_content()
+
+        db.session.expire_all()
+        assert db.session.get(Post, recent.id) is not None
+
+    def test_a_post_whose_image_is_shared_survives(self, db_session):
+        """`:254`'s third condition, and the reason `:242-250` exists.
+
+        Two posts referencing one File make the delete cascade fail, so the
+        task deliberately skips them. The source comment at `:238-241` records
+        that this is a workaround rather than a fix.
+        """
+        instance, user, community, post = _seed()
+        shared = make_file(file_path='/static/shared.png')
+        first = self._soft_deleted_post(community, user, 'https://peer.example/p/2')
+        first.image_id = shared.id
+        second = make_post(community, user, 'https://peer.example/p/3')
+        second.image_id = shared.id
+        db.session.commit()
+
+        delete_old_soft_deleted_content()
+
+        db.session.expire_all()
+        assert db.session.get(Post, first.id) is not None
+
+    def test_a_post_with_its_own_image_is_deleted(self, db_session):
+        """`:254`'s second condition taking its false arm while the third takes
+        its true arm -- the image exists but is not shared.
+        """
+        instance, user, community, post = _seed()
+        own = make_file(file_path='/static/own.png')
+        gone = self._soft_deleted_post(community, user, 'https://peer.example/p/2')
+        gone.image_id = own.id
+        db.session.commit()
+        gone_id = gone.id
+
+        delete_old_soft_deleted_content()
+
+        db.session.expire_all()
+        assert db.session.query(Post).filter_by(id=gone_id).first() is None
+
+    def test_a_bookmarked_post_survives(self, db_session):
+        """`:229-233`'s NOT EXISTS against post_bookmark."""
+        instance, user, community, post = _seed()
+        kept = self._soft_deleted_post(community, user, 'https://peer.example/p/2')
+        db.session.commit()
+        db.session.add(PostBookmark(post_id=kept.id, user_id=user.id))
+        db.session.commit()
+
+        delete_old_soft_deleted_content()
+
+        db.session.expire_all()
+        assert db.session.get(Post, kept.id) is not None
+
+    def test_an_old_soft_deleted_reply_is_hard_deleted(self, db_session):
+        """`:260-273`'s second pass, which no post test reaches."""
+        instance, user, community, post = _seed()
+        reply = make_post_reply(post, user)
+        reply.deleted = True
+        reply.posted_at = utcnow() - timedelta(days=8)
+        db.session.commit()
+        reply_id = reply.id
+
+        delete_old_soft_deleted_content()
+
+        db.session.expire_all()
+        assert db.session.query(PostReply).filter_by(id=reply_id).first() is None
+
+    def test_a_reply_with_children_survives(self, db_session):
+        """`:271`'s `if not post_reply.has_replies(include_deleted=True):`.
+
+        A deleted reply that still has children is kept, because removing it
+        would orphan them.
+        """
+        instance, user, community, post = _seed()
+        parent = make_post_reply(post, user)
+        parent.deleted = True
+        parent.posted_at = utcnow() - timedelta(days=8)
+        child = make_post_reply(post, user)
+        child.parent_id = parent.id
+        db.session.commit()
+
+        delete_old_soft_deleted_content()
+
+        db.session.expire_all()
+        assert db.session.get(PostReply, parent.id) is not None
+
+    def test_a_failure_inside_the_task_propagates(self, db_session, monkeypatch):
+        monkeypatch.setattr('app.shared.tasks.maintenance.utcnow', _boom)
+
+        with pytest.raises(RuntimeError, match='the task itself failed'):
+            delete_old_soft_deleted_content()
