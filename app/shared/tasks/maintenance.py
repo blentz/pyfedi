@@ -529,6 +529,7 @@ def monitor_healthy_instances():
                 nodeinfo_href = None
 
             if not nodeinfo_href:
+                nodeinfo = None
                 try:
                     nodeinfo = get_request_instance(
                         f"https://{instance.domain}/.well-known/nodeinfo",
@@ -558,10 +559,12 @@ def monitor_healthy_instances():
                     session.rollback()
                     instance.failures += 1
                 finally:
-                    nodeinfo.close()
+                    if nodeinfo is not None:
+                        nodeinfo.close()
                 session.commit()
 
             if instance.nodeinfo_href:
+                node = None
                 try:
                     node = get_request_instance(instance.nodeinfo_href, headers=HEADERS, instance=instance)
                     if node.status_code == 200:
@@ -589,7 +592,8 @@ def monitor_healthy_instances():
                     if instance.failures > 12:
                         instance.gone_forever = True
                 finally:
-                    node.close()
+                    if node is not None:
+                        node.close()
 
                 session.commit()
             else:
