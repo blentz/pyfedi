@@ -31,7 +31,11 @@ runs. Both `if` statements still evaluate, so this file covers their FALSE arms
 and sub-project 33 owns the true ones.
 
 INSTANCE 1 IS RESERVED. `:449` and `:518` both filter `Instance.id != 1`, and
-the conftest fixtures seed `instance_id=1`. Seeded instances must not be it.
+the `db_session` teardown resets every sequence with
+`SELECT setval(c.oid, 1, false)` (`tests/conftest.py:131`), so the FIRST
+instance a test seeds lands on exactly the id both tasks exclude. `_seed_instance`
+below plants a row that absorbs that id and is excluded by STATE, not id, so it
+stays invisible to both tasks no matter which id it actually receives.
 
 THE TASKS RUN ON THEIR OWN CONNECTION. `get_task_session()` returns
 `Session(bind=db.engine)` (`app/utils.py:3673-3675`), so rows a test seeds must
@@ -86,6 +90,31 @@ def _response(status_code=200, payload=None):
 NODEINFO_LINK = 'http://nodeinfo.diaspora.software/ns/schema/2.0'
 
 
+def _seed_instance(domain, software='mastodon'):
+    """Seed an instance the tasks will actually see.
+
+    `check_instance_health:449` and `monitor_healthy_instances:518` both filter
+    `Instance.id != 1`, and the `db_session` teardown resets every sequence with
+    `SELECT setval(c.oid, 1, false)` (`tests/conftest.py:131`), so the FIRST
+    instance a test seeds lands on exactly the id both tasks exclude. A test
+    that seeds one instance and asserts the task changed it would pass only
+    because the task processed nothing.
+
+    The reserved row absorbs that id. It is excluded by STATE rather than by id
+    -- dormant and gone_forever, with `start_trying_again` a year out -- so it
+    stays invisible to both of `check_instance_health`'s loops and to
+    `monitor_healthy_instances` no matter which id it actually receives.
+    """
+    if db.session.query(Instance).filter_by(domain='reserved-id-one.example').first() is None:
+        reserved = Instance(domain='reserved-id-one.example', software='mastodon')
+        reserved.dormant = True
+        reserved.gone_forever = True
+        reserved.start_trying_again = utcnow() + timedelta(days=365)
+        db.session.add(reserved)
+        db.session.commit()
+    return make_instance(domain, software=software)
+
+
 class TestSyncDefederationSubscriptions:
     """`sync_defederation_subscriptions:409` -- refresh subscription-sourced bans.
 
@@ -134,8 +163,12 @@ class TestSyncDefederationSubscriptions:
     def test_a_failing_download_rolls_back_and_re_raises(self, db_session, monkeypatch):
         """`:419-421`. The task does not swallow -- Celery must see the failure.
 
-        The raise comes from `download_defeds` at `:417`, INSIDE the `try` that
-        opens at `:412`, which is what makes `:420`'s rollback reachable.
+        This proves the exception propagates rather than being swallowed. It
+        does NOT discriminate a mutant that drops `:420`'s `session.rollback()`
+        alone: by the time the loop at `:416` runs, `:414`'s commit has already
+        landed, so the rollback here only ever acts on a transaction holding
+        nothing but the read at `:416`. No observable state depends on whether
+        that rollback runs, so no assertion here can tell the two apart.
         """
         def _boom(*args, **kwargs):
             raise RuntimeError('defed download failed')
@@ -148,7 +181,17 @@ class TestSyncDefederationSubscriptions:
             sync_defederation_subscriptions()
 
     def test_no_subscriptions_is_not_an_error(self, db_session, monkeypatch):
-        """`:416`'s loop over an empty result. The delete at `:413` still runs."""
+        """Covers the zero-iteration arm of `:416`'s loop, nothing more.
+
+        In isolation this cannot distinguish correct empty-subscription
+        handling from a task that does nothing at all -- it leans on the other
+        three tests in this class to establish that the task does something.
+        It also cannot be strengthened by adding a subscription-sourced ban for
+        `:413` to delete: `BannedInstances.subscription_id` is a foreign key to
+        `defederation_subscription.id` (`app/models.py:70`), so with zero
+        subscription rows no subscription-sourced ban can exist for the DELETE
+        to remove.
+        """
         recorder = _Recorder()
         monkeypatch.setattr(
             'app.shared.tasks.maintenance.download_defeds', recorder)
