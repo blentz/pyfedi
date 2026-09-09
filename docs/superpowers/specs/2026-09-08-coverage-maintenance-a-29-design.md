@@ -71,7 +71,7 @@ concentrated here: `cleanup_old_voting_data` is four `text()` DELETEs,
 ORM layer to intercept, so a test cannot patch its way to an assertion; it must
 put real rows in the container's Postgres and count them afterwards.
 
-**`patch_db_session` is live and load-bearing.** `cleanup_old_read_posts:50` and
+**`patch_db_session` is live and load-bearing.** `cleanup_old_read_posts:49` and
 `recalculate_user_attitudes:719` wrap their bodies in it, because `get_setting`
 (`app/utils.py:203-211`) and `User.recalculate_attitude()` read `db.session`
 rather than the task's session. Facts 156 and 157 bind directly: the harness
@@ -160,7 +160,7 @@ grep over the function's whole range rather than by observation.
   is a performance question, not a correctness one.
 - **Two docstrings contradict their code.** `:26` says "Remove notifications
   older than 90 days"; `:32-34` also deletes `RevokedToken` rows older than 365
-  days. `:46` says "older than 180 days"; `:51` reads
+  days. `:46` says "older than 180 days"; `:50` reads
   `get_setting('read_posts_cutoff', 180)`, so 180 is a default and the real
   cutoff is whatever the setting holds. Registered rather than fixed — the
   approved production scope is three changes, and a docstring correction that

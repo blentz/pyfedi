@@ -54,7 +54,7 @@ Read these once. They are the difference between a test that measures something 
 1. Rows a test seeds must be **committed** before the task runs, or the task's connection cannot see them. Every `tests/factories.py` factory commits, so factory-built rows are fine; a column a test assigns afterwards is not, until the test commits it.
 2. After the task runs, an ORM attribute read on an object the test built earlier is **stale**. Read through a fresh query, or call `db.session.expire_all()` first (harness fact 153).
 
-**`patch_db_session` is live under this harness and load-bearing in two tasks.** `cleanup_old_read_posts:50` and `recalculate_user_attitudes:719` wrap their bodies in it, because `get_setting` (`app/utils.py:203-211`) and `User.recalculate_attitude` (`app/models.py:1348`) read `db.session` rather than the task's session. The harness pushes only an app context (`tests/conftest.py:112`); pushing a request context would disable `patch_db_session` at `app/utils.py:3684` and both tasks would then write through the wrong session.
+**`patch_db_session` is live under this harness and load-bearing in two tasks.** `cleanup_old_read_posts:49` and `recalculate_user_attitudes:719` wrap their bodies in it, because `get_setting` (`app/utils.py:203-211`) and `User.recalculate_attitude` (`app/models.py:1348`) read `db.session` rather than the task's session. The harness pushes only an app context (`tests/conftest.py:112`); pushing a request context would disable `patch_db_session` at `app/utils.py:3684` and both tasks would then write through the wrong session.
 
 **The uniform error-path idiom.** Nine of the ten tasks call `utcnow()` as their first or near-first statement inside the `try`. `utcnow` is bound into this module's namespace by `app/shared/tasks/maintenance.py:16`, so monkeypatching `app.shared.tasks.maintenance.utcnow` raises inside the `try` without touching the factories, which reach `utcnow` through `app.models`. `update_hashtag_counts` is the exception — it calls no clock — so its error-path test monkeypatches `app.shared.tasks.maintenance.text` instead.
 
@@ -390,7 +390,7 @@ Subject: `test: cover the two notification cutoffs and the log cleanup`
 
 All three are raw SQL against tables with no ORM model of their own or with an unusual shape. `read_posts` is an association table (`app/models.py:942-948`), `post_tag` likewise (`:340-343`), and `unban_expired_users` writes `"user"` directly.
 
-`cleanup_old_read_posts:51` reads `get_setting('read_posts_cutoff', 180)` through `db.session`, which is why `:50` wraps the body in `patch_db_session`. Its docstring at `:46` says "180 days" as though that were fixed; 180 is the default and the setting overrides it. Registered, not fixed.
+`cleanup_old_read_posts:50` reads `get_setting('read_posts_cutoff', 180)` through `db.session`, which is why `:49` wraps the body in `patch_db_session`. Its docstring at `:46` says "180 days" as though that were fixed; 180 is the default and the setting overrides it. Registered, not fixed.
 
 - [ ] **Step 1: Write the tests**
 
@@ -398,8 +398,8 @@ All three are raw SQL against tables with no ORM model of their own or with an u
 class TestCleanupOldReadPosts:
     """`cleanup_old_read_posts:45` -- a raw DELETE against an association table.
 
-    `:51` reads the cutoff from `get_setting('read_posts_cutoff', 180)`, which
-    goes through `db.session`; `:50`'s `patch_db_session(session)` is what makes
+    `:50` reads the cutoff from `get_setting('read_posts_cutoff', 180)`, which
+    goes through `db.session`; `:49`'s `patch_db_session(session)` is what makes
     that read land on the task's own session. The harness leaves
     `patch_db_session` live because `tests/conftest.py:112` pushes only an app
     context (facts 156 and 157).
@@ -434,8 +434,8 @@ class TestCleanupOldReadPosts:
     def test_the_cutoff_comes_from_the_setting_not_the_default(self, db_session):
         """A row 100 days old survives at the default and dies at a 90-day setting.
 
-        This is the test that proves `:51`'s `get_setting` call is load-bearing
-        rather than decorative -- and therefore that `:50`'s `patch_db_session`
+        This is the test that proves `:50`'s `get_setting` call is load-bearing
+        rather than decorative -- and therefore that `:49`'s `patch_db_session`
         is doing something, since `get_setting` reads `db.session`.
         """
         from app.utils import set_setting
@@ -1513,7 +1513,7 @@ One entry each, from D342:
 - **The stale activity stats** — what was observed in Task 9 Step 1, and the scope limit: communities excluded by `c.banned = FALSE AND c.last_active > :half_year` are still not reset.
 - **The dead `processed` counter** — with the grep that proved it dead.
 - **`calculate_community_activity_stats` indexes a temp table** one aggregate scan reads. An observation, not a fix.
-- **Two docstrings contradict their code** — `:26` against `:33-34`'s `RevokedToken` delete, and `:46` against `:51`'s `get_setting`. Registered rather than fixed; the approved production scope was three changes.
+- **Two docstrings contradict their code** — `:26` against `:33-34`'s `RevokedToken` delete, and `:46` against `:50`'s `get_setting`. Registered rather than fixed; the approved production scope was three changes.
 - **Raw `text()` DELETEs bypass the identity map** in `cleanup_old_read_posts` and `cleanup_old_voting_data`. Harmless as written because these tasks load nothing first; recorded so a future round that adds a query above one of them knows.
 - **`maintenance.py`'s remaining three groups** — B, C and D, with their function lists and statement counts from the spec, so the next round does not re-derive them.
 
