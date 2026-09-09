@@ -7,7 +7,7 @@ Group D is the five that leave the database:
 
   `refresh_instance_chooser:975`   `add_remote_communities:1070`
   `add_remote_community_from_post:1101`
-  `delete_from_s3:1121`            `clean_up_tmp:1139`
+  `delete_from_s3:1121`            `clean_up_tmp:1141`
 
 AN UNMATCHED RESPX REQUEST DOES NOT FAIL EVERY TEST IN THIS FILE, and which
 tests it fails is the first thing this round established.
@@ -107,11 +107,12 @@ class _StubBoto3Session:
 class TestDeleteFromS3:
     """`delete_from_s3:1121` -- delete a batch of keys from object storage.
 
-    Seven statements, ZERO branch points, and the only task in this module with
-    no `try`, no `except`, no `finally` and no session. `:1135`'s `s3.close()`
-    is the last statement of the body, so a raise from `:1134`'s
-    `delete_objects` skips it and leaks the client. That is this round's PC3 and
-    is NOT fixed by these tests.
+    Eight statements (measured via `--cov-report=term-missing`), ZERO branch
+    points, and the only task in this module with no `except` and no session.
+    `:1134`'s `try` wraps `:1135`'s `delete_objects` so `:1136`'s `finally`
+    always runs `:1137`'s `s3.close()`, even when `delete_objects` raises.
+    That was this round's PC3 and is now fixed by the production change these
+    tests exercise.
     """
 
     def _patch_boto3(self, monkeypatch, client):
@@ -162,9 +163,9 @@ class TestDeleteFromS3:
         assert client.closed is True
 
     def test_the_client_is_closed_when_the_delete_raises(self, db_session, monkeypatch):
-        """PC3: `:1135`'s `s3.close()` is the body's last statement, not a
-        `finally`, so a raise from `:1134` skips it and leaks the client's
-        connection pool.
+        """PC3: `:1135` raises, but `:1136`'s `finally` still runs `:1137`'s
+        `s3.close()`, so the client's connection pool no longer leaks on the
+        failure path.
         """
         client = _StubS3(raise_on_delete=RuntimeError('s3 is down'))
         self._patch_boto3(monkeypatch, client)
