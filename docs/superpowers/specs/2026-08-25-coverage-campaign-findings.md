@@ -10086,6 +10086,184 @@ round's closure also raised `maintenance.py`'s `coverage_floors.ini` entry
 sub-split rows individually), 21 killed, six holes closed and none proven
 equivalent. If you take D383, say so here in the change that takes it.
 
+## Sub-project 33: `app/shared/tasks/maintenance.py` Group C, second half -- the identity phases, and the module's closure
+
+`docs/superpowers/specs/2026-09-09-coverage-maintenance-c2-33-design.md` and
+`docs/superpowers/plans/2026-09-09-coverage-maintenance-c2-33.md` (design and
+plan; the per-task briefs and reports live in
+`.superpowers/sdd/2026-09-09-coverage-maintenance-c2-33/`), on branch
+`blentz`, from base `daf84875`. This round took Group C's second half --
+`monitor_healthy_instances`' identity phases, the Lemmy/PieFed admin-role and
+custom-emoji block (`:637-696`), the MBIN admin-role block (`:703-739`) and
+the task's own outer handler (`:742-744`) -- left open by sub-project 32.
+Tests live in the existing `tests/test_shared_tasks_maintenance_identity.py`
+(opened this round, **28 tests**). The module's `coverage_floors.ini` entry
+rose **89 -> 100**, `percent_covered` and `percent_statements_covered`
+converging at **100.0** for the first time across this module's five rounds
+-- **664 statements, 214 branches**, `missing_lines: []` and
+`missing_branches: []`, independently re-measured three times (Task 9's
+implementer, Task 9's review, and Task 10 after its own mutation pass).
+**228 tests now run across the module's five files** -- identity 28, health
+49, external 39, lifecycle 59, cleanup 53. Twenty-six mutations were run one
+at a time against the closed ranges: **19 killed, 4 survived -- all four
+real holes, all four closed with a new test apiece -- and 3 proven
+equivalent**, each with a traced or executed proof rather than a guess.
+**`app/shared/tasks/maintenance.py` reaches 100% and closes; see the final
+entry below for where the campaign goes next.**
+
+**Three production changes landed, numstat `16 10` total across three
+commits in one file -- `git diff --numstat daf84875..b480b632 -- app/`:**
+
+1. `app/shared/tasks/maintenance.py:638,690,694,704,733,737` (`response`
+   bound to `None` before both identity blocks' `try` statements, both
+   `finally` guards changed to `is not None`) -- commit `0c7dd942` (`4 2`)
+   -- **D383.**
+2. `app/shared/tasks/maintenance.py:659-669` (the Lemmy admin-role removal
+   loop drains into a `stale_roles` list before issuing any `.delete()`) --
+   commit `c266d87d` (`11 7`), with a scoped test-only follow-up at
+   `5281f619` -- **D384.**
+3. `app/shared/tasks/maintenance.py:689` (`cache.delete_memoized` moved one
+   indent level inward, inside the `:641` response guard) -- commit
+   `0778c739` (`1 1`) -- **D385.**
+
+### 1. `response` unbound in both identity blocks' `finally` guards -- the reachable twin of sub-project 32's own fix, now observed rather than predicted -- D383
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D383 | `monitor_healthy_instances`' Lemmy/PieFed block, `app/shared/tasks/maintenance.py:640` (`response = get_request(...)`, inside the `try` at `:639`) and `:694`'s `finally: if response is not None:` (pre-fix `if response:`); the MBIN block's identical shape at `:706`/`:737` | **Fixed, observed failing pre-fix, and the reachable twin of D375 (sub-project 32).** `get_request` raises rather than returning a synthetic response, so a transport failure inside `:639`/`:705`'s `try` left `response` unbound; the `finally`'s `if response:` then raised `UnboundLocalError` before the `except Exception` at `:690`/`:733` -- which had already run -- could help, and the error escaped to the task-level handler at `:742`, rolling back and re-raising, ending the sweep for every remaining instance. Task 1's probe reproduced this against unmodified code before any fix existed, verbatim: `PROBE: task raised UnboundLocalError: cannot access local variable 'response' where it is not associated with a value` and `PROBE: failures=2 dormant=False`. The unpatched raise itself is `respx.models.AllMockedAssertionError` (an `AssertionError` subclass, not an `httpx.HTTPError`), so it escapes all five of `get_request`'s specific `except` clauses (`app/utils.py:146-183`) immediately, with none of their retry-sleep paths triggered -- the crash is fast as well as loud. **There is a second effect this entry records that the crash framing alone misses: on a LATER iteration of the same sweep, Python function scope means `response` is not unbound at all -- it still holds the previous instance's value from the prior loop pass.** So instead of raising, the `finally` closes the PREVIOUS instance's response and leaks the current one, silently, with no error and no log line. Only the FIRST instance in a sweep to reach an unpatched raise crashes the whole task; every later one corrupts resource cleanup instead. Fixed exactly as D375 was: `response = None` seeded before each `try` (`:638`, `:704`), both `finally` guards changed from truthiness to `is not None` (`:694`, `:737`), matching sub-project 32's own idiom for `node`/`nodeinfo` rather than the surrounding code's weaker local one. This is what makes an unpatched test in this file the OPPOSITE failure shape from the harness trap sub-projects 31 and 32 both trained on: `get_request_instance`'s bare `except:` (D380, `app/utils.py:192`) swallows silently and redirects to a synthetic 500, but `get_request` (`app/utils.py:131-185`) always raises on failure, so before this fix a forgotten patch killed the task outright rather than quietly passing for the wrong reason -- the friendlier of the two failure modes | fixed (observed failing pre-fix via the verbatim `UnboundLocalError`); the later-iteration wrong-response-closed effect is registered as part of the same finding, not a separate one | `task-1-report.md` (the verbatim probe transcript, the failure-increment derivation); `task-1-review.md` finding 6-7 (the `AllMockedAssertionError` chain, the `get_request`/`get_request_instance` asymmetry); `task-2-report.md` (the pre-change failure transcript at (then) `:689`, the citation sweep); `task-2-review.md`; `docs/superpowers/specs/2026-09-09-coverage-maintenance-c2-33-design.md` ("There is a second effect on later iterations..."); `app/shared/tasks/maintenance.py:638-640,690,694,704-706,733,737,742` read at this commit; `app/utils.py:131-185,189-196` read at this commit; D375 (sub-project 32) for the twin fix and its own upgrade-by-accident; D380 for the contrasting swallow |
+
+### 2. The admin-role removal loop mutated its own result set mid-iteration -- fixed on its own terms, but the gate that authorised it could not have failed -- D384
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D384 | `monitor_healthy_instances`' Lemmy admin-role removal, pre-fix `for instance_admin in session.query(InstanceRole).filter_by(instance_id=instance.id): if instance_admin.user.profile_id() not in admin_profile_ids: session.query(InstanceRole).filter(...).delete()` -- a live query object consumed by a `for` loop while `.delete()` issues further queries against the SAME table inside that loop body | **Fixed on its own terms; the record states the real reason rather than the one first offered for it.** Draining the query into a `stale_roles` list comprehension (`app/shared/tasks/maintenance.py:659-663`) before issuing any `.delete()` (`:664-669`) is correct independent of any ordering question: mutating a result set while a cursor is still iterating it, and desynchronizing the session's identity map from the database mid-loop, are defects on their own terms. **But the gate that authorised the change was vacuous, and this round's review caught it rather than letting a plausible-looking demonstration stand.** The gate's own design compared the set of rows the removal loop would act on before and after the change, seeded with both a surviving and a departing admin. Two independent facts make that comparison unable to fail regardless of the fixture: (1) the fixture's surviving admin's `InstanceRole` row was seeded and COMMITTED before the task ran, so `instance.user_is_admin(user.id)` was already `True` and `:656`'s `session.add` never fired during the probe -- there was no pending add in flight for the two orderings to disagree about; and (2) even with a genuinely pending add, the risk cannot exist on this codebase at all: `get_task_session()` (`app/utils.py:3673-3675`) returns a bare `Session(bind=db.engine)`, carrying SQLAlchemy's library-default `autoflush=True`, while `db.session` is pinned to `autoflush=False` (`app/__init__.py:81`) -- so a pending `session.add` is flushed to the database the moment the removal query next executes (`:661`), whether that query is consumed directly by a `for` loop or drained into a list first; both issue the identical SELECT at the identical program point and cannot diverge. This was confirmed by direct reasoning, by an isolated sandbox reproduction of a bare `Session`'s `autoflush=True` behaviour, AND empirically on this codebase: a fix round reverted the drain-before-delete change in place, under a NEW fixture built with a genuinely pending `session.add` (an admin arriving while a different, already-committed admin departs in the same sweep), reran the full suite, and it still passed 10/10 -- proving old and new orderings are indistinguishable by measurement, not only by argument. The new fixture also closed a real, independent gap the vacuous gate had been masking: nothing in the suite previously exercised the create arm's `session.add` (`:656`) firing in the SAME sweep as the removal loop's `.delete()` for the SAME instance; `test_an_admin_arrives_while_another_leaves_in_the_same_sweep` now does, proven by a mutation on `:656` that fails both it and the pre-existing add-only test | fixed (correct on mutate-while-iterate / identity-map-desync grounds); the ordering justification the commit message first offered is retracted and replaced with equivalence by construction (autoflush), not equivalence by observation on one fixture -- see facts 203-204 | `task-5-report.md` (the Step 1 gate's before/after row sets, both `{(2, 2)}`; the autoflush investigation; the reverted-fix empirical re-run at 10/10; the new combined-sweep test and its mutation proof); `task-5-review.md` (the two-part argument that the gate could not have failed, and the isolated `autoflush=True` reproduction); `progress.md` ("Ruling 11", "Ruling 12", "Ruling 13"); `app/shared/tasks/maintenance.py:656,659-669` read at this commit; `app/utils.py:3673-3675`, `app/__init__.py:81` read at this commit |
+
+### 3. The emoji cache was invalidated on every response, not only a successful one -- D385
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D385 | `monitor_healthy_instances`' Lemmy/PieFed block, pre-fix `cache.delete_memoized(get_emoji_replacements)` sitting at the same indentation as `:641`'s `if response and response.status_code == 200:` guard -- i.e. inside the outer `try` but OUTSIDE that guard's body | **Fixed, observed failing pre-fix.** A non-200 (or falsy) response from one instance's `/api/v3/site` call still invalidated `get_emoji_replacements`'s memoized cache for the WHOLE site, discarding every instance's emoji replacements on a single remote instance's bad day. Pre-fix failure observed exactly as predicted, verbatim: `assert [((<function get_emoji_replacements ...>,), {})] == []` after a 404 response. Fixed by moving the one line inward by four spaces of indent, from the `:641`-guard's own indentation to the indentation of its body's other statements (`instance_data = ...`, the admins loop, the removal loop, the emoji-refresh block) -- `git diff` shows exactly one line changed, no line-count shift. **The call is now a sibling of the removal loop and the emoji-refresh block, firing once per successful site response regardless of ban status, not nested inside the emoji loop or the ban gate.** Because `tests/conftest.py:68` sets `CACHE_TYPE = 'NullCache'`, invalidation has nothing to invalidate under test, so the oracle is a monkeypatched recorder over `cache.delete_memoized` (patching the shared `Cache` instance imported at `maintenance.py:12`, not a name local to the module or the test) rather than any observation of cache state -- see fact 201 | fixed (observed failing pre-fix: the recorder captured a call under a 404) | `task-7-report.md` (the pre-change failure transcript, the NullCache confirmation, the shared-object patching analysis); `task-7-review.md` (settling a citation dispute over `tests/conftest.py:68` in favor of the original, correct citation; confirming the moved call's sibling placement); commit `0778c739`; `app/shared/tasks/maintenance.py:641,688-689` read at this commit; `tests/conftest.py:66-68` read at this commit |
+
+### 4. The per-emoji `session.commit()` inside an unbounded remote-driven loop -- registered, not fixed -- D386
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D386 | `monitor_healthy_instances`' Lemmy/PieFed custom-emoji refresh, `app/shared/tasks/maintenance.py:688`'s `session.commit()`, sitting inside the `for emoji in instance_data['custom_emojis']:` loop at `:673`, itself inside the per-instance `try` | **Registered, NOT fixed -- outside this round's approved production-change scope.** The commit fires once per emoji rather than once per instance (or once for the whole sweep), on a path iterating `instance_data['custom_emojis']`, a list an unbounded remote server controls the length and content of. An instance advertising a large emoji set issues one commit per entry rather than one; nothing bounds that list's size before the loop runs. **This is the fifth in-loop commit this campaign has registered** -- the design spec for this round names it explicitly in those terms. Left registered rather than fixed because this round's approved production scope was DC1, DC2 and DC3 specifically, and this call site was not on that list | registered, NOT fixed (outside this round's approved scope) | `docs/superpowers/specs/2026-09-09-coverage-maintenance-c2-33-design.md` ("The fifth in-loop commit this campaign has registered"); `app/shared/tasks/maintenance.py:673,688` read at this commit |
+
+### 5. `User.profile_id()` does not lowercase where `Community.profile_id()` does -- latent, not live -- D387
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D387 | `User.profile_id()` (`app/models.py:1454-1456`, returns `self.ap_profile_id` as-is when set) against `Community.profile_id()` (`app/models.py:787-789`, always calls `.lower()` on its return value) -- both are compared against a `.lower()`-appended `admin_profile_ids` list at `:662`'s removal predicate | **Latent, not live, and the round's own tests verify why.** `:662`'s `instance_admin.user.profile_id() not in admin_profile_ids` compares an UN-lowercased `User.profile_id()` against a list every entry of which was explicitly lowercased at `:648` (`admin_profile_ids.append(profile_id.lower())`). If a remote instance ever returned an admin actor id with mixed case, the removal predicate would compare a mixed-case value against an all-lowercase list, never match, and the stale role would never be removed. **It is safe today because `ap_profile_id` is stored PRE-LOWERCASED at actor-creation time** -- `app/activitypub/util.py:1233`: `ap_profile_id=activity_json['id'].lower()` -- so both sides of the comparison are lowercase because the SOURCE STRING was, not because anything normalises case at comparison time. **What would make it unsafe: any code path that sets `ap_profile_id` without lowercasing it first**, or a future refactor of `User.profile_id()` that stops returning the stored `ap_profile_id` verbatim (its own fallback branch, `f"{SERVER_URL}/u/{self.user_name.lower()}"`, IS already lowercased, so only the `ap_profile_id`-set branch is exposed). Task 4's two new tests use all-lowercase literals throughout their fixtures and do not mask the asymmetry -- they simply do not exercise it, honestly reported as such rather than claimed as coverage of it | correct in current production behaviour (given the creation-time invariant); registered as a latent asymmetry, not fixed | `task-4-report.md` ("`profile_id` lowercasing asymmetry — what I checked"); `task-4-review.md` ("`profile_id` lowercase asymmetry", independently confirmed); `app/models.py:787-789,1454-1456` read at this commit; `app/activitypub/util.py:1233` read at this commit; `app/shared/tasks/maintenance.py:648,662` read at this commit |
+
+### 6. `user_is_admin`'s role-specific check lets a non-admin `InstanceRole` row collide with a new admin insert -- latent, not live -- D388
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D388 | `monitor_healthy_instances:650`'s guard, `if user and not instance.user_is_admin(user.id):`, gating `:656`'s `session.add(new_instance_role)`; `Instance.user_is_admin` (`app/models.py:121-123`) returns `role and role.role == 'admin'`, checking the STORED ROLE VALUE specifically rather than merely whether an `InstanceRole` row exists for `(instance_id, user_id)` | **Latent, not live.** `InstanceRole.role` (`app/models.py:169`) is a free-text `db.Column(db.String(50), default='admin')`, not an enum, so a row could in principle hold any string. If a row for `(instance.id, user.id)` existed with `role` set to anything OTHER than `'admin'`, `:650`'s `user_is_admin(user.id)` would return `False` even though a row already occupies that composite primary key (`app/models.py:167-168`), so `:650`'s guard would be true and `:656`'s `session.add(new_instance_role)` would attempt to insert a SECOND row for the identical `(instance_id, user_id)` pair -- a composite-PK collision, raised on the next autoflush (the removal loop's own query at `:661`) and caught by `:690`'s `except`, incrementing `failures` rather than persisting anything. **It is safe today because every `InstanceRole(...)` construction in the codebase passes `role='admin'` literally** -- confirmed by a full-repository search: `app/shared/tasks/maintenance.py:651` and `:718` (this module's own two sites) and `app/activitypub/util.py:2173`, all three literal `role='admin'`, and the column's own default is `'admin'` too. No code path currently writes any other value. **What would make it unsafe: a future admin-role variant (a moderator role, say) written to the same `InstanceRole` table with a different `role` string** -- `user_is_admin`'s specific `== 'admin'` check, rather than a plain existence check, would then let this guard's `not instance.user_is_admin(...)` go true for a user who already holds a non-admin row, and the resulting insert would collide on the composite key exactly as described. Task 3's mutation-testing traced the identical composite-PK collision mechanism for a different mutation of this same guard (dropping its second conjunct entirely), confirming the collision-and-swallow consequence by direct observation rather than only by reading the schema | correct in current production behaviour (given that no code path writes a non-'admin' role today); registered as a latent guard/schema mismatch, not fixed | `app/models.py:121-123,166-169` read at this commit; `app/shared/tasks/maintenance.py:650-656` read at this commit; `grep -rn "InstanceRole(" app/` (three call sites, all literal `role='admin'`); `task-3-report.md` and `task-3-review.md` (`test_an_existing_admin_is_not_added_twice`'s independent trace of the composite-PK collision mechanism at the guard's other conjunct) |
+
+### 7. The MBIN removal loop keeps DC3's mutate-while-iterating shape, deliberately unfixed, and mutation still discriminates it -- D389
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D389 | `monitor_healthy_instances`' MBIN admin-role removal, `app/shared/tasks/maintenance.py:726` (`for instance_admin in session.query(InstanceRole).filter_by(instance_id=instance.id):`) through `:732` (`.delete()`), the same live-query-consumed-by-a-mutating-loop shape D384 fixed at the Lemmy block's parallel site | **Deliberately NOT changed, and this entry says so explicitly.** This round's approved scope authorised the drain-before-delete rewrite at the LEMMY removal loop only; `git diff` for that commit shows a single hunk, confirmed against the MBIN block, which is untouched. The MBIN loop is structurally identical in shape (a `for` over a live query, `.delete()` issued inside the loop body) but uses `instance_admin.user_id` directly rather than `instance_admin.user.profile_id()` -- no `.lower()` call anywhere in the MBIN block, so D387's asymmetry does not apply here. **Left unfixed on purpose, not by oversight, and the mutation pass confirms it is still discriminated despite being unfixed**: Task 10's row 24 (dropping the `not in` negation at `:727`, producing `if instance_admin.user_id in admin_user_ids:`) was killed -- 4 tests failed, including the still-listed-admin companion Task 8 wrote for exactly this guard. So the same anti-pattern D384 fixed at the Lemmy block remains live at the MBIN block, and a regression in either direction of its removal predicate would still be caught, even though the mutate-while-iterating shape itself was not restructured | registered, deliberately NOT fixed (out of this round's approved scope); its own removal predicate remains discriminated by mutation (row 24) despite the shape being unfixed | `progress.md` (Ruling 3, Ruling 3 REVISED); `task-8-report.md`; `task-10-report.md` (mutation row 24: "killed (4 failed, includes still-listed companion)"); `app/shared/tasks/maintenance.py:726-732` read at this commit |
+
+### 8. `app/shared/tasks/maintenance.py` reaches 100% and closes -- no new number
+
+Not a defect; recorded because this is the last round in this module and the
+next sub-project starts somewhere new, so this entry carries more weight
+than the module-closure entries before it. **Floor: 89 -> 100.**
+`percent_covered` and `percent_statements_covered` converge at exactly
+`100.0` for the whole module -- **664 statements, 214 branches**,
+`missing_lines: []`, `missing_branches: []`, independently re-measured by
+Task 9's implementer, Task 9's review, and Task 10 after its own mutation
+pass -- the first time across this module's five rounds the two coverage
+keys this campaign has policed since sub-project 29 have agreed, itself a
+sign the module is genuinely done rather than merely close. **228 tests now
+run across the module's five files: `tests/test_shared_tasks_maintenance_
+identity.py` (28), `..._health.py` (49), `..._external.py` (39),
+`..._lifecycle.py` (59), `..._cleanup.py` (53).** A module measuring zero
+missing statements and zero missing arcs STILL had four real behavioural
+holes that only the mutation pass found (fact 202) -- the same lesson
+sub-project 32 taught at partial coverage, reproduced here at full coverage,
+which is the stronger version of the lesson: there is no coverage number
+that makes a mutation pass redundant. `check_instance_health`'s batched
+commit (D381, sub-project 32) remains outstanding and untouched by this
+round -- it sat outside `monitor_healthy_instances`' identity phases, this
+round's assigned range, exactly as sub-project 32 predicted when it
+nominated D381 for a future round. **Where the campaign goes next**, derived
+from `coverage_floors.ini` directly rather than from memory: six modules
+remain below 100 --
+
+| module | floor |
+|---|---|
+| `app/shared/post.py` | 40 |
+| `app/utils.py` | 73 |
+| `app/activitypub/util.py` | 76 |
+| `app/activitypub/routes.py` | 90 |
+| `app/shared/tasks/notes.py` | 99 |
+| `app/shared/tasks/pages.py` | 99 |
+
+`app/shared/post.py` at 40 is by far the largest remaining gap.
+`app/shared/tasks/maintenance.py` drops off this list entirely -- the
+five-round arc that opened with sub-project 29's retention and counter
+tasks closes here.
+
+**Facts 198-205 carried into `tests/README.md`.** Task 1's probe established
+that an unpatched `get_request` crashes the whole task rather than being
+silently swallowed, the opposite of what sub-projects 31 and 32 found for
+`refresh_instance_chooser` and `get_request_instance` -- and DC1 then changed
+that state, so the fact records both (198). An instance's `software` value
+decides which blocks a test enters, and a test that sets it for one reason
+enters them for all reasons (199). `_quiet_http_half` neutralises the fetch
+and discovery blocks so an identity-phase test observes only the identity
+phases, and the 404 it installs still contributes exactly two of `failures`'s
+increments (200). Patching `cache.delete_memoized` mutates the shared `Cache`
+object every module imports, not a name local to the module under test, and
+under `NullCache` an invalidation has nothing to invalidate, so the oracle
+must record the call rather than observe the cache (201). A module measuring
+zero missing statements and zero missing arcs, independently confirmed three
+times, still hid four real behavioural holes, every one inside a construct
+coverage.py records as a single arc pair (202). `get_task_session()` carries
+SQLAlchemy's default `autoflush=True` where `db.session` is pinned to
+`autoflush=False`, so reasoning about pending-write visibility inside a
+Celery task differs from the same reasoning in a request (203). A gate that
+cannot fail is as uninformative as a test that cannot fail -- a fixture
+unable to distinguish the orderings it exists to compare authorised a change
+for the wrong reason, even though the change itself was right (204). A
+working-tree scanner and a mutation-testing task collide on every round that
+mutates production, clustering on exactly the guards worth mutating, and the
+mitigation is to treat HEAD, not the tree, as the artifact during a probe
+window (205).
+
+**Next free number: D390.** D383-D389 were taken by this round -- **D383**
+the two identity blocks' unbound `response`, fixed as the reachable twin of
+sub-project 32's own D375, with the previously-unrecorded later-iteration
+effect (closing the wrong response rather than crashing) folded into the
+same entry; **D384** the admin-role removal loop's mid-iteration mutation,
+fixed on its own (mutate-while-iterate) terms, with the gate that authorised
+it corrected on the record to state equivalence by construction (autoflush)
+rather than the vacuous by-observation demonstration that first justified
+it; **D385** the emoji-cache invalidation firing on every response rather
+than only a 200, fixed by a four-space indentation change with no
+line-count shift; **D386** the per-emoji `session.commit()` inside an
+unbounded remote-driven loop, the fifth in-loop commit this campaign has
+registered, not fixed and outside this round's approved scope; **D387**
+`User.profile_id()`'s missing `.lower()` against `Community.profile_id()`'s
+presence of it, latent rather than live because `ap_profile_id` is stored
+pre-lowercased at actor-creation time; **D388** `user_is_admin`'s
+role-specific check, which would let a non-`'admin'`-valued `InstanceRole`
+row collide on its composite PK with a new admin insert, latent rather than
+live because no code path in the repository writes any role value other
+than `'admin'`; **D389** the MBIN removal loop's identical
+mutate-while-iterating shape, deliberately left unfixed and still
+discriminated by Task 10's mutation row 24 despite being unfixed. No entry
+from an earlier sub-project's section was edited in place by this round.
+This round's closure also raised `maintenance.py`'s `coverage_floors.ini`
+entry 89 -> 100 -- **closing the module** -- and ran 26 mutations, 19
+killed, four holes closed and three proven equivalent. If you take D390, say
+so here in the change that takes it.
+
 ## Ratchet gotchas
 
 - `percent_covered` is a **blended statement+branch figure**. This matters for
