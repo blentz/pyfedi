@@ -4,12 +4,12 @@ Sub-projects 29, 30, 31 and 32 closed the rest of this module. This file
 covers what was left: the two blocks of `monitor_healthy_instances` gated on
 `instance.software`, plus the task's own outer handler.
 
-  Lemmy/PieFed admin roles and custom emoji  `:637-692`
-  MBIN admin roles                           `:699-735`
-  the task's outer handler                   `:738-740`
+  Lemmy/PieFed admin roles and custom emoji  `:637-696`
+  MBIN admin roles                           `:703-739`
+  the task's outer handler                   `:742-744`
 
 ENTRY IS GATED ON `software`. `:637` needs 'lemmy', 'piefed' or 'pylova';
-`:699` needs 'mbin'. Sub-project 32's fixtures used `make_instance`'s
+`:703` needs 'mbin'. Sub-project 32's fixtures used `make_instance`'s
 'mastodon' default, so neither block ran and both `if` statements were
 covered only on their false arms. Every fixture here sets a matching value --
 which means a test that sets `software` and forgets about these blocks enters
@@ -22,7 +22,7 @@ test observes only the identity phases.
 
 THE OUTER HANDLER IS REACHED THROUGH `:547`. `instance_banned` is called at
 loop level, outside every `try`, so a raise there is the one failure that
-reaches `:738` rather than being caught per-instance.
+reaches `:742` rather than being caught per-instance.
 
 `get_request` RAISES, unlike `get_request_instance` which returns a synthetic
 500. Task 1 probed what that meant for a test that forgot to patch it, before
@@ -33,10 +33,10 @@ Exception` could absorb anything. The task-level `except` then re-raised that
 `UnboundLocalError` to the caller -- a forgotten patch killed the task rather
 than quietly redirecting it.
 
-Task 2 seeded `response = None` before both `try` blocks (`:638`, `:700`) and
+Task 2 seeded `response = None` before both `try` blocks (`:638`, `:704`) and
 guarded the `finally`s with `is not None`, matching sub-project 32's
 fetch-block idiom (`:594`). A raising `get_request` is now caught by
-`:686`/`:729`'s `except` and becomes a failure increment instead of a crash --
+`:690`/`:733`'s `except` and becomes a failure increment instead of a crash --
 `TestIdentityPhaseFailures` below covers that.
 """
 
@@ -113,8 +113,8 @@ def _quiet_http_half(monkeypatch):
 def _site_payload(*actor_ids, emojis=None):
     """A Lemmy `/api/v3/site` body: admins, and optionally custom emoji.
 
-    `:646` reads `admin['person']['actor_id']`; `:670` reads
-    `emoji['custom_emoji']` and `:671` reads `emoji['keywords']`.
+    `:646` reads `admin['person']['actor_id']`; `:674` reads
+    `emoji['custom_emoji']` and `:675` reads `emoji['keywords']`.
     """
     return {
         'admins': [{'person': {'actor_id': a}} for a in actor_ids],
@@ -131,22 +131,22 @@ def _emoji(shortcode, url='https://peer.example/e.png', category='cat', keywords
 
 
 def _mbin_payload(*items):
-    """An MBIN `/api/users/admins` body. `:707` reads `instance_data['items']`."""
+    """An MBIN `/api/users/admins` body. `:711` reads `instance_data['items']`."""
     return {'items': list(items)}
 
 
 class TestTheTaskLevelHandler:
-    """`monitor_healthy_instances:738-740` -- the task's own `except`.
+    """`monitor_healthy_instances:742-744` -- the task's own `except`.
 
-    `:741`'s `finally` and `:742`'s `session.close()` were already covered:
-    every call reaches them. `:738-740` had never run, because every failure
+    `:745`'s `finally` and `:746`'s `session.close()` were already covered:
+    every call reaches them. `:742-744` had never run, because every failure
     inside the loop is caught per-instance. `:547`'s `instance_banned` call is
     the exception -- it sits at loop level, outside every `try`, so a raise
     there is the one that reaches the task handler.
     """
 
     def test_a_raising_ban_check_rolls_back_and_re_raises(self, db_session, monkeypatch):
-        """`:740`'s `raise`. The task does not swallow -- Celery must see it."""
+        """`:744`'s `raise`. The task does not swallow -- Celery must see it."""
         def _boom(domain):
             raise RuntimeError('ban check exploded')
 
@@ -163,12 +163,12 @@ class TestIdentityPhaseFailures:
     """The two identity blocks' error handling."""
 
     def test_a_raising_request_does_not_end_the_whole_sweep(self, db_session, monkeypatch):
-        """DC1: `:690` reads `response`, which `:640` may never have bound.
+        """DC1: `:694` reads `response`, which `:640` may never have bound.
 
         `get_request` RAISES, unlike `get_request_instance`. The `except` at
-        `:686` catches the original and then the `finally` at `:689-691`
+        `:690` catches the original and then the `finally` at `:693-695`
         raises `UnboundLocalError`, which that handler has already run and
-        cannot catch. It escapes to `:738`, rolls back and re-raises, so one
+        cannot catch. It escapes to `:742`, rolls back and re-raises, so one
         instance's failure ends the sweep for every other instance.
 
         The oracle is that BOTH instances were touched, compared as a set:
@@ -250,9 +250,9 @@ class TestLemmyAdminRoles:
 
         Dropping just that conjunct does not make role count alone fail: with
         no `user`, `instance.user_is_admin(user.id)` raises `AttributeError`
-        on `None`, `:686` catches it, and the block still ends with zero
+        on `None`, `:690` catches it, and the block still ends with zero
         roles -- a crash swallowed into a skip looks the same as a clean one
-        by that measure. `:688`'s failure increment is what tells them apart:
+        by that measure. `:692`'s failure increment is what tells them apart:
         the guard intact costs only the HTTP half's two; the guard missing
         costs a third from the caught crash. So the oracle checks BOTH that
         no role exists and that no failure was recorded by this block.
@@ -275,7 +275,7 @@ class TestLemmyAdminRoles:
 
         The role is seeded first, so `user_is_admin` is already true. A second
         `session.add` for the same `(instance_id, user_id)` would raise, which
-        `:686`'s `except` would swallow into `:688`'s failure increment -- so
+        `:690`'s `except` would swallow into `:692`'s failure increment -- so
         the oracle checks BOTH that one role exists and that no failure was
         recorded by this block.
         """
@@ -300,9 +300,9 @@ class TestLemmyAdminRoles:
 
         Negating that guard does not make role count alone fail: with no
         payload attached to the 503, `response.json()` raises on the empty
-        body, `:686` catches it, and the block still ends with zero roles --
+        body, `:690` catches it, and the block still ends with zero roles --
         a crash swallowed into a skip looks the same as a clean one by that
-        measure. `:688`'s failure increment is what tells them apart: the
+        measure. `:692`'s failure increment is what tells them apart: the
         guard intact costs only the HTTP half's two; the guard missing costs
         a third from the caught crash. So the oracle checks BOTH that no
         role exists and that no failure was recorded by this block.
@@ -327,7 +327,7 @@ class TestLemmyAdminRoles:
         assert reloaded.failures == before + 2
 
     def test_an_admin_no_longer_listed_loses_the_role(self, db_session, monkeypatch):
-        """`:664`'s `.delete()`. The departing admin's role goes."""
+        """`:669`'s `.delete()`. The departing admin's role goes."""
         instance = _seed_instance('peer.example', software='lemmy')
         staying = make_user(instance, 'staying')
         leaving = make_user(instance, 'leaving')
@@ -346,7 +346,7 @@ class TestLemmyAdminRoles:
         assert remaining == {staying.id}
 
     def test_a_still_listed_admin_keeps_the_role(self, db_session, monkeypatch):
-        """`:659`'s false arm -- the profile IS in the listed set, so no delete.
+        """`:662`'s false arm -- the profile IS in the listed set, so no delete.
 
         This is the companion the removal test needs: without it, a mutation
         that deletes unconditionally would still satisfy the test above.
