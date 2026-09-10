@@ -325,3 +325,41 @@ class TestLemmyAdminRoles:
         assert db.session.query(InstanceRole).filter_by(
             instance_id=instance.id).count() == 0
         assert reloaded.failures == before + 2
+
+    def test_an_admin_no_longer_listed_loses_the_role(self, db_session, monkeypatch):
+        """`:664`'s `.delete()`. The departing admin's role goes."""
+        instance = _seed_instance('peer.example', software='lemmy')
+        staying = make_user(instance, 'staying')
+        leaving = make_user(instance, 'leaving')
+        for user in (staying, leaving):
+            db.session.add(InstanceRole(
+                instance_id=instance.id, user_id=user.id, role='admin'))
+        db.session.commit()
+        self._lemmy(monkeypatch, _site_payload(staying.ap_profile_id), actor=staying)
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        remaining = {
+            r.user_id for r in
+            db.session.query(InstanceRole).filter_by(instance_id=instance.id).all()}
+        assert remaining == {staying.id}
+
+    def test_a_still_listed_admin_keeps_the_role(self, db_session, monkeypatch):
+        """`:659`'s false arm -- the profile IS in the listed set, so no delete.
+
+        This is the companion the removal test needs: without it, a mutation
+        that deletes unconditionally would still satisfy the test above.
+        """
+        instance = _seed_instance('peer.example', software='lemmy')
+        staying = make_user(instance, 'staying')
+        db.session.add(InstanceRole(
+            instance_id=instance.id, user_id=staying.id, role='admin'))
+        db.session.commit()
+        self._lemmy(monkeypatch, _site_payload(staying.ap_profile_id), actor=staying)
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        assert db.session.query(InstanceRole).filter_by(
+            instance_id=instance.id, user_id=staying.id).count() == 1
