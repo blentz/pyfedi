@@ -5942,19 +5942,25 @@ separated here because they pin different lines (`:463` here, `:447` in fact
 190) against different tests.
 
 **197. A NOISY BINDING IS STILL A BINDING, BUT THE NOISE IS WORTH RECORDING
-SO A LATER FIX DOESN'T LOOK LIKE A REGRESSION.**
-`test_a_banned_domain_is_skipped_before_any_request`
-(`monitor_healthy_instances`' `:547` guard) fails, when the guard is removed,
-via the pre-existing unbound-`response` `UnboundLocalError` at `:689` --
-`banned.example` gets processed, the recorder's 200-with-`software` body
-sets `instance.software` and clears `dormant`, `:637`'s admin-role block is
-entered, the unpatched `get_request` raises, and `:689`'s `if response:`
-throws before `assert recorder.calls == []` is ever evaluated. The failure
-is real and reliable, so the test binds -- but it binds by crash, not by its
-own assertion. When a future round fixes `:689` (fact 192, D375's registered
-but unfixed sites), this test's failure mode will change shape from a crash
-to a clean assertion failure, which is worth knowing in advance rather than
-mistaking for a new defect.
+SO A LATER FIX DOESN'T LOOK LIKE A REGRESSION -- AND SUB-PROJECT 33 IS THE
+FIX THIS FACT PREDICTED.** `test_a_banned_domain_is_skipped_before_any_request`
+(`monitor_healthy_instances`' `:547` guard), AT THE TIME THIS FACT WAS
+WRITTEN, failed when the guard was removed via the pre-existing unbound-
+`response` `UnboundLocalError` at (then) `:689` -- `banned.example` got
+processed, the recorder's 200-with-`software` body set `instance.software`
+and cleared `dormant`, `:637`'s admin-role block was entered, the unpatched
+`get_request` raised, and the `finally`'s `if response:` threw before
+`assert recorder.calls == []` was ever evaluated. The failure was real and
+reliable, so the test bound -- but it bound by crash, not by its own
+assertion. Sub-project 33's D383 fix is that future round: `response = None`
+is now seeded before both identity `try` blocks and both `finally` guards
+read `is not None`, so the site this fact named is now `:694`, not `:689`,
+and the raise is caught by the block's own `except` instead of escaping
+unbound. This test's failure mode has changed shape from a crash to a clean
+assertion failure exactly as predicted -- see
+`tests/test_shared_tasks_maintenance_health.py:786-793`'s rewritten
+docstring for the post-fix account, and facts 198-205 for what sub-project
+33 recorded about the fix itself.
 
 **198. AN UNPATCHED `get_request` KILLS THE TASK RATHER THAN BEING SWALLOWED
 -- THE OPPOSITE OF WHAT SUB-PROJECTS 31 AND 32 FOUND FOR
@@ -6010,9 +6016,18 @@ derived from the code and confirmed against Task 1's probe output
 stays `False`. Every identity-phase assertion on `failures` in this file is
 written against a baseline of 2 for exactly this reason -- `before + 2`
 after the identity block runs cleanly, `before + 3` if it catches a
-swallowed crash instead (see the `failures`-assertion pattern this round
-reused three times, at the Lemmy creation guard, the Lemmy removal-arm
-guard, and the MBIN block's own repaired tests).
+swallowed crash instead. That pattern is reused six times, at every guard
+whose negation is a crash swallowed into a skip rather than a clean
+early-out: the Lemmy unresolvable-actor guard (`:650`'s `user and`,
+identity `:336`), the Lemmy duplicate-admin guard (`:650`'s second
+conjunct, identity `:361`), the Lemmy non-200 site-response guard (`:641`,
+identity `:386`), the MBIN missing-username guard (`:712`, identity `:677`),
+the MBIN unknown-username guard (`:715`, identity `:718`), and the MBIN
+non-200 admins-response guard (`:707`, identity `:784`). No removal-arm
+test carries a `failures` assertion -- `test_an_admin_no_longer_listed_
+loses_the_role` and `test_a_still_listed_admin_keeps_the_role` (both the
+Lemmy and MBIN versions) assert on role sets only, since a broken removal
+predicate does not raise, it just deletes or keeps the wrong rows.
 
 **201. PATCHING `cache.delete_memoized` MUTATES A SHARED OBJECT, NOT A
 MODULE-LOCAL NAME, AND UNDER `NullCache` AN INVALIDATION IS UNOBSERVABLE --

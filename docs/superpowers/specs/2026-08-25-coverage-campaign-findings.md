@@ -10264,6 +10264,27 @@ entry 89 -> 100 -- **closing the module** -- and ran 26 mutations, 19
 killed, four holes closed and three proven equivalent. If you take D390, say
 so here in the change that takes it.
 
+### 9. Final whole-branch review of sub-project 33 -- a wrong equivalence proof corrected, and an unregistered behavioural consequence of D383 -- D390, D391
+
+The final review of sub-project 33 (range `daf84875..f0d6f2e8`) found the
+module's two closing claims needed one correction and one addition, neither
+of which touches the module's 100% coverage or its production diff.
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D390 | `task-10-report.md`'s "Equivalent mutants" item 3, echoed in `progress.md`'s Task 10 block: the claim that `monitor_healthy_instances:743`'s `session.rollback()` is a no-op because "at every point where `:742`'s `except` can fire, `session` holds nothing pending", supported by citing `:591`, `:625`, `:634`, `:696` and `:739` as the task's only `session.commit()` calls | **The stated grounds are wrong; the verdict is still correct, for a different reason.** All five cited commits sit OUTSIDE the `try`/`except`/`finally` of the block they follow -- `:591` after the discovery block's `finally` (`:588-590`), `:625` after the fetch block's `finally` (`:621-623`), `:634` in the no-href `else` arm, `:696` and `:739` after each identity block's own `finally`. A `session.commit()` that itself raises (an `IntegrityError` surfacing at flush, a dropped connection) is caught by nothing local to its block and reaches `:742` with a failed transaction and pending work -- the "session holds nothing pending" premise is false at these five reachable points, not merely unproven. The equivalence verdict for `:743` survives anyway, on different grounds: `:745-746`'s `finally: session.close()` discards the connection (and with it, the transaction) regardless of what `:743`'s `rollback()` did or did not do, so `:743` is redundant with `:746` rather than a no-op because nothing is pending. Re-derived by reading `:534-746` against the closed tree; no test change follows from this, since the corrected grounds still support the same equivalence classification Task 10 recorded | corrected on the record; `:743` remains classified equivalent, now for the right reason | `app/shared/tasks/maintenance.py:534-746` read at this commit; `task-10-report.md` ("Equivalent mutants (3)", item 3); the final whole-branch review of sub-project 33 (finding F3) |
+| D391 | `monitor_healthy_instances`' two identity blocks' `except Exception:` arms, `app/shared/tasks/maintenance.py:690-692` (Lemmy/PieFed) and `:733-735` (MBIN) -- D383's fix seeded `response = None` and changed both `finally` guards to `is not None`, which routes a raising `get_request` into these arms instead of crashing | **The fix is right; a new, unregistered behaviour follows from it.** Both arms do only `session.rollback(); instance.failures += 1` -- no `most_recent_attempt` stamp and no `dormant`/`gone_forever` escalation, unlike the fetch block's own `except` (`:612-620`) or its `>= 300` arm (`:605-611`). Because `:602` resets `failures = 0` on every sweep once nodeinfo comes back healthy, an instance whose nodeinfo is fine but whose `/api/v3/site` (or MBIN's `/api/users/admins`) is permanently broken never accumulates enough consecutive identity-block failures to cross `:609`'s threshold -- the task retries the broken endpoint forever, with no backoff and no escalation to dormant, a live behaviour change from the pre-D383 state where the same raise killed the whole task loudly. This is a near neighbour of D386's unbounded remote-driven loop: right change, new exposure, out of this round's approved scope to fix. Nominated for a future round rather than fixed here | correct in current production behaviour; registered as a live consequence of D383, not fixed, nominated for a future round | `app/shared/tasks/maintenance.py:602,605-620,690-692,733-735` read at this commit; D383 (the fix this consequence follows from); D386 (the nearest registered neighbour); the final whole-branch review of sub-project 33 (finding F7) |
+
+**Next free number: D392.** D390 and D391 were taken by this fix round --
+**D390** the `:743` equivalence proof restated on its correct grounds
+(`:746`'s `close()`, not "nothing pending"); **D391** DC1's unbounded silent
+retry on a permanently broken identity-block endpoint, registered as a
+consequence of D383 and nominated for a future round. Neither changes
+`maintenance.py`'s closed 100% coverage or its `coverage_floors.ini` entry;
+no test was added or changed for either, since D390 is a proof correction
+and D391 is a registration of already-correct production behaviour's
+consequence. If you take D392, say so here in the change that takes it.
+
 ## Ratchet gotchas
 
 - `percent_covered` is a **blended statement+branch figure**. This matters for
