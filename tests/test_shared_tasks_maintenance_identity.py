@@ -38,6 +38,31 @@ guarded the `finally`s with `is not None`, matching sub-project 32's
 fetch-block idiom (`:594`). A raising `get_request` is now caught by
 `:690`/`:733`'s `except` and becomes a failure increment instead of a crash --
 `TestIdentityPhaseFailures` below covers that.
+
+THE REMOVAL LOOP'S DRAIN-BEFORE-DELETE FIX (`:659-663`) stands on its own
+terms: draining `session.query(InstanceRole)...` into `stale_roles` before
+issuing any `.delete()` stops the loop from mutating a result set mid-
+iteration and desynchronizing the session's identity map, regardless of
+what else is pending in the session. It is NOT rescued by, and its
+correctness does NOT depend on, pending-add visibility. `get_task_session`
+(`app/utils.py:3673-3675`) returns a bare `Session(bind=db.engine)`, which
+keeps SQLAlchemy's default `autoflush=True` -- the opposite of `db.session`,
+which this project pins to `autoflush=False` (`app/__init__.py:81`). Under
+autoflush, a pending `session.add` from `:656` is flushed to the database
+before the removal query at `:661` ever executes, whether that query is
+consumed directly by a `for` loop (the old shape) or drained into a list
+first (the new one) -- both issue the identical SELECT at the identical
+program point, so they cannot diverge on whether a pending add is visible.
+A fixture built to catch that divergence (a pending add still in flight
+when the removal query runs) cannot exist against this session. This was
+checked empirically, not just read off the session config: reverting the
+drain-before-delete fix and re-running
+`test_an_admin_arrives_while_another_leaves_in_the_same_sweep` below --
+whose fixture has a genuinely pending create, an admin arriving while
+another leaves in the same sweep -- still passed against the reverted
+code. The fix is correct because mutating a result set mid-iteration and
+desynchronizing the identity map are defects on their own terms, not
+because any fixture here can observe the two orderings disagreeing.
 """
 
 from datetime import timedelta
@@ -363,3 +388,31 @@ class TestLemmyAdminRoles:
         db.session.expire_all()
         assert db.session.query(InstanceRole).filter_by(
             instance_id=instance.id, user_id=staying.id).count() == 1
+
+    def test_an_admin_arrives_while_another_leaves_in_the_same_sweep(self, db_session, monkeypatch):
+        """`:656`'s `session.add` and `:669`'s `.delete()`, both firing for
+        the same instance in the same pass.
+
+        Every test above isolates one half: a genuinely new admin with no
+        prior role, or an existing role with no new admin arriving. Here a
+        departing admin already has a committed role, and the payload lists
+        a DIFFERENT admin who has never had one, so both `:656` and the
+        removal loop run in the same sweep. The oracle is that the final
+        role set is exactly the arriving admin's -- neither operation may
+        leave a trace of the other's target behind.
+        """
+        instance = _seed_instance('peer.example', software='lemmy')
+        leaving = make_user(instance, 'leaving')
+        arriving = make_user(instance, 'arriving')
+        db.session.add(InstanceRole(
+            instance_id=instance.id, user_id=leaving.id, role='admin'))
+        db.session.commit()
+        self._lemmy(monkeypatch, _site_payload(arriving.ap_profile_id), actor=arriving)
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        remaining = {
+            r.user_id for r in
+            db.session.query(InstanceRole).filter_by(instance_id=instance.id).all()}
+        assert remaining == {arriving.id}
