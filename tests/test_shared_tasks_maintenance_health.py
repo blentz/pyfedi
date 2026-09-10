@@ -492,6 +492,136 @@ class TestMonitorHealthyInstances:
         assert db.session.query(Instance).filter_by(
             domain='lemmy.example').first().nodeinfo_href == 'https://lemmy.example/nodeinfo/2.1'
 
+    def test_a_healthy_node_document_clears_the_failure_state(self, db_session, monkeypatch):
+        """The fetch block's 200 arm (`:597-604`): software, version and the
+        three flags.
+
+        `get_request` (not `get_request_instance`) is patched to a harmless
+        404 because this arm sets `instance.software = 'piefed'` (`:600`) and
+        clears `dormant` (`:603`), so `instance.online()` is True and `:637`'s
+        admin-role guard IS entered once `software` becomes 'piefed'. An
+        unpatched call there would reach a live transport and, on the
+        pre-existing unbound-`response` bug at `:689`, raise instead of
+        merely logging a failure -- unrelated to what this test checks.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(200, {'software': {'name': 'PieFed', 'version': '1.2.3'}})))
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request', _Recorder(result=_response(404)))
+        instance = _seed_instance('healthy.example')
+        instance.nodeinfo_href = 'https://healthy.example/nodeinfo/2.0'
+        instance.failures = 4
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='healthy.example').first()
+        assert reloaded.software == 'piefed'
+        assert reloaded.version == '1.2.3'
+        assert reloaded.failures == 0
+        assert reloaded.dormant is False
+
+    def test_a_non_200_node_response_drops_the_href_and_counts_a_failure(self, db_session, monkeypatch):
+        """The `elif ... >= 300` arm (`:605-611`): the href is cleared so
+        discovery re-runs next sweep, and `most_recent_attempt` is stamped.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(503)))
+        instance = _seed_instance('flaky.example')
+        instance.nodeinfo_href = 'https://flaky.example/nodeinfo/2.0'
+        instance.failures = 0
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='flaky.example').first()
+        assert reloaded.nodeinfo_href is None
+        assert reloaded.failures == 1
+        assert reloaded.most_recent_attempt is not None
+
+    def test_the_sixth_failure_turns_an_instance_dormant(self, db_session, monkeypatch):
+        """The BOUNDARY in the `elif ... >= 300` arm (`:609`): `> 5`, so five
+        failures is not enough and six is.
+
+        Seeded at 5, the sweep's own increment makes 6.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(503)))
+        instance = _seed_instance('sixth.example')
+        instance.nodeinfo_href = 'https://sixth.example/nodeinfo/2.0'
+        instance.failures = 5
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='sixth.example').first()
+        assert reloaded.failures == 6
+        assert reloaded.dormant is True
+        assert reloaded.start_trying_again is not None
+
+    def test_the_fifth_failure_does_not(self, db_session, monkeypatch):
+        """The other side of the same boundary (`:609`). Seeded at 4, ending at 5."""
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(503)))
+        instance = _seed_instance('fifth.example')
+        instance.nodeinfo_href = 'https://fifth.example/nodeinfo/2.0'
+        instance.failures = 4
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='fifth.example').first()
+        assert reloaded.failures == 5
+        assert reloaded.dormant is False
+
+    def test_an_instance_with_no_href_after_discovery_escalates(self, db_session, monkeypatch):
+        """The else arm below the fetch block (`:626-634`), reached when
+        discovery found nothing. This is a DIFFERENT path from the fetch
+        block's failure arm and has its own threshold checks.
+
+        Seeded at 12: discovery's own `matched=False` increment (`:581`)
+        takes it to 13, then this else arm's increment (`:627`) takes it to
+        14 before `:632`'s `> 12` check fires -- comfortably past the
+        boundary, not pinned to it, so this proves the else arm's
+        `gone_forever` assignment (`:633`) fires at all but not exactly where.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(200, {'links': []})))
+        instance = _seed_instance('nohref.example')
+        instance.nodeinfo_href = None
+        instance.failures = 12
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='nohref.example').first()
+        assert reloaded.gone_forever is True
+
+    def test_a_banned_domain_is_skipped_before_any_request(self, db_session, monkeypatch):
+        """`:547`'s true arm. The oracle is that no request was made."""
+        recorder = _Recorder(result=_response(200, {'software': {'name': 'PieFed', 'version': '1.0'}}))
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance', recorder)
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.instance_banned', lambda domain: True)
+        instance = _seed_instance('banned.example')
+        instance.nodeinfo_href = 'https://banned.example/nodeinfo/2.0'
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        assert recorder.calls == []
+
 
 class TestCheckInstanceHealthGoneForever:
     """`check_instance_health:427` -- first loop, `:435-443`.
