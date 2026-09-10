@@ -53,6 +53,7 @@ from datetime import timedelta
 import httpx
 import pytest
 from sqlalchemy import event
+from sqlalchemy.orm import Session
 
 from app import db
 from app.models import BannedInstances, DefederationSubscription, Instance, utcnow
@@ -622,6 +623,171 @@ class TestMonitorHealthyInstances:
 
         assert recorder.calls == []
 
+    def test_a_discovery_response_between_200_and_300_counts_no_failure_here(self, db_session, monkeypatch):
+        """`:582`'s `elif`, the FALSE arm. A status code that is neither 200
+        (`:565`) nor >= 300 (`:582`) falls through the whole if/elif chain
+        untouched and lands straight on the `finally` at `:588-590`. Neither
+        existing discovery test reaches this: the 200 tests take `:565`'s
+        true arm, and `test_a_non_200_discovery_counts_a_failure` uses a 404,
+        which takes `:582`'s TRUE arm.
+
+        Regression this catches: widening `:582` so it also matches a 250
+        (e.g. changing `>= 300` to `>= 200`) would add a second failure here
+        -- `:584`'s increment on top of the no-href `else` arm's `:627` -- so
+        `failures` would end at 2 instead of 1.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(250)))
+        instance = _seed_instance('inbetween.example')
+        instance.nodeinfo_href = None
+        instance.failures = 0
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='inbetween.example').first()
+        assert reloaded.failures == 1
+        assert reloaded.nodeinfo_href is None
+
+    def test_a_node_response_between_200_and_300_leaves_state_untouched(self, db_session, monkeypatch):
+        """`:605`'s `elif`, the FALSE arm -- the second fetch block's
+        counterpart to the discovery test above, reached when a
+        `nodeinfo_href` is already on file. A 250 satisfies neither `:597`'s
+        `== 200` nor `:605`'s `>= 300`, so nothing in the if/elif body runs
+        and control falls straight to the `finally` at `:621-623`.
+
+        Regression this catches: widening `:605`'s `>= 300` to also match
+        250 would clear `nodeinfo_href` and add a failure; narrowing `:597`'s
+        `== 200` so a 250 is treated as success would instead reset
+        `failures` to 0 and set `software`/`version`. Either mutation
+        changes one of this test's unchanged-state assertions.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(250)))
+        instance = _seed_instance('node-inbetween.example')
+        instance.nodeinfo_href = 'https://node-inbetween.example/nodeinfo/2.0'
+        instance.failures = 3
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='node-inbetween.example').first()
+        assert reloaded.failures == 3
+        assert reloaded.nodeinfo_href == 'https://node-inbetween.example/nodeinfo/2.0'
+        assert reloaded.software == 'mastodon'
+        assert reloaded.version is None
+
+    def test_a_raising_node_fetch_below_both_thresholds_counts_one_failure(self, db_session, monkeypatch):
+        """The `except` arm below the second fetch block (`:612-620`), never
+        reached by `:605-611`'s own boundary tests
+        (`test_the_sixth_failure_turns_an_instance_dormant` and
+        `test_the_fifth_failure_does_not`) because those return a non-2xx
+        response rather than raising.
+
+        Seeded at 4, ending at 5: not `> 5` (`:616`), so `dormant` stays
+        `False` and lines `:617-618` do not run -- the FALSE side of that
+        boundary in an arm none of the existing tests reach. `node` is never
+        bound (the raise happens inside `get_request_instance` itself), so
+        `:622`'s `is not None` guard also takes its FALSE arm here.
+        """
+        def _raise(*args, **kwargs):
+            raise RuntimeError('node fetch exploded')
+
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance', _raise)
+        instance = _seed_instance('excepting-below.example')
+        instance.nodeinfo_href = 'https://excepting-below.example/nodeinfo/2.0'
+        instance.failures = 4
+        instance.most_recent_attempt = None
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='excepting-below.example').first()
+        assert reloaded.failures == 5
+        assert reloaded.dormant is False
+        assert reloaded.gone_forever is False
+        assert reloaded.most_recent_attempt is not None
+
+    def test_the_sixth_failure_in_the_except_arm_turns_dormant(self, db_session, monkeypatch):
+        """The BOUNDARY in the `except` arm (`:616`): `> 5`, mirroring
+        `test_the_sixth_failure_turns_an_instance_dormant` for the `elif`
+        arm but for the path that raises instead of returning a non-2xx
+        response. Seeded at 5, the except handler's own increment (`:614`)
+        makes 6.
+        """
+        def _raise(*args, **kwargs):
+            raise RuntimeError('node fetch exploded')
+
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance', _raise)
+        instance = _seed_instance('excepting-sixth.example')
+        instance.nodeinfo_href = 'https://excepting-sixth.example/nodeinfo/2.0'
+        instance.failures = 5
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='excepting-sixth.example').first()
+        assert reloaded.failures == 6
+        assert reloaded.dormant is True
+        assert reloaded.gone_forever is False
+        assert reloaded.start_trying_again is not None
+
+    def test_the_thirteenth_failure_in_the_except_arm_ends_gone_forever(self, db_session, monkeypatch):
+        """The BOUNDARY in the `except` arm (`:619`): `> 12`, the one none of
+        this module's existing tests pin exactly -- `test_an_instance_with_no_href_after_discovery_escalates`
+        seeds its (different, `else`-arm) path high enough to end at 14, past
+        the boundary rather than on it. Seeded at 12, the except handler's
+        own increment (`:614`) makes 13.
+        """
+        def _raise(*args, **kwargs):
+            raise RuntimeError('node fetch exploded')
+
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance', _raise)
+        instance = _seed_instance('excepting-thirteenth.example')
+        instance.nodeinfo_href = 'https://excepting-thirteenth.example/nodeinfo/2.0'
+        instance.failures = 12
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='excepting-thirteenth.example').first()
+        assert reloaded.failures == 13
+        assert reloaded.dormant is True
+        assert reloaded.gone_forever is True
+
+    def test_the_twelfth_failure_in_the_except_arm_does_not_end_gone_forever(self, db_session, monkeypatch):
+        """The other side of the same boundary (`:619`). Seeded at 11, ending
+        at 12: `dormant` is set (12 > 5) but `gone_forever` is not (12 is not
+        > 12).
+        """
+        def _raise(*args, **kwargs):
+            raise RuntimeError('node fetch exploded')
+
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance', _raise)
+        instance = _seed_instance('excepting-twelfth.example')
+        instance.nodeinfo_href = 'https://excepting-twelfth.example/nodeinfo/2.0'
+        instance.failures = 11
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='excepting-twelfth.example').first()
+        assert reloaded.failures == 12
+        assert reloaded.dormant is True
+        assert reloaded.gone_forever is False
+
 
 class TestCheckInstanceHealthGoneForever:
     """`check_instance_health:427` -- first loop, `:435-443`.
@@ -904,6 +1070,56 @@ class TestCheckInstanceHealthRecheck:
         check_instance_health()
 
         assert set(attempted) == {'bad-one.example', 'bad-two.example'}
+
+    def test_a_raising_banned_check_rolls_back_and_reraises(self, db_session, monkeypatch):
+        """`:501-503`, the function's OUTER handler -- distinct from the inner
+        one at `:494-497` the rest of this class documents. `instance_banned`
+        is called at `:453`, BEFORE the inner `try` opens at `:456`, so an
+        exception raised there escapes the inner handler untouched and is
+        caught only by the outer `try` wrapping the whole function body
+        (`:430-503`).
+
+        Two oracles, because `pytest.raises` alone cannot tell `:501-503`
+        apart from having no handler at all: with no `except` clause, the
+        same `RuntimeError` would still propagate out of the function
+        unchanged, and `pytest.raises` would still pass.
+
+          1. `Session.rollback` is spied at the class level (the task's
+             `session` is a plain `Session(bind=db.engine)` from
+             `get_task_session`, `app/utils.py:3673-3675`, not a name this
+             test can reach directly) and the spy list is cleared
+             immediately before the call, so it can only record activity
+             from this one invocation. This is what pins `:502`
+             specifically -- deleting just that line changes nothing else
+             this test checks.
+          2. `pytest.raises(RuntimeError, match=...)` pins `:503`'s `raise`
+             (a bare `except: pass` would swallow the error instead) and,
+             together with the rollback spy firing at all, pins `:501`'s
+             `except Exception:` actually catching it (an absent handler
+             would still propagate the same exception, but the rollback spy
+             would then record nothing).
+        """
+        def _raise(domain):
+            raise RuntimeError('banned check exploded')
+
+        monkeypatch.setattr('app.shared.tasks.maintenance.instance_banned', _raise)
+        self._dormant('outer-handler.example', href='https://outer-handler.example/nodeinfo/2.0')
+        db.session.commit()
+
+        rollback_calls = []
+        original_rollback = Session.rollback
+
+        def _spy_rollback(self_session, *args, **kwargs):
+            rollback_calls.append(self_session)
+            return original_rollback(self_session, *args, **kwargs)
+
+        monkeypatch.setattr(Session, 'rollback', _spy_rollback)
+        rollback_calls.clear()
+
+        with pytest.raises(RuntimeError, match='banned check exploded'):
+            check_instance_health()
+
+        assert rollback_calls, "session.rollback() at :502 did not run"
 
 
 class TestVersionAtLeast:
