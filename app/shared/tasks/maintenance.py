@@ -675,6 +675,7 @@ def monitor_healthy_instances():
 
             # Handle admin roles for Lemmy/PieFed instances
             if instance.online() and (instance.software == 'lemmy' or instance.software == 'piefed' or instance.software == 'pylova'):
+                response = None
                 try:
                     response = get_request(f'https://{instance.domain}/api/v3/site')
                     if response and response.status_code == 200:
@@ -732,7 +733,7 @@ def monitor_healthy_instances():
                     session.rollback()
                     instance.failures += 1
                 finally:
-                    if response:
+                    if response is not None:
                         response.close()
                 session.commit()
 
@@ -742,6 +743,7 @@ def monitor_healthy_instances():
             only add instance role info to Users that the DB is already aware of)
             """
             if instance.online() and instance.software == 'mbin':
+                response = None
                 try:
                     response = get_request(f'https://{instance.domain}/api/users/admins')
                     if response and response.status_code == 200:
@@ -774,7 +776,7 @@ def monitor_healthy_instances():
                     session.rollback()
                     instance.failures += 1
                 finally:
-                    if response:
+                    if response is not None:
                         response.close()
                 session.commit()
 
