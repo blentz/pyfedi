@@ -516,7 +516,7 @@ class TestLemmyCustomEmoji:
         assert db.session.query(Emoji).filter_by(instance_id=instance.id).count() == 0
 
     def test_a_non_200_does_not_invalidate_the_emoji_cache(self, db_session, monkeypatch):
-        """DC2: `cache.delete_memoized` sits outside `:640`'s guard.
+        """DC2: `cache.delete_memoized` sits outside `:641`'s guard.
 
         A 404 from one Lemmy instance discards the whole site's emoji
         replacements. The oracle records the call rather than observing the
@@ -551,3 +551,174 @@ class TestLemmyCustomEmoji:
         monitor_healthy_instances()
 
         assert len(recorder.calls) == 1
+
+
+class TestMbinAdminRoles:
+    """`:703-739` -- MBIN admin reconciliation.
+
+    `:703` forks on `software == 'mbin'`; `:707` on the response; `:711` walks
+    `instance_data['items']`; `:712` reads the username defensively; `:713` is
+    a COMPOUND -- `username and (isAdmin or isGlobalModerator)` -- which
+    coverage sees as one arc pair, so each conjunct needs its own test;
+    `:714` looks the user up locally and `:715` skips one that is not known;
+    `:717` skips one already an admin; `:726-732` removes stale roles.
+
+    Unlike the Lemmy block this never creates a User: the API response does
+    not carry enough to build one.
+    """
+
+    def _mbin(self, monkeypatch, payload):
+        _quiet_http_half(monkeypatch)
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request',
+            _Recorder(result=_response(200, payload)))
+
+    def test_a_listed_admin_gets_an_instance_role(self, db_session, monkeypatch):
+        """`:723`'s `session.add`."""
+        instance = _seed_instance('peer.example', software='mbin')
+        admin = make_user(instance, 'adminuser')
+        self._mbin(monkeypatch, _mbin_payload(
+            {'username': 'adminuser', 'isAdmin': True}))
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        roles = db.session.query(InstanceRole).filter_by(instance_id=instance.id).all()
+        assert {r.user_id for r in roles} == {admin.id}
+
+    def test_a_global_moderator_also_gets_the_role(self, db_session, monkeypatch):
+        """`:713`'s second disjunct, alone. `isAdmin` is absent."""
+        instance = _seed_instance('peer.example', software='mbin')
+        admin = make_user(instance, 'moduser')
+        self._mbin(monkeypatch, _mbin_payload(
+            {'username': 'moduser', 'isGlobalModerator': True}))
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        assert db.session.query(InstanceRole).filter_by(
+            instance_id=instance.id, user_id=admin.id).count() == 1
+
+    def test_a_plain_user_gets_no_role(self, db_session, monkeypatch):
+        """`:713`'s false arm -- neither flag set."""
+        instance = _seed_instance('peer.example', software='mbin')
+        make_user(instance, 'plainuser')
+        self._mbin(monkeypatch, _mbin_payload({'username': 'plainuser'}))
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        assert db.session.query(InstanceRole).filter_by(
+            instance_id=instance.id).count() == 0
+
+    def test_an_item_without_a_username_is_skipped(self, db_session, monkeypatch):
+        """`:712`'s else -- the key is absent, so `username` is None and
+        `:713`'s first conjunct is false. Without `:712`'s guard this raises
+        `KeyError`, caught by `:733`.
+        """
+        instance = _seed_instance('peer.example', software='mbin')
+        before = instance.failures
+        self._mbin(monkeypatch, _mbin_payload({'isAdmin': True}))
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='peer.example').first()
+        assert db.session.query(InstanceRole).filter_by(
+            instance_id=instance.id).count() == 0
+        assert reloaded.failures == before + 2
+
+    def test_an_unknown_username_gets_no_role(self, db_session, monkeypatch):
+        """`:715`'s false arm -- listed as admin but not in our database.
+
+        Dropping that guard does not make role count alone fail: with `user`
+        None, `admin_user_ids.append(user.id)` raises `AttributeError`,
+        `:733` catches it, and the block still ends with zero roles -- a
+        crash swallowed into a skip looks the same as a clean one by that
+        measure. `:735`'s failure increment is what tells them apart: the
+        guard intact costs only the HTTP half's two; the guard missing costs
+        a third from the caught crash. So the oracle checks BOTH that no
+        role exists and that no failure was recorded by this block.
+        """
+        instance = _seed_instance('peer.example', software='mbin')
+        self._mbin(monkeypatch, _mbin_payload(
+            {'username': 'stranger', 'isAdmin': True}))
+        before = instance.failures
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='peer.example').first()
+        assert db.session.query(InstanceRole).filter_by(
+            instance_id=instance.id).count() == 0
+        assert reloaded.failures == before + 2
+
+    def test_an_admin_no_longer_listed_loses_the_role(self, db_session, monkeypatch):
+        """`:732`'s `.delete()`."""
+        instance = _seed_instance('peer.example', software='mbin')
+        staying = make_user(instance, 'staying')
+        leaving = make_user(instance, 'leaving')
+        for user in (staying, leaving):
+            db.session.add(InstanceRole(
+                instance_id=instance.id, user_id=user.id, role='admin'))
+        db.session.commit()
+        self._mbin(monkeypatch, _mbin_payload(
+            {'username': 'staying', 'isAdmin': True}))
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        remaining = {
+            r.user_id for r in
+            db.session.query(InstanceRole).filter_by(instance_id=instance.id).all()}
+        assert remaining == {staying.id}
+
+    def test_a_still_listed_admin_keeps_the_role(self, db_session, monkeypatch):
+        """`:727`'s false arm -- the user IS in `admin_user_ids`, so no delete.
+
+        This is the companion the removal test needs: without it, a mutation
+        that deletes unconditionally (dropping the `not in` negation at
+        `:727`) would still satisfy the test above.
+        """
+        instance = _seed_instance('peer.example', software='mbin')
+        staying = make_user(instance, 'staying')
+        db.session.add(InstanceRole(
+            instance_id=instance.id, user_id=staying.id, role='admin'))
+        db.session.commit()
+        self._mbin(monkeypatch, _mbin_payload(
+            {'username': 'staying', 'isAdmin': True}))
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        assert db.session.query(InstanceRole).filter_by(
+            instance_id=instance.id, user_id=staying.id).count() == 1
+
+    def test_a_non_200_admins_response_creates_no_role(self, db_session, monkeypatch):
+        """`:707`'s false arm.
+
+        Negating that guard does not make role count alone fail: entering
+        the block with a 503 and no payload attached, `response.json()`
+        raises on the empty body, `:733` catches it, and the block still
+        ends with zero roles -- a crash swallowed into a skip looks the same
+        as a clean one by that measure. `:735`'s failure increment is what
+        tells them apart: the guard intact costs only the HTTP half's two;
+        the guard missing costs a third from the caught crash. So the oracle
+        checks BOTH that no role exists and that no failure was recorded by
+        this block.
+        """
+        instance = _seed_instance('peer.example', software='mbin')
+        make_user(instance, 'adminuser')
+        _quiet_http_half(monkeypatch)
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request',
+            _Recorder(result=_response(503)))
+        before = instance.failures
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='peer.example').first()
+        assert db.session.query(InstanceRole).filter_by(
+            instance_id=instance.id).count() == 0
+        assert reloaded.failures == before + 2
