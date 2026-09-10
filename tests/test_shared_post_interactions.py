@@ -262,3 +262,91 @@ def test_flair_list_returns_an_empty_list_when_the_post_has_no_flair(db_session)
 
     assert flair_list == []
 
+
+def test_marking_read_inserts_one_row_per_post_id(db_session):
+    """`:1118-1120`'s INSERT, reached through `:1116`'s true arm.
+
+    Catches a regression inverting `:1116`, which would send a read=True call
+    down the DELETE branch and leave the table empty.
+    """
+    s = _seed()
+    second = make_post(s.community, s.author, 'https://local.example/p/2')
+
+    mark_post_read([s.post.id, second.id], True, s.voter.id)
+
+    rows = db.session.execute(
+        read_posts.select().where(read_posts.c.user_id == s.voter.id)).fetchall()
+    assert {row.read_post_id for row in rows} == {s.post.id, second.id}
+
+
+def test_marking_read_twice_updates_rather_than_duplicating(db_session):
+    """`:1119`'s `ON CONFLICT (user_id, read_post_id) DO UPDATE`.
+
+    Catches a regression dropping the conflict clause, which would raise a
+    unique-violation on the second call instead of refreshing `interacted_at`.
+    """
+    s = _seed()
+
+    mark_post_read([s.post.id], True, s.voter.id)
+    first = db.session.execute(
+        read_posts.select().where(read_posts.c.user_id == s.voter.id)).fetchone()
+    mark_post_read([s.post.id], True, s.voter.id)
+
+    rows = db.session.execute(
+        read_posts.select().where(read_posts.c.user_id == s.voter.id)).fetchall()
+    assert len(rows) == 1
+    assert rows[0].interacted_at >= first.interacted_at
+
+
+def test_marking_unread_deletes_the_row(db_session):
+    """`:1123-1125`'s DELETE, reached through `:1116`'s false arm.
+
+    Catches a regression inverting `:1116`, which would re-insert on a
+    read=False call instead of removing.
+    """
+    s = _seed()
+    mark_post_read([s.post.id], True, s.voter.id)
+
+    mark_post_read([s.post.id], False, s.voter.id)
+
+    rows = db.session.execute(
+        read_posts.select().where(read_posts.c.user_id == s.voter.id)).fetchall()
+    assert rows == []
+
+
+def test_an_empty_post_id_list_still_bumps_last_seen(db_session):
+    """Both loops' zero-iteration exit arcs, plus `:1128-1130`.
+
+    `:1117` and `:1122` each need a zero-length list to record their exit arc,
+    and `:1128`'s UPDATE runs regardless of how many posts were named -- so an
+    empty call is not a no-op. Catches a regression moving the last_seen update
+    inside either loop, which would make it depend on the list being non-empty.
+    """
+    s = _seed()
+    s.voter.last_seen = None
+    db.session.commit()
+
+    mark_post_read([], True, s.voter.id)
+
+    db.session.refresh(s.voter)
+    assert s.voter.last_seen is not None
+    rows = db.session.execute(
+        read_posts.select().where(read_posts.c.user_id == s.voter.id)).fetchall()
+    assert rows == []
+
+
+def test_an_empty_post_id_list_on_the_unread_branch_also_bumps_last_seen(db_session):
+    """`:1122`'s zero-iteration exit arc specifically.
+
+    The read=True twin above records `:1117`'s exit arc; this records `:1122`'s.
+    Coverage treats them as separate arcs and one test cannot take both.
+    """
+    s = _seed()
+    s.voter.last_seen = None
+    db.session.commit()
+
+    mark_post_read([], False, s.voter.id)
+
+    db.session.refresh(s.voter)
+    assert s.voter.last_seen is not None
+
