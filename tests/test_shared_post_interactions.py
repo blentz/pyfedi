@@ -969,3 +969,272 @@ def test_a_web_reversal_bypasses_the_upvote_gate_for_a_blocked_user(db_session, 
     assert db.session.query(PostVote).filter_by(
         user_id=s.voter.id, post_id=s.post.id).count() == 0
 
+
+# --- Task 6: vote_for_post, the ban check through the return arms ---
+
+def test_a_banned_user_is_aborted_with_403(db_session, app):
+    """`:50`'s FIRST conjunct -- `user.banned` -- and `:51`'s abort.
+
+    DEVIATES FROM THE BRIEF, which asked for SRC_API with `vote_direction=
+    'upvote'`. That combination never reaches `:50` at all: `authorise_api_user`
+    (app/utils.py:3628) raises a bare `Exception('incorrect_login')` for ANY
+    bearer token whose user has `user.banned is True`, before vote_for_post's
+    body runs a single line, so a banned SRC_API caller never even reaches
+    `:34`'s return. And a banned SRC_WEB caller with `vote_direction='upvote'`
+    fares no better via a different route: `can_upvote` (app/utils.py:2481)
+    also returns False whenever `user.banned` is true, so `:43`'s `not
+    can_upvote(...)` is True and the function returns through `:47`'s early
+    render before `:50` ever runs.
+
+    `vote_direction='reversal'` sidesteps both: `:43` and `:44` compare
+    `vote_direction` against 'upvote'/'downvote' by equality, so neither
+    conjunct's first half is ever True for 'reversal' regardless of what
+    `can_upvote`/`can_downvote` return, and the disjunction is False --
+    exactly the mechanism `test_a_web_reversal_bypasses_the_upvote_gate_for_a_
+    blocked_user` above already established for a bot voter. Execution falls
+    through to `:50`, where `user.banned` is now the ONLY thing that can raise,
+    and it is True. SRC_WEB is required (not SRC_API) because SRC_WEB reads
+    `current_user` directly with no `authorise_api_user` gate to intercept it.
+
+    Asserts the status code rather than merely that something raised, so an
+    abort reached through an unrelated crash cannot satisfy it, and asserts no
+    vote was recorded.
+    """
+    from werkzeug.exceptions import Forbidden
+
+    s = _seed()
+    s.voter.banned = True
+    db.session.commit()
+
+    with _web_ctx(app, s.voter):
+        with pytest.raises(Forbidden) as excinfo:
+            vote_for_post(s.post.id, 'reversal', True, None, SRC_WEB)
+
+    assert excinfo.value.code == 403
+    assert db.session.query(PostVote).filter_by(
+        user_id=s.voter.id, post_id=s.post.id).count() == 0
+
+
+def test_a_vote_over_the_daily_quota_is_aborted_with_429(db_session, app):
+    """`:55`'s true arm and `:56`'s abort.
+
+    Sets the counter one above VOTE_QUOTA, the tight side of `>`. Asserts 429
+    specifically, because `:51` aborts 403 on the same function and a bare
+    `pytest.raises(Exception)` cannot tell them apart. Writes the redis key
+    `votes_cast_today` (app/models.py:47-52) reads directly in this test body
+    rather than through a second helper -- `_clear_votes_cast` (Task 5,
+    above) already exists for the matching cleanup half of this job, and the
+    module docstring's binding rule is that no test may leave a
+    `votes_cast_*` key behind, not that every test must share one write
+    helper. The abort happens before `post.vote()` runs, so this key is never
+    incremented by production code either -- only this test's own `set` and
+    the `finally`'s `_clear_votes_cast` ever touch it.
+    """
+    from app import redis_client
+    from werkzeug.exceptions import TooManyRequests
+
+    s = _seed()
+    redis_client.set(f'votes_cast_{date.today()}_{s.voter.id}',
+                     str(app.config['VOTE_QUOTA'] + 1))
+
+    try:
+        with pytest.raises(TooManyRequests) as excinfo:
+            vote_for_post(s.post.id, 'upvote', True, None, SRC_API,
+                          auth=_bearer(s.voter))
+
+        assert excinfo.value.code == 429
+        assert db.session.query(PostVote).filter_by(
+            user_id=s.voter.id, post_id=s.post.id).count() == 0
+    finally:
+        _clear_votes_cast(s.voter.id)
+
+
+def test_a_vote_exactly_at_the_daily_quota_is_allowed(db_session, app):
+    """`:55`'s false arm at the boundary itself.
+
+    `:55` is `>`, so a count EQUAL to VOTE_QUOTA passes. This is the
+    direction sub-project 32's mutation pass failed to probe, and the reason
+    this plan asks for both. Catches a regression changing `>` to `>=`. The
+    vote completes, so `post.vote()` (app/models.py:2822-2826) itself
+    increments this same key afterward; the `finally` clears it regardless of
+    what value it ends up holding.
+    """
+    from app import redis_client
+
+    s = _seed()
+    redis_client.set(f'votes_cast_{date.today()}_{s.voter.id}',
+                     str(app.config['VOTE_QUOTA']))
+
+    try:
+        result = vote_for_post(s.post.id, 'upvote', True, None, SRC_API,
+                               auth=_bearer(s.voter))
+
+        assert result == s.voter.id
+        assert db.session.query(PostVote).filter_by(
+            user_id=s.voter.id, post_id=s.post.id).count() == 1
+    finally:
+        _clear_votes_cast(s.voter.id)
+
+
+def test_a_first_web_upvote_reports_the_post_as_recently_upvoted(db_session, app):
+    """`:67`'s true arm and `:68`'s assignment, plus `:62`'s false arm.
+
+    `Post.vote` returns None for a fresh vote, so `undo is None` holds and the
+    post id lands in `recently_upvoted`, which flows into the template as the
+    `voted_up` CSS class (app/templates/post/_post_voting_buttons.html:3) on
+    the upvote button div. Asserting on that literal marker in the rendered
+    body -- not just `status_code` -- is what actually pins `:68`'s
+    assignment: a regression that skipped it would still return 200 with an
+    unrelated body, but would never render `voted_up`. Completes a real vote,
+    so the redis cleanup applies (see `_clear_votes_cast`'s docstring).
+    """
+    s = _seed()
+
+    try:
+        with _web_ctx(app, s.voter):
+            result = vote_for_post(s.post.id, 'upvote', True, None, SRC_WEB)
+
+        assert result.status_code == 200
+        body = result.get_data(as_text=True)
+        assert 'voted_up' in body
+        assert 'voted_down' not in body
+        assert db.session.query(PostVote).filter_by(
+            user_id=s.voter.id, post_id=s.post.id).count() == 1
+    finally:
+        _clear_votes_cast(s.voter.id)
+
+
+def test_a_first_web_downvote_reports_the_post_as_recently_downvoted(db_session, app):
+    """`:67`'s false arm, `:69`'s true arm and `:70`'s assignment.
+
+    Catches a regression collapsing `:69` into `:67`, which would report a
+    downvote as an upvote to the template. Same `voted_down`/`voted_up`
+    marker technique as the upvote test above, plus the `PostVote.effect`
+    check the brief asked for.
+    """
+    s = _seed()
+
+    try:
+        with _web_ctx(app, s.voter):
+            result = vote_for_post(s.post.id, 'downvote', True, None, SRC_WEB)
+
+        assert result.status_code == 200
+        body = result.get_data(as_text=True)
+        assert 'voted_down' in body
+        assert 'voted_up' not in body
+        vote = db.session.query(PostVote).filter_by(
+            user_id=s.voter.id, post_id=s.post.id).one()
+        assert vote.effect < 0
+    finally:
+        _clear_votes_cast(s.voter.id)
+
+
+def test_repeating_a_web_upvote_undoes_it_and_reports_neither_list(db_session, app):
+    """`:67`'s and `:69`'s false arms together, via a non-None `undo`.
+
+    `Post.vote` returns 'Like' when it removes an existing upvote
+    (app/models.py:2762-2767), so `undo is None` is False on both
+    conditionals and both lists stay empty. This is the only input that takes
+    both false arms. Catches a regression dropping the `undo is None` clause
+    from either, which would report an undone vote as a live one -- pinned
+    here by asserting NEITHER marker is in the body, not merely that the vote
+    row is gone. Only the first call writes a `votes_cast_*` key
+    (app/models.py:2762-2767's undo branch never touches it, confirmed by
+    reading it), but the `finally` clears it unconditionally regardless.
+    """
+    s = _seed()
+
+    try:
+        with _web_ctx(app, s.voter):
+            vote_for_post(s.post.id, 'upvote', True, None, SRC_WEB)
+
+        with _web_ctx(app, s.voter):
+            result = vote_for_post(s.post.id, 'upvote', True, None, SRC_WEB)
+
+        assert result.status_code == 200
+        body = result.get_data(as_text=True)
+        assert 'voted_up' not in body
+        assert 'voted_down' not in body
+        assert db.session.query(PostVote).filter_by(
+            user_id=s.voter.id, post_id=s.post.id).count() == 0
+    finally:
+        _clear_votes_cast(s.voter.id)
+
+
+def test_the_masonry_template_is_chosen_on_the_success_path_too(db_session, app):
+    """`:72`'s true arm, distinct from `:45`'s.
+
+    Coverage records two separate ternaries at `:45` and `:72`; Task 5 pinned
+    `:45`'s on the early-refusal path (`:47`). This pins `:72`'s on the
+    success path -- the one `:45`'s test structurally cannot reach, since
+    `:45` only runs when `:43-44`'s guard fires and returns before `:53`.
+
+    DEVIATES FROM THE BRIEF, which called this twice with `vote_direction=
+    'upvote'` (masonry then plain) and asserted `masonry != plain`. Two
+    problems with that: first, `Response.__eq__` is identity comparison, so
+    two distinct Response objects are ALWAYS `!=` regardless of body content
+    -- that assertion cannot fail no matter what `:72` does, which is exactly
+    the "test that cannot fail" defect this round is watching for. Second,
+    even fixed to compare `.get_data(as_text=True)`, a same-post 'upvote'/
+    'upvote' pair is a fresh-vote-then-undo pair (see the test above): the
+    second call's `recently_upvoted` becomes `[]` where the first's was
+    `[post_id]`, so the two bodies would still differ by the `voted_up`
+    marker even if `:72` were mutated to hardcode a single template name --
+    the test would pass for the wrong reason and never catch that mutation.
+
+    This calls `vote_for_post` TWICE with `vote_direction='reversal'` and no
+    existing vote instead. As `test_a_banned_user_is_aborted_with_403` above
+    establishes, `:43-44`'s guard never fires for 'reversal', so both calls
+    reach `:53` onward. `Post.vote`'s reversal handling (app/models.py:2732-
+    2741) returns None immediately with NO existing vote to reverse, before
+    touching a single row, a lock, or the votes_cast key -- so `undo` is None
+    on both calls but `vote_direction` is 'reversal', not 'upvote' or
+    'downvote', so `:67` and `:69` are both False on EVERY call, identically.
+    `recently_upvoted=[]` and `recently_downvoted=[]` on both renders, so the
+    only difference `:72` can introduce between the masonry and plain calls
+    is the template file itself -- no vote-state confound, no PostVote row,
+    no redis write, no cleanup needed.
+
+    Verified live (see task report): mutating `:72` to always select
+    `post/_post_voting_buttons.html` made the two bodies equal and this
+    test's inequality assertion fail, then restored.
+    """
+    s = _seed()
+
+    with _web_ctx(app, s.voter, query_string='style=masonry'):
+        masonry = vote_for_post(s.post.id, 'reversal', True, None, SRC_WEB)
+
+    with _web_ctx(app, s.voter):
+        plain = vote_for_post(s.post.id, 'reversal', True, None, SRC_WEB)
+
+    assert masonry.status_code == 200
+    assert plain.status_code == 200
+    masonry_body = masonry.get_data(as_text=True)
+    plain_body = plain.get_data(as_text=True)
+    assert masonry_body != plain_body
+    assert 'style=masonry' in masonry_body
+    assert 'style=masonry' not in plain_body
+    assert db.session.query(PostVote).filter_by(
+        user_id=s.voter.id, post_id=s.post.id).count() == 0
+
+
+def test_voting_marks_the_post_read(db_session, app):
+    """`:53`'s `mark_post_read` call on the success path.
+
+    A future change moving this call below the quota check would still pass
+    every other test in this file; this test pins that it happens on the
+    path where the vote succeeds, so that move cannot silently delete it.
+    Completes a real vote, so the redis cleanup applies.
+    """
+    s = _seed()
+
+    try:
+        with _web_ctx(app, s.voter):
+            vote_for_post(s.post.id, 'upvote', True, None, SRC_WEB)
+
+        rows = db.session.execute(
+            read_posts.select().where(read_posts.c.user_id == s.voter.id)).fetchall()
+        assert {row.read_post_id for row in rows} == {s.post.id}
+    finally:
+        _clear_votes_cast(s.voter.id)
+
