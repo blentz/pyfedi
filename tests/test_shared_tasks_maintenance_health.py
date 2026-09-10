@@ -423,6 +423,40 @@ class TestMonitorHealthyInstances:
         assert db.session.query(Instance).filter_by(
             domain='missing.example').first().failures == 2
 
+    def test_a_genuine_3xx_discovery_response_counts_a_failure(self, db_session, monkeypatch):
+        """`:582`'s `elif`, TRUE arm, with a status actually inside `[300, 400)`
+        rather than `test_a_non_200_discovery_counts_a_failure`'s 404.
+
+        Task 11's mutation testing found `:582`'s `>= 300` survives being
+        mutated to `>= 400` under every existing test in this file: the only
+        discovery statuses exercised are 200 (`< 300`) and 404 (`>= 400`), so
+        nothing here distinguished the boundary actually written from one
+        drawn 100 higher. A 304 sits strictly between the two and is real --
+        redirects and not-modified responses are exactly what a `>= 300`
+        catch-all is for.
+
+        The oracle mirrors the 404 test's: 2, not merely nonzero. `:584`
+        counts the 304 itself, and because `nodeinfo_href` stays unset,
+        `:593`'s `else` arm at `:627` counts a second failure. Regression this
+        catches: narrowing `:582` to `>= 400` (or any bound above 304) leaves
+        a 304 unmatched by `==200` or the narrowed `elif`, so `:584` never
+        fires and only `:627`'s single increment lands -- `failures` ends at
+        1 instead of 2.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(304)))
+        instance = _seed_instance('redirected.example')
+        instance.nodeinfo_href = None
+        instance.failures = 0
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        assert db.session.query(Instance).filter_by(
+            domain='redirected.example').first().failures == 2
+
     def test_an_unmatched_document_counts_one_failure_not_one_per_link(self, db_session, monkeypatch):
         """DC3: before the fix, the increment sat INSIDE the per-link loop
         (`:568-579`), firing once per unrelated link instead of once per
@@ -607,6 +641,107 @@ class TestMonitorHealthyInstances:
         db.session.expire_all()
         reloaded = db.session.query(Instance).filter_by(domain='nohref.example').first()
         assert reloaded.gone_forever is True
+
+    def test_the_sixth_failure_in_the_no_href_else_arm_turns_dormant(self, db_session, monkeypatch):
+        """The BOUNDARY in the no-href `else` arm (`:629`): `> 5`, mirroring
+        `test_the_sixth_failure_turns_an_instance_dormant` for the fetch
+        block's `elif` arm but for the path that never has a
+        `nodeinfo_href` at all.
+
+        Task 11's mutation testing found `:629` survives being mutated to
+        `>= 5`: `test_an_instance_with_no_href_after_discovery_escalates`
+        seeds this same arm at 12 and ends at 14, comfortably past the
+        boundary on both sides of `> 5` vs `>= 5`, so it cannot tell them
+        apart. A 404 discovery response takes the discovery block's own
+        `elif >= 300` arm (`:582-584`), counting one failure without ever
+        setting `nodeinfo_href`; because it is still unset, `:593`'s `else`
+        arm runs too and counts a second. Seeded at 4: discovery's
+        increment makes 5, this arm's own increment (`:627`) makes 6 --
+        past the boundary.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(404)))
+        instance = _seed_instance('nohref-sixth.example')
+        instance.nodeinfo_href = None
+        instance.failures = 4
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='nohref-sixth.example').first()
+        assert reloaded.failures == 6
+        assert reloaded.dormant is True
+        assert reloaded.start_trying_again is not None
+
+    def test_the_fifth_failure_in_the_no_href_else_arm_does_not(self, db_session, monkeypatch):
+        """The other side of the same boundary (`:629`). Seeded at 3:
+        discovery's increment (`:584`) makes 4, this arm's own increment
+        (`:627`) makes 5 -- not `> 5`.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(404)))
+        instance = _seed_instance('nohref-fifth.example')
+        instance.nodeinfo_href = None
+        instance.failures = 3
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='nohref-fifth.example').first()
+        assert reloaded.failures == 5
+        assert reloaded.dormant is False
+
+    def test_the_thirteenth_failure_in_the_no_href_else_arm_ends_gone_forever(self, db_session, monkeypatch):
+        """The BOUNDARY in the no-href `else` arm (`:632`): `> 12`, the same
+        shape as `test_the_sixth_failure_in_the_no_href_else_arm_turns_dormant`
+        above but for the `gone_forever` threshold.
+
+        Task 11's mutation testing found `:632` survives being mutated to
+        `>= 12` for the same reason as `:629`:
+        `test_an_instance_with_no_href_after_discovery_escalates` ends at 14,
+        past the boundary on both sides. Seeded at 11: discovery's own
+        increment makes 12, this arm's own increment (`:627`) makes 13 --
+        past the boundary.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(404)))
+        instance = _seed_instance('nohref-thirteenth.example')
+        instance.nodeinfo_href = None
+        instance.failures = 11
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='nohref-thirteenth.example').first()
+        assert reloaded.failures == 13
+        assert reloaded.gone_forever is True
+
+    def test_the_twelfth_failure_in_the_no_href_else_arm_does_not_end_gone_forever(self, db_session, monkeypatch):
+        """The other side of the same boundary (`:632`). Seeded at 10:
+        discovery's increment makes 11, this arm's own increment makes 12 --
+        not `> 12`. `dormant` is set regardless (12 > 5).
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(404)))
+        instance = _seed_instance('nohref-twelfth.example')
+        instance.nodeinfo_href = None
+        instance.failures = 10
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='nohref-twelfth.example').first()
+        assert reloaded.failures == 12
+        assert reloaded.dormant is True
+        assert reloaded.gone_forever is False
 
     def test_a_banned_domain_is_skipped_before_any_request(self, db_session, monkeypatch):
         """`:547`'s true arm. The oracle is that no request was made."""
@@ -981,6 +1116,50 @@ class TestCheckInstanceHealthRecheck:
         assert reloaded.nodeinfo_href == 'https://found.example/nodeinfo/2.0'
         assert reloaded.dormant is False
 
+    def test_discovery_matches_the_https_schema_2_0_variant(self, db_session, monkeypatch):
+        """`:484`, the `https://` variant of the 2.0 schema rel -- one of the
+        three URLs `:482`'s `in` check accepts.
+
+        Task 11's mutation testing found dropping `:484` alone survives
+        every existing test in this file: `NODEINFO_LINK` (the module
+        constant every other discovery test here uses) is the `:483`
+        `http://` variant, so nothing exercised `:484` or `:485` before this.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(200, {'links': [
+                {'rel': 'https://nodeinfo.diaspora.software/ns/schema/2.0',
+                 'href': 'https://https-variant.example/nodeinfo/2.0'}]})))
+        self._dormant('https-variant.example', href=None)
+        db.session.commit()
+
+        check_instance_health()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='https-variant.example').first()
+        assert reloaded.nodeinfo_href == 'https://https-variant.example/nodeinfo/2.0'
+        assert reloaded.dormant is False
+
+    def test_discovery_matches_the_2_1_schema_variant(self, db_session, monkeypatch):
+        """`:485`, the 2.1 schema rel -- the third of the three URLs `:482`'s
+        `in` check accepts. See `test_discovery_matches_the_https_schema_2_0_variant`
+        above for why this line was previously unexercised.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(200, {'links': [
+                {'rel': 'http://nodeinfo.diaspora.software/ns/schema/2.1',
+                 'href': 'https://schema21.example/nodeinfo/2.1'}]})))
+        self._dormant('schema21.example', href=None)
+        db.session.commit()
+
+        check_instance_health()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='schema21.example').first()
+        assert reloaded.nodeinfo_href == 'https://schema21.example/nodeinfo/2.1'
+        assert reloaded.dormant is False
+
     def test_a_link_list_with_no_match_leaves_the_instance_dormant(self, db_session, monkeypatch):
         """`:482`'s false arm, taken for every link. `:481`'s loop ends without
         a break and nothing is assigned.
@@ -1009,6 +1188,27 @@ class TestCheckInstanceHealthRecheck:
         monkeypatch.setattr(
             'app.shared.tasks.maintenance.instance_banned', lambda domain: True)
         self._dormant('banned.example', href='https://banned.example/nodeinfo/2.0')
+        db.session.commit()
+
+        check_instance_health()
+
+        assert recorder.calls == []
+
+    def test_flipboard_is_skipped_before_any_request(self, db_session, monkeypatch):
+        """`:453`'s second guard, the `flipboard.com` literal. `instance_banned`
+        is left real (not mocked to `True`) so this test cannot pass merely
+        because the domain happens to be banned in the database -- there is
+        no `BannedInstances` row for it, so `instance_banned('flipboard.com')`
+        returns `False` and only the literal comparison can skip this row.
+
+        Task 11's mutation testing found dropping ` or instance.domain ==
+        'flipboard.com'` from `:453` survives every existing test in this
+        file: none of them seeds that domain.
+        """
+        recorder = _Recorder(result=_response(200, {'software': {'name': 'PieFed', 'version': '1.0'}}))
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance', recorder)
+        self._dormant('flipboard.com', href='https://flipboard.com/nodeinfo/2.0')
         db.session.commit()
 
         check_instance_health()
