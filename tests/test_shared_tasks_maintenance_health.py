@@ -578,6 +578,39 @@ class TestMonitorHealthyInstances:
         assert reloaded.failures == 1
         assert reloaded.most_recent_attempt is not None
 
+    def test_a_genuine_3xx_node_response_drops_the_href_and_counts_a_failure(self, db_session, monkeypatch):
+        """`:605`'s `elif`, TRUE arm, with a status actually inside `[300, 400)`
+        rather than `test_a_non_200_node_response_drops_the_href_and_counts_a_failure`'s
+        503.
+
+        The mirror of `test_a_genuine_3xx_discovery_response_counts_a_failure`
+        for the SECOND fetch block: `nodeinfo_href` is seeded already set, so
+        the sweep skips discovery entirely (`:556`'s `if not nodeinfo_href:`
+        is False) and reaches this arm directly. No test in the file drove a
+        status in `[300, 400)` through here before -- every other test on this
+        arm uses 503, well above 400.
+
+        Regression this catches: narrowing `:605` to `>= 400` (or any bound
+        above 304) leaves a 304 satisfying neither `:597`'s `== 200` nor the
+        narrowed `elif`, so nothing in the if/elif body runs, `nodeinfo_href`
+        survives instead of being cleared, and `failures` stays at its seeded
+        0 instead of becoming 1.
+        """
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            _Recorder(result=_response(304)))
+        instance = _seed_instance('redirected-node.example')
+        instance.nodeinfo_href = 'https://redirected-node.example/nodeinfo/2.0'
+        instance.failures = 0
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='redirected-node.example').first()
+        assert reloaded.nodeinfo_href is None
+        assert reloaded.failures == 1
+
     def test_the_sixth_failure_turns_an_instance_dormant(self, db_session, monkeypatch):
         """The BOUNDARY in the `elif ... >= 300` arm (`:609`): `> 5`, so five
         failures is not enough and six is.
@@ -947,11 +980,20 @@ class TestCheckInstanceHealthGoneForever:
         """`:442`'s assignment. The recheck loop is neutralised so this test
         observes only the first loop: a raising helper would otherwise route
         into `:494-497` and change `failures`.
+
+        Seeded at exactly `days_ago=5`, pinning `:435`'s cutoff rather than
+        merely straddling it with the 4-day seed below. Mutating `days=5` to
+        `days=6` survives an unpinned 6-day seed (both sides of `T0 - 6d <
+        T1 - 6d` still hold), but at `days_ago=5` the row's `start_trying_again`
+        is `T0 - 5d`; under the mutant, `five_days_ago` becomes `T1 - 6d`, and
+        `T0 - 5d < T1 - 6d` is False for any realistic gap between seeding and
+        running the task, so the row is not selected and `gone_forever` stays
+        `False` where this test asserts `True`.
         """
         monkeypatch.setattr(
             'app.shared.tasks.maintenance.get_request_instance',
             _Recorder(result=_response(500)))
-        self._dormant('gone.example', days_ago=6)
+        self._dormant('gone.example', days_ago=5)
         db.session.commit()
 
         check_instance_health()
