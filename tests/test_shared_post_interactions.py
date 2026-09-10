@@ -700,7 +700,7 @@ def test_an_api_upvote_from_a_bot_returns_early_without_voting(db_session):
     module docstring's "SRC_API ARM DOES NOT NEED A REQUEST CONTEXT" finding
     applies to this arm too. No `redis_double` requested anywhere in this
     file, per the module docstring, and this call does not even reach
-    `mark_post_read` -- it returns at `:36`, before `:53`.
+    `mark_post_read` -- it returns at `:36`, before `:56`.
     """
     s = _seed()
     s.voter.bot = True
@@ -923,7 +923,7 @@ def test_a_web_reversal_bypasses_the_upvote_gate_for_a_blocked_user(db_session, 
     both False) and `vote_direction='reversal'`: `:43`'s first conjunct is
     `'reversal' == 'upvote' and ...` = False; `:44`'s second conjunct is
     `'reversal' == 'downvote' and ...` = False. Neither disjunct fires, so
-    the guard does not trigger and execution proceeds PAST `:48` to `:53`'s
+    the guard does not trigger and execution proceeds PAST `:48` to `:56`'s
     `mark_post_read` call -- the one thing in this function that inserts
     into `read_posts` before anything else does. Its presence afterward is
     therefore proof execution passed the guard; its absence would prove the
@@ -952,7 +952,7 @@ def test_a_web_reversal_bypasses_the_upvote_gate_for_a_blocked_user(db_session, 
     `True`. Verified by LIVE MUTATION (see task report): under that
     mutation, `not can_upvote(user, post.community)` is True for this bot,
     the first disjunct becomes True, the guard fires, and `:47`'s early
-    return runs before `:53` -- no `read_posts` row is written, and this
+    return runs before `:56` -- no `read_posts` row is written, and this
     test's `rows == {s.post.id}` assertion fails.
     """
     s = _seed()
@@ -1016,7 +1016,7 @@ def test_a_banned_user_is_aborted_with_403(db_session, app):
 
 
 def test_a_vote_over_the_daily_quota_is_aborted_with_429(db_session, app):
-    """`:55`'s true arm and `:56`'s abort.
+    """`:53`'s true arm and `:54`'s abort.
 
     Sets the counter one above VOTE_QUOTA, the tight side of `>`. Asserts 429
     specifically, because `:51` aborts 403 on the same function and a bare
@@ -1050,9 +1050,9 @@ def test_a_vote_over_the_daily_quota_is_aborted_with_429(db_session, app):
 
 
 def test_a_vote_exactly_at_the_daily_quota_is_allowed(db_session, app):
-    """`:55`'s false arm at the boundary itself.
+    """`:53`'s false arm at the boundary itself.
 
-    `:55` is `>`, so a count EQUAL to VOTE_QUOTA passes. This is the
+    `:53` is `>`, so a count EQUAL to VOTE_QUOTA passes. This is the
     direction sub-project 32's mutation pass failed to probe, and the reason
     this plan asks for both. Catches a regression changing `>` to `>=`. The
     vote completes, so `post.vote()` (app/models.py:2822-2826) itself
@@ -1167,7 +1167,7 @@ def test_the_masonry_template_is_chosen_on_the_success_path_too(db_session, app)
     Coverage records two separate ternaries at `:45` and `:72`; Task 5 pinned
     `:45`'s on the early-refusal path (`:47`). This pins `:72`'s on the
     success path -- the one `:45`'s test structurally cannot reach, since
-    `:45` only runs when `:43-44`'s guard fires and returns before `:53`.
+    `:45` only runs when `:43-44`'s guard fires and returns before `:56`.
 
     DEVIATES FROM THE BRIEF, which called this twice with `vote_direction=
     'upvote'` (masonry then plain) and asserted `masonry != plain`. Two
@@ -1185,7 +1185,7 @@ def test_the_masonry_template_is_chosen_on_the_success_path_too(db_session, app)
     This calls `vote_for_post` TWICE with `vote_direction='reversal'` and no
     existing vote instead. As `test_a_banned_user_is_aborted_with_403` above
     establishes, `:43-44`'s guard never fires for 'reversal', so both calls
-    reach `:53` onward. `Post.vote`'s reversal handling (app/models.py:2732-
+    reach `:56` onward. `Post.vote`'s reversal handling (app/models.py:2732-
     2741) returns None immediately with NO existing vote to reverse, before
     touching a single row, a lock, or the votes_cast key -- so `undo` is None
     on both calls but `vote_direction` is 'reversal', not 'upvote' or
@@ -1219,7 +1219,7 @@ def test_the_masonry_template_is_chosen_on_the_success_path_too(db_session, app)
 
 
 def test_voting_marks_the_post_read(db_session, app):
-    """`:53`'s `mark_post_read` call on the success path.
+    """`:56`'s `mark_post_read` call on the success path.
 
     A future change moving this call below the quota check would still pass
     every other test in this file; this test pins that it happens on the
@@ -1235,6 +1235,41 @@ def test_voting_marks_the_post_read(db_session, app):
         rows = db.session.execute(
             read_posts.select().where(read_posts.c.user_id == s.voter.id)).fetchall()
         assert {row.read_post_id for row in rows} == {s.post.id}
+    finally:
+        _clear_votes_cast(s.voter.id)
+
+
+def test_an_over_quota_vote_does_not_mark_the_post_read(db_session, app):
+    """PC3: `:56`'s mark_post_read runs before `:53-54`'s quota check.
+
+    A user over quota has the post written to read_posts and last_seen bumped,
+    and only then receives a 429 -- the side effect survives the rejection.
+    This test fails against the tree as it stands and passes once the call
+    moves below the check. Same over-quota setup as
+    `test_a_vote_over_the_daily_quota_is_aborted_with_429`, but asserts the
+    `read_posts` table instead of `PostVote`, since the pre-move call this
+    test targets runs unconditionally on this path regardless of the vote
+    quota outcome.
+
+    Asserts the 429 as well as the empty table, so a change that stopped the
+    abort entirely could not make it pass.
+    """
+    from app import redis_client
+    from werkzeug.exceptions import TooManyRequests
+
+    s = _seed()
+    redis_client.set(f'votes_cast_{date.today()}_{s.voter.id}',
+                     str(app.config['VOTE_QUOTA'] + 1))
+
+    try:
+        with pytest.raises(TooManyRequests) as excinfo:
+            vote_for_post(s.post.id, 'upvote', True, None, SRC_API,
+                          auth=_bearer(s.voter))
+
+        assert excinfo.value.code == 429
+        rows = db.session.execute(
+            read_posts.select().where(read_posts.c.user_id == s.voter.id)).fetchall()
+        assert rows == []
     finally:
         _clear_votes_cast(s.voter.id)
 
