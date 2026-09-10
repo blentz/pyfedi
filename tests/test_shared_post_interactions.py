@@ -350,3 +350,119 @@ def test_an_empty_post_id_list_on_the_unread_branch_also_bumps_last_seen(db_sess
     db.session.refresh(s.voter)
     assert s.voter.last_seen is not None
 
+
+def test_bookmarking_through_the_api_creates_the_row_and_marks_read(db_session):
+    """`:78`'s API arm, `:84`'s add, `:80`'s mark_post_read call, `:94`'s return.
+
+    Pins all four at once because they lie on one straight path. Catches a
+    regression dropping `:80`, which would leave the read_posts table empty
+    while the bookmark still appeared. No request context here -- the module
+    docstring's "SRC_API ARM DOES NOT NEED A REQUEST CONTEXT" finding applies
+    equally to `bookmark_post`'s identical ternary at `:78`, so this does not
+    wrap the call in `_web_ctx`.
+    """
+    s = _seed()
+
+    result = bookmark_post(s.post.id, SRC_API, auth=_bearer(s.voter))
+
+    assert result == s.voter.id
+    assert db.session.query(PostBookmark).filter_by(
+        post_id=s.post.id, user_id=s.voter.id).count() == 1
+    rows = db.session.execute(
+        read_posts.select().where(read_posts.c.user_id == s.voter.id)).fetchall()
+    assert {row.read_post_id for row in rows} == {s.post.id}
+
+
+def test_bookmarking_through_the_web_reads_current_user_and_returns_none(db_session, app):
+    """`:78`'s WEB arm and `:93`'s false arm.
+
+    `:93`'s `if src == SRC_API:` has no else, so the WEB call returns None. That
+    is the arm this pins. Catches a regression making `:78` read the bearer
+    token unconditionally, which would raise with auth=None.
+    """
+    s = _seed()
+
+    with _web_ctx(app, s.voter):
+        result = bookmark_post(s.post.id, SRC_WEB)
+
+    assert result is None
+    assert db.session.query(PostBookmark).filter_by(
+        post_id=s.post.id, user_id=s.voter.id).count() == 1
+
+
+def test_bookmarking_twice_through_the_api_raises(db_session):
+    """`:83`'s false arm and `:89`'s raise, reached through `:88`'s true arm.
+
+    Catches a regression inverting `:83`, which would add a second row rather
+    than reject. Asserts the row count stayed at one so the raise is not
+    reached through an unrelated crash.
+    """
+    s = _seed()
+    bookmark_post(s.post.id, SRC_API, auth=_bearer(s.voter))
+
+    with pytest.raises(Exception, match='already been bookmarked'):
+        bookmark_post(s.post.id, SRC_API, auth=_bearer(s.voter))
+
+    assert db.session.query(PostBookmark).filter_by(
+        post_id=s.post.id, user_id=s.voter.id).count() == 1
+
+
+def test_bookmarking_twice_through_the_web_flashes_instead_of_raising(db_session, app):
+    """`:88`'s false arm and `:91`'s flash.
+
+    The WEB duplicate path must NOT raise -- that asymmetry is the arm. Catches
+    a regression hoisting the raise out of `:88`, which would give the web route
+    an exception it has no handler for.
+    """
+    s = _seed()
+    with _web_ctx(app, s.voter):
+        bookmark_post(s.post.id, SRC_WEB)
+
+    with _web_ctx(app, s.voter):
+        result = bookmark_post(s.post.id, SRC_WEB)
+
+    assert result is None
+    assert db.session.query(PostBookmark).filter_by(
+        post_id=s.post.id, user_id=s.voter.id).count() == 1
+
+
+def test_removing_a_bookmark_through_the_api_deletes_it(db_session):
+    """`:101`'s true arm, `:102`'s delete, `:112`'s return.
+
+    Catches a regression inverting `:101`, which would leave the row and flash
+    or raise instead.
+    """
+    s = _seed()
+    bookmark_post(s.post.id, SRC_API, auth=_bearer(s.voter))
+
+    result = remove_bookmark_post(s.post.id, SRC_API, auth=_bearer(s.voter))
+
+    assert result == s.voter.id
+    assert db.session.query(PostBookmark).filter_by(
+        post_id=s.post.id, user_id=s.voter.id).count() == 0
+
+
+def test_removing_a_bookmark_that_does_not_exist_raises_through_the_api(db_session):
+    """`:101`'s false arm and `:107`'s raise, through `:106`'s true arm.
+
+    Catches a regression that made the delete unconditional, which would raise
+    a different error entirely on a None row.
+    """
+    s = _seed()
+
+    with pytest.raises(Exception, match='was not bookmarked'):
+        remove_bookmark_post(s.post.id, SRC_API, auth=_bearer(s.voter))
+
+
+def test_removing_a_bookmark_that_does_not_exist_flashes_on_the_web(db_session, app):
+    """`:106`'s false arm and `:109`'s flash, plus `:111`'s false arm.
+
+    Catches a regression hoisting `:107`'s raise out of `:106`.
+    """
+    s = _seed()
+
+    with _web_ctx(app, s.voter):
+        result = remove_bookmark_post(s.post.id, SRC_WEB)
+
+    assert result is None
+
