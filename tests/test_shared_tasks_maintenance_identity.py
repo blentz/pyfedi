@@ -416,3 +416,101 @@ class TestLemmyAdminRoles:
             r.user_id for r in
             db.session.query(InstanceRole).filter_by(instance_id=instance.id).all()}
         assert remaining == {arriving.id}
+
+
+class TestLemmyCustomEmoji:
+    """`:672-688` -- refresh the instance's custom emoji.
+
+    `:672` skips the whole block for a banned domain; `:673` walks
+    `custom_emojis`; `:678` forks on whether a row with that token already
+    exists for this instance.
+
+    `Emoji` has NO unique constraint on `(instance_id, token)`
+    (`app/models.py:4378-4384`), so `:676-677`'s lookup is the only thing
+    preventing duplicates.
+    """
+
+    def _lemmy(self, monkeypatch, payload, actor=None):
+        _quiet_http_half(monkeypatch)
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request',
+            _Recorder(result=_response(200, payload)))
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.find_actor_or_create',
+            lambda profile_id, **kwargs: actor)
+
+    def test_a_new_emoji_is_created(self, db_session, monkeypatch):
+        """`:683-687`'s create arm."""
+        instance = _seed_instance('peer.example', software='lemmy')
+        self._lemmy(monkeypatch, _site_payload(emojis=[
+            _emoji('blobcat', url='https://peer.example/blob.png',
+                   category='blobs', keywords=('happy', 'cat'))]))
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        rows = db.session.query(Emoji).filter_by(instance_id=instance.id).all()
+        assert len(rows) == 1
+        assert rows[0].token == ':blobcat:'
+        assert rows[0].url == 'https://peer.example/blob.png'
+        assert rows[0].category == 'blobs'
+        assert rows[0].aliases == 'happy cat'
+
+    def test_an_existing_emoji_is_updated_not_duplicated(self, db_session, monkeypatch):
+        """`:678`'s true arm and `:679-681`. The token has no unique constraint,
+        so a broken lookup would duplicate rather than raise.
+        """
+        instance = _seed_instance('peer.example', software='lemmy')
+        db.session.add(Emoji(
+            instance_id=instance.id, token=':blobcat:',
+            url='https://peer.example/old.png', category='old', aliases='stale'))
+        db.session.commit()
+        self._lemmy(monkeypatch, _site_payload(emojis=[
+            _emoji('blobcat', url='https://peer.example/new.png',
+                   category='blobs', keywords=('happy',))]))
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        rows = db.session.query(Emoji).filter_by(instance_id=instance.id).all()
+        assert len(rows) == 1
+        assert rows[0].url == 'https://peer.example/new.png'
+        assert rows[0].category == 'blobs'
+        assert rows[0].aliases == 'happy'
+
+    def test_a_banned_domain_skips_the_emoji_refresh(self, db_session, monkeypatch):
+        """`:672`'s false arm. Admin roles are still reconciled above it --
+        only the emoji block is skipped -- so the oracle is the absence of an
+        Emoji row, not the absence of all work.
+
+        `instance_banned` is also called at `:547`, loop level, before this
+        instance's identity blocks run at all -- and both call sites see the
+        SAME `instance.domain` value for a single seeded instance (confirmed
+        empirically: a blanket `True` patch left `get_request` uncalled, i.e.
+        `:547` had already `continue`d). A domain-keyed patch therefore cannot
+        tell the two call sites apart either -- both would need to agree on
+        one verdict for 'peer.example'. What distinguishes them is ORDER:
+        `:547` is always the first call for a given instance, `:672` the
+        second, so a call-counter lets `:547` see `False` (falls through to
+        run the admin-role phase and reach the emoji block) while `:672`
+        sees `True` (skips only the emoji refresh). Because the admin phase
+        still runs first, this also confirms the test isn't vacuously passing
+        on a sweep that never started -- the mock is exercised at least once
+        before the block under test is reached.
+        """
+        instance = _seed_instance('peer.example', software='lemmy')
+        self._lemmy(monkeypatch, _site_payload(emojis=[_emoji('blobcat')]))
+        calls = {'count': 0}
+
+        def _banned_after_loop_gate(domain):
+            calls['count'] += 1
+            return calls['count'] > 1
+
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.instance_banned', _banned_after_loop_gate)
+
+        monitor_healthy_instances()
+
+        assert calls['count'] >= 2
+        db.session.expire_all()
+        assert db.session.query(Emoji).filter_by(instance_id=instance.id).count() == 0
