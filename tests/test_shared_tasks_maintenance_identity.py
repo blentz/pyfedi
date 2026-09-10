@@ -169,6 +169,23 @@ def _mbin_payload(*items):
     return {'items': list(items)}
 
 
+def _lemmy(monkeypatch, payload, actor=None):
+    """Patch the Lemmy/PieFed block's two HTTP-shaped dependencies.
+
+    `get_request` returns `payload` as a 200; `find_actor_or_create` returns
+    `actor` (or `None`) regardless of the profile id it is called with. Used
+    by both `TestLemmyAdminRoles` and `TestLemmyCustomEmoji` -- previously
+    duplicated as an identical method on each class.
+    """
+    _quiet_http_half(monkeypatch)
+    monkeypatch.setattr(
+        'app.shared.tasks.maintenance.get_request',
+        _Recorder(result=_response(200, payload)))
+    monkeypatch.setattr(
+        'app.shared.tasks.maintenance.find_actor_or_create',
+        lambda profile_id, **kwargs: actor)
+
+
 class TestTheTaskLevelHandler:
     """`monitor_healthy_instances:742-744` -- the task's own `except`.
 
@@ -187,7 +204,6 @@ class TestTheTaskLevelHandler:
         monkeypatch.setattr('app.shared.tasks.maintenance.instance_banned', _boom)
         _quiet_http_half(monkeypatch)
         _seed_instance('peer.example', software='lemmy')
-        db.session.commit()
 
         with pytest.raises(RuntimeError, match='ban check exploded'):
             monitor_healthy_instances()
@@ -221,7 +237,6 @@ class TestIdentityPhaseFailures:
         _quiet_http_half(monkeypatch)
         for domain in ('one.example', 'two.example'):
             _seed_instance(domain, software='lemmy')
-        db.session.commit()
 
         monitor_healthy_instances()
 
@@ -245,20 +260,11 @@ class TestLemmyAdminRoles:
     that.
     """
 
-    def _lemmy(self, monkeypatch, payload, actor=None):
-        _quiet_http_half(monkeypatch)
-        monkeypatch.setattr(
-            'app.shared.tasks.maintenance.get_request',
-            _Recorder(result=_response(200, payload)))
-        monkeypatch.setattr(
-            'app.shared.tasks.maintenance.find_actor_or_create',
-            lambda profile_id, **kwargs: actor)
-
     def test_a_listed_admin_gets_an_instance_role(self, db_session, monkeypatch):
         """`:656`'s `session.add`. Delete it and no role exists."""
         instance = _seed_instance('peer.example', software='lemmy')
         admin = make_user(instance, 'adminuser')
-        self._lemmy(monkeypatch, _site_payload(admin.ap_profile_id), actor=admin)
+        _lemmy(monkeypatch, _site_payload(admin.ap_profile_id), actor=admin)
 
         monitor_healthy_instances()
 
@@ -300,7 +306,7 @@ class TestLemmyAdminRoles:
         # test is checking for gets deleted in the SAME sweep as stale.
         admin.ap_profile_id = f'http://{instance.domain}/users/adminuser'
         db.session.commit()
-        self._lemmy(monkeypatch, _site_payload(admin.ap_profile_id), actor=admin)
+        _lemmy(monkeypatch, _site_payload(admin.ap_profile_id), actor=admin)
 
         monitor_healthy_instances()
 
@@ -318,7 +324,7 @@ class TestLemmyAdminRoles:
         """
         instance = _seed_instance('peer.example', software='piefed')
         admin = make_user(instance, 'adminuser')
-        self._lemmy(monkeypatch, _site_payload(admin.ap_profile_id), actor=admin)
+        _lemmy(monkeypatch, _site_payload(admin.ap_profile_id), actor=admin)
 
         monitor_healthy_instances()
 
@@ -334,7 +340,7 @@ class TestLemmyAdminRoles:
         """
         instance = _seed_instance('peer.example', software='pylova')
         admin = make_user(instance, 'adminuser')
-        self._lemmy(monkeypatch, _site_payload(admin.ap_profile_id), actor=admin)
+        _lemmy(monkeypatch, _site_payload(admin.ap_profile_id), actor=admin)
 
         monitor_healthy_instances()
 
@@ -355,7 +361,7 @@ class TestLemmyAdminRoles:
         no role exists and that no failure was recorded by this block.
         """
         instance = _seed_instance('peer.example', software='lemmy')
-        self._lemmy(
+        _lemmy(
             monkeypatch, _site_payload('https://peer.example/users/ghost'), actor=None)
         before = instance.failures
 
@@ -382,7 +388,7 @@ class TestLemmyAdminRoles:
             instance_id=instance.id, user_id=admin.id, role='admin'))
         db.session.commit()
         before = instance.failures
-        self._lemmy(monkeypatch, _site_payload(admin.ap_profile_id), actor=admin)
+        _lemmy(monkeypatch, _site_payload(admin.ap_profile_id), actor=admin)
 
         monitor_healthy_instances()
 
@@ -432,7 +438,7 @@ class TestLemmyAdminRoles:
             db.session.add(InstanceRole(
                 instance_id=instance.id, user_id=user.id, role='admin'))
         db.session.commit()
-        self._lemmy(monkeypatch, _site_payload(staying.ap_profile_id), actor=staying)
+        _lemmy(monkeypatch, _site_payload(staying.ap_profile_id), actor=staying)
 
         monitor_healthy_instances()
 
@@ -453,13 +459,15 @@ class TestLemmyAdminRoles:
         db.session.add(InstanceRole(
             instance_id=instance.id, user_id=staying.id, role='admin'))
         db.session.commit()
-        self._lemmy(monkeypatch, _site_payload(staying.ap_profile_id), actor=staying)
+        _lemmy(monkeypatch, _site_payload(staying.ap_profile_id), actor=staying)
 
         monitor_healthy_instances()
 
         db.session.expire_all()
-        assert db.session.query(InstanceRole).filter_by(
-            instance_id=instance.id, user_id=staying.id).count() == 1
+        remaining = {
+            r.user_id for r in
+            db.session.query(InstanceRole).filter_by(instance_id=instance.id).all()}
+        assert remaining == {staying.id}
 
     def test_an_admin_arrives_while_another_leaves_in_the_same_sweep(self, db_session, monkeypatch):
         """`:656`'s `session.add` and `:669`'s `.delete()`, both firing for
@@ -479,7 +487,7 @@ class TestLemmyAdminRoles:
         db.session.add(InstanceRole(
             instance_id=instance.id, user_id=leaving.id, role='admin'))
         db.session.commit()
-        self._lemmy(monkeypatch, _site_payload(arriving.ap_profile_id), actor=arriving)
+        _lemmy(monkeypatch, _site_payload(arriving.ap_profile_id), actor=arriving)
 
         monitor_healthy_instances()
 
@@ -547,7 +555,7 @@ class TestLemmyAdminRoles:
         db.session.add(InstanceRole(instance_id=instance.id, user_id=admin.id, role='admin'))
         db.session.add(InstanceRole(instance_id=other.id, user_id=admin.id, role='admin'))
         db.session.commit()
-        self._lemmy(monkeypatch, _site_payload())
+        _lemmy(monkeypatch, _site_payload())
 
         monitor_healthy_instances()
 
@@ -575,7 +583,7 @@ class TestLemmyAdminRoles:
         db.session.add(InstanceRole(
             instance_id=instance.id, user_id=moderator.id, role='moderator'))
         db.session.commit()
-        self._lemmy(monkeypatch, _site_payload())
+        _lemmy(monkeypatch, _site_payload())
 
         monitor_healthy_instances()
 
@@ -596,19 +604,10 @@ class TestLemmyCustomEmoji:
     preventing duplicates.
     """
 
-    def _lemmy(self, monkeypatch, payload, actor=None):
-        _quiet_http_half(monkeypatch)
-        monkeypatch.setattr(
-            'app.shared.tasks.maintenance.get_request',
-            _Recorder(result=_response(200, payload)))
-        monkeypatch.setattr(
-            'app.shared.tasks.maintenance.find_actor_or_create',
-            lambda profile_id, **kwargs: actor)
-
     def test_a_new_emoji_is_created(self, db_session, monkeypatch):
         """`:683-687`'s create arm."""
         instance = _seed_instance('peer.example', software='lemmy')
-        self._lemmy(monkeypatch, _site_payload(emojis=[
+        _lemmy(monkeypatch, _site_payload(emojis=[
             _emoji('blobcat', url='https://peer.example/blob.png',
                    category='blobs', keywords=('happy', 'cat'))]))
 
@@ -631,7 +630,7 @@ class TestLemmyCustomEmoji:
             instance_id=instance.id, token=':blobcat:',
             url='https://peer.example/old.png', category='old', aliases='stale'))
         db.session.commit()
-        self._lemmy(monkeypatch, _site_payload(emojis=[
+        _lemmy(monkeypatch, _site_payload(emojis=[
             _emoji('blobcat', url='https://peer.example/new.png',
                    category='blobs', keywords=('happy',))]))
 
@@ -665,7 +664,7 @@ class TestLemmyCustomEmoji:
         before the block under test is reached.
         """
         instance = _seed_instance('peer.example', software='lemmy')
-        self._lemmy(monkeypatch, _site_payload(emojis=[_emoji('blobcat')]))
+        _lemmy(monkeypatch, _site_payload(emojis=[_emoji('blobcat')]))
         calls = {'count': 0}
 
         def _banned_after_loop_gate(domain):
@@ -702,7 +701,6 @@ class TestLemmyCustomEmoji:
             'app.shared.tasks.maintenance.get_request',
             _Recorder(result=_response(404)))
         _seed_instance('peer.example', software='lemmy')
-        db.session.commit()
 
         monitor_healthy_instances()
 
@@ -715,9 +713,8 @@ class TestLemmyCustomEmoji:
         recorder = _Recorder()
         monkeypatch.setattr(
             'app.shared.tasks.maintenance.cache.delete_memoized', recorder)
-        self._lemmy(monkeypatch, _site_payload(emojis=[_emoji('blobcat')]))
         _seed_instance('peer.example', software='lemmy')
-        db.session.commit()
+        _lemmy(monkeypatch, _site_payload(emojis=[_emoji('blobcat')]))
 
         monitor_healthy_instances()
 
@@ -886,8 +883,10 @@ class TestMbinAdminRoles:
         monitor_healthy_instances()
 
         db.session.expire_all()
-        assert db.session.query(InstanceRole).filter_by(
-            instance_id=instance.id, user_id=staying.id).count() == 1
+        remaining = {
+            r.user_id for r in
+            db.session.query(InstanceRole).filter_by(instance_id=instance.id).all()}
+        assert remaining == {staying.id}
 
     def test_a_non_200_admins_response_creates_no_role(self, db_session, monkeypatch):
         """`:707`'s false arm.
@@ -1026,7 +1025,6 @@ class TestMbinAdminRoleFailures:
         _quiet_http_half(monkeypatch)
         monkeypatch.setattr('app.shared.tasks.maintenance.get_request', _raise)
         instance = _seed_instance('peer.example', software='mbin')
-        db.session.commit()
         before = instance.failures
 
         monitor_healthy_instances()
