@@ -276,6 +276,63 @@ class TestLemmyAdminRoles:
 
         assert resolver.calls == []
 
+    def test_a_plain_http_profile_id_is_accepted(self, db_session, monkeypatch):
+        """`:647`'s SECOND disjunct, alone -- `profile_id.startswith('http://')`.
+
+        Every other test in this file uses an `https://` actor id, so all of
+        them pass `:647` on the FIRST disjunct and cannot tell it apart from
+        `startswith('http://')` alone. This is the one payload that actually
+        needs the second disjunct: a plain `http://` actor id.
+        """
+        instance = _seed_instance('peer.example', software='lemmy')
+        admin = make_user(instance, 'adminuser')
+        # `admin.profile_id()` (`:662`'s removal check) returns `ap_profile_id`
+        # verbatim, so the payload's scheme must match it or the role this
+        # test is checking for gets deleted in the SAME sweep as stale.
+        admin.ap_profile_id = f'http://{instance.domain}/users/adminuser'
+        db.session.commit()
+        self._lemmy(monkeypatch, _site_payload(admin.ap_profile_id), actor=admin)
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        roles = db.session.query(InstanceRole).filter_by(instance_id=instance.id).all()
+        assert {(r.user_id, r.role) for r in roles} == {(admin.id, 'admin')}
+
+    def test_a_piefed_instance_gets_admin_roles_too(self, db_session, monkeypatch):
+        """`:637`'s SECOND disjunct, alone -- `instance.software == 'piefed'`.
+
+        Every other test in this class seeds `software='lemmy'`, which enters
+        `:637` on the FIRST disjunct alone and cannot tell it apart from a
+        two-way `or` missing 'piefed' and 'pylova' both. This is the one test
+        that actually needs 'piefed' accepted.
+        """
+        instance = _seed_instance('peer.example', software='piefed')
+        admin = make_user(instance, 'adminuser')
+        self._lemmy(monkeypatch, _site_payload(admin.ap_profile_id), actor=admin)
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        roles = db.session.query(InstanceRole).filter_by(instance_id=instance.id).all()
+        assert {(r.user_id, r.role) for r in roles} == {(admin.id, 'admin')}
+
+    def test_a_pylova_instance_gets_admin_roles_too(self, db_session, monkeypatch):
+        """`:637`'s THIRD disjunct, alone -- `instance.software == 'pylova'`.
+
+        The companion to the piefed test above -- 'pylova' is the disjunct
+        neither of the other tests in this class exercise.
+        """
+        instance = _seed_instance('peer.example', software='pylova')
+        admin = make_user(instance, 'adminuser')
+        self._lemmy(monkeypatch, _site_payload(admin.ap_profile_id), actor=admin)
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        roles = db.session.query(InstanceRole).filter_by(instance_id=instance.id).all()
+        assert {(r.user_id, r.role) for r in roles} == {(admin.id, 'admin')}
+
     def test_an_unresolvable_actor_creates_no_role(self, db_session, monkeypatch):
         """`:650`'s `user and ...` conjunct, false because the resolver returned None.
 
@@ -633,6 +690,30 @@ class TestMbinAdminRoles:
         assert db.session.query(InstanceRole).filter_by(
             instance_id=instance.id).count() == 0
         assert reloaded.failures == before + 2
+
+    def test_an_empty_username_is_skipped(self, db_session, monkeypatch):
+        """`:713`'s FIRST conjunct, `username and`, alone.
+
+        An item with `username: ''` passes `:712`'s guard -- the key IS
+        present, so `username` is `''` rather than the `None` the missing-key
+        test above produces. `''` and `None` are both falsy, but a query keyed
+        on `None` can never match a real row, so a test that only drops
+        `:712`'s guard (leaving `username` `None`) cannot tell `:713`'s
+        `username and` conjunct apart from working: with or without it, the
+        lookup finds nothing and the block ends the same way. A user whose
+        `user_name` really IS `''` closes that gap -- without the conjunct,
+        `:714`'s query finds this real row and creates a role that must not
+        exist.
+        """
+        instance = _seed_instance('peer.example', software='mbin')
+        make_user(instance, '')
+        self._mbin(monkeypatch, _mbin_payload({'username': '', 'isAdmin': True}))
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        assert db.session.query(InstanceRole).filter_by(
+            instance_id=instance.id).count() == 0
 
     def test_an_unknown_username_gets_no_role(self, db_session, monkeypatch):
         """`:715`'s false arm -- listed as admin but not in our database.
