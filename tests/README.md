@@ -5782,20 +5782,23 @@ LINE, when several lines in the same function move that field for different
 reasons.
 
 **190. A MOCK THAT RETURNS WHERE PRODUCTION WOULD RAISE REMOVES THE EXACT
-SIGNAL AN ASSERTION DEPENDS ON TO FAIL.** A test asserting
-`test_a_live_instance_is_untouched_by_the_sweep`'s two properties --
-`reloaded.dormant is True` and `reloaded.failures == 0` -- could not fail on
-the second property no matter how badly `check_instance_health`'s dormant
-filter (`:437`) was broken, because the patched `get_request_instance` was
-configured to RETURN `httpx.Response(status_code=500)` rather than raise, and
-`:496`'s `instance.failures += 1` sits inside the recheck loop's `except`
-arm, which a mocked non-raising 500 never enters. Weakening `:437`'s filter
-by hand and re-running showed exactly this: `dormant is True` did NOT fail,
-while the strengthened version of the same test (the mock changed to RAISE)
-failed cleanly with `assert 1 == 0`. The tautological assertion and the
-binding one, side by side, against the identical mutation, is the clearest
-demonstration this round produced of why a test's oracle is only as strong
-as the path its own mocks force the code down.
+SIGNAL AN ASSERTION DEPENDS ON TO FAIL.** `test_a_live_instance_is_untouched_by_the_sweep`
+asserts `reloaded.gone_forever is False` and `reloaded.failures == 0`; it
+never asserted `dormant is True`. The second property could not fail no
+matter how badly `check_instance_health`'s second-loop dormant filter
+(`:447` -- NOT `:437`, which belongs to the first loop and is caught by this
+same test's first assertion instead) was broken, because the patched
+`get_request_instance` was originally configured to RETURN
+`httpx.Response(status_code=500)` rather than raise, and `:496`'s
+`instance.failures += 1` sits inside the recheck loop's `except` arm, which a
+mocked non-raising 500 never enters. Weakening `:447`'s filter by hand and
+re-running showed exactly this: `failures == 0` did NOT fail, while the
+strengthened version of the same test (the mock changed to RAISE) failed
+cleanly with `assert 1 == 0` (`1 = <Instance live.example>.failures`). The
+tautological assertion and the binding one, side by side, against the
+identical mutation, is the clearest demonstration this round produced of why
+a test's oracle is only as strong as the path its own mocks force the code
+down.
 
 **191. THE FIRST `Instance` A TEST SEEDS BECOMES id 1, BECAUSE OF THE
 HARNESS'S OWN SEQUENCE RESET -- AND THE FIX IS A ROW EXCLUDED BY STATE, NOT
@@ -5861,7 +5864,10 @@ further out).
 BEATS MAKING THE TRANSPORT FAIL.** Every helper `check_instance_health` and
 `monitor_healthy_instances` call -- `get_request_instance`, `get_request`,
 `instance_banned`, `download_defeds` -- is imported at
-`app/shared/tasks/maintenance.py`'s module scope (`:13`, `:19`), so
+`app/shared/tasks/maintenance.py`'s module scope, all four on the single
+`from app.utils import ...` line at `:19`. (`:13`'s import from
+`app.activitypub.util` is a different line entirely -- `find_actor_or_create`,
+`find_language_or_create`, `find_instance_id` -- none of the four.) So
 `monkeypatch.setattr('app.shared.tasks.maintenance.<name>', ...)` reaches
 every call site directly. This round's entire test file used this idiom
 exclusively and never needed `respx` or a real (or even a fake) `httpx`
@@ -5920,6 +5926,35 @@ stated entirely in terms of what the acting process does before it stops has
 a blind spot at the one place a process cannot help itself -- its own
 death -- and the check for probe residue needs a second, independent home on
 whichever side resumes the work.
+
+**196. THE "TAUTOLOGICAL ASSERTION VERSUS BINDING ONE" DEMONSTRATION IN FACT
+190 CAME FROM A DIFFERENT TEST THAN THE ONE FACT 190 NAMES.** The `dormant is
+True` / "did NOT fail" pairing belongs to
+`test_a_document_without_software_leaves_the_instance_dormant`, not
+`test_a_live_instance_is_untouched_by_the_sweep`. With `check_instance_health`'s
+`'software' in node_json` guard (`:463`) negated by hand, one run produced:
+`assert reloaded.dormant is True` -- did NOT fail, while `assert
+reloaded.failures == 0` DID fail (`assert 1 == 0`), because negating `:463`
+raises a `KeyError` that lands in `:494`'s `except`, incrementing `failures`
+without touching `dormant`. Two incidents -- this one and fact 190's -- had
+been spliced into one fact in an earlier draft of this register; they are
+separated here because they pin different lines (`:463` here, `:447` in fact
+190) against different tests.
+
+**197. A NOISY BINDING IS STILL A BINDING, BUT THE NOISE IS WORTH RECORDING
+SO A LATER FIX DOESN'T LOOK LIKE A REGRESSION.**
+`test_a_banned_domain_is_skipped_before_any_request`
+(`monitor_healthy_instances`' `:547` guard) fails, when the guard is removed,
+via the pre-existing unbound-`response` `UnboundLocalError` at `:689` --
+`banned.example` gets processed, the recorder's 200-with-`software` body
+sets `instance.software` and clears `dormant`, `:637`'s admin-role block is
+entered, the unpatched `get_request` raises, and `:689`'s `if response:`
+throws before `assert recorder.calls == []` is ever evaluated. The failure
+is real and reliable, so the test binds -- but it binds by crash, not by its
+own assertion. When a future round fixes `:689` (fact 192, D375's registered
+but unfixed sites), this test's failure mode will change shape from a crash
+to a clean assertion failure, which is worth knowing in advance rather than
+mistaking for a new defect.
 
 ## Known noise
 
