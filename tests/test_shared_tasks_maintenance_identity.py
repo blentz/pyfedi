@@ -480,6 +480,100 @@ class TestLemmyAdminRoles:
             db.session.query(InstanceRole).filter_by(instance_id=instance.id).all()}
         assert remaining == {arriving.id}
 
+    def test_a_lemmy_instance_gone_dormant_this_sweep_is_not_queried(self, db_session, monkeypatch):
+        """`:637`'s `instance.online() and` conjunct.
+
+        `instance.online()` (`app/models.py:118-119`) is
+        `not (dormant or gone_forever)`, and the fetch block above this one
+        can set `dormant = True` mid-sweep: `:605`'s `elif >= 300:` arm
+        increments `failures` and `:609`'s `> 5` escalates to dormant
+        before control ever reaches `:637`. Every fixture elsewhere in
+        this class keeps `failures` at 2 or 3 via `_quiet_http_half`'s
+        harmless 404, so none of them can drive this. This one seeds
+        `failures = 5` with `nodeinfo_href` already set (so the discovery
+        block above is skipped and the fetch block runs directly) and
+        answers the fetch with a 404, whose `>= 300` arm pushes `failures`
+        to 6 and sets `dormant = True` on THIS sweep, before `:637` is
+        ever evaluated. Dropping `instance.online() and` from `:637`
+        survives every fixture that only varies `software` -- the oracle
+        here is that `get_request`, the Lemmy site-info call, was never
+        made for an instance the sweep itself just gave up on.
+        """
+        get_request_recorder = _Recorder(result=_response(200, _site_payload()))
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request', get_request_recorder)
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            lambda *args, **kwargs: _response(404))
+        instance = _seed_instance('peer.example', software='lemmy')
+        instance.nodeinfo_href = 'https://peer.example/nodeinfo/2.0'
+        instance.failures = 5
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='peer.example').first()
+        assert reloaded.dormant is True
+        assert get_request_recorder.calls == []
+
+    def test_another_instances_admin_role_is_untouched_by_this_sweep(self, db_session, monkeypatch):
+        """`:667`'s `InstanceRole.instance_id == instance.id` on the `.delete()`.
+
+        Every fixture elsewhere in this class seeds roles for exactly ONE
+        instance, so a regression that widened this delete to match
+        `user_id` alone -- deleting that user's admin role on EVERY
+        instance they hold one on -- would still pass 228 tests. Here the
+        SAME user is an admin on two instances; `peer.example`'s site
+        payload lists no admins at all, so its own admin role is
+        correctly stale and removed, and the oracle is that
+        `other.example`'s role for the SAME user survives. `other.example`
+        stays on `software='mastodon'` so it is never itself processed by
+        this block -- the only way its role can move is through a
+        scoping failure in `peer.example`'s sweep.
+        """
+        instance = _seed_instance('peer.example', software='lemmy')
+        other = _seed_instance('other.example', software='mastodon')
+        admin = make_user(instance, 'adminuser')
+        db.session.add(InstanceRole(instance_id=instance.id, user_id=admin.id, role='admin'))
+        db.session.add(InstanceRole(instance_id=other.id, user_id=admin.id, role='admin'))
+        db.session.commit()
+        self._lemmy(monkeypatch, _site_payload())
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        assert db.session.query(InstanceRole).filter_by(
+            instance_id=instance.id, user_id=admin.id).count() == 0
+        assert db.session.query(InstanceRole).filter_by(
+            instance_id=other.id, user_id=admin.id).count() == 1
+
+    def test_a_non_admin_role_on_the_same_instance_survives(self, db_session, monkeypatch):
+        """`:668`'s `InstanceRole.role == 'admin'`.
+
+        The removal candidates drained at `:659-663` are drawn by
+        `instance_id` and profile-membership alone -- NOT by role value --
+        so a non-`'admin'` row for a user not listed in the site payload
+        is just as much a candidate as a genuinely stale admin row.
+        `:668` is what stops the `.delete()` from taking it: without it,
+        the delete's `user_id`+`instance_id` match alone is enough. D388
+        registers the schema letting `InstanceRole.role` hold any string;
+        this is the fixture no earlier test in this file provided to
+        reach it.
+        """
+        instance = _seed_instance('peer.example', software='lemmy')
+        moderator = make_user(instance, 'moduser')
+        db.session.add(InstanceRole(
+            instance_id=instance.id, user_id=moderator.id, role='moderator'))
+        db.session.commit()
+        self._lemmy(monkeypatch, _site_payload())
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        assert db.session.query(InstanceRole).filter_by(
+            instance_id=instance.id, user_id=moderator.id, role='moderator').count() == 1
+
 
 class TestLemmyCustomEmoji:
     """`:672-688` -- refresh the instance's custom emoji.
@@ -809,6 +903,77 @@ class TestMbinAdminRoles:
         assert db.session.query(InstanceRole).filter_by(
             instance_id=instance.id).count() == 0
         assert reloaded.failures == before + 2
+
+    def test_a_mbin_instance_gone_dormant_this_sweep_is_not_queried(self, db_session, monkeypatch):
+        """`:703`'s `instance.online() and` conjunct -- the MBIN twin of
+        `TestLemmyAdminRoles.test_a_lemmy_instance_gone_dormant_this_sweep_is_not_queried`.
+
+        Same mechanism: `failures` seeded at 5 with `nodeinfo_href`
+        already set, so the fetch block's own `>= 300` arm (`:605`) pushes
+        it to 6 and `:609` sets `dormant = True` before `:703` is ever
+        evaluated.
+        """
+        get_request_recorder = _Recorder(result=_response(200, _mbin_payload()))
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request', get_request_recorder)
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request_instance',
+            lambda *args, **kwargs: _response(404))
+        instance = _seed_instance('peer.example', software='mbin')
+        instance.nodeinfo_href = 'https://peer.example/nodeinfo/2.0'
+        instance.failures = 5
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='peer.example').first()
+        assert reloaded.dormant is True
+        assert get_request_recorder.calls == []
+
+    def test_another_instances_admin_role_is_untouched_by_this_sweep(self, db_session, monkeypatch):
+        """`:730`'s `InstanceRole.instance_id == instance.id` on the `.delete()`
+        -- the MBIN twin of `TestLemmyAdminRoles`'s same-named test.
+
+        The same user is an admin on two instances; `peer.example`'s
+        admins payload is empty, so its own role is correctly stale and
+        removed, and the oracle is that `other.example`'s role for the
+        SAME user survives. `other.example` stays `software='mastodon'`
+        so it is never itself processed by this block.
+        """
+        instance = _seed_instance('peer.example', software='mbin')
+        other = _seed_instance('other.example', software='mastodon')
+        admin = make_user(instance, 'adminuser')
+        db.session.add(InstanceRole(instance_id=instance.id, user_id=admin.id, role='admin'))
+        db.session.add(InstanceRole(instance_id=other.id, user_id=admin.id, role='admin'))
+        db.session.commit()
+        self._mbin(monkeypatch, _mbin_payload())
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        assert db.session.query(InstanceRole).filter_by(
+            instance_id=instance.id, user_id=admin.id).count() == 0
+        assert db.session.query(InstanceRole).filter_by(
+            instance_id=other.id, user_id=admin.id).count() == 1
+
+    def test_a_non_admin_role_on_the_same_instance_survives(self, db_session, monkeypatch):
+        """`:731`'s `InstanceRole.role == 'admin'` -- the MBIN twin of the
+        Lemmy test of the same name. `:726`'s candidates are drawn by
+        `instance_id` and `user_id` membership alone, not role value.
+        """
+        instance = _seed_instance('peer.example', software='mbin')
+        moderator = make_user(instance, 'moduser')
+        db.session.add(InstanceRole(
+            instance_id=instance.id, user_id=moderator.id, role='moderator'))
+        db.session.commit()
+        self._mbin(monkeypatch, _mbin_payload())
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        assert db.session.query(InstanceRole).filter_by(
+            instance_id=instance.id, user_id=moderator.id, role='moderator').count() == 1
 
 
 class TestMbinAdminRoleFailures:
