@@ -9,10 +9,13 @@ covers what was left: the two blocks of `monitor_healthy_instances` gated on
   the task's outer handler                   `:742-744`
 
 Task 9 measured the whole module across all five maintenance test files and
-found one further gap: `:733-735` (the MBIN block's own `except`, never
-exercised because every MBIN test above reaches its failure through a caught
-crash inside the `try` rather than the request itself raising).
-`TestMbinAdminRoleFailures` below closes it.
+found two further gaps, both in the same arc: `:733-735` (the MBIN block's
+own `except`, never exercised because every MBIN test above reaches its
+failure through a caught crash inside the `try` rather than the request
+itself raising) and `:737`'s FALSE arm (`if response is not None:`, never
+false because those same caught-inside-the-try crashes always leave
+`response` bound to a real 200). `TestMbinAdminRoleFailures` below closes
+both with the one test that makes `get_request` itself raise.
 
 ENTRY IS GATED ON `software`. `:637` needs 'lemmy', 'piefed' or 'pylova';
 `:703` needs 'mbin'. Sub-project 32's fixtures used `make_instance`'s
@@ -194,13 +197,19 @@ class TestIdentityPhaseFailures:
     """The two identity blocks' error handling."""
 
     def test_a_raising_request_does_not_end_the_whole_sweep(self, db_session, monkeypatch):
-        """DC1: `:694` reads `response`, which `:640` may never have bound.
+        """DC1's fix, on the current tree: `:638` seeds `response = None`
+        before the `try`, so `:694`'s `if response is not None:` can read it
+        safely no matter how early `:640` raises.
 
-        `get_request` RAISES, unlike `get_request_instance`. The `except` at
-        `:690` catches the original and then the `finally` at `:693-695`
-        raises `UnboundLocalError`, which that handler has already run and
-        cannot catch. It escapes to `:742`, rolls back and re-raises, so one
-        instance's failure ends the sweep for every other instance.
+        `get_request` RAISES, unlike `get_request_instance`. Before DC1,
+        `response` was never assigned before that point in the iteration, so
+        the `finally` at `:693-695` raised `UnboundLocalError` on top of the
+        original -- a crash the `except` at `:690` had already run and could
+        not catch, which then escaped to `:742`, rolled back and re-raised,
+        ending the sweep for every other instance. DC1 closes that: the
+        `except` now catches the raise cleanly and increments `failures`
+        instead, and the `finally`'s `is not None` guard never sees an
+        unbound name.
 
         The oracle is that BOTH instances were touched, compared as a set:
         `:540` returns planner-ordered rows.
@@ -673,12 +682,17 @@ class TestLemmyCustomEmoji:
         assert db.session.query(Emoji).filter_by(instance_id=instance.id).count() == 0
 
     def test_a_non_200_does_not_invalidate_the_emoji_cache(self, db_session, monkeypatch):
-        """DC2: `cache.delete_memoized` sits outside `:641`'s guard.
+        """DC2's fix, on the current tree: `:689`'s `cache.delete_memoized`
+        sits INSIDE `:641`'s response guard, at the same indent as the admin
+        loop and the removal loop, so a non-200 response never reaches it.
 
-        A 404 from one Lemmy instance discards the whole site's emoji
-        replacements. The oracle records the call rather than observing the
-        cache, because `CACHE_TYPE` is `NullCache` under test
-        (`tests/conftest.py:68`) and an invalidation there is unobservable.
+        Before DC2, the call sat one indent level out, a sibling of `:641`
+        itself rather than of its body, so it fired regardless of whether
+        the response was ever checked -- a 404 from one Lemmy instance would
+        have discarded the whole site's emoji replacements anyway. The
+        oracle records the call rather than observing the cache, because
+        `CACHE_TYPE` is `NullCache` under test (`tests/conftest.py:68`) and
+        an invalidation there is unobservable.
         """
         recorder = _Recorder()
         monkeypatch.setattr(
