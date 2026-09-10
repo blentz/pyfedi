@@ -5728,6 +5728,184 @@ into. The distinction: `tempfile.mkdtemp()` solves WHERE a test-visible
 directory lives; it does nothing about WHETHER the code under test accepts
 being told where to look.
 
+**187. A MODULE MEASURING ZERO MISSING STATEMENTS AND ZERO MISSING ARCS CAN
+STILL HIDE UNTESTED BEHAVIOUR -- THE MUTATION PASS IS NOT REDUNDANT WITH THE
+COVERAGE GATE.** After `app/shared/tasks/maintenance.py`'s Group C first
+half closed to `coverage.py`'s own zero-missing measurement, a one-at-a-time
+mutation pass over the same closed ranges still found six real holes, and
+**three of the six were found by mutation alone -- nothing else in the round
+had flagged them**: the `flipboard.com` domain literal in
+`check_instance_health`'s skip guard (`:453`) had never been exercised by any
+seeded test domain; two of the three accepted nodeinfo schema URLs in
+`check_instance_health`'s discovery match (`:484`, the `https` 2.0 variant,
+and `:485`, the 2.1 variant) had never been matched, every discovery test
+using only the first (`:483`); and `monitor_healthy_instances`' `elif
+nodeinfo.status_code >= 300:` arm (`:582`) had never been driven by a genuine
+`[300, 400)` status, every discovery test using only 200 or 404. All six
+mutants SURVIVED the full suite before a new test closed each in turn.
+Decision-level branch coverage records that a line ran and that its
+alternative ran somewhere; it does not record which literal, which of several
+equally-typed alternatives, or which numeric range was the one actually
+exercised.
+
+**188. COVERAGE.PY RECORDS THAT BOTH ARCS OF A BRANCH RAN, NEVER WHICH
+THRESHOLD VALUE DISCRIMINATED IT.** `monitor_healthy_instances`' no-href
+`else` arm checks `instance.failures > 5` (`:629`, setting `dormant`) and
+`instance.failures > 12` (`:632`, setting `gone_forever`). Both arcs of both
+`if`s had been exercised by an existing test before any mutation ran --
+`coverage.py` reported the lines fully covered -- but the only test on this
+arm seeded `failures` from 12 to 14, a jump that lands past BOTH boundaries
+at once. That single test cannot tell `> 5` from `>= 5`, nor `> 12` from
+`>= 12`: a mutant substituting either comparison operator, on either line,
+survives unchanged, because every seed the suite used was already decisively
+on one side of both boundaries. Closed with boundary-exact pairs seeded at
+3/4 and 10/11. Coverage was satisfied by this arm long before discrimination
+was; the two states are not the same claim, and only mutation (or a
+boundary-exact test written on purpose) tells them apart.
+
+**189. AN ORACLE OVER A FIELD THAT SEVERAL ARMS OF THE SAME FUNCTION WRITE
+PINS NONE OF THEM IN PARTICULAR.** `monitor_healthy_instances`'
+fetch-and-escalate block has four reachable arms once `nodeinfo_href` is
+set -- the 200 arm (`:597-604`), the `elif >= 300` arm (`:605-611`), the
+`except` arm (`:612-620`), and (for a DIFFERENT instance, taking the
+`if instance.nodeinfo_href:` false branch) the no-href `else` arm
+(`:626-634`) -- and `instance.failures` is written in every one of them:
+reset to `0` at `:602`, incremented at `:607`, `:614` and `:627`. An
+assertion that only checks `reloaded.failures == <some value>` after running
+the function is bound to whichever arm actually ran, not to the arm a
+docstring names, because three of the four writers produce numerically
+plausible results for a variety of unrelated scenarios. This round fixed six
+tests or docstrings across four different tasks that claimed to prove one
+arm while actually being satisfied by another -- the recurring shape being
+"some field moved" or "some field did not move" read as proof of a specific
+LINE, when several lines in the same function move that field for different
+reasons.
+
+**190. A MOCK THAT RETURNS WHERE PRODUCTION WOULD RAISE REMOVES THE EXACT
+SIGNAL AN ASSERTION DEPENDS ON TO FAIL.** A test asserting
+`test_a_live_instance_is_untouched_by_the_sweep`'s two properties --
+`reloaded.dormant is True` and `reloaded.failures == 0` -- could not fail on
+the second property no matter how badly `check_instance_health`'s dormant
+filter (`:437`) was broken, because the patched `get_request_instance` was
+configured to RETURN `httpx.Response(status_code=500)` rather than raise, and
+`:496`'s `instance.failures += 1` sits inside the recheck loop's `except`
+arm, which a mocked non-raising 500 never enters. Weakening `:437`'s filter
+by hand and re-running showed exactly this: `dormant is True` did NOT fail,
+while the strengthened version of the same test (the mock changed to RAISE)
+failed cleanly with `assert 1 == 0`. The tautological assertion and the
+binding one, side by side, against the identical mutation, is the clearest
+demonstration this round produced of why a test's oracle is only as strong
+as the path its own mocks force the code down.
+
+**191. THE FIRST `Instance` A TEST SEEDS BECOMES id 1, BECAUSE OF THE
+HARNESS'S OWN SEQUENCE RESET -- AND THE FIX IS A ROW EXCLUDED BY STATE, NOT
+BY id.** `tests/conftest.py:131`'s `db_session` teardown runs `SELECT
+setval(c.oid, 1, false) FROM pg_class c` across every sequence after each
+test, so the very first `Instance` row the NEXT test inserts always claims
+id 1 -- and `check_instance_health:449` and `monitor_healthy_instances:543`
+both filter `Instance.id != 1`. A test that seeds one instance and asserts a
+health task changed it would have PASSED even if the task processed nothing
+at all, because its subject was silently excluded from the task's own
+selection query before the loop body ever ran -- confirmed directly: an
+instrumented probe seeding exactly one instance showed `instance.id=1` and
+`get_request_instance` never called, while the identical probe seeding a
+decoy first (landing the subject on id 2) showed the call fire and
+`failures` move `0 -> 1`. The remedy is a `_seed_instance(domain,
+software='mastodon')` helper that seeds a RESERVED row first if none exists
+yet (`dormant=True`, `gone_forever=True`, `start_trying_again` a year in the
+future) before returning `make_instance(domain, software=software)` for the
+caller's actual subject. The reserved row is excluded BY STATE, not by id,
+which is deliberately more robust than seeding an inert decoy to consume id
+1: a decoy excluded only by id is still selected if the sequence has already
+advanced past 1 for an unrelated reason, where a row excluded by its own
+`dormant`/`gone_forever`/`start_trying_again` columns is invisible to both
+tasks' selection queries regardless of which id it actually receives.
+
+**192. A BARE `except:` IN A SHARED HELPER DEFEATS AN AUTOUSE OUTBOUND-HTTP
+GUARD -- THE SAME SHAPE AS FACT 148, REACHED BY A DIFFERENT ROUTE.**
+`block_outbound_http` (`tests/conftest.py:262-263`, session-scoped, autouse)
+makes an httpx request that no `http_mock` route matches RAISE rather than
+reach a real transport. `get_request_instance`'s bare `except:`
+(`app/utils.py:192`, catching everything, not merely `Exception`) swallows
+that raise exactly as it would swallow a genuine connection failure,
+increments `instance.failures`, and returns a synthetic
+`httpx.Response(status_code=500)` -- so a test that forgets to patch
+`get_request_instance` does not fail loudly with a blocked-request error; it
+silently exercises the function's own failure-handling branch and can still
+pass. Confirmed directly: an unpatched call in this round's probe raised
+inside `get_request` (blocked by the fixture), was caught, moved `failures`
+`0 -> 1`, and the enclosing test still `PASSED`. Fact 148 established this
+same shape for `respx`'s `AllMockedAssertionError` being swallowed by a bare
+`except Exception` in `refresh_instance_chooser`; this is the identical
+"a guard fixture's own failure signal gets caught by the code under test"
+hazard, reached through a different fixture (`block_outbound_http` rather
+than `http_mock`) and a different bare `except:` (a literal bare clause
+rather than `except Exception`, which is if anything a wider net).
+
+**193. REPLACING A REQUEST HELPER BY NAME, AT ITS CALLER'S MODULE SCOPE,
+BEATS MAKING THE TRANSPORT FAIL.** Every helper `check_instance_health` and
+`monitor_healthy_instances` call -- `get_request_instance`, `get_request`,
+`instance_banned`, `download_defeds` -- is imported at
+`app/shared/tasks/maintenance.py`'s module scope (`:13`, `:19`), so
+`monkeypatch.setattr('app.shared.tasks.maintenance.<name>', ...)` reaches
+every call site directly. This round's entire test file used this idiom
+exclusively and never needed `respx` or a real (or even a fake) `httpx`
+transport: a test that needs a helper to fail patches it to raise; a test
+that needs a non-200 response constructs a real `httpx.Response(status_code=
+...)` and returns it. Two costs this avoids, both established by earlier
+rounds: `respx`'s unmatched-request failure being a distinct exception type
+a bare `except Exception` can swallow in ways specific to which function
+catches it (fact 183), and `get_request`'s own internal retry logic sleeping
+3-10 real seconds on certain exception types (fact 184) -- neither applies
+when `get_request` itself never runs. Contrast a helper imported INSIDE a
+function's own body rather than at its caller's module scope (fact 185):
+that idiom cannot reach it, because the name is never bound in the calling
+module's namespace before the function executes.
+
+**194. TWO SIBLING TASKS IN ONE MODULE CAN DIFFER IN WHETHER THEY WRAP IN
+`patch_db_session`, AND WHETHER THE DIFFERENCE IS OBSERVABLE DEPENDS ON WHERE
+THE WRAPPED HELPER'S WRITES ACTUALLY LAND.** `check_instance_health` wraps
+its entire body in `with patch_db_session(session):`
+(`app/shared/tasks/maintenance.py:431`); `monitor_healthy_instances`
+(`:533-742`) does not, at any line. Investigating whether that asymmetry is
+a real defect measured, rather than assumed, that it is not: after forcing
+`get_request_instance`'s exception path, `failures`/`dormant`/`gone_forever`
+came out byte-identical with and without a hypothetical wrapper, three runs
+of three. The reason generalises past this one pair of functions:
+`patch_db_session` (`app/utils.py:3679-3711`) installs a `SessionWrapper`
+(`:3707`) whose `__getattr__` (`:3700-3705`) delegates every attribute read
+to the task's OWN session object, so under the wrapper `db.session.commit()`
+is textually the task session's own commit -- there is nothing for a
+wrapped and an unwrapped call to disagree about UNLESS the object being
+committed lives somewhere the unwrapped `db.session` can also see it (the
+request-scoped session's own identity map, or a row already persisted to the
+database). Here it does not: `instance` lives only in the task session's own
+identity map, so no session other than the task's own has anything of it to
+flush. The asymmetry is real as a matter of code shape; whether it is a
+defect depends entirely on whether some OTHER caller's write can reach the
+same identity map from outside the task session, which is a case-by-case
+question this measurement answers only for these two functions and this one
+field.
+
+**195. A PROCESS THAT DIES MID-MUTATION LEAVES NO OPPORTUNITY TO RESTORE
+ITSELF -- THE CHECK BELONGS ON THE CONTROLLER'S SIDE AT RESUME, NOT ONLY THE
+IMPLEMENTER'S.** The mutation discipline this campaign uses says to restore
+production code before any point where the work might stop, so that a
+mid-mutation interruption never leaves a probe applied. That rule assumes
+the interruption is something the implementer's own process can observe and
+act on. It cannot cover the one failure mode where the implementer's process
+itself dies: this round had an implementer's session terminate mid-task with
+a probe still applied (`isinstance(links, dict)` removed from a discovery
+guard, mid-verification of a mutant), and no restore ever ran because there
+was no surviving process left to run it. The controller found the stray
+mutation on resume by checking `git diff --stat -- app/` before resuming the
+task, rather than trusting that the discipline had held, and restored it
+with `git checkout -- <file>`. The general point: a self-discipline rule
+stated entirely in terms of what the acting process does before it stops has
+a blind spot at the one place a process cannot help itself -- its own
+death -- and the check for probe residue needs a second, independent home on
+whichever side resumes the work.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not

@@ -9910,6 +9910,173 @@ edited in place by this round. Group D's closure also raised
 ran 21 mutations, 17 killed, two holes closed and two proven equivalent. If
 you take D374, say so here in the change that takes it.
 
+## Sub-project 32: `app/shared/tasks/maintenance.py` Group C, first half -- the instance-health tasks
+
+`docs/superpowers/specs/2026-09-09-coverage-maintenance-c-32-design.md` and
+`docs/superpowers/plans/2026-09-09-coverage-maintenance-c-32.md` (design and
+plan; the per-task briefs and reports live in
+`.superpowers/sdd/2026-09-09-coverage-maintenance-c-32/`), on branch `blentz`,
+from base `a0be51be`. Continuing the split of Group C by TESTING SURFACE, this
+round took its first half -- `sync_defederation_subscriptions:408-425`,
+`check_instance_health:426-507`, the new `_version_at_least:508-530`, and
+`monitor_healthy_instances`' HTTP half, `:533-635` -- leaving the identity
+phases at `:636-742` (Lemmy/PieFed and MBIN admin-role sync) to sub-project 33.
+Tests live in the new `tests/test_shared_tasks_maintenance_health.py` (**48
+tests**, 1342 lines). The module's `coverage_floors.ini` entry rose **66 ->
+89**, `percent_covered` **89.749430523918%** (`percent_statements_covered`
+91.8429003021148% on the same run, two points higher -- the key still
+matters). The module measures **662 statements, 216 branches** overall as of
+this commit, up from 639/204 at the round's start. Every in-scope range
+measured **zero missing statements and zero missing arcs** before the
+mutation pass ran. Twenty-seven mutations were run one at a time against the
+closed ranges: **20 killed, 6 survived -- all six real holes, all six closed
+with a new test apiece -- and 1 skipped as moot** (a `patch_db_session`
+wrapper the plan's own table proposed probing, which Task 2 investigated and
+correctly did not add).
+
+**Three production changes landed, numstat `36 5` total across three commits
+in one file -- `git diff --numstat a0be51be..80df9bbf -- app/`:**
+
+1. `app/shared/tasks/maintenance.py:557,594` (`monitor_healthy_instances`'
+   `nodeinfo` and `node` bound to `None` before their `try` blocks, with the
+   `finally` close guarded) -- commit `44fbf409` -- **D375.**
+2. `app/shared/tasks/maintenance.py:567,578,580-581` (`monitor_healthy_
+   instances`' discovery block counts one failure per non-matching document
+   via a `matched` flag, not one per non-matching link) -- commit `187927ea`
+   -- **D376.**
+3. `app/shared/tasks/maintenance.py:508-530,552` (`_version_at_least`, a new
+   numeric version-comparison helper, and its call site) -- commit `b9d8a6be`
+   -- **D377.**
+
+A fourth candidate production change, `monitor_healthy_instances`' missing
+`patch_db_session` wrapper, was investigated and did not reproduce -- see
+D374. **The round landed three production changes, not four,** against the
+design spec's provisional count.
+
+### 1. `monitor_healthy_instances`' missing `patch_db_session`, investigated and not reproduced -- D374
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D374 | `monitor_healthy_instances`' session, `app/shared/tasks/maintenance.py:536` (`session = get_task_session()`, never wrapped in `with patch_db_session(session):` anywhere in the function's `:533-742` range) against `check_instance_health`'s own body, which wraps entirely in `with patch_db_session(session):` at `:431` | **Investigated. The defect did not reproduce, and no production or test change was made -- not because a missing wrapper is harmless in general, but because two independently designed discriminators could not separate the behaviours.** The first design, a `before_cursor_execute` listener on `db.engine` recording `id(conn.connection)` per statement matching `'instance' in statement.lower()` (the technique that discriminated `pwn_bots`' split at D352), was CONTAMINATED: `instance_banned` (`app/utils.py:2335-2336` opens its own `get_task_session`; its first query against `banned_instances` runs at `:2352`) also matches the filter, and ordinary connection-pool checkout churn adds further noise -- the identical UNMODIFIED code produced 1 distinct connection checkout in one harness run and 2 in another, differing only by an unrelated extra `SELECT`. The contamination was caught, not missed: applying a hypothetical wrapper did not change the result, which is what exposed that the instrument itself was untrustworthy rather than confirming a fix. The second design asked a sharper question -- does the PERSISTED DATA differ? -- and after forcing `get_request_instance`'s exception path, final `failures`/`dormant`/`gone_forever` were byte-identical (`failures=3, dormant=False, gone_forever=False`) with and without the wrapper, three runs of three. **The reason is structural, not a coincidence of this test's shape**: `instance` lives only in the TASK session's identity map, so `db.session.commit()` has nothing of it to flush regardless of which session object issues the commit. A review sharpened this further by reading `patch_db_session` itself (`app/utils.py:3679-3711`): the wrapper it installs at `:3707` (`db.session = SessionWrapper(task_session)`) DELEGATES every attribute read to the task session via `__getattr__` (`:3700-3705`), so under the wrapper `db.session.commit()` is textually the task session's own commit -- there is nothing left for the two to disagree about. The review also confirmed `get_request_instance` never re-raises (its bare `except:` at `app/utils.py:192` always returns a synthetic 500, see D380), so `monitor_healthy_instances`' own `except Exception: session.rollback()` blocks (`:585-587`, `:612-614`, `:685-687`, `:727-729`) can never fire as a consequence of `get_request_instance`'s OWN internal failure, closing the one path the first report had not explicitly traced. **This is the second round running a "missing `patch_db_session`" investigation has come back null, and both times for a distinct scoping reason rather than a true absence** -- sub-project 31's PC2 was `patch_db_session`'s own `finally` restoring `db.session` before the nested call returns; this one is the identity map never holding the row at all. Confirmed the contrast the design spec asked for: `check_instance_health` wraps its entire body in `with patch_db_session(session):` at `:431`; `monitor_healthy_instances` (`:533-742`) contains no `patch_db_session` call anywhere -- verified against every one of the file's seven `patch_db_session` call sites (`:49`, `:140`, `:166`, `:221`, `:431`, `:750`, `:1202`), none inside `:533-742`. Also registered as its own methodological point: a connection-identity listener filtering on a substring that matches an unrelated helper's own table is a fragile discriminator design in a codebase where several helpers open their own task sessions -- contrast sub-project 30's `pwn_bots` listener, whose filter on `'settings'` matched nothing else and worked cleanly for exactly that reason | investigated, not reproduced; register-only, with the null result's reasoning (identity-map scoping, not general harmlessness) stated as the standing condition | `task-2-report.md` (both discriminator designs, the contamination discovery, the byte-identical persisted-state runs); `task-2-review.md` (the `patch_db_session` delegation reading, the rollback-cannot-fire tracing, the `instance_banned` contamination confirmation); `app/utils.py:3679-3711`, `:2335-2336`, `:2352`, `:189-196` read at this commit; `app/shared/tasks/maintenance.py:431`, `:536`, `:585-587`, `:612-614`, `:685-687`, `:727-729` read at this commit; D352 (sub-project 30) for the discriminator technique's origin |
+
+### 2. `nodeinfo` and `node` bound before their `try` blocks -- fixed as robustness, and the sites the fix could not reach are now confirmed rather than predicted -- D375
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D375 | `monitor_healthy_instances`' `nodeinfo`, assigned inside the `try` it is closed by (pre-fix, no binding before the `try`) and `node`, the same shape at its own site | **Fixed, and the justification is stated at its real strength rather than inflated.** If the assigning call raised before completing, the name was never bound, and the `finally` closing it (`nodeinfo.close()` / `node.close()`) raised `UnboundLocalError` -- an error the enclosing `except` cannot catch because it has already exited by the time the `finally` runs, so it escaped to the task-level handler, rolled back, and re-raised, ending the ENTIRE sweep over one instance's failure. Fixed by binding both to `None` before their `try` blocks and guarding the close: `nodeinfo = None` at `:557`, assigned at `:559-563`, `finally: if nodeinfo is not None: nodeinfo.close()` at `:588-590`; `node = None` at `:594`, assigned at `:596`, `finally: if node is not None: node.close()` at `:621-623`. **This justification is weaker than the round's usual bar, and this is stated rather than dressed up**: in production, reaching the pre-fix crash needs `get_request_instance`'s own bare `except:` (`app/utils.py:192`) to have already swallowed whatever the request raised and returned a synthetic 500 -- `get_request_instance` itself never raises, so the assigning call inside `monitor_healthy_instances` cannot fail on its account. The fix is robustness against a dependency's contract changing, not a repair of a defect a user sees today. Same class of justification as sub-project 31's PC1. **Confirmed `check_instance_health` never shared this shape, structurally rather than by luck**: its `node` is assigned at `:459`, outside the inner `try` that closes it (which opens at `:461`), and its `nodeinfo` is assigned at `:473-477`, likewise outside the `try` that closes it (opens at `:479`) -- so those `finally` blocks (`:469-470`, `:492-493`) can only ever run with the name already bound. **The genuinely reachable instances of this exact shape are the two sites that call `get_request` directly** -- `get_request` DOES raise, unlike `get_request_instance` -- inside `monitor_healthy_instances`' own identity phases: `:639` (`response = get_request(f'https://{instance.domain}/api/v3/site')`, inside the Lemmy/PieFed admin-role block's `try` at `:638`, closed by `:688-690`'s `finally: if response: response.close()`) and `:700` (the identical shape in the MBIN block's `try` at `:699`, closed by `:730-732`). Neither site binds `response` to `None` before its `try`. **This entry UPGRADES that registration from reachable-in-principle to CONFIRMED BY OBSERVATION, rather than opening a second, duplicate finding for it.** This round's own design spec reasoned the sites were reachable but did not observe the crash; Task 8 (registering DC4, unrelated to this shape) hit it BY ACCIDENT: its Lemmy integration fixture's instance is online from the moment `_seed_instance` creates it (`dormant`/`gone_forever` default to `False`, and `Instance.online()` is `not (dormant or gone_forever)`), so the admin-role block at `:637` is entered regardless of the DC4 fix, and running the literal unmocked `get_request` crashed with `UnboundLocalError: cannot access local variable 'response' where it is not associated with a value`, at the `finally`'s `if response:` line. The implementer worked around it by patching `get_request` to return an inert 404 so the block is genuinely entered, as it truly is, but takes a harmless branch, keeping DC4's own oracle the only thing asserted. **Not fixed here -- `:639` and `:700` belong to `monitor_healthy_instances`' identity phases, sub-project 33's assigned range** | fixed (robustness, not a live-bug repair; the reachable sites are registered, not fixed, and now hold an observed error rather than a predicted one) | `task-3-report.md` (the pre-fix `UnboundLocalError: cannot access local variable 'nodeinfo'` transcript, at the pre-shift line `:561`); `task-3-review.md` (confirming both sites fixed and `check_instance_health`'s structural immunity); `task-8-report.md` ("The literal brief version crashed instead", the verbatim traceback, the `get_request`-404 workaround); `task-8-review.md` (independently confirming the unbound-`response` bug at both sites); `app/shared/tasks/maintenance.py:459,461,469-470,473-477,479,492-493,557-563,588-590,594-596,621-623,636-639,688-690,698-700,730-732` read at this commit |
+
+### 3. One nodeinfo document counts one failure, not one per unrelated link -- D376
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D376 | `monitor_healthy_instances`' discovery block, pre-fix `else: instance.failures += 1` inside the per-link loop walking a nodeinfo document's `links` | **Fixed, observed failing pre-fix.** A nodeinfo document carrying several links unrelated to the three recognised schema URLs incremented `instance.failures` once per unrelated link, so a document's SHAPE, not its reachability, drove the count -- five unrelated links recorded five failures in one pass. `update_dormant_gone` (`app/models.py:146-150`) turns an instance `dormant` above 2 failures and `gone_forever` above 7, so this was crossing real lifecycle thresholds on document shape alone. Fixed with a `matched` flag: `matched = False` before the loop (`:567`), set `True` beside the `break` on an actual match (`:578`), and `if not matched: instance.failures += 1` once, after the loop (`:580-581`), replacing the removed per-link `else`. Pre-fix failure observed exactly as predicted: `AssertionError: assert 4 == 2` with `4 = <Instance noisy.example>.failures` -- three non-matching links (3 increments pre-fix) plus one more from the unrelated no-href fallback arm (`:627`, since `nodeinfo_href` was still never set) totalled 4; post-fix, the single `matched`-flag increment plus the same no-href fallback totals 2. A whole-file citation sweep after this change corrected nineteen numeric citations across the module docstring and four test docstrings, catching one the numeric sweep alone would have missed: a docstring claiming "the `else` arm counts one failure" that became FALSE, not merely mis-numbered, once that arm was removed | fixed (observed failing pre-fix: `assert 4 == 2`) | `task-6-report.md` (establishing `:600`'s -- now `:627`'s -- no-href fallback fires for ANY non-200-or-unmatched discovery, tightening a loose `failures > 0` oracle to `failures == 2` in the same task); `task-7-report.md` (the pre-fix failure transcript, the nineteen-citation sweep); `task-7-review.md` (zero still-stale or wrongly-corrected citations, confirmed independently); commit `187927ea`; `app/shared/tasks/maintenance.py:567,578,580-581,626-627` read at this commit |
+
+### 4. Lemmy version comparisons were lexical, not numeric -- D377
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D377 | `monitor_healthy_instances:552` pre-fix (`instance.version >= '0.19.4'`, a plain string comparison deciding whether a Lemmy instance's `nodeinfo_href` should be discarded and rediscovered) | **Fixed, observed failing pre-fix, and the new helper is deliberately scoped to this one call site.** String comparison orders `'0.19.10'` BELOW `'0.19.4'` (`'1' < '4'` at the first differing character), so exactly the newer point releases the check exists to catch took the wrong branch and kept a stale `nodeinfo_href` instead of rediscovering it. Fixed with `_version_at_least(version, minimum) -> bool` (`app/shared/tasks/maintenance.py:508-530`), which splits each dotted segment, takes its leading digit run as an integer (non-digit suffixes fold to 0 rather than raising, so `'1.2.3-rc1'` does not crash a sweep), zero-pads the shorter side, and compares the two integer lists; called at `:552` inside the lemmy-specific condition (`:551-553`). Pre-fix failure observed exactly as predicted: the rediscovered href stuck at the stale `.../nodeinfo/2.0.json` instead of `.../nodeinfo/2.1`. **The module had no version helper before this change and the new one is kept to what this site needs rather than generalised** to other version comparisons elsewhere in the codebase. Five unit tests exercise `_version_at_least` directly (an exact-match boundary, a double-digit-outranks-single-digit case, an older release, a missing segment padded to zero, a non-numeric suffix); a review MUTATION-TESTED all five against four plausible wrong implementations -- a lexical string compare, an always-`True` stub, a strict `>` instead of `>=`, and a naive `int()` with no zero-padding -- and confirmed each test is falsified by a distinct one of them, which is a stronger check than reading the tests | fixed (repair, observed failing pre-fix); scope stated deliberately narrow (one call site, not a general version comparator) | `task-8-report.md` (the pre-fix `AssertionError` transcript, the mutation-testing table); `task-8-review.md` (independent confirmation of the mutation results and of the one input, a non-digit-prefixed segment, that would break the helper but never reaches this call site given how `instance.version` is populated); commit `b9d8a6be`; `app/shared/tasks/maintenance.py:508-530,551-553` read at this commit; `app/models.py:146-150` read at this commit |
+
+### 5. `sync_defederation_subscriptions` unbans before it rebans, and its rollback cannot be told apart from its absence -- D378-D379
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D378 | `sync_defederation_subscriptions`'s delete-then-redownload ordering, `app/shared/tasks/maintenance.py:413` (`DELETE FROM banned_instances WHERE subscription_id is not null`) and `:414` (`session.commit()`), both executing BEFORE `:416-417`'s loop re-downloads each subscription's current ban list via `download_defeds` | **Registered, not fixed -- the repair is a restructure outside this round's approved production-change scope.** Every subscription-sourced ban is removed and DURABLY COMMITTED before any replacement ban arrives, so for the duration of the loop -- and for however long the loop takes if it is slow or the process is killed partway through -- every instance that was banned only through a defederation subscription is UNBANNED. A failure partway through `:416-417`'s loop (one subscription's `download_defeds` raising) leaves the table not merely stale but EMPTY of subscription-sourced bans, re-raised at `:421` after `:420`'s rollback (see D379) rather than swallowed. The fix this calls for is a build-then-swap restructure -- stage the new bans, then replace the old set atomically -- which is a shape change to the function, not a bounded edit, and was outside the three call sites (DC2, DC3, DC4) this round was authorised to touch | registered, not fixed (repair requires a build-then-swap restructure, outside this round's approved scope) | `app/shared/tasks/maintenance.py:408-425` read at this commit; `task-1-report.md` |
+| D379 | `sync_defederation_subscriptions:420`'s `session.rollback()`, inside the `except Exception:` at `:419`, wrapping the whole body from `:413` through `:417` | **Correct as written; registered because it is provably untestable by database-state assertion, not because it was left unexamined.** By the time any exception in `:416-417`'s loop reaches `:420`, `:413`'s DELETE is already committed (at `:414`) -- the transaction the rollback acts on holds nothing but a read from the loop's own `session.query(DefederationSubscription).all()` at `:416`, with no uncommitted write of this function's own left to discard. No assertion over persisted state can distinguish this line's presence from its absence, because there is nothing for it to roll back. Found in Task 1's review (finding 6, against a docstring that had claimed the rollback's effect was observable) and confirmed by the controller reading `:413-420` directly before ruling that the test should claim only what it proves: that the exception propagates, not that anything was rolled back | correct as written, registered so a future round does not spend effort trying to test it | `app/shared/tasks/maintenance.py:413-421` read at this commit; `task-1-review.md` finding 6; `task-1-report.md` ("Ruling 4" / fix round 1's docstring correction) |
+
+### 6. `get_request_instance`'s bare `except:` swallows everything, `KeyboardInterrupt` and `SystemExit` included -- D380
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D380 | `get_request_instance` (`app/utils.py:189-196`), `:192`'s bare `except:` (not `except Exception:`) wrapping `:191`'s `return get_request(uri, params, headers)` | **Correct as written per its own docstring's intent; registered as fact 111's shape, a further instance of a bare-except finding this campaign has made before.** A bare `except:` (no exception class at all) catches literally everything the request can raise, including `KeyboardInterrupt` and `SystemExit`, not merely ordinary request failures -- increments `instance.failures` (`:193`), calls `instance.update_dormant_gone()` (`:194`), commits (`:195`), and returns a synthetic `httpx.Response(status_code=500)` (`:196`) that no caller can distinguish from a real 500 the remote server sent. This is what makes the harness trap this round's Task 1 uncovered possible: a test that forgets to patch `get_request_instance` does not fail -- the call silently succeeds through the swallow, `failures` moves by exactly one, and the task returns normally, `PASSED`. `app/utils.py` is shared infrastructure outside `maintenance.py`, so no change was made here; registered so a future round touching this helper does not have to rediscover why every test in this round's file patches it explicitly rather than letting a request reach it | correct as written (per its own contract), registered (fact 111's shape; not fixed, out of this round's scope) | `app/utils.py:189-196` read at this commit; `task-1-report.md` (the extended diagnostic proving the swallow: `failures` moved `0 -> 1` and the task still `PASSED`); fact 111 (`tests/README.md`); facts 192 and 195 below |
+
+### 7. `check_instance_health`'s recheck loop commits once for the whole sweep, and a rollback mid-sweep discards every failure but the last -- D381
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D381 | `check_instance_health`'s dormant-recheck loop, `app/shared/tasks/maintenance.py:452` (`for instance in dormant_to_recheck:`) through `:497`, with `:499`'s `session.commit()` sitting OUTSIDE the loop at the same indentation as `:452`'s `for` | **Registered, NOT fixed, and flagged as MORE SERIOUS than any of the three defects this round did fix.** The loop commits exactly once, after every instance in the sweep has been processed, rather than per instance -- contrast `monitor_healthy_instances`, which commits after each instance individually (`:591`, `:625`, `:634`, `:691`, `:733`). When a SECOND (or later) instance in the same sweep raises inside `:456-493`'s `try`, `:495`'s `session.rollback()` expires the shared session and DISCARDS every uncommitted change accumulated so far in the sweep -- including an EARLIER instance's own `:496` failure increment, which was never separately committed. Only the LAST instance to raise in a given sweep has its failure recorded at `:499`. A health checker's common case is several instances failing in one sweep, and `failures` drives `update_dormant_gone`'s `dormant` (above 2) and `gone_forever` (above 7) thresholds (`app/models.py:146-150`), so this silently loses almost all of a multi-failure sweep's failure counting -- the exact case the function exists to handle correctly. **Found by a test that COULD NOT PASS**: Task 5's implementer reproduced the loss standalone, without `pytest` or `monkeypatch`, against completely unmodified production code, which is what makes this a finding rather than a harness artefact. Independently confirmed by that task's review, which verified the indentation directly: `:452` and `:499` share indentation while `:495`'s rollback is nested inside the loop. **Left unfixed only because this round's approved production scope was a specific, pre-authorised list of three call sites (DC2, DC3, DC4) and this was not on it** -- not because the defect is doubted or considered minor. A test locking in the corrupted behaviour was deliberately avoided: one test asserts `:496`'s increment on the single-instance path where it genuinely survives to `:499`'s commit; a second asserts, via a recorder, which domains were ATTEMPTED, so the loop's "continues past a raise" behaviour is tested without asserting over the corrupted persisted state itself | registered, NOT fixed (more serious than D375-D377; out of this round's approved scope) | `task-5-report.md` (the standalone reproduction against unmodified code, the indentation argument); `task-5-review.md` (independent confirmation the defect is real, by indentation and by tracing `:495`'s rollback scope); `app/shared/tasks/maintenance.py:452-499` read at this commit; `app/models.py:146-150` read at this commit |
+
+### 8. `monitor_healthy_instances`' three failure-escalation arms disagree on when an instance is gone forever -- D382
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D382 | `monitor_healthy_instances`' `elif nodeinfo.status_code >= 300:` arm, `app/shared/tasks/maintenance.py:605-611`, which checks `instance.failures > 5` at `:609` (setting `dormant`) but contains NO `> 12` `gone_forever` check anywhere in the arm | **Correct as written for what it does; registered as a real behavioural inconsistency rather than a style preference, and not fixed.** Contrast the `except Exception:` arm three lines below it (`:612-620`), which checks BOTH `instance.failures > 5` (`:616`, `dormant`) AND `instance.failures > 12` (`:619`, `gone_forever`), and the no-`nodeinfo_href` `else` arm (`:626-634`), which likewise checks both (`:629` and `:632`). Only the `elif >= 300` arm is missing the second check. **Consequence: an instance whose fetch keeps returning a genuine non-200, non-exception status** (a persistent `404` or similar on `instance.nodeinfo_href`, landing in this specific arm rather than the `except` arm or the no-href arm) **can accumulate failures past 12 and never be marked `gone_forever`**, where the identical failure count reached via an exception, or via a missing href, would mark it gone. Found during this round's own controller pre-check while deriving Task 9's mutation-site ranges, ahead of any test being written against it; not on the round's approved fix list, so left registered rather than closed | correct as written (per its own text), registered as a real cross-arm inconsistency, not fixed | `app/shared/tasks/maintenance.py:605-634` read at this commit |
+
+### 9. Group C's second half remains -- no new number
+
+Not a defect; recorded so sub-project 33 does not re-derive
+`monitor_healthy_instances`' identity-phase decomposition from scratch,
+current line numbers verified against this commit. This round's scope ended
+cleanly at `:635`; the remaining half opens immediately after with the
+Lemmy/PieFed admin-role block's comment at `:636` and its `if` at `:637`,
+running a nested try/except/finally through `:691` (Lemmy/PieFed), then the
+MBIN admin-role block from its comment/docstring at `:694-697` and `if` at
+`:698` through its own try/except/finally ending at `:733`, followed by the
+task's outer `except`/`finally` closing the whole function at `:736-740`
+(module ends this range at `:742`, the last blank line before the next
+`@celery.task` decorator at `:743`). **54 statements, 35 arcs missing,
+decorator-inclusive** -- this round's own measurement, taken once the HTTP
+half closed to zero missing statements and zero missing arcs, so the 54/35
+figure is exactly and only sub-project 33's remaining surface, not a stale
+estimate. It contains both of this round's confirmed-but-unfixed
+unbound-`response` sites (D375: `:639`, `:700`) and both of `monitor_healthy_
+instances`' own `get_request` call sites in the whole file (`grep -n
+'= get_request(' app/shared/tasks/maintenance.py` shows exactly these two
+plus two unrelated ones outside this function, at `:1040` and `:1103`).
+
+**Facts 187-195 carried into `tests/README.md`.** A module measuring zero
+missing statements and zero missing arcs still hid six real holes that only
+the mutation pass found, three of them found by mutation alone (187).
+Coverage records that both directions of a branch ran, never which threshold
+value discriminated it, so `> 5` and `>= 5` can both survive one boundary
+pinned only past both of them (188). An oracle asserting a field that
+several arms of the same function write is bound to none of them in
+particular (189). A mock that returns where production would raise removes
+the exact signal an assertion depends on to fail (190). The first `Instance`
+a test seeds becomes id 1 because of the harness's own sequence reset, and
+the fix is a reserved row excluded by state rather than by id (191). A bare
+`except:` in a shared helper defeats an autouse outbound-HTTP guard, the same
+shape as fact 148 reached by a different route (192). Replacing a request
+helper by name at its caller's module scope beats making the transport fail,
+avoiding both `respx` and a real retry sleep (193). Two sibling tasks in one
+module can differ in whether they wrap in `patch_db_session` with the
+difference proving unobservable, when the field in question lives only in
+the task session's own identity map (194). A process that dies mid-mutation
+leaves no opportunity to restore itself, so the check for probe residue
+belongs on the controller's side at resume as well as the implementer's
+(195).
+
+**Next free number: D383.** D374-D382 were taken by this round -- **D374**
+`monitor_healthy_instances`' missing `patch_db_session`, investigated and not
+reproduced, with the CORRECTED reasoning that the null result holds because
+`instance` lives only in the task session's own identity map and
+`patch_db_session`'s wrapper delegates to that same session, not because a
+missing wrapper is harmless in general; **D375** the unbound `nodeinfo`/
+`node` names, fixed as robustness against `get_request_instance`'s contract
+rather than a live-bug repair, with the reachable-in-principle sites at
+`:639`/`:700` UPGRADED to confirmed by observation (a verbatim
+`UnboundLocalError`, hit by accident during Task 8) rather than duplicated
+into a new entry; **D376** the per-link failure count, fixed with a `matched`
+flag so one document counts one failure; **D377** the lexical Lemmy version
+comparison, fixed with `_version_at_least`, deliberately scoped to its one
+call site; **D378** `sync_defederation_subscriptions`' delete-then-redownload
+window, registered rather than fixed because the repair is a build-then-swap
+restructure outside this round's scope; **D379** that same function's
+`:420` rollback, correct as written and provably untestable by database
+state because the DELETE it would undo is already committed; **D380**
+`get_request_instance`'s bare `except:` at `app/utils.py:192`, correct as
+written, fact 111's shape, registered because it is what makes an unpatched
+test silently exercise the failure path; **D381**
+`check_instance_health`'s batched commit, registered and NOT fixed, flagged
+as more serious than D375-D377 because a multi-instance sweep loses every
+failure count but the last raiser's; **D382** `monitor_healthy_instances`'
+threshold asymmetry, the `elif >= 300` arm missing the `> 12` gone-forever
+check its two siblings both have, registered and not fixed. No entry from an
+earlier sub-project's section was edited in place by this round. This
+round's closure also raised `maintenance.py`'s `coverage_floors.ini` entry
+66 -> 89 and ran 27 mutations, 20 killed, six holes closed and none proven
+equivalent. If you take D383, say so here in the change that takes it.
+
 ## Ratchet gotchas
 
 - `percent_covered` is a **blended statement+branch figure**. This matters for
