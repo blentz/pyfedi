@@ -128,7 +128,7 @@ from flask import get_flashed_messages
 from flask_login import login_user
 
 from app import db
-from app.constants import SRC_API, SRC_WEB
+from app.constants import SRC_API, SRC_PLD, SRC_WEB
 from app.models import Poll, PollChoice, PollChoiceVote, PostBookmark, \
     NotificationSubscription, PostVote, read_posts
 from app.shared.post import (
@@ -478,4 +478,190 @@ def test_removing_a_bookmark_that_does_not_exist_flashes_on_the_web(db_session, 
     assert result is None
     assert len(flashed) == 1
     assert 'was not bookmarked' in flashed[0]
+
+
+def test_subscribing_through_the_api_creates_the_subscription(db_session):
+    """`:143-147`'s creation, reached through `:124`'s false arm and `:136`'s
+    false arm, and `:150`'s return.
+
+    No `_web_ctx` here -- the module docstring's "SRC_API ARM DOES NOT NEED A
+    REQUEST CONTEXT" finding applies: `:117`'s ternary reads
+    `authorise_api_user(auth)` for SRC_API, never `current_user`, so a bearer
+    call authorises with no request context at all.
+
+    Catches a regression inverting `:136`, which would reject a first
+    subscription as already existing.
+    """
+    s = _seed()
+
+    result = subscribe_post(s.post.id, True, SRC_API, auth=_bearer(s.voter))
+
+    assert result == s.voter.id
+    assert db.session.query(NotificationSubscription).filter_by(
+        entity_id=s.post.id, user_id=s.voter.id).count() == 1
+
+
+def test_subscribing_twice_through_the_api_raises(db_session):
+    """`:136`'s true arm and `:139`'s raise, through `:138`'s true arm.
+
+    Asserts the count stayed at one, so the raise is not reached through an
+    unrelated crash that would satisfy pytest.raises just as well.
+    """
+    s = _seed()
+    subscribe_post(s.post.id, True, SRC_API, auth=_bearer(s.voter))
+
+    with pytest.raises(Exception, match='already existed'):
+        subscribe_post(s.post.id, True, SRC_API, auth=_bearer(s.voter))
+
+    assert db.session.query(NotificationSubscription).filter_by(
+        entity_id=s.post.id, user_id=s.voter.id).count() == 1
+
+
+def test_unsubscribing_through_the_api_deletes_the_subscription(db_session):
+    """`:124`'s true arm, `:125`'s true arm, `:126`'s delete.
+
+    Catches a regression changing `:124` to a truthiness test, which would send
+    `subscribe=False` down the creation branch.
+    """
+    s = _seed()
+    subscribe_post(s.post.id, True, SRC_API, auth=_bearer(s.voter))
+
+    result = subscribe_post(s.post.id, False, SRC_API, auth=_bearer(s.voter))
+
+    assert result == s.voter.id
+    assert db.session.query(NotificationSubscription).filter_by(
+        entity_id=s.post.id, user_id=s.voter.id).count() == 0
+
+
+def test_unsubscribing_when_none_exists_raises_through_the_api(db_session):
+    """`:125`'s false arm and `:131`'s raise, through `:130`'s true arm."""
+    s = _seed()
+
+    with pytest.raises(Exception, match='did not exist'):
+        subscribe_post(s.post.id, False, SRC_API, auth=_bearer(s.voter))
+
+    assert db.session.query(NotificationSubscription).filter_by(
+        entity_id=s.post.id, user_id=s.voter.id).count() == 0
+
+
+def test_the_web_arm_ignores_the_subscribe_argument_it_was_given(db_session, app):
+    """`:119-120`'s override, the function's least obvious behaviour.
+
+    `:120` recomputes `subscribe` from `post.notify_new_replies(user_id)`, so a
+    SRC_WEB caller passing subscribe=False when no subscription exists still
+    CREATES one -- the argument is discarded. `app/post/routes.py:2089`, the
+    only production caller of this arm, passes `subscribe=None` for exactly
+    this reason: the value is never read.
+
+    Verified: no NotificationSubscription row exists for this post/user before
+    the call (`_seed()` creates none), so `post.notify_new_replies(user_id)`
+    at `:120` is False and `subscribe` becomes True -- the create arm below.
+
+    Catches a regression deleting `:119`, which would make the web arm honour
+    the argument and silently change the toggle route's behaviour.
+    """
+    s = _seed()
+    assert db.session.query(NotificationSubscription).filter_by(
+        entity_id=s.post.id, user_id=s.voter.id).count() == 0
+
+    with _web_ctx(app, s.voter):
+        result = subscribe_post(s.post.id, False, SRC_WEB)
+
+    assert result.status_code == 200
+    assert db.session.query(NotificationSubscription).filter_by(
+        entity_id=s.post.id, user_id=s.voter.id).count() == 1
+
+
+def test_the_web_arm_removes_an_existing_subscription_when_toggled(db_session, app):
+    """`:120`'s other arm: with a subscription present, `notify_new_replies`
+    returns truthy and `subscribe` becomes False, so the toggle removes.
+
+    Together with the test above this exercises both values `:120` can
+    produce. Verified: after the first call a row exists (asserted below,
+    count == 1) before the second call is made, the mirror of the zero-row
+    state the test above starts from -- so the two tests provably take
+    different arms of `:120`'s ternary rather than coincidentally landing on
+    the same one.
+
+    Catches a regression inverting `:120`'s ternary, which would make the
+    toggle one-way.
+    """
+    s = _seed()
+    with _web_ctx(app, s.voter):
+        subscribe_post(s.post.id, True, SRC_WEB)
+
+    assert db.session.query(NotificationSubscription).filter_by(
+        entity_id=s.post.id, user_id=s.voter.id).count() == 1
+
+    with _web_ctx(app, s.voter):
+        result = subscribe_post(s.post.id, True, SRC_WEB)
+
+    assert result.status_code == 200
+    assert db.session.query(NotificationSubscription).filter_by(
+        entity_id=s.post.id, user_id=s.voter.id).count() == 0
+
+
+def test_a_third_source_reaches_the_flash_branches_the_web_arm_cannot(db_session, app):
+    """`:130`'s false arm and `:133`'s flash, then `:136`'s true arm, `:138`'s
+    false arm and `:141`'s flash.
+
+    Neither SRC_WEB nor SRC_API can reach `:133`/`:141`. SRC_WEB cannot:
+    `:119-120`'s override sets `subscribe` from `post.notify_new_replies`,
+    which runs the SAME query as `:122-123`'s `existing_notification` lookup
+    (entity_id, user_id, type=NOTIF_POST, identical on both), so under SRC_WEB
+    `subscribe == False` if and only if `existing_notification` is truthy --
+    `:124`/`:125`/`:136` can never land on the "mismatched" arms
+    (`:125`'s false arm or `:136`'s true arm) that lead to `:129-133` or
+    `:137-141`. SRC_API cannot either: `:130`/`:138`'s `if src == SRC_API`
+    always takes the raise branch (`:131`/`:139`) instead of the else.
+    `app/post/routes.py:2089`, the only WEB caller, passes `subscribe=None`,
+    consistent with the argument never mattering there.
+
+    This was verified empirically, not just reasoned: a diagnostic call of
+    `subscribe_post(post_id, False, SRC_WEB)` against a post with no existing
+    subscription (the exact inputs the original brief's web-flash test
+    specified) was run and observed to CREATE a subscription and flash
+    nothing (`before=0 after=1 flashed=[]`), not reach `:133` -- see the task
+    report for the transcript. `:133`/`:141` are only reachable through a
+    third source value that (a) is not SRC_WEB, so skips `:119`'s override,
+    and (b) is not SRC_API, so `:130`/`:138` take the else. SRC_PLD
+    (app/constants.py:94, the admin preload path) is used here purely as such
+    a value to reach these two statements; it is not how the code is used in
+    production, and this docstring says so rather than implying otherwise.
+
+    Uses `_web_ctx` (not an SRC_API test) because `:117`'s else-arm reads
+    `current_user.id`, which needs a logged-in request context regardless of
+    the source constant.
+
+    Catches a regression deleting either `flash(_(msg))` call outright. Under
+    SRC_PLD, `:149`'s `if src == SRC_API:` is always False, so control flow
+    reaches `:151`'s else and `:150`'s return is never taken either way --
+    deleting a flash call does not change which branch runs or what `:152`
+    returns, only what got flashed. That is exactly why this test asserts on
+    `flashed`'s content rather than on `result` alone: a deleted flash call
+    would otherwise still return a normal 200 render and pass silently.
+    """
+    s = _seed()
+
+    with _web_ctx(app, s.voter):
+        result = subscribe_post(s.post.id, False, SRC_PLD)
+        flashed = get_flashed_messages()
+
+    assert result.status_code == 200
+    assert len(flashed) == 1
+    assert 'did not exist' in flashed[0]
+    assert db.session.query(NotificationSubscription).filter_by(
+        entity_id=s.post.id, user_id=s.voter.id).count() == 0
+
+    subscribe_post(s.post.id, True, SRC_API, auth=_bearer(s.voter))
+
+    with _web_ctx(app, s.voter):
+        result = subscribe_post(s.post.id, True, SRC_PLD)
+        flashed = get_flashed_messages()
+
+    assert result.status_code == 200
+    assert len(flashed) == 1
+    assert 'already existed' in flashed[0]
+    assert db.session.query(NotificationSubscription).filter_by(
+        entity_id=s.post.id, user_id=s.voter.id).count() == 1
 
