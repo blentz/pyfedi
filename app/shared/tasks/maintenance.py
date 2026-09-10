@@ -686,7 +686,7 @@ def monitor_healthy_instances():
                                                       aliases=' '.join(aliases))
                                     session.add(new_emoji)
                                 session.commit()
-                    cache.delete_memoized(get_emoji_replacements)
+                        cache.delete_memoized(get_emoji_replacements)
                 except Exception:
                     session.rollback()
                     instance.failures += 1
