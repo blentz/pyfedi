@@ -832,20 +832,26 @@ def test_a_web_downvote_is_allowed_when_nothing_blocks_it(db_session, app):
     report) to catch a regression dropping `:44`'s `not` on `can_downvote`
     (which would then block this permitted downvote).
 
-    NOT a witness for `:43`'s equality check the way the brief claimed.
-    Live mutation (replacing `:43`'s `vote_direction == 'upvote'` with
-    `True`) left every test in this file passing, including this one:
-    `can_upvote` has no restriction `can_downvote` lacks (both start from the
-    same `user is None or community is None or user.banned or user.bot`
-    check, and share the same banned-community-list check; `can_downvote`
-    only ever adds MORE restrictions on top), so `not can_upvote(user,
-    post.community)` is False whenever this test's downvote is actually
-    unblocked. The mutated first disjunct (`True and not can_upvote(...)`)
-    therefore evaluates the same as the original's (`False and ...`) for
-    every reachable arrangement of these two helpers on the downvote path.
-    This is an equivalent mutant for that specific line, in the same sense
-    the module docstring documents for `:1137` -- recorded here rather than
-    claimed as caught.
+    NOT a witness for `:43`'s equality check the way the brief claimed --
+    scoped correctly, not in general. Live mutation (replacing `:43`'s
+    `vote_direction == 'upvote'` with `True`) left every test in this file
+    passing, including this one: `can_upvote` has no restriction
+    `can_downvote` lacks (both start from the same `user is None or
+    community is None or user.banned or user.bot` check, and share the same
+    banned-community-list check; `can_downvote` only ever adds MORE
+    restrictions on top), so `not can_upvote(user, post.community)` is False
+    whenever this test's downvote is actually unblocked. The mutated first
+    disjunct (`True and not can_upvote(...)`) therefore evaluates the same
+    as the original's (`False and ...`) for every reachable arrangement of
+    these two helpers WHEN `vote_direction == 'downvote'`. That scope
+    matters: it is a conditional equivalence, true only across calls whose
+    direction is 'downvote', not an unconditional one -- unlike `:1137`'s
+    equivalent mutant (module docstring), which no input distinguishes at
+    all. Here, a `vote_direction` outside {'upvote', 'downvote'} (e.g.
+    'reversal', reachable via app/api/alpha/utils/post.py:1397 and
+    unvalidated via app/post/routes.py:539) DOES distinguish the mutant --
+    see `test_a_web_reversal_bypasses_the_upvote_gate_for_a_blocked_user`
+    below, which is the actual killer for this line.
 
     Completes a real vote, so the redis cleanup applies here too.
     """
@@ -902,4 +908,64 @@ def test_the_masonry_template_is_chosen_when_a_style_is_requested(db_session, ap
     masonry_body = masonry.get_data(as_text=True)
     assert plain_body != masonry_body
     assert 'class="score"' in plain_body
+
+
+def test_a_web_reversal_bypasses_the_upvote_gate_for_a_blocked_user(db_session, app):
+    """Round-1 fix. `:43`'s equality check IS load-bearing, but only across
+    calls whose `vote_direction` is outside {'upvote', 'downvote'} -- the
+    scope `test_a_web_downvote_is_allowed_when_nothing_blocks_it`'s docstring
+    now states. `vote_direction='reversal'` is such a value, reachable in
+    production via app/api/alpha/utils/post.py:1397 (`score` neither 1 nor
+    -1) and, completely unvalidated, via app/post/routes.py:539's URL path
+    segment.
+
+    On the CURRENT code, with a bot voter (`can_upvote` and `can_downvote`
+    both False) and `vote_direction='reversal'`: `:43`'s first conjunct is
+    `'reversal' == 'upvote' and ...` = False; `:44`'s second conjunct is
+    `'reversal' == 'downvote' and ...` = False. Neither disjunct fires, so
+    the guard does not trigger and execution proceeds PAST `:48` to `:53`'s
+    `mark_post_read` call -- the one thing in this function that inserts
+    into `read_posts` before anything else does. Its presence afterward is
+    therefore proof execution passed the guard; its absence would prove the
+    guard fired. This is a stronger assertion than "nothing raised" or
+    "status_code == 200", both of which are identical whichever branch runs
+    (`:47` and `:72-74` are separate templates, but for this direction and
+    this seed they are called with byte-identical arguments -- both pass
+    `recently_upvoted=[]`/`recently_downvoted=[]` -- so comparing rendered
+    bodies cannot distinguish the branches here the way it did for the
+    masonry-style test above).
+
+    NO EXISTING VOTE IS SEEDED, deliberately. Post.vote's reversal handling
+    (app/models.py:2732-2741) only ever does one of two things: if an
+    existing vote is found, it relabels `vote_direction` to match that
+    vote's OWN sign and falls into the ordinary "remove it" arms at
+    app/models.py:2762/2776 (never the sign-flip arms at :2768/:2782, since
+    the relabelled direction can never disagree with the vote it was just
+    read from) -- so a reversal can only ever DELETE an existing vote, never
+    create one or change its sign. With none seeded, `existing_vote` is
+    None and `:2741` returns None immediately, before writing anything --
+    so this call cannot accidentally create or remove a PostVote row either
+    way, and the `read_posts` row is the only signal in this test that
+    depends on the guard rather than on Post.vote's own branching.
+
+    Catches a regression replacing `:43`'s `vote_direction == 'upvote'` with
+    `True`. Verified by LIVE MUTATION (see task report): under that
+    mutation, `not can_upvote(user, post.community)` is True for this bot,
+    the first disjunct becomes True, the guard fires, and `:47`'s early
+    return runs before `:53` -- no `read_posts` row is written, and this
+    test's `rows == {s.post.id}` assertion fails.
+    """
+    s = _seed()
+    s.voter.bot = True
+    db.session.commit()
+
+    with _web_ctx(app, s.voter):
+        result = vote_for_post(s.post.id, 'reversal', True, None, SRC_WEB)
+
+    assert result.status_code == 200
+    rows = db.session.execute(
+        read_posts.select().where(read_posts.c.user_id == s.voter.id)).fetchall()
+    assert {row.read_post_id for row in rows} == {s.post.id}
+    assert db.session.query(PostVote).filter_by(
+        user_id=s.voter.id, post_id=s.post.id).count() == 0
 
