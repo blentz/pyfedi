@@ -9928,9 +9928,11 @@ tests**, 1342 lines). The module's `coverage_floors.ini` entry rose **66 ->
 matters). The module measures **662 statements, 216 branches** overall as of
 this commit, up from 639/204 at the round's start. Every in-scope range
 measured **zero missing statements and zero missing arcs** before the
-mutation pass ran. Twenty-seven mutations were run one at a time against the
-closed ranges: **20 killed, 6 survived -- all six real holes, all six closed
-with a new test apiece -- and 1 skipped as moot** (a `patch_db_session`
+mutation pass ran. Twenty-eight mutations were run one at a time against the
+closed ranges, counting each row of the report's own table -- including the
+`a`/`b`/`c`/`d` sub-splits of a single numbered site -- as one mutation:
+**21 killed, 6 survived -- all six real holes, all six closed with a new
+test apiece -- and 1 skipped as moot** (a `patch_db_session`
 wrapper the plan's own table proposed probing, which Task 2 investigated and
 correctly did not add).
 
@@ -9982,7 +9984,7 @@ design spec's provisional count.
 | # | site | defect | status | evidence |
 |---|---|---|---|---|
 | D378 | `sync_defederation_subscriptions`'s delete-then-redownload ordering, `app/shared/tasks/maintenance.py:413` (`DELETE FROM banned_instances WHERE subscription_id is not null`) and `:414` (`session.commit()`), both executing BEFORE `:416-417`'s loop re-downloads each subscription's current ban list via `download_defeds` | **Registered, not fixed -- the repair is a restructure outside this round's approved production-change scope.** Every subscription-sourced ban is removed and DURABLY COMMITTED before any replacement ban arrives, so for the duration of the loop -- and for however long the loop takes if it is slow or the process is killed partway through -- every instance that was banned only through a defederation subscription is UNBANNED. A failure partway through `:416-417`'s loop (one subscription's `download_defeds` raising) leaves the table not merely stale but EMPTY of subscription-sourced bans, re-raised at `:421` after `:420`'s rollback (see D379) rather than swallowed. The fix this calls for is a build-then-swap restructure -- stage the new bans, then replace the old set atomically -- which is a shape change to the function, not a bounded edit, and was outside the three call sites (DC2, DC3, DC4) this round was authorised to touch | registered, not fixed (repair requires a build-then-swap restructure, outside this round's approved scope) | `app/shared/tasks/maintenance.py:408-425` read at this commit; `task-1-report.md` |
-| D379 | `sync_defederation_subscriptions:420`'s `session.rollback()`, inside the `except Exception:` at `:419`, wrapping the whole body from `:413` through `:417` | **Correct as written; registered because it is provably untestable by database-state assertion, not because it was left unexamined.** By the time any exception in `:416-417`'s loop reaches `:420`, `:413`'s DELETE is already committed (at `:414`) -- the transaction the rollback acts on holds nothing but a read from the loop's own `session.query(DefederationSubscription).all()` at `:416`, with no uncommitted write of this function's own left to discard. No assertion over persisted state can distinguish this line's presence from its absence, because there is nothing for it to roll back. Found in Task 1's review (finding 6, against a docstring that had claimed the rollback's effect was observable) and confirmed by the controller reading `:413-420` directly before ruling that the test should claim only what it proves: that the exception propagates, not that anything was rolled back | correct as written, registered so a future round does not spend effort trying to test it | `app/shared/tasks/maintenance.py:413-421` read at this commit; `task-1-review.md` finding 6; `task-1-report.md` ("Ruling 4" / fix round 1's docstring correction) |
+| D379 | `sync_defederation_subscriptions:420`'s `session.rollback()`, inside the `except Exception:` at `:419`, wrapping the whole body from `:413` through `:417` | **Correct as written; registered because it is provably untestable by database-state assertion, not because it was left unexamined.** By the time any exception in `:416-417`'s loop reaches `:420`, `:413`'s DELETE is already committed (at `:414`) -- the transaction the rollback acts on holds nothing but a read from the loop's own `session.query(DefederationSubscription).all()` at `:416`, with no uncommitted write of this function's own left to discard. No assertion over persisted state can distinguish this line's presence from its absence, because there is nothing for it to roll back. Found in Task 1's review (finding 6, against a docstring that had claimed the rollback's effect was observable) and confirmed by the controller reading `:413-420` directly before ruling that the test should claim only what it proves: that the exception propagates, not that anything was rolled back | correct as written, registered so a future round does not spend effort trying to test it | `app/shared/tasks/maintenance.py:413-421` read at this commit; `task-1-review.md` finding 6; `task-1-report.md` (fix round 1's docstring correction, section "2. `test_a_failing_download_rolls_back_and_re_raises` docstring corrected"); `progress.md` ("Ruling 4", the controller's ruling not to contort either test) |
 
 ### 6. `get_request_instance`'s bare `except:` swallows everything, `KeyboardInterrupt` and `SystemExit` included -- D380
 
@@ -10074,7 +10076,8 @@ threshold asymmetry, the `elif >= 300` arm missing the `> 12` gone-forever
 check its two siblings both have, registered and not fixed. No entry from an
 earlier sub-project's section was edited in place by this round. This
 round's closure also raised `maintenance.py`'s `coverage_floors.ini` entry
-66 -> 89 and ran 27 mutations, 20 killed, six holes closed and none proven
+66 -> 89 and ran 28 mutations (counting the report's `a`/`b`/`c`/`d`
+sub-split rows individually), 21 killed, six holes closed and none proven
 equivalent. If you take D383, say so here in the change that takes it.
 
 ## Ratchet gotchas

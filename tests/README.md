@@ -5822,7 +5822,7 @@ advanced past 1 for an unrelated reason, where a row excluded by its own
 tasks' selection queries regardless of which id it actually receives.
 
 **192. A BARE `except:` IN A SHARED HELPER DEFEATS AN AUTOUSE OUTBOUND-HTTP
-GUARD -- THE SAME SHAPE AS FACT 148, REACHED BY A DIFFERENT ROUTE.**
+GUARD -- THE SAME SHAPE AS FACT 183, REACHED BY A DIFFERENT ROUTE.**
 `block_outbound_http` (`tests/conftest.py:262-263`, session-scoped, autouse)
 makes an httpx request that no `http_mock` route matches RAISE rather than
 reach a real transport. `get_request_instance`'s bare `except:`
@@ -5834,13 +5834,28 @@ increments `instance.failures`, and returns a synthetic
 silently exercises the function's own failure-handling branch and can still
 pass. Confirmed directly: an unpatched call in this round's probe raised
 inside `get_request` (blocked by the fixture), was caught, moved `failures`
-`0 -> 1`, and the enclosing test still `PASSED`. Fact 148 established this
+`0 -> 1`, and the enclosing test still `PASSED`. Fact 183 established this
 same shape for `respx`'s `AllMockedAssertionError` being swallowed by a bare
-`except Exception` in `refresh_instance_chooser`; this is the identical
-"a guard fixture's own failure signal gets caught by the code under test"
-hazard, reached through a different fixture (`block_outbound_http` rather
-than `http_mock`) and a different bare `except:` (a literal bare clause
-rather than `except Exception`, which is if anything a wider net).
+`except Exception` in `refresh_instance_chooser` -- also
+`app/shared/tasks/maintenance.py`, the sibling module this round extends;
+this is the identical "a guard fixture's own failure signal gets caught by
+the code under test" hazard, reached through a different fixture
+(`block_outbound_http` rather than `http_mock`) and a different bare
+`except:` (a literal bare clause rather than `except Exception`, which is if
+anything a wider net). Fact 148 is the shape's earlier and more distant
+sighting: `post_request`'s `except Exception as e:`
+(`app/activitypub/signature.py:143`) swallows an unmatched respx route too,
+but into a different side channel entirely -- an `ActivityPubLog` failure
+row, checked by a row count rather than by a recorder or a status field --
+in a different module (`app/activitypub/signature.py`, not
+`maintenance.py`) with a different consequence for a test (a spurious send
+becomes invisible to `_delivered_inboxes`/`route.calls`, not a `failures`
+counter moving). Fact 183 already names this lineage explicitly ("this is
+fact 148's shape... recurring through a different mechanism"); this entry
+is the third sighting, closest in shape to 183 (same module family, a bare
+except over an httpx-adjacent guard) and traceable through it back to 148
+(the same failure-swallowed-into-a-side-channel mechanism, one module
+further out).
 
 **193. REPLACING A REQUEST HELPER BY NAME, AT ITS CALLER'S MODULE SCOPE,
 BEATS MAKING THE TRANSPORT FAIL.** Every helper `check_instance_health` and
