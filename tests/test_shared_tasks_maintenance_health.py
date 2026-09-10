@@ -536,7 +536,7 @@ class TestMonitorHealthyInstances:
         admin-role guard IS entered once `software` becomes 'piefed'. An
         unpatched call there would reach a live transport; since sub-project
         33's DC1 fix seeded `response = None` ahead of the `try` (`:638`), that
-        would now just log a failure at `:690` rather than crash on an
+        would now just log a failure at `:688` rather than crash on an
         unbound `response` -- unrelated to what this test checks either way.
         """
         monkeypatch.setattr(

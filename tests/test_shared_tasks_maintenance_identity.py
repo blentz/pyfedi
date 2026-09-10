@@ -113,8 +113,8 @@ def _quiet_http_half(monkeypatch):
 def _site_payload(*actor_ids, emojis=None):
     """A Lemmy `/api/v3/site` body: admins, and optionally custom emoji.
 
-    `:646` reads `admin['person']['actor_id']`; `:669` reads
-    `emoji['custom_emoji']` and `emoji['keywords']`.
+    `:646` reads `admin['person']['actor_id']`; `:670` reads
+    `emoji['custom_emoji']` and `:671` reads `emoji['keywords']`.
     """
     return {
         'admins': [{'person': {'actor_id': a}} for a in actor_ids],
@@ -188,3 +188,114 @@ class TestIdentityPhaseFailures:
         db.session.expire_all()
         touched = {i.domain for i in db.session.query(Instance).all() if i.failures > 2}
         assert touched == {'one.example', 'two.example'}
+
+
+class TestLemmyAdminRoles:
+    """The Lemmy/PieFed block's admin reconciliation.
+
+    `:637` forks on `software`; `:640` on the response; `:645` walks
+    `instance_data['admins']`; `:647` requires an http(s) scheme; `:649`
+    resolves the actor and `:650` skips one that is already an admin;
+    `:651-656` creates the role.
+
+    `find_actor_or_create` is imported at `maintenance.py:13`, so the
+    namespace idiom reaches it. `InstanceRole` has a composite primary key
+    `(instance_id, user_id)` (`app/models.py:167-168`), so a duplicate add
+    raises rather than silently doubling -- `:650`'s guard is what prevents
+    that.
+    """
+
+    def _lemmy(self, monkeypatch, payload, actor=None):
+        _quiet_http_half(monkeypatch)
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request',
+            _Recorder(result=_response(200, payload)))
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.find_actor_or_create',
+            lambda profile_id, **kwargs: actor)
+
+    def test_a_listed_admin_gets_an_instance_role(self, db_session, monkeypatch):
+        """`:656`'s `session.add`. Delete it and no role exists."""
+        instance = _seed_instance('peer.example', software='lemmy')
+        admin = make_user(instance, 'adminuser')
+        self._lemmy(monkeypatch, _site_payload(admin.ap_profile_id), actor=admin)
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        roles = db.session.query(InstanceRole).filter_by(instance_id=instance.id).all()
+        assert {(r.user_id, r.role) for r in roles} == {(admin.id, 'admin')}
+
+    def test_a_non_http_actor_id_is_skipped(self, db_session, monkeypatch):
+        """`:647`'s false arm. An acct: URI creates no role and is never resolved.
+
+        The oracle is that `find_actor_or_create` was NOT called -- asserting
+        only that no role exists would hold if the resolver returned None too.
+        """
+        instance = _seed_instance('peer.example', software='lemmy')
+        resolver = _Recorder(result=None)
+        _quiet_http_half(monkeypatch)
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request',
+            _Recorder(result=_response(200, _site_payload('acct:admin@peer.example'))))
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.find_actor_or_create', resolver)
+
+        monitor_healthy_instances()
+
+        assert resolver.calls == []
+
+    def test_an_unresolvable_actor_creates_no_role(self, db_session, monkeypatch):
+        """`:650`'s `user and ...` conjunct, false because the resolver returned None."""
+        instance = _seed_instance('peer.example', software='lemmy')
+        self._lemmy(
+            monkeypatch, _site_payload('https://peer.example/users/ghost'), actor=None)
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        assert db.session.query(InstanceRole).filter_by(
+            instance_id=instance.id).count() == 0
+
+    def test_an_existing_admin_is_not_added_twice(self, db_session, monkeypatch):
+        """`:650`'s second conjunct. Without it the composite PK collides.
+
+        The role is seeded first, so `user_is_admin` is already true. A second
+        `session.add` for the same `(instance_id, user_id)` would raise, which
+        `:686`'s `except` would swallow into `:688`'s failure increment -- so
+        the oracle checks BOTH that one role exists and that no failure was
+        recorded by this block.
+        """
+        instance = _seed_instance('peer.example', software='lemmy')
+        admin = make_user(instance, 'adminuser')
+        db.session.add(InstanceRole(
+            instance_id=instance.id, user_id=admin.id, role='admin'))
+        db.session.commit()
+        before = instance.failures
+        self._lemmy(monkeypatch, _site_payload(admin.ap_profile_id), actor=admin)
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='peer.example').first()
+        assert db.session.query(InstanceRole).filter_by(
+            instance_id=instance.id).count() == 1
+        assert reloaded.failures == before + 2
+
+    def test_a_non_200_site_response_creates_no_role(self, db_session, monkeypatch):
+        """`:641`'s false arm."""
+        instance = _seed_instance('peer.example', software='lemmy')
+        admin = make_user(instance, 'adminuser')
+        _quiet_http_half(monkeypatch)
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request',
+            _Recorder(result=_response(503)))
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.find_actor_or_create',
+            lambda profile_id, **kwargs: admin)
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        assert db.session.query(InstanceRole).filter_by(
+            instance_id=instance.id).count() == 0
