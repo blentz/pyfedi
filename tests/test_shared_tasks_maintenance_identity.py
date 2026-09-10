@@ -246,16 +246,29 @@ class TestLemmyAdminRoles:
         assert resolver.calls == []
 
     def test_an_unresolvable_actor_creates_no_role(self, db_session, monkeypatch):
-        """`:650`'s `user and ...` conjunct, false because the resolver returned None."""
+        """`:650`'s `user and ...` conjunct, false because the resolver returned None.
+
+        Dropping just that conjunct does not make role count alone fail: with
+        no `user`, `instance.user_is_admin(user.id)` raises `AttributeError`
+        on `None`, `:686` catches it, and the block still ends with zero
+        roles -- a crash swallowed into a skip looks the same as a clean one
+        by that measure. `:688`'s failure increment is what tells them apart:
+        the guard intact costs only the HTTP half's two; the guard missing
+        costs a third from the caught crash. So the oracle checks BOTH that
+        no role exists and that no failure was recorded by this block.
+        """
         instance = _seed_instance('peer.example', software='lemmy')
         self._lemmy(
             monkeypatch, _site_payload('https://peer.example/users/ghost'), actor=None)
+        before = instance.failures
 
         monitor_healthy_instances()
 
         db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='peer.example').first()
         assert db.session.query(InstanceRole).filter_by(
             instance_id=instance.id).count() == 0
+        assert reloaded.failures == before + 2
 
     def test_an_existing_admin_is_not_added_twice(self, db_session, monkeypatch):
         """`:650`'s second conjunct. Without it the composite PK collides.
@@ -283,7 +296,17 @@ class TestLemmyAdminRoles:
         assert reloaded.failures == before + 2
 
     def test_a_non_200_site_response_creates_no_role(self, db_session, monkeypatch):
-        """`:641`'s false arm."""
+        """`:641`'s false arm.
+
+        Negating that guard does not make role count alone fail: with no
+        payload attached to the 503, `response.json()` raises on the empty
+        body, `:686` catches it, and the block still ends with zero roles --
+        a crash swallowed into a skip looks the same as a clean one by that
+        measure. `:688`'s failure increment is what tells them apart: the
+        guard intact costs only the HTTP half's two; the guard missing costs
+        a third from the caught crash. So the oracle checks BOTH that no
+        role exists and that no failure was recorded by this block.
+        """
         instance = _seed_instance('peer.example', software='lemmy')
         admin = make_user(instance, 'adminuser')
         _quiet_http_half(monkeypatch)
@@ -293,9 +316,12 @@ class TestLemmyAdminRoles:
         monkeypatch.setattr(
             'app.shared.tasks.maintenance.find_actor_or_create',
             lambda profile_id, **kwargs: admin)
+        before = instance.failures
 
         monitor_healthy_instances()
 
         db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='peer.example').first()
         assert db.session.query(InstanceRole).filter_by(
             instance_id=instance.id).count() == 0
+        assert reloaded.failures == before + 2
