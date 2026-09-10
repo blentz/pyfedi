@@ -732,7 +732,7 @@ def monitor_healthy_instances():
                                              and instance_data['site_view']['local_site']['captcha_enabled'] is False \
                                              and instance_data['site_view']['local_site']['require_email_verification'] is False
 
-                    cache.delete_memoized(get_emoji_replacements)
+                        cache.delete_memoized(get_emoji_replacements)
                 except Exception:
                     session.rollback()
                     instance.failures += 1

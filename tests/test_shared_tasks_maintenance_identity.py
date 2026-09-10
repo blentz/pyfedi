@@ -514,3 +514,40 @@ class TestLemmyCustomEmoji:
         assert calls['count'] >= 2
         db.session.expire_all()
         assert db.session.query(Emoji).filter_by(instance_id=instance.id).count() == 0
+
+    def test_a_non_200_does_not_invalidate_the_emoji_cache(self, db_session, monkeypatch):
+        """DC2: `cache.delete_memoized` sits outside `:640`'s guard.
+
+        A 404 from one Lemmy instance discards the whole site's emoji
+        replacements. The oracle records the call rather than observing the
+        cache, because `CACHE_TYPE` is `NullCache` under test
+        (`tests/conftest.py:68`) and an invalidation there is unobservable.
+        """
+        recorder = _Recorder()
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.cache.delete_memoized', recorder)
+        _quiet_http_half(monkeypatch)
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_request',
+            _Recorder(result=_response(404)))
+        _seed_instance('peer.example', software='lemmy')
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        assert recorder.calls == []
+
+    def test_a_200_does_invalidate_the_emoji_cache(self, db_session, monkeypatch):
+        """The other side of DC2. Without this, deleting the call entirely
+        would satisfy the test above.
+        """
+        recorder = _Recorder()
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.cache.delete_memoized', recorder)
+        self._lemmy(monkeypatch, _site_payload(emojis=[_emoji('blobcat')]))
+        _seed_instance('peer.example', software='lemmy')
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        assert len(recorder.calls) == 1
