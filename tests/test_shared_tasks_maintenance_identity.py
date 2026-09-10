@@ -4,12 +4,12 @@ Sub-projects 29, 30, 31 and 32 closed the rest of this module. This file
 covers what was left: the two blocks of `monitor_healthy_instances` gated on
 `instance.software`, plus the task's own outer handler.
 
-  Lemmy/PieFed admin roles and custom emoji  `:637-691`
-  MBIN admin roles                           `:698-733`
-  the task's outer handler                   `:736-738`
+  Lemmy/PieFed admin roles and custom emoji  `:637-692`
+  MBIN admin roles                           `:699-735`
+  the task's outer handler                   `:738-740`
 
 ENTRY IS GATED ON `software`. `:637` needs 'lemmy', 'piefed' or 'pylova';
-`:698` needs 'mbin'. Sub-project 32's fixtures used `make_instance`'s
+`:699` needs 'mbin'. Sub-project 32's fixtures used `make_instance`'s
 'mastodon' default, so neither block ran and both `if` statements were
 covered only on their false arms. Every fixture here sets a matching value --
 which means a test that sets `software` and forgets about these blocks enters
@@ -22,16 +22,22 @@ test observes only the identity phases.
 
 THE OUTER HANDLER IS REACHED THROUGH `:547`. `instance_banned` is called at
 loop level, outside every `try`, so a raise there is the one failure that
-reaches `:736` rather than being caught per-instance.
+reaches `:738` rather than being caught per-instance.
 
 `get_request` RAISES, unlike `get_request_instance` which returns a synthetic
-500. Task 1 probed what that means for a test that forgets to patch it:
-an unpatched `get_request` raises inside the `try` at `:638`, and because
-`response` is never assigned before that point in this iteration, the
-`finally`'s `if response:` at `:689` raises `UnboundLocalError` before the
-`except Exception` at `:685` can absorb anything. The task-level `except`
-at `:736` then re-raises that `UnboundLocalError` to the caller -- a forgotten
-patch kills the task rather than quietly redirecting it.
+500. Task 1 probed what that meant for a test that forgot to patch it, before
+Task 2's fix: an unpatched `get_request` raised inside the `try`, and because
+`response` was never assigned before that point in this iteration, the
+`finally`'s `if response:` raised `UnboundLocalError` before the `except
+Exception` could absorb anything. The task-level `except` then re-raised that
+`UnboundLocalError` to the caller -- a forgotten patch killed the task rather
+than quietly redirecting it.
+
+Task 2 seeded `response = None` before both `try` blocks (`:638`, `:700`) and
+guarded the `finally`s with `is not None`, matching sub-project 32's
+fetch-block idiom (`:594`). A raising `get_request` is now caught by
+`:686`/`:729`'s `except` and becomes a failure increment instead of a crash --
+`TestIdentityPhaseFailures` below covers that.
 """
 
 from datetime import timedelta
@@ -107,7 +113,7 @@ def _quiet_http_half(monkeypatch):
 def _site_payload(*actor_ids, emojis=None):
     """A Lemmy `/api/v3/site` body: admins, and optionally custom emoji.
 
-    `:645` reads `admin['person']['actor_id']`; `:668` reads
+    `:646` reads `admin['person']['actor_id']`; `:669` reads
     `emoji['custom_emoji']` and `emoji['keywords']`.
     """
     return {
@@ -125,22 +131,22 @@ def _emoji(shortcode, url='https://peer.example/e.png', category='cat', keywords
 
 
 def _mbin_payload(*items):
-    """An MBIN `/api/users/admins` body. `:705` reads `instance_data['items']`."""
+    """An MBIN `/api/users/admins` body. `:707` reads `instance_data['items']`."""
     return {'items': list(items)}
 
 
 class TestTheTaskLevelHandler:
-    """`monitor_healthy_instances:736-738` -- the task's own `except`.
+    """`monitor_healthy_instances:738-740` -- the task's own `except`.
 
-    `:739`'s `finally` and `:740`'s `session.close()` were already covered:
-    every call reaches them. `:736-738` had never run, because every failure
+    `:741`'s `finally` and `:742`'s `session.close()` were already covered:
+    every call reaches them. `:738-740` had never run, because every failure
     inside the loop is caught per-instance. `:547`'s `instance_banned` call is
     the exception -- it sits at loop level, outside every `try`, so a raise
     there is the one that reaches the task handler.
     """
 
     def test_a_raising_ban_check_rolls_back_and_re_raises(self, db_session, monkeypatch):
-        """`:738`'s `raise`. The task does not swallow -- Celery must see it."""
+        """`:740`'s `raise`. The task does not swallow -- Celery must see it."""
         def _boom(domain):
             raise RuntimeError('ban check exploded')
 
@@ -151,3 +157,34 @@ class TestTheTaskLevelHandler:
 
         with pytest.raises(RuntimeError, match='ban check exploded'):
             monitor_healthy_instances()
+
+
+class TestIdentityPhaseFailures:
+    """The two identity blocks' error handling."""
+
+    def test_a_raising_request_does_not_end_the_whole_sweep(self, db_session, monkeypatch):
+        """DC1: `:690` reads `response`, which `:640` may never have bound.
+
+        `get_request` RAISES, unlike `get_request_instance`. The `except` at
+        `:686` catches the original and then the `finally` at `:689-691`
+        raises `UnboundLocalError`, which that handler has already run and
+        cannot catch. It escapes to `:738`, rolls back and re-raises, so one
+        instance's failure ends the sweep for every other instance.
+
+        The oracle is that BOTH instances were touched, compared as a set:
+        `:540` returns planner-ordered rows.
+        """
+        def _raise(*args, **kwargs):
+            raise httpx.HTTPError('transport down')
+
+        monkeypatch.setattr('app.shared.tasks.maintenance.get_request', _raise)
+        _quiet_http_half(monkeypatch)
+        for domain in ('one.example', 'two.example'):
+            _seed_instance(domain, software='lemmy')
+        db.session.commit()
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        touched = {i.domain for i in db.session.query(Instance).all() if i.failures > 2}
+        assert touched == {'one.example', 'two.example'}
