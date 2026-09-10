@@ -122,6 +122,7 @@ app/shared/post.py:1020, which is Group B.
 
 import pytest
 from contextlib import contextmanager
+from datetime import date
 from types import SimpleNamespace
 
 from flask import get_flashed_messages
@@ -198,6 +199,28 @@ def _bearer(user):
     `auth=f'Bearer {s.user.encode_jwt_token()}'` into edit_post's API branch.
     """
     return f'Bearer {user.encode_jwt_token()}'
+
+
+def _clear_votes_cast(user_id):
+    """Deletes the `votes_cast_{today}_{user_id}` key a completed vote wrote.
+
+    Not one of this file's brief-listed helpers -- added in Task 5 because it
+    is the first task in this round whose tests let `vote_for_post` run all
+    the way to `post.vote()` (app/models.py:2813). That call sets or
+    increments this key on the REAL redis instance the whole compose stack
+    shares for the session (module docstring, "REAL REDIS IS SHARED ACROSS
+    THE WHOLE TEST SESSION"), and tests/conftest.py:131 resets id sequences
+    after every test, so a later test whose user reuses this id would
+    otherwise inherit a stale count. Every test in this file that completes a
+    real vote calls this in a `finally` block. The import is inside the
+    function body, not at module level, for the same reason
+    `votes_cast_today` (app/models.py:48) does it that way -- `app.redis_client`
+    is a module-level name assigned by `create_app`, so a top-level `from app
+    import redis_client` here would bind `None`, captured before `create_app`
+    ever runs.
+    """
+    from app import redis_client
+    redis_client.delete(f'votes_cast_{date.today()}_{user_id}')
 
 
 def test_extra_rate_limit_check_returns_false_for_any_user(db_session):
@@ -664,4 +687,219 @@ def test_a_third_source_reaches_the_flash_branches_the_web_arm_cannot(db_session
     assert 'already existed' in flashed[0]
     assert db.session.query(NotificationSubscription).filter_by(
         entity_id=s.post.id, user_id=s.voter.id).count() == 1
+
+
+# --- Task 5: vote_for_post, :31-48's source fork and permission gates ---
+
+def test_an_api_upvote_from_a_bot_returns_early_without_voting(db_session):
+    """`:35`'s true arm and `:36`'s early return.
+
+    `can_upvote` rejects a bot, so `:36` returns the user id having voted for
+    nothing. Asserts no PostVote row, because `:36` and `:63` return the same
+    value and the return alone cannot tell them apart. No `_web_ctx` -- the
+    module docstring's "SRC_API ARM DOES NOT NEED A REQUEST CONTEXT" finding
+    applies to this arm too. No `redis_double` requested anywhere in this
+    file, per the module docstring, and this call does not even reach
+    `mark_post_read` -- it returns at `:36`, before `:53`.
+    """
+    s = _seed()
+    s.voter.bot = True
+    db.session.commit()
+
+    result = vote_for_post(s.post.id, 'upvote', True, None, SRC_API,
+                            auth=_bearer(s.voter))
+
+    assert result == s.voter.id
+    assert db.session.query(PostVote).filter_by(
+        user_id=s.voter.id, post_id=s.post.id).count() == 0
+
+
+def test_an_api_downvote_returns_early_when_downvotes_are_disabled(db_session):
+    """`:35`'s false arm, `:37`'s true arm and `:38`'s early return.
+
+    Catches a regression collapsing `:37` into `:35`, which would let a
+    downvote through while downvotes are off site-wide.
+    """
+    s = _seed()
+    s.site.enable_downvotes = False
+    db.session.commit()
+
+    result = vote_for_post(s.post.id, 'downvote', True, None, SRC_API,
+                            auth=_bearer(s.voter))
+
+    assert result == s.voter.id
+    assert db.session.query(PostVote).filter_by(
+        user_id=s.voter.id, post_id=s.post.id).count() == 0
+
+
+def test_an_api_upvote_passes_both_gates_and_records_the_vote(db_session):
+    """`:35`'s and `:37`'s false arms together, and `:63`'s return.
+
+    The false-arm counterpart of the two tests above. Catches a regression
+    inverting either gate, which would reject a permitted vote. This is the
+    first test in this file to let `vote_for_post` run all the way through
+    `post.vote()`, so it writes a real `votes_cast_*` key to the shared redis
+    instance (see `_clear_votes_cast`'s docstring) and cleans it up in a
+    `finally` block regardless of assertion outcome.
+    """
+    s = _seed()
+
+    try:
+        result = vote_for_post(s.post.id, 'upvote', True, None, SRC_API,
+                                auth=_bearer(s.voter))
+
+        assert result == s.voter.id
+        assert db.session.query(PostVote).filter_by(
+            user_id=s.voter.id, post_id=s.post.id).count() == 1
+    finally:
+        _clear_votes_cast(s.voter.id)
+
+
+def test_a_web_upvote_from_a_bot_renders_empty_voting_buttons(db_session, app):
+    """`:43`'s FIRST conjunction taken true -- upvote and not can_upvote.
+
+    `:43-44` is one arc pair to coverage.py, so this and the three tests below
+    are the only way to distinguish its parts, and Task 11's mutation pass is
+    the only instrument that proves they are distinguished. Catches a
+    regression dropping the first disjunct.
+
+    Asserts `result.status_code` rather than `isinstance(result, str)`:
+    `render_template` here is `app.utils.render_template`
+    (app/shared/post.py:23), which wraps the rendered string in
+    `make_response` (app/utils.py:86-99) before returning it, so the value is
+    a Flask `Response`, never a plain string.
+    """
+    s = _seed()
+    s.voter.bot = True
+    db.session.commit()
+
+    with _web_ctx(app, s.voter):
+        result = vote_for_post(s.post.id, 'upvote', True, None, SRC_WEB)
+
+    assert result.status_code == 200
+    assert db.session.query(PostVote).filter_by(
+        user_id=s.voter.id, post_id=s.post.id).count() == 0
+
+
+def test_a_web_downvote_is_refused_when_downvotes_are_disabled(db_session, app):
+    """`:44`'s SECOND conjunction taken true -- downvote and not can_downvote,
+    with the first disjunct false because the direction is not 'upvote'.
+
+    Catches a regression dropping the second disjunct, which would let the
+    downvote through to `:58`.
+    """
+    s = _seed()
+    s.site.enable_downvotes = False
+    db.session.commit()
+
+    with _web_ctx(app, s.voter):
+        result = vote_for_post(s.post.id, 'downvote', True, None, SRC_WEB)
+
+    assert result.status_code == 200
+    assert db.session.query(PostVote).filter_by(
+        user_id=s.voter.id, post_id=s.post.id).count() == 0
+
+
+def test_a_web_upvote_is_allowed_when_only_downvotes_are_disabled(db_session, app):
+    """Both disjuncts false with `can_downvote` False -- the input that proves
+    `:44`'s direction check is load-bearing.
+
+    Without this test, a regression replacing `:44`'s
+    `vote_direction == 'downvote'` with True would still pass everything
+    above. Completes a real vote (see `test_an_api_upvote_passes_both_gates...`
+    above for why the redis cleanup is needed), so it is wrapped in the same
+    `finally`.
+    """
+    s = _seed()
+    s.site.enable_downvotes = False
+    db.session.commit()
+
+    try:
+        with _web_ctx(app, s.voter):
+            result = vote_for_post(s.post.id, 'upvote', True, None, SRC_WEB)
+
+        assert result.status_code == 200
+        assert db.session.query(PostVote).filter_by(
+            user_id=s.voter.id, post_id=s.post.id).count() == 1
+    finally:
+        _clear_votes_cast(s.voter.id)
+
+
+def test_a_web_downvote_is_allowed_when_nothing_blocks_it(db_session, app):
+    """Both disjuncts false with both helpers True -- the fourth input.
+
+    Completes the four-way exercise of `:43-44`. Verified live (see task
+    report) to catch a regression dropping `:44`'s `not` on `can_downvote`
+    (which would then block this permitted downvote).
+
+    NOT a witness for `:43`'s equality check the way the brief claimed.
+    Live mutation (replacing `:43`'s `vote_direction == 'upvote'` with
+    `True`) left every test in this file passing, including this one:
+    `can_upvote` has no restriction `can_downvote` lacks (both start from the
+    same `user is None or community is None or user.banned or user.bot`
+    check, and share the same banned-community-list check; `can_downvote`
+    only ever adds MORE restrictions on top), so `not can_upvote(user,
+    post.community)` is False whenever this test's downvote is actually
+    unblocked. The mutated first disjunct (`True and not can_upvote(...)`)
+    therefore evaluates the same as the original's (`False and ...`) for
+    every reachable arrangement of these two helpers on the downvote path.
+    This is an equivalent mutant for that specific line, in the same sense
+    the module docstring documents for `:1137` -- recorded here rather than
+    claimed as caught.
+
+    Completes a real vote, so the redis cleanup applies here too.
+    """
+    s = _seed()
+
+    try:
+        with _web_ctx(app, s.voter):
+            result = vote_for_post(s.post.id, 'downvote', True, None, SRC_WEB)
+
+        assert result.status_code == 200
+        vote = db.session.query(PostVote).filter_by(
+            user_id=s.voter.id, post_id=s.post.id).one()
+        assert vote.effect < 0
+    finally:
+        _clear_votes_cast(s.voter.id)
+
+
+def test_the_masonry_template_is_chosen_when_a_style_is_requested(db_session, app):
+    """`:45`'s true arm, the refusal path's masonry template.
+
+    `:45` and `:72` are two separate ternaries with identical text; this pins
+    `:45`'s. Catches a regression hardcoding either template name.
+
+    Renders BOTH styles from the same gated input (`bot=True`, 'upvote', so
+    `:43-44`'s disjunction is true on both calls and both return through
+    `:47`'s early render) and asserts the two Response bodies differ. A
+    status-only assertion cannot tell `_post_voting_buttons.html` and
+    `_post_voting_buttons_masonry.html` apart -- both return 200 -- so this
+    compares `result.get_data(as_text=True)` between the two renders, per the
+    module docstring's "THE WEB ARMS RETURN A FLASK RESPONSE" finding.
+
+    Verified live (see task report): with `bot=True`, both of this post's
+    community's `can_upvote`/`can_downvote` checks are False inside the
+    template itself, so `_post_voting_buttons.html`'s unconditional `<span
+    class="score" ...>` (the only element not gated by either check) still
+    renders, while `_post_voting_buttons_masonry.html`'s authenticated branch
+    contains no unconditional element -- both its upvote and downvote blocks
+    are individually gated -- so it renders empty. The two bodies are not
+    merely different strings; one is non-empty markup and the other is
+    effectively blank, which is the strongest form of "not equal" available.
+    """
+    s = _seed()
+    s.voter.bot = True
+    db.session.commit()
+
+    with _web_ctx(app, s.voter):
+        plain = vote_for_post(s.post.id, 'upvote', True, None, SRC_WEB)
+    with _web_ctx(app, s.voter, query_string='style=masonry'):
+        masonry = vote_for_post(s.post.id, 'upvote', True, None, SRC_WEB)
+
+    assert plain.status_code == 200
+    assert masonry.status_code == 200
+    plain_body = plain.get_data(as_text=True)
+    masonry_body = masonry.get_data(as_text=True)
+    assert plain_body != masonry_body
+    assert 'class="score"' in plain_body
 
