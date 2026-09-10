@@ -31,18 +31,76 @@ instead of raising. `user_ip_banned` then sees a falsy IP and returns `None`,
 so `user.banned or user_ip_banned()` is falsy and the guard lets a
 context-free call straight through. A bearer-token call with no request
 context does not fail inside `user_ip_banned`; it does not fail there at all.
+CONSEQUENTLY, no SRC_API-arm test in this round wraps its call in `_web_ctx`
+-- `_web_ctx` stays reserved for the SRC_WEB arms, which need `flash` and
+`request.args` to be available.
 
-WHAT ACTUALLY BLOCKS AN API-ARM TEST IS `_seed()`'s USERS NOT BEING LOCAL.
-`_seed()` calls `make_user(instance, 'author')` and `make_user(instance,
+WHAT ACTUALLY BLOCKS AN API-ARM TEST IS AN `ap_id`, NOT CONTEXT.
+`authorise_api_user`'s condition at app/utils.py:3628,
+`if user.ap_id is not None or user.verified is False or user.banned is True or
+user.deleted is True:`, raises `Exception('incorrect_login')` at its body,
+app/utils.py:3629, for any bearer token whose user has a non-None `ap_id` --
+before the source fork ever reaches `user_ip_banned`. Probe D's `_seed()`
+originally called `make_user(instance, 'author')` and `make_user(instance,
 'voter')` with `local` left at its factory default of `False`
-(tests/factories.py:41), so both get a non-None `ap_id`. `authorise_api_user`
-(app/utils.py:3628) rejects any bearer token whose user has
-`ap_id is not None` with `raise Exception('incorrect_login')`, and it does
-this before the source fork ever reaches `user_ip_banned`. This is what Probe
-D actually observed with `_seed()`'s default voter, and it is unrelated to
-request context: tests/test_shared_post_edit.py:202's `_seed()` avoids it by
-passing `local=True` to its one user. Any test in this round that authorises
-a Group A SRC_API arm from a bearer token must mint its user the same way.
+(tests/factories.py:41), so both got a non-None `ap_id` and every bearer-token
+call against them failed here, unrelated to request context. Round-1 controller
+ruling: `_seed()` now passes `local=True` to both calls (see `_seed()`'s own
+docstring), so this file's `author` and `voter` authorise cleanly and this
+paragraph is a historical record, not a live hazard in this file. It remains a
+hazard for any test elsewhere that builds a bearer-token user without
+`local=True`, exactly as tests/test_shared_post_edit.py:202 already avoids it.
+
+`redis_double` REACHES THE FUNCTION-BODY IMPORT BUT BREAKS THE LOCK IT TAKES.
+Probe A (Task 1) resolved the question tests/conftest.py:459-463 raises: yes,
+`redis_double` DOES reach `mark_post_read:1126`'s `from app import
+redis_client`, contrary to what that warning leaves open. The traceback showed
+`redis_client.lock(...)` (`:1127`) acquiring its lock against a
+`fakeredis._connection.FakeRedisConnection`, proof the fixture's monkeypatch of
+`app.redis_client` is visible even to a function-body import. But the fixture
+still breaks the call: the lock's `__exit__` releases through a Lua script over
+`EVALSHA`, and fakeredis does not implement that command, so any call through
+`mark_post_read` -- directly, or transitively through `bookmark_post`,
+`vote_for_post`, or `vote_for_poll` -- raises this verbatim error under
+`redis_double`:
+
+    redis.exceptions.ResponseError: unknown command 'evalsha', with args
+    beginning with:
+
+The remedy is to omit `redis_double` entirely and let the call bind to the real
+Redis in the compose stack (`pyfedi_test-redis_1`), which implements `EVALSHA`
+and completes the lock's acquire-and-release cycle normally. NO TEST IN THIS
+FILE REQUESTS `redis_double` for exactly this reason -- Groups B and C's
+`delete_post:765` and `votes_cast_today` (app/models.py:47-52) do the same
+function-body redis import and inherit this same finding.
+
+REAL REDIS IS SHARED ACROSS THE WHOLE TEST SESSION -- WATCH FOR KEY COLLISIONS.
+Dropping `redis_double` for the reason above means every test in this round
+that touches Redis binds to the one Redis instance the whole compose stack
+shares for the session, not a fixture-scoped double that resets between tests.
+`votes_cast_today` (app/models.py:47-52) reads the key
+`votes_cast_{date.today()}_{user_id}`, and tests/conftest.py:131 resets
+Postgres id sequences after every test, so user ids are REUSED across tests in
+the same run. A test that increments or sets that key and does not clean it up
+leaves a value a later test's user id can collide with, silently corrupting
+that later test's vote-quota assertion. Task 6, which exercises
+`votes_cast_today`'s callers, is expected to wrap its Redis-touching tests in a
+context manager that deletes the key on exit; no test anywhere in this round
+should call `redis_client.set(...)` on a `votes_cast_*` key without a matching
+cleanup.
+
+THE WEB ARMS RETURN A FLASK `Response`, NEVER A `str`. Probe B (Task 1) found
+all three WEB templates (`post/_post_voting_buttons.html`,
+`post/_post_voting_buttons_masonry.html`, `post/_post_notification_toggle.html`)
+render without error against `_seed()`'s objects and a logged-in `_web_ctx`
+user -- no missing `g` attribute, no missing `Site` row. But `render_template`
+as imported at app/shared/post.py:23 is `app.utils.render_template`, not
+Flask's own. app/utils.py:74-79 calls `flask.render_template` internally to
+get a plain string, then app/utils.py:86-99 wraps that string in
+`make_response(content)` and adds `ETag`/`Cache-Control`/`Link` headers before
+returning it. Every SRC_WEB-arm assertion in this round must therefore read
+`result.status_code` and `result.get_data(as_text=True)`; `isinstance(result,
+str)` is always False and is not evidence of a broken render.
 
 THE FEDERATION LEVER IS `community.private`, NOT `local_only`. task_selector
 runs synchronously under eager Celery (tests/conftest.py:105-110), so
@@ -98,11 +156,20 @@ def _seed(*, private=True):
     tests/conftest.py:131 resets sequences after every test, so the instance
     seeded first here lands on id 1 and the community resolves to it. Unlike the
     maintenance rounds, this round WANTS id 1 rather than avoiding it.
+
+    author and voter are minted `local=True` (ap_id None) because every SRC_API
+    arm in this round authorises through `authorise_api_user`
+    (app/utils.py:3628), which rejects any bearer token whose user has a non-None
+    `ap_id`. See the module docstring's "SRC_API ARM" section -- this is a
+    Round-1 controller ruling, not the original brief. `make_community`
+    (tests/factories.py:148) hardcodes `local_only=False` regardless, so
+    `can_downvote`'s `community.local_only and not user.is_local()` check is not
+    engaged by this change either way.
     """
     instance = make_instance('local.example', software='piefed')
     site = make_site()
-    author = make_user(instance, 'author')
-    voter = make_user(instance, 'voter')
+    author = make_user(instance, 'author', local=True)
+    voter = make_user(instance, 'voter', local=True)
     community = make_community('interactions')
     community.private = private
     db.session.commit()
@@ -174,10 +241,20 @@ def test_flair_list_accepts_a_post_object_and_skips_the_lookup(db_session):
 
 
 def test_flair_list_returns_an_empty_list_when_the_post_has_no_flair(db_session):
-    """`:1139`'s `flair_list = []`, reached through `:1137`'s true arm.
+    """`:1139`'s `flair_list = []` executes, reached through `:1137`'s true arm.
 
-    Catches a regression returning `post.flair` unguarded, which would hand the
-    caller None instead of a list.
+    This does NOT catch a regression at `:1137` -- `Post.flair`
+    (app/models.py:1754) is a many-to-many relationship with no
+    `lazy='dynamic'`, so it is never None; an unflaired post's `post.flair` is
+    an empty `InstrumentedList`, which is itself a `list` subclass and compares
+    equal to `[]`. That makes `:1137`'s two arms behaviourally EQUIVALENT on
+    this path: the true arm assigns a literal `[]`; the false arm's
+    `post.flair` is `== []` too, and no equality, length, iteration, or
+    `isinstance(..., list)` check a caller could write distinguishes the two.
+    Inverting or deleting `:1137`'s condition does not change this test's
+    result -- it is an equivalent mutant here, not an escaped one. What this
+    test actually pins is `:1139`'s statement executing on the no-flair path;
+    the other two tests in this file pin the flair-present branch's behaviour.
     """
     s = _seed()
 
