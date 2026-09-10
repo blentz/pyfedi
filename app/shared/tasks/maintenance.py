@@ -509,8 +509,8 @@ def _version_at_least(version: str, minimum: str) -> bool:
     """Compare dotted numeric versions numerically rather than lexically.
 
     `'0.19.10' >= '0.19.4'` is False as strings, which is backwards for every
-    caller that means "this release or newer". Non-numeric suffixes compare as
-    0 rather than raising, so a version like '1.2.3-rc1' does not end a sweep.
+    caller that means "this release or newer". A segment's leading digit run
+    is kept, not folded to 0: `_version_at_least('1.2.3-rc1', '1.2.3')` is True.
     """
     def _parts(value):
         parts = []

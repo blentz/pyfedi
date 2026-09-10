@@ -52,7 +52,6 @@ from datetime import timedelta
 
 import httpx
 import pytest
-from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from app import db
@@ -777,7 +776,19 @@ class TestMonitorHealthyInstances:
         assert reloaded.gone_forever is False
 
     def test_a_banned_domain_is_skipped_before_any_request(self, db_session, monkeypatch):
-        """`:547`'s true arm. The oracle is that no request was made."""
+        """`:547`'s true arm. The oracle is that no request was made.
+
+        NOISY BINDING, recorded rather than fixed: with `:547`'s guard
+        removed, `banned.example` is processed, the recorder's 200-with-
+        `software` body drives `instance.software` to `'piefed'` and
+        `dormant` to `False` at `:600`/`:603`, `:637`'s admin-role block is
+        entered, the unpatched `get_request` raises, and the pre-existing
+        `:689` `if response:` throws `UnboundLocalError` -- so this test goes
+        red by crash rather than by `assert recorder.calls == []` failing
+        cleanly. The binding is real (removing the guard reliably fails this
+        test), but a future fix to `:689` (sub-project 33's territory) will
+        change this test's failure shape from a crash to a clean assertion.
+        """
         recorder = _Recorder(result=_response(200, {'software': {'name': 'PieFed', 'version': '1.0'}}))
         monkeypatch.setattr(
             'app.shared.tasks.maintenance.get_request_instance', recorder)
@@ -827,10 +838,13 @@ class TestMonitorHealthyInstances:
         and control falls straight to the `finally` at `:621-623`.
 
         Regression this catches: widening `:605`'s `>= 300` to also match
-        250 would clear `nodeinfo_href` and add a failure; narrowing `:597`'s
-        `== 200` so a 250 is treated as success would instead reset
-        `failures` to 0 and set `software`/`version`. Either mutation
-        changes one of this test's unchanged-state assertions.
+        250 would clear `nodeinfo_href` and add a failure. Narrowing `:597`'s
+        `== 200` so a 250 takes the success arm does NOT reset `failures` to
+        0 and set `software`/`version` as one might expect -- the mock's 250
+        carries no body, so `node.json()` at `:598` raises `JSONDecodeError`,
+        which `:612`'s `except Exception` catches and turns into a fourth
+        failure. The test still binds (`failures == 3` sees 4), just via that
+        route rather than the one it might look like.
         """
         monkeypatch.setattr(
             'app.shared.tasks.maintenance.get_request_instance',
@@ -969,7 +983,12 @@ class TestCheckInstanceHealthGoneForever:
     tests need no session gymnastics.
     """
 
-    def _dormant(self, domain, days_ago):
+    def _dormant_since(self, domain, days_ago):
+        """`start_trying_again` in the PAST -- `days_ago` days before now.
+
+        Not to be confused with `TestCheckInstanceHealthRecheck._dormant_pending_recheck`,
+        which sets a FUTURE date and takes an `href` rather than a day count.
+        """
         instance = _seed_instance(domain)
         instance.dormant = True
         instance.gone_forever = False
@@ -993,7 +1012,7 @@ class TestCheckInstanceHealthGoneForever:
         monkeypatch.setattr(
             'app.shared.tasks.maintenance.get_request_instance',
             _Recorder(result=_response(500)))
-        self._dormant('gone.example', days_ago=5)
+        self._dormant_since('gone.example', days_ago=5)
         db.session.commit()
 
         check_instance_health()
@@ -1009,7 +1028,7 @@ class TestCheckInstanceHealthGoneForever:
         monkeypatch.setattr(
             'app.shared.tasks.maintenance.get_request_instance',
             _Recorder(result=_response(500)))
-        self._dormant('recent.example', days_ago=4)
+        self._dormant_since('recent.example', days_ago=4)
         db.session.commit()
 
         check_instance_health()
@@ -1065,7 +1084,11 @@ class TestCheckInstanceHealthRecheck:
     they belong to, so DC2's defect does not exist here.
     """
 
-    def _dormant(self, domain, href=None):
+    def _dormant_pending_recheck(self, domain, href=None):
+        """`start_trying_again` in the FUTURE (one day out) with an optional
+        `href` already on file -- opposite date direction and signature from
+        `TestCheckInstanceHealthGoneForever._dormant_since`.
+        """
         instance = _seed_instance(domain)
         instance.dormant = True
         instance.gone_forever = False
@@ -1078,7 +1101,7 @@ class TestCheckInstanceHealthRecheck:
         monkeypatch.setattr(
             'app.shared.tasks.maintenance.get_request_instance',
             _Recorder(result=_response(200, {'software': {'name': 'PieFed', 'version': '1.2.3'}})))
-        self._dormant('back.example', href='https://back.example/nodeinfo/2.0')
+        self._dormant_pending_recheck('back.example', href='https://back.example/nodeinfo/2.0')
         db.session.commit()
 
         check_instance_health()
@@ -1106,7 +1129,7 @@ class TestCheckInstanceHealthRecheck:
         monkeypatch.setattr(
             'app.shared.tasks.maintenance.get_request_instance',
             _Recorder(result=_response(200, {'unexpected': True})))
-        self._dormant('quiet.example', href='https://quiet.example/nodeinfo/2.0')
+        self._dormant_pending_recheck('quiet.example', href='https://quiet.example/nodeinfo/2.0')
         db.session.commit()
 
         check_instance_health()
@@ -1131,7 +1154,7 @@ class TestCheckInstanceHealthRecheck:
         monkeypatch.setattr(
             'app.shared.tasks.maintenance.get_request_instance',
             _Recorder(result=_response(503, {'software': {'name': 'PieFed', 'version': '1.2.3'}})))
-        self._dormant('down.example', href='https://down.example/nodeinfo/2.0')
+        self._dormant_pending_recheck('down.example', href='https://down.example/nodeinfo/2.0')
         db.session.commit()
 
         check_instance_health()
@@ -1148,7 +1171,7 @@ class TestCheckInstanceHealthRecheck:
             'app.shared.tasks.maintenance.get_request_instance',
             _Recorder(result=_response(200, {'links': [
                 {'rel': NODEINFO_LINK, 'href': 'https://found.example/nodeinfo/2.0'}]})))
-        self._dormant('found.example', href=None)
+        self._dormant_pending_recheck('found.example', href=None)
         db.session.commit()
 
         check_instance_health()
@@ -1172,7 +1195,7 @@ class TestCheckInstanceHealthRecheck:
             _Recorder(result=_response(200, {'links': [
                 {'rel': 'https://nodeinfo.diaspora.software/ns/schema/2.0',
                  'href': 'https://https-variant.example/nodeinfo/2.0'}]})))
-        self._dormant('https-variant.example', href=None)
+        self._dormant_pending_recheck('https-variant.example', href=None)
         db.session.commit()
 
         check_instance_health()
@@ -1192,7 +1215,7 @@ class TestCheckInstanceHealthRecheck:
             _Recorder(result=_response(200, {'links': [
                 {'rel': 'http://nodeinfo.diaspora.software/ns/schema/2.1',
                  'href': 'https://schema21.example/nodeinfo/2.1'}]})))
-        self._dormant('schema21.example', href=None)
+        self._dormant_pending_recheck('schema21.example', href=None)
         db.session.commit()
 
         check_instance_health()
@@ -1210,7 +1233,7 @@ class TestCheckInstanceHealthRecheck:
             'app.shared.tasks.maintenance.get_request_instance',
             _Recorder(result=_response(200, {'links': [
                 {'rel': 'https://example.invalid/other', 'href': 'https://x.example/y'}]})))
-        self._dormant('nomatch.example', href=None)
+        self._dormant_pending_recheck('nomatch.example', href=None)
         db.session.commit()
 
         check_instance_health()
@@ -1229,7 +1252,7 @@ class TestCheckInstanceHealthRecheck:
             'app.shared.tasks.maintenance.get_request_instance', recorder)
         monkeypatch.setattr(
             'app.shared.tasks.maintenance.instance_banned', lambda domain: True)
-        self._dormant('banned.example', href='https://banned.example/nodeinfo/2.0')
+        self._dormant_pending_recheck('banned.example', href='https://banned.example/nodeinfo/2.0')
         db.session.commit()
 
         check_instance_health()
@@ -1250,7 +1273,7 @@ class TestCheckInstanceHealthRecheck:
         recorder = _Recorder(result=_response(200, {'software': {'name': 'PieFed', 'version': '1.0'}}))
         monkeypatch.setattr(
             'app.shared.tasks.maintenance.get_request_instance', recorder)
-        self._dormant('flipboard.com', href='https://flipboard.com/nodeinfo/2.0')
+        self._dormant_pending_recheck('flipboard.com', href='https://flipboard.com/nodeinfo/2.0')
         db.session.commit()
 
         check_instance_health()
@@ -1270,7 +1293,7 @@ class TestCheckInstanceHealthRecheck:
 
         monkeypatch.setattr(
             'app.shared.tasks.maintenance.get_request_instance', _raise)
-        self._dormant('bad-one.example', href='https://bad-one.example/nodeinfo/2.0')
+        self._dormant_pending_recheck('bad-one.example', href='https://bad-one.example/nodeinfo/2.0')
         db.session.commit()
 
         check_instance_health()
@@ -1305,8 +1328,8 @@ class TestCheckInstanceHealthRecheck:
 
         monkeypatch.setattr(
             'app.shared.tasks.maintenance.get_request_instance', _raise)
-        self._dormant('bad-one.example', href='https://bad-one.example/nodeinfo/2.0')
-        self._dormant('bad-two.example', href='https://bad-two.example/nodeinfo/2.0')
+        self._dormant_pending_recheck('bad-one.example', href='https://bad-one.example/nodeinfo/2.0')
+        self._dormant_pending_recheck('bad-two.example', href='https://bad-two.example/nodeinfo/2.0')
         db.session.commit()
 
         check_instance_health()
@@ -1345,7 +1368,7 @@ class TestCheckInstanceHealthRecheck:
             raise RuntimeError('banned check exploded')
 
         monkeypatch.setattr('app.shared.tasks.maintenance.instance_banned', _raise)
-        self._dormant('outer-handler.example', href='https://outer-handler.example/nodeinfo/2.0')
+        self._dormant_pending_recheck('outer-handler.example', href='https://outer-handler.example/nodeinfo/2.0')
         db.session.commit()
 
         rollback_calls = []
