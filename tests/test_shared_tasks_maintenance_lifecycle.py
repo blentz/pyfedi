@@ -800,6 +800,97 @@ class TestDeleteOldSoftDeletedContent:
             delete_old_soft_deleted_content()
 
 
+class _GhostReplySession:
+    """Wraps a real task session so `.query(PostReply).get(ghost_id)` returns
+    `None` for one chosen id, standing in for that row having been deleted by
+    ANOTHER session between the raw `SELECT` at
+    `delete_old_soft_deleted_content:261-266` and the ORM lookup at `:269`.
+    Every other call -- `.query(Post)`, `.query(PostReply)` for any other id,
+    `.execute`, `.delete`, `.commit`, `.rollback`, `.close` -- forwards to the
+    real session untouched.
+    """
+
+    def __init__(self, real_session, ghost_id):
+        self._real = real_session
+        self._ghost_id = ghost_id
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+    def query(self, *entities, **kwargs):
+        real_query = self._real.query(*entities, **kwargs)
+        if entities and entities[0] is PostReply:
+            return _GhostQuery(real_query, self._ghost_id)
+        return real_query
+
+
+class _GhostQuery:
+    """Forwards everything to the wrapped `Query` except `.get(ghost_id)`."""
+
+    def __init__(self, real_query, ghost_id):
+        self._real = real_query
+        self._ghost_id = ghost_id
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+    def get(self, ident):
+        if ident == self._ghost_id:
+            return None
+        return self._real.get(ident)
+
+
+class TestDeleteOldSoftDeletedContentReplyRace:
+    """`delete_old_soft_deleted_content:270`'s missing branch -- `if
+    post_reply:` taking its FALSE arm.
+
+    `:261-266` selects `post_reply` ids matching the retention criteria with
+    one raw SQL `SELECT`, a snapshot at that instant. `:269` then re-fetches
+    each id through the ORM, one at a time, in a separate round trip. Between
+    those two steps another session can delete the row -- a concurrent
+    request, another worker -- and `:270`'s `if post_reply:` guard exists for
+    exactly that case, per its own comment ("Check if still exists"). A
+    single-process test cannot make a genuine second connection race the
+    first, so `_GhostReplySession` stands in for the race by wrapping the
+    task's own session and making `.query(PostReply).get(ghost_id)` return
+    `None` for the one id under test. `get_task_session` is imported into
+    `app.shared.tasks.maintenance`'s namespace (`maintenance.py:19`), the
+    same seam `TestRefreshInstanceChooser` in the external file patches for
+    `get_request`.
+
+    Deleting or inverting `:270`'s guard makes `post_reply.delete_dependencies()`
+    run on `None`, raising `AttributeError` that escapes this task's own
+    `try` to `:278`'s `raise` -- turning a row already gone into a crash for
+    the whole task instead of a silent skip. The oracle is therefore BOTH
+    that the task returns normally (a bare call, no `pytest.raises`) AND
+    that the row -- untouched by this pass, since the ghost lookup never
+    reaches `delete_dependencies` or `session.delete` -- still exists
+    afterward; the guard's absence would fail on the first, a mutant that
+    kept the guard but deleted anyway would fail on the second.
+    """
+
+    def test_a_reply_gone_before_the_get_is_left_alone(self, db_session, monkeypatch):
+        instance, user, community, post = _seed()
+        reply = make_post_reply(post, user)
+        reply.deleted = True
+        reply.posted_at = utcnow() - timedelta(days=8)
+        db.session.commit()
+        reply_id = reply.id
+
+        from app.utils import get_task_session as _real_get_task_session
+
+        def _ghost_get_task_session():
+            return _GhostReplySession(_real_get_task_session(), reply_id)
+
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_task_session', _ghost_get_task_session)
+
+        delete_old_soft_deleted_content()
+
+        db.session.expire_all()
+        assert db.session.query(PostReply).filter_by(id=reply_id).first() is not None
+
+
 class TestArchiveUser:
     """`archive_user:958` -- drop a user's avatar and cover.
 
