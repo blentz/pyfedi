@@ -124,6 +124,7 @@ import pytest
 from contextlib import contextmanager
 from types import SimpleNamespace
 
+from flask import get_flashed_messages
 from flask_login import login_user
 
 from app import db
@@ -412,7 +413,10 @@ def test_bookmarking_twice_through_the_web_flashes_instead_of_raising(db_session
 
     The WEB duplicate path must NOT raise -- that asymmetry is the arm. Catches
     a regression hoisting the raise out of `:88`, which would give the web route
-    an exception it has no handler for.
+    an exception it has no handler for. Also asserts the flashed message's
+    content (read inside the same `_web_ctx`, since `flash`/`get_flashed_messages`
+    both operate on that request's session), so a regression that drops `:91`'s
+    `flash(_(msg))` call outright does not survive on `result is None` alone.
     """
     s = _seed()
     with _web_ctx(app, s.voter):
@@ -420,8 +424,11 @@ def test_bookmarking_twice_through_the_web_flashes_instead_of_raising(db_session
 
     with _web_ctx(app, s.voter):
         result = bookmark_post(s.post.id, SRC_WEB)
+        flashed = get_flashed_messages()
 
     assert result is None
+    assert len(flashed) == 1
+    assert 'already been bookmarked' in flashed[0]
     assert db.session.query(PostBookmark).filter_by(
         post_id=s.post.id, user_id=s.voter.id).count() == 1
 
@@ -457,12 +464,18 @@ def test_removing_a_bookmark_that_does_not_exist_raises_through_the_api(db_sessi
 def test_removing_a_bookmark_that_does_not_exist_flashes_on_the_web(db_session, app):
     """`:106`'s false arm and `:109`'s flash, plus `:111`'s false arm.
 
-    Catches a regression hoisting `:107`'s raise out of `:106`.
+    Catches a regression hoisting `:107`'s raise out of `:106`, and also
+    asserts the flashed message's content (read inside the same `_web_ctx`) so
+    a regression that drops `:109`'s `flash(_(msg))` call outright does not
+    survive on `result is None` alone.
     """
     s = _seed()
 
     with _web_ctx(app, s.voter):
         result = remove_bookmark_post(s.post.id, SRC_WEB)
+        flashed = get_flashed_messages()
 
     assert result is None
+    assert len(flashed) == 1
+    assert 'was not bookmarked' in flashed[0]
 
