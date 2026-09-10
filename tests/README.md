@@ -5956,6 +5956,165 @@ but unfixed sites), this test's failure mode will change shape from a crash
 to a clean assertion failure, which is worth knowing in advance rather than
 mistaking for a new defect.
 
+**198. AN UNPATCHED `get_request` KILLS THE TASK RATHER THAN BEING SWALLOWED
+-- THE OPPOSITE OF WHAT SUB-PROJECTS 31 AND 32 FOUND FOR
+`refresh_instance_chooser` AND `get_request_instance`, AND A FIX THEN
+CHANGED WHICH STATE IS TRUE.** Before sub-project 33's DC1 fix, Task 1
+probed what an unpatched `get_request` does inside `monitor_healthy_
+instances`' identity blocks, against completely unmodified production code,
+and recorded the result verbatim: `PROBE: task raised UnboundLocalError:
+cannot access local variable 'response' where it is not associated with a
+value` and `PROBE: failures=2 dormant=False`. `get_request` (`app/
+utils.py:131-185`) always raises on failure -- unlike `get_request_
+instance` (`:189-196`), whose bare `except:` swallows everything and
+returns a synthetic 500 -- so a forgotten patch here does not quietly
+redirect a test down the wrong branch, it crashes the whole task loudly and
+immediately (the raise is `respx`'s `AllMockedAssertionError`, which skips
+every one of `get_request`'s retry-sleep branches). Sub-project 33's DC1
+fix (`response = None` seeded before each identity block's `try`) then
+changed that state: the same unpatched call is now caught by the block's
+own `except Exception:` and becomes an ordinary failure increment instead of
+a crash. Both states are true of this file, at different points in its
+history, and this fact records both rather than only the current one.
+
+**199. AN INSTANCE'S `software` VALUE DECIDES WHICH BLOCKS A TEST ENTERS,
+AND A TEST THAT SETS IT FOR ONE REASON ENTERS THEM FOR ALL REASONS.**
+`monitor_healthy_instances`' Lemmy/PieFed admin-role block (`app/shared/
+tasks/maintenance.py:637`) is gated on `instance.software` being one of
+`'lemmy'`, `'piefed'` or `'pylova'`; the MBIN block (`:703`) is gated on
+`'mbin'`. `instance.online()` (`not (dormant or gone_forever)`) needs no
+arranging, since `_seed_instance` leaves both `False`. So a fixture that
+sets `software` to satisfy some UNRELATED check enters whichever
+`software`-gated block that value happens to match, whether the test
+intended to exercise it or not. Sub-project 32 hit this by accident: one of
+its version-comparison tests set `software='lemmy'` for reasons having
+nothing to do with the admin-role block, entered it anyway, and crashed on
+what later became D375. Sub-project 33's own `_quiet_http_half` (fact 200)
+exists specifically to make entering these blocks harmless rather than to
+prevent entry, because preventing entry is not an option once `software` is
+set for any reason at all.
+
+**200. `_quiet_http_half`'S SHAPE: WHY AN IDENTITY-PHASE TEST MUST
+NEUTRALISE THE BLOCKS ABOVE IT, AND WHAT A 404 THERE CONTRIBUTES TO
+`failures`.** `tests/test_shared_tasks_maintenance_identity.py:131-141`
+patches `get_request_instance` to always return a 404, so every fixture in
+the file goes through the fetch and discovery blocks above the identity
+phases before reaching them (fact 199 is why a software-gated identity
+block cannot simply be avoided instead). Walking a 404 through those blocks
+for an instance with no `nodeinfo_href` set: the discovery block's `elif
+status_code >= 300:` arm increments `failures` once, and the still-unset
+`nodeinfo_href` then falls to the no-href `else` arm below the fetch block,
+incrementing `failures` a second time -- **exactly two**, independently
+derived from the code and confirmed against Task 1's probe output
+(`failures=2`), and well under the `> 5` dormancy threshold so `dormant`
+stays `False`. Every identity-phase assertion on `failures` in this file is
+written against a baseline of 2 for exactly this reason -- `before + 2`
+after the identity block runs cleanly, `before + 3` if it catches a
+swallowed crash instead (see the `failures`-assertion pattern this round
+reused three times, at the Lemmy creation guard, the Lemmy removal-arm
+guard, and the MBIN block's own repaired tests).
+
+**201. PATCHING `cache.delete_memoized` MUTATES A SHARED OBJECT, NOT A
+MODULE-LOCAL NAME, AND UNDER `NullCache` AN INVALIDATION IS UNOBSERVABLE --
+SO THE ORACLE MUST RECORD THE CALL.** `app/shared/tasks/maintenance.py:12`
+imports `cache` from `app` (`from app import celery, cache, httpx_client`),
+the SAME `Cache` instance every other module that imports `cache` shares --
+not a name local to `maintenance.py`. `monkeypatch.setattr('app.shared.
+tasks.maintenance.cache.delete_memoized', recorder)` therefore patches the
+live shared object's bound method for the duration of the test, restored at
+teardown; this is safe under this project's single-process, non-`xdist`
+test runner, where nothing else can observe the patched method mid-test.
+`tests/conftest.py:68` sets `CACHE_TYPE = 'NullCache'` on the test config,
+under which `cache.delete_memoized` has no backing store to invalidate --
+so an oracle that tried to observe cache STATE after the call would pass
+whether or not the call fired at all. The only oracle available is
+recording the call itself via the monkeypatched recorder, which is what
+made DC2 (a non-200 response still invalidating the cache) observable at
+all.
+
+**202. A MODULE MEASURING ZERO MISSING STATEMENTS AND ZERO MISSING ARCS CAN
+STILL HIDE FOUR REAL BEHAVIOURAL HOLES, EVERY ONE INSIDE A CONSTRUCT
+COVERAGE.PY RECORDS AS A SINGLE ARC PAIR -- AND THIS TIME IT HAPPENED AT
+100%, NOT PARTIAL COVERAGE.** `app/shared/tasks/maintenance.py` measured
+`missing_lines: []` and `missing_branches: []` three separate times this
+round (Task 9's implementer, Task 9's review, and Task 10 after its own
+mutation pass) -- genuinely zero on both instruments. Task 10's mutation
+pass against that fully-covered module still found four survivors that were
+real holes, not equivalents: dropping `'pylova'` from `:637`'s three-way
+`or`, dropping `'piefed'` from the same disjunction, dropping the
+`http://` disjunct from `:647`'s scheme check, and dropping the `username
+and` conjunct from `:713`'s compound guard. Every one of these lives inside
+a construct `coverage.py` records as ONE arc pair regardless of which
+specific disjunct or conjunct made it true, so a test suite that entered
+the branch via any one path registered full coverage of it while never
+supplying the specific input the missing disjunct/conjunct existed to
+handle. Fact 187 (sub-project 32) showed this same shape at partial
+coverage; this round reproduces it at FULL coverage, which is the stronger
+version of the lesson -- there is no coverage number, including 100, that
+makes a mutation pass redundant.
+
+**203. `get_task_session()` CARRIES `autoflush=True`; `db.session` IS
+PINNED TO `autoflush=False` -- REASONING ABOUT PENDING-WRITE VISIBILITY
+INSIDE A CELERY TASK DIFFERS FROM THE SAME REASONING IN A REQUEST.**
+`get_task_session()` (`app/utils.py:3673-3675`) returns a bare
+`Session(bind=db.engine)` with no `session_options` override, so it keeps
+SQLAlchemy's library default, `autoflush=True`. `db.session` (`app/
+__init__.py:81`) is explicitly constructed with `session_options={"autoflush":
+False}`. Under `autoflush=True`, any pending write on that session is
+flushed to the database automatically the moment the NEXT query on the same
+session executes, regardless of what shape consumes that query's result
+(directly by a `for` loop, or drained into a list first) -- both see the
+identical, already-flushed state at the identical program point. Every
+Celery task in this module runs against the `autoflush=True` session; every
+test fixture in this file seeds and asserts through the `autoflush=False`
+`db.session`. A fixture built to catch a pending-write-visibility bug in a
+Celery task must account for this asymmetry or it will not be testing what
+it thinks it is testing -- see fact 204, which is exactly what happened
+here.
+
+**204. A GATE THAT CANNOT FAIL IS AS UNINFORMATIVE AS A TEST THAT CANNOT
+FAIL.** Sub-project 33's DC3 fix was authorised by a gate comparing the set
+of `InstanceRole` rows a removal query would act on, before and after
+draining that query into a list before deleting from it, under a fixture
+seeded with both a surviving and a departing admin. The row sets matched
+(`{(2, 2)}` both times), and the change was made on that basis. A later
+review found the comparison could not have failed regardless of the
+fixture: the surviving admin's row was already committed before the task
+ran, so no write was ever pending when the removal query executed, and --
+independent of that gap -- fact 203's `autoflush=True` asymmetry means no
+fixture on this codebase COULD make the two orderings disagree, because a
+pending write is always flushed before the removal query next runs either
+way. The change itself was still correct, on grounds independent of the
+vacuous gate (mutating a result set mid-iteration and desynchronizing the
+session's identity map are defects on their own terms) -- but the gate that
+was supposed to have tested the specific ordering risk never could have,
+which the record now states plainly rather than leaving the original,
+overstated justification standing. This campaign has spent six rounds
+learning this lesson about TESTS; this is the first time it has bitten a
+GATE designed to authorise a production change before the change was made.
+
+**205. A WORKING-TREE SCANNER AND A MUTATION-TESTING TASK COLLIDE ON EVERY
+ROUND THAT MUTATES PRODUCTION, AND THE COLLISIONS CLUSTER ON EXACTLY THE
+GUARDS WORTH MUTATING.** Sub-project 33 had three such collisions, one per
+task that mutated `app/shared/tasks/maintenance.py` in place to prove a
+test's kill (the Lemmy admin-role removal's `not in` negation, the MBIN
+block's `(isAdmin or isGlobalModerator)` compound, and a response-status
+guard) -- each time, a background security scanner flagged the LIVE,
+in-progress mutation as a HIGH-severity authorization or logic-inversion
+defect. Every flag was a false positive in the sense that mattered:
+`git show HEAD:` showed the correct code, and `git diff -- app/` was empty
+once the implementer's own restore had run; the scanner was reading the
+WORKING TREE during the exact window a probe was intentionally applied to
+it. None of the three cost more than a single verification command once the
+pattern was recognised. The collisions are not coincidental: a scanner
+looks for authorization conditions, membership tests and status checks, and
+those are also precisely the guards a coverage campaign most needs to
+mutate to discriminate. The mitigation is not to stop mutating -- it is
+that during a probe window, HEAD is the artifact under test, not the
+working tree; check `git show HEAD:` before believing OR dismissing such a
+finding, and expect it to be naming a real invariant, since the mutation
+was chosen precisely because that invariant matters.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
