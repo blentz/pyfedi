@@ -8,6 +8,16 @@ covers what was left: the two blocks of `monitor_healthy_instances` gated on
   MBIN admin roles                           `:703-739`
   the task's outer handler                   `:742-744`
 
+Task 9 measured the whole module across all five maintenance test files and
+found two further gaps: `:733-735` (the MBIN block's own `except`, never
+exercised because every MBIN test above reaches its failure through a caught
+crash inside the `try` rather than the request itself raising) and
+`delete_old_soft_deleted_content:270`'s FALSE arm, in a task outside this
+file's stated scope. Task 9's binding constraints allow writing only to this
+file, so `TestMbinAdminRoleFailures` and
+`TestDeleteOldSoftDeletedContentReplyRace` below close both regardless of
+which task they belong to.
+
 ENTRY IS GATED ON `software`. `:637` needs 'lemmy', 'piefed' or 'pylova';
 `:703` needs 'mbin'. Sub-project 32's fixtures used `make_instance`'s
 'mastodon' default, so neither block ran and both `if` statements were
@@ -71,9 +81,12 @@ import httpx
 import pytest
 
 from app import db
-from app.models import Emoji, Instance, InstanceRole, User, utcnow
-from app.shared.tasks.maintenance import monitor_healthy_instances
-from tests.factories import make_instance, make_user
+from app.models import Emoji, Instance, InstanceRole, PostReply, User, utcnow
+from app.shared.tasks.maintenance import (
+    delete_old_soft_deleted_content, monitor_healthy_instances)
+from app.utils import get_task_session as _real_get_task_session
+from tests.factories import (
+    make_community, make_instance, make_post, make_post_reply, make_user)
 
 
 class _Recorder:
@@ -722,3 +735,148 @@ class TestMbinAdminRoles:
         assert db.session.query(InstanceRole).filter_by(
             instance_id=instance.id).count() == 0
         assert reloaded.failures == before + 2
+
+
+class TestMbinAdminRoleFailures:
+    """`:733-735` -- the MBIN block's own `except`, and `:737`'s FALSE arm.
+
+    Every failure test in `TestMbinAdminRoles` above reaches `:733` through a
+    crash CAUGHT INSIDE the `try` body -- a `KeyError` from a missing
+    `'username'`, an `AttributeError` from a `None` user -- so `response`
+    (200, with a malformed or absent payload) is never `None` by the time
+    `:733` runs, and `:737`'s `if response is not None:` always takes its
+    TRUE arm there. `:733-735` themselves -- `session.rollback()` and
+    `instance.failures += 1` -- had never executed, and `:737`'s FALSE arm
+    had never executed either.
+
+    This test makes `get_request` itself raise, the twin of
+    `TestIdentityPhaseFailures.test_a_raising_request_does_not_end_the_whole_sweep`
+    but for the MBIN block. `response` is seeded `None` at `:704` and the
+    raise happens during the assignment at `:706`, so `response` is still
+    `None` when `:733`'s `except` runs and when `:737` evaluates it --
+    exercising the FALSE arm this file was still missing.
+    """
+
+    def test_a_raising_request_is_caught_as_a_failure(self, db_session, monkeypatch):
+        """Deleting `:735`'s `instance.failures += 1` is caught here: without
+        it `failures` would land on `before + 2` (the HTTP half's two,
+        `_quiet_http_half`'s 404) instead of `before + 3`. Deleting the whole
+        `:733-735` except block instead lets the `httpx.HTTPError` escape
+        uncaught to `:742`'s task-level handler, which rolls back and
+        re-raises -- `monitor_healthy_instances()` would then raise instead
+        of returning, which this test's bare call (no `pytest.raises`) would
+        also catch.
+        """
+        def _raise(*args, **kwargs):
+            raise httpx.HTTPError('transport down')
+
+        _quiet_http_half(monkeypatch)
+        monkeypatch.setattr('app.shared.tasks.maintenance.get_request', _raise)
+        instance = _seed_instance('peer.example', software='mbin')
+        db.session.commit()
+        before = instance.failures
+
+        monitor_healthy_instances()
+
+        db.session.expire_all()
+        reloaded = db.session.query(Instance).filter_by(domain='peer.example').first()
+        assert reloaded.failures == before + 3
+
+
+class _GhostReplySession:
+    """Wraps a real task session so `.query(PostReply).get(ghost_id)` returns
+    `None` for one chosen id, standing in for that row having been deleted by
+    ANOTHER session between the raw `SELECT` at
+    `delete_old_soft_deleted_content:261-266` and the ORM lookup at `:269`.
+    Every other call -- `.query(Post)`, `.query(PostReply)` for any other id,
+    `.execute`, `.delete`, `.commit`, `.rollback`, `.close` -- forwards to the
+    real session untouched.
+    """
+
+    def __init__(self, real_session, ghost_id):
+        self._real = real_session
+        self._ghost_id = ghost_id
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+    def query(self, *entities, **kwargs):
+        real_query = self._real.query(*entities, **kwargs)
+        if entities and entities[0] is PostReply:
+            return _GhostQuery(real_query, self._ghost_id)
+        return real_query
+
+
+class _GhostQuery:
+    """Forwards everything to the wrapped `Query` except `.get(ghost_id)`."""
+
+    def __init__(self, real_query, ghost_id):
+        self._real = real_query
+        self._ghost_id = ghost_id
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+    def get(self, ident):
+        if ident == self._ghost_id:
+            return None
+        return self._real.get(ident)
+
+
+class TestDeleteOldSoftDeletedContentReplyRace:
+    """`delete_old_soft_deleted_content:270`'s missing branch -- `if
+    post_reply:` taking its FALSE arm.
+
+    This function is outside the scope this file's docstring states --
+    sub-project 33 is `monitor_healthy_instances`'s identity phases and the
+    task-level `except`. Task 9's measurement command
+    (`--cov=app.shared.tasks.maintenance` across all five maintenance test
+    files) found this branch missing for the WHOLE module, and Task 9's
+    binding constraints permit writing only to this file, so it is closed
+    here rather than left silently absorbed into the raised floor.
+
+    `:261-266` selects `post_reply` ids matching the retention criteria with
+    one raw SQL `SELECT`, a snapshot at that instant. `:269` then re-fetches
+    each id through the ORM, one at a time, in a separate round trip. Between
+    those two steps another session can delete the row -- a concurrent
+    request, another worker -- and `:270`'s `if post_reply:` guard exists for
+    exactly that case, per its own comment ("Check if still exists"). A
+    single-process test cannot make a genuine second connection race the
+    first, so `_GhostReplySession` stands in for the race by wrapping the
+    task's own session and making `.query(PostReply).get(ghost_id)` return
+    `None` for the one id under test. `get_task_session` is imported into
+    `app.shared.tasks.maintenance`'s namespace (`:19`), the same kind of seam
+    this file already patches for `get_request` and `find_actor_or_create`.
+
+    Deleting or inverting `:270`'s guard makes `post_reply.delete_dependencies()`
+    run on `None`, raising `AttributeError` that escapes `delete_old_soft_deleted_content`'s
+    own `try` to `:278`'s `raise` -- turning a row already gone into a crash
+    for the whole task instead of a silent skip. The oracle is therefore
+    BOTH that the task returns normally (a bare call, no `pytest.raises`)
+    AND that the row -- untouched by this pass, since the ghost lookup never
+    reaches `delete_dependencies` or `session.delete` -- still exists
+    afterward; the guard's absence would fail on the first, a mutant that
+    kept the guard but deleted anyway would fail on the second.
+    """
+
+    def test_a_reply_gone_before_the_get_is_left_alone(self, db_session, monkeypatch):
+        instance = make_instance('peer.example')
+        user = make_user(instance, 'reader', local=True)
+        community = make_community()
+        post = make_post(community, user, 'https://peer.example/p/1')
+        reply = make_post_reply(post, user)
+        reply.deleted = True
+        reply.posted_at = utcnow() - timedelta(days=8)
+        db.session.commit()
+        reply_id = reply.id
+
+        def _ghost_get_task_session():
+            return _GhostReplySession(_real_get_task_session(), reply_id)
+
+        monkeypatch.setattr(
+            'app.shared.tasks.maintenance.get_task_session', _ghost_get_task_session)
+
+        delete_old_soft_deleted_content()
+
+        db.session.expire_all()
+        assert db.session.query(PostReply).filter_by(id=reply_id).first() is not None
