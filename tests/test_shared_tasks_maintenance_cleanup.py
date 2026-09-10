@@ -747,13 +747,13 @@ class TestUpdateCommunityStatsIsAtomic:
 
 
 class TestRecalculateUserAttitudes:
-    """`recalculate_user_attitudes:713` -- recompute attitude and post stats.
+    """`recalculate_user_attitudes:750` -- recompute attitude and post stats.
 
-    `:721-723` selects users seen in the last day, `:728` batches them 100 at a
-    time (`:716`), and `:735-736` call `recalculate_attitude` and
-    `recalculate_post_stats` on each. Both model methods read `db.session`
-    (app/models.py:1351, :1421), which is what `:719`'s `patch_db_session`
-    redirects onto the task's own session.
+    `:758-760` selects users seen in the last day, `:765` batches them 100 at
+    a time (`batch_size`, `:753`), and `:772-773` call `recalculate_attitude`
+    and `recalculate_post_stats` on each. Both model methods read
+    `db.session` (app/models.py:1351, :1421), which is what `:756`'s
+    `patch_db_session` redirects onto the task's own session.
     """
 
     def test_a_recently_seen_user_has_post_stats_recomputed(self, db_session):
@@ -769,7 +769,7 @@ class TestRecalculateUserAttitudes:
         assert db.session.get(User, user.id).post_count == 2
 
     def test_a_user_not_seen_for_a_day_is_skipped(self, db_session):
-        """`:728`'s zero-iteration arm: no eligible users, no batches."""
+        """`:765`'s zero-iteration arm: no eligible users, no batches."""
         instance, user, community, post = _seed()
         user.last_seen = utcnow() - timedelta(days=2)
         user.post_count = 99

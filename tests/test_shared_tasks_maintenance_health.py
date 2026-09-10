@@ -25,7 +25,7 @@ it routes it into the failure path while the test believes it tested success.
 Task 1 established this by observation.
 
 THE IDENTITY HALF IS MOSTLY OUT OF SCOPE. `monitor_healthy_instances:637` needs
-`instance.software` in {'lemmy', 'piefed', 'pylova'} and `:699` needs 'mbin'.
+`instance.software` in {'lemmy', 'piefed', 'pylova'} and `:703` needs 'mbin'.
 Every fixture but one uses `make_instance`'s default, 'mastodon', so neither
 body runs for those. Both `if` statements still evaluate, so this file covers
 their FALSE arms and sub-project 33 owns the true ones. The one exception is
@@ -309,7 +309,7 @@ class TestMonitorHealthyInstances:
         have bound: if `get_request_instance` raised, the `except` at `:585`
         caught it and then the `finally` at `:588-590` raised
         `UnboundLocalError` -- which that handler had already run and could
-        not catch. It escaped to `:738`, rolled back and re-raised, so one
+        not catch. It escaped to `:742`, rolled back and re-raised, so one
         instance's failure ended the sweep for every other instance. The
         `nodeinfo = None` / `node = None` bindings ahead of each `try` and the
         `is not None` guards on `.close()` fix that: the `except` arm's own
@@ -536,7 +536,7 @@ class TestMonitorHealthyInstances:
         admin-role guard IS entered once `software` becomes 'piefed'. An
         unpatched call there would reach a live transport; since sub-project
         33's DC1 fix seeded `response = None` ahead of the `try` (`:638`), that
-        would now just log a failure at `:688` rather than crash on an
+        would now just log a failure at `:692` rather than crash on an
         unbound `response` -- unrelated to what this test checks either way.
         """
         monkeypatch.setattr(
@@ -784,7 +784,7 @@ class TestMonitorHealthyInstances:
         `software` body drives `instance.software` to `'piefed'` and
         `dormant` to `False` at `:600`/`:603`, `:637`'s admin-role block is
         entered, and the unpatched `get_request` raises. Before sub-project
-        33's DC1 fix that raise escaped through `:690`'s `if response:` as an
+        33's DC1 fix that raise escaped through `:694`'s `if response:` as an
         `UnboundLocalError`, so this test would have gone red by crash rather
         than by `assert recorder.calls == []` failing cleanly. Now that
         `:638` seeds `response = None`, the raise is caught and turned into a
