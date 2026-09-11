@@ -512,3 +512,120 @@ def test_the_web_arm_flashes_that_the_post_moved(db_session, app):
     assert result is None
     assert len(flashed) == 1
     assert 'moved' in flashed[0]
+
+
+def test_a_moderator_stickies_a_post(db_session):
+    """`:999`'s first disjunct alone (`is_moderator`) and `:1000`'s assignment.
+
+    `s.voter` gets no other privilege here, so the true arm is reached
+    through the moderator disjunct only. Catches a regression dropping the
+    assignment at `:1000`, which would leave `post.sticky` unset.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+
+    user_id, post = sticky_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
+
+    assert user_id == s.voter.id
+    db.session.refresh(s.post)
+    assert s.post.sticky is True
+
+
+def test_unstickying_clears_the_flag_and_records_the_action(db_session):
+    """`:1001`'s false arm, `:1004`'s modlog_type.
+
+    Catches a regression collapsing `:1001`, which would file an unsticky as a
+    feature.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    s.post.sticky = True
+    db.session.commit()
+
+    sticky_post(s.post.id, False, SRC_API, auth=bearer(s.voter))
+
+    db.session.refresh(s.post)
+    assert s.post.sticky is False
+    actions = {row.action for row in db.session.query(ModLog).all()}
+    assert actions == {'unfeatured_post'}
+
+
+def test_stickying_backfills_the_communitys_featured_url(db_session):
+    """`:1005`'s true arm and `:1006`'s assignment.
+
+    Catches a regression dropping the backfill, which would leave a community
+    with no ap_featured_url after its first sticky.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    s.community.ap_featured_url = None
+    db.session.commit()
+
+    sticky_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
+
+    db.session.refresh(s.community)
+    assert s.community.ap_featured_url == s.community.ap_profile_id + '/featured'
+
+
+def test_an_existing_featured_url_is_left_alone(db_session):
+    """`:1005`'s false arm.
+
+    Catches a regression making `:1006` unconditional, which would overwrite a
+    community's real featured collection URL.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    s.community.ap_featured_url = 'https://elsewhere.example/c/x/featured'
+    db.session.commit()
+
+    sticky_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
+
+    db.session.refresh(s.community)
+    assert s.community.ap_featured_url == 'https://elsewhere.example/c/x/featured'
+
+
+def test_an_unprivileged_user_cannot_sticky_a_post(db_session):
+    """`:999`'s false arm, all three disjuncts failing.
+
+    Asserts the flag and the empty ModLog. `:1017` returns `user.id, post`
+    unconditionally, so the return proves nothing.
+    """
+    s = seed_post_context(community_name='moderation')
+
+    user_id, post = sticky_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
+
+    db.session.refresh(s.post)
+    assert s.post.sticky is not True
+    assert db.session.query(ModLog).count() == 0
+
+
+def test_an_instance_admin_may_sticky_a_post(db_session):
+    """`:999`'s second disjunct alone -- `community.is_instance_admin(user)`.
+
+    This is the disjunct that distinguishes P2 from P1, and the only reason
+    move_post and sticky_post admit an actor lock_post refuses.
+    """
+    s = seed_post_context(community_name='moderation')
+    make_instance_admin(s.voter, s.instance)
+
+    sticky_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
+
+    db.session.refresh(s.post)
+    assert s.post.sticky is True
+
+
+def test_a_site_admin_may_sticky_a_post(db_session):
+    """`:999`'s THIRD disjunct alone -- `user.is_admin_or_staff()`.
+
+    Task 5 witnessed this same disjunct for `move_post:969`'s copy of P2, but
+    that is evidence about a different `if` statement. This test witnesses it
+    independently for `sticky_post:999`, so Task 11's mutation pass has a
+    witness that dies when `:999`'s third disjunct specifically is weakened.
+    """
+    s = seed_post_context(community_name='moderation')
+    make_site_admin(s.voter)
+
+    sticky_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
+
+    db.session.refresh(s.post)
+    assert s.post.sticky is True
