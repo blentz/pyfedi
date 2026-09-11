@@ -6295,7 +6295,7 @@ changes the `type` column of every ModLog row an id-1 actor writes.
 NON-CRASHING VARIANT OF THE SAME FAULT SURVIVES.** When a mutant dies on a
 `TypeError`, `AttributeError`, `KeyError` or import error rather than an
 assertion, the row is evidence only if the crash is the test observing the
-thing the mutation changed. Sub-project 35 found one row out of sixty-two
+thing the mutation changed. Sub-project 35 found one row out of fifty-nine
 where it was not: a `task_selector` key swap at `app/shared/post.py:985` died
 on `TypeError: delete_post() got an unexpected keyword argument
 'old_community_id'` — a Celery signature mismatch, unrelated to any test.
