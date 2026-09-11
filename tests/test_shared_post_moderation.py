@@ -924,3 +924,155 @@ def test_the_web_arm_returns_none(db_session, app):
     assert result is None
     db.session.refresh(s.post)
     assert s.post.deleted is True
+
+
+def test_a_moderator_restores_a_removed_post(db_session):
+    """`:1091`'s false arm (permission granted) reached through the FIRST
+    conjunct alone, `:1097`'s deleted flag and `:1098`'s deleted_by clear.
+
+    Mirrors `test_a_moderator_removes_a_post`: the gate is spelled
+    negatively, so the permitted path is the whole expression's FALSE arm,
+    and a moderator makes `not is_moderator` False -- short-circuiting
+    before `not user.is_admin_or_staff()` is even evaluated.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    s.post.deleted = True
+    s.post.deleted_by = s.voter.id
+    db.session.commit()
+
+    user_id, post = mod_restore_post(s.post.id, 'appealed', SRC_API, bearer(s.voter))
+
+    assert user_id == s.voter.id
+    db.session.refresh(s.post)
+    assert s.post.deleted is False
+    assert s.post.deleted_by is None
+
+
+def test_restoration_increments_both_counters(db_session):
+    """`:1099`'s author.post_count and `:1100`'s community.post_count.
+
+    The mirror of mod_remove_post's decrements. Catches a regression dropping
+    either, which would leave the counters drifting after a remove/restore
+    cycle.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    s.post.author.post_count = 4
+    s.community.post_count = 6
+    db.session.commit()
+
+    mod_restore_post(s.post.id, 'appealed', SRC_API, bearer(s.voter))
+
+    db.session.refresh(s.post.author)
+    db.session.refresh(s.community)
+    assert s.post.author.post_count == 5
+    assert s.community.post_count == 7
+
+
+def test_a_site_admin_who_is_not_a_moderator_may_restore_a_post(db_session):
+    """`:1091`'s SECOND conjunct alone -- `not user.is_admin_or_staff()`.
+
+    `:1091` is `not is_moderator and not is_admin_or_staff()`, one arc pair to
+    coverage.py: the permitted path is the whole expression's FALSE arm.
+    `test_a_moderator_restores_a_removed_post` reaches that false arm through
+    the FIRST conjunct alone (is_moderator true, short-circuiting before the
+    second is even evaluated). This test reaches it through the SECOND
+    conjunct with the first true -- a site admin who is NOT a moderator of
+    the community. Catches a regression that drops the admin/staff disjunct
+    and gates restoration on moderator status alone, which the moderator
+    test above cannot detect because it never exercises a non-moderator
+    actor.
+
+    Uses `make_site_admin(s.voter)`, not `s.author`: `s.author` is User id 1,
+    and `User.is_admin()` returns True unconditionally for id 1, so a test
+    built on it would pass through an accident of seeding order rather than
+    through the role it claims to exercise.
+    """
+    s = seed_post_context(community_name='moderation')
+    make_site_admin(s.voter)
+    s.post.deleted = True
+    s.post.deleted_by = s.voter.id
+    db.session.commit()
+
+    user_id, post = mod_restore_post(s.post.id, 'appealed', SRC_API, bearer(s.voter))
+
+    assert user_id == s.voter.id
+    db.session.refresh(s.post)
+    assert s.post.deleted is False
+
+
+def test_an_unprivileged_user_cannot_restore_a_post(db_session):
+    """`:1091`'s true arm and `:1092`'s raise.
+
+    Asserts the message and that the post stayed deleted, because a bare
+    pytest.raises(Exception) is satisfied by any exception including an
+    unrelated crash from the redis lock or the module-body import at
+    `:1088-1089`.
+    """
+    s = seed_post_context(community_name='moderation')
+    s.post.deleted = True
+    db.session.commit()
+
+    with pytest.raises(Exception, match='Does not have permission'):
+        mod_restore_post(s.post.id, 'appealed', SRC_API, bearer(s.voter))
+
+    db.session.refresh(s.post)
+    assert s.post.deleted is True
+
+
+def test_restoration_writes_the_reason_to_the_modlog(db_session):
+    """`:1103-1105`'s add_to_modlog with action 'restore_post'."""
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+
+    mod_restore_post(s.post.id, 'appealed on review', SRC_API, bearer(s.voter))
+
+    entries = db.session.query(ModLog).all()
+    assert len(entries) == 1
+    assert entries[0].action == 'restore_post'
+    assert entries[0].reason == 'appealed on review'
+
+
+def test_restoring_a_post_with_a_url_recalculates_cross_posts(db_session):
+    """`:1094`'s true arm, reached when the post has a url.
+
+    `make_post` leaves `url` unset, so every other test in this file takes
+    the false arm. Seeding one here exercises `:1095`'s
+    calculate_cross_posts() call -- unlike mod_remove_post's :1053, this arm
+    passes no delete_only argument. Asserts the restoration still completes,
+    since :1095 mutating self.cross_posts is the only other observable
+    effect and this post has none seeded.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    s.post.url = 'https://example.com/article'
+    s.post.deleted = True
+    db.session.commit()
+
+    mod_restore_post(s.post.id, 'appealed', SRC_API, bearer(s.voter))
+
+    db.session.refresh(s.post)
+    assert s.post.deleted is False
+
+
+def test_the_web_arm_returns_none_when_restoring(db_session, app):
+    """`:1109`'s false arm and `:1112`'s bare return.
+
+    Catches a regression making `:1110`'s two-tuple unconditional, which
+    would change the contract for a caller that unpacks nothing. Named
+    distinctly from mod_remove_post's `test_the_web_arm_returns_none` --
+    two module-level functions sharing a name silently shadow each other,
+    dropping the earlier one from collection entirely.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    s.post.deleted = True
+    db.session.commit()
+
+    with web_ctx(app, s.voter):
+        result = mod_restore_post(s.post.id, 'appealed', SRC_WEB, None)
+
+    assert result is None
+    db.session.refresh(s.post)
+    assert s.post.deleted is False
