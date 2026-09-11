@@ -6250,6 +6250,148 @@ tell whether it had run. **The check is cheap and belongs in every round: for
 each entry point, read the route that BUILDS the argument, and confirm at
 least one test supplies that type.**
 
+**213. NOT EVERY `app/shared/` FUNCTION RENDERS A TEMPLATE, AND THE
+`status_code` RULE IS NOT A PROPERTY OF THE SRC_WEB ARM.** Sub-project 34's
+rule — recorded as **D393**(c) in
+`docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md` and in
+`tests/test_shared_post_interactions.py`'s module docstring — is that a WEB
+arm returns a Flask `Response` (because `app/shared/post.py:23`'s
+`render_template` is `app.utils.render_template`, which wraps in
+`make_response` at `app/utils.py:86`) and must be asserted with
+`result.status_code == 200`, never `isinstance(result, str)`. That holds for
+functions that return a rendered
+template, which in `app/shared/post.py` means `vote_for_post` and
+`subscribe_post`. **None of the six moderator verbs does.** `lock_post:927`,
+`move_post:963`, `sticky_post:994`, `hide_post:1026`, `mod_remove_post:1045`
+and `mod_restore_post:1088` return `user.id, post` on SRC_API, and `None` on
+the SRC_WEB arms of all but `sticky_post` and `hide_post`. A test written to
+the `status_code` rule against one of these **cannot fail for the right
+reason** — it fails on an `AttributeError` against `None` or a tuple, which
+looks like a harness problem and is not. The general check before writing the
+first assertion in a new group: **read what the function actually returns on
+each arm, rather than inheriting the previous group's oracle.** Where the
+return shape is the same on the permitted and the refused path — which is true
+of all six here — **the return value distinguishes nothing and the oracle must
+be a side effect**: the post's field, the `ModLog` row count, and where
+federation is in question, whether `task_selector` fired.
+
+**214. `add_to_modlog` COMMITS, AND RAISES ON AN ACTION OUTSIDE ITS MAP.**
+`app/utils.py:3564-3582`. Two consequences for any test over a function that
+calls it. (a) **It ends with `db.session.commit()` at `:3582`**, so a test
+asserting that *nothing* was written must query the database rather than
+inspect the session — and a test asserting something *was* written sees it
+committed even if the calling function later rolls back. (b) **`:3568-3569`
+raises `Exception('Invalid action: ' + action)` for any action not in
+`ModLog.action_map`.** That matters most during a mutation pass: swapping an
+action string to something unmapped produces a crash on the `add_to_modlog`
+call itself, not an observation by a test, so the row is a **crash kill** and
+must be adjudicated as one (fact 215's question applies). Verify the swapped
+string is in `ModLog.action_map` before scoring the mutation. `add_to_modlog`
+also decides `action_type` by reading `actor.is_instance_admin() or
+actor.is_admin() or actor.is_staff()` at `:3570`, so fact 216's id-1 trap
+changes the `type` column of every ModLog row an id-1 actor writes.
+
+**215. A CRASH KILL IS NOT A KILL. THE QUESTION IS WHETHER A VIABLE
+NON-CRASHING VARIANT OF THE SAME FAULT SURVIVES.** When a mutant dies on a
+`TypeError`, `AttributeError`, `KeyError` or import error rather than an
+assertion, the row is evidence only if the crash is the test observing the
+thing the mutation changed. Sub-project 35 found one row out of sixty-two
+where it was not: a `task_selector` key swap at `app/shared/post.py:985` died
+on `TypeError: delete_post() got an unexpected keyword argument
+'old_community_id'` — a Celery signature mismatch, unrelated to any test.
+**A false kill is worse than a survivor**, because a survivor is a finding
+someone acts on while a false kill enters the table as evidence the site is
+covered. Re-mutated with a signature-compatible substitute, the same site
+survived all 64 tests and was hiding a real defect. **The operator itself can
+be structurally void:** `task_selector` dispatches through a hard
+`tasks[task_key]` subscript (`app/shared/tasks/__init__.py:66,68`) and no task
+in the map accepts `**kwargs`, so at a call site whose kwargs only one task
+accepts, *every* key-only swap crashes and the site is unmeasurable by that
+operator. **Two rules follow.** (i) After any crash kill, ask the question in
+this fact's title; if the answer is no, record VOID rather than K or S. (ii)
+**`-x` reports only the FIRST failing arm**, so a crash kill can mask an
+assertion kill on the other arm of the same fork — re-run the second arm's
+tests explicitly before concluding anything about it. The summary table cannot
+show the difference.
+
+**216. THE FIRST `User` A TEST SEEDS BECOMES id 1, AND `User.is_admin()`
+RETURNS TRUE FOR id 1 UNCONDITIONALLY.** `app/models.py:1259-1261` opens
+`if self.id == 1: return True`, before any role lookup. `tests/conftest.py`
+resets sequences after every test and `seed_post_context`
+(`tests/factories.py:1187`) creates `author` before `voter`, so **`s.author`
+is a site admin in every seeded context and `s.voter` (id 2) is not.** This is
+fact 191's `Instance`-id-1 trap with teeth: a permission test that picks
+`s.author` as its "unprivileged actor" passes the gate through the
+`is_admin_or_staff()` disjunct, witnesses nothing, and looks exactly like a
+test that works. **Use `s.voter` for every unprivileged actor.** Verify by
+fixture, not by docstring — a reviewer checking this claim must read which
+rows the helper actually writes, because the seeding order is the only thing
+establishing the id. Two places the shortcut leaks beyond permission gates:
+`add_to_modlog:3570` types an id-1 actor's rows as `admin`, and
+`User.is_admin_or_staff()` (`app/models.py:1274`) inherits it.
+
+**217. `grant_permission` CANNOT MAKE A SITE ADMIN — `is_admin()` AND
+`is_staff()` CHECK ROLE *NAMES*, NOT PERMISSIONS.** `User.is_admin()`
+(`app/models.py:1259-1265`) and `User.is_staff()` (`:1268-1272`) iterate
+`self.roles` and compare `role.name` to the literals `'Admin'` and `'Staff'`.
+**A role carrying every permission in the system but named anything else is
+not an admin to any gate in `app/shared/`.** So
+`grant_permission(user, 'change instance settings')`
+(`tests/factories.py:365`) is the wrong tool for any test that needs to
+witness an admin disjunct — and the test **passes anyway**, exercising the
+unprivileged path while claiming to prove the opposite, because these gates
+refuse silently (see `app/shared/post.py:941`, `:971`, `:1003`). The working
+form is a `Role` named literally `'Admin'` plus a `user_role` row;
+`tests/test_shared_post_moderation.py:93`'s `make_site_admin(user)` is the
+reference implementation. Two properties make the raw insert safe: `User.roles`
+is `lazy='dynamic'`, so the row is visible immediately without a refresh, and
+the test config's NullCache neutralises `is_admin()`'s
+`@cache.memoize(timeout=30)`. Note the three privilege helpers are genuinely
+disjoint and that is what makes them usable as single-disjunct witnesses:
+`seed_moderator` writes only `CommunityMember`, `make_instance_admin` only
+`InstanceRole`, `make_site_admin` only `Role`/`user_role`. Watch which
+`is_instance_admin` a gate calls — `Community.is_instance_admin(user)`
+(`app/models.py:769-776`) keys on the **COMMUNITY's** `instance_id`, while
+`User.is_instance_admin()` (`:1277-1282`) keys on the **USER's**, and only the
+first appears in `app/shared/post.py`'s gates.
+
+**218. TWO IDENTICALLY-NAMED TESTS IN ONE FILE: PYTHON REBINDS, THE EARLIER
+ONE STOPS RUNNING, AND NOTHING REPORTS IT.** A second `def test_foo` at module
+scope silently replaces the first. **No error, no warning, no collection
+failure** — the earlier test simply ceases to exist. Every other check this
+repo runs is blind to it: coverage does not notice (the survivor covers
+similar lines), a citation sweep does not notice (nothing moved), and the
+collection count drops by exactly one, which is **indistinguishable from
+having miscounted** — and predicted counts in a plan are wrong often enough
+that the drop reads as the plan being wrong rather than a test disappearing.
+The risk is highest where it looks most like good practice: a naming
+convention that makes tests read as pairs across sibling functions makes
+`test_the_web_arm_returns_none` the natural name for the same assertion about
+four different functions. **The check is one line and belongs in every round's
+final gate, over every test file the round touched:**
+
+    grep -oE "^def (test_[a-z_]+)" tests/test_your_file.py | sort | uniq -d
+
+Empty output is the pass. Cross-check it against pytest's own collection
+count and the file's `grep -c "^def test_"`; the three agreeing is the
+positive signal.
+
+**219. `Community.moderators()` EXCLUDES BANNED MEMBERS, AND EVERY GATE IN
+`app/shared/post.py` READS THROUGH IT.** `app/models.py:716-722` filters
+`CommunityMember` on `is_owner OR is_moderator` **and then**
+`.filter(CommunityMember.is_banned == False)`. `Community.is_moderator()`
+(`:736-740`) and `Community.is_owner()` (`:742-747`) both iterate
+`self.moderators()`, so **a banned moderator is not a moderator anywhere in
+this module** — a test seeding `CommunityMember(is_moderator=True,
+is_banned=True)` is seeding an unprivileged actor, which is a useful witness
+for the false arm of a gate and a silent failure if you meant otherwise. Two
+practical notes. `moderators()` carries `@cache.memoize(timeout=300)`, which
+the test config's NullCache neutralises, so a membership row written
+mid-test is visible to the next gate call. And when citing this: the adjacent
+range `:736-740` is `is_moderator()`, not `moderators()` — a plan in
+sub-project 35 cited it wrongly and the error was caught only because the
+implementer re-derived the range instead of copying it.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not

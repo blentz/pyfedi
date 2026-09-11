@@ -122,6 +122,33 @@ decision this round cannot make from the source alone, and both directions are
 harmful if wrong: unifying on P2 grants permission three functions currently
 withhold, and unifying on P1 revokes a working path for remote-instance admins.
 
+> **CORRECTION (Task 12, after the round's work landed). The "two ways, not
+> three" claim above is true only of Group B's five gates. The MODULE carries
+> THREE predicates, and the third is registered as D416-series finding
+> **D422**.**
+>
+> **P3** — `post.community.is_moderator(user) or post.community.is_owner(user)
+> or user.is_admin()` — sits at **`app/shared/post.py:387`**, inside
+> `edit_post` (Group E), guarding `:388`'s `post.sticky` assignment from the
+> create/edit form. It is the **only** predicate in the module that mentions
+> `is_owner`, and it uses **bare `is_admin()` rather than
+> `is_admin_or_staff()`** — so a Staff member may sticky a post through
+> `sticky_post` and not through `edit_post`'s form field. P3 was surfaced by a
+> reviewer's Minor that was a false positive about `:388` being unguarded and
+> true about `:387` being a third predicate; it was checked rather than
+> accepted, which is the only reason it is on the record. Group E owns it.
+>
+> **Line numbers in the table above are stale by up to +6.** They were written
+> against the 1187-line tree, before PC2 added six lines. Re-derived against
+> the 1193-line tree at `5e2f5703`: **P1** — `lock_post:941`,
+> `mod_remove_post:1055`, `mod_restore_post:1097`; **P2** — `move_post:971`,
+> `sticky_post:1003`. Re-derive before citing; do not copy.
+>
+> This block is marked rather than the section being silently rewritten,
+> following the precedent set by **D394**: later rounds read this spec, and a
+> spec that quietly changes its mind is indistinguishable from one that was
+> always right.
+
 The gates are also **compounds that coverage.py records as single arc pairs**.
 `:941`, `:969`, `:999`, `:1049` and `:1091` each need their conjuncts exercised
 separately, and only mutation can see inside them.
