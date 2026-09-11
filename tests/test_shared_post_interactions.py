@@ -206,7 +206,8 @@ def _clear_votes_cast(user_id):
 
     Not one of this file's brief-listed helpers -- added in Task 5 because it
     is the first task in this round whose tests let `vote_for_post` run all
-    the way to `post.vote()` (app/models.py:2813). That call sets or
+    the way to `post.vote()` (defined at app/models.py:2725; the key writes
+    this helper cleans up are app/models.py:2825-2829). That call sets or
     increments this key on the REAL redis instance the whole compose stack
     shares for the session (module docstring, "REAL REDIS IS SHARED ACROSS
     THE WHOLE TEST SESSION"), and tests/conftest.py:131 resets id sequences
@@ -936,13 +937,25 @@ def test_a_web_reversal_bypasses_the_upvote_gate_for_a_blocked_user(db_session, 
     masonry-style test above).
 
     NO EXISTING VOTE IS SEEDED, deliberately. Post.vote's reversal handling
-    (app/models.py:2732-2741) only ever does one of two things: if an
-    existing vote is found, it relabels `vote_direction` to match that
-    vote's OWN sign and falls into the ordinary "remove it" arms at
-    app/models.py:2762/2776 (never the sign-flip arms at :2768/:2782, since
-    the relabelled direction can never disagree with the vote it was just
-    read from) -- so a reversal can only ever DELETE an existing vote, never
-    create one or change its sign. With none seeded, `existing_vote` is
+    (app/models.py:2732-2741) does one of two things when an existing vote
+    IS found: it relabels `vote_direction` to match that vote's OWN sign and
+    falls through to `:2744`. From there, WITH `emoji` NULL -- as here, and
+    as in every `vote_for_post` call in this file -- it reaches the ordinary
+    "remove it" arms at app/models.py:2762/2776 (never the sign-flip arms at
+    :2768/:2782, since the relabelled direction can never disagree with the
+    vote it was just read from), so a reversal carrying a null emoji can only
+    DELETE an existing vote, never create one or change its sign. THAT
+    SCOPING IS LOAD-BEARING: with a NON-null emoji, app/models.py:2746-2752
+    overwrites `existing_vote.emoji` IN PLACE, refreshes the reaction cache
+    and returns None WITHOUT deleting the vote -- and because `:2734-2737`
+    has already forced `vote_direction` to agree with the existing vote's
+    sign, `:2746`'s condition is ALWAYS satisfied for a reversal carrying an
+    emoji. Both production callers can supply one
+    (app/api/alpha/utils/post.py:1390 and app/post/routes.py:540). See D408
+    in docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md; an
+    earlier form of this docstring stated the delete-only claim unscoped,
+    which is D412's own failure mode -- true for the one input the test uses,
+    false in general, stated in general. With none seeded, `existing_vote` is
     None and `:2741` returns None immediately, before writing anything --
     so this call cannot accidentally create or remove a PostVote row either
     way, and the `read_posts` row is the only signal in this test that
@@ -1221,9 +1234,11 @@ def test_the_masonry_template_is_chosen_on_the_success_path_too(db_session, app)
 def test_voting_marks_the_post_read(db_session, app):
     """`:56`'s `mark_post_read` call on the success path.
 
-    A future change moving this call below the quota check would still pass
-    every other test in this file; this test pins that it happens on the
-    path where the vote succeeds, so that move cannot silently delete it.
+    PC3 MOVED this call below `:53-54`'s quota check -- the post-PC3 layout
+    is `:50-51` ban, `:53-54` quota, `:56` mark_post_read, and it is the tree
+    this test runs against. That move would have passed every other test in
+    this file; this test pins that the call still happens on the path where
+    the vote succeeds, so the relocation could not silently delete it.
     Completes a real vote, so the redis cleanup applies.
     """
     s = _seed()
@@ -1240,15 +1255,17 @@ def test_voting_marks_the_post_read(db_session, app):
 
 
 def test_an_over_quota_vote_does_not_mark_the_post_read(db_session, app):
-    """PC3: `:56`'s mark_post_read runs before `:53-54`'s quota check.
+    """PC3: mark_post_read USED TO run before the quota check. It no longer
+    does -- the post-PC3 layout is `:50-51` ban, `:53-54` quota, `:56`
+    mark_post_read, and `:56` is now BELOW the check, not above it.
 
-    A user over quota has the post written to read_posts and last_seen bumped,
-    and only then receives a 429 -- the side effect survives the rejection.
-    This test fails against the tree as it stands and passes once the call
-    moves below the check. Same over-quota setup as
+    Pre-PC3, a user over quota had the post written to read_posts and
+    last_seen bumped and only then received a 429 -- the side effect survived
+    the rejection. This test failed against the pre-PC3 tree and passes now
+    that the call sits below the check. Same over-quota setup as
     `test_a_vote_over_the_daily_quota_is_aborted_with_429`, but asserts the
     `read_posts` table instead of `PostVote`, since the pre-move call this
-    test targets runs unconditionally on this path regardless of the vote
+    test targeted ran unconditionally on this path regardless of the vote
     quota outcome.
 
     Asserts the 429 as well as the empty table, so a change that stopped the
@@ -1618,13 +1635,15 @@ def test_multiple_mode_with_no_choices_records_nothing(db_session, app):
 
 
 def test_an_api_vote_for_another_polls_choice_is_rejected(db_session):
-    """PC1: `vote_for_poll` never checks that a choice belongs to the poll.
+    """PC1: `vote_for_poll` USED TO accept a choice belonging to another poll.
+    The membership filter that closed it is now at `:1159-1167`.
 
     app/api/alpha/utils/post.py:1793 hands `data['choice_id']` straight through.
-    Against the tree as it stands this records a PollChoiceVote whose post_id is
-    the target poll and whose choice_id belongs to another, and increments the
-    FOREIGN choice's num_votes. Fails today, passes once the membership filter
-    lands.
+    Against the pre-PC1 tree this recorded a PollChoiceVote whose post_id was
+    the target poll and whose choice_id belonged to another, and incremented the
+    FOREIGN choice's num_votes. It failed then and passes now that the filter
+    has landed: `:1161` collects the foreign ids and `:1163-1164` raises on the
+    SRC_API arm, which is what the body below asserts.
 
     No `_web_ctx` -- this is the SRC_API arm, and the module docstring's
     "SRC_API ARM DOES NOT NEED A REQUEST CONTEXT" finding applies here as it
@@ -1660,9 +1679,11 @@ def test_a_nonexistent_choice_id_does_not_dereference_none(db_session):
     `None` for a nonexistent id, before `:1175` is ever reached. Either
     dereference would fail the same way; this test observed the
     `vote_for_choice` one. A choice id matching no row makes that an
-    AttributeError on None. The membership filter closes it because a
-    nonexistent choice is not a member. Fails today with AttributeError,
-    passes once the filter lands.
+    AttributeError on None. The membership filter now at `:1159-1167` closed
+    it, because a nonexistent choice is not a member. It failed with that
+    AttributeError against the pre-PC1 tree and passes now that the filter has
+    landed -- `:1164` raises on the SRC_API arm instead, which is the
+    behaviour the body below asserts.
 
     No `_web_ctx` -- SRC_API arm, same reasoning as the test above.
     """
@@ -1758,8 +1779,9 @@ def test_a_web_single_mode_vote_for_only_a_foreign_choice_does_not_crash(db_sess
     app/post/routes.py:643, a route with no error handling that flashes
     'Vote has been cast.' unconditionally -- exactly the failure mode the
     raise-for-API/skip-for-web semantics exists to keep that route from ever
-    having. Fails today with IndexError, passes once the membership branch
-    returns early when nothing survives the filter.
+    having. It failed with that IndexError against the fix-round-1 tree and
+    passes now that the membership branch returns early at `:1166-1167` when
+    nothing survives the filter.
     """
     s = _seed()
     _seed_poll(s, mode='single')

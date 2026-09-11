@@ -376,8 +376,11 @@ Findings from D392, facts from 206.
 - The three production changes, with PC2's decision about `vote_for_choice`'s
   return value and its caller enumeration recorded.
 - **The harness facts**, which are the round's most reusable output: that Group A
-  has no `user=` escape, that both source arms need a request context because of
-  `user_ip_banned`, what the three templates require, whether `redis_double`
+  has no `user=` escape, ~~that both source arms need a request context because of
+  `user_ip_banned`~~ — **CORRECTED: only the SRC_WEB arm needs one; see the
+  CORRECTION block at "The SRC_API arms need a request context too" above,
+  registered as D394 and carried into `tests/README.md` fact 206** — what the
+  three templates require, whether `redis_double`
   reaches a function-body `from app import redis_client`, and whether the eager
   `likes.py` task bodies return early. Groups B through E all depend on these.
 - **PC4, not fixed:** `:1160`'s single-mode length check is API-only, and
@@ -392,10 +395,39 @@ Findings from D392, facts from 206.
 - **`mark_post_read:1116`'s `read is True` identity test**, which routes a
   truthy non-`True` down the DELETE branch.
 - **`vote_for_post:33` uses `.get()` where `:40` uses `get_or_404`.** The API arm
-  gives a 500 at `:35`'s `post.community` where the WEB arm gives a 404. This is
-  one of roughly nine sites of the same asymmetry across the module —
+  gives a 500 at `:35`'s `post.community` where the WEB arm gives a 404.
+  ~~This is one of roughly nine sites of the same asymmetry across the module —
   `delete_post:757`, `restore_post:798`, `lock_post:933` and others — so it is
-  registered whole and fixed in no round that can only reach one site.
+  registered whole and fixed in no round that can only reach one site.~~
+
+  > **CORRECTION, recorded after the round re-derived the enumeration rather
+  > than inheriting it. The original text is kept above, struck through, per the
+  > precedent this document set at "The SRC_API arms need a request context too".
+  > Registered as **D403**; D403's own section heading in
+  > `docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md` carried the
+  > same wrong claim and was corrected in the same change.**
+  >
+  > **"Roughly nine sites of the same asymmetry" is wrong twice over.**
+  > `grep -n "get_or_404" app/shared/post.py` returns **exactly two** lines in
+  > the whole module — `:40` (Post) and `:1158` (Poll) — and
+  > `grep -n "query(Post).get(" app/shared/post.py` returns **exactly eleven**:
+  > `:33`, `:757`, `:767`, `:798`, `:803`, `:933`, `:967`, `:996`, `:1026`,
+  > `:1047`, `:1090`.
+  >
+  > So **`vote_for_post` is the ONLY function with the two-arm asymmetry**: one
+  > source arm bare `.get()` (`:33`) against the other's `get_or_404` (`:40`).
+  > The other **ten** bare-`.get()` sites — `delete_post:757`/`:767`,
+  > `restore_post:798`/`:803`, `lock_post:933`, `move_post:967`,
+  > `sticky_post:996`, `hide_post:1026`, `mod_remove_post:1047`,
+  > `mod_restore_post:1090` — have **no `get_or_404` counterpart on any arm**.
+  > They dereference `None` identically on both arms, which is the **ABSENCE**
+  > of the asymmetry, not an instance of it: a different defect, needing a
+  > different fix. Naming `delete_post:757`, `restore_post:798` and
+  > `lock_post:933` as instances of "the same asymmetry" is the specific error.
+  >
+  > Still registered whole rather than fixed at one site: fixing `:33` alone
+  > would leave ten behind and make the module LESS uniform. All ten live in
+  > Groups B and C, which is where the production scope will exist.
 - **`subscribe_post:116` uses `.one()`**, raising `NoResultFound` for a deleted
   or missing post where the module's convention is a 404.
 - **`extra_rate_limit_check` is near-duplicated** at `app/shared/reply.py:134-139`.

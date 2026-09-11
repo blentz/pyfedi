@@ -2104,8 +2104,20 @@ echo "exit=$?"
 - [ ] **Step 2: Read the number**
 
 ```bash
-./run_tests.sh --exec python -c "import json;d=json.load(open('/tmp/post34.json'));f=d['files']['app/shared/post.py'];print(f['summary'])"
+podman-compose -f compose.test.yaml exec -T test-runner \
+  python -c "import json;d=json.load(open('/tmp/post34.json'));f=d['files']['app/shared/post.py'];print(f['summary'])"
 ```
+
+> **CORRECTED POST-HOC (sub-project 34's final fix wave; Task 12 found it while
+> measuring).** This line and the one in Step 7 below originally read
+> `./run_tests.sh --exec python …`. **`run_tests.sh` has no `--exec` flag**:
+> `run_tests.sh:85` is `exec $COMPOSE exec -T test-runner pytest "$@"`, so every
+> argument goes to **pytest**, which rejects `--exec` with **exit 4** and runs
+> nothing. The working form is the `podman-compose … exec -T test-runner python`
+> invocation above, already documented at `tests/README.md:403-405`. The
+> correction is recorded here rather than silently applied because four later
+> sub-projects template their plan off this one and the history should stay
+> honest about which command actually ran.
 
 Read `percent_covered`, **not** `percent_statements_covered`. `tests/check_coverage_floors.py:75` reads the former.
 
@@ -2132,14 +2144,14 @@ Append to `docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md`, sta
 Entries required, one number each:
 
 1. The decomposition of `app/shared/post.py` into five groups, with each group's measured statements and arcs, the ordering, and why — so the next four rounds do not re-derive it.
-2. The harness facts, this round's most reusable output: no `user=` escape in Group A; both source arms need a request context because `user_ip_banned` resolves to a function reading `request`; `community.private` is the federation lever and `local_only` is the trap because `can_downvote` reads it; whether `redis_double` reaches a function-body `from app import redis_client`; what the three templates required.
+2. The harness facts, this round's most reusable output: no `user=` escape in Group A; ~~both source arms need a request context because `user_ip_banned` resolves to a function reading `request`~~ — **CORRECTED POST-HOC (final fix wave): Probe D disproved this. Only the SRC_WEB arm needs a request context; `get_ip_address` (`app/__init__.py:68-77`) swallows the `RuntimeError`, so the SRC_API arm runs with no context at all. Registered as D394 and `tests/README.md` fact 206** — `community.private` is the federation lever and `local_only` is the trap because `can_downvote` reads it; whether `redis_double` reaches a function-body `from app import redis_client`; what the three templates required.
 3. PC1, with the safety demonstration from Task 9 Step 5 recorded.
 4. PC2, with the caller enumeration and which resolution was taken.
 5. PC3.
 6. PC4 — `:1160`'s length check is API-only and `:1161`'s WEB arm falls through to `:1164`'s `votes[0]`, unreachable today because `app/post/routes.py:642` normalizes single mode to one int. Registered, not fixed, because a change there would have no reachable failing observation.
 7. `vote_for_poll` returns `None` on `SRC_API` where every sibling returns `user.id`; `app/api/alpha/utils/post.py:1797` ignores the return, so latent not live.
 8. `mark_post_read:1116`'s `read is True` identity test, which routes a truthy non-`True` down the DELETE branch.
-9. `vote_for_post:33`'s `.get()` against `:40`'s `get_or_404` — the API arm 500s at `:35`'s `post.community` where the WEB arm 404s. Roughly nine sites of the same asymmetry across the module (`delete_post:757`, `restore_post:798`, `lock_post:933` among them), registered whole rather than fixed at one site.
+9. `vote_for_post:33`'s `.get()` against `:40`'s `get_or_404` — the API arm 500s at `:35`'s `post.community` where the WEB arm 404s. ~~Roughly nine sites of the same asymmetry across the module (`delete_post:757`, `restore_post:798`, `lock_post:933` among them), registered whole rather than fixed at one site.~~ **CORRECTED POST-HOC (final fix wave): the re-derivation refuted "roughly nine sites of the same asymmetry" twice over. `get_or_404` appears exactly TWICE in `app/shared/post.py` (`:40`, `:1158`) and `query(Post).get(` exactly ELEVEN times (`:33`, `:757`, `:767`, `:798`, `:803`, `:933`, `:967`, `:996`, `:1026`, `:1047`, `:1090`), so `vote_for_post` is the ONLY site with the two-arm asymmetry and the other TEN — `delete_post:757` and `lock_post:933` among them — are the ABSENCE of it, a different defect. Registered whole as D403; see D403's body and the design spec's CORRECTED Register bullet. The lesson for a plan templated off this one: never write an enumeration into a register instruction without re-deriving it first.**
 10. `subscribe_post:116`'s `.one()`, raising `NoResultFound` where the module's convention is a 404.
 11. `extra_rate_limit_check` near-duplicated at `app/shared/reply.py:134-139`, the two bodies differing only in the docstring's noun.
 12. `app/post/routes.py:280`'s precedence bug: `[post.id] + post.cross_posts if post.cross_posts is not None else []` binds the conditional to the whole expression, so a post with no cross-posts yields `[]` and is never marked read. Outside this module and outside this round.
@@ -2163,8 +2175,13 @@ Then, as the separate chained step documented at `tests/README.md:403-405`:
 
 ```bash
 ./run_tests.sh --cov=app --cov-branch --cov-report=json:/tmp/floors34.json && \
-  ./run_tests.sh --exec python tests/check_coverage_floors.py /tmp/floors34.json
+  podman-compose -f compose.test.yaml exec -T test-runner \
+    python tests/check_coverage_floors.py /tmp/floors34.json
 ```
+
+> **CORRECTED POST-HOC, same defect as Step 2 above** — `./run_tests.sh --exec`
+> does not exist and rejects with pytest exit 4. See the note at Step 2 and
+> `tests/README.md:403-405`.
 
 The `&&` matters: a failed pytest must not leave a stale report standing for the floor check to pass against.
 
