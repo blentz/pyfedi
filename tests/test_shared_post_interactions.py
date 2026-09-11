@@ -1055,7 +1055,7 @@ def test_a_vote_exactly_at_the_daily_quota_is_allowed(db_session, app):
     `:53` is `>`, so a count EQUAL to VOTE_QUOTA passes. This is the
     direction sub-project 32's mutation pass failed to probe, and the reason
     this plan asks for both. Catches a regression changing `>` to `>=`. The
-    vote completes, so `post.vote()` (app/models.py:2822-2826) itself
+    vote completes, so `post.vote()` (app/models.py:2825-2829) itself
     increments this same key afterward; the `finally` clears it regardless of
     what value it ends up holding.
     """

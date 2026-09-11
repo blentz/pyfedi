@@ -6130,6 +6130,126 @@ working tree; check `git show HEAD:` before believing OR dismissing such a
 finding, and expect it to be naming a real invariant, since the mutation
 was chosen precisely because that invariant matters.
 
+**206. THE `SRC_API` ARM OF AN `app/shared/` FUNCTION NEEDS NO REQUEST
+CONTEXT; THE `SRC_WEB` ARM DOES; AND WHAT BLOCKS AN API-ARM TEST IS THAT
+`make_user` DEFAULTS TO A NON-LOCAL USER.** Sub-project 34's design spec
+asserted, as "the fact most likely to be missed", that both source arms of
+`vote_for_post` and `vote_for_poll` need a request context, because both
+reach `if user.banned or user_ip_banned():` and `user_ip_banned`
+(`app/utils.py:2311-2314`) resolves through `app/utils.py:2308` to
+`app/__init__.py`'s `get_ip_address`, which reads `request`. The chain is
+right and the conclusion is wrong: `get_ip_address` (`app/__init__.py:68-77`)
+wraps its whole body in `try: ... except RuntimeError: ip = ''`, catching
+exactly the "working outside of request context" error, so `user_ip_banned`
+sees a falsy address, falls off the end, returns `None`, and the guard
+passes. **Call the `SRC_API` arm directly, with no context.** The `SRC_WEB`
+arm genuinely does need one, for `flash` and `request.args`. What actually
+stops an API-arm test is unrelated: `authorise_api_user`
+(`app/utils.py:3628-3629`) raises `Exception('incorrect_login')` for any user
+with `ap_id is not None`, and `tests/factories.py`'s `make_user` defaults to
+non-local — **seed with `local=True` or every bearer-token test fails before
+reaching the function under test.** Carrying a request context an API test
+does not need is not harmless: the next round copies the harness and inherits
+the wrong model of it.
+
+**207. `community.private` IS THE FEDERATION LEVER; `community.local_only` IS
+A TRAP, BECAUSE `can_downvote` READS IT.** To stop a shared-layer function's
+eager Celery task from attempting outbound federation, set
+`community.private = True`: `app/shared/tasks/likes.py`'s body then stops
+after its row lookups and before any request, and `block_outbound_http` never
+fires. `local_only` looks like the same switch and is not — `can_downvote`
+reads it at `app/utils.py:2448` (`if community.local_only and not
+user.is_local():`), so setting it silently changes which permission arm a
+vote test takes and a test written to isolate federation quietly becomes a
+test of the permission gate instead. The general shape: **before using a
+model flag as a test lever, grep for every read of it, not just the one you
+are aiming at.**
+
+**208. `mark_post_read` AND `hide_post` EACH NAME TWO DIFFERENT FUNCTIONS —
+ONE IN `tests/factories.py`, ONE IN `app/shared/post.py` — WITH DIFFERENT
+SIGNATURES.** `tests/factories.py:665` is `mark_post_read(user: User, post:
+Post) -> None`, a seeder that inserts one `read_posts` row.
+`app/shared/post.py:1115` is `mark_post_read(post_ids: List[int], read: bool,
+user_id: int)`, the production function under test. Likewise
+`tests/factories.py:679` `hide_post(user, post)` against
+`app/shared/post.py:1020` `hide_post(post_id, hidden, src, auth=None)`. A
+file that imports both gets whichever was imported last, with **no error** —
+the arguments are positional and the types are close enough that the failure
+surfaces somewhere else entirely. Import one of them qualified
+(`from app.shared import post as post_module`, then `post_module.hide_post`),
+or alias the factory. Group B's round tests `hide_post` directly and will hit
+this.
+
+**209. RAISE A USER'S DAILY VOTE COUNT BY WRITING THE REDIS KEY, NOT BY
+SEEDING VOTES — AND DELETE IT AFTERWARDS OR YOU RAISE A LATER TEST'S QUOTA.**
+`votes_cast_today` (`app/models.py:47-52`) reads
+`votes_cast_{date.today()}_{user_id}` from Redis and returns `0` when the key
+is absent. So `redis_client.set(f'votes_cast_{date.today()}_{user.id}',
+str(app.config['VOTE_QUOTA']))` puts a user exactly at the quota boundary
+with no database rows at all, which is what makes both directions of
+`app/shared/post.py:53`'s `>` cheap to pin. **The hazard is the teardown.**
+These tests run against the compose stack's real, shared Redis (see fact 210
+for why the `redis_double` fixture is not an option here), and Redis is not
+in the database teardown: `tests/conftest.py:126-132` deletes every table and
+resets every sequence, so the NEXT test gets a user with the same id and
+inherits the leftover key — its quota is silently raised and, if it then
+fails, the failure looks like a production defect in the quota check. Every
+test that writes such a key must clear it in a `finally`; sub-project 34 does
+this through a `_clear_votes_cast(user_id)` helper. The same reasoning
+applies to any Redis key keyed on a database id.
+
+**210. `redis_double` REACHES A FUNCTION-BODY `from app import redis_client`
+AND THEN BREAKS IT ON `EVALSHA`.** `tests/conftest.py:459-465` warns that the
+fixture may not reach `from app import redis_client` sites written inside a
+function body. For `app/shared/post.py:1126` the warning's implication is
+wrong in both directions: the fixture **does** reach the import (the import
+re-executes on every call, so patching the single attribute `app.redis_client`
+redirects it), but `:1127`'s `redis_client.lock(...)` releases its lock via
+`EVALSHA`, which fakeredis does not implement, so every path through
+`mark_post_read` dies on `redis.exceptions.ResponseError: unknown command
+'evalsha'`. **Do not request `redis_double` in a test whose code path takes a
+Redis lock**; bind to the compose stack's real Redis instead, and pay fact
+209's teardown cost. `app/shared/post.py:765` (`delete_post`) and
+`app/models.py:2730,2754,2818` have the same lock-inside-a-function shape.
+
+**211. WHEN A DOCUMENT CARRIES BOTH THE EVIDENCE AND THE CLAIM, CHECK THE
+CLAIM AGAINST THE NUMBER, NOT AGAINST ITS OWN REASONING.** Sub-project 34's
+mutation report recorded, in a results table, `C1 SURVIVED (58 passed)`. Four
+sections later the same report, and a test docstring it had just written,
+claimed that dropping that same cast alone made a downstream filter discard
+every choice — behaviour which, had it been true, would have made that very
+test kill C1. **The evidence and the claim sat in one artifact, disagreeing,
+and neither the implementer nor the first reviewer caught it, because both
+checked the claim's reasoning rather than the claim against the number.** It
+took a second review pass. This is the same failure as fact 204's vacuous
+gate, one level out: an argument can be internally coherent and still
+contradict a measurement printed on the same page. **When a report contains a
+run's output, read the claims against the output first and against their own
+logic second.** It costs seconds and it is the only check that is independent
+of the reasoning being checked. The correction matters more in a test
+docstring than in a report, because the report is a workspace artifact that
+is deleted when the round closes and the docstring is inherited by every
+later round that reads the file.
+
+**212. API AND WEB CALLERS OF THE SAME SHARED FUNCTION ROUTINELY DISAGREE
+ABOUT TYPE, AND A SUITE THAT SEEDS THROUGH THE ORM WILL TEST ONLY ONE OF
+THEM.** The API deserializes through a marshmallow schema; the web route
+reads `request.form` raw. For `vote_for_poll` the difference is inside a
+single ternary: `app/post/routes.py:642` hands single mode an `int` (it calls
+`int(...)`) and multiple mode a **`list[str]`** (`request.form.getlist`),
+while `app/api/alpha/schema.py:1745` declares
+`fields.List(fields.Integer())`, so `"5"` arrives as `5` and `"abc"` is
+rejected before the handler runs. Every one of sub-project 34's 18 poll call
+sites passed ints, because ORM-seeded ids are ints — so the whole file
+exercised the API's type on both arms and a genuine defect in a string-only
+path (`app/shared/post.py:1165`) was invisible to coverage and found only by
+mutation. Worse, a docstring in the file had already noticed the gap and
+concluded "the cast is exercised either way", which is **true of execution
+and false of observation**: the line was covered and nothing downstream could
+tell whether it had run. **The check is cheap and belongs in every round: for
+each entry point, read the route that BUILDS the argument, and confirm at
+least one test supplies that type.**
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not

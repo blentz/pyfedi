@@ -89,17 +89,45 @@ two tests are the model, and `tests/factories.py:119-120` shows the
 `app.test_request_context('/')` plus `login_user(viewer)` pattern the repository
 already uses.
 
-### The SRC_API arms need a request context too
+### ~~The SRC_API arms need a request context too~~ — CORRECTED: they do not
 
-This is the fact most likely to be missed. `vote_for_post:50` and
+> **CORRECTION, recorded after Task 1's probe D/E disproved this section's
+> central claim. The original text is kept below, struck through, because later
+> rounds read this spec and a document that quietly changes its mind is
+> indistinguishable from one that was always right. Registered as **D394** in
+> `docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md`.**
+>
+> **SRC_API tests need NO request context.** The call chain below is correct up
+> to its last step, and the conclusion does not follow from it.
+> `get_ip_address` (`app/__init__.py:68-77`) wraps its entire body in
+> `try: ... except RuntimeError: ip = ''`, catching exactly the "working outside
+> of request context" error; `user_ip_banned` (`app/utils.py:2311-2314`) then
+> sees a falsy `current_ip_address`, falls off the end and returns `None`, and
+> the guard passes. Probed directly in Task 1, not reasoned about.
+>
+> **What actually blocks an SRC_API test is different and unrelated:**
+> `authorise_api_user` (`app/utils.py:3628-3629`) rejects any user with
+> `ap_id is not None` with `Exception('incorrect_login')`, and
+> `tests/factories.py`'s `make_user` defaults to a NON-local user. The seed
+> helper must pass `local=True`. See `tests/README.md` fact 206.
+>
+> **SRC_WEB tests still need a context**, for `flash` and `request.args` — that
+> part was never in doubt. A test carrying a context it does not need is worse
+> than harmless: it teaches the next round the wrong harness.
+>
+> **The transferable lesson:** a "there is no path that avoids X" claim built by
+> following a call chain is only as strong as the exception handling at the
+> chain's far end, and this one was written without opening the last file.
+
+~~This is the fact most likely to be missed.~~ `vote_for_post:50` and
 `vote_for_poll:1152` both read `if user.banned or user_ip_banned():` on the path
 *after* the source fork, so both arms reach it. `user_ip_banned`
 (`app/utils.py:2311-2314`) calls `ip_address`, which `app/utils.py:2308` binds to
 `app/__init__.py`'s `get_ip_address`, and that reads `request`.
 
-**There is no context-free path through either function.** A test that arranges
+~~**There is no context-free path through either function.** A test that arranges
 a bearer token and calls without a request context fails inside `user_ip_banned`,
-not at the assertion.
+not at the assertion.~~ **FALSE — see the correction above.**
 
 ### The WEB arms render real templates
 

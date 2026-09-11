@@ -665,7 +665,7 @@ def make_conversation(sender: User, recipient: User) -> Conversation:
 def mark_post_read(user: User, post: Post) -> None:
     """Insert into the `read_posts` association table.
 
-    `read_posts` has no ORM model -- it is a plain db.Table (app/models.py:933) --
+    `read_posts` has no ORM model -- it is a plain db.Table (app/models.py:942) --
     so the row is inserted directly through it, mirroring grant_permission's use of
     user_role.insert(). get_deduped_post_ids reads
     `SELECT read_post_id FROM "read_posts" WHERE user_id = :user_id` when the
@@ -679,7 +679,7 @@ def mark_post_read(user: User, post: Post) -> None:
 def hide_post(user: User, post: Post) -> None:
     """Insert into the `hidden_posts` association table.
 
-    `hidden_posts` has no ORM model either (app/models.py:942). get_deduped_post_ids
+    `hidden_posts` has no ORM model either (app/models.py:951). get_deduped_post_ids
     reads `SELECT hidden_post_id FROM "hidden_posts" WHERE user_id = :user_id`
     unconditionally for every authenticated viewer (app/utils.py:3890), and
     get_instance_stickies reads the identical query unconditionally too
