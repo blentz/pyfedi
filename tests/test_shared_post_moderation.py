@@ -89,6 +89,22 @@ def seed_moderator(s, user=None):
     return make_community_member(user or s.voter, s.community, is_moderator=True)
 
 
+def make_site_admin(user):
+    """Give `user` a role named exactly 'Admin'.
+
+    `User.is_admin()` (app/models.py:1259-1265) checks role NAMES, not
+    permissions, so `grant_permission` cannot produce a site admin however it
+    is called. The name must be the literal string 'Admin'.
+    """
+    from app.models import Role, user_role
+    role = Role(name='Admin', weight=0)
+    db.session.add(role)
+    db.session.commit()
+    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.commit()
+    return role
+
+
 def test_hiding_a_post_through_the_api_inserts_the_row(db_session):
     """`:1029`'s `mark_post_as_hidden`, reached through `:1028`'s true arm.
 
@@ -171,3 +187,206 @@ def test_the_web_arm_reads_current_user(db_session, app):
     rows = db.session.execute(
         hidden_posts.select().where(hidden_posts.c.user_id == s.voter.id)).fetchall()
     assert {row.hidden_post_id for row in rows} == {s.post.id}
+
+
+def test_a_moderator_locks_a_post_through_the_api(db_session):
+    """`:941`'s true arm via `is_moderator`, `:942`'s assignment, `:951`'s
+    federation, and `:958`'s return.
+
+    Catches a regression inverting `:941`, which would leave comments_enabled
+    untouched. Asserts the field rather than the return, because `:958` returns
+    the same shape on the refused path.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    s.post.comments_enabled = True
+    db.session.commit()
+
+    user_id, post = lock_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
+
+    assert user_id == s.voter.id
+    db.session.refresh(s.post)
+    assert s.post.comments_enabled is False
+
+
+def test_unlocking_sets_comments_enabled_back_to_true(db_session):
+    """`:934`'s false arm, `:938`'s assignment and `:939`'s modlog_type.
+
+    Catches a regression collapsing `:934`, which would lock on an unlock
+    request.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    s.post.comments_enabled = False
+    db.session.commit()
+
+    lock_post(s.post.id, False, SRC_API, auth=bearer(s.voter))
+
+    db.session.refresh(s.post)
+    assert s.post.comments_enabled is True
+
+
+def test_locking_writes_a_modlog_entry_naming_the_action(db_session):
+    """`:944-946`'s add_to_modlog with `:936`'s modlog_type.
+
+    `:934` sets modlog_type to 'lock_post' or 'unlock_post' and `:944` passes
+    it. Catches a regression hardcoding either string, which would record an
+    unlock as a lock.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+
+    lock_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
+
+    actions = {row.action for row in db.session.query(ModLog).all()}
+    assert actions == {'lock_post'}
+
+
+def test_unlocking_writes_the_unlock_action(db_session):
+    """`:939`'s modlog_type on the false arm of `:934`.
+
+    The counterpart of the test above. Together they prove `:944`'s argument is
+    driven by `:934` rather than fixed.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+
+    lock_post(s.post.id, False, SRC_API, auth=bearer(s.voter))
+
+    actions = {row.action for row in db.session.query(ModLog).all()}
+    assert actions == {'unlock_post'}
+
+
+def test_a_site_admin_who_is_not_a_moderator_may_lock(db_session):
+    """`:941`'s SECOND disjunct alone -- `community.is_admin_or_staff(user)`.
+
+    `:941` is `is_moderator or community.is_admin_or_staff(user)`, one arc pair
+    to coverage.py. This takes the second disjunct with the first false, which
+    the moderator tests cannot do. Catches a regression dropping the admin
+    disjunct.
+    """
+    s = seed_post_context(community_name='moderation')
+    make_site_admin(s.voter)
+
+    user_id, post = lock_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
+
+    db.session.refresh(s.post)
+    assert s.post.comments_enabled is False
+
+
+def test_an_unprivileged_user_changes_nothing(db_session):
+    """`:941`'s false arm.
+
+    Neither disjunct holds, so the body is skipped entirely. Asserts the field
+    AND the empty ModLog, because `:958` returns `user.id, post` on this path
+    exactly as it does on success -- the return proves nothing.
+    """
+    s = seed_post_context(community_name='moderation')
+    s.post.comments_enabled = True
+    db.session.commit()
+
+    user_id, post = lock_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
+
+    db.session.refresh(s.post)
+    assert s.post.comments_enabled is True
+    assert db.session.query(ModLog).count() == 0
+
+
+def test_a_banned_moderator_is_not_a_moderator(db_session):
+    """`Community.moderators()`'s `is_banned == False` filter
+    (app/models.py:716-722).
+
+    A CommunityMember row with is_moderator=True and is_banned=True does NOT
+    satisfy `:941`. Catches a regression dropping that filter, which would let
+    a banned moderator keep moderating.
+    """
+    s = seed_post_context(community_name='moderation')
+    member = seed_moderator(s)
+    member.is_banned = True
+    db.session.commit()
+    s.post.comments_enabled = True
+    db.session.commit()
+
+    lock_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
+
+    db.session.refresh(s.post)
+    assert s.post.comments_enabled is True
+
+
+def test_the_web_arm_flashes_when_locking(db_session, app):
+    """`:949`'s true arm and `:950`'s flash.
+
+    `:948`'s `if locked:` picks the message and `:949` gates it on SRC_WEB.
+    Asserts the flashed CONTENT, not merely that nothing raised -- a mutant
+    deleting `:950` would otherwise survive. `get_flashed_messages` must be
+    called INSIDE the request context and consumes the queue, so call it once.
+    """
+    from flask import get_flashed_messages
+
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+
+    with web_ctx(app, s.voter):
+        result = lock_post(s.post.id, True, SRC_WEB)
+        flashed = get_flashed_messages()
+
+    assert result is None
+    assert len(flashed) == 1
+    assert 'locked' in flashed[0]
+
+
+def test_the_web_arm_flashes_a_different_message_when_unlocking(db_session, app):
+    """`:953`'s true arm and `:954`'s flash, distinct from `:950`'s.
+
+    Catches a regression collapsing `:948`, which would flash 'locked' on an
+    unlock. Compares the two messages rather than asserting one exists.
+    """
+    from flask import get_flashed_messages
+
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+
+    with web_ctx(app, s.voter):
+        lock_post(s.post.id, False, SRC_WEB)
+        flashed = get_flashed_messages()
+
+    assert len(flashed) == 1
+    assert 'unlocked' in flashed[0]
+
+
+def test_the_api_arm_does_not_flash_when_locking(db_session):
+    """`:949`'s false arm, on the lock path.
+
+    Called with NO request context at all -- that absence is the oracle.
+    `flash()` writes to `session`, and Flask's `session` proxy raises
+    RuntimeError outside a request context. So if `:949`'s `if src ==
+    SRC_WEB:` guard were deleted, this contextless `locked=True` SRC_API call
+    would reach `:948`'s true branch, hit the now-unguarded `:950` flash, and
+    raise instead of returning normally. Verified live: dropping the `:949`
+    guard makes this exact call raise `RuntimeError: Working outside of
+    request context.` This test says nothing about `:953` -- `locked=True`
+    never reaches the `else` at `:952-955` that contains it.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+
+    user_id, post = lock_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
+
+    assert user_id == s.voter.id
+
+
+def test_the_api_arm_does_not_flash_when_unlocking(db_session):
+    """`:953`'s false arm, on the unlock path.
+
+    The counterpart of the test above, needed because `locked=False` is the
+    only way to reach `:952-955` and exercise `:953`'s guard directly rather
+    than relying on some other test to catch it incidentally. Same
+    contextless oracle: verified live that dropping `:953`'s guard makes this
+    exact call raise `RuntimeError: Working outside of request context.`
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+
+    user_id, post = lock_post(s.post.id, False, SRC_API, auth=bearer(s.voter))
+
+    assert user_id == s.voter.id
