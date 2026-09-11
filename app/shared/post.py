@@ -17,8 +17,8 @@ from app import db, cache, plugins, limiter
 from app.activitypub.util import make_image_sizes, notify_about_post
 from app.community.util import tags_from_string_old, end_poll_date, flair_from_form, flairs_from_string
 from app.constants import *
-from app.models import File, Notification, NotificationSubscription, Poll, PollChoice, Post, PostBookmark, PostVote, \
-    Report, Site, User, utcnow, Instance, Event, Community, CommunityFlair, votes_cast_today
+from app.models import File, Notification, NotificationSubscription, Poll, PollChoice, PollChoiceVote, Post, \
+    PostBookmark, PostVote, Report, Site, User, utcnow, Instance, Event, Community, CommunityFlair, votes_cast_today
 from app.shared.tasks import task_selector
 from app.utils import render_template, authorise_api_user, shorten_string, gibberish, ensure_directory_exists, \
     piefed_markdown_to_lemmy_markdown, markdown_to_html, fixup_url, domain_from_url, \
@@ -1178,6 +1178,10 @@ def vote_for_poll(post_id, votes, src, auth=None):
                 raise Exception("User has already voted.")
     else:
         for choice_id in votes:
+            already_voted = db.session.query(PollChoiceVote).filter(
+                PollChoiceVote.user_id == user.id,
+                PollChoiceVote.choice_id == int(choice_id)).first() is not None
             poll.vote_for_choice(int(choice_id), user.id)
-            task_selector('vote_for_poll', post_id=post_id, user_id=user.id,
-                          choice_text=PollChoice.query.get(int(choice_id)).choice_text)
+            if not already_voted:
+                task_selector('vote_for_poll', post_id=post_id, user_id=user.id,
+                              choice_text=PollChoice.query.get(int(choice_id)).choice_text)

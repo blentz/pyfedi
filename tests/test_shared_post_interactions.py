@@ -3,7 +3,7 @@
 SCOPE. The eight reader-facing functions, 63 uncovered statements and 51
 uncovered branch arcs when this file was started:
 
-  vote_for_post :31-74 (29/18), vote_for_poll :1146-1183 (20/18),
+  vote_for_post :31-74 (29/18), vote_for_poll :1146-1187 (20/18),
   bookmark_post :77-94 (4/4), subscribe_post :115-152 (4/4),
   mark_post_read :1115-1130 (2/3), get_post_flair_list :1133-1143 (2/2),
   remove_bookmark_post :97-112 (1/2), extra_rate_limit_check :155-160 (1/0).
@@ -104,7 +104,7 @@ str)` is always False and is not evidence of a broken render.
 
 THE FEDERATION LEVER IS `community.private`, NOT `local_only`. task_selector
 runs synchronously under eager Celery (tests/conftest.py:105-110), so
-vote_for_post:60 and vote_for_poll:1174/:1182 execute real bodies in
+vote_for_post:60 and vote_for_poll:1174/:1186 execute real bodies in
 app/shared/tasks/likes.py. Both bodies return at their first guard --
 `send_vote:60` and the poll task's own equivalent -- when
 `community.local_only or community.private or not community.instance.online()`.
@@ -1489,7 +1489,7 @@ def test_multiple_mode_records_every_choice(db_session, app):
     """`:1168`'s false arm and `:1180`'s loop over several choices.
 
     The real multiple-mode web caller (app/post/routes.py:642) sends
-    `request.form.getlist('poll_choice[]')`, a list of strings -- `:1181`'s
+    `request.form.getlist('poll_choice[]')`, a list of strings -- `:1184`'s
     explicit `int(choice_id)` exists for that reason, so this test passes
     plain ints rather than strings to keep the choice-identity assertion
     simple; the cast is exercised either way. Catches a regression sending a
@@ -1648,3 +1648,49 @@ def test_a_web_single_mode_vote_for_only_a_foreign_choice_does_not_crash(db_sess
         vote_for_poll(s.post.id, foreign.id, SRC_WEB)
 
     assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 0
+
+
+def test_resubmitting_multiple_mode_choices_does_not_federate_again(db_session, app):
+    """PC2: the multiple-mode loop's task_selector call used to fire even when
+    `vote_for_choice` no-ops.
+
+    `Poll.vote_for_choice` guards its whole body with `if not existing_vote:`
+    (app/models.py:3797), so a repeat submission records nothing -- but the
+    loop's `task_selector` call (now guarded at `:1185`-`:1187`) used to
+    federate one phantom vote per choice regardless, and remote instances
+    would increment totals the origin does not have.
+
+    Counts task_selector calls rather than inspecting network traffic, because
+    task_selector runs synchronously under eager Celery and the poll task
+    returns at its own first guard with `community.private` set (this file's
+    `_seed()` default) -- no outbound request, no redis key, so no
+    `redis_double` and no `_clear_votes_cast` are needed here.
+    """
+    calls = []
+    s = _seed()
+    _seed_poll(s, mode='multiple', choices=('a', 'b'))
+    ids = sorted(c.id for c in
+                 db.session.query(PollChoice).filter_by(post_id=s.post.id))
+
+    import app.shared.post as post_module
+    original = post_module.task_selector
+
+    def counting_task_selector(task_key, **kwargs):
+        calls.append(task_key)
+        return original(task_key, **kwargs)
+
+    post_module.task_selector = counting_task_selector
+    try:
+        with _web_ctx(app, s.voter):
+            vote_for_poll(s.post.id, ids, SRC_WEB)
+        first_round = len(calls)
+
+        with _web_ctx(app, s.voter):
+            vote_for_poll(s.post.id, ids, SRC_WEB)
+    finally:
+        post_module.task_selector = original
+
+    assert first_round == 2
+    assert len(calls) == 2, \
+        'the repeat submission federated votes that were never recorded'
+    assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 2
