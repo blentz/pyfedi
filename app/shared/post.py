@@ -953,6 +953,8 @@ def lock_post(post_id: int, locked, src, auth=None):
             if src == SRC_WEB:
                 flash(_('%(name)s has been unlocked.', name=post.title))
             task_selector('unlock_post', user_id=user.id, post_id=post_id)
+    elif src == SRC_API:
+        raise Exception('Does not have permission')
 
     if src == SRC_API:
         return user.id, post
@@ -982,6 +984,8 @@ def move_post(post_id: int, target_id: int, src, auth=None):
 
         task_selector('move_post', user_id=user.id, old_community_id=old_community_id,
                       new_community_id=target_community.id, post_id=post_id)
+    elif src == SRC_API:
+        raise Exception('Does not have permission')
 
     if src == SRC_API:
         return user.id, post
@@ -1013,6 +1017,8 @@ def sticky_post(post_id: int, featured: bool, src: int, auth=None):
             task_selector('sticky_post', user_id=user.id, post_id=post_id)
         else:
             task_selector('unsticky_post', user_id=user.id, post_id=post_id)
+    elif src == SRC_API:
+        raise Exception('Does not have permission')
 
     return user.id, post
 
