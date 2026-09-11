@@ -65,8 +65,8 @@ import pytest
 from types import SimpleNamespace
 
 from app import db
-from app.constants import SRC_API, SRC_WEB
-from app.models import CommunityMember, ModLog, Post, hidden_posts
+from app.constants import NOTIF_POST, NOTIF_REPORT, NOTIF_REPORT_ESCALATION, SRC_API, SRC_WEB
+from app.models import CommunityMember, ModLog, Notification, Post, hidden_posts
 from app.shared.post import (
     hide_post,
     lock_post,
@@ -76,7 +76,7 @@ from app.shared.post import (
     sticky_post,
 )
 from tests.factories import bearer, make_community, make_community_member, \
-    make_post, make_user, seed_post_context, web_ctx
+    make_notification, make_post, make_user, seed_post_context, web_ctx
 
 
 def seed_moderator(s, user=None):
@@ -719,3 +719,208 @@ def test_a_permitted_unsticky_federates_the_undo(db_session):
         post_module.task_selector = original
 
     assert calls == ['unsticky_post']
+
+
+def test_a_moderator_removes_a_post(db_session):
+    """`:1049`'s false arm (permission granted), `:1055`'s deleted flag,
+    `:1056`'s deleted_by and `:1077`'s return.
+
+    Note the gate is spelled negatively: `:1049` raises when the user is NOT
+    permitted, so the permitted path is its FALSE arm.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+
+    user_id, post = mod_remove_post(s.post.id, 'spam', SRC_API, bearer(s.voter))
+
+    assert user_id == s.voter.id
+    db.session.refresh(s.post)
+    assert s.post.deleted is True
+    assert s.post.deleted_by == s.voter.id
+
+
+def test_removal_decrements_both_counters(db_session):
+    """`:1057`'s author.post_count and `:1058`'s community.post_count.
+
+    Catches a regression dropping either decrement, which the deleted flag
+    alone would not reveal.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    s.post.author.post_count = 5
+    s.community.post_count = 7
+    db.session.commit()
+
+    mod_remove_post(s.post.id, 'spam', SRC_API, bearer(s.voter))
+
+    db.session.refresh(s.post.author)
+    db.session.refresh(s.community)
+    assert s.post.author.post_count == 4
+    assert s.community.post_count == 6
+
+
+def test_a_site_admin_who_is_not_a_moderator_may_remove_a_post(db_session):
+    """`:1049`'s SECOND conjunct alone -- `not user.is_admin_or_staff()`.
+
+    `:1049` is `not is_moderator and not is_admin_or_staff()`, one arc pair to
+    coverage.py: the permitted path is the whole expression's FALSE arm.
+    `test_a_moderator_removes_a_post` reaches that false arm through the
+    FIRST conjunct alone (is_moderator true, short-circuiting before the
+    second is even evaluated). This test reaches it through the SECOND
+    conjunct with the first true -- a site admin who is NOT a moderator of
+    the community. Catches a regression that drops the admin/staff disjunct
+    and gates removal on moderator status alone, which the moderator test
+    above cannot detect because it never exercises a non-moderator actor.
+
+    Uses `make_site_admin(s.voter)`, not `s.author`: `s.author` is User id 1,
+    and `User.is_admin()` returns True unconditionally for id 1, so a test
+    built on it would pass through an accident of seeding order rather than
+    through the role it claims to exercise.
+    """
+    s = seed_post_context(community_name='moderation')
+    make_site_admin(s.voter)
+
+    user_id, post = mod_remove_post(s.post.id, 'spam', SRC_API, bearer(s.voter))
+
+    assert user_id == s.voter.id
+    db.session.refresh(s.post)
+    assert s.post.deleted is True
+
+
+def test_an_unprivileged_user_is_refused_with_an_exception(db_session):
+    """`:1049`'s true arm and `:1050`'s raise.
+
+    Unlike lock_post, move_post and sticky_post, this function RAISES rather
+    than returning as though it succeeded. Asserts the message AND that the
+    post survived, because a bare pytest.raises(Exception) is satisfied by any
+    exception including an unrelated crash.
+    """
+    s = seed_post_context(community_name='moderation')
+
+    with pytest.raises(Exception, match='Does not have permission'):
+        mod_remove_post(s.post.id, 'spam', SRC_API, bearer(s.voter))
+
+    db.session.refresh(s.post)
+    assert s.post.deleted is not True
+
+
+def test_removal_writes_the_reason_to_the_modlog(db_session):
+    """`:1061-1063`'s add_to_modlog with `reason=reason`.
+
+    lock_post and move_post pass reason='' unconditionally; this function
+    forwards the caller's. Catches a regression dropping it.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+
+    mod_remove_post(s.post.id, 'breaks rule 3', SRC_API, bearer(s.voter))
+
+    entries = db.session.query(ModLog).all()
+    assert len(entries) == 1
+    assert entries[0].action == 'delete_post'
+    assert entries[0].reason == 'breaks rule 3'
+
+
+def test_removal_deletes_ordinary_notifications_about_the_post(db_session):
+    """`:1073`'s delete, reached through `:1071`'s false arm.
+
+    Catches a regression inverting `:1071`, which would keep ordinary
+    notifications and delete the report ones instead.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    make_notification(s.voter, s.post, notif_type=NOTIF_POST)
+
+    mod_remove_post(s.post.id, 'spam', SRC_API, bearer(s.voter))
+
+    assert db.session.query(Notification).count() == 0
+
+
+def test_removal_keeps_report_notifications(db_session):
+    """`:1071`'s true arm via its FIRST disjunct (NOTIF_REPORT) and `:1072`'s
+    continue.
+
+    A report notification must survive the removal it reported. Catches a
+    regression dropping the continue, which would destroy the moderation trail.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    make_notification(s.voter, s.post, notif_type=NOTIF_REPORT)
+
+    mod_remove_post(s.post.id, 'spam', SRC_API, bearer(s.voter))
+
+    remaining = db.session.query(Notification).all()
+    assert len(remaining) == 1
+    assert remaining[0].notif_type == NOTIF_REPORT
+
+
+def test_removal_keeps_escalated_report_notifications(db_session):
+    """`:1071`'s SECOND disjunct -- NOTIF_REPORT_ESCALATION, with the first
+    disjunct false.
+
+    `:1071` is `notif_type == NOTIF_REPORT or notif_type ==
+    NOTIF_REPORT_ESCALATION`, one arc pair to coverage.py. The test above takes
+    the first disjunct; this takes the second with the first false.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    make_notification(s.voter, s.post, notif_type=NOTIF_REPORT_ESCALATION)
+
+    mod_remove_post(s.post.id, 'spam', SRC_API, bearer(s.voter))
+
+    remaining = db.session.query(Notification).all()
+    assert len(remaining) == 1
+    assert remaining[0].notif_type == NOTIF_REPORT_ESCALATION
+
+
+def test_removal_with_no_notifications_takes_the_loops_zero_exit(db_session):
+    """`:1069`'s zero-iteration exit arc.
+
+    A post nobody was notified about still removes cleanly. Catches a
+    regression assuming at least one row.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+
+    mod_remove_post(s.post.id, 'spam', SRC_API, bearer(s.voter))
+
+    db.session.refresh(s.post)
+    assert s.post.deleted is True
+
+
+def test_removing_a_post_with_a_url_recalculates_cross_posts(db_session):
+    """`:1052`'s true arm, reached when the post has a url.
+
+    `make_post` leaves `url` unset, so every other test in this file takes
+    the false arm. Seeding one here exercises `:1053`'s
+    calculate_cross_posts(delete_only=True) call. Asserts the removal still
+    completes, since :1053 mutating self.cross_posts is the only other
+    observable effect and this post has none seeded.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    s.post.url = 'https://example.com/article'
+    db.session.commit()
+
+    mod_remove_post(s.post.id, 'spam', SRC_API, bearer(s.voter))
+
+    db.session.refresh(s.post)
+    assert s.post.deleted is True
+
+
+def test_the_web_arm_returns_none(db_session, app):
+    """`:1076`'s false arm and `:1079`'s bare return.
+
+    The web caller at app/post/routes.py:1170 discards the value. Catches a
+    regression making `:1077`'s two-tuple unconditional, which would change the
+    contract for a caller that unpacks nothing.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+
+    with web_ctx(app, s.voter):
+        result = mod_remove_post(s.post.id, 'spam', SRC_WEB, None)
+
+    assert result is None
+    db.session.refresh(s.post)
+    assert s.post.deleted is True
