@@ -629,3 +629,93 @@ def test_a_site_admin_may_sticky_a_post(db_session):
 
     db.session.refresh(s.post)
     assert s.post.sticky is True
+
+
+def test_an_unprivileged_user_does_not_federate_a_sticky(db_session):
+    """PC1: `:1012`'s federation block now sits INSIDE `:999`'s permission gate.
+
+    An unprivileged actor must not trigger task_selector at all -- if the
+    gate is refused, no sticky ever happened locally, so nothing should be
+    federated. Before PC1's fix, `:999` and `:1012` were at the same
+    indentation, so task_selector fired whether or not the gate passed,
+    letting an unauthorized user federate a sticky that never happened
+    locally. app/community/routes.py:1109 reaches this with an ordinary post
+    author on the create path, so this was not only a crafted-API-call risk.
+
+    Counts task_selector calls by monkeypatching the module-level name, and
+    restores in a finally: it is imported by other tests in the same session
+    and a leaked patch corrupts every test that follows.
+    """
+    calls = []
+    s = seed_post_context(community_name='moderation')
+
+    import app.shared.post as post_module
+    original = post_module.task_selector
+
+    def counting_task_selector(task_key, **kwargs):
+        calls.append(task_key)
+        return original(task_key, **kwargs)
+
+    post_module.task_selector = counting_task_selector
+    try:
+        sticky_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
+    finally:
+        post_module.task_selector = original
+
+    db.session.refresh(s.post)
+    assert s.post.sticky is not True
+    assert calls == [], 'a refused sticky was federated anyway'
+
+
+def test_a_permitted_sticky_still_federates(db_session):
+    """`:1013`'s task_selector on the permitted path, after PC1.
+
+    The counterpart of the test above. Without this one, PC1 could be
+    'fixed' by deleting the federation entirely and both tests would pass.
+    """
+    calls = []
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+
+    import app.shared.post as post_module
+    original = post_module.task_selector
+
+    def counting_task_selector(task_key, **kwargs):
+        calls.append(task_key)
+        return original(task_key, **kwargs)
+
+    post_module.task_selector = counting_task_selector
+    try:
+        sticky_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
+    finally:
+        post_module.task_selector = original
+
+    assert calls == ['sticky_post']
+
+
+def test_a_permitted_unsticky_federates_the_undo(db_session):
+    """`:1015`'s task_selector, the else arm of `:1012`, after PC1.
+
+    Catches a regression hardcoding `:1013`'s task key, which would federate a
+    sticky when the moderator unstickied.
+    """
+    calls = []
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    s.post.sticky = True
+    db.session.commit()
+
+    import app.shared.post as post_module
+    original = post_module.task_selector
+
+    def counting_task_selector(task_key, **kwargs):
+        calls.append(task_key)
+        return original(task_key, **kwargs)
+
+    post_module.task_selector = counting_task_selector
+    try:
+        sticky_post(s.post.id, False, SRC_API, auth=bearer(s.voter))
+    finally:
+        post_module.task_selector = original
+
+    assert calls == ['unsticky_post']

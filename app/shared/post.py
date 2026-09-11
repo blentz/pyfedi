@@ -1009,10 +1009,10 @@ def sticky_post(post_id: int, featured: bool, src: int, auth=None):
                       community=post.community, post=post,
                       link_text=shorten_string(post.title), link=f'post/{post.id}')
 
-    if featured:
-        task_selector('sticky_post', user_id=user.id, post_id=post_id)
-    else:
-        task_selector('unsticky_post', user_id=user.id, post_id=post_id)
+        if featured:
+            task_selector('sticky_post', user_id=user.id, post_id=post_id)
+        else:
+            task_selector('unsticky_post', user_id=user.id, post_id=post_id)
 
     return user.id, post
 
