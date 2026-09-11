@@ -10681,7 +10681,7 @@ line number the plan and the spec carried was written against the 1187-line
 tree and is stale by up to +6 after PC2.** Everything in this section is
 re-derived against 1193.
 
-**A 62-mutation pass** (Task 11, run on Opus) closed the round: **54 killed, 9
+**A 60-mutation pass** (Task 11, run on Opus) closed the round: **50 killed, 9
 holes found and closed with 9 new tests, and one mutation operator recorded
 VOID as structurally unable to measure its site**. No survivor was retired by
 an equivalence argument; every one was closed by a test and re-mutated to
