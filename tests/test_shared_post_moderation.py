@@ -44,10 +44,28 @@ divergence is `is_instance_admin`, which P1 omits. It is REGISTERED, NOT FIXED
 -- see the round's spec. `hide_post` has no gate, correctly: it writes
 per-user state.
 
-TWO FAILURE MODES, TOO. mod_remove_post:1056 and mod_restore_post:1098 RAISE
-`Exception('Does not have permission')`. lock_post, move_post and sticky_post
-fall through and return as though they had succeeded -- which Task 10 fixes
-for the SRC_API arm only, because the web callers have no error handling.
+P1 and P2 are the whole story for THIS file's six functions only. The module
+carries a THIRD predicate, P3 = `is_moderator or community.is_owner(user) or
+user.is_admin()`, at app/shared/post.py:387 inside `edit_post`, guarding :388's
+`post.sticky` assignment. P3 is the only one mentioning `is_owner` and the only
+one spelling bare `is_admin()`, so a Staff member may sticky through
+sticky_post and not through edit_post's form field. It belongs to Group E and
+is registered as D422 in
+docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md.
+
+TWO FAILURE MODES, TOO, AND THE SPLIT IS BY SOURCE ARM. mod_remove_post:1055-1056
+and mod_restore_post:1097-1098 RAISE `Exception('Does not have permission')` on
+BOTH arms. lock_post, move_post and sticky_post RAISE THE SAME EXCEPTION FOR
+SRC_API ONLY -- at :956-957, :987-988 and :1020-1021 -- and still return quietly
+for SRC_WEB, as though the refused call had succeeded. Do not write a test that
+expects a quiet return from an API refusal; it will get a raise. The three
+SRC_API raises are production change PC2, registered as D420 in
+docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md. The SRC_WEB half
+was deliberately left quiet: the web callers have no error handling around these
+calls, so raising there would turn a silent no-op into a 500. D421 registers the
+divergence that remains, and the three
+test_an_unprivileged_web_*_still_returns_quietly tests exist to stop a later
+change "finishing the job".
 
 A GATE TEST MUST ASSERT THE SIDE EFFECT DID NOT HAPPEN. Every one of these
 functions returns the same shape on the permitted and the refused path, so
