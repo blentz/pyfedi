@@ -1273,3 +1273,250 @@ def test_an_over_quota_vote_does_not_mark_the_post_read(db_session, app):
     finally:
         _clear_votes_cast(s.voter.id)
 
+
+
+def _seed_poll(s, mode='single', choices=('a', 'b')):
+    """A Poll on `s.post` with the named choices.
+
+    `Poll.post_id` is the primary key (app/models.py:3781) -- a poll IS its
+    post, so this takes the seeded post rather than making a new id. Returns
+    the Poll; read its choices by querying PollChoice with post_id=s.post.id
+    (order_by(PollChoice.sort_order) when choice identity/order matters --
+    e.g. picking "the first choice" -- since nothing else fixes row order).
+    """
+    from datetime import timedelta
+    from app.models import utcnow
+
+    poll = Poll(post_id=s.post.id, mode=mode, local_only=False,
+               end_poll=utcnow() + timedelta(days=1))
+    db.session.add(poll)
+    for order, text in enumerate(choices):
+        db.session.add(PollChoice(post_id=s.post.id, choice_text=text,
+                                  sort_order=order, num_votes=0))
+    db.session.commit()
+    return poll
+
+
+def test_a_single_mode_api_vote_records_one_choice(db_session):
+    """`:1147`'s true arm, `:1155`'s true arm, `:1159`'s true arm, `:1163`'s
+    true arm, `:1164`'s vote and `:1165`'s federation call.
+
+    No `_web_ctx` -- the module docstring's "SRC_API ARM DOES NOT NEED A
+    REQUEST CONTEXT" finding applies here too, and the real API caller
+    (app/api/alpha/utils/post.py:1791-1796) hands `vote_for_poll` a bare int
+    `data['choice_id']`, unwrapped, so `:1155` must wrap it into a list.
+    Catches a regression dropping `:1155`, which would make `len(votes)` at
+    `:1160` fail (`TypeError: object of type 'int' has no len()`) on an int.
+    `community.private=True` (this file's `_seed()` default) stops
+    `app/shared/tasks/likes.py`'s `vote_for_poll` task at its own first guard,
+    so `:1165`'s federation call runs but issues no outbound request and
+    touches no redis key -- unlike `vote_for_post`'s `post.vote()`, nothing
+    here writes a `votes_cast_*` key, so no `_clear_votes_cast` is needed.
+
+    Asserts the vote set rather than a single row, and refreshes `choice`
+    before reading `num_votes`, since `:1164`'s `vote_for_choice` commits
+    inside the ORM session this test shares.
+    """
+    s = _seed()
+    _seed_poll(s, mode='single')
+    choice = db.session.query(PollChoice).filter_by(post_id=s.post.id).order_by(
+        PollChoice.sort_order).first()
+
+    vote_for_poll(s.post.id, choice.id, SRC_API, auth=_bearer(s.voter))
+
+    votes = db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).all()
+    assert {v.choice_id for v in votes} == {choice.id}
+    db.session.refresh(choice)
+    assert choice.num_votes == 1
+
+
+def test_a_single_mode_web_vote_accepts_a_list(db_session, app):
+    """`:1147`'s false arm and `:1155`'s false arm.
+
+    The real web caller (app/post/routes.py:640-641) also sends a bare int
+    for single mode (`int(request.form.get('poll_choice'))`), so nothing in
+    this file's real callers exercises `:1155`'s false arm with SRC_WEB. The
+    function itself places no such restriction on its `votes` argument
+    though -- `isinstance(votes, int)` is the only gate -- so a list is a
+    legitimate input on this arm regardless of which caller happens to send
+    it today. Catches a regression making `:1155`'s wrap unconditional, which
+    would nest an already-list `votes` into `[[choice.id]]` and crash `:1166`'s
+    `PollChoice.query.get(votes[0])` on an unhashable/invalid key.
+    """
+    s = _seed()
+    _seed_poll(s, mode='single')
+    choice = db.session.query(PollChoice).filter_by(post_id=s.post.id).order_by(
+        PollChoice.sort_order).first()
+
+    with _web_ctx(app, s.voter):
+        vote_for_poll(s.post.id, [choice.id], SRC_WEB)
+
+    votes = db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).all()
+    assert {v.choice_id for v in votes} == {choice.id}
+
+
+def test_a_banned_user_cannot_vote_in_a_poll(db_session, app):
+    """`:1152`'s first disjunct (`user.banned`) and `:1153`'s abort.
+
+    DEVIATES FROM THE BRIEF, which asked for SRC_API. SRC_API never reaches
+    `:1152` for a banned user: `authorise_api_user` (app/utils.py:3628)
+    raises a bare `Exception('incorrect_login')` for any bearer token whose
+    user has `user.banned is True`, before `vote_for_poll`'s body runs past
+    `:1148` -- the same finding `test_a_banned_user_is_aborted_with_403`
+    already established for `vote_for_post`'s own SRC_API arm. SRC_WEB reads
+    `current_user` directly at `:1150` with no `authorise_api_user` gate in
+    front of it, so it is required to reach `:1152` at all. Unlike
+    `vote_for_post`, there is no intervening `can_upvote`/`can_downvote` gate
+    to route around, so a plain SRC_WEB call is enough -- no 'reversal'-style
+    trick is needed here.
+
+    Asserts 403 specifically and asserts no vote row, so an abort reached
+    through an unrelated crash cannot satisfy it.
+    """
+    from werkzeug.exceptions import Forbidden
+
+    s = _seed()
+    _seed_poll(s, mode='single')
+    choice = db.session.query(PollChoice).filter_by(post_id=s.post.id).first()
+    s.voter.banned = True
+    db.session.commit()
+
+    with _web_ctx(app, s.voter):
+        with pytest.raises(Forbidden) as excinfo:
+            vote_for_poll(s.post.id, choice.id, SRC_WEB)
+
+    assert excinfo.value.code == 403
+    assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 0
+
+
+def test_a_second_single_mode_vote_raises_through_the_api(db_session):
+    """`:1163`'s false arm and `:1169`'s raise, through `:1168`'s true arm.
+
+    `has_voted` is poll-scoped (app/models.py:3789-3792, filters on
+    `post_id`), so a second vote in the SAME poll is rejected even for a
+    DIFFERENT choice -- this is the `has_voted`/`vote_for_choice` asymmetry
+    Step 5 reports and Tasks 9/10 act on. No `_web_ctx` for either call, per
+    the module docstring's SRC_API finding. `match=` pins the specific
+    message, and the row-count assertion pins that the second call recorded
+    nothing, so an unrelated crash under the same bare `Exception` type
+    cannot satisfy this test.
+    """
+    s = _seed()
+    _seed_poll(s, mode='single')
+    first, second = db.session.query(PollChoice).filter_by(
+        post_id=s.post.id).order_by(PollChoice.sort_order).all()
+
+    vote_for_poll(s.post.id, first.id, SRC_API, auth=_bearer(s.voter))
+
+    with pytest.raises(Exception, match='already voted'):
+        vote_for_poll(s.post.id, second.id, SRC_API, auth=_bearer(s.voter))
+
+    assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 1
+
+
+def test_a_second_single_mode_vote_is_silently_ignored_on_the_web(db_session, app):
+    """`:1168`'s false arm.
+
+    The web arm must not raise -- app/post/routes.py:643 has no handler and
+    flashes 'Vote has been cast.' unconditionally afterwards, so a raise here
+    would surface as an unhandled 500 rather than the flash the real caller
+    expects. Catches a regression hoisting `:1169` out of `:1168`'s `if src
+    == SRC_API:` guard, which would raise for the web arm too.
+    """
+    s = _seed()
+    _seed_poll(s, mode='single')
+    first, second = db.session.query(PollChoice).filter_by(
+        post_id=s.post.id).order_by(PollChoice.sort_order).all()
+
+    with _web_ctx(app, s.voter):
+        vote_for_poll(s.post.id, [first.id], SRC_WEB)
+        vote_for_poll(s.post.id, [second.id], SRC_WEB)
+
+    assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 1
+
+
+def test_too_many_choices_in_single_mode_raises_through_the_api(db_session):
+    """`:1160`'s true arm and `:1162`'s raise, through `:1161`'s true arm.
+
+    No `_web_ctx`, per the module docstring's SRC_API finding. `match=` pins
+    the specific message. Asserts no vote was recorded, because `:1162`
+    raises before `:1163` is ever reached, and a regression that raised AFTER
+    voting would otherwise look identical under a bare `pytest.raises
+    (Exception)`.
+    """
+    s = _seed()
+    _seed_poll(s, mode='single')
+    first, second = db.session.query(PollChoice).filter_by(
+        post_id=s.post.id).order_by(PollChoice.sort_order).all()
+
+    with pytest.raises(Exception, match='single'):
+        vote_for_poll(s.post.id, [first.id, second.id], SRC_API,
+                      auth=_bearer(s.voter))
+
+    assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 0
+
+
+def test_too_many_choices_in_single_mode_falls_through_on_the_web(db_session, app):
+    """`:1161`'s false arm -- the fall-through this round registers as a
+    known equivalent-mutant-adjacent quirk, not a bug to fix.
+
+    `:1160`'s length check raises only for SRC_API (`:1161`). The web arm
+    falls through to `:1163`-`:1166`, which votes for `votes[0]` alone and
+    silently discards the rest. This exact input is unreachable from the real
+    web caller (app/post/routes.py:640), which normalizes single mode to one
+    bare int before calling `vote_for_poll` -- so this test registers the
+    fall-through's current behaviour (pinning it so it cannot change
+    unnoticed) rather than asserting it is correct.
+    """
+    s = _seed()
+    _seed_poll(s, mode='single')
+    first, second = db.session.query(PollChoice).filter_by(
+        post_id=s.post.id).order_by(PollChoice.sort_order).all()
+
+    with _web_ctx(app, s.voter):
+        vote_for_poll(s.post.id, [first.id, second.id], SRC_WEB)
+
+    votes = db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).all()
+    assert {v.choice_id for v in votes} == {first.id}
+
+
+def test_multiple_mode_records_every_choice(db_session, app):
+    """`:1159`'s false arm and `:1171`'s loop over several choices.
+
+    The real multiple-mode web caller (app/post/routes.py:640) sends
+    `request.form.getlist('poll_choice[]')`, a list of strings -- `:1172`'s
+    explicit `int(choice_id)` exists for that reason, so this test passes
+    plain ints rather than strings to keep the choice-identity assertion
+    simple; the cast is exercised either way. Catches a regression sending a
+    multiple-mode poll down the single-mode branch, which would record only
+    `votes[0]` and silently drop the rest -- comparing sets rather than a
+    single id, since a query-planner ordering assumption would let that
+    regression pass by accident.
+    """
+    s = _seed()
+    _seed_poll(s, mode='multiple', choices=('a', 'b', 'c'))
+    all_choices = db.session.query(PollChoice).filter_by(post_id=s.post.id).all()
+    ids = {c.id for c in all_choices}
+
+    with _web_ctx(app, s.voter):
+        vote_for_poll(s.post.id, sorted(ids), SRC_WEB)
+
+    votes = db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).all()
+    assert {v.choice_id for v in votes} == ids
+
+
+def test_multiple_mode_with_no_choices_records_nothing(db_session, app):
+    """`:1171`'s zero-iteration exit arc.
+
+    app/post/routes.py:640 uses `request.form.getlist`, which returns `[]`
+    when the voter submits nothing for multiple mode, so this input is
+    reachable from the real caller. Catches a regression giving the loop a
+    default choice or otherwise recording a vote when `votes` is empty.
+    """
+    s = _seed()
+    _seed_poll(s, mode='multiple')
+
+    with _web_ctx(app, s.voter):
+        vote_for_poll(s.post.id, [], SRC_WEB)
+
+    assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 0
