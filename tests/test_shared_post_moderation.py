@@ -105,6 +105,21 @@ def make_site_admin(user):
     return role
 
 
+def make_instance_admin(user, instance):
+    """An InstanceRole making `user` an admin of `instance`.
+
+    `Community.is_instance_admin(user)` (app/models.py:769-776) looks up
+    InstanceRole by the COMMUNITY's instance_id, not the user's, so the
+    instance passed here must be the one `seed_post_context`'s community
+    resolves to -- which is the first instance seeded, id 1.
+    """
+    from app.models import InstanceRole
+    role = InstanceRole(instance_id=instance.id, user_id=user.id, role='admin')
+    db.session.add(role)
+    db.session.commit()
+    return role
+
+
 def test_hiding_a_post_through_the_api_inserts_the_row(db_session):
     """`:1029`'s `mark_post_as_hidden`, reached through `:1028`'s true arm.
 
@@ -390,3 +405,110 @@ def test_the_api_arm_does_not_flash_when_unlocking(db_session):
     user_id, post = lock_post(s.post.id, False, SRC_API, auth=bearer(s.voter))
 
     assert user_id == s.voter.id
+
+
+def test_a_moderator_moves_a_post_to_another_community(db_session):
+    """`:969`'s first disjunct, `:973`'s move_to and `:974`'s commit.
+
+    Asserts the post's community_id after a refresh, because `move_to` does not
+    commit and an unrefreshed read would pass even if `:974` were deleted.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    target = make_community('target')
+
+    user_id, post = move_post(s.post.id, target.id, SRC_API, auth=bearer(s.voter))
+
+    assert user_id == s.voter.id
+    db.session.refresh(s.post)
+    assert s.post.community_id == target.id
+
+
+def test_moving_records_the_target_community_in_the_modlog(db_session):
+    """`:976-978`'s add_to_modlog, which passes `community=target_community`
+    rather than the post's original community.
+
+    Catches a regression passing `post.community`, which would file the entry
+    against the community the post left.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    target = make_community('target')
+
+    move_post(s.post.id, target.id, SRC_API, auth=bearer(s.voter))
+
+    entries = db.session.query(ModLog).all()
+    assert len(entries) == 1
+    assert entries[0].action == 'move_post'
+    assert entries[0].community_id == target.id
+
+
+def test_an_instance_admin_may_move_a_post(db_session):
+    """`:969`'s SECOND disjunct alone -- `community.is_instance_admin(user)`.
+
+    This is the disjunct that distinguishes P2 from P1, and the only reason
+    move_post and sticky_post admit an actor lock_post refuses. Catches a
+    regression dropping it, which would silently narrow move_post to P1.
+    """
+    s = seed_post_context(community_name='moderation')
+    target = make_community('target')
+    make_instance_admin(s.voter, s.instance)
+
+    move_post(s.post.id, target.id, SRC_API, auth=bearer(s.voter))
+
+    db.session.refresh(s.post)
+    assert s.post.community_id == target.id
+
+
+def test_a_site_admin_may_move_a_post(db_session):
+    """`:969`'s THIRD disjunct alone -- `user.is_admin_or_staff()`.
+
+    Note this is the User method, where lock_post:941 reaches the same check
+    through `Community.is_admin_or_staff(user)` (app/models.py:778-779), a pure
+    delegating wrapper. Same effect, different spelling.
+    """
+    s = seed_post_context(community_name='moderation')
+    target = make_community('target')
+    make_site_admin(s.voter)
+
+    move_post(s.post.id, target.id, SRC_API, auth=bearer(s.voter))
+
+    db.session.refresh(s.post)
+    assert s.post.community_id == target.id
+
+
+def test_an_unprivileged_user_cannot_move_a_post(db_session):
+    """`:969`'s false arm, all three disjuncts failing.
+
+    Asserts the post did not move AND that no ModLog row exists, because
+    `:987` returns `user.id, post` on this path exactly as on success.
+    """
+    s = seed_post_context(community_name='moderation')
+    target = make_community('target')
+    original = s.post.community_id
+
+    user_id, post = move_post(s.post.id, target.id, SRC_API, auth=bearer(s.voter))
+
+    db.session.refresh(s.post)
+    assert s.post.community_id == original
+    assert db.session.query(ModLog).count() == 0
+
+
+def test_the_web_arm_flashes_that_the_post_moved(db_session, app):
+    """`:980`'s true arm and `:981`'s flash.
+
+    Asserts the flashed content, so a mutant deleting `:981` does not survive.
+    """
+    from flask import get_flashed_messages
+
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    target = make_community('target')
+
+    with web_ctx(app, s.voter):
+        result = move_post(s.post.id, target.id, SRC_WEB)
+        flashed = get_flashed_messages()
+
+    assert result is None
+    assert len(flashed) == 1
+    assert 'moved' in flashed[0]
