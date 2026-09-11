@@ -62,6 +62,7 @@ strings this group passes were verified present.
 """
 
 import pytest
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 from app import db
@@ -118,6 +119,36 @@ def make_instance_admin(user, instance):
     db.session.add(role)
     db.session.commit()
     return role
+
+
+@contextmanager
+def recording_task_selector():
+    """Yield a list that collects every task key `app.shared.post` federates.
+
+    The six functions here call `task_selector(...)` unqualified, so rebinding
+    the name ON THE MODULE is what intercepts them -- patching
+    `app.shared.tasks.task_selector` would not, because the `from ... import`
+    at app/shared/post.py:22 already bound the original into this module's
+    globals. The recorder calls through to the original rather than stubbing
+    it, so the permitted paths still do whatever they do; `seed_post_context`
+    passes `private=True`, which stops every task body at its first guard.
+
+    Restores in a `finally`: `app.shared.post` is imported once per session, so
+    a leaked patch would corrupt every test that ran after this one.
+    """
+    import app.shared.post as post_module
+    calls = []
+    original = post_module.task_selector
+
+    def recorder(task_key, **kwargs):
+        calls.append(task_key)
+        return original(task_key, **kwargs)
+
+    post_module.task_selector = recorder
+    try:
+        yield calls
+    finally:
+        post_module.task_selector = original
 
 
 def test_hiding_a_post_through_the_api_inserts_the_row(db_session):
@@ -642,22 +673,38 @@ def test_a_site_admin_may_sticky_a_post(db_session):
 
 
 def test_an_unprivileged_user_does_not_federate_a_sticky(db_session):
-    """PC1: `:1016`'s federation block now sits INSIDE `:1003`'s permission gate.
+    """PC2's `:1021` raise on a refused API sticky. NOT PC1, despite the name.
 
-    An unprivileged actor must not trigger task_selector at all -- if the
-    gate is refused, no sticky ever happened locally, so nothing should be
-    federated. Before PC1's fix, `:1003` and `:1016` were at the same
-    indentation, so task_selector fired whether or not the gate passed,
-    letting an unauthorized user federate a sticky that never happened
-    locally. app/community/routes.py:1109 reaches this with an ordinary post
-    author on the create path, so this was not only a crafted-API-call risk.
+    This test was written for PC1 -- to pin that `:1016`'s federation block
+    sits INSIDE `:1003`'s permission gate -- and it no longer does that. It
+    makes its refused call through SRC_API, and PC2's `:1021` now raises
+    BEFORE `:1016` is ever reached, so `assert calls == []` below is VACUOUS
+    on this path: nothing can federate after the raise whether the block is
+    inside the gate or outside it. The mutation pass proved it rather than
+    inferring it -- hoisting `:1016`-`:1019` back out of the gate, which is
+    exactly PC1's regression, left the whole file green.
 
-    PC2's `:1020` `elif` now raises for this refused API call before the
-    federation block is ever reached, which only strengthens the guarantee
-    this test pins. Counts task_selector calls by monkeypatching the
-    module-level name, and restores in a finally: it is imported by other
-    tests in the same session and a leaked patch corrupts every test that
-    follows.
+    The general shape is worth remembering: a change that inserts an EARLIER
+    TERMINATOR on a path makes every downstream assertion on that path
+    vacuous, and the task that updates the test is the least likely to
+    notice, because it reasons about its own change rather than about
+    reachability.
+
+    `test_an_unprivileged_web_sticky_does_not_federate` is what actually
+    witnesses PC1 now. SRC_WEB is the only arm that still reaches `:1016`
+    after a refusal, because `:1020` deliberately does not match there --
+    app/community/routes.py:1109 calls it for an ordinary post author
+    mid-creation, and raising would cost them their post.
+
+    What is LIVE here, and why this test stays: the `pytest.raises` is one of
+    PC2's three killing witnesses (flipping `:1020` to SRC_WEB makes it
+    fail), and `assert s.post.sticky is not True` pins that the refused call
+    wrote nothing locally. The task_selector count is kept as a guard for the
+    day `:1021` stops raising, not as evidence about PC1 today.
+
+    Counts task_selector calls by monkeypatching the module-level name, and
+    restores in a finally: it is imported by other tests in the same session
+    and a leaked patch corrupts every test that follows.
     """
     calls = []
     s = seed_post_context(community_name='moderation')
@@ -1175,3 +1222,219 @@ def test_an_unprivileged_web_sticky_still_returns_quietly(db_session, app):
 
     db.session.refresh(s.post)
     assert s.post.sticky is not True
+
+
+# The eight tests below close holes this file's mutation pass found. Each names
+# the mutation that survived before it existed.
+
+def test_locking_federates_the_lock(db_session):
+    """`:951`'s task key on the permitted lock path.
+
+    `test_locking_writes_a_modlog_entry_naming_the_action` pins `:936`'s
+    modlog string, but nothing observed `:951`'s federation key: swapping it
+    to 'unlock_post' left all 56 tests green. A lock federated as an unlock
+    would tell every remote instance to re-open a thread a moderator had just
+    closed.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    s.post.comments_enabled = True
+    db.session.commit()
+
+    with recording_task_selector() as calls:
+        lock_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
+
+    assert calls == ['lock_post']
+
+
+def test_unlocking_federates_the_unlock(db_session):
+    """`:955`'s task key, the else arm of `:948`.
+
+    The counterpart of the test above, and the reason both are needed:
+    with only one of them, `:951` and `:955` could be made to federate the
+    SAME key and one test would still pass. Swapping `:955` to 'lock_post'
+    also survived the suite as it stood.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    s.post.comments_enabled = False
+    db.session.commit()
+
+    with recording_task_selector() as calls:
+        lock_post(s.post.id, False, SRC_API, auth=bearer(s.voter))
+
+    assert calls == ['unlock_post']
+
+
+def test_stickying_writes_the_featured_action_to_the_modlog(db_session):
+    """`:1006`'s modlog string, passed to `:1012`.
+
+    `test_unstickying_clears_the_flag_and_records_the_action` reads `:1008`'s
+    'unfeatured_post', but no test read the featured one, so `:1006` could be
+    changed to 'unfeatured_post' with the suite green -- a moderation log
+    that recorded every feature as an un-feature. Asserts the set of actions
+    rather than one row, so an extra entry fails too.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+
+    sticky_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
+
+    actions = {row.action for row in db.session.query(ModLog).all()}
+    assert actions == {'featured_post'}
+
+
+def test_an_unprivileged_web_sticky_does_not_federate(db_session, app):
+    """PC1 on the ONLY arm that can still reach `:1016`.
+
+    `test_an_unprivileged_user_does_not_federate_a_sticky` makes its refused
+    call through SRC_API, where PC2's `:1020` raises before `:1016` is
+    reached -- so that test passes whether the federation block sits inside
+    `:1003`'s gate or not. The mutation pass confirmed it: hoisting
+    `:1016`-`:1019` back OUT of the gate, which is exactly PC1's regression,
+    left all 56 tests green.
+
+    SRC_WEB is the arm PC1 was actually about. app/community/routes.py:1109
+    reaches it with an ordinary post author who need not be a moderator, and
+    `:1020` deliberately does not raise there. With the block hoisted out,
+    that author federates a sticky that never happened locally.
+    """
+    s = seed_post_context(community_name='moderation')
+
+    with recording_task_selector() as calls:
+        with web_ctx(app, s.voter):
+            sticky_post(s.post.id, True, SRC_WEB)
+
+    db.session.refresh(s.post)
+    assert s.post.sticky is not True
+    assert calls == [], 'a refused sticky was federated anyway'
+
+
+def test_removal_federates_the_delete(db_session):
+    """`:1071`'s task key.
+
+    `test_removal_writes_the_reason_to_the_modlog` pins `:1067`'s modlog
+    action, but nothing read `:1071`'s, so swapping it to 'restore_post' --
+    telling every remote instance to UN-delete the post a moderator had just
+    removed -- left the suite green.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+
+    with recording_task_selector() as calls:
+        mod_remove_post(s.post.id, 'spam', SRC_API, bearer(s.voter))
+
+    assert calls == ['delete_post']
+
+
+def test_restoration_federates_the_restore(db_session):
+    """`:1113`'s task key.
+
+    The mirror of the test above, and it survived the same way: `:1109`'s
+    modlog action was pinned, `:1113`'s federation key was not, so a restore
+    could federate as a delete.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    s.post.deleted = True
+    db.session.commit()
+
+    with recording_task_selector() as calls:
+        mod_restore_post(s.post.id, 'appealed', SRC_API, bearer(s.voter))
+
+    assert calls == ['restore_post']
+
+
+def test_removal_unlinks_the_post_from_its_cross_posts(db_session):
+    """`:1058`'s true arm OBSERVED, not merely reached.
+
+    `test_removing_a_post_with_a_url_recalculates_cross_posts` seeds a url but
+    no cross-post links, and `calculate_cross_posts` (app/models.py:2346)
+    with delete_only=True does nothing at all when `self.cross_posts` is
+    empty. So inverting `:1058` to `if not post.url:` -- which sends every
+    url-bearing removal PAST the call -- left all 56 tests green.
+
+    Seeding the link on BOTH sides makes app/models.py:2353-2356 observable:
+    the removed post's list is cleared and its id is taken out of the
+    sibling's. Each list holds exactly one id, so neither assertion depends
+    on the order the planner returned rows in.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    sibling = make_post(s.community, s.author, 'https://local.example/p/2')
+    s.post.url = 'https://example.com/article'
+    sibling.url = 'https://example.com/article'
+    s.post.cross_posts = [sibling.id]
+    sibling.cross_posts = [s.post.id]
+    db.session.commit()
+
+    mod_remove_post(s.post.id, 'spam', SRC_API, bearer(s.voter))
+
+    db.session.refresh(s.post)
+    db.session.refresh(sibling)
+    assert s.post.cross_posts == []
+    assert sibling.cross_posts == []
+
+
+def test_restoration_relinks_the_post_to_its_cross_posts(db_session):
+    """`:1100`'s true arm OBSERVED.
+
+    `:1101` passes no delete_only, so calculate_cross_posts
+    (app/models.py:2346) skips the clearing branch and runs the SEARCH at
+    app/models.py:2371, repopulating both sides from other published posts
+    sharing the url. `test_restoring_a_post_with_a_url_recalculates_cross_posts`
+    seeds no such sibling, so the search finds nothing and inverting `:1100`
+    changed nothing any test could see.
+
+    The sibling here is left undeleted and at the default status
+    (POST_STATUS_PUBLISHED, above POST_STATUS_REVIEWING), which is what
+    app/models.py:2371's filter requires. Exactly one sibling, so neither
+    list assertion is an ordering claim.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    sibling = make_post(s.community, s.author, 'https://local.example/p/2')
+    sibling.url = 'https://example.com/article'
+    s.post.url = 'https://example.com/article'
+    s.post.deleted = True
+    db.session.commit()
+
+    mod_restore_post(s.post.id, 'appealed', SRC_API, bearer(s.voter))
+
+    db.session.refresh(s.post)
+    db.session.refresh(sibling)
+    assert s.post.cross_posts == [sibling.id]
+    assert sibling.cross_posts == [s.post.id]
+
+
+def test_moving_federates_the_move(db_session):
+    """`:985`'s task key.
+
+    Closes a hole the mutation pass first recorded as a FALSE KILL. Swapping
+    `:985`'s key for a sibling raised
+    `TypeError: delete_post() got an unexpected keyword argument
+    'old_community_id'` -- a Celery signature mismatch, not a test observing
+    anything. `move_post(send_async, user_id, old_community_id,
+    new_community_id, post_id)` (app/shared/tasks/pages.py:373) is the only
+    task in `task_selector`'s map (app/shared/tasks/__init__.py:19-60) taking
+    those four kwargs, and the map is indexed with `tasks[task_key]`
+    (app/shared/tasks/__init__.py:66), so EVERY key-only swap here either
+    KeyErrors or TypeErrors. None of them measures whether the key is read.
+
+    Replacing the whole call with a signature-valid
+    `task_selector('lock_post', user_id=user.id, post_id=post_id)` -- the
+    copy-paste a developer would actually make -- dispatched cleanly and
+    survived all 64 tests. `move_post` could federate a LOCK to every remote
+    instance while the post moved locally, and nothing noticed.
+
+    `test_moving_records_the_target_community_in_the_modlog` pins `:978`'s
+    modlog action; this pins the federation key beside it.
+    """
+    s = seed_post_context(community_name='moderation')
+    seed_moderator(s)
+    target = make_community('target')
+
+    with recording_task_selector() as calls:
+        move_post(s.post.id, target.id, SRC_API, auth=bearer(s.voter))
+
+    assert calls == ['move_post']
