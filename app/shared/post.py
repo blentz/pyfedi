@@ -1156,6 +1156,13 @@ def vote_for_poll(post_id, votes, src, auth=None):
         votes = [votes]
 
     poll = Poll.query.get_or_404(post_id)
+    poll_choice_ids = {row.id for row in
+                       db.session.query(PollChoice).filter_by(post_id=post_id)}
+    foreign = [choice_id for choice_id in votes if int(choice_id) not in poll_choice_ids]
+    if foreign:
+        if src == SRC_API:
+            raise Exception("Choice does not belong to this poll.")
+        votes = [choice_id for choice_id in votes if int(choice_id) in poll_choice_ids]
     if poll.mode == 'single':
         if len(votes) != 1:
             if src == SRC_API:

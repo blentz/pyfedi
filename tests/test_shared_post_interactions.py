@@ -3,7 +3,7 @@
 SCOPE. The eight reader-facing functions, 63 uncovered statements and 51
 uncovered branch arcs when this file was started:
 
-  vote_for_post :31-74 (29/18), vote_for_poll :1146-1174 (20/18),
+  vote_for_post :31-74 (29/18), vote_for_poll :1146-1181 (20/18),
   bookmark_post :77-94 (4/4), subscribe_post :115-152 (4/4),
   mark_post_read :1115-1130 (2/3), get_post_flair_list :1133-1143 (2/2),
   remove_bookmark_post :97-112 (1/2), extra_rate_limit_check :155-160 (1/0).
@@ -104,7 +104,7 @@ str)` is always False and is not evidence of a broken render.
 
 THE FEDERATION LEVER IS `community.private`, NOT `local_only`. task_selector
 runs synchronously under eager Celery (tests/conftest.py:105-110), so
-vote_for_post:60 and vote_for_poll:1165/:1173 execute real bodies in
+vote_for_post:60 and vote_for_poll:1172/:1180 execute real bodies in
 app/shared/tasks/likes.py. Both bodies return at their first guard --
 `send_vote:60` and the poll task's own equivalent -- when
 `community.local_only or community.private or not community.instance.online()`.
@@ -1303,23 +1303,23 @@ def _seed_poll(s, mode='single', choices=('a', 'b')):
 
 
 def test_a_single_mode_api_vote_records_one_choice(db_session):
-    """`:1147`'s true arm, `:1155`'s true arm, `:1159`'s true arm, `:1163`'s
-    true arm, `:1164`'s vote and `:1165`'s federation call.
+    """`:1147`'s true arm, `:1155`'s true arm, `:1166`'s true arm, `:1170`'s
+    true arm, `:1171`'s vote and `:1172`'s federation call.
 
     No `_web_ctx` -- the module docstring's "SRC_API ARM DOES NOT NEED A
     REQUEST CONTEXT" finding applies here too, and the real API caller
     (app/api/alpha/utils/post.py:1791-1797) hands `vote_for_poll` a bare int
     `data['choice_id']`, unwrapped, so `:1155` must wrap it into a list.
     Catches a regression dropping `:1155`, which would make `len(votes)` at
-    `:1160` fail (`TypeError: object of type 'int' has no len()`) on an int.
+    `:1167` fail (`TypeError: object of type 'int' has no len()`) on an int.
     `community.private=True` (this file's `_seed()` default) stops
     `app/shared/tasks/likes.py`'s `vote_for_poll` task at its own first guard,
-    so `:1165`'s federation call runs but issues no outbound request and
+    so `:1172`'s federation call runs but issues no outbound request and
     touches no redis key -- unlike `vote_for_post`'s `post.vote()`, nothing
     here writes a `votes_cast_*` key, so no `_clear_votes_cast` is needed.
 
     Asserts the vote set rather than a single row, and refreshes `choice`
-    before reading `num_votes`, since `:1164`'s `vote_for_choice` commits
+    before reading `num_votes`, since `:1171`'s `vote_for_choice` commits
     inside the ORM session this test shares.
     """
     s = _seed()
@@ -1345,7 +1345,7 @@ def test_a_single_mode_web_vote_accepts_a_list(db_session, app):
     though -- `isinstance(votes, int)` is the only gate -- so a list is a
     legitimate input on this arm regardless of which caller happens to send
     it today. Catches a regression making `:1155`'s wrap unconditional, which
-    would nest an already-list `votes` into `[[choice.id]]` and crash `:1166`'s
+    would nest an already-list `votes` into `[[choice.id]]` and crash `:1173`'s
     `PollChoice.query.get(votes[0])` on an unhashable/invalid key.
     """
     s = _seed()
@@ -1395,7 +1395,7 @@ def test_a_banned_user_cannot_vote_in_a_poll(db_session, app):
 
 
 def test_a_second_single_mode_vote_raises_through_the_api(db_session):
-    """`:1163`'s false arm and `:1169`'s raise, through `:1168`'s true arm.
+    """`:1170`'s false arm and `:1176`'s raise, through `:1175`'s true arm.
 
     `has_voted` is poll-scoped (app/models.py:3789-3792, filters on
     `post_id`), so a second vote in the SAME poll is rejected even for a
@@ -1420,12 +1420,12 @@ def test_a_second_single_mode_vote_raises_through_the_api(db_session):
 
 
 def test_a_second_single_mode_vote_is_silently_ignored_on_the_web(db_session, app):
-    """`:1168`'s false arm.
+    """`:1175`'s false arm.
 
     The web arm must not raise -- app/post/routes.py:643 has no handler and
     flashes 'Vote has been cast.' unconditionally afterwards, so a raise here
     would surface as an unhandled 500 rather than the flash the real caller
-    expects. Catches a regression hoisting `:1169` out of `:1168`'s `if src
+    expects. Catches a regression hoisting `:1176` out of `:1175`'s `if src
     == SRC_API:` guard, which would raise for the web arm too.
     """
     s = _seed()
@@ -1441,11 +1441,11 @@ def test_a_second_single_mode_vote_is_silently_ignored_on_the_web(db_session, ap
 
 
 def test_too_many_choices_in_single_mode_raises_through_the_api(db_session):
-    """`:1160`'s true arm and `:1162`'s raise, through `:1161`'s true arm.
+    """`:1167`'s true arm and `:1169`'s raise, through `:1168`'s true arm.
 
     No `_web_ctx`, per the module docstring's SRC_API finding. `match=` pins
-    the specific message. Asserts no vote was recorded, because `:1162`
-    raises before `:1163` is ever reached, and a regression that raised AFTER
+    the specific message. Asserts no vote was recorded, because `:1169`
+    raises before `:1170` is ever reached, and a regression that raised AFTER
     voting would otherwise look identical under a bare `pytest.raises
     (Exception)`.
     """
@@ -1462,11 +1462,11 @@ def test_too_many_choices_in_single_mode_raises_through_the_api(db_session):
 
 
 def test_too_many_choices_in_single_mode_falls_through_on_the_web(db_session, app):
-    """`:1161`'s false arm -- the fall-through this round registers as a
+    """`:1168`'s false arm -- the fall-through this round registers as a
     known equivalent-mutant-adjacent quirk, not a bug to fix.
 
-    `:1160`'s length check raises only for SRC_API (`:1161`). The web arm
-    falls through to `:1163`-`:1166`, which votes for `votes[0]` alone and
+    `:1167`'s length check raises only for SRC_API (`:1168`). The web arm
+    falls through to `:1170`-`:1173`, which votes for `votes[0]` alone and
     silently discards the rest. This exact input is unreachable from the real
     web caller (app/post/routes.py:642), which normalizes single mode to one
     bare int before calling `vote_for_poll` -- so this test registers the
@@ -1486,10 +1486,10 @@ def test_too_many_choices_in_single_mode_falls_through_on_the_web(db_session, ap
 
 
 def test_multiple_mode_records_every_choice(db_session, app):
-    """`:1159`'s false arm and `:1171`'s loop over several choices.
+    """`:1166`'s false arm and `:1178`'s loop over several choices.
 
     The real multiple-mode web caller (app/post/routes.py:642) sends
-    `request.form.getlist('poll_choice[]')`, a list of strings -- `:1172`'s
+    `request.form.getlist('poll_choice[]')`, a list of strings -- `:1179`'s
     explicit `int(choice_id)` exists for that reason, so this test passes
     plain ints rather than strings to keep the choice-identity assertion
     simple; the cast is exercised either way. Catches a regression sending a
@@ -1511,7 +1511,7 @@ def test_multiple_mode_records_every_choice(db_session, app):
 
 
 def test_multiple_mode_with_no_choices_records_nothing(db_session, app):
-    """`:1171`'s zero-iteration exit arc.
+    """`:1178`'s zero-iteration exit arc.
 
     app/post/routes.py:642 uses `request.form.getlist`, which returns `[]`
     when the voter submits nothing for multiple mode, so this input is
@@ -1525,3 +1525,94 @@ def test_multiple_mode_with_no_choices_records_nothing(db_session, app):
         vote_for_poll(s.post.id, [], SRC_WEB)
 
     assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 0
+
+
+def test_an_api_vote_for_another_polls_choice_is_rejected(db_session):
+    """PC1: `vote_for_poll` never checks that a choice belongs to the poll.
+
+    app/api/alpha/utils/post.py:1793 hands `data['choice_id']` straight through.
+    Against the tree as it stands this records a PollChoiceVote whose post_id is
+    the target poll and whose choice_id belongs to another, and increments the
+    FOREIGN choice's num_votes. Fails today, passes once the membership filter
+    lands.
+
+    No `_web_ctx` -- this is the SRC_API arm, and the module docstring's
+    "SRC_API ARM DOES NOT NEED A REQUEST CONTEXT" finding applies here as it
+    does to every other SRC_API test in this file.
+    """
+    s = _seed()
+    _seed_poll(s, mode='single')
+    other_post = make_post(s.community, s.author, 'https://local.example/p/other')
+    from datetime import timedelta
+    from app.models import utcnow
+    other_poll = Poll(post_id=other_post.id, mode='single', local_only=False,
+                      end_poll=utcnow() + timedelta(days=1))
+    db.session.add(other_poll)
+    db.session.add(PollChoice(post_id=other_post.id, choice_text='foreign',
+                              sort_order=0, num_votes=0))
+    db.session.commit()
+    foreign = db.session.query(PollChoice).filter_by(post_id=other_post.id).one()
+
+    with pytest.raises(Exception):
+        vote_for_poll(s.post.id, foreign.id, SRC_API, auth=_bearer(s.voter))
+
+    assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 0
+    db.session.refresh(foreign)
+    assert foreign.num_votes == 0
+
+
+def test_a_nonexistent_choice_id_does_not_dereference_none(db_session):
+    """PC1's second effect. The brief expected the None dereference at `:1173`'s
+    `PollChoice.query.get(votes[0]).choice_text`, but the OBSERVED failure
+    happens earlier and elsewhere: `poll.vote_for_choice` (app/models.py:3800-
+    3801) does `choice = PollChoice.query.get(choice_id); choice.num_votes +=
+    1`, and that `choice.num_votes` read is what raises AttributeError on
+    `None` for a nonexistent id, before `:1173` is ever reached. Either
+    dereference would fail the same way; this test observed the
+    `vote_for_choice` one. A choice id matching no row makes that an
+    AttributeError on None. The membership filter closes it because a
+    nonexistent choice is not a member. Fails today with AttributeError,
+    passes once the filter lands.
+
+    No `_web_ctx` -- SRC_API arm, same reasoning as the test above.
+    """
+    s = _seed()
+    _seed_poll(s, mode='single')
+    highest = db.session.query(PollChoice).order_by(PollChoice.id.desc()).first()
+
+    with pytest.raises(Exception) as excinfo:
+        vote_for_poll(s.post.id, highest.id + 1000, SRC_API,
+                      auth=_bearer(s.voter))
+
+    assert 'NoneType' not in str(excinfo.value)
+    assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 0
+
+
+def test_the_membership_filter_keeps_every_legitimate_choice(db_session, app):
+    """PC1's safety demonstration, required by the spec.
+
+    A multiple-mode vote naming two of this poll's choices and one foreign
+    choice must record both legitimate votes and reject only the foreign one.
+    Catches a filter that rejects the whole request, or one that matches on the
+    wrong column and drops everything.
+    """
+    s = _seed()
+    _seed_poll(s, mode='multiple', choices=('a', 'b'))
+    other_post = make_post(s.community, s.author, 'https://local.example/p/other')
+    from datetime import timedelta
+    from app.models import utcnow
+    db.session.add(Poll(post_id=other_post.id, mode='single', local_only=False,
+                        end_poll=utcnow() + timedelta(days=1)))
+    db.session.add(PollChoice(post_id=other_post.id, choice_text='foreign',
+                              sort_order=0, num_votes=0))
+    db.session.commit()
+    mine = {c.id for c in db.session.query(PollChoice).filter_by(post_id=s.post.id)}
+    foreign = db.session.query(PollChoice).filter_by(post_id=other_post.id).one()
+
+    with _web_ctx(app, s.voter):
+        vote_for_poll(s.post.id, sorted(mine) + [foreign.id], SRC_WEB)
+
+    votes = db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).all()
+    assert {v.choice_id for v in votes} == mine
+    db.session.refresh(foreign)
+    assert foreign.num_votes == 0
