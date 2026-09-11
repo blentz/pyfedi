@@ -1178,3 +1178,57 @@ def make_banned_instance(domain: str) -> BannedInstances:
     db.session.add(banned)
     db.session.commit()
     return banned
+
+
+from contextlib import contextmanager
+from types import SimpleNamespace
+
+
+def seed_post_context(*, private=True, community_name='interactions'):
+    """One instance, one site, one community, an author, a voter and a post.
+
+    `private=True` stops the eager federation task bodies at their first
+    guard, so no test issues an outbound request.
+
+    `make_community` hardcodes `instance_id=1` (tests/factories.py:141) and
+    tests/conftest.py:131 resets sequences after every test, so the instance
+    seeded first here lands on id 1 and the community resolves to it.
+
+    `author` and `voter` are minted `local=True` because `authorise_api_user`
+    (app/utils.py:3628) rejects any bearer token whose user has a non-None
+    `ap_id`.
+
+    `make_community` hardcodes `local_only=False` (tests/factories.py:148),
+    so `can_downvote`'s local check is never engaged by this helper.
+    """
+    instance = make_instance('local.example', software='piefed')
+    site = make_site()
+    author = make_user(instance, 'author', local=True)
+    voter = make_user(instance, 'voter', local=True)
+    community = make_community(community_name)
+    community.private = private
+    db.session.commit()
+    post = make_post(community, author, 'https://local.example/p/1')
+    return SimpleNamespace(instance=instance, site=site, author=author,
+                           voter=voter, community=community, post=post)
+
+
+@contextmanager
+def web_ctx(app, user, query_string=''):
+    """A request context with `user` logged in, for the SRC_WEB arms.
+
+    `query_string` feeds `request.args`, which vote_for_post:45 and :72 read as
+    `request.args.get('style', '')` to choose between two templates.
+    """
+    with app.test_request_context('/?' + query_string):
+        login_user(user)
+        yield
+
+
+def bearer(user):
+    """The Authorization header value the SRC_API arms authorise from.
+
+    The precedent is tests/test_shared_post_edit.py:300, which passes
+    `auth=f'Bearer {s.user.encode_jwt_token()}'` into edit_post's API branch.
+    """
+    return f'Bearer {user.encode_jwt_token()}'

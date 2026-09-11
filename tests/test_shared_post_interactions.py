@@ -31,8 +31,8 @@ instead of raising. `user_ip_banned` then sees a falsy IP and returns `None`,
 so `user.banned or user_ip_banned()` is falsy and the guard lets a
 context-free call straight through. A bearer-token call with no request
 context does not fail inside `user_ip_banned`; it does not fail there at all.
-CONSEQUENTLY, no SRC_API-arm test in this round wraps its call in `_web_ctx`
--- `_web_ctx` stays reserved for the SRC_WEB arms, which need `flash` and
+CONSEQUENTLY, no SRC_API-arm test in this round wraps its call in `web_ctx`
+-- `web_ctx` stays reserved for the SRC_WEB arms, which need `flash` and
 `request.args` to be available.
 
 WHAT ACTUALLY BLOCKS AN API-ARM TEST IS AN `ap_id`, NOT CONTEXT.
@@ -40,12 +40,12 @@ WHAT ACTUALLY BLOCKS AN API-ARM TEST IS AN `ap_id`, NOT CONTEXT.
 `if user.ap_id is not None or user.verified is False or user.banned is True or
 user.deleted is True:`, raises `Exception('incorrect_login')` at its body,
 app/utils.py:3629, for any bearer token whose user has a non-None `ap_id` --
-before the source fork ever reaches `user_ip_banned`. Probe D's `_seed()`
+before the source fork ever reaches `user_ip_banned`. Probe D's `seed_post_context()`
 originally called `make_user(instance, 'author')` and `make_user(instance,
 'voter')` with `local` left at its factory default of `False`
 (tests/factories.py:41), so both got a non-None `ap_id` and every bearer-token
 call against them failed here, unrelated to request context. Round-1 controller
-ruling: `_seed()` now passes `local=True` to both calls (see `_seed()`'s own
+ruling: `seed_post_context()` now passes `local=True` to both calls (see `seed_post_context()`'s own
 docstring), so this file's `author` and `voter` authorise cleanly and this
 paragraph is a historical record, not a live hazard in this file. It remains a
 hazard for any test elsewhere that builds a bearer-token user without
@@ -92,15 +92,22 @@ cleanup.
 THE WEB ARMS RETURN A FLASK `Response`, NEVER A `str`. Probe B (Task 1) found
 all three WEB templates (`post/_post_voting_buttons.html`,
 `post/_post_voting_buttons_masonry.html`, `post/_post_notification_toggle.html`)
-render without error against `_seed()`'s objects and a logged-in `_web_ctx`
+render without error against `seed_post_context()`'s objects and a logged-in `web_ctx`
 user -- no missing `g` attribute, no missing `Site` row. But `render_template`
 as imported at app/shared/post.py:23 is `app.utils.render_template`, not
 Flask's own. app/utils.py:74-79 calls `flask.render_template` internally to
 get a plain string, then app/utils.py:86-99 wraps that string in
 `make_response(content)` and adds `ETag`/`Cache-Control`/`Link` headers before
-returning it. Every SRC_WEB-arm assertion in this round must therefore read
-`result.status_code` and `result.get_data(as_text=True)`; `isinstance(result,
-str)` is always False and is not evidence of a broken render.
+returning it. THIS RULE APPLIES ONLY TO A FUNCTION WHOSE SRC_WEB ARM RETURNS A
+RENDERED TEMPLATE -- not to every function in every round. In Group A that is
+`vote_for_post` (app/shared/post.py:47-48, :73-74) and `subscribe_post`
+(app/shared/post.py:152): every SRC_WEB-arm assertion against their result
+must read `result.status_code` and `result.get_data(as_text=True)`;
+`isinstance(result, str)` is always False and is not evidence of a broken
+render. Group B's `lock_post`, `move_post`, `sticky_post`, `hide_post`,
+`mod_remove_post` and `mod_restore_post` render no template at all -- they
+return `user.id, post` or a bare `return` -- so this rule does not apply to
+them.
 
 THE FEDERATION LEVER IS `community.private`, NOT `local_only`. task_selector
 runs synchronously under eager Celery (tests/conftest.py:105-110), so
@@ -121,12 +128,9 @@ app/shared/post.py:1020, which is Group B.
 """
 
 import pytest
-from contextlib import contextmanager
 from datetime import date
-from types import SimpleNamespace
 
 from flask import get_flashed_messages
-from flask_login import login_user
 
 from app import db
 from app.constants import SRC_API, SRC_PLD, SRC_WEB
@@ -142,63 +146,8 @@ from app.shared.post import (
     vote_for_poll,
     vote_for_post,
 )
-from tests.factories import make_community, make_instance, make_post, \
-    make_post_flair, make_site, make_user
-
-
-def _seed(*, private=True):
-    """One instance, one site, one community, an author, a voter and a post.
-
-    `private=True` is the federation lever described in the module docstring: it
-    stops app/shared/tasks/likes.py's eager task bodies at their first guard so
-    no test issues an outbound request. Pass private=False only in a test that
-    means to exercise the federation path, and expect to arrange for it.
-
-    `make_community` hardcodes `instance_id=1` (tests/factories.py:141) and
-    tests/conftest.py:131 resets sequences after every test, so the instance
-    seeded first here lands on id 1 and the community resolves to it. Unlike the
-    maintenance rounds, this round WANTS id 1 rather than avoiding it.
-
-    author and voter are minted `local=True` (ap_id None) because every SRC_API
-    arm in this round authorises through `authorise_api_user`
-    (app/utils.py:3628), which rejects any bearer token whose user has a non-None
-    `ap_id`. See the module docstring's "SRC_API ARM" section -- this is a
-    Round-1 controller ruling, not the original brief. `make_community`
-    (tests/factories.py:148) hardcodes `local_only=False` regardless, so
-    `can_downvote`'s `community.local_only and not user.is_local()` check is not
-    engaged by this change either way.
-    """
-    instance = make_instance('local.example', software='piefed')
-    site = make_site()
-    author = make_user(instance, 'author', local=True)
-    voter = make_user(instance, 'voter', local=True)
-    community = make_community('interactions')
-    community.private = private
-    db.session.commit()
-    post = make_post(community, author, 'https://local.example/p/1')
-    return SimpleNamespace(instance=instance, site=site, author=author,
-                           voter=voter, community=community, post=post)
-
-
-@contextmanager
-def _web_ctx(app, user, query_string=''):
-    """A request context with `user` logged in, for the SRC_WEB arms.
-
-    `query_string` feeds `request.args`, which vote_for_post:45 and :72 read as
-    `request.args.get('style', '')` to choose between two templates.
-    """
-    with app.test_request_context('/?' + query_string):
-        login_user(user)
-        yield
-
-
-def _bearer(user):
-    """The Authorization header value the SRC_API arms authorise from.
-
-    The precedent is tests/test_shared_post_edit.py:300, which passes
-    `auth=f'Bearer {s.user.encode_jwt_token()}'` into edit_post's API branch.
-    """
-    return f'Bearer {user.encode_jwt_token()}'
+from tests.factories import bearer, make_community, make_instance, make_post, \
+    make_post_flair, make_site, make_user, seed_post_context, web_ctx
 
 
 def _clear_votes_cast(user_id):
@@ -231,7 +180,7 @@ def test_extra_rate_limit_check_returns_false_for_any_user(db_session):
     production caller is make_post:166, which is Group D, so this round reaches
     it by direct call and says so rather than pretending otherwise.
     """
-    s = _seed()
+    s = seed_post_context()
 
     assert extra_rate_limit_check(s.voter) is False
 
@@ -242,7 +191,7 @@ def test_flair_list_loads_the_post_when_given_an_integer(db_session):
     Catches a regression dropping the isinstance branch, which would leave an
     int bound to `post` and fail at `:1137`'s attribute read.
     """
-    s = _seed()
+    s = seed_post_context()
     make_post_flair(s.post, name='news')
 
     flair_list = get_post_flair_list(s.post.id)
@@ -257,7 +206,7 @@ def test_flair_list_accepts_a_post_object_and_skips_the_lookup(db_session):
     Pins that a Post instance is used as given. Catches a regression that made
     the lookup unconditional, which would raise on a Post argument.
     """
-    s = _seed()
+    s = seed_post_context()
     make_post_flair(s.post, name='news')
 
     flair_list = get_post_flair_list(s.post)
@@ -281,7 +230,7 @@ def test_flair_list_returns_an_empty_list_when_the_post_has_no_flair(db_session)
     test actually pins is `:1139`'s statement executing on the no-flair path;
     the other two tests in this file pin the flair-present branch's behaviour.
     """
-    s = _seed()
+    s = seed_post_context()
 
     flair_list = get_post_flair_list(s.post)
 
@@ -294,7 +243,7 @@ def test_marking_read_inserts_one_row_per_post_id(db_session):
     Catches a regression inverting `:1116`, which would send a read=True call
     down the DELETE branch and leave the table empty.
     """
-    s = _seed()
+    s = seed_post_context()
     second = make_post(s.community, s.author, 'https://local.example/p/2')
 
     mark_post_read([s.post.id, second.id], True, s.voter.id)
@@ -310,7 +259,7 @@ def test_marking_read_twice_updates_rather_than_duplicating(db_session):
     Catches a regression dropping the conflict clause, which would raise a
     unique-violation on the second call instead of refreshing `interacted_at`.
     """
-    s = _seed()
+    s = seed_post_context()
 
     mark_post_read([s.post.id], True, s.voter.id)
     first = db.session.execute(
@@ -329,7 +278,7 @@ def test_marking_unread_deletes_the_row(db_session):
     Catches a regression inverting `:1116`, which would re-insert on a
     read=False call instead of removing.
     """
-    s = _seed()
+    s = seed_post_context()
     mark_post_read([s.post.id], True, s.voter.id)
 
     mark_post_read([s.post.id], False, s.voter.id)
@@ -347,7 +296,7 @@ def test_an_empty_post_id_list_still_bumps_last_seen(db_session):
     empty call is not a no-op. Catches a regression moving the last_seen update
     inside either loop, which would make it depend on the list being non-empty.
     """
-    s = _seed()
+    s = seed_post_context()
     s.voter.last_seen = None
     db.session.commit()
 
@@ -366,7 +315,7 @@ def test_an_empty_post_id_list_on_the_unread_branch_also_bumps_last_seen(db_sess
     The read=True twin above records `:1117`'s exit arc; this records `:1122`'s.
     Coverage treats them as separate arcs and one test cannot take both.
     """
-    s = _seed()
+    s = seed_post_context()
     s.voter.last_seen = None
     db.session.commit()
 
@@ -384,11 +333,11 @@ def test_bookmarking_through_the_api_creates_the_row_and_marks_read(db_session):
     while the bookmark still appeared. No request context here -- the module
     docstring's "SRC_API ARM DOES NOT NEED A REQUEST CONTEXT" finding applies
     equally to `bookmark_post`'s identical ternary at `:78`, so this does not
-    wrap the call in `_web_ctx`.
+    wrap the call in `web_ctx`.
     """
-    s = _seed()
+    s = seed_post_context()
 
-    result = bookmark_post(s.post.id, SRC_API, auth=_bearer(s.voter))
+    result = bookmark_post(s.post.id, SRC_API, auth=bearer(s.voter))
 
     assert result == s.voter.id
     assert db.session.query(PostBookmark).filter_by(
@@ -405,9 +354,9 @@ def test_bookmarking_through_the_web_reads_current_user_and_returns_none(db_sess
     is the arm this pins. Catches a regression making `:78` read the bearer
     token unconditionally, which would raise with auth=None.
     """
-    s = _seed()
+    s = seed_post_context()
 
-    with _web_ctx(app, s.voter):
+    with web_ctx(app, s.voter):
         result = bookmark_post(s.post.id, SRC_WEB)
 
     assert result is None
@@ -422,11 +371,11 @@ def test_bookmarking_twice_through_the_api_raises(db_session):
     than reject. Asserts the row count stayed at one so the raise is not
     reached through an unrelated crash.
     """
-    s = _seed()
-    bookmark_post(s.post.id, SRC_API, auth=_bearer(s.voter))
+    s = seed_post_context()
+    bookmark_post(s.post.id, SRC_API, auth=bearer(s.voter))
 
     with pytest.raises(Exception, match='already been bookmarked'):
-        bookmark_post(s.post.id, SRC_API, auth=_bearer(s.voter))
+        bookmark_post(s.post.id, SRC_API, auth=bearer(s.voter))
 
     assert db.session.query(PostBookmark).filter_by(
         post_id=s.post.id, user_id=s.voter.id).count() == 1
@@ -438,15 +387,15 @@ def test_bookmarking_twice_through_the_web_flashes_instead_of_raising(db_session
     The WEB duplicate path must NOT raise -- that asymmetry is the arm. Catches
     a regression hoisting the raise out of `:88`, which would give the web route
     an exception it has no handler for. Also asserts the flashed message's
-    content (read inside the same `_web_ctx`, since `flash`/`get_flashed_messages`
+    content (read inside the same `web_ctx`, since `flash`/`get_flashed_messages`
     both operate on that request's session), so a regression that drops `:91`'s
     `flash(_(msg))` call outright does not survive on `result is None` alone.
     """
-    s = _seed()
-    with _web_ctx(app, s.voter):
+    s = seed_post_context()
+    with web_ctx(app, s.voter):
         bookmark_post(s.post.id, SRC_WEB)
 
-    with _web_ctx(app, s.voter):
+    with web_ctx(app, s.voter):
         result = bookmark_post(s.post.id, SRC_WEB)
         flashed = get_flashed_messages()
 
@@ -463,10 +412,10 @@ def test_removing_a_bookmark_through_the_api_deletes_it(db_session):
     Catches a regression inverting `:101`, which would leave the row and flash
     or raise instead.
     """
-    s = _seed()
-    bookmark_post(s.post.id, SRC_API, auth=_bearer(s.voter))
+    s = seed_post_context()
+    bookmark_post(s.post.id, SRC_API, auth=bearer(s.voter))
 
-    result = remove_bookmark_post(s.post.id, SRC_API, auth=_bearer(s.voter))
+    result = remove_bookmark_post(s.post.id, SRC_API, auth=bearer(s.voter))
 
     assert result == s.voter.id
     assert db.session.query(PostBookmark).filter_by(
@@ -479,23 +428,23 @@ def test_removing_a_bookmark_that_does_not_exist_raises_through_the_api(db_sessi
     Catches a regression that made the delete unconditional, which would raise
     a different error entirely on a None row.
     """
-    s = _seed()
+    s = seed_post_context()
 
     with pytest.raises(Exception, match='was not bookmarked'):
-        remove_bookmark_post(s.post.id, SRC_API, auth=_bearer(s.voter))
+        remove_bookmark_post(s.post.id, SRC_API, auth=bearer(s.voter))
 
 
 def test_removing_a_bookmark_that_does_not_exist_flashes_on_the_web(db_session, app):
     """`:106`'s false arm and `:109`'s flash, plus `:111`'s false arm.
 
     Catches a regression hoisting `:107`'s raise out of `:106`, and also
-    asserts the flashed message's content (read inside the same `_web_ctx`) so
+    asserts the flashed message's content (read inside the same `web_ctx`) so
     a regression that drops `:109`'s `flash(_(msg))` call outright does not
     survive on `result is None` alone.
     """
-    s = _seed()
+    s = seed_post_context()
 
-    with _web_ctx(app, s.voter):
+    with web_ctx(app, s.voter):
         result = remove_bookmark_post(s.post.id, SRC_WEB)
         flashed = get_flashed_messages()
 
@@ -508,7 +457,7 @@ def test_subscribing_through_the_api_creates_the_subscription(db_session):
     """`:143-147`'s creation, reached through `:124`'s false arm and `:136`'s
     false arm, and `:150`'s return.
 
-    No `_web_ctx` here -- the module docstring's "SRC_API ARM DOES NOT NEED A
+    No `web_ctx` here -- the module docstring's "SRC_API ARM DOES NOT NEED A
     REQUEST CONTEXT" finding applies: `:117`'s ternary reads
     `authorise_api_user(auth)` for SRC_API, never `current_user`, so a bearer
     call authorises with no request context at all.
@@ -516,9 +465,9 @@ def test_subscribing_through_the_api_creates_the_subscription(db_session):
     Catches a regression inverting `:136`, which would reject a first
     subscription as already existing.
     """
-    s = _seed()
+    s = seed_post_context()
 
-    result = subscribe_post(s.post.id, True, SRC_API, auth=_bearer(s.voter))
+    result = subscribe_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
 
     assert result == s.voter.id
     assert db.session.query(NotificationSubscription).filter_by(
@@ -531,11 +480,11 @@ def test_subscribing_twice_through_the_api_raises(db_session):
     Asserts the count stayed at one, so the raise is not reached through an
     unrelated crash that would satisfy pytest.raises just as well.
     """
-    s = _seed()
-    subscribe_post(s.post.id, True, SRC_API, auth=_bearer(s.voter))
+    s = seed_post_context()
+    subscribe_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
 
     with pytest.raises(Exception, match='already existed'):
-        subscribe_post(s.post.id, True, SRC_API, auth=_bearer(s.voter))
+        subscribe_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
 
     assert db.session.query(NotificationSubscription).filter_by(
         entity_id=s.post.id, user_id=s.voter.id).count() == 1
@@ -547,10 +496,10 @@ def test_unsubscribing_through_the_api_deletes_the_subscription(db_session):
     Catches a regression changing `:124` to a truthiness test, which would send
     `subscribe=False` down the creation branch.
     """
-    s = _seed()
-    subscribe_post(s.post.id, True, SRC_API, auth=_bearer(s.voter))
+    s = seed_post_context()
+    subscribe_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
 
-    result = subscribe_post(s.post.id, False, SRC_API, auth=_bearer(s.voter))
+    result = subscribe_post(s.post.id, False, SRC_API, auth=bearer(s.voter))
 
     assert result == s.voter.id
     assert db.session.query(NotificationSubscription).filter_by(
@@ -559,10 +508,10 @@ def test_unsubscribing_through_the_api_deletes_the_subscription(db_session):
 
 def test_unsubscribing_when_none_exists_raises_through_the_api(db_session):
     """`:125`'s false arm and `:131`'s raise, through `:130`'s true arm."""
-    s = _seed()
+    s = seed_post_context()
 
     with pytest.raises(Exception, match='did not exist'):
-        subscribe_post(s.post.id, False, SRC_API, auth=_bearer(s.voter))
+        subscribe_post(s.post.id, False, SRC_API, auth=bearer(s.voter))
 
     assert db.session.query(NotificationSubscription).filter_by(
         entity_id=s.post.id, user_id=s.voter.id).count() == 0
@@ -578,17 +527,17 @@ def test_the_web_arm_ignores_the_subscribe_argument_it_was_given(db_session, app
     this reason: the value is never read.
 
     Verified: no NotificationSubscription row exists for this post/user before
-    the call (`_seed()` creates none), so `post.notify_new_replies(user_id)`
+    the call (`seed_post_context()` creates none), so `post.notify_new_replies(user_id)`
     at `:120` is False and `subscribe` becomes True -- the create arm below.
 
     Catches a regression deleting `:119`, which would make the web arm honour
     the argument and silently change the toggle route's behaviour.
     """
-    s = _seed()
+    s = seed_post_context()
     assert db.session.query(NotificationSubscription).filter_by(
         entity_id=s.post.id, user_id=s.voter.id).count() == 0
 
-    with _web_ctx(app, s.voter):
+    with web_ctx(app, s.voter):
         result = subscribe_post(s.post.id, False, SRC_WEB)
 
     assert result.status_code == 200
@@ -610,14 +559,14 @@ def test_the_web_arm_removes_an_existing_subscription_when_toggled(db_session, a
     Catches a regression inverting `:120`'s ternary, which would make the
     toggle one-way.
     """
-    s = _seed()
-    with _web_ctx(app, s.voter):
+    s = seed_post_context()
+    with web_ctx(app, s.voter):
         subscribe_post(s.post.id, True, SRC_WEB)
 
     assert db.session.query(NotificationSubscription).filter_by(
         entity_id=s.post.id, user_id=s.voter.id).count() == 1
 
-    with _web_ctx(app, s.voter):
+    with web_ctx(app, s.voter):
         result = subscribe_post(s.post.id, True, SRC_WEB)
 
     assert result.status_code == 200
@@ -653,7 +602,7 @@ def test_a_third_source_reaches_the_flash_branches_the_web_arm_cannot(db_session
     a value to reach these two statements; it is not how the code is used in
     production, and this docstring says so rather than implying otherwise.
 
-    Uses `_web_ctx` (not an SRC_API test) because `:117`'s else-arm reads
+    Uses `web_ctx` (not an SRC_API test) because `:117`'s else-arm reads
     `current_user.id`, which needs a logged-in request context regardless of
     the source constant.
 
@@ -665,9 +614,9 @@ def test_a_third_source_reaches_the_flash_branches_the_web_arm_cannot(db_session
     `flashed`'s content rather than on `result` alone: a deleted flash call
     would otherwise still return a normal 200 render and pass silently.
     """
-    s = _seed()
+    s = seed_post_context()
 
-    with _web_ctx(app, s.voter):
+    with web_ctx(app, s.voter):
         result = subscribe_post(s.post.id, False, SRC_PLD)
         flashed = get_flashed_messages()
 
@@ -677,9 +626,9 @@ def test_a_third_source_reaches_the_flash_branches_the_web_arm_cannot(db_session
     assert db.session.query(NotificationSubscription).filter_by(
         entity_id=s.post.id, user_id=s.voter.id).count() == 0
 
-    subscribe_post(s.post.id, True, SRC_API, auth=_bearer(s.voter))
+    subscribe_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
 
-    with _web_ctx(app, s.voter):
+    with web_ctx(app, s.voter):
         result = subscribe_post(s.post.id, True, SRC_PLD)
         flashed = get_flashed_messages()
 
@@ -697,18 +646,18 @@ def test_an_api_upvote_from_a_bot_returns_early_without_voting(db_session):
 
     `can_upvote` rejects a bot, so `:36` returns the user id having voted for
     nothing. Asserts no PostVote row, because `:36` and `:63` return the same
-    value and the return alone cannot tell them apart. No `_web_ctx` -- the
+    value and the return alone cannot tell them apart. No `web_ctx` -- the
     module docstring's "SRC_API ARM DOES NOT NEED A REQUEST CONTEXT" finding
     applies to this arm too. No `redis_double` requested anywhere in this
     file, per the module docstring, and this call does not even reach
     `mark_post_read` -- it returns at `:36`, before `:56`.
     """
-    s = _seed()
+    s = seed_post_context()
     s.voter.bot = True
     db.session.commit()
 
     result = vote_for_post(s.post.id, 'upvote', True, None, SRC_API,
-                            auth=_bearer(s.voter))
+                            auth=bearer(s.voter))
 
     assert result == s.voter.id
     assert db.session.query(PostVote).filter_by(
@@ -721,12 +670,12 @@ def test_an_api_downvote_returns_early_when_downvotes_are_disabled(db_session):
     Catches a regression collapsing `:37` into `:35`, which would let a
     downvote through while downvotes are off site-wide.
     """
-    s = _seed()
+    s = seed_post_context()
     s.site.enable_downvotes = False
     db.session.commit()
 
     result = vote_for_post(s.post.id, 'downvote', True, None, SRC_API,
-                            auth=_bearer(s.voter))
+                            auth=bearer(s.voter))
 
     assert result == s.voter.id
     assert db.session.query(PostVote).filter_by(
@@ -743,11 +692,11 @@ def test_an_api_upvote_passes_both_gates_and_records_the_vote(db_session):
     instance (see `_clear_votes_cast`'s docstring) and cleans it up in a
     `finally` block regardless of assertion outcome.
     """
-    s = _seed()
+    s = seed_post_context()
 
     try:
         result = vote_for_post(s.post.id, 'upvote', True, None, SRC_API,
-                                auth=_bearer(s.voter))
+                                auth=bearer(s.voter))
 
         assert result == s.voter.id
         assert db.session.query(PostVote).filter_by(
@@ -770,11 +719,11 @@ def test_a_web_upvote_from_a_bot_renders_empty_voting_buttons(db_session, app):
     `make_response` (app/utils.py:86-99) before returning it, so the value is
     a Flask `Response`, never a plain string.
     """
-    s = _seed()
+    s = seed_post_context()
     s.voter.bot = True
     db.session.commit()
 
-    with _web_ctx(app, s.voter):
+    with web_ctx(app, s.voter):
         result = vote_for_post(s.post.id, 'upvote', True, None, SRC_WEB)
 
     assert result.status_code == 200
@@ -789,11 +738,11 @@ def test_a_web_downvote_is_refused_when_downvotes_are_disabled(db_session, app):
     Catches a regression dropping the second disjunct, which would let the
     downvote through to `:58`.
     """
-    s = _seed()
+    s = seed_post_context()
     s.site.enable_downvotes = False
     db.session.commit()
 
-    with _web_ctx(app, s.voter):
+    with web_ctx(app, s.voter):
         result = vote_for_post(s.post.id, 'downvote', True, None, SRC_WEB)
 
     assert result.status_code == 200
@@ -811,12 +760,12 @@ def test_a_web_upvote_is_allowed_when_only_downvotes_are_disabled(db_session, ap
     above for why the redis cleanup is needed), so it is wrapped in the same
     `finally`.
     """
-    s = _seed()
+    s = seed_post_context()
     s.site.enable_downvotes = False
     db.session.commit()
 
     try:
-        with _web_ctx(app, s.voter):
+        with web_ctx(app, s.voter):
             result = vote_for_post(s.post.id, 'upvote', True, None, SRC_WEB)
 
         assert result.status_code == 200
@@ -856,10 +805,10 @@ def test_a_web_downvote_is_allowed_when_nothing_blocks_it(db_session, app):
 
     Completes a real vote, so the redis cleanup applies here too.
     """
-    s = _seed()
+    s = seed_post_context()
 
     try:
-        with _web_ctx(app, s.voter):
+        with web_ctx(app, s.voter):
             result = vote_for_post(s.post.id, 'downvote', True, None, SRC_WEB)
 
         assert result.status_code == 200
@@ -894,13 +843,13 @@ def test_the_masonry_template_is_chosen_when_a_style_is_requested(db_session, ap
     merely different strings; one is non-empty markup and the other is
     effectively blank, which is the strongest form of "not equal" available.
     """
-    s = _seed()
+    s = seed_post_context()
     s.voter.bot = True
     db.session.commit()
 
-    with _web_ctx(app, s.voter):
+    with web_ctx(app, s.voter):
         plain = vote_for_post(s.post.id, 'upvote', True, None, SRC_WEB)
-    with _web_ctx(app, s.voter, query_string='style=masonry'):
+    with web_ctx(app, s.voter, query_string='style=masonry'):
         masonry = vote_for_post(s.post.id, 'upvote', True, None, SRC_WEB)
 
     assert plain.status_code == 200
@@ -968,11 +917,11 @@ def test_a_web_reversal_bypasses_the_upvote_gate_for_a_blocked_user(db_session, 
     return runs before `:56` -- no `read_posts` row is written, and this
     test's `rows == {s.post.id}` assertion fails.
     """
-    s = _seed()
+    s = seed_post_context()
     s.voter.bot = True
     db.session.commit()
 
-    with _web_ctx(app, s.voter):
+    with web_ctx(app, s.voter):
         result = vote_for_post(s.post.id, 'reversal', True, None, SRC_WEB)
 
     assert result.status_code == 200
@@ -1015,11 +964,11 @@ def test_a_banned_user_is_aborted_with_403(db_session, app):
     """
     from werkzeug.exceptions import Forbidden
 
-    s = _seed()
+    s = seed_post_context()
     s.voter.banned = True
     db.session.commit()
 
-    with _web_ctx(app, s.voter):
+    with web_ctx(app, s.voter):
         with pytest.raises(Forbidden) as excinfo:
             vote_for_post(s.post.id, 'reversal', True, None, SRC_WEB)
 
@@ -1046,14 +995,14 @@ def test_a_vote_over_the_daily_quota_is_aborted_with_429(db_session, app):
     from app import redis_client
     from werkzeug.exceptions import TooManyRequests
 
-    s = _seed()
+    s = seed_post_context()
     redis_client.set(f'votes_cast_{date.today()}_{s.voter.id}',
                      str(app.config['VOTE_QUOTA'] + 1))
 
     try:
         with pytest.raises(TooManyRequests) as excinfo:
             vote_for_post(s.post.id, 'upvote', True, None, SRC_API,
-                          auth=_bearer(s.voter))
+                          auth=bearer(s.voter))
 
         assert excinfo.value.code == 429
         assert db.session.query(PostVote).filter_by(
@@ -1074,13 +1023,13 @@ def test_a_vote_exactly_at_the_daily_quota_is_allowed(db_session, app):
     """
     from app import redis_client
 
-    s = _seed()
+    s = seed_post_context()
     redis_client.set(f'votes_cast_{date.today()}_{s.voter.id}',
                      str(app.config['VOTE_QUOTA']))
 
     try:
         result = vote_for_post(s.post.id, 'upvote', True, None, SRC_API,
-                               auth=_bearer(s.voter))
+                               auth=bearer(s.voter))
 
         assert result == s.voter.id
         assert db.session.query(PostVote).filter_by(
@@ -1101,10 +1050,10 @@ def test_a_first_web_upvote_reports_the_post_as_recently_upvoted(db_session, app
     unrelated body, but would never render `voted_up`. Completes a real vote,
     so the redis cleanup applies (see `_clear_votes_cast`'s docstring).
     """
-    s = _seed()
+    s = seed_post_context()
 
     try:
-        with _web_ctx(app, s.voter):
+        with web_ctx(app, s.voter):
             result = vote_for_post(s.post.id, 'upvote', True, None, SRC_WEB)
 
         assert result.status_code == 200
@@ -1125,10 +1074,10 @@ def test_a_first_web_downvote_reports_the_post_as_recently_downvoted(db_session,
     marker technique as the upvote test above, plus the `PostVote.effect`
     check the brief asked for.
     """
-    s = _seed()
+    s = seed_post_context()
 
     try:
-        with _web_ctx(app, s.voter):
+        with web_ctx(app, s.voter):
             result = vote_for_post(s.post.id, 'downvote', True, None, SRC_WEB)
 
         assert result.status_code == 200
@@ -1155,13 +1104,13 @@ def test_repeating_a_web_upvote_undoes_it_and_reports_neither_list(db_session, a
     (app/models.py:2762-2767's undo branch never touches it, confirmed by
     reading it), but the `finally` clears it unconditionally regardless.
     """
-    s = _seed()
+    s = seed_post_context()
 
     try:
-        with _web_ctx(app, s.voter):
+        with web_ctx(app, s.voter):
             vote_for_post(s.post.id, 'upvote', True, None, SRC_WEB)
 
-        with _web_ctx(app, s.voter):
+        with web_ctx(app, s.voter):
             result = vote_for_post(s.post.id, 'upvote', True, None, SRC_WEB)
 
         assert result.status_code == 200
@@ -1212,12 +1161,12 @@ def test_the_masonry_template_is_chosen_on_the_success_path_too(db_session, app)
     `post/_post_voting_buttons.html` made the two bodies equal and this
     test's inequality assertion fail, then restored.
     """
-    s = _seed()
+    s = seed_post_context()
 
-    with _web_ctx(app, s.voter, query_string='style=masonry'):
+    with web_ctx(app, s.voter, query_string='style=masonry'):
         masonry = vote_for_post(s.post.id, 'reversal', True, None, SRC_WEB)
 
-    with _web_ctx(app, s.voter):
+    with web_ctx(app, s.voter):
         plain = vote_for_post(s.post.id, 'reversal', True, None, SRC_WEB)
 
     assert masonry.status_code == 200
@@ -1241,10 +1190,10 @@ def test_voting_marks_the_post_read(db_session, app):
     the vote succeeds, so the relocation could not silently delete it.
     Completes a real vote, so the redis cleanup applies.
     """
-    s = _seed()
+    s = seed_post_context()
 
     try:
-        with _web_ctx(app, s.voter):
+        with web_ctx(app, s.voter):
             vote_for_post(s.post.id, 'upvote', True, None, SRC_WEB)
 
         rows = db.session.execute(
@@ -1274,14 +1223,14 @@ def test_an_over_quota_vote_does_not_mark_the_post_read(db_session, app):
     from app import redis_client
     from werkzeug.exceptions import TooManyRequests
 
-    s = _seed()
+    s = seed_post_context()
     redis_client.set(f'votes_cast_{date.today()}_{s.voter.id}',
                      str(app.config['VOTE_QUOTA'] + 1))
 
     try:
         with pytest.raises(TooManyRequests) as excinfo:
             vote_for_post(s.post.id, 'upvote', True, None, SRC_API,
-                          auth=_bearer(s.voter))
+                          auth=bearer(s.voter))
 
         assert excinfo.value.code == 429
         rows = db.session.execute(
@@ -1323,13 +1272,13 @@ def test_a_single_mode_api_vote_records_one_choice(db_session):
     """`:1147`'s true arm, `:1155`'s true arm, `:1168`'s true arm, `:1172`'s
     true arm, `:1173`'s vote and `:1174`'s federation call.
 
-    No `_web_ctx` -- the module docstring's "SRC_API ARM DOES NOT NEED A
+    No `web_ctx` -- the module docstring's "SRC_API ARM DOES NOT NEED A
     REQUEST CONTEXT" finding applies here too, and the real API caller
     (app/api/alpha/utils/post.py:1791-1797) hands `vote_for_poll` a bare int
     `data['choice_id']`, unwrapped, so `:1155` must wrap it into a list.
     Catches a regression dropping `:1155`, which would make `len(votes)` at
     `:1169` fail (`TypeError: object of type 'int' has no len()`) on an int.
-    `community.private=True` (this file's `_seed()` default) stops
+    `community.private=True` (this file's `seed_post_context()` default) stops
     `app/shared/tasks/likes.py`'s `vote_for_poll` task at its own first guard,
     so `:1174`'s federation call runs but issues no outbound request and
     touches no redis key -- unlike `vote_for_post`'s `post.vote()`, nothing
@@ -1339,12 +1288,12 @@ def test_a_single_mode_api_vote_records_one_choice(db_session):
     before reading `num_votes`, since `:1173`'s `vote_for_choice` commits
     inside the ORM session this test shares.
     """
-    s = _seed()
+    s = seed_post_context()
     _seed_poll(s, mode='single')
     choice = db.session.query(PollChoice).filter_by(post_id=s.post.id).order_by(
         PollChoice.sort_order).first()
 
-    vote_for_poll(s.post.id, choice.id, SRC_API, auth=_bearer(s.voter))
+    vote_for_poll(s.post.id, choice.id, SRC_API, auth=bearer(s.voter))
 
     votes = db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).all()
     assert {v.choice_id for v in votes} == {choice.id}
@@ -1365,12 +1314,12 @@ def test_a_single_mode_web_vote_accepts_a_list(db_session, app):
     would nest an already-list `votes` into `[[choice.id]]` and crash `:1175`'s
     `PollChoice.query.get(votes[0])` on an unhashable/invalid key.
     """
-    s = _seed()
+    s = seed_post_context()
     _seed_poll(s, mode='single')
     choice = db.session.query(PollChoice).filter_by(post_id=s.post.id).order_by(
         PollChoice.sort_order).first()
 
-    with _web_ctx(app, s.voter):
+    with web_ctx(app, s.voter):
         vote_for_poll(s.post.id, [choice.id], SRC_WEB)
 
     votes = db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).all()
@@ -1397,13 +1346,13 @@ def test_a_banned_user_cannot_vote_in_a_poll(db_session, app):
     """
     from werkzeug.exceptions import Forbidden
 
-    s = _seed()
+    s = seed_post_context()
     _seed_poll(s, mode='single')
     choice = db.session.query(PollChoice).filter_by(post_id=s.post.id).first()
     s.voter.banned = True
     db.session.commit()
 
-    with _web_ctx(app, s.voter):
+    with web_ctx(app, s.voter):
         with pytest.raises(Forbidden) as excinfo:
             vote_for_poll(s.post.id, choice.id, SRC_WEB)
 
@@ -1417,21 +1366,21 @@ def test_a_second_single_mode_vote_raises_through_the_api(db_session):
     `has_voted` is poll-scoped (app/models.py:3789-3792, filters on
     `post_id`), so a second vote in the SAME poll is rejected even for a
     DIFFERENT choice -- this is the `has_voted`/`vote_for_choice` asymmetry
-    Step 5 reports and Tasks 9/10 act on. No `_web_ctx` for either call, per
+    Step 5 reports and Tasks 9/10 act on. No `web_ctx` for either call, per
     the module docstring's SRC_API finding. `match=` pins the specific
     message, and the row-count assertion pins that the second call recorded
     nothing, so an unrelated crash under the same bare `Exception` type
     cannot satisfy this test.
     """
-    s = _seed()
+    s = seed_post_context()
     _seed_poll(s, mode='single')
     first, second = db.session.query(PollChoice).filter_by(
         post_id=s.post.id).order_by(PollChoice.sort_order).all()
 
-    vote_for_poll(s.post.id, first.id, SRC_API, auth=_bearer(s.voter))
+    vote_for_poll(s.post.id, first.id, SRC_API, auth=bearer(s.voter))
 
     with pytest.raises(Exception, match='already voted'):
-        vote_for_poll(s.post.id, second.id, SRC_API, auth=_bearer(s.voter))
+        vote_for_poll(s.post.id, second.id, SRC_API, auth=bearer(s.voter))
 
     assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 1
 
@@ -1445,12 +1394,12 @@ def test_a_second_single_mode_vote_is_silently_ignored_on_the_web(db_session, ap
     expects. Catches a regression hoisting `:1178` out of `:1177`'s `if src
     == SRC_API:` guard, which would raise for the web arm too.
     """
-    s = _seed()
+    s = seed_post_context()
     _seed_poll(s, mode='single')
     first, second = db.session.query(PollChoice).filter_by(
         post_id=s.post.id).order_by(PollChoice.sort_order).all()
 
-    with _web_ctx(app, s.voter):
+    with web_ctx(app, s.voter):
         vote_for_poll(s.post.id, [first.id], SRC_WEB)
         vote_for_poll(s.post.id, [second.id], SRC_WEB)
 
@@ -1460,20 +1409,20 @@ def test_a_second_single_mode_vote_is_silently_ignored_on_the_web(db_session, ap
 def test_too_many_choices_in_single_mode_raises_through_the_api(db_session):
     """`:1169`'s true arm and `:1171`'s raise, through `:1170`'s true arm.
 
-    No `_web_ctx`, per the module docstring's SRC_API finding. `match=` pins
+    No `web_ctx`, per the module docstring's SRC_API finding. `match=` pins
     the specific message. Asserts no vote was recorded, because `:1171`
     raises before `:1172` is ever reached, and a regression that raised AFTER
     voting would otherwise look identical under a bare `pytest.raises
     (Exception)`.
     """
-    s = _seed()
+    s = seed_post_context()
     _seed_poll(s, mode='single')
     first, second = db.session.query(PollChoice).filter_by(
         post_id=s.post.id).order_by(PollChoice.sort_order).all()
 
     with pytest.raises(Exception, match='single'):
         vote_for_poll(s.post.id, [first.id, second.id], SRC_API,
-                      auth=_bearer(s.voter))
+                      auth=bearer(s.voter))
 
     assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 0
 
@@ -1490,12 +1439,12 @@ def test_too_many_choices_in_single_mode_falls_through_on_the_web(db_session, ap
     fall-through's current behaviour (pinning it so it cannot change
     unnoticed) rather than asserting it is correct.
     """
-    s = _seed()
+    s = seed_post_context()
     _seed_poll(s, mode='single')
     first, second = db.session.query(PollChoice).filter_by(
         post_id=s.post.id).order_by(PollChoice.sort_order).all()
 
-    with _web_ctx(app, s.voter):
+    with web_ctx(app, s.voter):
         vote_for_poll(s.post.id, [first.id, second.id], SRC_WEB)
 
     votes = db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).all()
@@ -1526,11 +1475,11 @@ def test_no_choices_in_single_mode_raises_through_the_api(db_session):
     recorded as well, since `:1171` raises before `:1172`, so a regression that
     raised AFTER voting cannot pass under a bare `pytest.raises(Exception)`.
     """
-    s = _seed()
+    s = seed_post_context()
     _seed_poll(s, mode='single')
 
     with pytest.raises(Exception, match='single'):
-        vote_for_poll(s.post.id, [], SRC_API, auth=_bearer(s.voter))
+        vote_for_poll(s.post.id, [], SRC_API, auth=bearer(s.voter))
 
     assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 0
 
@@ -1556,12 +1505,12 @@ def test_multiple_mode_records_every_choice(db_session, app):
     single id, since a query-planner ordering assumption would let that
     regression pass by accident.
     """
-    s = _seed()
+    s = seed_post_context()
     _seed_poll(s, mode='multiple', choices=('a', 'b', 'c'))
     all_choices = db.session.query(PollChoice).filter_by(post_id=s.post.id).all()
     ids = {c.id for c in all_choices}
 
-    with _web_ctx(app, s.voter):
+    with web_ctx(app, s.voter):
         vote_for_poll(s.post.id, sorted(ids), SRC_WEB)
 
     votes = db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).all()
@@ -1602,12 +1551,12 @@ def test_multiple_mode_accepts_the_string_ids_the_web_caller_sends(db_session, a
     (app/models.py:3794) moves the tally through a separate
     `PollChoice.query.get`.
     """
-    s = _seed()
+    s = seed_post_context()
     _seed_poll(s, mode='multiple', choices=('a', 'b'))
     choices = db.session.query(PollChoice).filter_by(post_id=s.post.id).all()
     ids = {c.id for c in choices}
 
-    with _web_ctx(app, s.voter):
+    with web_ctx(app, s.voter):
         vote_for_poll(s.post.id, [str(i) for i in sorted(ids)], SRC_WEB)
 
     votes = db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).all()
@@ -1625,10 +1574,10 @@ def test_multiple_mode_with_no_choices_records_nothing(db_session, app):
     reachable from the real caller. Catches a regression giving the loop a
     default choice or otherwise recording a vote when `votes` is empty.
     """
-    s = _seed()
+    s = seed_post_context()
     _seed_poll(s, mode='multiple')
 
-    with _web_ctx(app, s.voter):
+    with web_ctx(app, s.voter):
         vote_for_poll(s.post.id, [], SRC_WEB)
 
     assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 0
@@ -1645,11 +1594,11 @@ def test_an_api_vote_for_another_polls_choice_is_rejected(db_session):
     has landed: `:1161` collects the foreign ids and `:1163-1164` raises on the
     SRC_API arm, which is what the body below asserts.
 
-    No `_web_ctx` -- this is the SRC_API arm, and the module docstring's
+    No `web_ctx` -- this is the SRC_API arm, and the module docstring's
     "SRC_API ARM DOES NOT NEED A REQUEST CONTEXT" finding applies here as it
     does to every other SRC_API test in this file.
     """
-    s = _seed()
+    s = seed_post_context()
     _seed_poll(s, mode='single')
     other_post = make_post(s.community, s.author, 'https://local.example/p/other')
     from datetime import timedelta
@@ -1663,7 +1612,7 @@ def test_an_api_vote_for_another_polls_choice_is_rejected(db_session):
     foreign = db.session.query(PollChoice).filter_by(post_id=other_post.id).one()
 
     with pytest.raises(Exception, match='does not belong to this poll'):
-        vote_for_poll(s.post.id, foreign.id, SRC_API, auth=_bearer(s.voter))
+        vote_for_poll(s.post.id, foreign.id, SRC_API, auth=bearer(s.voter))
 
     assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 0
     db.session.refresh(foreign)
@@ -1685,15 +1634,15 @@ def test_a_nonexistent_choice_id_does_not_dereference_none(db_session):
     landed -- `:1164` raises on the SRC_API arm instead, which is the
     behaviour the body below asserts.
 
-    No `_web_ctx` -- SRC_API arm, same reasoning as the test above.
+    No `web_ctx` -- SRC_API arm, same reasoning as the test above.
     """
-    s = _seed()
+    s = seed_post_context()
     _seed_poll(s, mode='single')
     highest = db.session.query(PollChoice).order_by(PollChoice.id.desc()).first()
 
     with pytest.raises(Exception, match='does not belong to this poll'):
         vote_for_poll(s.post.id, highest.id + 1000, SRC_API,
-                      auth=_bearer(s.voter))
+                      auth=bearer(s.voter))
 
     assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 0
 
@@ -1706,7 +1655,7 @@ def test_the_membership_filter_keeps_every_legitimate_choice(db_session, app):
     Catches a filter that rejects the whole request, or one that matches on the
     wrong column and drops everything.
     """
-    s = _seed()
+    s = seed_post_context()
     _seed_poll(s, mode='multiple', choices=('a', 'b'))
     other_post = make_post(s.community, s.author, 'https://local.example/p/other')
     from datetime import timedelta
@@ -1719,7 +1668,7 @@ def test_the_membership_filter_keeps_every_legitimate_choice(db_session, app):
     mine = {c.id for c in db.session.query(PollChoice).filter_by(post_id=s.post.id)}
     foreign = db.session.query(PollChoice).filter_by(post_id=other_post.id).one()
 
-    with _web_ctx(app, s.voter):
+    with web_ctx(app, s.voter):
         vote_for_poll(s.post.id, sorted(mine) + [foreign.id], SRC_WEB)
 
     votes = db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).all()
@@ -1744,7 +1693,7 @@ def test_the_membership_filter_keeps_string_ids_when_one_is_foreign(db_session, 
     on the web arm. That mutation survived all 56 tests before this one
     existed. Compares sets, never row order.
     """
-    s = _seed()
+    s = seed_post_context()
     _seed_poll(s, mode='multiple', choices=('a', 'b'))
     other_post = make_post(s.community, s.author, 'https://local.example/p/other')
     from datetime import timedelta
@@ -1757,7 +1706,7 @@ def test_the_membership_filter_keeps_string_ids_when_one_is_foreign(db_session, 
     mine = {c.id for c in db.session.query(PollChoice).filter_by(post_id=s.post.id)}
     foreign = db.session.query(PollChoice).filter_by(post_id=other_post.id).one()
 
-    with _web_ctx(app, s.voter):
+    with web_ctx(app, s.voter):
         vote_for_poll(s.post.id, [str(i) for i in sorted(mine) + [foreign.id]],
                       SRC_WEB)
 
@@ -1783,7 +1732,7 @@ def test_a_web_single_mode_vote_for_only_a_foreign_choice_does_not_crash(db_sess
     passes now that the membership branch returns early at `:1166-1167` when
     nothing survives the filter.
     """
-    s = _seed()
+    s = seed_post_context()
     _seed_poll(s, mode='single')
     other_post = make_post(s.community, s.author, 'https://local.example/p/other')
     from datetime import timedelta
@@ -1795,7 +1744,7 @@ def test_a_web_single_mode_vote_for_only_a_foreign_choice_does_not_crash(db_sess
     db.session.commit()
     foreign = db.session.query(PollChoice).filter_by(post_id=other_post.id).one()
 
-    with _web_ctx(app, s.voter):
+    with web_ctx(app, s.voter):
         vote_for_poll(s.post.id, foreign.id, SRC_WEB)
 
     assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 0
@@ -1814,11 +1763,11 @@ def test_resubmitting_multiple_mode_choices_does_not_federate_again(db_session, 
     Counts task_selector calls rather than inspecting network traffic, because
     task_selector runs synchronously under eager Celery and the poll task
     returns at its own first guard with `community.private` set (this file's
-    `_seed()` default) -- no outbound request, no redis key, so no
+    `seed_post_context()` default) -- no outbound request, no redis key, so no
     `redis_double` and no `_clear_votes_cast` are needed here.
     """
     calls = []
-    s = _seed()
+    s = seed_post_context()
     _seed_poll(s, mode='multiple', choices=('a', 'b'))
     ids = sorted(c.id for c in
                  db.session.query(PollChoice).filter_by(post_id=s.post.id))
@@ -1832,11 +1781,11 @@ def test_resubmitting_multiple_mode_choices_does_not_federate_again(db_session, 
 
     post_module.task_selector = counting_task_selector
     try:
-        with _web_ctx(app, s.voter):
+        with web_ctx(app, s.voter):
             vote_for_poll(s.post.id, ids, SRC_WEB)
         first_round = len(calls)
 
-        with _web_ctx(app, s.voter):
+        with web_ctx(app, s.voter):
             vote_for_poll(s.post.id, ids, SRC_WEB)
     finally:
         post_module.task_selector = original
