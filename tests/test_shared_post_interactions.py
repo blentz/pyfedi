@@ -1485,6 +1485,39 @@ def test_too_many_choices_in_single_mode_falls_through_on_the_web(db_session, ap
     assert {v.choice_id for v in votes} == {first.id}
 
 
+def test_no_choices_in_single_mode_raises_through_the_api(db_session):
+    """`:1169`'s true arm at the OTHER end of the arity boundary, and the
+    reason PC1's empty-votes guard sits INSIDE `:1162`'s block.
+
+    `test_too_many_choices_in_single_mode_raises_through_the_api` pins
+    `len(votes) != 1` from above (two choices); nothing pinned it from below.
+    An empty list is reachable from the real API caller: `PollVoteRequest`
+    (app/api/alpha/schema.py:1745) declares `choice_id` as
+    `fields.List(fields.Integer(), required=True)`, and `required=True` only
+    demands the key be present -- `[]` deserializes cleanly and reaches
+    `vote_for_poll` via app/api/alpha/utils/post.py:1797. That same schema line
+    states the contract pinned here: "Must have a length of 1 for a poll in
+    single vote mode."
+
+    The path matters. `votes` is empty but nothing in it was foreign, so
+    `:1161`'s `foreign` is empty, `:1162` is false, and `:1166`'s
+    `if not votes: return` never runs -- control reaches `:1169` and `:1171`
+    raises. Task 11's mutation pass found that dedenting `:1166`-`:1167` out of
+    `:1162`'s block, making the guard unconditional, was invisible to the whole
+    suite: it turns this documented API error into a silent success. This test
+    is the only thing distinguishing the two placements. Asserts no vote was
+    recorded as well, since `:1171` raises before `:1172`, so a regression that
+    raised AFTER voting cannot pass under a bare `pytest.raises(Exception)`.
+    """
+    s = _seed()
+    _seed_poll(s, mode='single')
+
+    with pytest.raises(Exception, match='single'):
+        vote_for_poll(s.post.id, [], SRC_API, auth=_bearer(s.voter))
+
+    assert db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).count() == 0
+
+
 def test_multiple_mode_records_every_choice(db_session, app):
     """`:1168`'s false arm and `:1180`'s loop over several choices.
 
@@ -1492,7 +1525,15 @@ def test_multiple_mode_records_every_choice(db_session, app):
     `request.form.getlist('poll_choice[]')`, a list of strings -- `:1184`'s
     explicit `int(choice_id)` exists for that reason, so this test passes
     plain ints rather than strings to keep the choice-identity assertion
-    simple; the cast is exercised either way. Catches a regression sending a
+    simple. The casts are EXECUTED either way but not observable either way:
+    Task 11's mutation pass found that removing any of the five
+    `int(choice_id)` casts survived the whole file while every call site
+    passed ints. Two tests below carry the real caller's type, and they are not
+    interchangeable: `test_multiple_mode_accepts_the_string_ids_the_web_caller_sends`
+    covers this ordinary path but kills no single-site cast mutation, while
+    `test_the_membership_filter_keeps_string_ids_when_one_is_foreign` is the
+    one that kills `:1165`'s. Keep both when editing this test. Catches a
+    regression sending a
     multiple-mode poll down the single-mode branch, which would record only
     `votes[0]` and silently drop the rest -- comparing sets rather than a
     single id, since a query-planner ordering assumption would let that
@@ -1508,6 +1549,55 @@ def test_multiple_mode_records_every_choice(db_session, app):
 
     votes = db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).all()
     assert {v.choice_id for v in votes} == ids
+
+
+def test_multiple_mode_accepts_the_string_ids_the_web_caller_sends(db_session, app):
+    """The type the real multiple-mode caller sends, on the ordinary path.
+
+    app/post/routes.py:642 builds `votes` from
+    `request.form.getlist('poll_choice[]')` for multiple mode, which yields a
+    list of STRINGS -- only the single-mode half of that ternary applies
+    `int(...)`. Every `vote_for_poll` call in this file passed ints before this
+    test, so the suite exercised a type the real multiple-mode caller never
+    sends. This is the ordinary case: every choice legitimate, none foreign.
+
+    This test kills no SINGLE-site mutation of the five `int(choice_id)` casts,
+    and that is itself the thing to carry forward. Dropping `:1161`'s cast
+    alone changes nothing observable: `'5' not in {5}` is true, so every choice
+    is misclassified foreign and `:1162` opens, but `:1165`'s cast is intact
+    and re-filters the strings back into the IDENTICAL list, so the vote
+    proceeds normally. `:1161`'s cast is redundant given `:1165`'s. The silent
+    total loss -- `votes` emptied, `:1167` returning with nothing recorded and
+    no error at all, since `:1163` raises only for SRC_API while
+    app/post/routes.py:644 flashes 'Vote has been cast.' -- needs `:1165`'s
+    cast gone, which `test_the_membership_filter_keeps_string_ids_when_one_is_foreign`
+    pins, or both casts gone together, which no single-site mutation reaches.
+
+    What this test is for: it is the only string-typed call on the non-foreign
+    path, and its `num_votes` assertion is the only measurement anywhere of
+    what `:1183`, `:1184` and `:1187` do with a string. Those three survive
+    their own mutations because psycopg2/PostgreSQL coerce a numeric string at
+    the parameter-binding boundary -- a property of the driver and dialect, NOT
+    of this code, so it is a survivor to re-check on any DB change rather than
+    an equivalence. This test is what makes that a measured claim instead of an
+    assumed one, and it is what fails first if the coercion goes away. Asserts
+    `num_votes` as well as the recorded set because `vote_for_choice`
+    (app/models.py:3794) moves the tally through a separate
+    `PollChoice.query.get`.
+    """
+    s = _seed()
+    _seed_poll(s, mode='multiple', choices=('a', 'b'))
+    choices = db.session.query(PollChoice).filter_by(post_id=s.post.id).all()
+    ids = {c.id for c in choices}
+
+    with _web_ctx(app, s.voter):
+        vote_for_poll(s.post.id, [str(i) for i in sorted(ids)], SRC_WEB)
+
+    votes = db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).all()
+    assert {v.choice_id for v in votes} == ids
+    for c in choices:
+        db.session.refresh(c)
+    assert {c.num_votes for c in choices} == {1}
 
 
 def test_multiple_mode_with_no_choices_records_nothing(db_session, app):
@@ -1610,6 +1700,45 @@ def test_the_membership_filter_keeps_every_legitimate_choice(db_session, app):
 
     with _web_ctx(app, s.voter):
         vote_for_poll(s.post.id, sorted(mine) + [foreign.id], SRC_WEB)
+
+    votes = db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).all()
+    assert {v.choice_id for v in votes} == mine
+    db.session.refresh(foreign)
+    assert foreign.num_votes == 0
+
+
+def test_the_membership_filter_keeps_string_ids_when_one_is_foreign(db_session, app):
+    """`:1165`'s `int(choice_id)` -- the one cast the all-legitimate string
+    test above cannot reach.
+
+    `:1165` runs only inside `:1162`, so a request whose choices are all
+    legitimate leaves `foreign` empty and never executes it. This sends the
+    real web caller's string list (app/post/routes.py:642) WITH one foreign
+    choice, so `:1161`'s intact cast marks that one, `:1162` opens, and
+    `:1165` re-filters the strings.
+
+    Dropping `:1165`'s cast makes `'5' in {5}` false for the legitimate
+    choices too, so `votes` empties and `:1167` returns -- the entire vote
+    silently discarded rather than the foreign entry alone, and with no error
+    on the web arm. That mutation survived all 56 tests before this one
+    existed. Compares sets, never row order.
+    """
+    s = _seed()
+    _seed_poll(s, mode='multiple', choices=('a', 'b'))
+    other_post = make_post(s.community, s.author, 'https://local.example/p/other')
+    from datetime import timedelta
+    from app.models import utcnow
+    db.session.add(Poll(post_id=other_post.id, mode='single', local_only=False,
+                        end_poll=utcnow() + timedelta(days=1)))
+    db.session.add(PollChoice(post_id=other_post.id, choice_text='foreign',
+                              sort_order=0, num_votes=0))
+    db.session.commit()
+    mine = {c.id for c in db.session.query(PollChoice).filter_by(post_id=s.post.id)}
+    foreign = db.session.query(PollChoice).filter_by(post_id=other_post.id).one()
+
+    with _web_ctx(app, s.voter):
+        vote_for_poll(s.post.id, [str(i) for i in sorted(mine) + [foreign.id]],
+                      SRC_WEB)
 
     votes = db.session.query(PollChoiceVote).filter_by(user_id=s.voter.id).all()
     assert {v.choice_id for v in votes} == mine
