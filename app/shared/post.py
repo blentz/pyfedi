@@ -1163,6 +1163,8 @@ def vote_for_poll(post_id, votes, src, auth=None):
         if src == SRC_API:
             raise Exception("Choice does not belong to this poll.")
         votes = [choice_id for choice_id in votes if int(choice_id) in poll_choice_ids]
+        if not votes:
+            return
     if poll.mode == 'single':
         if len(votes) != 1:
             if src == SRC_API:
