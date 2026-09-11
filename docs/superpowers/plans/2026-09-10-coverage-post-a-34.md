@@ -265,6 +265,17 @@ def test_flair_list_returns_an_empty_list_when_the_post_has_no_flair(db_session)
     assert flair_list == []
 ```
 
+> **CORRECTED POST-HOC (final fix wave; found on a fourth-home search after
+> `:2158` and `:2165`).** The module-docstring paragraph above headed "THE
+> SRC_API ARM NEEDS A REQUEST CONTEXT TOO" (this block's `:117-124`) is the
+> claim Probe D (Step 8 below) disproved. It is left unedited above because it
+> sits inside a code fence, same as the `--exec` snapshot at Step 2 above — the
+> committed `tests/test_shared_post_interactions.py` docstring instead reads
+> "THE SRC_API ARM DOES NOT NEED A REQUEST CONTEXT," with the corrected
+> reasoning. Only the `SRC_WEB` arm needs a request context; `get_ip_address`
+> (`app/__init__.py:68-77`) swallows the `RuntimeError`, so the `SRC_API` arm
+> runs with no context at all. See D394 and `tests/README.md` fact 206.
+
 - [ ] **Step 4: Run the new tests**
 
 Run: `./run_tests.sh tests/test_shared_post_interactions.py -v`
@@ -2160,7 +2171,7 @@ Entries required, one number each:
 
 - [ ] **Step 6: Write the `tests/README.md` facts**
 
-Append starting at **206**, following the existing numbered-heading style. At minimum: the request-context requirement on both source arms; the `community.private`-not-`local_only` federation lever and why `local_only` is a trap; the `mark_post_read` and `hide_post` name collisions between `tests/factories.py` and `app/shared/post.py`; and the `votes_cast_today` redis-key technique for raising the vote quota without database rows.
+Append starting at **206**, following the existing numbered-heading style. At minimum: ~~the request-context requirement on both source arms~~ — **CORRECTED POST-HOC (final fix wave): Probe D disproved this. Only the SRC_WEB arm needs a request context; `get_ip_address` (`app/__init__.py:68-77`) swallows the `RuntimeError`, so the SRC_API arm runs with no context at all. Registered as D394 and `tests/README.md` fact 206** — the `community.private`-not-`local_only` federation lever and why `local_only` is a trap; the `mark_post_read` and `hide_post` name collisions between `tests/factories.py` and `app/shared/post.py`; and the `votes_cast_today` redis-key technique for raising the vote quota without database rows.
 
 - [ ] **Step 7: Run the full suite**
 
