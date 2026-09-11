@@ -1276,8 +1276,11 @@ def test_a_single_mode_api_vote_records_one_choice(db_session):
     REQUEST CONTEXT" finding applies here too, and the real API caller
     (app/api/alpha/utils/post.py:1791-1797) hands `vote_for_poll` a bare int
     `data['choice_id']`, unwrapped, so `:1155` must wrap it into a list.
-    Catches a regression dropping `:1155`, which would make `len(votes)` at
-    `:1169` fail (`TypeError: object of type 'int' has no len()`) on an int.
+    Catches a regression dropping `:1155`, which would leave `votes` as the
+    bare int `choice.id`: `:1161`'s `for choice_id in votes` comprehension
+    would raise `TypeError: 'int' object is not iterable` immediately,
+    before `:1168`'s `poll.mode == 'single'` branch or `:1169`'s `len(votes)`
+    is ever reached.
     `community.private=True` (this file's `seed_post_context()` default) stops
     `app/shared/tasks/likes.py`'s `vote_for_poll` task at its own first guard,
     so `:1174`'s federation call runs but issues no outbound request and
@@ -1311,8 +1314,11 @@ def test_a_single_mode_web_vote_accepts_a_list(db_session, app):
     though -- `isinstance(votes, int)` is the only gate -- so a list is a
     legitimate input on this arm regardless of which caller happens to send
     it today. Catches a regression making `:1155`'s wrap unconditional, which
-    would nest an already-list `votes` into `[[choice.id]]` and crash `:1175`'s
-    `PollChoice.query.get(votes[0])` on an unhashable/invalid key.
+    would nest an already-list `votes` into `[[choice.id]]`: `:1161`'s
+    `int(choice_id)` inside the foreign-filter comprehension would then be
+    called on the inner list itself and raise `TypeError: int() argument
+    must be a string, a bytes-like object or a real number, not 'list'`,
+    well before `:1175`'s `PollChoice.query.get(votes[0])` is ever reached.
     """
     s = seed_post_context()
     _seed_poll(s, mode='single')
