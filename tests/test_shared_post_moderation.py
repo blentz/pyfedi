@@ -3,16 +3,16 @@
 SCOPE. Six functions, 110 uncovered statements and 56 uncovered branch arcs
 when this file was started:
 
-  mod_remove_post :1039-1081 (26/12), lock_post :927-960 (22/14),
-  mod_restore_post :1082-1114 (20/8), sticky_post :990-1019 (18/10),
-  move_post :961-989 (15/8), hide_post :1020-1038 (9/4).
+  mod_remove_post :1045-1087 (26/12), lock_post :927-962 (22/14),
+  mod_restore_post :1088-1120 (20/8), sticky_post :994-1025 (18/10),
+  move_post :963-993 (15/8), hide_post :1026-1044 (9/4).
 
 THE HARNESS IS INHERITED FROM GROUP A and lives in tests/factories.py:
 `seed_post_context`, `web_ctx` and `bearer`. The facts behind it are recorded
 in tests/README.md 206-212. The three that bind hardest here:
 
-  - NO TEST MAY REQUEST `redis_double`. mod_remove_post:1045 and
-    mod_restore_post:1088 both do `from app import redis_client` INSIDE the
+  - NO TEST MAY REQUEST `redis_double`. mod_remove_post:1051 and
+    mod_restore_post:1094 both do `from app import redis_client` INSIDE the
     function body and then lock on it. Group A proved the fixture reaches that
     shape and then breaks it: `redis_client.lock(...)`'s `__exit__` releases
     through EVALSHA, which fakeredis does not implement, giving
@@ -33,9 +33,9 @@ THE GATES ARE THE POINT OF THIS FILE, and they do not agree. Five of the six
 functions gate on permission, in two distinct predicates:
 
   P1  is_moderator or user.is_admin_or_staff()
-      -- lock_post:941, mod_remove_post:1049, mod_restore_post:1091
+      -- lock_post:941, mod_remove_post:1055, mod_restore_post:1097
   P2  is_moderator or community.is_instance_admin(user) or user.is_admin_or_staff()
-      -- move_post:969, sticky_post:999
+      -- move_post:971, sticky_post:1003
 
 `Community.is_admin_or_staff(user)` (app/models.py:778-779) is
 `return user.is_admin_or_staff()`, a pure delegating wrapper, so lock_post's
@@ -44,7 +44,7 @@ divergence is `is_instance_admin`, which P1 omits. It is REGISTERED, NOT FIXED
 -- see the round's spec. `hide_post` has no gate, correctly: it writes
 per-user state.
 
-TWO FAILURE MODES, TOO. mod_remove_post:1050 and mod_restore_post:1092 RAISE
+TWO FAILURE MODES, TOO. mod_remove_post:1056 and mod_restore_post:1098 RAISE
 `Exception('Does not have permission')`. lock_post, move_post and sticky_post
 fall through and return as though they had succeeded -- which Task 10 fixes
 for the SRC_API arm only, because the web callers have no error handling.
@@ -121,9 +121,9 @@ def make_instance_admin(user, instance):
 
 
 def test_hiding_a_post_through_the_api_inserts_the_row(db_session):
-    """`:1029`'s `mark_post_as_hidden`, reached through `:1028`'s true arm.
+    """`:1035`'s `mark_post_as_hidden`, reached through `:1034`'s true arm.
 
-    Catches a regression inverting `:1028`, which would send a hide request
+    Catches a regression inverting `:1034`, which would send a hide request
     down the DELETE branch and leave the table empty.
     """
     s = seed_post_context(community_name='moderation')
@@ -137,9 +137,9 @@ def test_hiding_a_post_through_the_api_inserts_the_row(db_session):
 
 
 def test_unhiding_a_post_deletes_the_row(db_session):
-    """`:1031`'s raw DELETE, reached through `:1028`'s false arm.
+    """`:1037`'s raw DELETE, reached through `:1034`'s false arm.
 
-    Catches a regression inverting `:1028`, which would re-insert on an unhide
+    Catches a regression inverting `:1034`, which would re-insert on an unhide
     instead of removing.
     """
     s = seed_post_context(community_name='moderation')
@@ -171,7 +171,7 @@ def test_hiding_twice_does_not_duplicate_the_row(db_session):
 
 
 def test_unhiding_a_post_that_was_never_hidden_is_a_no_op(db_session):
-    """`:1031`'s DELETE against zero matching rows.
+    """`:1037`'s DELETE against zero matching rows.
 
     The raw SQL deletes nothing and does not raise. Catches a regression that
     made the unhide path assume a row exists.
@@ -187,11 +187,11 @@ def test_unhiding_a_post_that_was_never_hidden_is_a_no_op(db_session):
 
 
 def test_the_web_arm_reads_current_user(db_session, app):
-    """`:1021`'s false arm and `:1024`'s `current_user`.
+    """`:1027`'s false arm and `:1030`'s `current_user`.
 
-    Catches a regression making `:1021` read the bearer token unconditionally,
+    Catches a regression making `:1027` read the bearer token unconditionally,
     which would raise with auth=None. `hide_post` has no gate, so this is the
-    only thing `:1021`'s false arm needs.
+    only thing `:1027`'s false arm needs.
     """
     s = seed_post_context(community_name='moderation')
 
@@ -206,10 +206,10 @@ def test_the_web_arm_reads_current_user(db_session, app):
 
 def test_a_moderator_locks_a_post_through_the_api(db_session):
     """`:941`'s true arm via `is_moderator`, `:942`'s assignment, `:951`'s
-    federation, and `:958`'s return.
+    federation, and `:960`'s return.
 
     Catches a regression inverting `:941`, which would leave comments_enabled
-    untouched. Asserts the field rather than the return, because `:958` returns
+    untouched. Asserts the field rather than the return, because `:960` returns
     the same shape on the refused path.
     """
     s = seed_post_context(community_name='moderation')
@@ -292,15 +292,17 @@ def test_a_site_admin_who_is_not_a_moderator_may_lock(db_session):
 def test_an_unprivileged_user_changes_nothing(db_session):
     """`:941`'s false arm.
 
-    Neither disjunct holds, so the body is skipped entirely. Asserts the field
-    AND the empty ModLog, because `:958` returns `user.id, post` on this path
-    exactly as it does on success -- the return proves nothing.
+    Neither disjunct holds, so PC2's `:956` `elif` now raises for the API
+    arm instead of falling through to `:960`'s quiet `user.id, post` return.
+    Still asserts the field AND the empty ModLog -- the raise alone proves
+    the caller was refused, not that no side effect snuck in first.
     """
     s = seed_post_context(community_name='moderation')
     s.post.comments_enabled = True
     db.session.commit()
 
-    user_id, post = lock_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
+    with pytest.raises(Exception, match='Does not have permission'):
+        lock_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
 
     db.session.refresh(s.post)
     assert s.post.comments_enabled is True
@@ -313,7 +315,8 @@ def test_a_banned_moderator_is_not_a_moderator(db_session):
 
     A CommunityMember row with is_moderator=True and is_banned=True does NOT
     satisfy `:941`. Catches a regression dropping that filter, which would let
-    a banned moderator keep moderating.
+    a banned moderator keep moderating. PC2's `:956` `elif` now raises for
+    this refused API call rather than returning quietly.
     """
     s = seed_post_context(community_name='moderation')
     member = seed_moderator(s)
@@ -322,7 +325,8 @@ def test_a_banned_moderator_is_not_a_moderator(db_session):
     s.post.comments_enabled = True
     db.session.commit()
 
-    lock_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
+    with pytest.raises(Exception, match='Does not have permission'):
+        lock_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
 
     db.session.refresh(s.post)
     assert s.post.comments_enabled is True
@@ -408,10 +412,10 @@ def test_the_api_arm_does_not_flash_when_unlocking(db_session):
 
 
 def test_a_moderator_moves_a_post_to_another_community(db_session):
-    """`:969`'s first disjunct, `:973`'s move_to and `:974`'s commit.
+    """`:971`'s first disjunct, `:975`'s move_to and `:976`'s commit.
 
     Asserts the post's community_id after a refresh, because `move_to` does not
-    commit and an unrefreshed read would pass even if `:974` were deleted.
+    commit and an unrefreshed read would pass even if `:976` were deleted.
     """
     s = seed_post_context(community_name='moderation')
     seed_moderator(s)
@@ -425,7 +429,7 @@ def test_a_moderator_moves_a_post_to_another_community(db_session):
 
 
 def test_moving_records_the_target_community_in_the_modlog(db_session):
-    """`:976-978`'s add_to_modlog, which passes `community=target_community`
+    """`:978-980`'s add_to_modlog, which passes `community=target_community`
     rather than the post's original community.
 
     Catches a regression passing `post.community`, which would file the entry
@@ -444,7 +448,7 @@ def test_moving_records_the_target_community_in_the_modlog(db_session):
 
 
 def test_an_instance_admin_may_move_a_post(db_session):
-    """`:969`'s SECOND disjunct alone -- `community.is_instance_admin(user)`.
+    """`:971`'s SECOND disjunct alone -- `community.is_instance_admin(user)`.
 
     This is the disjunct that distinguishes P2 from P1, and the only reason
     move_post and sticky_post admit an actor lock_post refuses. Catches a
@@ -461,7 +465,7 @@ def test_an_instance_admin_may_move_a_post(db_session):
 
 
 def test_a_site_admin_may_move_a_post(db_session):
-    """`:969`'s THIRD disjunct alone -- `user.is_admin_or_staff()`.
+    """`:971`'s THIRD disjunct alone -- `user.is_admin_or_staff()`.
 
     Note this is the User method, where lock_post:941 reaches the same check
     through `Community.is_admin_or_staff(user)` (app/models.py:778-779), a pure
@@ -478,16 +482,19 @@ def test_a_site_admin_may_move_a_post(db_session):
 
 
 def test_an_unprivileged_user_cannot_move_a_post(db_session):
-    """`:969`'s false arm, all three disjuncts failing.
+    """`:971`'s false arm, all three disjuncts failing.
 
-    Asserts the post did not move AND that no ModLog row exists, because
-    `:987` returns `user.id, post` on this path exactly as on success.
+    PC2's `:987` `elif` now raises for the API arm instead of falling
+    through to `:991`'s quiet `user.id, post` return. Still asserts the post
+    did not move AND that no ModLog row exists -- the raise alone does not
+    prove the side effect was skipped.
     """
     s = seed_post_context(community_name='moderation')
     target = make_community('target')
     original = s.post.community_id
 
-    user_id, post = move_post(s.post.id, target.id, SRC_API, auth=bearer(s.voter))
+    with pytest.raises(Exception, match='Does not have permission'):
+        move_post(s.post.id, target.id, SRC_API, auth=bearer(s.voter))
 
     db.session.refresh(s.post)
     assert s.post.community_id == original
@@ -495,9 +502,9 @@ def test_an_unprivileged_user_cannot_move_a_post(db_session):
 
 
 def test_the_web_arm_flashes_that_the_post_moved(db_session, app):
-    """`:980`'s true arm and `:981`'s flash.
+    """`:982`'s true arm and `:983`'s flash.
 
-    Asserts the flashed content, so a mutant deleting `:981` does not survive.
+    Asserts the flashed content, so a mutant deleting `:983` does not survive.
     """
     from flask import get_flashed_messages
 
@@ -515,11 +522,11 @@ def test_the_web_arm_flashes_that_the_post_moved(db_session, app):
 
 
 def test_a_moderator_stickies_a_post(db_session):
-    """`:999`'s first disjunct alone (`is_moderator`) and `:1000`'s assignment.
+    """`:1003`'s first disjunct alone (`is_moderator`) and `:1004`'s assignment.
 
     `s.voter` gets no other privilege here, so the true arm is reached
     through the moderator disjunct only. Catches a regression dropping the
-    assignment at `:1000`, which would leave `post.sticky` unset.
+    assignment at `:1004`, which would leave `post.sticky` unset.
     """
     s = seed_post_context(community_name='moderation')
     seed_moderator(s)
@@ -532,9 +539,9 @@ def test_a_moderator_stickies_a_post(db_session):
 
 
 def test_unstickying_clears_the_flag_and_records_the_action(db_session):
-    """`:1001`'s false arm, `:1004`'s modlog_type.
+    """`:1005`'s false arm, `:1008`'s modlog_type.
 
-    Catches a regression collapsing `:1001`, which would file an unsticky as a
+    Catches a regression collapsing `:1005`, which would file an unsticky as a
     feature.
     """
     s = seed_post_context(community_name='moderation')
@@ -551,7 +558,7 @@ def test_unstickying_clears_the_flag_and_records_the_action(db_session):
 
 
 def test_stickying_backfills_the_communitys_featured_url(db_session):
-    """`:1005`'s true arm and `:1006`'s assignment.
+    """`:1009`'s true arm and `:1010`'s assignment.
 
     Catches a regression dropping the backfill, which would leave a community
     with no ap_featured_url after its first sticky.
@@ -568,9 +575,9 @@ def test_stickying_backfills_the_communitys_featured_url(db_session):
 
 
 def test_an_existing_featured_url_is_left_alone(db_session):
-    """`:1005`'s false arm.
+    """`:1009`'s false arm.
 
-    Catches a regression making `:1006` unconditional, which would overwrite a
+    Catches a regression making `:1010` unconditional, which would overwrite a
     community's real featured collection URL.
     """
     s = seed_post_context(community_name='moderation')
@@ -585,14 +592,17 @@ def test_an_existing_featured_url_is_left_alone(db_session):
 
 
 def test_an_unprivileged_user_cannot_sticky_a_post(db_session):
-    """`:999`'s false arm, all three disjuncts failing.
+    """`:1003`'s false arm, all three disjuncts failing.
 
-    Asserts the flag and the empty ModLog. `:1017` returns `user.id, post`
-    unconditionally, so the return proves nothing.
+    PC2's `:1020` `elif` now raises for the API arm instead of falling
+    through to `:1023`'s unconditional `user.id, post` return. Still
+    asserts the flag and the empty ModLog -- the raise alone does not prove
+    the sticky flag and ModLog were untouched.
     """
     s = seed_post_context(community_name='moderation')
 
-    user_id, post = sticky_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
+    with pytest.raises(Exception, match='Does not have permission'):
+        sticky_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
 
     db.session.refresh(s.post)
     assert s.post.sticky is not True
@@ -600,7 +610,7 @@ def test_an_unprivileged_user_cannot_sticky_a_post(db_session):
 
 
 def test_an_instance_admin_may_sticky_a_post(db_session):
-    """`:999`'s second disjunct alone -- `community.is_instance_admin(user)`.
+    """`:1003`'s second disjunct alone -- `community.is_instance_admin(user)`.
 
     This is the disjunct that distinguishes P2 from P1, and the only reason
     move_post and sticky_post admit an actor lock_post refuses.
@@ -615,12 +625,12 @@ def test_an_instance_admin_may_sticky_a_post(db_session):
 
 
 def test_a_site_admin_may_sticky_a_post(db_session):
-    """`:999`'s THIRD disjunct alone -- `user.is_admin_or_staff()`.
+    """`:1003`'s THIRD disjunct alone -- `user.is_admin_or_staff()`.
 
-    Task 5 witnessed this same disjunct for `move_post:969`'s copy of P2, but
+    Task 5 witnessed this same disjunct for `move_post:971`'s copy of P2, but
     that is evidence about a different `if` statement. This test witnesses it
-    independently for `sticky_post:999`, so Task 11's mutation pass has a
-    witness that dies when `:999`'s third disjunct specifically is weakened.
+    independently for `sticky_post:1003`, so Task 11's mutation pass has a
+    witness that dies when `:1003`'s third disjunct specifically is weakened.
     """
     s = seed_post_context(community_name='moderation')
     make_site_admin(s.voter)
@@ -632,19 +642,22 @@ def test_a_site_admin_may_sticky_a_post(db_session):
 
 
 def test_an_unprivileged_user_does_not_federate_a_sticky(db_session):
-    """PC1: `:1012`'s federation block now sits INSIDE `:999`'s permission gate.
+    """PC1: `:1016`'s federation block now sits INSIDE `:1003`'s permission gate.
 
     An unprivileged actor must not trigger task_selector at all -- if the
     gate is refused, no sticky ever happened locally, so nothing should be
-    federated. Before PC1's fix, `:999` and `:1012` were at the same
+    federated. Before PC1's fix, `:1003` and `:1016` were at the same
     indentation, so task_selector fired whether or not the gate passed,
     letting an unauthorized user federate a sticky that never happened
     locally. app/community/routes.py:1109 reaches this with an ordinary post
     author on the create path, so this was not only a crafted-API-call risk.
 
-    Counts task_selector calls by monkeypatching the module-level name, and
-    restores in a finally: it is imported by other tests in the same session
-    and a leaked patch corrupts every test that follows.
+    PC2's `:1020` `elif` now raises for this refused API call before the
+    federation block is ever reached, which only strengthens the guarantee
+    this test pins. Counts task_selector calls by monkeypatching the
+    module-level name, and restores in a finally: it is imported by other
+    tests in the same session and a leaked patch corrupts every test that
+    follows.
     """
     calls = []
     s = seed_post_context(community_name='moderation')
@@ -658,7 +671,8 @@ def test_an_unprivileged_user_does_not_federate_a_sticky(db_session):
 
     post_module.task_selector = counting_task_selector
     try:
-        sticky_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
+        with pytest.raises(Exception, match='Does not have permission'):
+            sticky_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
     finally:
         post_module.task_selector = original
 
@@ -668,7 +682,7 @@ def test_an_unprivileged_user_does_not_federate_a_sticky(db_session):
 
 
 def test_a_permitted_sticky_still_federates(db_session):
-    """`:1013`'s task_selector on the permitted path, after PC1.
+    """`:1017`'s task_selector on the permitted path, after PC1.
 
     The counterpart of the test above. Without this one, PC1 could be
     'fixed' by deleting the federation entirely and both tests would pass.
@@ -694,9 +708,9 @@ def test_a_permitted_sticky_still_federates(db_session):
 
 
 def test_a_permitted_unsticky_federates_the_undo(db_session):
-    """`:1015`'s task_selector, the else arm of `:1012`, after PC1.
+    """`:1019`'s task_selector, the else arm of `:1016`, after PC1.
 
-    Catches a regression hardcoding `:1013`'s task key, which would federate a
+    Catches a regression hardcoding `:1017`'s task key, which would federate a
     sticky when the moderator unstickied.
     """
     calls = []
@@ -722,10 +736,10 @@ def test_a_permitted_unsticky_federates_the_undo(db_session):
 
 
 def test_a_moderator_removes_a_post(db_session):
-    """`:1049`'s false arm (permission granted), `:1055`'s deleted flag,
-    `:1056`'s deleted_by and `:1077`'s return.
+    """`:1055`'s false arm (permission granted), `:1061`'s deleted flag,
+    `:1062`'s deleted_by and `:1083`'s return.
 
-    Note the gate is spelled negatively: `:1049` raises when the user is NOT
+    Note the gate is spelled negatively: `:1055` raises when the user is NOT
     permitted, so the permitted path is its FALSE arm.
     """
     s = seed_post_context(community_name='moderation')
@@ -740,7 +754,7 @@ def test_a_moderator_removes_a_post(db_session):
 
 
 def test_removal_decrements_both_counters(db_session):
-    """`:1057`'s author.post_count and `:1058`'s community.post_count.
+    """`:1063`'s author.post_count and `:1064`'s community.post_count.
 
     Catches a regression dropping either decrement, which the deleted flag
     alone would not reveal.
@@ -760,9 +774,9 @@ def test_removal_decrements_both_counters(db_session):
 
 
 def test_a_site_admin_who_is_not_a_moderator_may_remove_a_post(db_session):
-    """`:1049`'s SECOND conjunct alone -- `not user.is_admin_or_staff()`.
+    """`:1055`'s SECOND conjunct alone -- `not user.is_admin_or_staff()`.
 
-    `:1049` is `not is_moderator and not is_admin_or_staff()`, one arc pair to
+    `:1055` is `not is_moderator and not is_admin_or_staff()`, one arc pair to
     coverage.py: the permitted path is the whole expression's FALSE arm.
     `test_a_moderator_removes_a_post` reaches that false arm through the
     FIRST conjunct alone (is_moderator true, short-circuiting before the
@@ -788,7 +802,7 @@ def test_a_site_admin_who_is_not_a_moderator_may_remove_a_post(db_session):
 
 
 def test_an_unprivileged_user_is_refused_with_an_exception(db_session):
-    """`:1049`'s true arm and `:1050`'s raise.
+    """`:1055`'s true arm and `:1056`'s raise.
 
     Unlike lock_post, move_post and sticky_post, this function RAISES rather
     than returning as though it succeeded. Asserts the message AND that the
@@ -805,7 +819,7 @@ def test_an_unprivileged_user_is_refused_with_an_exception(db_session):
 
 
 def test_removal_writes_the_reason_to_the_modlog(db_session):
-    """`:1061-1063`'s add_to_modlog with `reason=reason`.
+    """`:1067-1069`'s add_to_modlog with `reason=reason`.
 
     lock_post and move_post pass reason='' unconditionally; this function
     forwards the caller's. Catches a regression dropping it.
@@ -822,9 +836,9 @@ def test_removal_writes_the_reason_to_the_modlog(db_session):
 
 
 def test_removal_deletes_ordinary_notifications_about_the_post(db_session):
-    """`:1073`'s delete, reached through `:1071`'s false arm.
+    """`:1079`'s delete, reached through `:1077`'s false arm.
 
-    Catches a regression inverting `:1071`, which would keep ordinary
+    Catches a regression inverting `:1077`, which would keep ordinary
     notifications and delete the report ones instead.
     """
     s = seed_post_context(community_name='moderation')
@@ -837,7 +851,7 @@ def test_removal_deletes_ordinary_notifications_about_the_post(db_session):
 
 
 def test_removal_keeps_report_notifications(db_session):
-    """`:1071`'s true arm via its FIRST disjunct (NOTIF_REPORT) and `:1072`'s
+    """`:1077`'s true arm via its FIRST disjunct (NOTIF_REPORT) and `:1078`'s
     continue.
 
     A report notification must survive the removal it reported. Catches a
@@ -855,10 +869,10 @@ def test_removal_keeps_report_notifications(db_session):
 
 
 def test_removal_keeps_escalated_report_notifications(db_session):
-    """`:1071`'s SECOND disjunct -- NOTIF_REPORT_ESCALATION, with the first
+    """`:1077`'s SECOND disjunct -- NOTIF_REPORT_ESCALATION, with the first
     disjunct false.
 
-    `:1071` is `notif_type == NOTIF_REPORT or notif_type ==
+    `:1077` is `notif_type == NOTIF_REPORT or notif_type ==
     NOTIF_REPORT_ESCALATION`, one arc pair to coverage.py. The test above takes
     the first disjunct; this takes the second with the first false.
     """
@@ -874,7 +888,7 @@ def test_removal_keeps_escalated_report_notifications(db_session):
 
 
 def test_removal_with_no_notifications_takes_the_loops_zero_exit(db_session):
-    """`:1069`'s zero-iteration exit arc.
+    """`:1075`'s zero-iteration exit arc.
 
     A post nobody was notified about still removes cleanly. Catches a
     regression assuming at least one row.
@@ -889,12 +903,12 @@ def test_removal_with_no_notifications_takes_the_loops_zero_exit(db_session):
 
 
 def test_removing_a_post_with_a_url_recalculates_cross_posts(db_session):
-    """`:1052`'s true arm, reached when the post has a url.
+    """`:1058`'s true arm, reached when the post has a url.
 
     `make_post` leaves `url` unset, so every other test in this file takes
-    the false arm. Seeding one here exercises `:1053`'s
+    the false arm. Seeding one here exercises `:1059`'s
     calculate_cross_posts(delete_only=True) call. Asserts the removal still
-    completes, since :1053 mutating self.cross_posts is the only other
+    completes, since :1059 mutating self.cross_posts is the only other
     observable effect and this post has none seeded.
     """
     s = seed_post_context(community_name='moderation')
@@ -909,10 +923,10 @@ def test_removing_a_post_with_a_url_recalculates_cross_posts(db_session):
 
 
 def test_the_web_arm_returns_none(db_session, app):
-    """`:1076`'s false arm and `:1079`'s bare return.
+    """`:1082`'s false arm and `:1085`'s bare return.
 
     The web caller at app/post/routes.py:1170 discards the value. Catches a
-    regression making `:1077`'s two-tuple unconditional, which would change the
+    regression making `:1083`'s two-tuple unconditional, which would change the
     contract for a caller that unpacks nothing.
     """
     s = seed_post_context(community_name='moderation')
@@ -927,8 +941,8 @@ def test_the_web_arm_returns_none(db_session, app):
 
 
 def test_a_moderator_restores_a_removed_post(db_session):
-    """`:1091`'s false arm (permission granted) reached through the FIRST
-    conjunct alone, `:1097`'s deleted flag and `:1098`'s deleted_by clear.
+    """`:1097`'s false arm (permission granted) reached through the FIRST
+    conjunct alone, `:1103`'s deleted flag and `:1104`'s deleted_by clear.
 
     Mirrors `test_a_moderator_removes_a_post`: the gate is spelled
     negatively, so the permitted path is the whole expression's FALSE arm,
@@ -950,7 +964,7 @@ def test_a_moderator_restores_a_removed_post(db_session):
 
 
 def test_restoration_increments_both_counters(db_session):
-    """`:1099`'s author.post_count and `:1100`'s community.post_count.
+    """`:1105`'s author.post_count and `:1106`'s community.post_count.
 
     The mirror of mod_remove_post's decrements. Catches a regression dropping
     either, which would leave the counters drifting after a remove/restore
@@ -971,9 +985,9 @@ def test_restoration_increments_both_counters(db_session):
 
 
 def test_a_site_admin_who_is_not_a_moderator_may_restore_a_post(db_session):
-    """`:1091`'s SECOND conjunct alone -- `not user.is_admin_or_staff()`.
+    """`:1097`'s SECOND conjunct alone -- `not user.is_admin_or_staff()`.
 
-    `:1091` is `not is_moderator and not is_admin_or_staff()`, one arc pair to
+    `:1097` is `not is_moderator and not is_admin_or_staff()`, one arc pair to
     coverage.py: the permitted path is the whole expression's FALSE arm.
     `test_a_moderator_restores_a_removed_post` reaches that false arm through
     the FIRST conjunct alone (is_moderator true, short-circuiting before the
@@ -1003,12 +1017,12 @@ def test_a_site_admin_who_is_not_a_moderator_may_restore_a_post(db_session):
 
 
 def test_an_unprivileged_user_cannot_restore_a_post(db_session):
-    """`:1091`'s true arm and `:1092`'s raise.
+    """`:1097`'s true arm and `:1098`'s raise.
 
     Asserts the message and that the post stayed deleted, because a bare
     pytest.raises(Exception) is satisfied by any exception including an
     unrelated crash from the redis lock or the module-body import at
-    `:1088-1089`.
+    `:1094-1095`.
     """
     s = seed_post_context(community_name='moderation')
     s.post.deleted = True
@@ -1022,7 +1036,7 @@ def test_an_unprivileged_user_cannot_restore_a_post(db_session):
 
 
 def test_restoration_writes_the_reason_to_the_modlog(db_session):
-    """`:1103-1105`'s add_to_modlog with action 'restore_post'."""
+    """`:1109-1111`'s add_to_modlog with action 'restore_post'."""
     s = seed_post_context(community_name='moderation')
     seed_moderator(s)
 
@@ -1035,13 +1049,13 @@ def test_restoration_writes_the_reason_to_the_modlog(db_session):
 
 
 def test_restoring_a_post_with_a_url_recalculates_cross_posts(db_session):
-    """`:1094`'s true arm, reached when the post has a url.
+    """`:1100`'s true arm, reached when the post has a url.
 
     `make_post` leaves `url` unset, so every other test in this file takes
-    the false arm. Seeding one here exercises `:1095`'s
-    calculate_cross_posts() call -- unlike mod_remove_post's :1053, this arm
+    the false arm. Seeding one here exercises `:1101`'s
+    calculate_cross_posts() call -- unlike mod_remove_post's :1059, this arm
     passes no delete_only argument. Asserts the restoration still completes,
-    since :1095 mutating self.cross_posts is the only other observable
+    since :1101 mutating self.cross_posts is the only other observable
     effect and this post has none seeded.
     """
     s = seed_post_context(community_name='moderation')
@@ -1057,9 +1071,9 @@ def test_restoring_a_post_with_a_url_recalculates_cross_posts(db_session):
 
 
 def test_the_web_arm_returns_none_when_restoring(db_session, app):
-    """`:1109`'s false arm and `:1112`'s bare return.
+    """`:1115`'s false arm and `:1118`'s bare return.
 
-    Catches a regression making `:1110`'s two-tuple unconditional, which
+    Catches a regression making `:1116`'s two-tuple unconditional, which
     would change the contract for a caller that unpacks nothing. Named
     distinctly from mod_remove_post's `test_the_web_arm_returns_none` --
     two module-level functions sharing a name silently shadow each other,
@@ -1076,3 +1090,88 @@ def test_the_web_arm_returns_none_when_restoring(db_session, app):
     assert result is None
     db.session.refresh(s.post)
     assert s.post.deleted is False
+
+
+def test_an_unprivileged_api_lock_is_refused_rather_than_reported_as_done(db_session):
+    """PC2: `:959` sat outside `:941`'s gate, so a refused lock used to return
+    `user.id, post` and a 200 with an unchanged post. `:956`'s `elif` now
+    raises for the API arm instead.
+
+    mod_remove_post:1056 already raises in the same module. Failed against the
+    pre-fix tree by returning instead of raising.
+    """
+    s = seed_post_context(community_name='moderation')
+
+    with pytest.raises(Exception, match='Does not have permission'):
+        lock_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
+
+
+def test_an_unprivileged_api_move_is_refused(db_session):
+    """PC2 at `:987`'s `elif`, outside `:971`'s gate."""
+    s = seed_post_context(community_name='moderation')
+    target = make_community('target')
+
+    with pytest.raises(Exception, match='Does not have permission'):
+        move_post(s.post.id, target.id, SRC_API, auth=bearer(s.voter))
+
+
+def test_an_unprivileged_api_sticky_is_refused(db_session):
+    """PC2 at `:1020`'s `elif`, outside `:1003`'s gate."""
+    s = seed_post_context(community_name='moderation')
+
+    with pytest.raises(Exception, match='Does not have permission'):
+        sticky_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
+
+
+def test_an_unprivileged_web_lock_still_returns_quietly(db_session, app):
+    """PC2's deliberate asymmetry: the SRC_WEB arm must NOT raise.
+
+    app/post/routes.py:1664 has no error handling and would 500. This test is
+    what stops a later change from 'finishing the job' by raising on both arms.
+    """
+    s = seed_post_context(community_name='moderation')
+    s.post.comments_enabled = True
+    db.session.commit()
+
+    with web_ctx(app, s.voter):
+        result = lock_post(s.post.id, True, SRC_WEB)
+
+    assert result is None
+    db.session.refresh(s.post)
+    assert s.post.comments_enabled is True
+
+
+def test_an_unprivileged_web_move_still_returns_quietly(db_session, app):
+    """PC2's asymmetry at move_post.
+
+    app/post/routes.py:1694 calls this with no error handling around it, from
+    a route reached by an ordinary post author choosing a target community.
+    Raising here would 500 that route exactly as it would post_lock's.
+    """
+    s = seed_post_context(community_name='moderation')
+    target = make_community('target')
+    original = s.post.community_id
+
+    with web_ctx(app, s.voter):
+        result = move_post(s.post.id, target.id, SRC_WEB)
+
+    assert result is None
+    db.session.refresh(s.post)
+    assert s.post.community_id == original
+    assert db.session.query(ModLog).count() == 0
+
+
+def test_an_unprivileged_web_sticky_still_returns_quietly(db_session, app):
+    """PC2's asymmetry at sticky_post.
+
+    app/community/routes.py:1109 calls this mid-post-creation for the post's
+    own author, who need not be a moderator. Raising here would cost a
+    non-moderator their post.
+    """
+    s = seed_post_context(community_name='moderation')
+
+    with web_ctx(app, s.voter):
+        result = sticky_post(s.post.id, True, SRC_WEB)
+
+    db.session.refresh(s.post)
+    assert s.post.sticky is not True
