@@ -81,11 +81,10 @@ strings this group passes were verified present.
 
 import pytest
 from contextlib import contextmanager
-from types import SimpleNamespace
 
 from app import db
 from app.constants import NOTIF_POST, NOTIF_REPORT, NOTIF_REPORT_ESCALATION, SRC_API, SRC_WEB
-from app.models import CommunityMember, ModLog, Notification, Post, hidden_posts
+from app.models import ModLog, Notification, hidden_posts
 from app.shared.post import (
     hide_post,
     lock_post,
@@ -676,10 +675,11 @@ def test_an_instance_admin_may_sticky_a_post(db_session):
 def test_a_site_admin_may_sticky_a_post(db_session):
     """`:1003`'s THIRD disjunct alone -- `user.is_admin_or_staff()`.
 
-    Task 5 witnessed this same disjunct for `move_post:971`'s copy of P2, but
-    that is evidence about a different `if` statement. This test witnesses it
-    independently for `sticky_post:1003`, so Task 11's mutation pass has a
-    witness that dies when `:1003`'s third disjunct specifically is weakened.
+    `test_a_site_admin_may_move_a_post` witnesses this same disjunct for
+    `move_post:971`'s copy of P2, but that is evidence about a different `if`
+    statement. This test witnesses it independently for `sticky_post:1003`,
+    so the mutation pass (D426) has a witness that dies when `:1003`'s third
+    disjunct specifically is weakened.
     """
     s = seed_post_context(community_name='moderation')
     make_site_admin(s.voter)
@@ -724,22 +724,11 @@ def test_an_unprivileged_user_does_not_federate_a_sticky(db_session):
     restores in a finally: it is imported by other tests in the same session
     and a leaked patch corrupts every test that follows.
     """
-    calls = []
     s = seed_post_context(community_name='moderation')
 
-    import app.shared.post as post_module
-    original = post_module.task_selector
-
-    def counting_task_selector(task_key, **kwargs):
-        calls.append(task_key)
-        return original(task_key, **kwargs)
-
-    post_module.task_selector = counting_task_selector
-    try:
+    with recording_task_selector() as calls:
         with pytest.raises(Exception, match='Does not have permission'):
             sticky_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
-    finally:
-        post_module.task_selector = original
 
     db.session.refresh(s.post)
     assert s.post.sticky is not True
@@ -752,22 +741,11 @@ def test_a_permitted_sticky_still_federates(db_session):
     The counterpart of the test above. Without this one, PC1 could be
     'fixed' by deleting the federation entirely and both tests would pass.
     """
-    calls = []
     s = seed_post_context(community_name='moderation')
     seed_moderator(s)
 
-    import app.shared.post as post_module
-    original = post_module.task_selector
-
-    def counting_task_selector(task_key, **kwargs):
-        calls.append(task_key)
-        return original(task_key, **kwargs)
-
-    post_module.task_selector = counting_task_selector
-    try:
+    with recording_task_selector() as calls:
         sticky_post(s.post.id, True, SRC_API, auth=bearer(s.voter))
-    finally:
-        post_module.task_selector = original
 
     assert calls == ['sticky_post']
 
@@ -778,24 +756,13 @@ def test_a_permitted_unsticky_federates_the_undo(db_session):
     Catches a regression hardcoding `:1017`'s task key, which would federate a
     sticky when the moderator unstickied.
     """
-    calls = []
     s = seed_post_context(community_name='moderation')
     seed_moderator(s)
     s.post.sticky = True
     db.session.commit()
 
-    import app.shared.post as post_module
-    original = post_module.task_selector
-
-    def counting_task_selector(task_key, **kwargs):
-        calls.append(task_key)
-        return original(task_key, **kwargs)
-
-    post_module.task_selector = counting_task_selector
-    try:
+    with recording_task_selector() as calls:
         sticky_post(s.post.id, False, SRC_API, auth=bearer(s.voter))
-    finally:
-        post_module.task_selector = original
 
     assert calls == ['unsticky_post']
 
@@ -1236,7 +1203,7 @@ def test_an_unprivileged_web_sticky_still_returns_quietly(db_session, app):
     s = seed_post_context(community_name='moderation')
 
     with web_ctx(app, s.voter):
-        result = sticky_post(s.post.id, True, SRC_WEB)
+        sticky_post(s.post.id, True, SRC_WEB)
 
     db.session.refresh(s.post)
     assert s.post.sticky is not True
