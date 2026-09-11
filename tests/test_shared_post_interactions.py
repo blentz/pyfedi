@@ -1283,6 +1283,11 @@ def _seed_poll(s, mode='single', choices=('a', 'b')):
     the Poll; read its choices by querying PollChoice with post_id=s.post.id
     (order_by(PollChoice.sort_order) when choice identity/order matters --
     e.g. picking "the first choice" -- since nothing else fixes row order).
+
+    LIMIT: this ties to `s.post` alone, and since `Poll.post_id` is the
+    primary key that means exactly one poll per seed. A test needing a SECOND
+    poll (e.g. a choice that belongs to a different poll than the one under
+    test) needs its own arrangement -- this helper does not support it.
     """
     from datetime import timedelta
     from app.models import utcnow
@@ -1303,7 +1308,7 @@ def test_a_single_mode_api_vote_records_one_choice(db_session):
 
     No `_web_ctx` -- the module docstring's "SRC_API ARM DOES NOT NEED A
     REQUEST CONTEXT" finding applies here too, and the real API caller
-    (app/api/alpha/utils/post.py:1791-1796) hands `vote_for_poll` a bare int
+    (app/api/alpha/utils/post.py:1791-1797) hands `vote_for_poll` a bare int
     `data['choice_id']`, unwrapped, so `:1155` must wrap it into a list.
     Catches a regression dropping `:1155`, which would make `len(votes)` at
     `:1160` fail (`TypeError: object of type 'int' has no len()`) on an int.
@@ -1333,7 +1338,7 @@ def test_a_single_mode_api_vote_records_one_choice(db_session):
 def test_a_single_mode_web_vote_accepts_a_list(db_session, app):
     """`:1147`'s false arm and `:1155`'s false arm.
 
-    The real web caller (app/post/routes.py:640-641) also sends a bare int
+    The real web caller (app/post/routes.py:642) also sends a bare int
     for single mode (`int(request.form.get('poll_choice'))`), so nothing in
     this file's real callers exercises `:1155`'s false arm with SRC_WEB. The
     function itself places no such restriction on its `votes` argument
@@ -1463,7 +1468,7 @@ def test_too_many_choices_in_single_mode_falls_through_on_the_web(db_session, ap
     `:1160`'s length check raises only for SRC_API (`:1161`). The web arm
     falls through to `:1163`-`:1166`, which votes for `votes[0]` alone and
     silently discards the rest. This exact input is unreachable from the real
-    web caller (app/post/routes.py:640), which normalizes single mode to one
+    web caller (app/post/routes.py:642), which normalizes single mode to one
     bare int before calling `vote_for_poll` -- so this test registers the
     fall-through's current behaviour (pinning it so it cannot change
     unnoticed) rather than asserting it is correct.
@@ -1483,7 +1488,7 @@ def test_too_many_choices_in_single_mode_falls_through_on_the_web(db_session, ap
 def test_multiple_mode_records_every_choice(db_session, app):
     """`:1159`'s false arm and `:1171`'s loop over several choices.
 
-    The real multiple-mode web caller (app/post/routes.py:640) sends
+    The real multiple-mode web caller (app/post/routes.py:642) sends
     `request.form.getlist('poll_choice[]')`, a list of strings -- `:1172`'s
     explicit `int(choice_id)` exists for that reason, so this test passes
     plain ints rather than strings to keep the choice-identity assertion
@@ -1508,7 +1513,7 @@ def test_multiple_mode_records_every_choice(db_session, app):
 def test_multiple_mode_with_no_choices_records_nothing(db_session, app):
     """`:1171`'s zero-iteration exit arc.
 
-    app/post/routes.py:640 uses `request.form.getlist`, which returns `[]`
+    app/post/routes.py:642 uses `request.form.getlist`, which returns `[]`
     when the voter submits nothing for multiple mode, so this input is
     reachable from the real caller. Catches a regression giving the loop a
     default choice or otherwise recording a vote when `votes` is empty.
