@@ -262,6 +262,36 @@ def test_restoring_federates_unconditionally(db_session):
     assert calls == ['restore_post']
 
 
+def test_restoring_through_the_api_requires_the_posts_own_author(db_session):
+    """`:799`'s `id_match=post.user_id` authorisation -- a REFUSAL, not a value.
+
+    Every SRC_API `restore_post` test above passes a bearer token that
+    already belongs to the post's author, so the `user_id` `:799` returns is
+    identical whether it comes from `authorise_api_user`'s ownership check or
+    from a regression that just reads `post.user_id` directly and never
+    checks the bearer at all -- the two arms produce the SAME value in the
+    success case, and a mutation collapsing `:799` to the latter passes every
+    test above silently. Only a call from someone who is NOT the author can
+    tell them apart.
+
+    `s.voter` (id 2) did not author `s.post` (`s.author`, id 1), so `:799`
+    must reject the call. `app/utils.py:3634`'s `id_match` check raises a
+    bare `Exception('incorrect_login')` on mismatch -- the same rejection
+    tested directly in `tests/test_utils_api_auth.py`. The post staying
+    deleted afterward additionally confirms the rejection happened before any
+    of `:807-811`'s mutations, not after.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    s.post.deleted = True
+    db.session.commit()
+
+    with pytest.raises(Exception, match='incorrect_login'):
+        restore_post(s.post.id, SRC_API, bearer(s.voter))
+
+    db.session.refresh(s.post)
+    assert s.post.deleted is True
+
+
 def test_deleting_through_the_api_sets_the_flag_and_attributes_it(db_session):
     """`:756`'s true arm, `:771`'s flag, `:772`'s deleted_by, `:791`'s return.
 
@@ -1347,6 +1377,66 @@ def test_a_remote_suspects_instance_is_not_added_twice(db_session):
         post_module.task_selector = original
 
     assert calls == [{suspect_instance.id}]
+
+
+def test_a_local_moderators_user_id_colliding_with_a_remote_suspects_instance_id_still_adds_it(db_session):
+    """`:908` compares `suspect_user.instance_id` against `remote_instance_ids`
+    -- NOT `already_notified` -- and the distinction matters even though the
+    arc labelled at `:908` above (an id already present in the SAME set) is a
+    documented no-op. A mutant swapping the comparison to `already_notified`
+    (a set of USER ids, populated at `:884` for LOCAL moderators only) is a
+    DIFFERENT fault: it can falsely skip `:909`'s add when a local
+    moderator's user id happens to equal the remote suspect's instance id --
+    two values from unrelated id spaces.
+
+    THE COLLISION IS BUILT BY ORDERING, the same technique as
+    `test_a_remote_communitys_instance_is_flagged_even_when_ids_collide` (PC2),
+    and not by reassigning a primary key. `seed_post_context` takes instance
+    id 1, author user id 1, voter user id 2. A local moderator seeded next
+    takes user id 3. A padding instance (id 2) and the suspect's own instance
+    (id 3) are seeded after that, landing `suspect_instance.id` on 3 as well
+    -- `already_notified == {3}` (the moderator's USER id) collides with
+    `suspect_user.instance_id == 3` (an INSTANCE id). The assertion below
+    pins the collision explicitly so a change to seeding order fails loudly
+    here instead of silently ceasing to construct its own precondition.
+
+    Against the tree as it stands, the local moderator contributes nothing to
+    `remote_instance_ids` (only non-local moderators do, via `:886-890`), so
+    it is empty when `:908` is reached; `suspect_user.instance_id (3) not in
+    {}` is true, `:909` adds it, and one Flag is dispatched carrying
+    `{suspect_instance.id}`. A mutant checking `already_notified` instead
+    would see `3 in {3}`, skip the add, leave `remote_instance_ids` empty,
+    and `:914` would then suppress the call ENTIRELY -- not the no-op `:908`
+    arc produces, a missing federation call.
+    """
+    calls = []
+    s = seed_post_context(community_name='lifecycle')
+    localmod = seed_local_moderator(s)
+    make_instance('padding.example')  # consumes instance id 2
+    suspect_instance = make_instance('suspect.example', software='lemmy')  # id 3
+    assert localmod.id == suspect_instance.id == 3
+    suspect = make_user(suspect_instance, 'remoteauthor')
+    remote_post = make_post(s.community, suspect, 'https://suspect.example/p/9')
+
+    import app.shared.post as post_module
+    original = post_module.task_selector
+
+    def recorder(task_key, **kwargs):
+        calls.append((task_key, set(kwargs.get('instance_ids') or [])))
+        return original(task_key, **kwargs)
+
+    post_module.task_selector = recorder
+    try:
+        report_post(
+            remote_post,
+            {'reason': 'spam', 'description': 'x', 'report_remote': True},
+            SRC_API,
+            auth=bearer(s.voter),
+        )
+    finally:
+        post_module.task_selector = original
+
+    assert calls == [('report_post', {suspect_instance.id})]
 
 
 def test_a_minor_abuse_report_notifies_admins_through_the_api(db_session):
