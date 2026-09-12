@@ -80,9 +80,11 @@ from app.models import Instance, Notification, Report, Role, User, user_role
 from app.shared.post import delete_post, report_post, restore_post
 from tests.factories import (
     bearer,
+    make_community,
     make_community_member,
     make_instance,
     make_post,
+    make_site,
     make_user,
     seed_post_context,
     web_ctx,
@@ -1360,3 +1362,101 @@ def test_minor_abuse_in_the_description_also_notifies_admins(db_session):
 
     assert db.session.query(Notification).filter_by(
         title='Suspicious content').count() == 1
+
+
+def test_a_remote_communitys_instance_is_flagged_even_when_ids_collide(db_session):
+    """PC2: `:905` tests `post.community_id` against a set of INSTANCE ids.
+
+    `:906` adds `post.community.instance_id`, and `:908` gets the identical
+    guard right two lines below -- that in-file counterpart is what
+    establishes intent. The consequence is a false skip: when a community id
+    happens to equal an instance id already in the set, the community's
+    instance is never added and its moderators never receive the Flag.
+
+    THIS FIXTURE CONSTRUCTS THE COLLISION DELIBERATELY. Community ids and
+    instance ids are drawn from separate sequences, so the coincidence below
+    is not realistic -- it is the minimal arrangement that makes the wrong
+    comparison observable. The defect is a latent wrong-variable bug, not a
+    common failure.
+
+    THE COLLISION IS BUILT BY ORDERING, NOT BY REASSIGNING A PRIMARY KEY.
+    Reassigning `community.id` after the row exists is a primary key with
+    dependent foreign keys and is not a safe rewrite, so this inlines
+    `seed_post_context`'s own steps (tests/factories.py:1187-1213) with one
+    extra `make_community('padding')` call spliced in between the local
+    instance and the community under test. `tests/conftest.py:131` resets
+    every table's sequence to 1 after each test, and `make_community`
+    hardcodes `instance_id=1` (tests/factories.py:141), so:
+
+      - the local instance is the first Instance row -> id 1
+      - the padding community consumes community id 1 (its hardcoded FK to
+        instance id 1 already exists by this point)
+      - the community under test becomes the SECOND community -> id 2
+      - `seed_remote_moderator` then creates the SECOND Instance row overall
+        (the local instance was the first) -> id 2
+
+    That makes `post.community_id` (2) collide with the remote moderator's
+    instance id (2), already in `remote_instance_ids` from the loop above
+    `:905` because `report_remote=True` is passed below.
+
+    `:904` additionally requires the community to be NON-LOCAL, and setting
+    only `ap_id` is not enough to get there: `Community.is_local()`
+    (app/models.py:796) is `self.ap_id is None or
+    self.profile_id().startswith(SERVER_URL)`, and `make_community`'s
+    default `ap_profile_id` (`https://test.piefed.local/c/<name>`) already
+    starts with this test environment's `SERVER_URL` (`.env.test`'s
+    `SERVER_NAME=test.piefed.local`) -- the second disjunct alone would keep
+    the community local regardless of `ap_id`. Both `ap_id` and
+    `ap_profile_id` are overridden below to a remote domain, and
+    `is_local()` is asserted False before calling `report_post` so a
+    fixture that silently fails to reach `:904` announces itself instead of
+    passing for the wrong reason.
+
+    Fails against the tree as it stands: the community's instance (id 1) is
+    missing from the federated instance list, which comes back as `{2}`
+    instead of `{1, 2}`.
+    """
+    calls = []
+
+    # Inlined seed_post_context (tests/factories.py:1187-1213) with one
+    # padding community spliced in to force the id collision described above.
+    instance = make_instance('local.example', software='piefed')
+    make_site()
+    author = make_user(instance, 'author', local=True)
+    voter = make_user(instance, 'voter', local=True)
+    make_community('padding')  # consumes community id 1
+    community = make_community('lifecycle')  # lands on community id 2
+    community.private = True
+    db.session.commit()
+    post = make_post(community, author, 'https://local.example/p/1')
+
+    from types import SimpleNamespace
+    remote_instance, _remotemod = seed_remote_moderator(
+        SimpleNamespace(community=community))
+
+    assert community.id == remote_instance.id == 2
+
+    community.ap_id = f'lifecycle@{remote_instance.domain}'
+    community.ap_profile_id = f'https://{remote_instance.domain}/c/lifecycle'
+    db.session.commit()
+    assert community.is_local() is False
+
+    import app.shared.post as post_module
+    original = post_module.task_selector
+
+    def recorder(task_key, **kwargs):
+        calls.append(set(kwargs.get('instance_ids') or []))
+        return original(task_key, **kwargs)
+
+    post_module.task_selector = recorder
+    try:
+        report_post(
+            post,
+            {'reason': 'spam', 'description': 'x', 'report_remote': True},
+            SRC_API,
+            auth=bearer(voter),
+        )
+    finally:
+        post_module.task_selector = original
+
+    assert calls == [{instance.id, remote_instance.id}]
