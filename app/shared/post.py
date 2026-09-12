@@ -670,7 +670,7 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
         post.type = POST_TYPE_POLL
 
         # Add poll choices
-        if 'choices' in poll_data:
+        if 'choices' in poll_data:  # pragma: no branch -- see proof in test_shared_post_url.py
             for choice in poll_data['choices']:
                 if 'choice_text' in choice and choice['choice_text'].strip():
                     db.session.add(PollChoice(

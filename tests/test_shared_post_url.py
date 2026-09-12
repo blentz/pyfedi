@@ -72,6 +72,7 @@ url itself -- and why `post.url` alone cannot tell `:640` (`post.url = url`)
 apart from `:652` (`post.url = embed_url`). See TestLoopsArm for what does.
 """
 
+import warnings
 from datetime import datetime, timedelta
 from io import BytesIO
 
@@ -2294,3 +2295,315 @@ class TestGenericOpengraphArm:
         """
         post = self._drive_video(http_mock, 'https://vimeo.com/12345')
         assert post.type == POST_TYPE_VIDEO
+
+
+BARE_PIXELFED_URL = 'https://pixelfed.social'
+
+
+class TestPollAndEventTail:
+    """`:662-703` -- five arms whose LINES all run and whose branches do not.
+
+    This region contributed ZERO missing statements and five missing arcs to
+    sub-project 39's baseline, so nothing here is about reaching new code; it
+    is entirely about reaching the other side of decisions the rest of the
+    suite only ever takes one way. Measured suite-scoped at 7e320fb1 over all
+    seven `tests/test_shared_post_*.py` files (349 passed), the whole of
+    `app/shared/post.py` was `missing_lines []` and
+    `missing_branches [(665, 668), (673, 682), (675, 674), (683, 686),
+    (699, 703)]`. A FILE-SCOPED run over this file alone reports ~20
+    statements missing in the `670-694` window; they are not missing, they are
+    covered by `tests/test_shared_post_edit.py`, and a file-scoped run cannot
+    see that. Nothing in this class was concluded from one.
+
+    `:673`'s FALSE ARM IS UNREACHABLE and `app/shared/post.py:673` carries a
+    `# pragma: no branch` saying so and pointing here. THE PROOF, read out of
+    the file rather than recalled -- `poll_data` is assigned at exactly four
+    lines (`grep -n poll_data app/shared/post.py` gives :300, :314, :349,
+    :357 as the only assignments), it is a LOCAL of `edit_post` and not a
+    parameter, so no caller and no direct test call can hand `:673` a dict
+    without the key. The API branch::
+
+        299	        # Parse poll data from API
+        300	        poll_data = input.get('poll', None)
+        301	        if poll_data:
+        302	            # Extract all poll fields
+        303	            parsed_poll = {
+        304	                'mode': poll_data.get('mode', 'single'),
+        305	                'local_only': poll_data.get('local_only', False),
+        306	                'choices': poll_data.get('choices', [])
+        307	            }
+        ...
+        314	            poll_data = parsed_poll
+
+    -- a caller-supplied `poll` that is TRUTHY is replaced wholesale by
+    `parsed_poll`, which always carries `'choices'` (`:306`); a `poll` that is
+    FALSY leaves `poll_data` falsy and `:669`'s `and poll_data` closes the
+    whole block before `:673` is reached. There is no third outcome: a truthy
+    non-mapping dies at `:304`'s `.get` with AttributeError, upstream of
+    `:673`. The web branch::
+
+        343	        if type == POST_TYPE_POLL:
+        ...
+        349	            poll_data = {
+        350	                'mode': input.mode.data,
+        351	                'local_only': input.local_only.data,
+        352	                'choices': poll_choices
+        353	            }
+        354	            if input.finish_in:
+        355	                poll_data['end_poll'] = end_poll_date(input.finish_in.data)
+        356	        else:
+        357	            poll_data = None
+
+    -- `'choices'` at `:352` unconditionally when `type` is POLL, and `None`
+    otherwise, which again closes `:669`. And `:315` is a bare `else:`, so any
+    `src` that is not SRC_API takes the web branch; there is no third entry
+    point.
+
+    REGISTERED, NOT DELETED. Removing a guard because no CURRENT caller can
+    trip it is a behaviour change this round has no standing to make, and
+    `:673` describes a `poll_data` shape a future caller could easily produce.
+    The pragma is the same disposition this repository already uses at
+    `app/shared/tasks/pages.py:270`, `:312`, `:333` and
+    `app/shared/tasks/follows.py:188`.
+    """
+
+    def test_an_unflushed_thumbnail_is_not_found_by_its_own_foreign_key(
+            self, db_session, http_mock):
+        """`:665` FALSE -> `:668`. Arc 665->668.
+
+        THE BRIEF'S MECHANISM FOR THIS ARC WAS WRONG TWICE, and what follows
+        is measured. The brief guessed `File.query.get(None)` on an unflushed
+        `post.image_id`; the controller's amendment then reported Task 7's
+        finding that `File.query.get`'s own autoflush gives `post.image_id` a
+        value, so `:665` is TRUE on the opengraph arms, and told this task to
+        find the real mechanism. BOTH are right about their own case, and the
+        reconciliation is the url's PATH:
+
+          - `post.image = file` (`:626`) is a RELATIONSHIP write. `post.image`
+            is truthy the instant it is assigned, but `post.image_id`
+            (app/models.py:559) is only synced at FLUSH.
+          - `:659` `post.calculate_cross_posts(url_changed=url_changed)` is
+            the only thing between `:626` and `:663` that can emit SQL, and
+            SQL is what autoflushes. For a url WITH a path it queries, the
+            autoflush fires, `post.image_id` is set, and `:665` is true --
+            that is Task 7's case, and it is the test immediately below.
+          - For a url that is a BARE DOMAIN it returns first, at
+            app/models.py:2362 `if self.url.count('/') < 3 or ...: return`,
+            having touched only already-loaded attributes. NO SQL, NO
+            autoflush, so `post.image_id` is still None at `:664`.
+
+        `File.query.get(None)` then returns None rather than raising -- probed
+        in this container: `PROBE File.query.get(None) -> None`, with
+        `SAWarning: fully NULL primary key identity cannot load any object.`
+
+        THAT WARNING IS THIS TEST'S PRIMARY WITNESS, and it is the only
+        assertion here that separates `:665` FALSE from `:663` FALSE. It is
+        raised by SQLAlchemy only when a `get()` is handed an all-NULL primary
+        key, and it is attributed to the calling line, so
+        `filename.endswith('app/shared/post.py') and lineno == 664` says
+        exactly `:664` ran and was handed None -- i.e. `:663` was TRUE and
+        `:665` was FALSE. Measured: `PROBE hits [('/app/app/shared/post.py',
+        664, 'fully NULL primary key identity cannot load any object...')]`.
+        `:438` is the function's only other `File.query.get(post.image_id)`
+        and `from_scratch=True` closes the whole `:421-459` block, so `:664`
+        is the only candidate.
+
+        The alt_text is the second witness, and alone it would be a false
+        witness: 'A photo' is what `:625` wrote, and `post.image` being falsy
+        at `:663` would leave it just as untouched (mechanism 1). Paired with
+        the warning it says `:666` did not run; paired with the test below --
+        same page, same og key, same `image_alt_text`, differing ONLY in
+        whether the url has a path -- it says `:666` is a write and not an
+        absence (mechanism 3).
+        """
+        http_mock.head(BARE_PIXELFED_URL).respond(
+            200, headers={'Content-Type': 'text/html'})
+        _opengraph_page(http_mock, BARE_PIXELFED_URL,
+                        og_image='https://cdn.example.com/shot.jpg',
+                        og_title='A photo')
+        s = _seed()
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            edit_post(_api_input(url=BARE_PIXELFED_URL,
+                                 image_alt_text='supplied by the caller'),
+                      s.post, POST_TYPE_LINK, SRC_API, user=s.user,
+                      from_scratch=True)
+
+        null_pk = [w for w in caught
+                   if 'fully NULL primary key' in str(w.message)
+                   and w.filename.endswith('app/shared/post.py')
+                   and w.lineno == 664]
+        assert len(null_pk) == 1
+
+        db.session.refresh(s.post)
+        assert s.post.image_id is not None  # `:663`'s `post.image` WAS truthy
+        file = db.session.get(File, s.post.image_id)
+        assert file.source_url == 'https://cdn.example.com/shot.jpg'
+        assert file.alt_text == 'A photo'  # `:625`'s value; `:666` never ran
+
+    def test_a_thumbnail_flushed_by_the_cross_post_query_does_get_the_alt_text(
+            self, db_session, http_mock):
+        """`:665` TRUE -> `:666`. THE POSITIVE CONTROL for the test above.
+
+        CLOSES NO ARC -- 665->666 is already covered suite-scoped. It exists
+        because the test above asserts that something did NOT happen, and an
+        assertion of that shape is worth nothing without a same-mechanism
+        positive control (mechanism 3).
+
+        It differs from the test above in EXACTLY ONE input: the url carries a
+        path, so `:659`'s `calculate_cross_posts` gets past
+        app/models.py:2362's bare-domain return and queries, its autoflush
+        assigns `post.image_id`, `:664` finds the row and `:666` overwrites
+        `:625`'s 'A photo' with the caller's text. Everything else -- the og
+        tags, the `image_alt_text`, the post type, the seed -- is identical,
+        which is what makes the alt_text difference attributable to `:665`
+        and nothing else.
+
+        The absence of the NULL-primary-key warning is asserted too: on this
+        path `:664` is handed a real id, so the warning the test above
+        requires must NOT appear here. Two independent witnesses moving in
+        opposite directions across one input change (mechanism 5).
+        """
+        http_mock.head(PIXELFED_URL).respond(
+            200, headers={'Content-Type': 'text/html'})
+        _opengraph_page(http_mock, PIXELFED_URL,
+                        og_image='https://cdn.example.com/shot.jpg',
+                        og_title='A photo')
+        s = _seed()
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            edit_post(_api_input(url=PIXELFED_URL,
+                                 image_alt_text='supplied by the caller'),
+                      s.post, POST_TYPE_LINK, SRC_API, user=s.user,
+                      from_scratch=True)
+
+        assert not [w for w in caught
+                    if 'fully NULL primary key' in str(w.message)
+                    and w.filename.endswith('app/shared/post.py')]
+
+        db.session.refresh(s.post)
+        file = db.session.get(File, s.post.image_id)
+        assert file.source_url == 'https://cdn.example.com/shot.jpg'
+        assert file.alt_text == 'supplied by the caller'  # `:666` overwrote
+
+    def test_a_blank_choice_is_skipped_and_the_next_one_is_still_added(
+            self, db_session):
+        """`:675` FALSE -> back to `:674`. Arc 675->674, the LOOP-BACK.
+
+        A CORRECTION TO THE BRIEF, measured rather than reasoned. The brief
+        asserts that "a single bad choice gives the loop no next iteration to
+        return to", so the blank entry must be followed by another. That is
+        FALSE: a single blank choice closes 675->674 on its own, because the
+        `for` at `:674` re-executes to raise StopIteration and coverage sees
+        that line event either way. Measured by running a one-blank-choice
+        variant alone under `--cov=app.shared.post --cov-branch`:
+
+            (665, 668) MISSING
+            (673, 682) MISSING
+            (675, 674) TAKEN      <-- one blank choice, no second entry
+            (683, 686) MISSING
+            (699, 703) MISSING
+
+        The second choice is kept anyway, because it is a strictly stronger
+        WITNESS even though it is not needed for the arc. With one choice the
+        only assertion available is that no row was written, which is also
+        what a `:674` loop that never ran would leave (mechanism 3 and
+        mechanism 1 together). 'kept' can only have been added by an iteration
+        that ran AFTER the skip, so the pair pins both halves: the blank was
+        skipped, and the skip did not abort the loop.
+
+        `'   '` is non-empty, so `'choice_text' in choice` is TRUE and it is
+        `:675`'s SECOND conjunct, `choice['choice_text'].strip()`, that
+        decides -- the two conjuncts are not moved in lockstep here.
+
+        No `http_mock`: `_seed` leaves `post.url` None so `:403` is false, and
+        the input's `url` is None so `:565`, `:660` and `:663` are all false.
+        This call makes no outbound request at all, and a registered route
+        would fail `assert_all_called=True` at teardown.
+        """
+        s = _seed()
+
+        edit_post(_api_input(poll={'choices': [
+            {'choice_text': '   ', 'sort_order': 1},
+            {'choice_text': 'kept', 'sort_order': 2},
+        ]}), s.post, POST_TYPE_POLL, SRC_API, user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        texts = {c.choice_text for c in
+                 PollChoice.query.filter_by(post_id=s.post.id).all()}
+        assert texts == {'kept'}
+
+    def test_editing_a_post_that_already_has_a_poll_reuses_the_existing_row(
+            self, db_session):
+        """`:683` FALSE -> `:686`. Arc 683->686.
+
+        The create path always takes `:683`'s true arm, so this needs a post
+        that already carries a `Poll`.
+
+        THE BRIEF'S WITNESS DOES NOT EXIST AND ITS LOGIC WOULD NOT WORK. It
+        proposes `polls[0].id == existing_id`, but `Poll` HAS NO `id`
+        (app/models.py:3781, `post_id = db.Column(db.Integer,
+        db.ForeignKey('post.id'), primary_key=True)`) -- `post_id` IS the
+        primary key. That also means a freshly created row would carry the
+        SAME key, so no identity comparison on the key can tell reuse from
+        recreation; and `len(polls) == 1` is guaranteed by the primary key
+        rather than by the branch.
+
+        The witness that does work is a column `:686-690` DOES NOT WRITE.
+        `:687` is `if 'end_poll' in poll_data and poll_data['end_poll']:` and
+        the input below carries no `end_poll`, so `:688` is skipped and
+        `end_poll` is untouched by the whole block. The seeded row's
+        `end_poll` therefore survives only if `:683` took its FALSE arm; a row
+        built by `:684`'s `Poll(post_id=post.id)` would have `end_poll` None.
+        Paired with `mode == 'multiple'`, which shows `:686` really did write
+        to the row it found rather than to some other one, that is the
+        identity-plus-write pair. Asserting the mode alone would pass against
+        a freshly created row (mechanism 1).
+        """
+        s = _seed()
+        db.session.add(Poll(post_id=s.post.id, mode='single',
+                            end_poll=datetime(2031, 3, 4, 5, 6, 7)))
+        db.session.commit()
+
+        edit_post(_api_input(poll={'mode': 'multiple', 'choices': [
+            {'choice_text': 'a', 'sort_order': 1}]}),
+            s.post, POST_TYPE_POLL, SRC_API, user=s.user, from_scratch=True)
+
+        polls = Poll.query.filter_by(post_id=s.post.id).all()
+        assert len(polls) == 1
+        assert polls[0].mode == 'multiple'  # `:686` wrote to the row it found
+        assert polls[0].end_poll == datetime(2031, 3, 4, 5, 6, 7)
+
+    def test_editing_a_post_that_already_has_an_event_reuses_the_existing_row(
+            self, db_session):
+        """`:699` FALSE -> `:703`. Arc 699->703.
+
+        The event twin of the test above, and `Event` has the same shape:
+        app/models.py:3840 makes `post_id` the primary key and there is no
+        `id` column, so the brief's `events[0].id == existing_id` is again
+        unavailable and again would not have distinguished anything.
+
+        The surviving column here is `start`. `:703` is `if 'start' in
+        event_data:` and the input below carries none, so `:704` is skipped
+        and `start` is untouched; a row built by `:700`'s
+        `Event(post_id=post.id)` would have `start` None. `timezone` is
+        written unconditionally at `:708`, so asserting it shows `:708` wrote
+        to the row that `:698` found.
+        """
+        s = _seed()
+        db.session.add(Event(post_id=s.post.id,
+                             start=datetime(2032, 7, 8, 9, 10, 11)))
+        db.session.commit()
+
+        edit_post(_api_input(event={'timezone': 'Europe/Berlin',
+                                    'max_attendees': 5}),
+                  s.post, POST_TYPE_EVENT, SRC_API, user=s.user,
+                  from_scratch=True)
+
+        events = Event.query.filter_by(post_id=s.post.id).all()
+        assert len(events) == 1
+        assert events[0].timezone == 'Europe/Berlin'  # `:708` wrote the row
+        assert events[0].max_attendees == 5
+        assert events[0].start == datetime(2032, 7, 8, 9, 10, 11)
