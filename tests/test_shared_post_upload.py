@@ -900,6 +900,14 @@ def test_a_gif_path_skips_the_pil_reencode_block(db_session, chdir_upload, http_
     renamed raster) so this reaches `:513` with a filename AND payload that
     would both pass `:515` if the block ran -- the only thing that should
     stop it is `:513`'s own `.gif` check.
+
+    Positive control: `test_a_jpeg_upload_takes_the_to_srgb_conversion_path`
+    below spies the SAME `post_module.Image.open` target and asserts a
+    NON-EMPTY call list for a file that DOES enter the block -- without it,
+    this test's empty list would be equally consistent with "the guard
+    worked", "the spy never installed", or "the patch targeted the wrong
+    name" (D451 mechanism 3); that test's non-empty result for the same
+    spy rules out the latter two.
     """
     open_calls = []
     real_open = Image.open
@@ -964,6 +972,15 @@ def test_a_file_whose_bytes_disagree_with_its_name_is_refused(db_session, chdir_
     the opposite (no file), it would pass equally were `:468` to fire
     instead of `:533` -- which is exactly the ambiguity the docstring
     warns against.
+
+    Positive control, named explicitly rather than left to inference:
+    `test_a_jpeg_upload_takes_the_to_srgb_conversion_path` below drives a
+    genuine, allowed-format upload through the SAME `:515` check and
+    reaches its TRUE arm instead -- completing normally rather than
+    raising. Without a same-format-decode input that goes the other way,
+    a `pytest.raises` firing for the wrong reason (e.g. a mutant that made
+    `:515` always False) would look identical to this test passing for the
+    right one.
     """
     s = _seed()
     with pytest.raises(Exception, match='filetype not allowed'):
@@ -992,6 +1009,19 @@ def test_a_jpeg_upload_takes_the_to_srgb_conversion_path(db_session, chdir_uploa
     arm ran", "the spy never installed", or "the patch targeted the wrong
     name"; this test's non-empty call list rules out the latter two for
     this spy target.
+
+    ALSO the positive control for `test_a_gif_path_skips_the_pil_reencode_block`
+    above: that test spies `post_module.Image.open` and asserts an EMPTY
+    call list to prove `:513`'s guard skipped the block for a `.gif` path.
+    An empty list there is, on its own, equally consistent with "the guard
+    correctly skipped the block", "the spy never installed", or "the patch
+    targeted the wrong name" (D451 mechanism 3). This test installs the
+    SAME spy on the SAME target (`post_module.Image.open`, the sole call
+    site at `:514`) and asserts a NON-EMPTY call list for a file that DOES
+    enter the block, ruling out the latter two for that spy mechanism --
+    the shape Task 3 used pairing its `sanitize_svg` spy across
+    `test_heic_extension_registers_the_heif_opener` (empty) and
+    `test_svg_extension_is_sanitized_successfully` (non-empty).
     """
     calls = []
     real_to_srgb = post_module.to_srgb
@@ -1002,12 +1032,22 @@ def test_a_jpeg_upload_takes_the_to_srgb_conversion_path(db_session, chdir_uploa
 
     monkeypatch.setattr(post_module, 'to_srgb', spy_to_srgb)
 
+    open_calls = []
+    real_open = Image.open
+
+    def spy_open(*a, **kw):
+        open_calls.append(a)
+        return real_open(*a, **kw)
+
+    monkeypatch.setattr(post_module.Image, 'open', spy_open)
+
     http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/jpeg'})
     s = _seed()
     edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
               uploaded_file=make_upload(filename='pic.jpg', fmt='JPEG'))
 
     assert calls == [True]
+    assert len(open_calls) == 1
     written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
     assert len(written) == 1
     db.session.refresh(s.post)
