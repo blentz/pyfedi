@@ -680,7 +680,7 @@ def test_an_api_ai_flair_report_does_not_escalate_on_piefed(db_session):
         title='Suspicious content').count() == 0
 
 
-def test_a_local_moderator_gets_a_notification(db_session):
+def test_an_api_report_notifies_a_local_moderator(db_session):
     """`:876`'s true arm and `:878-883`'s Notification.
 
     Catches a regression inverting `:876`, which would route a local moderator
@@ -701,7 +701,7 @@ def test_a_local_moderator_gets_a_notification(db_session):
     assert {n.user_id for n in notifs} == {mod.id}
 
 
-def test_a_remote_moderator_gets_no_local_notification(db_session):
+def test_an_api_report_gives_a_remote_moderator_no_local_notification(db_session):
     """`:876`'s false arm.
 
     A remote moderator is reached by a federated Flag, not a local
@@ -722,15 +722,31 @@ def test_a_remote_moderator_gets_no_local_notification(db_session):
         title='A post has been reported').count() == 0
 
 
-def test_report_remote_true_includes_every_remote_moderators_instance(db_session):
-    """`:886`'s FALSE arm and `:890`'s unconditional add.
+def test_api_report_remote_true_adds_a_moderator_the_filter_would_exclude(db_session):
+    """`:886`'s FALSE arm and `:890`'s UNCONDITIONAL add.
 
-    With `report_remote` set the reporter has opted in, so every remote
-    moderator's instance receives the Flag with no filtering.
+    THE MODERATOR MUST BE ONE `:887` WOULD REJECT. This one is non-local but
+    carries the community's own `instance_id`, so `:887`'s second conjunct is
+    false and the filtered arm would drop it. Under `report_remote` the add at
+    `:890` happens anyway.
+
+    That fixture is the whole test. A moderator on some THIRD instance --
+    distinct from both the suspect's and the community's -- passes `:887` too,
+    so a test using one would pass identically whether `:886` routed it to
+    `:890` or to `:888`, and would witness nothing about which arm ran. Swap
+    the arms here and `remote_instance_ids` is empty, `:914` is false, and no
+    `task_selector` call happens at all.
+
+    `make_user(..., local=False)` sets `ap_id` (tests/factories.py:60) while
+    leaving `instance_id` at the instance passed in, and `User.is_local()`
+    (app/models.py:1252) reads only `ap_id`/`ap_profile_id` -- never
+    `instance_id`. That is what lets a user be non-local and still sit on the
+    local instance.
     """
     calls = []
     s = seed_post_context(community_name='lifecycle')
-    remote_instance, _mod = seed_remote_moderator(s)
+    oddmod = make_user(s.instance, 'filtermod', local=False)
+    make_community_member(oddmod, s.community, is_moderator=True)
 
     import app.shared.post as post_module
     original = post_module.task_selector
@@ -752,10 +768,10 @@ def test_report_remote_true_includes_every_remote_moderators_instance(db_session
 
     assert len(calls) == 1
     assert calls[0][0] == 'report_post'
-    assert set(calls[0][1]) == {remote_instance.id}
+    assert set(calls[0][1]) == {s.instance.id}
 
 
-def test_report_remote_false_excludes_the_suspects_own_instance(db_session):
+def test_api_report_remote_false_excludes_the_suspects_own_instance(db_session):
     """`:886`'s TRUE arm and `:887`'s FIRST conjunct taken false.
 
     Without opt-in, a moderator on the suspect's own instance is excluded --
@@ -792,7 +808,7 @@ def test_report_remote_false_excludes_the_suspects_own_instance(db_session):
     assert calls == []
 
 
-def test_report_remote_false_excludes_a_moderator_sharing_the_communitys_instance(db_session):
+def test_api_report_remote_false_excludes_a_moderator_sharing_the_communitys_instance(db_session):
     """`:887`'s SECOND conjunct taken false, with the first conjunct true.
 
     `oddmod`'s `instance_id` equals the community's (1, the local instance
