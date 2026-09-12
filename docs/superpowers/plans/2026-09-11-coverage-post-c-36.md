@@ -1832,6 +1832,10 @@ And: **`-x` reports only the first failing arm**, so a crash kill may mask an as
 
 Either add a test, or prove the mutation equivalent **with an argument, not an assertion**. An equivalence argument must quantify over the inputs that REACH the site, not the one input a test happens to use.
 
+**An arc being equivalent does NOT make every mutation of its line equivalent.** These are different claims and conflating them is how a real hole gets filed as expected. `:908`'s two ARMS are observationally equivalent, because the guard tests the same set `:909` adds to and `set.add` of a present value is a no-op. That says nothing about a mutant which swaps the guard to test a DIFFERENT set: `already_notified` holds user ids, `remote_instance_ids` holds instance ids, and when one of those user ids happens to equal the suspect's instance id the mutant skips an add the original performs. The final states differ, so the mutant is not equivalent — it is the same wrong-id-space defect as PC2, one guard lower.
+
+Before accepting any survivor as equivalent, state which of the two claims you are making. If it is the second, the argument must cover the mutant's actual predicate, not the original's.
+
 Re-run the whole file after each new test.
 
 - [ ] **Step 6: Final restore check and duplicate-name check**
