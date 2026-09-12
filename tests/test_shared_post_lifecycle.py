@@ -355,6 +355,158 @@ def test_deleting_a_post_with_a_url_tears_down_its_cross_post_links(db_session):
     assert sibling.cross_posts == []
 
 
+def test_a_published_post_federates_its_deletion(db_session):
+    """`:778`'s true arm with BOTH conjuncts true, and `:779`'s task_selector.
+
+    Positive control for the two suppression tests below: this is the sibling
+    that shows `calls` is non-empty when both conjuncts hold, so an empty
+    `calls` in those tests is a real refusal rather than a broken fixture.
+    """
+    calls = []
+    s = seed_post_context(community_name='lifecycle')
+    s.post.status = POST_STATUS_PUBLISHED
+    db.session.commit()
+
+    import app.shared.post as post_module
+    original = post_module.task_selector
+
+    def recorder(task_key, **kwargs):
+        calls.append(task_key)
+        return original(task_key, **kwargs)
+
+    post_module.task_selector = recorder
+    try:
+        delete_post(s.post.id, True, SRC_API, bearer(s.author))
+    finally:
+        post_module.task_selector = original
+
+    assert calls == ['delete_post']
+
+
+def test_federate_deletion_false_suppresses_the_federation(db_session):
+    """`:778`'s FIRST conjunct taken false, with the second true.
+
+    This is the maintenance tasks' call shape --
+    `app/shared/tasks/maintenance.py:150` passes `False`. Catches a regression
+    dropping the `federate_deletion` conjunct, which would federate every
+    retention-policy deletion to every peer. Positive control:
+    `test_a_published_post_federates_its_deletion` above, same fixture shape,
+    non-empty `calls`.
+    """
+    calls = []
+    s = seed_post_context(community_name='lifecycle')
+    s.post.status = POST_STATUS_PUBLISHED
+    db.session.commit()
+
+    import app.shared.post as post_module
+    original = post_module.task_selector
+
+    def recorder(task_key, **kwargs):
+        calls.append(task_key)
+        return original(task_key, **kwargs)
+
+    post_module.task_selector = recorder
+    try:
+        delete_post(s.post.id, False, SRC_API, bearer(s.author))
+    finally:
+        post_module.task_selector = original
+
+    assert calls == []
+
+
+def test_an_unpublished_post_does_not_federate_its_deletion(db_session):
+    """`:778`'s SECOND conjunct taken false, with the first true.
+
+    A post no peer ever saw must not federate a delete. Catches a regression
+    dropping the status conjunct. Positive control:
+    `test_a_published_post_federates_its_deletion` above, same fixture shape,
+    non-empty `calls`.
+    """
+    calls = []
+    s = seed_post_context(community_name='lifecycle')
+    s.post.status = 0
+    db.session.commit()
+
+    import app.shared.post as post_module
+    original = post_module.task_selector
+
+    def recorder(task_key, **kwargs):
+        calls.append(task_key)
+        return original(task_key, **kwargs)
+
+    post_module.task_selector = recorder
+    try:
+        delete_post(s.post.id, True, SRC_API, bearer(s.author))
+    finally:
+        post_module.task_selector = original
+
+    assert calls == []
+
+
+def test_deleting_removes_ordinary_notifications_about_the_post(db_session):
+    """`:787`'s delete, reached through `:785`'s false arm."""
+    from tests.factories import make_notification
+    from app.constants import NOTIF_POST
+
+    s = seed_post_context(community_name='lifecycle')
+    make_notification(s.voter, s.post, notif_type=NOTIF_POST)
+
+    delete_post(s.post.id, False, SRC_API, bearer(s.author))
+
+    assert db.session.query(Notification).count() == 0
+
+
+def test_deleting_keeps_report_notifications(db_session):
+    """`:785`'s FIRST disjunct and `:786`'s continue.
+
+    A report notification must survive the deletion it reported.
+    """
+    from tests.factories import make_notification
+
+    s = seed_post_context(community_name='lifecycle')
+    make_notification(s.voter, s.post, notif_type=NOTIF_REPORT)
+
+    delete_post(s.post.id, False, SRC_API, bearer(s.author))
+
+    remaining = db.session.query(Notification).all()
+    assert len(remaining) == 1
+    assert remaining[0].notif_type == NOTIF_REPORT
+
+
+def test_deleting_keeps_escalated_report_notifications(db_session):
+    """`:785`'s SECOND disjunct, with the first false.
+
+    `:785` is one arc pair to coverage.py; this and the test above are the
+    only way to distinguish its operands.
+    """
+    from tests.factories import make_notification
+
+    s = seed_post_context(community_name='lifecycle')
+    make_notification(s.voter, s.post, notif_type=NOTIF_REPORT_ESCALATION)
+
+    delete_post(s.post.id, False, SRC_API, bearer(s.author))
+
+    remaining = db.session.query(Notification).all()
+    assert len(remaining) == 1
+    assert remaining[0].notif_type == NOTIF_REPORT_ESCALATION
+
+
+def test_deleting_with_no_notifications_takes_the_loops_zero_exit(db_session):
+    """`:783`'s zero-iteration exit arc.
+
+    This test's positive signal is weak -- `post.deleted is True` would hold
+    on several paths -- and it is recorded as pinning the ARC rather than a
+    behavioural difference. Task 10's mutation pass covers the loop directly.
+    """
+    s = seed_post_context(community_name='lifecycle')
+
+    delete_post(s.post.id, False, SRC_API, bearer(s.author))
+
+    db.session.refresh(s.post)
+    assert s.post.deleted is True
+    assert db.session.query(Notification).count() == 0
+
+
 def test_deleting_builds_no_new_cross_post_links(db_session):
     """The `delete_only=True` ARGUMENT at `:769`, not merely the call.
 
