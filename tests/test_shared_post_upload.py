@@ -1119,3 +1119,168 @@ def test_a_malformed_svg_fails_sanitization_and_is_rejected(db_session, chdir_up
                   uploaded_file=upload)
 
     assert not list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+
+
+def test_a_configured_format_rewrites_the_saved_extension(
+        db_session, chdir_upload, http_mock, app, monkeypatch):
+    """`:524`'s TRUE arm, `:525`'s `kwargs['format']`, and `:526-527`'s
+    rewrite of `final_ext`/`final_place`.
+
+    `test_media_image_format_avif_imports_pillow_avif_a_second_time` above
+    already takes this same arc incidentally -- its `MEDIA_IMAGE_FORMAT =
+    'AVIF'` makes `:524` True too, and its own docstring says so explicitly
+    ("also makes `:524`'s `if image_format:` True ... incidental
+    confirmation the config took effect, not itself evidence for `:511`").
+    But that test's PURPOSE is `:510`'s second `import pillow_avif`
+    (`510->511`); this test is about the format kwarg on its own terms, so
+    it uses `MEDIA_IMAGE_FORMAT = 'WEBP'` instead of `'AVIF'` -- Pillow's
+    WEBP encoder is a native, always-available codec, so this test carries
+    none of the module docstring's Pillow-12.3.0 native-AVIF-support
+    complication (a successful WEBP save unambiguously required `:525`'s
+    kwarg to reach `:531`'s `img.save`; there is no competing "it would have
+    saved anyway" explanation the way there is for AVIF).
+
+    THE OBSERVABLE DIFFERENCE IS THE SAVED FILE'S EXTENSION, NOT THE KWARGS
+    DICT -- `kwargs` is local to `edit_post` and invisible from outside;
+    `:527` replaces `final_place`'s extension, so a `.png` upload with WEBP
+    configured lands on disk as `.webp`. That is what is asserted here.
+
+    TWO FILES ARE EXPECTED, NOT ONE -- a REGISTERED DEFECT, not a test bug.
+    `:487` saves the original upload to `<name>.png`; `:527` then rewrites
+    `final_place` to `<name>.webp` and `:531` saves the re-encoded image
+    there. Nothing between `:485` and `:563` unlinks the pre-rename `.png`
+    path -- `:563`'s `os.unlink` runs only in the S3 branch, and only on the
+    NEW path -- so both files survive on disk. Task 4's
+    `test_media_image_format_avif_imports_pillow_avif_a_second_time` found
+    this the same way (a first run asserting `== 1` failed with `2 == 1`)
+    and pinned it there as a known defect rather than correct behaviour;
+    this test pins the same defect for the WEBP arm rather than silently
+    re-deriving the wrong (`== 1`) expectation.
+
+    Positive control for the `== 2` count:
+    `test_an_uploaded_image_is_saved_and_linked` above takes the DEFAULT
+    (`MEDIA_IMAGE_FORMAT == ''`) path with an otherwise-identical `.png`
+    upload and asserts `len(written) == 1` -- so the second file here is
+    attributable to the configured format taking `:524`'s TRUE arm, not to
+    some format-independent mechanism that always leaves two files behind.
+    """
+    monkeypatch.setitem(app.config, 'MEDIA_IMAGE_FORMAT', 'WEBP')
+    assert app.config['MEDIA_IMAGE_FORMAT'] == 'WEBP'
+
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+    s = _seed()
+    edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+              uploaded_file=make_upload(filename='pic.png', fmt='PNG'))
+
+    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+    assert len(written) == 2
+    assert any(p.suffix == '.webp' for p in written)
+    assert any(p.suffix == '.png' for p in written)
+    db.session.refresh(s.post)
+    assert s.post.image_id is not None
+
+
+def test_default_media_image_quality_passes_the_quality_kwarg(
+        db_session, chdir_upload, http_mock, app, monkeypatch):
+    """`:528`'s TRUE arm, arc `528->529` -- positive control for
+    `test_falsy_media_image_quality_omits_the_quality_kwarg` below.
+
+    Per D451: this test's correctness depends on `MEDIA_IMAGE_QUALITY`
+    defaulting to `90` (`config.py:142`), so that default is asserted
+    explicitly rather than assumed.
+
+    `PIL.Image.Image.save` (the class method, not a particular instance) is
+    spied so calls are seen regardless of which `Image` object ends up
+    calling `.save` -- `img` is reassigned by `ImageOps.exif_transpose` and
+    by `to_srgb`/`convert` before `:531`, so an instance-level spy installed
+    on the object `Image.open` returns would miss the actual call. The spy
+    WRAPS the real method (still saves for real) and records every call's
+    kwargs. `make_upload`'s own internal `Image.new(...).save(buf,
+    format=fmt)` call is also caught by this class-level patch, so calls
+    are filtered down to the one carrying `optimize=True` -- the literal
+    kwarg `:531` passes and no other call site in this test does -- which
+    isolates the `:531` call specifically.
+
+    Asserting the recorded `quality` kwarg equals the configured `90`
+    (not just that the key is present) is the positive control for
+    `test_falsy_media_image_quality_omits_the_quality_kwarg`'s absence
+    assertion below: without a paired test showing the key present and
+    correct when quality is truthy, an empty/absent result there would be
+    equally consistent with "the falsy guard worked", "the spy never
+    installed", or "the patch targeted the wrong name" (D451 mechanism 3).
+    This test's non-empty, correct-valued result for the same spy target
+    rules out the latter two.
+    """
+    assert app.config['MEDIA_IMAGE_QUALITY'] == 90
+
+    save_calls = []
+    real_save = Image.Image.save
+
+    def spy_save(self, *a, **kw):
+        save_calls.append(kw)
+        return real_save(self, *a, **kw)
+
+    monkeypatch.setattr(Image.Image, 'save', spy_save)
+
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+    s = _seed()
+    edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+              uploaded_file=make_upload(filename='pic.png', fmt='PNG'))
+
+    reencode_calls = [kw for kw in save_calls if 'optimize' in kw]
+    assert len(reencode_calls) == 1
+    assert reencode_calls[0].get('quality') == 90
+
+    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+    assert len(written) == 1
+    db.session.refresh(s.post)
+    assert s.post.image_id is not None
+
+
+def test_falsy_media_image_quality_omits_the_quality_kwarg(
+        db_session, chdir_upload, http_mock, app, monkeypatch):
+    """`:528`'s FALSE arm, arc `528->531`.
+
+    `MEDIA_IMAGE_QUALITY` is forced to `0` -- falsy, and, unlike `''`, safe
+    even if something downstream ever re-ran `int(image_quality)` on it
+    (`config.py:142` only applies that coercion once, at `Config` class
+    definition time; `current_app.config['MEDIA_IMAGE_QUALITY']` at
+    `:522` reads the already-int value straight back out of the config
+    dict). `0` was verified to actually reach `:528` as falsy and to leave
+    `kwargs` without a `'quality'` key -- see the assertions below.
+
+    Same spy mechanism as `test_default_media_image_quality_passes_the_quality_kwarg`
+    above (`PIL.Image.Image.save` spied at the class level, calls filtered
+    to the one carrying `optimize=True` to isolate `:531`'s call from
+    `make_upload`'s own internal save) -- that test is this one's positive
+    control: it shows the SAME spy, on the SAME filtered call, records a
+    `quality` key with the configured value when `:528` is True. Without
+    it, this test's absent-key assertion would be equally consistent with
+    "the falsy guard worked", "the spy never installed", or "the patch
+    targeted the wrong name" (D451 mechanism 3).
+    """
+    monkeypatch.setitem(app.config, 'MEDIA_IMAGE_QUALITY', 0)
+    assert app.config['MEDIA_IMAGE_QUALITY'] == 0
+
+    save_calls = []
+    real_save = Image.Image.save
+
+    def spy_save(self, *a, **kw):
+        save_calls.append(kw)
+        return real_save(self, *a, **kw)
+
+    monkeypatch.setattr(Image.Image, 'save', spy_save)
+
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+    s = _seed()
+    edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+              uploaded_file=make_upload(filename='pic.png', fmt='PNG'))
+
+    reencode_calls = [kw for kw in save_calls if 'optimize' in kw]
+    assert len(reencode_calls) == 1
+    assert 'quality' not in reencode_calls[0]
+
+    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+    assert len(written) == 1
+    db.session.refresh(s.post)
+    assert s.post.image_id is not None
