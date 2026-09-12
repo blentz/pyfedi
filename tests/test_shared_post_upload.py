@@ -784,6 +784,274 @@ def test_svg_extension_is_sanitized_successfully(db_session, chdir_upload, http_
     assert s.post.image_id is not None
 
 
+def test_media_image_format_avif_imports_pillow_avif_a_second_time(
+        db_session, chdir_upload, http_mock, app, monkeypatch):
+    """`:510`'s TRUE arm, arc `510->511`.
+
+    `:511` is a SECOND `import pillow_avif`, independent of `:493`/`:494`'s
+    filename-driven import -- it is gated only on
+    `current_app.config['MEDIA_IMAGE_FORMAT'] == 'AVIF'`. This test uses a
+    `.png`-named upload (`final_ext` stays `.png`), so `:493`'s check is
+    False and `:494` never runs -- the only way `pillow_avif` can land in
+    `sys.modules` during this call is `:511`, isolating this arc from the
+    filename-driven one `test_avif_extension_imports_pillow_avif` already
+    covers.
+
+    Per the module docstring's Pillow-12.3.0 trap (also hit by
+    `test_avif_extension_imports_pillow_avif` above): this container's
+    Pillow already has native AVIF support, so a successful AVIF-format save
+    is not evidence this specific `import` statement ran -- only
+    `sys.modules` membership is. `pillow_avif` is popped from the import
+    cache (if present) before the call and its presence asserted after; the
+    original entry, if any, is restored in `finally`.
+
+    `MEDIA_IMAGE_FORMAT='AVIF'` also makes `:524`'s `if image_format:` True,
+    renaming `final_place` to a `.avif` suffix and passing `format='AVIF'`
+    to `:531`'s save -- asserting that suffix is incidental confirmation
+    the config took effect, not itself evidence for `:511`.
+    """
+    monkeypatch.setitem(app.config, 'MEDIA_IMAGE_FORMAT', 'AVIF')
+    assert app.config['MEDIA_IMAGE_FORMAT'] == 'AVIF'
+
+    had_pillow_avif = sys.modules.pop('pillow_avif', None)
+    try:
+        http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+        s = _seed()
+        edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+                  uploaded_file=make_upload(filename='pic.png', fmt='PNG'))
+
+        assert 'pillow_avif' in sys.modules
+        # `:527` renames `final_place` to a new `.avif` path for the
+        # re-encoded save; the ORIGINAL `.png` `:487` saved is never
+        # removed, so two files exist here, not one -- verified empirically
+        # against this container (a first run asserting `== 1` failed with
+        # `2 == 1`, listing both the `.png` and the `.avif` path).
+        written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+        assert len(written) == 2
+        assert any(p.suffix == '.avif' for p in written)
+    finally:
+        if had_pillow_avif is not None:
+            sys.modules['pillow_avif'] = had_pillow_avif
+        else:
+            sys.modules.pop('pillow_avif', None)
+
+
+def test_default_media_image_format_skips_the_second_avif_import(
+        db_session, chdir_upload, http_mock, app, monkeypatch):
+    """`:510`'s FALSE arm, arc `510->513` -- the positive control for
+    `test_media_image_format_avif_imports_pillow_avif_a_second_time` above.
+
+    Per D451: this test's correctness depends on `MEDIA_IMAGE_FORMAT`
+    defaulting to `''` (`config.py:141`), so that default is asserted
+    explicitly here rather than assumed -- a future config change would
+    otherwise make this pass for the wrong reason with no code change to
+    trigger a review.
+
+    `.png`-named upload again keeps `:493`/`:494` out of the picture, so
+    `pillow_avif` absent from `sys.modules` afterward is solely evidence
+    that neither `:494` nor `:511` ran -- and since `:494` is already
+    structurally excluded by the filename, this isolates `:511`'s FALSE
+    arm specifically.
+    """
+    assert app.config['MEDIA_IMAGE_FORMAT'] == ''
+
+    had_pillow_avif = sys.modules.pop('pillow_avif', None)
+    try:
+        http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+        s = _seed()
+        edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+                  uploaded_file=make_upload(filename='pic.png', fmt='PNG'))
+
+        assert 'pillow_avif' not in sys.modules
+        written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+        assert len(written) == 1
+    finally:
+        if had_pillow_avif is not None:
+            sys.modules['pillow_avif'] = had_pillow_avif
+        else:
+            sys.modules.pop('pillow_avif', None)
+
+
+def test_a_gif_path_skips_the_pil_reencode_block(db_session, chdir_upload, http_mock, monkeypatch):
+    """`:513`'s FALSE arm via its SECOND conjunct, arc `513->535`.
+
+    `:513` is `if not X.endswith('.svg') and not X.endswith('.gif') and not
+    is_video_url(X):` -- three conditions folded into one arc pair by
+    coverage.py. `test_svg_extension_is_sanitized_successfully` above
+    already witnesses the FIRST conjunct's false arm (an `.svg` path) and
+    `test_a_video_upload_is_accepted_when_video_uploads_are_enabled` already
+    witnesses the THIRD (an `.mp4` path taking `is_video_url` True) -- both
+    named here rather than duplicated. This test supplies the missing
+    SECOND: a genuine `.gif` upload.
+
+    `post_module.Image.open` -- the ONLY call site for `Image.open` in this
+    module (`:514`) -- is spied so the block's entry is witnessed directly
+    rather than inferred from file state, which would be ambiguous here: a
+    `.gif` is itself an ALLOWED extension (`:463`), so if a mutant weakened
+    the `.gif` conjunct (e.g. dropped it, or `and` softened to `or` against
+    a condition that's False for this path) and let this file INTO the
+    block, `img.format` would be `'GIF'` and `'.gif' in allowed_extensions`
+    is True -- `:515` would pass, `:531` would re-encode, and a file would
+    still exist and `post.image_id` would still be set. Only the spy
+    distinguishes "block skipped" from "block ran and happened to succeed
+    anyway".
+
+    Genuine GIF bytes (`make_upload`'s `fmt='GIF'` is real content, not a
+    renamed raster) so this reaches `:513` with a filename AND payload that
+    would both pass `:515` if the block ran -- the only thing that should
+    stop it is `:513`'s own `.gif` check.
+    """
+    open_calls = []
+    real_open = Image.open
+
+    def spy_open(*a, **kw):
+        open_calls.append(a)
+        return real_open(*a, **kw)
+
+    monkeypatch.setattr(post_module.Image, 'open', spy_open)
+
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/gif'})
+    s = _seed()
+    edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+              uploaded_file=make_upload(filename='pic.gif', fmt='GIF'))
+
+    assert open_calls == []
+    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+    assert len(written) == 1
+    db.session.refresh(s.post)
+    assert s.post.image_id is not None
+
+
+def test_a_file_whose_bytes_disagree_with_its_name_is_refused(db_session, chdir_upload):
+    """`:513`'s TRUE arm (arc `513->514`) and `:515`'s FALSE arm feeding
+    `:533`'s raise (arc `515->533`).
+
+    `:467` checked the FILENAME's extension and passed -- `.png` is
+    allowed. `:515` checks the DECODED format and refuses: a file named
+    `.png` whose bytes decode to a format absent from `allowed_extensions`
+    is the input that separates them.
+
+    A CORRECTION TO THE BRIEF'S WORKED EXAMPLE, verified mechanically
+    rather than assumed. The brief's Step 3 draft used
+    `make_upload(filename='pic.png', fmt='GIF')`, predicting `:533` fires
+    because "`.gif` is not in `allowed_extensions` unless the name said
+    so". Both halves of that prediction were checked directly against this
+    container:
+
+      1. `make_upload(fmt='GIF')` DOES produce `img.format == 'GIF'` after
+         a decode round-trip -- the brief's prediction on THIS point holds.
+      2. But `:463` is `allowed_extensions = ['.gif', '.jpg', '.jpeg',
+         '.png', '.webp', '.heic', '.mpo', '.avif', '.svg']` --  `.gif` is
+         in the list UNCONDITIONALLY, on the same line as `.png` and
+         `.jpg`. Only `.mp4`/`.webm`/`.mov` are conditional on
+         `POST_TYPE_VIDEO` (`:464-465`). So `'.' + 'gif' in
+         allowed_extensions` is True, `:515` takes its TRUE arm, and
+         `:531`'s re-encode runs -- the brief's example does NOT reach
+         `:533` at all; it completes normally instead.
+
+    This test therefore uses `fmt='BMP'` instead. VERIFIED directly:
+    encoding an 8x8 image as BMP and reopening it gives `img.format ==
+    'BMP'`, and `.bmp` has no entry anywhere in `allowed_extensions` (no
+    post type adds it), so `:515`'s condition is False and `:533` raises.
+
+    Per the module docstring's ruling on the two byte-identical 'filetype
+    not allowed' messages (`:468` vs `:533`), this test also confirms a
+    file DOES exist under `chdir_upload` -- unlike every raising test
+    earlier in this file (which assert NO file exists, because `:468`
+    fires before `:487`'s save), `:533` fires AFTER `:487` saves the raw
+    BMP-content bytes under a `.png`-suffixed path, so this is the one
+    test in this file that must find something there. If this asserted
+    the opposite (no file), it would pass equally were `:468` to fire
+    instead of `:533` -- which is exactly the ambiguity the docstring
+    warns against.
+    """
+    s = _seed()
+    with pytest.raises(Exception, match='filetype not allowed'):
+        edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+                  uploaded_file=make_upload(filename='pic.png', fmt='BMP'))
+
+    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+    assert len(written) == 1
+
+
+def test_a_jpeg_upload_takes_the_to_srgb_conversion_path(db_session, chdir_upload, http_mock, monkeypatch):
+    """`:515`'s TRUE arm (arc `515->516`) and `:517`'s TRUE arm (arc
+    `517->518`) -- a genuine JPEG upload takes `to_srgb`, not `convert`.
+
+    `post_module.to_srgb` is spied, WRAPPING the real function so the save
+    still succeeds, and asserted called exactly once. `final_ext` is
+    `.jpg`, which is in `:517`'s `['.jpg', '.jpeg']` list regardless of
+    `MEDIA_IMAGE_FORMAT` (default `''` here, so the first disjunct is
+    False) -- this isolates the SECOND disjunct as what makes `:517` True
+    for this call.
+
+    Positive control for
+    `test_a_non_jpeg_upload_takes_the_rgba_conversion_path` below, which
+    spies the SAME name and asserts it uncalled for a `.png` upload -- an
+    empty list there would otherwise be equally consistent with "the RGBA
+    arm ran", "the spy never installed", or "the patch targeted the wrong
+    name"; this test's non-empty call list rules out the latter two for
+    this spy target.
+    """
+    calls = []
+    real_to_srgb = post_module.to_srgb
+
+    def spy_to_srgb(img, *a, **kw):
+        calls.append(True)
+        return real_to_srgb(img, *a, **kw)
+
+    monkeypatch.setattr(post_module, 'to_srgb', spy_to_srgb)
+
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/jpeg'})
+    s = _seed()
+    edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+              uploaded_file=make_upload(filename='pic.jpg', fmt='JPEG'))
+
+    assert calls == [True]
+    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+    assert len(written) == 1
+    db.session.refresh(s.post)
+    assert s.post.image_id is not None
+
+
+def test_a_non_jpeg_upload_takes_the_rgba_conversion_path(db_session, chdir_upload, http_mock, app, monkeypatch):
+    """`:517`'s FALSE arm, arc `517->520` -- the positive control for
+    `test_a_jpeg_upload_takes_the_to_srgb_conversion_path` above.
+
+    `MEDIA_IMAGE_FORMAT` stays at its default `''` (asserted, per D451) and
+    the upload is `.png`, so neither of `:517`'s disjuncts is True and
+    `:520`'s `img.convert('RGBA')` runs instead of `to_srgb`.
+    `post_module.to_srgb` is spied and asserted UNCALLED -- without the
+    paired positive control above, an empty call list here would equally be
+    consistent with "the RGBA arm correctly ran", "the spy never
+    installed", or "the patch targeted the wrong name" (D451 mechanism 3);
+    the other test's non-empty result for the same spy rules out the
+    latter two.
+
+    Asserting only on `to_srgb` non-invocation rather than on the save
+    succeeding matters here (D451 mechanism 4): a PNG reaches `:531`'s save
+    successfully whether `:517` took the `if` or the `else` -- both arms
+    converge on the same `img.save(...)` call one line later, so "the file
+    exists and `post.image_id` is set" would pass identically under either
+    arm and would not, on its own, discriminate them.
+    """
+    assert app.config['MEDIA_IMAGE_FORMAT'] == ''
+
+    calls = []
+    monkeypatch.setattr(post_module, 'to_srgb', lambda *a, **kw: calls.append(True))
+
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+    s = _seed()
+    edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+              uploaded_file=make_upload(filename='pic.png', fmt='PNG'))
+
+    assert calls == []
+    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+    assert len(written) == 1
+    db.session.refresh(s.post)
+    assert s.post.image_id is not None
+
+
 def test_a_malformed_svg_fails_sanitization_and_is_rejected(db_session, chdir_upload):
     """`:500`'s TRUE arm, arc `500->501` -- `sanitize_svg` returns False and
     `:501` raises. Positive control for
