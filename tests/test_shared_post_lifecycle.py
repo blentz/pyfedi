@@ -237,17 +237,27 @@ def test_deleting_through_the_api_sets_the_flag_and_attributes_it(db_session):
     """`:756`'s true arm, `:771`'s flag, `:772`'s deleted_by, `:791`'s return.
 
     `:758` authorises with `id_match=post.user_id`, so the actor must be the
-    post's author. Catches a regression dropping `:772`, which would delete the
-    post without recording who did it.
+    post's author. THE POST IS AUTHORED BY `s.voter`, NOT `s.author`, and that
+    is the whole point of the fixture: `s.author` is User id 1, which is
+    exactly the literal `:763` assigns on the no-context path. A test deleting
+    `s.post` and asserting `deleted_by == s.author.id` asserts
+    `deleted_by == 1`, which an INVERTED `:756` would also satisfy -- skipping
+    `:758`'s authorisation check entirely and still passing. Authoring the post
+    as `s.voter` (id 2) makes the two arms produce different values.
+
+    Catches a regression dropping `:772`, and a regression inverting `:756`,
+    which would delete a post through the API with no authorisation at all.
     """
     s = seed_post_context(community_name='lifecycle')
+    voter_post = make_post(s.community, s.voter, 'https://local.example/p/2')
 
-    user_id, post = delete_post(s.post.id, False, SRC_API, bearer(s.author))
+    user_id, post = delete_post(voter_post.id, False, SRC_API, bearer(s.voter))
 
-    assert user_id == s.author.id
-    db.session.refresh(s.post)
-    assert s.post.deleted is True
-    assert s.post.deleted_by == s.author.id
+    assert user_id == s.voter.id
+    assert s.voter.id != 1
+    db.session.refresh(voter_post)
+    assert voter_post.deleted is True
+    assert voter_post.deleted_by == s.voter.id
 
 
 def test_deleting_decrements_both_counters_and_touches_last_seen(db_session):
@@ -283,14 +293,21 @@ def test_the_celery_path_attributes_the_deletion_to_user_one(db_session):
 
     Catches a regression changing `:760` to `current_user.is_authenticated`,
     which would raise on a None proxy and break both maintenance tasks.
+
+    The post is authored by `s.voter` (id 2) so that `deleted_by == 1` means
+    `:763`'s literal and nothing else. Deleting `s.post`, whose author IS id 1,
+    would leave the assertion satisfiable by a regression that attributed the
+    deletion to the post's own author instead of to the fallback.
     """
     s = seed_post_context(community_name='lifecycle')
+    voter_post = make_post(s.community, s.voter, 'https://local.example/p/2')
 
-    delete_post(s.post.id, False, SRC_WEB, None)
+    delete_post(voter_post.id, False, SRC_WEB, None)
 
-    db.session.refresh(s.post)
-    assert s.post.deleted is True
-    assert s.post.deleted_by == 1
+    db.session.refresh(voter_post)
+    assert voter_post.deleted is True
+    assert voter_post.deleted_by == 1
+    assert voter_post.user_id != 1
 
 
 def test_the_web_path_with_a_logged_in_user_attributes_to_them(db_session, app):
@@ -341,7 +358,7 @@ def test_deleting_a_post_with_a_url_tears_down_its_cross_post_links(db_session):
 def test_deleting_builds_no_new_cross_post_links(db_session):
     """The `delete_only=True` ARGUMENT at `:769`, not merely the call.
 
-    app/models.py:2359 returns as soon as the teardown is done when
+    app/models.py:2360 returns as soon as the teardown is done when
     `delete_only` is set. WITHOUT the argument the function falls through to
     :2371's search and would LINK the post being deleted to every sibling
     sharing its url -- the opposite of what a delete should do.
