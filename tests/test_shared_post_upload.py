@@ -228,8 +228,14 @@ def test_a_disallowed_extension_is_refused(db_session, chdir_upload):
     it through `make_post` would hit that one first and prove nothing about
     this line.
 
-    Positive control: `test_an_allowed_extension_passes` below -- same shape,
-    an allowed extension instead of a disallowed one.
+    Positive control: `test_an_allowed_extension_passes` below. It differs in
+    more than the extension -- `type` is `POST_TYPE_IMAGE` there rather than
+    `POST_TYPE_ARTICLE` here (kept as the brief's literal example gave it,
+    since `type` is irrelevant to `:467`'s check outside the `POST_TYPE_VIDEO`
+    compound at `:464`) and it needs `http_mock` because it runs to
+    completion. What makes it a control for THIS test is narrower: both
+    reach `:467` with a non-empty, non-video-typed `uploaded_file`, and only
+    the extension decides which side of `:467` each one takes.
 
     No `http_mock` is registered: the raise at `:468` happens before `:470`'s
     `gibberish(15)` and every step after it, so this call never reaches
@@ -254,7 +260,11 @@ def test_an_allowed_extension_passes(db_session, chdir_upload, http_mock):
     `test_a_disallowed_extension_is_refused` above.
 
     Without it, a `pytest.raises` that fired for an unrelated reason would
-    look identical to one that fired for the right reason.
+    look identical to one that fired for the right reason. As the control for
+    a test that asserts NO file exists, this one asserts a file DOES exist --
+    without that, a mutant deleting `:487`'s save outright would still pass
+    here (`post.image_id` gets set by the later `:601`-`:608` block
+    regardless), making this control weaker than the thing it controls for.
 
     Unlike the raising tests in this file, this call runs to completion and
     reaches `:601`'s `is_image_url` HEAD request in `edit_post`'s shared
@@ -267,6 +277,8 @@ def test_an_allowed_extension_passes(db_session, chdir_upload, http_mock):
     edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
               uploaded_file=make_upload(filename='pic.png'))
 
+    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+    assert len(written) == 1
     db.session.refresh(s.post)
     assert s.post.image_id is not None
 
