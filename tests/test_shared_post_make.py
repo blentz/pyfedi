@@ -342,7 +342,7 @@ def test_a_rate_limited_api_user_is_refused(db_session):
 def test_an_unverified_user_cannot_make_a_post(db_session, app):
     """`:187`'s FIRST disjunct and `:188`'s raise.
 
-    SRC_WEB, not SRC_API. `authorise_api_user` (app/utils.py:3620-3622)
+    SRC_WEB, not SRC_API. `authorise_api_user` (app/utils.py:3628-3629)
     itself raises `'incorrect_login'` for `user.verified is False` before
     `make_post` is ever reached -- verified empirically: the API-arm version
     of this test failed with `'incorrect_login'` rather than `'not
@@ -440,7 +440,8 @@ def test_a_hostless_url_skips_the_domain_check(db_session):
     above. `edit_post` re-derives its OWN url from the same `input` (`:256`)
     and re-runs its OWN `domain_from_url` call (`:566`) against it, and for a
     truthy, non-empty url it goes on to call `is_image_url`/`opengraph_parse`
-    (app/utils.py:601, :642), which reach real httpx machinery. Verified
+    (call sites app/shared/post.py:601, :642 -- the functions are DEFINED at
+    app/utils.py:247 and :2998), which reach real httpx machinery. Verified
     empirically, and worth recording because it very nearly produced a
     silently-broken test: `httpx.Client.build_request` MERGES a url containing
     no `//authority` against its (empty) `base_url`, stripping even an
@@ -448,7 +449,7 @@ def test_a_hostless_url_skips_the_domain_check(db_session):
     before the request ever leaves the client -- so a route registered for
     the url as written never matches the request respx actually sees. And a
     fully schemeless string such as `'not-a-url'`, once respx (installed by
-    the session-scoped `block_outbound_http` fixture, tests/conftest.py:260)
+    the session-scoped `block_outbound_http` fixture, tests/conftest.py:263)
     returns a mocked response for it, crashes with a `ValueError` deep in
     httpx's OWN cookie-jar bookkeeping (`urllib.request.Request._splittype`
     demands a `scheme:rest` prefix) -- a failure in httpx's plumbing, not in
@@ -482,9 +483,9 @@ def test_a_hostless_url_skips_the_domain_check(db_session):
 def test_a_banned_domain_is_refused(db_session):
     """`:194`'s FIRST disjunct and `:195`'s raise.
 
-    `domain_from_url` (app/utils.py:1561) creates the Domain when absent, so
-    the row is seeded banned FIRST -- otherwise the call would create a fresh
-    unbanned one and the guard would never fire.
+    `domain_from_url` (app/utils.py:1590-1593) creates the Domain when absent,
+    so the row is seeded banned FIRST -- otherwise the call would create a
+    fresh unbanned one and the guard would never fire.
 
     THE ASSERTION IS ON THE RAISE, NOT ON `post.url` OR A `Domain` ROW: both
     are confounded, per `test_a_link_post_picks_link_url_not_video_url`'s
