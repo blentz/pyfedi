@@ -220,7 +220,7 @@ def test_restoring_a_post_with_a_url_links_it_to_its_cross_posts(db_session):
 
 
 def test_the_web_arm_reads_current_user_and_returns_none(db_session, app):
-    """`:797`'s false arm, `:801`'s `current_user.id`, and `:817`'s bare return.
+    """`:797`'s false arm, `:801`'s `current_user.id`, and `:818`'s bare return.
 
     Catches a regression making `:816`'s two-tuple unconditional, which would
     change the contract for `app/post/routes.py`'s caller, and one making
@@ -747,7 +747,7 @@ def test_an_api_report_gives_a_remote_moderator_no_local_notification(db_session
     """`:876`'s false arm.
 
     A remote moderator is reached by a federated Flag, not a local
-    Notification row. Positive control: `test_a_local_moderator_gets_a_notification`
+    Notification row. Positive control: `test_an_api_report_notifies_a_local_moderator`
     above, same fixture shape and same notification title, non-empty.
     """
     s = seed_post_context(community_name='lifecycle')
@@ -819,9 +819,8 @@ def test_api_report_remote_false_excludes_the_suspects_own_instance(db_session):
     Without opt-in, a moderator on the suspect's own instance is excluded --
     the reporter has not consented to their report reaching the instance
     hosting the person they reported. Catches a regression dropping that
-    conjunct. Positive control: `test_report_remote_true_includes_every_remote_moderators_instance`
-    above, same fixture shape (a single `seed_remote_moderator`), non-empty
-    `calls`.
+    conjunct. Positive control: `test_api_report_remote_true_adds_a_moderator_the_filter_would_exclude`
+    above, non-empty `calls`.
     """
     calls = []
     s = seed_post_context(community_name='lifecycle')
@@ -920,7 +919,7 @@ def test_a_moderator_row_whose_user_is_gone_is_skipped(db_session):
     `:874` looks the moderator up by id and `:875` guards the result, so a
     CommunityMember row whose User has been deleted is skipped rather than
     raising. Catches a regression dropping the guard. Positive control:
-    `test_a_local_moderator_gets_a_notification` above, same fixture shape
+    `test_an_api_report_notifies_a_local_moderator` above, same fixture shape
     (a single local moderator), non-empty Notification count.
     """
     s = seed_post_context(community_name='lifecycle')
@@ -1201,7 +1200,7 @@ def test_the_web_arm_escalates_on_reason_five(db_session, app):
 
     The WEB arm matches reason IDs where the API arm matches text. `'5'` is
     `Minor abuse or sexualization` (app/post/forms.py:36) -- the same policy
-    whose API equivalent is broken by PC1.
+    whose API equivalent PC1 fixed (`a06e350f`).
     """
     from types import SimpleNamespace
 
@@ -1458,7 +1457,8 @@ def test_a_minor_abuse_report_notifies_admins_through_the_api(db_session):
     `:828` lowercases the haystack and keeps the needle's capital M, so the
     disjunct is ALWAYS False and the escalation has never fired on this arm.
 
-    Fails against the tree as it stands: no admin notification is written.
+    Failed against the unmodified tree (fixed at `a06e350f`): no admin
+    notification was written.
 
     `seed_site_admin` is load-bearing here. Without it `Site.admins()` is empty
     and this test fails BOTH before and after the fix -- a failing observation
@@ -1492,6 +1492,31 @@ def test_minor_abuse_in_the_description_also_notifies_admins(db_session):
     report_post(
         s.post,
         {'reason': 'spam', 'description': 'this is minor abuse',
+         'report_remote': False},
+        SRC_API,
+        auth=bearer(s.voter),
+    )
+
+    assert db.session.query(Notification).filter_by(
+        title='Suspicious content').count() == 1
+
+
+def test_doxing_in_the_description_also_notifies_admins(db_session):
+    """`:829`'s `'doxing'` needle, witnessed in the DESCRIPTION.
+
+    `:828` (reason) and `:829` (description) each carry the same two-element
+    needle list. `'doxing'` is already witnessed in the reason
+    (`test_a_doxing_report_notifies_admins_through_the_api`) and `'minor
+    abuse'` is witnessed in both positions, but nothing puts `'doxing'` in a
+    description. An ordinary reason keeps this test from being satisfied by
+    `:828` instead.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    seed_site_admin(s)
+
+    report_post(
+        s.post,
+        {'reason': 'spam', 'description': 'this is doxing',
          'report_remote': False},
         SRC_API,
         auth=bearer(s.voter),
@@ -1549,9 +1574,9 @@ def test_a_remote_communitys_instance_is_flagged_even_when_ids_collide(db_sessio
     fixture that silently fails to reach `:904` announces itself instead of
     passing for the wrong reason.
 
-    Fails against the tree as it stands: the community's instance (id 1) is
-    missing from the federated instance list, which comes back as `{2}`
-    instead of `{1, 2}`.
+    Failed against the unmodified tree (fixed at `478ff47a`): the community's
+    instance (id 1) was missing from the federated instance list, which came
+    back as `{2}` instead of `{1, 2}`.
     """
     calls = []
 
