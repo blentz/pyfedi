@@ -1134,7 +1134,7 @@ class TestPixelfedArm:
     side effect. Either way `is_image_url` falls through to extension sniffing
     and finds no image extension.
 
-    The two sites also read DIFFERENT VALUES: `:403` tests `post.url`, the url
+    The two sites also read DIFFERENT VALUES: `:404` tests `post.url`, the url
     the post already has, while `:619` tests `url`, the newly submitted one,
     which `:618`/`:628`/`:640`/`:652` have not yet written. So this is not one
     value checked twice with different strictness; it is two classifiers of the
@@ -1145,10 +1145,60 @@ class TestPixelfedArm:
 
     WHY RESPX HAS TO BE TOLD TO RAISE, for the scheme-less test only. This is a
     CORRECTION to the brief, which predicted respx would never see the request.
-    Measured: `respx.mock` patches httpx BELOW the point where
-    `httpx.Client._transport_for_url` would raise `UnsupportedProtocol`, so
-    with a router active the HEAD *does* reach respx, as
-    `<Request('HEAD', '/pixelfed.uno/p/bob/2')>`. Registering no route at all
+
+    RESPX REPLACES THE VERY METHOD THAT RAISES, and this paragraph is itself a
+    correction: an earlier revision said respx patches "below the point where
+    `httpx.Client._transport_for_url` would raise `UnsupportedProtocol`", which
+    was recalled rather than read. `_transport_for_url` raises nothing. Read
+    out of the installed httpx 0.28.1 / respx 0.23.1 in this container::
+
+        httpx/_client.py
+        760	    def _transport_for_url(self, url: URL) -> BaseTransport:
+        ...
+        765	        for pattern, transport in self._mounts.items():
+        766	            if pattern.matches(url):
+        767	                return self._transport if transport is None else transport
+        768
+        769	        return self._transport
+
+    The raise is httpcore's, one layer further in::
+
+        httpcore/_sync/connection_pool.py
+        199	    def handle_request(self, request: Request) -> Response:
+        ...
+        205	        scheme = request.url.scheme.decode()
+        206	        if scheme == "":
+        207	            raise UnsupportedProtocol(
+        208	                "Request URL is missing an 'http://' or 'https://' protocol."
+        209	            )
+
+    and httpx only RE-LABELS it on the way out::
+
+        httpx/_transports/default.py
+        88	        httpcore.UnsupportedProtocol: UnsupportedProtocol,
+        ...
+        249	        with map_httpcore_exceptions():
+        250	            resp = self._pool.handle_request(req)
+
+    respx's default mocker is `HTTPCoreMocker` (`respx/mocks.py:339`,
+    `DEFAULT_MOCKER: str = HTTPCoreMocker.name`), and it patches::
+
+        respx/mocks.py
+        262	class HTTPCoreMocker(AbstractRequestMocker):
+        263	    name = "httpcore"
+        264	    targets = [
+        265	        "httpcore._sync.connection.HTTPConnection",
+        266	        "httpcore._sync.connection_pool.ConnectionPool",
+        ...
+        272	    target_methods = ["handle_request", "handle_async_request"]
+
+    -- `ConnectionPool.handle_request`, i.e. the exact method holding lines
+    205-209. So with a router active there is no longer anything to raise, and
+    the HEAD *does* reach respx, as
+    `<Request('HEAD', '/pixelfed.uno/p/bob/2')>`. The message this class
+    injects is copied verbatim from `connection_pool.py:208` above, so the
+    double is a transcription of production's own exception rather than an
+    invention. Registering no route at all
     therefore raises `AllMockedAssertionError`, which is neither
     `httpx.HTTPError` nor `httpx.InvalidURL` and escapes app/utils.py:345.
     Registering a normal 200 does not work either: httpx's own cookie jar then
@@ -1167,13 +1217,12 @@ class TestPixelfedArm:
         Arcs 619->620, 622->623, 624->625; statements 620-629.
 
         FOUR witnesses, because no one of them is unique to this arm:
-          - `post.type` is IMAGE -- also what `:617` writes, but `:601` is
-            false here, which the single registered HEAD (answering
-            `text/html`) and the absence of any `make_image_sizes` work
-            confirm.
+          - `post.type` is IMAGE -- also what `:617` writes, so on its own it
+            cannot tell `:620` from `:617`. The NEXT bullet is what does; this
+            one is only a witness in company.
           - `post.body` ends with the 'Source: ' suffix -- `:629` is the ONLY
             line in the function that appends it, so this is the arm's
-            signature.
+            signature, and it is what rules `:601`'s arm out.
           - a `File` exists whose `source_url` is the og:image, not the post
             url -- `:602`'s File would carry the post url instead.
           - the File's `alt_text` is `''`, NOT the og:title, and that is a
@@ -1190,6 +1239,17 @@ class TestPixelfedArm:
             same-mechanism positive control for that claim: it passes a
             non-empty `image_alt_text` and gets it back, so the `''` here is
             `:666` writing rather than `:625` failing to.
+
+        AN EXPECTED SURVIVOR, NOT A HOLE. Because `:666` overwrites the column,
+        a mutation of `:625`'s `alt_text=shorten_string(opengraph.get('og:title'),
+        295)` -- the argument, not the line -- WILL SURVIVE this test and every
+        other test in this class, and Task 9's mutation pass should record it as
+        expected rather than chase it. The `source_url=filename` half of the
+        same line IS killed: this test and
+        `test_a_pixelfed_url_falls_back_to_og_image_url` pin it to two
+        different og keys. Closing the alt_text half would need an assertion
+        taken before `:663` runs, or a change to `app/`, and neither is in this
+        round's scope.
         """
         http_mock.head(PIXELFED_URL).respond(200, headers={'Content-Type': 'text/html'})
         _opengraph_page(http_mock, PIXELFED_URL,
