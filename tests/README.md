@@ -6347,15 +6347,32 @@ to the claim it qualifies. All three predicates, for a User id 1 carrying no
 | `g.admin_ids` (`app/request_hooks.py:97-107`, the query at `:100-106`) | a SQL `UNION`: `SELECT u.id FROM "user" u WHERE u.id = 1` unioned with a second `SELECT` joined to `user_role` for `ROLE_ADMIN` — the id-1 branch is its own `SELECT` with no join | admin |
 | `Site.admins()` (`app/models.py:3995-4000`, the join+filter at `:3999-4000`) | `.filter_by(deleted=False, banned=False).join(user_role).filter(or_(user_role.c.role_id == ROLE_ADMIN, User.id == 1))` — an INNER join, so a user with zero `user_role` rows is dropped before the `User.id == 1` disjunct is ever reached | NOT admin |
 
-`Site.admins()` is the outlier, and the `g.admin_ids` `UNION` is the in-file
-proof of what the policy is meant to be (same shape of evidence as the PC2
-defect two guards down in `app/shared/post.py:905` vs `:908` — see the
-campaign findings register, D442). A test asserting an admin notification
-through `report_post`'s `Site.admins()` path (`:893`) must seed a real
-`user_role`/`Role('Admin')` row — `s.author`'s id-1 status alone will not
-produce one there, though it will for anything gated on `is_admin()` or
-`g.admin_ids`. **A claim about "admin" that does not name its predicate is
-not a claim.**
+**BUT THAT TABLE'S THIRD ROW IS THE HARNESS'S ANSWER, NOT PRODUCTION'S.**
+`Site.admins()` has TWO branches. `app/models.py:3996-3997` returns
+`User.id.in_(tuple(g.admin_ids))` whenever `g.admin_ids` is set, and only
+falls through to the INNER-join query when it is not.
+`app/request_hooks.py:79` is an `@app.before_request` (registered at
+`app/__init__.py:366`) that sets `g.admin_ids` on every request except
+`/inbox` and paths under `/static/` (`:94`). So on a normal request path all
+three predicates AGREE and a role-less id 1 IS an admin.
+
+The join branch is reached only where `g.admin_ids` is unset: outside any
+request context — Celery, CLI, **and this harness**, because `web_ctx` uses
+`test_request_context`, which pushes a request context but never dispatches,
+so `before_request` never fires — or during `/inbox` handling, which the hook
+skips. That is why `Site.admins()` returns `[]` here and would not on a live
+site.
+
+**What this means for writing tests, which is unchanged:** a test asserting
+an admin notification through `report_post`'s `Site.admins()` path (`:893`)
+must still seed a real `user_role`/`Role('Admin')` row, because the harness
+always takes the join branch. What changed is the reason — it is an artifact
+of running without a dispatched request, not a defect the test is pinning.
+Do not cite this as a production bug; the campaign register's D442 carries the
+corrected version and names the one unverified case (callers reached from
+`/inbox`, the path the hook skips). **A claim about "admin" that does not name
+its predicate is not a claim** — and, it turns out, naming the predicate is
+not enough either when the predicate itself branches on context.
 
 **217. `grant_permission` CANNOT MAKE A SITE ADMIN — `is_admin()` AND
 `is_staff()` CHECK ROLE *NAMES*, NOT PERMISSIONS.** `User.is_admin()`
@@ -6468,10 +6485,16 @@ keeps a community local. `make_community` (`tests/factories.py:124-144`) sets
 always true for a `seed_post_context` community regardless of host. This is
 the fact that decides whether `report_post:841`'s `post.community.is_local()`
 conjunct and `:904`'s `if not post.community.is_local():` guard are reachable
-in a test at all: reaching the True arm of `:841` or the True arm of `:904`
-requires overriding BOTH `ap_id` AND `ap_profile_id` to a remote domain — the
-second disjunct alone (`ap_profile_id` pointed at a real remote host) is not
-enough, because `ap_id is None` already satisfies the first. Assert
+in a test at all, and THE TWO WANT OPPOSITE THINGS, so read this slowly.
+`:841` is `if post.community.is_local() and post.community.un_moderated:` —
+its TRUE arm needs the community to STAY LOCAL, which is the default, so
+override nothing. `:904` is `if not post.community.is_local():` — its TRUE arm
+needs the community to be NON-local, which requires overriding BOTH `ap_id`
+AND `ap_profile_id` to a remote domain. The second disjunct alone
+(`ap_profile_id` pointed at a real remote host) is not enough, because
+`ap_id is None` already satisfies the first. An earlier version of this fact
+said the True arm of `:841` needed both overridden; that is its FALSE arm, and
+following it would produce a test that takes the opposite arm and passes. Assert
 `community.is_local() is False` before calling the function under test so a
 fixture that silently fails to clear both fields announces itself instead of
 exercising the wrong arm.
