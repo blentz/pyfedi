@@ -166,3 +166,147 @@ def test_an_article_post_is_created_through_the_web_arm(db_session, app):
     assert len(rows) == 1
     assert rows[0].user_id == s.author.id
     assert rows[0].title == 'a title'
+
+
+def test_the_api_arm_returns_the_user_id_and_the_post(db_session):
+    """`:164`'s true arm and `:244`'s two-tuple.
+
+    NO `web_ctx`: the API arm takes no request context. The two-tuple is what
+    distinguishes this arm from `:246`'s bare return, and a test asserting only
+    that a post exists would pass on either arm -- `:206-228` runs on both.
+
+    This is also the false-arm witness for `:166`: `extra_rate_limit_check` is
+    left unpatched, so it takes its ordinary `return False`, `:166` is taken
+    false, and the call proceeds to `:168` and beyond.
+    """
+    s = seed_make_context()
+
+    result = make_post(_api_input(), s.community, POST_TYPE_ARTICLE, SRC_API,
+                        auth=bearer(s.author))
+
+    assert isinstance(result, tuple)
+    user_id, post = result
+    assert user_id == s.author.id
+    assert post.title == 'a title'
+
+
+def test_the_web_arm_strips_the_title_and_the_api_arm_does_not(db_session, app):
+    """`:173`'s `.strip()` against `:168`'s bare read.
+
+    `edit_post` (called from `:231`) independently RE-DERIVES and strips the
+    title on BOTH arms (`:254` for SRC_API, `:318` for SRC_WEB) and overwrites
+    `post.title` with it at `:395` -- so by the time `make_post` returns
+    normally, the value `:168`/`:173` produced has already been clobbered on
+    every path. Verified empirically: an unpatched version of this test failed
+    with `'spaced' == '  spaced  '` on the API arm, because `:254`'s
+    `.strip()` ran downstream of `:168`'s bare read regardless. `edit_post` is
+    therefore stubbed to identity here -- the one test in this file that does
+    not let it run for real -- so the value `:168`/`:173` actually set on the
+    Post at `:206-207` survives to the assertion. The asymmetry between the
+    two returned titles is still produced entirely by `:168` vs `:173`.
+    """
+    s = seed_make_context()
+
+    original_edit_post = post_module.edit_post
+    post_module.edit_post = lambda *args, **kwargs: args[1]
+    try:
+        api_result = make_post(_api_input(title='  spaced  '), s.community,
+                                POST_TYPE_ARTICLE, SRC_API, auth=bearer(s.author))
+        with web_ctx(app, s.author):
+            web_post = make_post(_web_form(title='  spaced  '), s.community,
+                                  POST_TYPE_ARTICLE, SRC_WEB)
+    finally:
+        post_module.edit_post = original_edit_post
+
+    assert api_result[1].title == '  spaced  '
+    assert web_post.title == 'spaced'
+
+
+def test_a_link_post_takes_its_url_from_link_url(db_session, app, http_mock):
+    """`:174`'s true arm and `:175`.
+
+    `_web_form` sets `link_url` and `video_url` to DIFFERENT values
+    (tests/test_shared_post_edit.py:152), which is what makes this test able to
+    fail: if `:175` read `video_url` the assertion would catch it.
+
+    The url `:175` extracts is passed through to `edit_post` (`:231`), whose
+    own SRC_WEB branch re-derives the SAME url from the same field (`:321`)
+    and is what actually assigns `post.url` (`:652`), after `is_image_url`
+    issues one HEAD (app/utils.py:269) and, since 'text/html' is not an image
+    extension, the else arm's `opengraph_parse` issues one GET (`:642`) --
+    mirroring tests/test_shared_post_edit.py:799's http_mock pair for the
+    identical reason.
+    """
+    s = seed_make_context()
+    http_mock.head('https://example.com/page').respond(200, headers={'Content-Type': 'text/html'})
+    http_mock.get('https://example.com/page').respond(200, html='<html></html>')
+
+    with web_ctx(app, s.author):
+        post = make_post(_web_form(), s.community, POST_TYPE_LINK, SRC_WEB)
+
+    assert post.url == 'https://example.com/page'
+
+
+def test_a_video_post_takes_its_url_from_video_url(db_session, app, http_mock):
+    """`:176`'s true arm and `:177`, with `:174` taken false.
+
+    Same HEAD/GET pair as the link test, for `video_url`'s content type
+    ('video/mp4') instead -- see that test's docstring for why both are
+    required.
+    """
+    s = seed_make_context()
+    http_mock.head('https://example.com/v.mp4').respond(200, headers={'Content-Type': 'video/mp4'})
+    http_mock.get('https://example.com/v.mp4').respond(200, html='')
+
+    with web_ctx(app, s.author):
+        post = make_post(_web_form(), s.community, POST_TYPE_VIDEO, SRC_WEB)
+
+    assert post.url == 'https://example.com/v.mp4'
+
+
+def test_an_article_post_takes_no_url_at_all(db_session, app):
+    """`:178`'s else arm and `:179`'s `url = None`, with `:174` and `:176`
+    both taken false.
+
+    Asserts the url is absent even though the form CARRIES both `link_url` and
+    `video_url` -- so a regression dropping the type check and always reading
+    one of them fails here rather than passing quietly.
+    """
+    s = seed_make_context()
+
+    with web_ctx(app, s.author):
+        post = make_post(_web_form(), s.community, POST_TYPE_ARTICLE, SRC_WEB)
+
+    assert not post.url
+
+
+def test_a_rate_limited_api_user_is_refused(db_session):
+    """`:166`'s true arm and `:167`'s raise.
+
+    `extra_rate_limit_check` (`:155-160`) is currently an unconditional
+    `return False` -- finding D406 records that its docstring says the real
+    limiting is still planned, and that the same stub is duplicated verbatim in
+    `app/shared/reply.py:134-139` -- so this arc CANNOT be reached without
+    replacing it. The monkeypatch is not a convenience here; it is the only way
+    in, and that fact is registered rather than hidden. When the function grows
+    real logic, this test keeps working and a fixture-based version would have
+    to be rewritten.
+
+    `:166`'s FALSE arm is witnessed by
+    `test_the_api_arm_returns_the_user_id_and_the_post`, an ordinary API call
+    that reaches `:168` with `extra_rate_limit_check` left unpatched.
+    """
+    s = seed_make_context()
+
+    original = post_module.extra_rate_limit_check
+    post_module.extra_rate_limit_check = lambda user: True
+    try:
+        with pytest.raises(Exception, match='rate_limited'):
+            make_post(_api_input(), s.community, POST_TYPE_ARTICLE, SRC_API,
+                      auth=bearer(s.author))
+    finally:
+        post_module.extra_rate_limit_check = original
+
+    # Proves the raise happened BEFORE :206 created a row -- without this the
+    # test would pass even if the raise moved below the creation.
+    assert db.session.query(Post).count() == 0
