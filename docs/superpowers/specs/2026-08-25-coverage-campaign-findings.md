@@ -11302,6 +11302,8 @@ D463, say so here in the change that takes it.
 
 ## Sub-project 38: `app/shared/post.py` Group E1 -- `edit_post`'s file-upload block
 
+**A SIZING CORRECTION, MADE AFTER THE FINAL REVIEW AND APPLYING TO EVERY FIGURE BELOW AND TO THE ROUND'S SPEC AND PLAN, WHICH ARE LEFT UNREVISED AS DATED RECORDS PER THIS FILE'S CONVENTION.** The block CONTAINS 67 statements and 40 branch arcs. The figures `66/39` used throughout this round are the BASELINE MISSING counts at the round's start, not the block's size -- `:461` and the arc `461->565` were already covered by the pre-existing `tests/test_shared_post_edit.py`, which calls `edit_post` with no `uploaded_file` and so takes the guard's false arm. The round closed 66 statements and 39 arcs because 1 and 1 were already closed. Nothing measured is wrong; the noun is. A count of what is MISSING and a count of what EXISTS differ by whatever was already covered, and conflating them makes a round's scope read as larger or smaller than the code it touches.
+
 Group E1 is `app/shared/post.py:461-563` inside `edit_post` -- 66 statements,
 39 branch arcs, the first block in the campaign driving a real file through a
 real image pipeline (seek/read/save, PIL open, colour conversion, thumbnail,
