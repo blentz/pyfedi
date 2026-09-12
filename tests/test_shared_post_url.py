@@ -897,6 +897,26 @@ class TestImageArmEventBanner:
     Exactly ONE HEAD is issued per test: `_seed()` leaves `post.url` None, so
     `:403` is false and `:410`'s `is_image_url(post.url)` never runs; `:601`'s
     `is_image_url(url)` is the only caller.
+
+    THE TWO TESTS DIFFER IN THE `type` ARGUMENT AND IN NOTHING ELSE. Both pass
+    the same url, the same recorder, the same HEAD route and -- importantly --
+    the SAME `event` dict, even though only the event test needs one (see that
+    test's docstring for why it needs one at all). Giving the `event` dict to
+    only one of them would make `type` and `event_data` vary in lockstep, and
+    the pair could then not tell `:612`'s real predicate,
+    `if type == POST_TYPE_EVENT:`, from one written on `event_data` --
+    false-witness mechanism 5. It is inert in the control: `:696`'s FIRST
+    conjunct (`type == POST_TYPE_EVENT`) is false there, so no `Event` row is
+    built, and `:617` types the post IMAGE so `app/shared/tasks/pages.py:231`'s
+    `elif post.type == POST_TYPE_EVENT:` is never taken either.
+
+    `:663`'s `if url and post.image:` IS REACHED BY BOTH TESTS, and `post.image`
+    there is an implicit lazy load rather than anything the code assigns.
+    `:607` commits (expiring the instance), `:608` writes `post.image_id`, and
+    `:663` then resolves the relationship off that freshly-written FK -- no
+    line ever sets `post.image` on this path. Both tests depend on it
+    completing without error, so a change to that relationship's loader
+    strategy would break them at a line none of their docstrings name.
     """
 
     def test_an_event_with_an_image_url_keeps_no_url_and_gets_a_banner(
@@ -907,6 +927,19 @@ class TestImageArmEventBanner:
         ends up None (only `:613` writes that; `:618` writes the url), and
         `make_image_sizes` is called with the banner sizes 170/2000 (only
         `:614` passes those; `:616` passes 512/1200).
+
+        THE WHOLE ARGUMENT TUPLE IS PINNED, not just the sizes. `:614` and
+        `:616` each pass five positional arguments, and all five are inside a
+        mutation pass's reach; this recorder is the only thing in the file that
+        can see any of them. `'posts'` is the storage directory and
+        `post.community.low_quality` the last argument, asserted here against
+        the community's actual value, which `make_community` leaves at
+        `Community.low_quality`'s column default of False (app/models.py:576).
+        That kills a fifth argument mutated to `True` or to any truthy
+        constant; it cannot kill one mutated to the literal `False`, and the
+        `low_quality=True` case that would is deliberately NOT added to this
+        pair -- a second varying input is exactly what the class docstring
+        explains this pair must not have.
 
         `post.url` being None is NOT merely the seeded value surviving --
         false-witness mechanism 1. `_seed()` does seed None, but reaching
@@ -943,15 +976,20 @@ class TestImageArmEventBanner:
         assert s.post.url is None
         assert s.post.image_id is not None
         assert len(rec.calls) == 1
-        assert rec.calls[0][0][1:3] == (170, 2000)
+        assert s.community.low_quality is False
+        assert rec.calls[0] == ((s.post.image_id, 170, 2000, 'posts', False), {})
 
     def test_a_non_event_with_an_image_url_keeps_the_url_and_gets_a_thumbnail(
             self, db_session, http_mock, monkeypatch):
         """`:612` false -> `:616`, `:617`, `:618`. Arc 612->616.
 
-        THE POSITIVE CONTROL for the test above: it differs in the post TYPE
-        alone and produces the opposite value on both witnesses -- the url is
-        written rather than cleared, and the sizes are 512/1200.
+        THE POSITIVE CONTROL for the test above. The ONLY input that varies is
+        the `type` argument: the url, the recorder, the HEAD route and the
+        `event` dict are all identical, deliberately -- see the class docstring
+        for why the `event` dict has to be passed here too even though nothing
+        reads it. Every witness comes back with the opposite value: the url is
+        written rather than cleared, the sizes are 512/1200 rather than
+        170/2000, and `post.type` becomes IMAGE.
 
         `POST_TYPE_IMAGE` at `:617` is a real witness rather than a default:
         `:398` wrote `POST_TYPE_LINK` here, and `Post.type`'s column default is
@@ -959,20 +997,28 @@ class TestImageArmEventBanner:
         seeded value nor the submitted one. The only other writers of IMAGE are
         `:405` and `:411`, both inside `:403`'s block, which cannot run --
         `_seed()` leaves `post.url` None.
+
+        The argument tuple is pinned in full for the same reason as in the test
+        above, and with the same limit on what an unchanged `low_quality` can
+        witness.
         """
         rec = _RecordingMakeImageSizes()
         monkeypatch.setattr('app.shared.post.make_image_sizes', rec)
         http_mock.head(PAGE_URL).respond(200, headers={'Content-Type': 'image/png'})
         s = _seed()
 
-        edit_post(_api_input(url=PAGE_URL), s.post, POST_TYPE_LINK, SRC_API,
+        edit_post(_api_input(url=PAGE_URL,
+                             event={'start': '2030-01-01T09:00:00Z',
+                                    'end': '2030-01-01T10:00:00Z'}),
+                  s.post, POST_TYPE_LINK, SRC_API,
                   user=s.user, from_scratch=True)
 
         db.session.refresh(s.post)
         assert s.post.url == PAGE_URL
         assert s.post.type == POST_TYPE_IMAGE
         assert len(rec.calls) == 1
-        assert rec.calls[0][0][1:3] == (512, 1200)
+        assert s.community.low_quality is False
+        assert rec.calls[0] == ((s.post.image_id, 512, 1200, 'posts', False), {})
 
 
 class TestVideoHostingSiteArm:
@@ -1034,6 +1080,13 @@ class TestVideoHostingSiteArm:
         the word 'watch' without holding the substring 'videos/watch', which
         `app/utils.py:326-327` accepts as PeerTube. Otherwise this control
         would take `:660`'s TRUE arm -- false-witness mechanism 4.
+
+        That PeerTube route needs no witness HERE. It reaches `:661` by the
+        same arc the youtube test already closes and adds no line or arc in
+        `app/shared/post.py`, and
+        `tests/test_utils_strings.py:26-27`
+        (`TestIsVideoHostingSite::test_peertube_is_matched_by_path_not_host`)
+        already pins the substring check itself.
         """
         plain = 'https://example.com/watch-this'
         http_mock.head(plain).respond(200, headers={'Content-Type': 'text/html'})
@@ -1044,26 +1097,3 @@ class TestVideoHostingSiteArm:
 
         db.session.refresh(s.post)
         assert s.post.type == POST_TYPE_LINK
-
-    def test_a_peertube_url_that_did_not_change_also_retypes_the_post_as_video(
-            self, db_session, http_mock):
-        """`:660` true -> `:661` by the SECOND, independent route into
-        `is_video_hosting_site`: `'videos/watch' in url` (app/utils.py:326-327,
-        PeerTube), which no prefix in the `video_hosting_sites` list
-        (app/utils.py:319-321) can reach.
-
-        This adds no arc and no statement in `app/shared/post.py` that the
-        youtube test above does not already close -- it is here because the
-        youtube url short-circuits at app/utils.py:323-324 and therefore leaves
-        `:326`'s substring test unexecuted. Without this test a mutation that
-        deletes or negates `:326-327` survives the whole file.
-        """
-        peertube = 'https://tube.example.org/videos/watch/abc-123'
-        http_mock.head(peertube).respond(200, headers={'Content-Type': 'text/html'})
-        s = _seed(url=peertube)
-
-        edit_post(_api_input(url=peertube), s.post, POST_TYPE_LINK, SRC_API,
-                  user=s.user, from_scratch=False)
-
-        db.session.refresh(s.post)
-        assert s.post.type == POST_TYPE_VIDEO
