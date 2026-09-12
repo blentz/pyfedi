@@ -64,6 +64,7 @@ tests/factories.py; the rules are tests/README.md facts 206-219. Four bind here:
 """
 
 import pytest
+from sqlalchemy import text
 
 from app import db
 from app.constants import (
@@ -677,6 +678,217 @@ def test_an_api_ai_flair_report_does_not_escalate_on_piefed(db_session):
 
     assert db.session.query(Notification).filter_by(
         title='Suspicious content').count() == 0
+
+
+def test_a_local_moderator_gets_a_notification(db_session):
+    """`:876`'s true arm and `:878-883`'s Notification.
+
+    Catches a regression inverting `:876`, which would route a local moderator
+    into `remote_instance_ids` and federate a Flag to the local instance.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    mod = seed_local_moderator(s)
+
+    report_post(
+        s.post,
+        {'reason': 'spam', 'description': 'x', 'report_remote': False},
+        SRC_API,
+        auth=bearer(s.voter),
+    )
+
+    notifs = db.session.query(Notification).filter_by(
+        title='A post has been reported').all()
+    assert {n.user_id for n in notifs} == {mod.id}
+
+
+def test_a_remote_moderator_gets_no_local_notification(db_session):
+    """`:876`'s false arm.
+
+    A remote moderator is reached by a federated Flag, not a local
+    Notification row. Positive control: `test_a_local_moderator_gets_a_notification`
+    above, same fixture shape and same notification title, non-empty.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    seed_remote_moderator(s)
+
+    report_post(
+        s.post,
+        {'reason': 'spam', 'description': 'x', 'report_remote': False},
+        SRC_API,
+        auth=bearer(s.voter),
+    )
+
+    assert db.session.query(Notification).filter_by(
+        title='A post has been reported').count() == 0
+
+
+def test_report_remote_true_includes_every_remote_moderators_instance(db_session):
+    """`:886`'s FALSE arm and `:890`'s unconditional add.
+
+    With `report_remote` set the reporter has opted in, so every remote
+    moderator's instance receives the Flag with no filtering.
+    """
+    calls = []
+    s = seed_post_context(community_name='lifecycle')
+    remote_instance, _mod = seed_remote_moderator(s)
+
+    import app.shared.post as post_module
+    original = post_module.task_selector
+
+    def recorder(task_key, **kwargs):
+        calls.append((task_key, kwargs.get('instance_ids')))
+        return original(task_key, **kwargs)
+
+    post_module.task_selector = recorder
+    try:
+        report_post(
+            s.post,
+            {'reason': 'spam', 'description': 'x', 'report_remote': True},
+            SRC_API,
+            auth=bearer(s.voter),
+        )
+    finally:
+        post_module.task_selector = original
+
+    assert len(calls) == 1
+    assert calls[0][0] == 'report_post'
+    assert set(calls[0][1]) == {remote_instance.id}
+
+
+def test_report_remote_false_excludes_the_suspects_own_instance(db_session):
+    """`:886`'s TRUE arm and `:887`'s FIRST conjunct taken false.
+
+    Without opt-in, a moderator on the suspect's own instance is excluded --
+    the reporter has not consented to their report reaching the instance
+    hosting the person they reported. Catches a regression dropping that
+    conjunct. Positive control: `test_report_remote_true_includes_every_remote_moderators_instance`
+    above, same fixture shape (a single `seed_remote_moderator`), non-empty
+    `calls`.
+    """
+    calls = []
+    s = seed_post_context(community_name='lifecycle')
+    remote_instance, mod = seed_remote_moderator(s)
+    s.post.author.instance_id = remote_instance.id
+    db.session.commit()
+
+    import app.shared.post as post_module
+    original = post_module.task_selector
+
+    def recorder(task_key, **kwargs):
+        calls.append(task_key)
+        return original(task_key, **kwargs)
+
+    post_module.task_selector = recorder
+    try:
+        report_post(
+            s.post,
+            {'reason': 'spam', 'description': 'x', 'report_remote': False},
+            SRC_API,
+            auth=bearer(s.voter),
+        )
+    finally:
+        post_module.task_selector = original
+
+    assert calls == []
+
+
+def test_report_remote_false_excludes_a_moderator_sharing_the_communitys_instance(db_session):
+    """`:887`'s SECOND conjunct taken false, with the first conjunct true.
+
+    `oddmod`'s `instance_id` equals the community's (1, the local instance
+    `seed_post_context` seeds first, per `make_community`'s hardcoded
+    `instance_id=1`), but its `ap_id` is set (`make_user(..., local=False)`),
+    so `User.is_local()` (app/models.py:1251-1252, `self.ap_id is None or
+    self.ap_profile_id.startswith(SERVER_URL)`) is False -- `is_local()` reads
+    `ap_id`/`ap_profile_id`, never `instance_id`, so this combination is a
+    legitimate state under the model's own definitions even though it looks
+    contradictory. `:886`'s false arm is therefore reached for oddmod despite
+    `instance_id` alone suggesting "local".
+
+    The suspect (`s.post.author`) is moved to a THIRD instance, distinct from
+    both moderators', so oddmod's FIRST conjunct
+    (`moderator.instance_id != suspect_user.instance_id`, 1 != other_instance.id)
+    is true while its SECOND (`moderator.instance_id != post.community.instance_id`,
+    1 != 1) is false -- the arrangement `:887`'s second conjunct needs a
+    witness for.
+
+    `realmod`, a genuine remote moderator on a FOURTH instance, is the
+    positive control: its instance DOES land in `remote_instance_ids`, which
+    is what shows oddmod's absence below is a real exclusion enforced by the
+    second conjunct rather than an empty/broken fixture. Catches a regression
+    dropping that conjunct, which would let oddmod's instance (1) into the
+    call too.
+    """
+    calls = []
+    s = seed_post_context(community_name='lifecycle')
+    oddmod = make_user(s.instance, 'oddmod', local=False)
+    make_community_member(oddmod, s.community, is_moderator=True)
+    assert oddmod.instance_id == s.community.instance_id
+    assert oddmod.is_local() is False
+
+    remote_instance, _realmod = seed_remote_moderator(
+        s, domain='genuine.example', name='realmod')
+
+    other_instance = make_instance('elsewhere.example')
+    s.post.author.instance_id = other_instance.id
+    db.session.commit()
+
+    import app.shared.post as post_module
+    original = post_module.task_selector
+
+    def recorder(task_key, **kwargs):
+        calls.append((task_key, kwargs.get('instance_ids')))
+        return original(task_key, **kwargs)
+
+    post_module.task_selector = recorder
+    try:
+        report_post(
+            s.post,
+            {'reason': 'spam', 'description': 'x', 'report_remote': False},
+            SRC_API,
+            auth=bearer(s.voter),
+        )
+    finally:
+        post_module.task_selector = original
+
+    assert len(calls) == 1
+    assert calls[0][0] == 'report_post'
+    assert set(calls[0][1]) == {remote_instance.id}
+
+
+def test_a_moderator_row_whose_user_is_gone_is_skipped(db_session):
+    """`:875`'s false arm.
+
+    `:874` looks the moderator up by id and `:875` guards the result, so a
+    CommunityMember row whose User has been deleted is skipped rather than
+    raising. Catches a regression dropping the guard. Positive control:
+    `test_a_local_moderator_gets_a_notification` above, same fixture shape
+    (a single local moderator), non-empty Notification count.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    mod = seed_local_moderator(s)
+    orphan_id = mod.id
+    # community_member.user_id carries a live FOREIGN KEY to user.id (RESTRICT,
+    # not CASCADE), so an ordinary delete of `mod` would raise
+    # ForeignKeyViolation rather than produce the orphaned row this test
+    # needs. `session_replication_role = replica` disables FK triggers for the
+    # rest of this transaction -- the same trick tests/conftest.py's own
+    # per-test teardown SQL uses for the identical reason -- so the
+    # CommunityMember row survives with a user_id no "user" row backs.
+    db.session.execute(text('SET LOCAL session_replication_role = replica'))
+    db.session.delete(mod)
+    db.session.commit()
+
+    reporter_id, report = report_post(
+        s.post,
+        {'reason': 'spam', 'description': 'x', 'report_remote': False},
+        SRC_API,
+        auth=bearer(s.voter),
+    )
+
+    assert reporter_id == s.voter.id
+    assert db.session.query(Notification).filter_by(
+        title='A post has been reported').count() == 0
 
 
 def test_an_unmoderated_local_community_always_notifies_admins_through_the_api(db_session):
