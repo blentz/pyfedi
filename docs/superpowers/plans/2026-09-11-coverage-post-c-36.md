@@ -310,14 +310,23 @@ def test_restoring_increments_both_counters(db_session):
     assert s.community.post_count == 7
 
 
-def test_restoring_a_post_with_a_url_recalculates_cross_posts(db_session):
+def test_restoring_a_post_with_a_url_links_it_to_its_cross_posts(db_session):
     """`:804`'s true arm and `:805`'s `calculate_cross_posts()`.
 
     `make_post` leaves `url` unset, so every other test here takes the false
-    arm. Catches a regression making the call unconditional, which would run a
-    cross-post search for a post that has no url to match on.
+    arm. The assertions are on cross_posts rather than on `deleted`, because
+    `deleted` is set at `:807` on EVERY path: a test asserting only that would
+    pass with `:805` deleted outright and witness nothing.
+
+    `calculate_cross_posts` (app/models.py:2371-2388) finds other published,
+    undeleted posts sharing the url and links them both ways, so a sibling post
+    is what makes the call observable. Catches a regression dropping `:805`,
+    after which a restored post would come back unlinked from every cross-post
+    it belongs with.
     """
     s = seed_post_context(community_name='lifecycle')
+    sibling = make_post(s.community, s.voter, 'https://local.example/p/2')
+    sibling.url = 'https://example.com/article'
     s.post.url = 'https://example.com/article'
     s.post.deleted = True
     db.session.commit()
@@ -326,7 +335,9 @@ def test_restoring_a_post_with_a_url_recalculates_cross_posts(db_session):
 
     assert user_id == s.author.id
     db.session.refresh(s.post)
-    assert s.post.deleted is False
+    db.session.refresh(sibling)
+    assert s.post.cross_posts == [sibling.id]
+    assert sibling.cross_posts == [s.post.id]
 
 
 def test_the_web_arm_reads_current_user_and_returns_none(db_session, app):
@@ -492,21 +503,60 @@ def test_the_web_path_with_a_logged_in_user_attributes_to_them(db_session, app):
     assert s.post.deleted_by == s.voter.id
 
 
-def test_deleting_a_post_with_a_url_clears_cross_posts(db_session):
+def test_deleting_a_post_with_a_url_tears_down_its_cross_post_links(db_session):
     """`:768`'s true arm and `:769`'s `calculate_cross_posts(delete_only=True)`.
 
-    Note the `delete_only=True` argument, which `restore_post:805` omits.
-    Catches a regression dropping the argument, which would run the search
-    branch on a delete.
+    `delete_only=True` reaches app/models.py:2350-2356, which clears this
+    post's `cross_posts` and removes this post's id from each sibling that
+    listed it. The assertions are on cross_posts rather than on `deleted`,
+    because `deleted` is set at `:771` on every path: a test asserting only
+    that would pass with `:769` deleted outright.
+
+    Catches a regression dropping `:769`, after which a deleted post would stay
+    listed in its siblings' cross_posts and keep appearing as a cross-post of a
+    post that no longer exists.
     """
     s = seed_post_context(community_name='lifecycle')
+    sibling = make_post(s.community, s.voter, 'https://local.example/p/2')
+    sibling.url = 'https://example.com/article'
+    s.post.url = 'https://example.com/article'
+    s.post.cross_posts = [sibling.id]
+    sibling.cross_posts = [s.post.id]
+    db.session.commit()
+
+    delete_post(s.post.id, False, SRC_API, bearer(s.author))
+
+    db.session.refresh(s.post)
+    db.session.refresh(sibling)
+    assert s.post.cross_posts == []
+    assert sibling.cross_posts == []
+
+
+def test_deleting_builds_no_new_cross_post_links(db_session):
+    """The `delete_only=True` ARGUMENT at `:769`, not merely the call.
+
+    app/models.py:2359 returns as soon as the teardown is done when
+    `delete_only` is set. WITHOUT the argument the function falls through to
+    :2371's search and would LINK the post being deleted to every sibling
+    sharing its url -- the opposite of what a delete should do.
+
+    This is the only test that distinguishes `calculate_cross_posts(delete_only=True)`
+    from a bare `calculate_cross_posts()`; the teardown test above passes under
+    both, because the teardown runs first either way. Starts with no links so a
+    link appearing can only have come from the search branch.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    sibling = make_post(s.community, s.voter, 'https://local.example/p/2')
+    sibling.url = 'https://example.com/article'
     s.post.url = 'https://example.com/article'
     db.session.commit()
 
-    user_id, post = delete_post(s.post.id, False, SRC_API, bearer(s.author))
+    delete_post(s.post.id, False, SRC_API, bearer(s.author))
 
     db.session.refresh(s.post)
-    assert s.post.deleted is True
+    db.session.refresh(sibling)
+    assert not s.post.cross_posts
+    assert not sibling.cross_posts
 ```
 
 - [ ] **Step 3: Run and report the collection line**
