@@ -1842,8 +1842,23 @@ class TestGenericOpengraphArm:
         the other six:  308 passed
 
     So each of the five is killed by exactly one test in 349, and 'no other test
-    in the suite' below is a measurement rather than a hope. `app/` was restored
-    from a pristine copy after each run and `git diff -- app/` is empty.
+    in the suite' below is a measurement rather than a hope. These five rows are
+    summaries without pasted pytest output, so the mutation pass should treat
+    them as LEADS TO VERIFY rather than as banked results.
+
+    THE RESTORE CHECK IS `git diff --quiet -- app/`, NOT `wc -l`. Every mutant
+    here was a SINGLE-LINE REPLACEMENT, which leaves `wc -l app/shared/post.py`
+    reading 1193 whether the mutant is present or not -- so the line-count
+    tripwire this campaign relies on is INOPERATIVE against exactly the kind of
+    edit a mutation run makes. It was left inoperative for about 26 minutes
+    during this task, with production code mutated across turn boundaries, and
+    nothing would have caught it. Restore from a pristine copy immediately after
+    each run, and gate on::
+
+        git diff --quiet -- app/ && echo CLEAN
+
+    before stopping, reporting or committing. `wc -l` is a useful second signal
+    and not a substitute.
     """
 
     def test_a_generic_url_downloads_the_opengraph_thumbnail(
@@ -2176,13 +2191,40 @@ class TestGenericOpengraphArm:
 
     def test_an_uppercase_video_extension_is_typed_as_video(
             self, db_session, http_mock, chdir_upload):
-        """`:654`'s FIRST disjunct alone -> `:655`. Arc 654->655, statement 655.
+        """`:654`'s FIRST disjunct alone -> `:655`.
 
-        A CORRECTION TO THE BRIEF, which stated the arcs here were already
-        covered and that the test existed only for Task 9. Measured on the
-        33-test baseline immediately before this class was written: 655 was in
-        `missing_lines` and `[654, 655]` in `missing_branches`. This test closes
-        both.
+        CLOSES NO ARC AND NO STATEMENT. An earlier revision of this docstring
+        claimed it closed `655` and `654->655` and called the brief wrong for
+        saying otherwise. THAT CLAIM WAS RETRACTED; the brief was right.
+
+        The mistake was one of MEASUREMENT SCOPE, and it is worth stating
+        plainly because the correct fact was already in this very class. The
+        baseline was taken FILE-SCOPED -- `./run_tests.sh
+        tests/test_shared_post_url.py --cov=app.shared.post` -- over 33 tests.
+        The round's authoritative baseline is SUITE-SCOPED, taken at `544a7eb1`
+        over every tests/test_shared_post_*.py file, and in it neither `655` nor
+        `654->655` is missing:
+        docs/superpowers/plans/2026-09-12-coverage-post-e2-39.md:85 lists the
+        missing statements in this region as `644 645 646 647 648 649 650 661`,
+        with no 655, and `:95` lists the missing arcs with no `654->655`;
+        docs/superpowers/specs/2026-09-12-coverage-post-e2-39-design.md:81 says
+        so in prose. A statement covered by another FILE is not missing from
+        the module, however it looks when that file is measured alone.
+
+        What already covers it is `tests/test_shared_post_edit.py:815-825`
+        (`test_web_branch_takes_the_video_url_for_a_video_post`): its HEAD
+        answers `video/mp4`, which is not an image type, so `:601` is false and
+        the `:641` else arm is taken; its GET answers `html=''`, so `:643` is
+        false; and `is_video_url('https://example.com/clip.mp4')` is true, so
+        `:654` reaches `:655`. The block comment above this method already said
+        that file reaches `655` -- the two statements were never reconciled,
+        which is the actual failure here, not the file-scoped number.
+
+        THE TEST STAYS, because what it witnesses is not coverage. `:654` is a
+        four-disjunct compound scored as ONE arc pair, so the covering test
+        above cannot distinguish the operands: its url makes d1 AND d2 true at
+        once. This one makes d1 true ALONE, which is what lets a mutant that
+        deletes d1 be killed.
 
         'MOVIE.MP4' is uppercase on purpose. `is_video_url` lowercases the
         parsed path (app/utils.py:312) so d1 is True, while `url.endswith(
