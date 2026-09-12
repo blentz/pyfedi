@@ -1308,3 +1308,55 @@ def test_a_remote_suspects_instance_is_not_added_twice(db_session):
         post_module.task_selector = original
 
     assert calls == [{suspect_instance.id}]
+
+
+def test_a_minor_abuse_report_notifies_admins_through_the_api(db_session):
+    """PC1: `:828`'s `'Minor abuse'` needle can never match a `.lower()`ed
+    haystack.
+
+    The API arm mirrors the WEB arm's policy: `'Minor abuse'` corresponds to
+    reason `'5'`, `Minor abuse or sexualization` (app/post/forms.py:36). But
+    `:828` lowercases the haystack and keeps the needle's capital M, so the
+    disjunct is ALWAYS False and the escalation has never fired on this arm.
+
+    Fails against the tree as it stands: no admin notification is written.
+
+    `seed_site_admin` is load-bearing here. Without it `Site.admins()` is empty
+    and this test fails BOTH before and after the fix -- a failing observation
+    that proves nothing, and the worst possible foundation for a production
+    change.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    seed_site_admin(s)
+
+    report_post(
+        s.post,
+        {'reason': 'Minor abuse or sexualization', 'description': 'x',
+         'report_remote': False},
+        SRC_API,
+        auth=bearer(s.voter),
+    )
+
+    assert db.session.query(Notification).filter_by(
+        title='Suspicious content').count() == 1
+
+
+def test_minor_abuse_in_the_description_also_notifies_admins(db_session):
+    """`:829`, the description-side needle, distinct from `:828`'s reason-side.
+
+    `:828` and `:829` are separate disjuncts of one compound; a test exercising
+    only the reason leaves `:829` unwitnessed.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    seed_site_admin(s)
+
+    report_post(
+        s.post,
+        {'reason': 'spam', 'description': 'this is minor abuse',
+         'report_remote': False},
+        SRC_API,
+        auth=bearer(s.voter),
+    )
+
+    assert db.session.query(Notification).filter_by(
+        title='Suspicious content').count() == 1

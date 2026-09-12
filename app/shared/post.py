@@ -825,8 +825,8 @@ def report_post(post: Post, input, src, auth=None):
         source_instance = Instance.query.filter_by(id=post.instance_id).one()
         reason = input['reason']
         description = input['description']
-        notify_admins = (any(x in reason.lower() for x in ['Minor abuse', 'doxing']) or
-                        any(x in description.lower() for x in ['Minor abuse', 'doxing']) or
+        notify_admins = (any(x in reason.lower() for x in ['minor abuse', 'doxing']) or
+                        any(x in description.lower() for x in ['minor abuse', 'doxing']) or
                          (reason == 'AI content that needs flair' and post.community.instance.software.lower() != 'piefed'))
         report_remote = input['report_remote']
     else:
