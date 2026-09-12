@@ -998,6 +998,14 @@ def test_a_banned_domain_is_refused_before_any_row_is_created(db_session, app):
 
     Asserting `Post.count() == 0` cannot tell those apart -- the rollback
     produces it too. Recording whether `edit_post` was ENTERED can.
+
+    `calls == []` is an emptiness assertion, and an empty recorder is what a
+    correct early refusal produces, but it is ALSO what a recorder that never
+    installed, or a patch that leaked from an earlier test, would produce
+    (D451 mechanism 3) -- on its own it proves nothing. Its positive control
+    is `test_an_unbanned_domain_lets_edit_post_run` below: identical fixture
+    shape, an unbanned domain, and `calls == [True]` -- so the empty case here
+    is contrasted against a case where the same recorder is known to work.
     """
     calls = []
     s = seed_make_context()
@@ -1021,3 +1029,43 @@ def test_a_banned_domain_is_refused_before_any_row_is_created(db_session, app):
 
     assert calls == []
     assert db.session.query(Post).count() == 0
+
+
+def test_an_unbanned_domain_lets_edit_post_run(db_session, http_mock):
+    """Positive control for `test_a_banned_domain_is_refused_before_any_row_is_created`.
+
+    That test's `calls == []` is an emptiness assertion, and an empty list is
+    also what a recorder that never installed, or a patch that leaked from
+    an earlier test, would produce (D451 mechanism 3) -- nothing about an
+    empty `calls` on its own proves `:195` refused early. This test uses the
+    IDENTICAL recorder shape against an unbanned domain: `:195` does not fire,
+    `:231` is reached, and the recorder records exactly one call on its way to
+    delegating to the real `edit_post`. `calls == [True]` here is the contrast
+    that makes `calls == []` there mean something.
+
+    Needs `http_mock`, same reason as `test_an_ordinary_domain_is_allowed`
+    above: nothing raises before `:231` delegates, so `edit_post` reaches a
+    real url, `is_image_url` fires one HEAD, and (the response not being an
+    image) `opengraph_parse` fires one GET.
+    """
+    calls = []
+    s = seed_make_context()
+    http_mock.head('https://ok-unbanned.example/x').respond(200, headers={'Content-Type': 'text/html'})
+    http_mock.get('https://ok-unbanned.example/x').respond(200, html='<html></html>')
+
+    original = post_module.edit_post
+
+    def recorder(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+
+    post_module.edit_post = recorder
+    try:
+        user_id, post = make_post(_api_input(url='https://ok-unbanned.example/x'),
+                                  s.community, POST_TYPE_LINK, SRC_API,
+                                  auth=bearer(s.author))
+    finally:
+        post_module.edit_post = original
+
+    assert calls == [True]
+    assert db.session.query(Post).count() == 1
