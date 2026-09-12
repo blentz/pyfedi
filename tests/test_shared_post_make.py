@@ -222,62 +222,89 @@ def test_the_web_arm_strips_the_title_and_the_api_arm_does_not(db_session, app):
     assert web_post.title == 'spaced'
 
 
-def test_a_link_post_takes_its_url_from_link_url(db_session, app, http_mock):
-    """`:174`'s true arm and `:175`.
+def test_a_link_post_picks_link_url_not_video_url(db_session, app):
+    """`:174`'s true arm and `:175`, witnessed through `:195`'s raise.
 
-    `_web_form` sets `link_url` and `video_url` to DIFFERENT values
-    (tests/test_shared_post_edit.py:152), which is what makes this test able to
-    fail: if `:175` read `video_url` the assertion would catch it.
+    THE ASSERTION IS ON THE RAISE, NOT ON `post.url`, AND THAT IS THE WHOLE
+    POINT. `make_post` never puts its local `url` on the Post: `:206-207`
+    passes `title` and `language_id` only. `post.url` is set later by
+    `edit_post`, which re-derives url from the SAME `input` and `type`
+    (`:256`, `:321-327`). So a test asserting `post.url == ...` passes even
+    with `:175` deleted -- it witnesses `edit_post`, not `make_post`. (An
+    earlier draft of this file did exactly that, and a fix-round caught it.)
 
-    The url `:175` extracts is passed through to `edit_post` (`:231`), whose
-    own SRC_WEB branch re-derives the SAME url from the same field (`:321`)
-    and is what actually assigns `post.url` (`:652`), after `is_image_url`
-    issues one HEAD (app/utils.py:269) and, since 'text/html' is not an image
-    extension, the else arm's `opengraph_parse` issues one GET (`:642`) --
-    mirroring tests/test_shared_post_edit.py:799's http_mock pair for the
-    identical reason.
+    A Domain-row assertion is confounded too, because `edit_post:566` calls
+    `domain_from_url` as well. The ONLY effect of `make_post`'s local url that
+    nothing downstream can reproduce is `:195`'s raise, which happens before
+    `:231` delegates at all.
+
+    Both hosts are banned, so the arm that ran is named in the message:
+    `:195` raises `domain.name + ' is blocked by admin'`. Delete `:175` and url
+    is None, `:190` is false, and no raise happens -- this test fails. Swap
+    `:175` to read `video_url` and the message names the other host -- this
+    test fails.
     """
     s = seed_make_context()
-    http_mock.head('https://example.com/page').respond(200, headers={'Content-Type': 'text/html'})
-    http_mock.get('https://example.com/page').respond(200, html='<html></html>')
+    for host in ('linkhost.example', 'videohost.example'):
+        d = make_domain(host)
+        d.banned = True
+    db.session.commit()
+    form = _web_form(link_url='https://linkhost.example/page',
+                      video_url='https://videohost.example/v.mp4')
 
     with web_ctx(app, s.author):
-        post = make_post(_web_form(), s.community, POST_TYPE_LINK, SRC_WEB)
+        with pytest.raises(Exception, match='linkhost.example is blocked by admin'):
+            make_post(form, s.community, POST_TYPE_LINK, SRC_WEB)
 
-    assert post.url == 'https://example.com/page'
+    assert db.session.query(Post).count() == 0
 
 
-def test_a_video_post_takes_its_url_from_video_url(db_session, app, http_mock):
+def test_a_video_post_picks_video_url_not_link_url(db_session, app):
     """`:176`'s true arm and `:177`, with `:174` taken false.
 
-    Same HEAD/GET pair as the link test, for `video_url`'s content type
-    ('video/mp4') instead -- see that test's docstring for why both are
-    required.
+    The mirror of the test above: same form, same two banned hosts, different
+    `type`, and the message names the OTHER host. Together the pair pins which
+    field each arm reads -- neither test alone could, because a single banned
+    host cannot distinguish "read the right field" from "read any field".
     """
     s = seed_make_context()
-    http_mock.head('https://example.com/v.mp4').respond(200, headers={'Content-Type': 'video/mp4'})
-    http_mock.get('https://example.com/v.mp4').respond(200, html='')
+    for host in ('linkhost.example', 'videohost.example'):
+        d = make_domain(host)
+        d.banned = True
+    db.session.commit()
+    form = _web_form(link_url='https://linkhost.example/page',
+                      video_url='https://videohost.example/v.mp4')
 
     with web_ctx(app, s.author):
-        post = make_post(_web_form(), s.community, POST_TYPE_VIDEO, SRC_WEB)
+        with pytest.raises(Exception, match='videohost.example is blocked by admin'):
+            make_post(form, s.community, POST_TYPE_VIDEO, SRC_WEB)
 
-    assert post.url == 'https://example.com/v.mp4'
+    assert db.session.query(Post).count() == 0
 
 
-def test_an_article_post_takes_no_url_at_all(db_session, app):
+def test_an_article_post_reads_neither_url_field(db_session, app, stub_notify):
     """`:178`'s else arm and `:179`'s `url = None`, with `:174` and `:176`
     both taken false.
 
-    Asserts the url is absent even though the form CARRIES both `link_url` and
-    `video_url` -- so a regression dropping the type check and always reading
-    one of them fails here rather than passing quietly.
+    BOTH hosts are banned and the form carries both, so if `:179` were changed
+    to read either field this call would raise. It must not: an article takes
+    no url, `:190` is false, and the domain check never runs. The positive
+    controls are the two tests above -- same fixture, same banned hosts, and
+    they DO raise.
     """
     s = seed_make_context()
+    for host in ('linkhost.example', 'videohost.example'):
+        d = make_domain(host)
+        d.banned = True
+    db.session.commit()
+    form = _web_form(link_url='https://linkhost.example/page',
+                      video_url='https://videohost.example/v.mp4')
 
     with web_ctx(app, s.author):
-        post = make_post(_web_form(), s.community, POST_TYPE_ARTICLE, SRC_WEB)
+        post = make_post(form, s.community, POST_TYPE_ARTICLE, SRC_WEB)
 
-    assert not post.url
+    assert post is not None
+    assert db.session.query(Post).count() == 1
 
 
 def test_a_rate_limited_api_user_is_refused(db_session):
