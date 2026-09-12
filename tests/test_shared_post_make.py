@@ -52,8 +52,9 @@ INSIDE `web_ctx` (Probe B; corrects an earlier draft of this paragraph, which
 assumed the opposite before the probe ran). `g` is bound to Flask's APP
 context, not the request context: `tests/conftest.py`'s `app` fixture pushes
 one app context for the whole test (`with application.app_context(): yield
-application`) and `db_session` clears `g.__dict__` once per test before the
-test body runs (`tests/conftest.py:154`) -- so anything stashed on `g` during
+application`, `tests/conftest.py:112-113`) and `db_session` clears
+`g.__dict__` once per test before the test body runs
+(`g.__dict__.clear()`, `tests/conftest.py:156`) -- so anything stashed on `g` during
 the test survives across `with web_ctx(...)` blocks entering and leaving,
 because those only push/pop a REQUEST context on top of the same already-open
 app context. `seed_make_context` therefore sets `g.site = site` directly in
