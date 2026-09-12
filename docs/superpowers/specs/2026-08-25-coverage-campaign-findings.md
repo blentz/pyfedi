@@ -10953,6 +10953,181 @@ predicted counts and hand-copied citations. The module's floor rose 50 -> 64
 and the module is NOT closed. If you take D437, say so here in the change that
 takes it.
 
+## Sub-project 36: `app/shared/post.py` Group C -- the author lifecycle and reporting
+
+`.superpowers/sdd/2026-09-11-coverage-post-c-36/` (per-task briefs and reports;
+gitignored, deleted when the round closes), on branch `blentz`, from base
+`33417fca` to `2cdab539`, 24 commits. This round took **Group C**: `delete_post`,
+`restore_post` and `report_post`. Tests live in the new
+`tests/test_shared_post_lifecycle.py` (**48 tests**). Two production defects
+were fixed (PC1, PC2) and 41 mutations were run, using the crash-kill and
+void-operator checks sub-project 35 established.
+
+**Re-derived function ranges** at the 1193-line tree (`grep -n "^def " app/shared/post.py`,
+unchanged in line count from Group B's measurement -- PC1 and PC2 each replaced
+lines in place): `delete_post:755-795`, `restore_post:796-820`,
+`report_post:821-926` (the group ends where `lock_post:927` begins).
+
+**Group C is NOT fully closed: one branch arc remains uncovered.** Measured
+with `--cov=app.shared.post --cov-branch` over `tests/test_shared_post_lifecycle.py`,
+`tests/test_shared_post_moderation.py`, `tests/test_shared_post_interactions.py`
+and `tests/test_shared_post_edit.py` (237 tests) against the 1193-line tree:
+`delete_post` is 28/28 statements, 14/14 branches (100%/100%). `restore_post` is
+16/16 statements, 6/6 branches (100%/100%). `report_post` is 57/57 statements
+(100%) but 35/36 branches (97.22%) -- the one missing arc is `[905, 907]`: the
+False arm of `:905`'s guard (`if post.community.instance_id not in
+remote_instance_ids:`), the case where the community's instance id is ALREADY
+present in `remote_instance_ids` before this line runs, so `:906`'s add is
+skipped. No test in any of the four files constructs that collision -- Task 9's
+own PC2 collision test reaches only the True arm (its collision lands the
+*moderator's* instance id in the set, distinct from the community's). See
+**D453**.
+
+Whole-module figures at this measurement: **788 statements, 617 covered, 171
+missing; 438 branches, 334 covered, 104 missing, 22 partial; `percent_covered`
+77.56933115823817**. `coverage_floors.ini`'s `app/shared/post.py` entry rose
+**64 -> 77**. Groups D and E are two more sub-projects; see the closing entry
+in this section.
+
+### 1. PC1 -- `report_post`'s minor-abuse escalation never fired -- D437
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D437 | `app/shared/post.py:828-829` | **Fixed, observed failing pre-fix.** `notify_admins = (any(x in reason.lower() for x in ['Minor abuse', 'doxing']) or ...)` lowercases the haystack (`reason.lower()`) but kept the needle's capital `M`, so the first disjunct was ALWAYS False; same shape on `:829` against `description`. `test_a_minor_abuse_report_notifies_admins_through_the_api` (`seed_site_admin` present, so `Site.admins()` is non-empty and the failure is meaningful) failed against the unmodified tree with `assert 0 == 1` (`db.session.query(Notification).filter_by(title='Suspicious content').count()`). **The API/WEB policy correspondence that establishes intent, not a deliberate stricter API policy:** the WEB arm's `:838` disjuncts are reason codes `'5'` and `'6'`, which `app/post/forms.py:36` and `:35` name `'Minor abuse or sexualization'` and `'Sharing personal info - doxing'` -- the exact two categories the API arm's needle list encodes as strings, and the WEB arm's third disjunct (`'17' in ... and ... software.lower() != 'piefed'`) mirrors the API arm's third disjunct verbatim. The two arms were meant to detect the same two categories; the capitalisation was a typo, not policy divergence. Fixed by lowercasing both needle lists to `['minor abuse', 'doxing']`, **not** by removing `.lower()` from the haystack (that would trade this silent failure for a new one: `'Doxing'`, capitalised, would then fail to match). `test_minor_abuse_in_the_description_also_notifies_admins` pins `:829` independently of `:828`. | fixed (observed failing pre-fix) | `task-8-report.md` (verbatim `assert 0 == 1` FAILED transcript, the diff, the 44/44 post-fix run); commit `a06e350f`; `app/post/forms.py:28-41` read at this commit |
+
+### 2. PC2 -- `report_post`'s remote-instance guard tested the wrong id space -- D438
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D438 | `app/shared/post.py:905` | **Fixed, observed failing pre-fix.** `if post.community_id not in remote_instance_ids:` compared a COMMUNITY id against a set of INSTANCE ids -- `remote_instance_ids` is populated from `moderator.instance_id` (`:888`, `:890`) and, two lines below this guard, from `suspect_user.instance_id` (`:908-909`), which gets the identical shape right. Fixed: `post.community_id` -> `post.community.instance_id`. **THE COLLISION MUST BE CONSTRUCTED DELIBERATELY** -- community ids and instance ids are independent sequences in production, so `test_a_remote_communitys_instance_is_flagged_even_when_ids_collide` builds it by SEEDING ORDER, not by reassigning a primary key (rejected up front as PK/FK-fragile): a spliced-in `make_community('padding')` pushes the community under test to id 2, and `seed_remote_moderator` (called after) lands its instance on id 2 also -- `post.community_id` (2) collides with the moderator's already-added instance id (2). Against the unmodified tree this failed `assert calls == [{instance.id, remote_instance.id}]` with `AssertionError: assert [{2}] == [{1, 2}]` -- the community's real instance (id 1) never got added, because `2` read as "already present" under the wrong comparison. | fixed (observed failing pre-fix) | `task-9-report.md` (verbatim `assert [{2}] == [{1, 2}]` failure, the seeding-order derivation, the `is_local()` trap it also had to clear); commit `478ff47a` |
+
+### 3. `delete_post`/`restore_post` have three unregistered asymmetries -- D439
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D439 | `app/shared/post.py:765-778` against `:796-818` | **Registered, not fixed.** Three places where `restore_post` does not mirror `delete_post`'s inverse operation. (a) **Federation guard.** `delete_post:778` gates its federation call on two conjuncts, `federate_deletion and post.status == POST_STATUS_PUBLISHED`; `restore_post:813`'s `task_selector('restore_post', user_id=user_id, post_id=post.id)` carries no guard at all -- a never-published post still federates a restore. Pinned, not fixed, by `test_restoring_federates_unconditionally` (Task 2), whose docstring records the asymmetry as a deliberate decision this round did not change, so a later round adding a guard sees the pinned test fail and recognises it as revisiting a recorded decision. (b) **`last_seen`.** `delete_post:774` does `post.author.last_seen = utcnow()` alongside its counter decrement; `restore_post:807-810`'s mirrored block (`deleted = False`, `deleted_by = None`, both counters incremented) has no equivalent line -- an author whose post is restored does not have their `last_seen` touched, though the post-count arithmetic is otherwise symmetric (`-=`/`+=`). (c) **Redis lock.** `delete_post:765-766` wraps its entire mutation in `with redis_client.lock(f"lock:post:{post_id}", timeout=10, blocking_timeout=6):`; `restore_post:803-811`'s equivalent block takes no lock at all, so a restore racing a delete (or another restore) on the same post is not serialised the way two deletes are. None of the three was in this round's mandate (PC1/PC2 and the source/return forks) and none is fixed here. | registered, NOT fixed | `app/shared/post.py:755-818` read at `2cdab539`; `task-2-report.md` (asymmetry (a), pinned by `test_restoring_federates_unconditionally`) |
+
+### 4. `report_post`'s two `source_instance` derivations diverge by SOURCE and by MISSING-ROW BEHAVIOUR -- D440
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D440 | `app/shared/post.py:825` against `:835` | **Registered, not fixed. Two independent divergences at the same two lines.** Source: the API arm derives `source_instance` from the POST (`Instance.query.filter_by(id=post.instance_id).one()`, `:825`); the WEB arm derives it from the SUSPECT USER (`Instance.query.get(suspect_user.instance_id)`, `:835`) -- for a post whose author's current instance differs from the post's own recorded `instance_id`, the two arms compute a different `source_instance`, which flows unchanged into `targets_data['source_instance_id']`/`'source_instance_domain']` at `:849-850`. Missing-row behaviour also diverges on the SAME two lines: `.one()` raises `sqlalchemy.orm.exc.NoResultFound` if the instance row is gone, aborting the call outright; `.get()` returns `None`, deferred to an `AttributeError` at the first `.id`/`.domain` access three lines later -- the identical missing-row scenario crashes with a different exception and at a different line depending on which arm reaches it. | registered, NOT fixed | `app/shared/post.py:821-850` read at `2cdab539` |
+
+### 5. The `user_id = 1` fallback is REACHABLE, correcting an earlier draft -- D441
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D441 | `app/shared/post.py:760-763`; `app/shared/tasks/maintenance.py:150`, `:185` | **Not a defect -- `:760`'s `if current_user:` is correct, and `:763`'s `user_id = 1  # for remove_old_community_content()` fallback is LIVE in production, correcting an earlier spec draft that concluded it was unreachable.** Two Celery tasks call `delete_post(..., SRC_WEB, None)` from inside `with patch_db_session(session):`, with no request context: `remove_old_community_content` (`app/shared/tasks/maintenance.py:134-150`, the call itself at `:150`) and `remove_old_bot_content` (`:161-185`, the call at `:185`). Confirmed directly rather than argued: Task 1's Probe C called `delete_post(s.post.id, False, SRC_WEB, None)` with no request context pushed and read back `deleted_by == 1` -- `current_user` (a `flask_login` `LocalProxy`) resolves falsy outside a request context, `:760`'s guard is False, and `:763` fires exactly as the fallback's own comment names. | confirmed reachable; correction, not a finding | `task-1-report.md` Probe C (verbatim `PASSED`, `deleted_by == 1`); `app/shared/tasks/maintenance.py:134-185` read at `2cdab539` |
+
+### 6. Three predicates answer "is User id 1 an admin?" and they disagree -- D442
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D442 | `app/models.py:1259-1261` (`User.is_admin`), `:3999-4000` (`Site.admins`, the join+filter line of the method at `:3995-4000`); `app/request_hooks.py:100-106` (the `g.admin_ids` `UNION`, inside the block at `:97-107`) | **Registered, NOT fixed.** For a User id 1 carrying no `user_role` row -- every seeded user in this test suite, and the founding admin of any real instance where nobody assigned an explicit Admin role -- the three predicates this codebase uses for "is this user an admin" disagree: `User.is_admin()` returns `True` (`if self.id == 1: return True`, checked before any role lookup); `g.admin_ids` includes id 1 (a `UNION` of `SELECT u.id ... WHERE u.id = 1` with a second `SELECT` joined to `user_role` for `ROLE_ADMIN` -- the id-1 branch is a separate `SELECT` with no join, so it needs no `user_role` row); `Site.admins()` does NOT include id 1 (`.join(user_role).filter(or_(role_id == ROLE_ADMIN, User.id == 1))` -- an INNER join, so a user with zero `user_role` rows is dropped before the `id == 1` disjunct is ever reached). Two of the three agree, and the `g.admin_ids` `UNION` is the in-file proof of what the policy is meant to be -- the same shape of evidence that makes PC2 (**D438**) a defect, where `:908` gets the identical id-space comparison right two lines below the wrong `:905`. `Site.admins()` is the outlier. **Consequence on a real instance:** a founding admin never given an explicit Admin role is in `g.admin_ids` and passes `is_admin()`, yet is absent from `Site.admins()` -- the same site reports different admin sets depending on which predicate the call path happens to use, and `report_post:893` (`for admin in Site.admins():`) uses the one that leaves them out. `Site.admins()` is outside this round's module and has call sites this round has not read, so this is registered, not fixed. **Found in two halves, and what the gap between them cost.** Task 1's Probe A ran `Site.admins()` under `seed_post_context` and got `[]`, refuting a brief draft's claim that `s.author` is unconditionally an admin -- correct as far as `Site.admins()` goes. The corrected docstring Task 1 wrote then overclaimed in the OPPOSITE direction, stating `s.author` "IS NOT AN ADMIN" as a general fact, when `User.is_admin()` returns `True` for id 1 unconditionally (`app/models.py:1259-1261`) -- a fact already on record as **tests/README.md fact 216**, inside the very citation range (`facts 206-219`) the corrected docstring itself named two paragraphs earlier. Task 1's own review caught this second overclaim before it shipped. **A claim about "admin" that does not name its predicate is not a claim**, and it cost the round twice over the same sentence before the third, fully-scoped version (naming all three predicates and citing fact 216 directly) landed. | registered, NOT fixed | `task-1-report.md` (Probe A, the `Site.admins() == []` result, the root-cause read of `app/models.py:3994-4000`); `task-1-review.md` (the Major finding on the overcorrected docstring, citing fact 216 verbatim); `tests/README.md` fact 216 (pre-amendment); `app/models.py:1259-1265`, `:3994-4000` and `app/request_hooks.py:95-107` read at `2cdab539` |
+
+### 7. The moderator/admin notification-counter asymmetry at `:883` versus `:900` -- D443
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D443 | `app/shared/post.py:883` against `:900` | **Registered, not fixed.** The admin-notification loop increments `admin.unread_notifications += 1` (`:900`) for every `Notification` it creates in the loop above `:892`. The local-moderator notification loop (`:876-884`) creates an identically-shaped `Notification` (same `notif_type=NOTIF_REPORT`, `subtype='post_reported'`) and adds it to the session at `:883`, with NO corresponding `moderator.unread_notifications += 1`. A moderator's unread counter is never bumped by a report notification; an admin's always is, for the same event. | registered, NOT fixed | `app/shared/post.py:869-900` read at `2cdab539` |
+
+### 8. `delete_post`'s notification-removal block is STILL a verbatim copy of `mod_remove_post`'s -- second sighting of D424 -- D444
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D444 | `app/shared/post.py:781-788` against `:1073-1080` | **Registered, not fixed -- confirmed still byte-for-byte identical at this commit.** `diff <(sed -n '781,788p' app/shared/post.py) <(sed -n '1073,1080p' app/shared/post.py)` is empty: eight identical lines, the misspelled comment `# dont delete report notifs` included. D424 (sub-project 35) registered this from `mod_remove_post`'s side of Group B and predicted "the next sub-project meets this same code from the other side and will write a second set of tests for it" -- this is that second sighting, witnessed independently by this round's `test_deleting_keeps_report_notifications` and `test_deleting_keeps_escalated_report_notifications` (mutations #6-#7 of **D446**). D424's surroundings note is confirmed unchanged: `delete_post` still federates conditionally at `:778-779` where `mod_remove_post` federates unconditionally at `:1071`, and `delete_post` still touches `post.author.last_seen` at `:774` where `mod_remove_post` does not. No extraction was done this round either. | registered, NOT fixed (unchanged) | `app/shared/post.py:781-788`, `:1073-1080` read at `2cdab539` (diff empty); **D424** |
+
+### 9. CORRECTION to this round's own spec: `:849`/`:865` are two DIFFERENT FIELDS with confusing names, not one field with two meanings -- D445
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D445 | `app/shared/post.py:849`, `:865`; `app/models.py:3754` (`Report.source_instance_id`'s column comment) | **Correction, not a finding.** This round's own design spec described `:849` (`targets_data['source_instance_id'] = source_instance.id`) and `:865` (`Report(..., source_instance_id=reporter_user.instance_id, ...)`) as "two meanings of source instance in one function," implying both were suspect. `Report.source_instance_id`'s column comment reads *"the instance of the reporter. mostly used to distinguish between local (instance 1) and remote reports"* -- so `:865` (`reporter_user.instance_id`) is CORRECT by its own column's documented meaning. `targets_data['source_instance_id']` (`:849`) is an unrelated key in a JSON blob, populated from the local variable `source_instance` (itself derived from the POST or the SUSPECT depending on arm -- see **D440**), a different field entirely that happens to share a name with the model column. Not a defect; a naming collision between a JSON key and a model column, confusing to read but not wrong to run. | not a defect -- confusing naming, recorded as such | `app/shared/post.py:844-866`, `app/models.py:3754` read at `2cdab539` |
+
+### 10. The mutation pass: 41 mutations, 3 holes closed in a fix round, 0 final survivors -- D446
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D446 | `app/shared/post.py:755-926` (all of Group C) | **41 mutations run across two rounds (39 original + 2 added in fix round 1). Final totals: 38 killed outright, 3 killed after closing a hole (41 total killed), 0 survived/equivalent, 0 structurally void.** Three holes, each closed with a dedicated test verified in both directions (fails on the mutant re-applied, passes on the unmodified tree): **(a) `:841` conjunct 1 (`is_local()`), mutation #21.** Dropping `post.community.is_local() and` from `if post.community.is_local() and post.community.un_moderated:` passed all 45 tests then in the file -- every existing `un_moderated=True` fixture used a LOCAL community, so the conjunct's removal never changed an outcome. Closed by `test_an_unmoderated_remote_community_does_not_force_admin_notification` (a non-local community built the same way PC2's test is, `un_moderated=True`, asserting zero admin notifications). See **D449** for why this survived three prior tasks' fixtures. **(b) `:908` guard, mutation #34 -- ORIGINALLY MISFILED AS EQUIVALENT, corrected in fix round 1.** Swapping the compared set from `remote_instance_ids` to `already_notified` (a set of USER ids, populated at `:884`) survived, because the two id-spaces can collide by seeding order exactly as PC2's did. Closed by `test_a_local_moderators_user_id_colliding_with_a_remote_suspects_instance_id_still_adds_it`. See **D448** for the general lesson this correction produced. **(c) `:799` `restore_post` SRC_API authorisation, mutation #40.** `authorise_api_user(auth, id_match=post.user_id)` replaced by `post.user_id` (no authorisation at all) SURVIVED all 46 tests then in the file, because every SRC_API test used `bearer(s.author)` -- the post's own author -- so the mutant's value and the real one coincide in every test's success case. Closed by `test_restoring_through_the_api_requires_the_posts_own_author` (`s.voter` attempts to restore `s.author`'s post; asserts `Exception('incorrect_login')` and that the post is still deleted). See **D447**. A fourth mutation at the structurally identical site in `report_post` (`:823`, mutation #41, `authorise_api_user(auth, return_type='model')` -> `post.author`) was KILLED IMMEDIATELY, no hole -- `report_post`'s tests call with `bearer(s.voter)` and assert `reporter_id == s.voter.id`, and the voter is never the author, so the mutant's derived value diverges from an already-asserted one. Method and totals otherwise match sub-project 35's: mutate one line with `sed -i`, run the full file (no `-x`), restore with `git checkout`, confirm `git diff -- app/` empty and `wc -l` back to 1193 after every mutation. No `task_selector`-dispatch site was mutated in this file's Group C functions, so the void-operator failure mode sub-project 35 found does not recur here. | 38 killed outright + 3 killed after fix (41 total); 0 survivors, 0 void | `task-10-report.md` (the full 41-row table, the crash-analysis section, the "Hole closed" and "Fix round 1" sections verbatim); commits `da7980d4`, `6a5ba2de`, `2cdab539` |
+
+### 11. A crash kill answers "is this line reached", never "is this line's effect asserted" -- D447
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D447 | `app/shared/post.py:799` (`restore_post`) against `:823` (`report_post`) | **Process finding, general lesson.** Replacing `restore_post:799`'s `authorise_api_user(auth, id_match=post.user_id)` with `user_id = post.user_id` -- no authorisation at all -- passed ALL 46 tests then in the file (mutation #40, **D446**). Every pre-existing SRC_API test in this file used `bearer(s.author)`; none ever passed a non-author token. The suite had already recorded `:797`'s source-fork inversion (mutation #9) as KILLED, all five of its failures crashes on `current_user`/`incorrect_login` -- and that crash kill answered "is `:797`'s branch reached," not "does anything downstream of it get checked." **The general lesson: a crash kill is evidence the mutated line was REACHED, never evidence that the mutated line's EFFECT was asserted** -- those are different questions, and the fork-inversion crash at `:797` being a legitimate kill said nothing about whether `:799`'s own authorisation logic was ever exercised for its actual purpose. **The identical mutation died instantly in `report_post`, for a reason specific to what that suite happened to assert, not to any difference between the two functions**: `report_post`'s tests call with `bearer(s.voter)` and assert `reporter_id == s.voter.id`; the voter is never the author, so a mutant deriving the reporter from `post.author` diverges from an already-asserted value on the very next line. The asymmetry between the two functions' mutation results is a property of what each suite happened to assert (author-only tokens in one, a non-author token in the other), not a property of the functions themselves. | closed (`:799`); registered as a process lesson | `task-10-report.md` "Fix round 1" MAJOR section (mutation #40's survival and closure, mutation #41's immediate kill, side by side) |
+
+### 12. An arc being equivalent does not make every mutation of its line equivalent -- D448
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D448 | `app/shared/post.py:908-909` | **Corrected process finding (fix round 1, CRITICAL).** `:908-909`'s two ARMS (guarded add vs. unconditional add, both against `remote_instance_ids`) are genuinely equivalent: the guard tests the same set `:909` adds to, and `set.add` of a present value is a no-op -- this equivalence claim is correct and stands. The error was generalising it to "any mutation of `:908` is equivalent." Mutation #34 swapped the COMPARED SET, from `remote_instance_ids` to `already_notified` (a set of USER ids populated at `:884` for local moderators), while `:909` still adds to `remote_instance_ids` (a set of INSTANCE ids) -- this is NOT equivalent: when a local moderator's user id happens to equal the remote suspect's instance id, the mutant's guard reads False where the original's would have been True, `:909`'s add is skipped, `remote_instance_ids` can stay empty, and `:914` suppresses the Flag entirely that the original would have sent. Same wrong-id-space shape as PC2 (**D438**), one guard lower. **The collision was constructed through seeding order, the same technique PC2's test used**: `seed_post_context` takes instance id 1 and user ids 1-2, `seed_local_moderator` takes user id 3, a padding instance consumes instance id 2, and the suspect's own instance lands on id 3 -- colliding with the moderator's user id. Closed by `test_a_local_moderators_user_id_colliding_with_a_remote_suspects_instance_id_still_adds_it`, which asserts the collision (`localmod.id == suspect_instance.id == 3`) explicitly before calling `report_post`, so a change to seeding order fails loudly rather than silently. | corrected; closed by a dedicated test | `task-10-report.md` "Fix round 1" CRITICAL section (the original misfiling, the corrected argument, the verbatim before/after mutation runs) |
+
+### 13. `:841`'s `is_local()` conjunct was unwitnessed across three tasks' fixtures -- D449
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D449 | `app/shared/post.py:841` | **Found only by the mutation pass, after surviving three tasks' worth of fixtures.** `if post.community.is_local() and post.community.un_moderated:` -- dropping the `is_local()` conjunct (mutation #21) passed all 45 tests in the file at the time, because every `un_moderated=True` fixture across Tasks 5, 6 and 7 happened to use a LOCAL community (the default for `seed_post_context`/`make_community`), so the conjunct's presence or absence never changed an outcome for any of them. A remote community's own `un_moderated` flag (mirroring the remote instance's moderation policy, not this instance's) would incorrectly force a local admin escalation without it. Closed in Task 10 by `test_an_unmoderated_remote_community_does_not_force_admin_notification`. | closed (see **D446**(a)) | `task-10-report.md` "Hole closed: `:841` conjunct 1" section |
+
+### 14. `:875`'s `if moderator:` guard is unreachable in production -- D450
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D450 | `app/shared/post.py:875` | **Registered, not fixed -- defensive code against a state that cannot occur.** `moderator = User.query.get(mod.user_id)` (`:874`) followed by `if moderator:` (`:875`) guards against a `CommunityMember` row whose `User` has been deleted. Both hard-delete call sites for `User` run `delete_dependencies()` first (`app/models.py:1490`), which deletes that user's own `CommunityMember` rows at `:1543` (`db.session.query(CommunityMember).filter(CommunityMember.user_id == self.id).delete()`) before the user row itself is removed; no migration overrides `CommunityMember.user_id`'s FK to `user.id` (`app/models.py:3500`, plain `db.ForeignKey`, no `ondelete='CASCADE'`) to make an orphan possible any other way; the only other user-removal path is a soft delete (`banned`/`deleted` flags), which leaves the `CommunityMember` row present with a real `User` still attached. The test reaching this branch (`test_a_moderator_row_whose_user_is_gone_is_skipped`) can only construct the orphaned state by running `SET LOCAL session_replication_role = replica` to disable FK triggers for its own transaction, then deleting the `CommunityMember`'s user directly -- the same technique `tests/conftest.py`'s teardown uses, and not a state production can reach through any of this codebase's own removal paths. A future round may consider removing the guard, or leaving it as insurance against a future removal path that does not call `delete_dependencies()` first. | registered, NOT fixed (defensive, not reachable) | `tests/test_shared_post_lifecycle.py:907-925` (the test's own comment naming the FK and the workaround); `app/models.py:1490,1543,3500` read at `2cdab539` |
+
+### 15. Four distinct ways a test can fail to witness what it names -- a checklist for later rounds -- D451
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D451 | Group C's own test file, four separate instances found this round | **Process finding -- four distinct false-witness shapes, all found and fixed within this round, none of them the same shape as another.** (1) **Asserting on state the function sets on every path.** An oracle that reads a field the function writes unconditionally cannot discriminate the arm under test from its sibling. (2) **A fixture coincidence making two arms produce the same value** -- `s.author.id == 1` colliding with a literal `1` (the `delete_post` celery-path fallback, `:763`) made an assertion pass whether the SRC fork or the fallback itself was exercised; Task 1's `4932cd07` ("stop the id-1 coincidence hiding delete_post's source fork") and `2f004ab2` fixed the corresponding pair of tests before Task 3/4 built on them. (3) **Asserting emptiness with no positive control.** A test proving "zero notifications" alongside no sibling test proving "one notification" under the identical fixture shape cannot distinguish "the gate correctly refused" from "the fixture never reached the notification code at all" -- `test_a_moderator_row_whose_user_is_gone_is_skipped` (**D450**) pairs itself explicitly against `test_a_local_moderator_gets_a_notification`'s non-empty count for this reason. (4) **Choosing an input that takes the same path under both arms.** The general form both **D448** and **D449** are instances of: a test that never constructs the specific input value (an id collision, a non-local community) that would make the two arms of a guard diverge witnesses nothing about the guard, regardless of how many times it is run. | closed (all four instances); registered as a checklist | commits `4932cd07`, `2f004ab2` (instance 2); `task-10-report.md` (instances 3 and 4, **D449**/**D450**/**D448**) |
+
+### 16. CORRECTION: Task 9's report overclaimed what Task 7's tests confirm at `:905-906` -- D452
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D452 | `app/shared/post.py:903-909` | **Correction to Task 9's own report, not a new finding.** Task 9's report credited Task 7's two tests with confirming "no regression" at `:905-906` after PC2's fix. They cannot: both of Task 7's tests use a LOCAL community, so `:904`'s `if not post.community.is_local():` is False and neither `:905` nor `:906` executes in either of them -- exactly as Task 7's own report and its reviewer both already documented (Task 7's report: "`:905-906` and `:908-909` are never executed by any test"). Task 7's two tests are evidence for `:903` and for `:907-909`'s reachability question, and none at all for `:905-906`'s CORRECTNESS. **The only test reaching `:905-906` in this round is Task 9's own** (`test_a_remote_communitys_instance_is_flagged_even_when_ids_collide`), which is also PC2's fix's sole witness. This correction is recorded here rather than repeated in this round's own summary. | correction | `progress.md` ("every task 7 test runs with a LOCAL community, so `:904` is false and `:905-906` never execute. PC2's fix cannot change a task 7 result."); `task-7-review.md` (the reviewer's independent confirmation of the same fact, pre-dating Task 9) |
+
+### 17. Group C's remaining gap: `:905`'s False arm is the one arc no test in this round exercises -- D453
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D453 | `app/shared/post.py:905-906` (arc `[905, 907]`) | **Open, registered rather than closed -- this task's write scope excludes test files.** `report_post` measures 100% statements but 97.22% branches (35/36); the one missing arc is `905 -> 907`, the False arm of `if post.community.instance_id not in remote_instance_ids:` -- the case where the community's instance id is ALREADY in the set before this line runs, so `:906`'s add is skipped. No test across `test_shared_post_lifecycle.py`, `_moderation.py`, `_interactions.py` or `_edit.py` constructs that state; PC2's own collision test (**D438**) puts the COLLISION on the moderator's instance id, not the community's, and reaches only the True arm. **Almost certainly equivalent, by the identical argument that governs `:908` in D448's UNCORRECTED half**: `:905`'s guard tests membership in the exact set `:906` unconditionally adds to, and `set.add` of a present value is a no-op, so removing the guard entirely would produce the same final `remote_instance_ids` either way. **Unlike `:908`, this specific claim has not been checked against a mutation that changes WHAT is compared rather than WHETHER it is guarded** -- D448's correction shows that kind of check is exactly what turns a true equivalence claim about one guard's own two arms into a false one about a differently-mutated version of the same line, and that check was never run against `:905`. Left open for a future round with test-file scope over this module, rather than asserted closed on an unverified analogy. | open; likely equivalent, unverified | `/tmp/post36.json`'s `functions['report_post']` summary (`missing_branches: 1`, `percent_branches_covered: 97.22`) and `missing_branches` list (`[905, 907]`), read via `podman-compose ... exec test-runner python -c ...` at `2cdab539`; **D448** for the verified half of the same argument |
+
+Groups D and E remain: **Group D -- `make_post:163-249`.** **Group E --
+`edit_post:250-754`.** It owns **D422**'s third predicate at `:387`, and it is
+the one group whose functions take a `user=` parameter, so its harness is
+materially cheaper than Group A's or Group B's. What Groups D and E should
+read before starting, beyond what sub-project 35's own closing entry already
+lists: **D437-D441** for this round's two production fixes and the three
+lifecycle asymmetries; **D442** for the three admin predicates, now amended
+into `tests/README.md` fact 216 rather than left as a fourth contradicting
+fact; **D446-D449** for the mutation-pass methodology corrections, particularly
+**D448**'s narrowed equivalence claim, which the next round should apply
+skeptically rather than by analogy; **D453** for the one open arc this round
+did not close.
+
+**Next free number: D454.** D437-D453 were taken by this round -- **D437**
+PC1, the minor-abuse escalation, fixed and observed failing pre-fix; **D438**
+PC2, the remote-instance guard's wrong id space, fixed and observed failing
+pre-fix; **D439** the three `delete_post`/`restore_post` asymmetries
+(unconditional federation, missing `last_seen`, missing redis lock); **D440**
+the API/WEB `source_instance` divergence at `:825`/`:835`, source AND
+missing-row behaviour both differing; **D441** the `user_id = 1` fallback
+confirmed reachable, correcting an earlier draft; **D442** the three admin
+predicates that disagree for a role-less id-1 user; **D443** the
+moderator/admin notification-counter asymmetry at `:883`/`:900`; **D444** the
+second sighting of D424's verbatim-duplicated notification-purge loop; **D445**
+a correction to this round's own spec, `:849`/`:865` being two different
+fields, not one field with two meanings; **D446** the 41-mutation pass and its
+three closed holes; **D447** a crash kill answering reachability, never
+assertion, drawn from `:799`; **D448** the corrected equivalence claim at
+`:908`, an arc being equivalent not making every mutation of its line
+equivalent; **D449** `:841`'s conjunct surviving three tasks' fixtures; **D450**
+`:875`'s guard being unreachable in production; **D451** the four-item
+false-witness checklist; **D452** a correction to Task 9's own report,
+overclaiming coverage of `:905-906` from Task 7's tests; **D453** the one
+branch arc Group C leaves open. The module's floor rose 64 -> 77 and the
+module is NOT closed -- Groups D and E remain. If you take D454, say so here
+in the change that takes it.
+
 ## Ratchet gotchas
 
 - `percent_covered` is a **blended statement+branch figure**. This matters for

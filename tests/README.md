@@ -6330,6 +6330,33 @@ establishing the id. Two places the shortcut leaks beyond permission gates:
 `add_to_modlog:3570` types an id-1 actor's rows as `admin`, and
 `User.is_admin_or_staff()` (`app/models.py:1274`) inherits it.
 
+**AMENDMENT (sub-project 36).** This fact is correct about `User.is_admin()`
+and ONLY about `User.is_admin()` — it does not generalise to "id 1 is an
+admin" as a fact about this codebase, because two other predicates answer the
+same question differently. A prior round's spec, plan and this file all
+carried the unscoped claim forward from here, and it survived until a
+reviewer traced it back to this exact paragraph (`task-1-review.md`). Do not
+add a fourth, contradicting fact for the correction — it belongs here, next
+to the claim it qualifies. All three predicates, for a User id 1 carrying no
+`user_role` row (every seeded user in this suite, via `make_user`,
+`tests/factories.py:41-67`, which never inserts one):
+
+| Predicate | Mechanism | Answer for role-less id 1 |
+|---|---|---|
+| `User.is_admin()` (`app/models.py:1259-1261`) | `if self.id == 1: return True`, checked before `self.roles` is ever read | admin |
+| `g.admin_ids` (`app/request_hooks.py:97-107`, the query at `:100-106`) | a SQL `UNION`: `SELECT u.id FROM "user" u WHERE u.id = 1` unioned with a second `SELECT` joined to `user_role` for `ROLE_ADMIN` — the id-1 branch is its own `SELECT` with no join | admin |
+| `Site.admins()` (`app/models.py:3995-4000`, the join+filter at `:3999-4000`) | `.filter_by(deleted=False, banned=False).join(user_role).filter(or_(user_role.c.role_id == ROLE_ADMIN, User.id == 1))` — an INNER join, so a user with zero `user_role` rows is dropped before the `User.id == 1` disjunct is ever reached | NOT admin |
+
+`Site.admins()` is the outlier, and the `g.admin_ids` `UNION` is the in-file
+proof of what the policy is meant to be (same shape of evidence as the PC2
+defect two guards down in `app/shared/post.py:905` vs `:908` — see the
+campaign findings register, D442). A test asserting an admin notification
+through `report_post`'s `Site.admins()` path (`:893`) must seed a real
+`user_role`/`Role('Admin')` row — `s.author`'s id-1 status alone will not
+produce one there, though it will for anything gated on `is_admin()` or
+`g.admin_ids`. **A claim about "admin" that does not name its predicate is
+not a claim.**
+
 **217. `grant_permission` CANNOT MAKE A SITE ADMIN — `is_admin()` AND
 `is_staff()` CHECK ROLE *NAMES*, NOT PERMISSIONS.** `User.is_admin()`
 (`app/models.py:1259-1265`) and `User.is_staff()` (`:1268-1272`) iterate
@@ -6391,6 +6418,63 @@ mid-test is visible to the next gate call. And when citing this: the adjacent
 range `:736-740` is `is_moderator()`, not `moderators()` — a plan in
 sub-project 35 cited it wrongly and the error was caught only because the
 implementer re-derived the range instead of copying it.
+
+**220. `delete_post` IS CALLED FROM CELERY TASKS WITH NO REQUEST CONTEXT, AND
+THE `user_id = 1` FALLBACK IS LIVE THERE.** Two `@celery.task`s call
+`delete_post(..., SRC_WEB, None)` from inside `with patch_db_session(session):`,
+with no Flask request context pushed: `remove_old_community_content`
+(`app/shared/tasks/maintenance.py:134-150`, the call at `:150`) and
+`remove_old_bot_content` (`:161-185`, the call at `:185`). `delete_post:760`'s
+`if current_user:` is False in that situation — `current_user` (a
+`flask_login` `LocalProxy`) resolves falsy with no request context — so
+`:763`'s `user_id = 1  # for remove_old_community_content()` fallback fires,
+confirmed directly by calling `delete_post(post_id, False, SRC_WEB, None)`
+with no context pushed and reading back `deleted_by == 1`. Not dead code, not
+a defensive-only path: every automated content-retention deletion in this
+codebase attributes itself to user id 1.
+
+**221. `report_post`'s SRC_API ARM NEEDS NO REQUEST CONTEXT, INCLUDING
+`force_locale`.** `:877`'s `with force_locale(get_recipient_language(moderator.id)):`
+and `:878`'s `gettext(...)` both run cleanly with no request context pushed —
+confirmed by calling `report_post` directly (SRC_API, with a `bearer()` auth
+object) outside any `app.test_request_context()`/`web_ctx`. `get_ip_address`
+(inside `authorise_api_user`'s call chain) swallows the `RuntimeError` a
+missing request context would otherwise raise, and nothing downstream of it
+in this arm needs one either. Delete/restore's SRC_API arms need no context
+for the same reason — `authorise_api_user` is the only thing in either arm
+that could need one, and it doesn't.
+
+**222. THE WEB ARM'S FORM STAND-IN SHAPE — BUILD IT AS A NESTED
+`SimpleNamespace`, NOT A WTForms INSTANCE.** `report_post`'s WEB arm takes a
+WTForms-like object, not a dict: `:836-839` reads
+`input.reasons_to_string(input.reasons.data)`, `input.description.data`,
+`input.report_remote.data`. A minimal stand-in needs no WTForms import —
+`SimpleNamespace(reasons=SimpleNamespace(data=['5']),
+description=SimpleNamespace(data='x'), report_remote=SimpleNamespace(data=False),
+reasons_to_string=lambda data: 'Minor abuse or sexualization')` satisfies every
+attribute access the function makes, including a *method* (`reasons_to_string`)
+as a plain lambda attribute — Python does not distinguish a bound method from
+a callable attribute at the call site. Groups D and E's WEB arms (`make_post`,
+`edit_post`) take the same kind of WTForms object and can build stand-ins the
+same way; read the specific field names each function actually accesses
+before assuming this exact shape transfers unchanged.
+
+**223. `Community.is_local()` IS TRUE UNDER `seed_post_context` BECAUSE
+`make_community` NEVER SETS `ap_id`.** `Community.is_local()`
+(`app/models.py:796`) is `self.ap_id is None or
+self.profile_id().startswith(SERVER_URL)` — an OR, so either disjunct alone
+keeps a community local. `make_community` (`tests/factories.py:124-144`) sets
+`ap_profile_id`/`ap_public_url` but never `ap_id`, so the first disjunct is
+always true for a `seed_post_context` community regardless of host. This is
+the fact that decides whether `report_post:841`'s `post.community.is_local()`
+conjunct and `:904`'s `if not post.community.is_local():` guard are reachable
+in a test at all: reaching the True arm of `:841` or the True arm of `:904`
+requires overriding BOTH `ap_id` AND `ap_profile_id` to a remote domain — the
+second disjunct alone (`ap_profile_id` pointed at a real remote host) is not
+enough, because `ap_id is None` already satisfies the first. Assert
+`community.is_local() is False` before calling the function under test so a
+fixture that silently fails to clear both fields announces itself instead of
+exercising the wrong arm.
 
 ## Known noise
 
