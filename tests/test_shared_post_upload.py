@@ -96,12 +96,15 @@ message must also assert whether a file exists under `chdir_upload` --
 absent for `:468`, present for `:533`.
 """
 
+import sys
 from io import BytesIO
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
 from werkzeug.datastructures import FileStorage
 
+import app.shared.post as post_module
 from app import db
 from app.constants import POST_TYPE_ARTICLE, POST_TYPE_IMAGE, POST_TYPE_VIDEO, SRC_API
 from app.shared.post import edit_post
@@ -115,6 +118,61 @@ SVG_BYTES = (b'<?xml version="1.0" encoding="UTF-8"?>'
 """Real, minimal SVG/XML. SVG is text, not a raster format, so it needs no
 image library at all -- see `make_upload`'s `fmt='SVG'` case.
 """
+
+
+MALFORMED_SVG_BYTES = (b'<?xml version="1.0" encoding="UTF-8"?>'
+                       b'<!DOCTYPE svg [<!ENTITY xxe "pwned">]>'
+                       b'<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">'
+                       b'<rect width="8" height="8" fill="#0a141e"/></svg>')
+"""An SVG whose internal DOCTYPE subset declares an XML entity.
+
+`refuse_svg_entity_declarations` (`app/utils.py:5542`) scans for the literal
+bytes `<!ENTITY` and raises `ValueError('SVG entity declarations are not
+allowed')` before py-svg-hush ever parses the document. `sanitize_svg_bytes`
+calls it first (`app/utils.py:5633` onward), so `sanitize_svg`'s `except
+Exception` (`app/utils.py:5730`) catches that `ValueError`, logs it, destroys
+the file via `discard_unsanitized_svg`, and returns False -- `:500`'s TRUE
+arm. VERIFIED against the installed py-svg-hush/this scan directly:
+
+    from app.utils import refuse_svg_entity_declarations
+    refuse_svg_entity_declarations(MALFORMED_SVG_BYTES)
+    # -> ValueError: SVG entity declarations are not allowed
+
+`make_upload` has no `fmt` that produces this -- its own docstring says a
+test wanting `:500`'s TRUE condition "needs a different, malformed payload"
+-- so this is built directly as a `FileStorage`, not through that helper.
+"""
+
+
+class _StubS3Client:
+    """A no-op stand-in for the boto3 S3 client `edit_post` builds at `:550`.
+
+    `upload_file` and `close` do nothing and record nothing: this file owns
+    only the directory fork at `:472` (arc `472->473`), not the S3 upload
+    itself -- that is Task 6's arc, per this round's controller ruling, so
+    there is deliberately nothing here to assert on.
+    """
+
+    def upload_file(self, *args, **kwargs):
+        pass
+
+    def close(self):
+        pass
+
+
+class _StubBoto3Session:
+    """Stands in for `boto3.session.Session`.
+
+    Callable so `boto3.session.Session()` at `:544` returns this instance,
+    and `.client(...)` at `:550` returns the no-op client above -- both
+    calls that would otherwise reach out to a real endpoint.
+    """
+
+    def __call__(self):
+        return self
+
+    def client(self, **kwargs):
+        return _StubS3Client()
 
 
 def make_upload(filename='pic.png', fmt='PNG', size=(8, 8), colour=(10, 20, 30),
@@ -379,3 +437,328 @@ def test_a_video_upload_is_accepted_when_video_uploads_are_enabled(db_session, c
     assert len(written) == 1
     db.session.refresh(s.post)
     assert s.post.image_id is not None
+
+
+def test_an_upload_lands_in_the_per_post_media_directory(db_session, chdir_upload, http_mock):
+    """`:472`'s FALSE arm, arc `472->475`.
+
+    The default: no S3 configured (TestConfig's `S3_*` settings are all
+    empty strings), so `store_files_in_s3()` is False and `:475` builds a
+    directory from the first four characters of `gibberish(15)`. Asserting
+    on the PATH SHAPE (`*/*/*` under `app/static/media/posts`) rather than
+    the exact name, which is random by construction.
+
+    Asserting the OTHER arm's directory ('app/static/tmp') was never even
+    created is what makes this a witness of the FORK rather than a
+    coincidence that a file merely landed somewhere -- see
+    `test_an_upload_lands_in_the_s3_tmp_directory` below for the paired
+    positive control showing the opposite once S3 IS configured.
+    """
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+    s = _seed()
+    edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+              uploaded_file=make_upload())
+
+    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+    assert len(written) == 1
+    assert not list(chdir_upload.rglob('app/static/tmp'))
+
+
+def test_an_upload_lands_in_the_s3_tmp_directory(db_session, chdir_upload, http_mock, app, monkeypatch):
+    """`:472`'s TRUE arm, arc `472->473` -- the positive control for
+    `test_an_upload_lands_in_the_per_post_media_directory` above.
+
+    `store_files_in_s3()` (`app/utils.py:4317`) is True only once all three
+    of `S3_ACCESS_KEY`, `S3_ACCESS_SECRET` and `S3_ENDPOINT` are non-empty;
+    setting them here is what flips `:472`. Per this round's controller
+    ruling, that ALSO makes `:543`'s block run, which would otherwise build
+    a real `boto3.session.Session()` (`:544`) and call `session.client(...)`
+    (`:550`) -- a genuine network attempt. `post_module.boto3` is patched
+    with the no-op `_StubBoto3Session`/`_StubS3Client` pair above so no
+    network call is attempted. Task 6 owns the assertions about what
+    `boto3` is called with (the S3 arc itself); this test asserts only on
+    the DIRECTORY, never on the stub's calls, so the two tests fail for one
+    reason each rather than both failing together for either.
+
+    The witness is the DIRECTORY, not the file: `:563`'s `os.unlink` removes
+    the uploaded file from 'app/static/tmp' after the (stubbed) S3 "upload"
+    completes, so by the time this test can look, the file itself is gone --
+    but `ensure_directory_exists` (`:476`) already created 'app/static/tmp'
+    before that happened, and nothing removes the directory itself.
+    Asserting the OTHER arm's directory tree ('app/static/media/posts') was
+    never created at all is the other half of the witness: a mutant that
+    always took `:475` instead would still create SOME directory, just the
+    wrong one.
+
+    `S3_PUBLIC_URL` is also set (to a syntactically valid host) because
+    `:560-561` build the post's url from it once the S3 branch runs, and an
+    empty value would leave an empty host in that url -- `:601`'s
+    `is_image_url` still issues a HEAD request against whatever url comes
+    out, so this needs `http_mock` exactly as every other full `edit_post`
+    call in this file does (see the module docstring).
+    """
+    monkeypatch.setitem(app.config, 'S3_ACCESS_KEY', 'test-key')
+    monkeypatch.setitem(app.config, 'S3_ACCESS_SECRET', 'test-secret')
+    monkeypatch.setitem(app.config, 'S3_ENDPOINT', 'https://s3.example.test')
+    monkeypatch.setitem(app.config, 'S3_PUBLIC_URL', 'cdn.example.test')
+    monkeypatch.setattr(post_module, 'boto3',
+                        SimpleNamespace(session=SimpleNamespace(Session=_StubBoto3Session())))
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+    s = _seed()
+
+    edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+              uploaded_file=make_upload())
+
+    assert (chdir_upload / 'app' / 'static' / 'tmp').is_dir()
+    assert not list(chdir_upload.rglob('app/static/media/posts'))
+
+
+def test_c2pa_flags_the_post_as_ai_generated_when_a_manifest_says_so(
+        db_session, chdir_upload, http_mock, monkeypatch):
+    """`:481`'s TRUE arm, arc `481->482`.
+
+    Probe C (module docstring, fact 3) found that a plain
+    `Image.new(...)`-generated PNG comes back from the REAL
+    `inspect_image_c2pa` with `ai_generated: False` -- there is no manifest
+    this harness can construct from first principles that flips it to True.
+    This monkeypatches `post_module.inspect_image_c2pa` to return a dict
+    with `ai_generated: True`, STANDING IN FOR A MANIFEST THIS HARNESS
+    CANNOT BUILD, per the brief.
+
+    `ai_generated=False` in the API input means `:391` sets
+    `post.ai_generated = False` before the upload block runs at all, so a
+    final value of True can only have come from `:482`'s override -- see
+    `test_c2pa_leaves_the_post_unflagged_without_an_ai_generated_manifest`
+    below for the paired control proving the override does NOT fire when
+    c2pa reports no AI generation, which is what makes True here meaningful
+    rather than some other unconditional default.
+    """
+    def fake_inspect_image_c2pa(data, mimetype):
+        return {'c2pa': {'present': True, 'ai_generated': True,
+                         'creator': None, 'software': None}}
+
+    monkeypatch.setattr(post_module, 'inspect_image_c2pa', fake_inspect_image_c2pa)
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+    s = _seed()
+
+    edit_post(_api_input(ai_generated=False), s.post, POST_TYPE_IMAGE, SRC_API,
+              user=s.user, uploaded_file=make_upload())
+
+    db.session.refresh(s.post)
+    assert s.post.ai_generated is True
+
+
+def test_c2pa_leaves_the_post_unflagged_without_an_ai_generated_manifest(
+        db_session, chdir_upload, http_mock):
+    """`:481`'s FALSE arm, arc `481->485` -- the positive control for
+    `test_c2pa_flags_the_post_as_ai_generated_when_a_manifest_says_so` above.
+
+    No monkeypatch here: this drives the REAL `inspect_image_c2pa` against a
+    genuine, freshly-generated PNG, which Probe C (module docstring)
+    established comes back with `ai_generated: False`.
+
+    `:391` already sets `post.ai_generated = False` from the API input
+    before the upload block runs at all, so this assertion ALONE would not
+    distinguish ":481 ran and took the FALSE arm" from ":481 never ran" --
+    what makes it a real witness is what it RULES OUT: a mutant that always
+    takes `:481`'s TRUE arm (the `if` inverted, or dropped so `:482` always
+    runs) would force `post.ai_generated` to True regardless of what c2pa
+    actually reports, and this assertion catches exactly that mutant. It
+    does not, on its own, catch a mutant that deletes the c2pa check
+    entirely -- that is a known, accepted limitation given Probe C's
+    finding that no image this harness can build reaches the TRUE arm any
+    other way.
+    """
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+    s = _seed()
+    edit_post(_api_input(ai_generated=False), s.post, POST_TYPE_IMAGE, SRC_API,
+              user=s.user, uploaded_file=make_upload())
+
+    db.session.refresh(s.post)
+    assert s.post.ai_generated is False
+
+
+def test_heic_extension_registers_the_heif_opener(db_session, chdir_upload, http_mock, monkeypatch):
+    """`:491`'s TRUE arm (arc `491->492`), and, on the SAME call, the FALSE
+    arms of the two dispatch checks after it: `493->495` (the `.avif`
+    check) and `495->503` (the `.svg` check) -- `.heic` matches neither, so
+    both fall through by construction.
+
+    RENAMED RASTER BYTES: `make_upload(filename='pic.heic', fmt='PNG')`
+    produces genuine PNG bytes wearing a `.heic` filename (see the module
+    docstring and `make_upload`'s own docstring) -- this pins the dispatch
+    on the FILENAME, not a real HEIC decode.
+
+    `register_heif_opener` is `app.shared.post`'s own imported name
+    (`app/shared/post.py:13`), so it is patched there directly as
+    `post_module.register_heif_opener` (never `app.utils`, which does not
+    hold this name) -- a spy WRAPPING the real function, so `:531`'s later
+    re-encode (which needs the HEIF opener registered to save to a
+    `.heic`-extensioned path with no explicit `format=` kwarg) still
+    succeeds. VERIFIED by hand against this container: opening genuine PNG
+    bytes and calling `.save('x.heic')` raises `ValueError('unknown file
+    extension: .heic')` when the opener has never been registered in this
+    process, and succeeds once it has. That makes `heif_spy_calls` a real,
+    load-bearing fact about THIS call, not a coincidence of some earlier
+    test in this file having already registered it process-wide
+    (registration is idempotent and is never un-registered, which is
+    exactly why "the upload succeeded" alone would NOT have been a safe
+    witness -- the spy sidesteps that entirely).
+
+    `493->495`: any cached `pillow_avif` import is popped from
+    `sys.modules` before the call (and restored after) and asserted ABSENT
+    afterward -- this Pillow (12.3.0) already has NATIVE AVIF support
+    (verified: `'.avif' in Image.registered_extensions()` is True with a
+    bare `from PIL import Image`, before `pillow_avif` is ever imported),
+    so a successful save proves nothing about whether `:494` ran; only
+    `sys.modules` membership does. See
+    `test_avif_extension_imports_pillow_avif` below for the paired TRUE-arm
+    witness.
+
+    `495->503`: `post_module.sanitize_svg` is spied and asserted uncalled --
+    a `.heic` file must never reach the SVG sanitizer.
+    """
+    heif_spy_calls = []
+    real_register_heif_opener = post_module.register_heif_opener
+
+    def heif_spy():
+        heif_spy_calls.append(True)
+        return real_register_heif_opener()
+
+    svg_spy_calls = []
+    monkeypatch.setattr(post_module, 'register_heif_opener', heif_spy)
+    monkeypatch.setattr(post_module, 'sanitize_svg',
+                        lambda path: (svg_spy_calls.append(path), True)[1])
+
+    had_pillow_avif = sys.modules.pop('pillow_avif', None)
+    try:
+        http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+        s = _seed()
+        edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+                  uploaded_file=make_upload(filename='pic.heic', fmt='PNG'))
+
+        assert heif_spy_calls == [True]
+        assert svg_spy_calls == []
+        assert 'pillow_avif' not in sys.modules
+        written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+        assert len(written) == 1
+    finally:
+        if had_pillow_avif is not None:
+            sys.modules['pillow_avif'] = had_pillow_avif
+        else:
+            sys.modules.pop('pillow_avif', None)
+
+
+def test_avif_extension_imports_pillow_avif(db_session, chdir_upload, http_mock, monkeypatch):
+    """`:493`'s TRUE arm (arc `493->494`), and, on the SAME call, `:491`'s
+    FALSE arm (arc `491->493`) -- `.avif` does not match the `.heic` check
+    ahead of it.
+
+    RENAMED RASTER BYTES: `make_upload(filename='pic.avif', fmt='PNG')`
+    (see the module docstring and `make_upload`'s own docstring) -- genuine
+    PNG bytes wearing a `.avif` filename, pinning the dispatch on the
+    FILENAME.
+
+    `pillow_avif` IS IMPORTED INSIDE THE FUNCTION (`:494` and `:511`), so
+    per the brief it CANNOT be patched as `post_module.pillow_avif` -- no
+    such attribute exists until the `import` statement runs, and patching
+    one in beforehand would not stop that statement from executing and
+    rebinding it anyway. This test MANIPULATES `sys.modules` DIRECTLY
+    instead of patching, exactly as the brief allows.
+
+    VERIFIED by hand against this container that Pillow 12.3.0 already
+    registers a native '.avif' extension BEFORE `pillow_avif` is ever
+    imported (`'.avif' in Image.registered_extensions()` is True with a
+    bare `from PIL import Image`), so a successful AVIF save is NOT
+    evidence that `:494`'s `import pillow_avif` ran -- the save would
+    succeed identically whether or not that line exists. That is exactly
+    the fourth false-witness mechanism (an input taking the same path under
+    both arms), which is why this does not assert on the save succeeding as
+    its evidence for THIS arc. The only direct evidence is `sys.modules`
+    membership: `pillow_avif` is removed from the import cache (if present)
+    before the call, and its PRESENCE afterward is asserted -- proof this
+    specific `import` statement executed during THIS call, not merely that
+    AVIF encoding works in this environment. The original cache entry, if
+    any, is restored afterward; if there was none, the entry this call
+    added is removed again.
+
+    `491->493`: `post_module.register_heif_opener` is spied and asserted
+    uncalled -- an `.avif` file must never reach the HEIF registration.
+    """
+    heif_spy_calls = []
+    monkeypatch.setattr(post_module, 'register_heif_opener',
+                        lambda: heif_spy_calls.append(True))
+
+    had_pillow_avif = sys.modules.pop('pillow_avif', None)
+    try:
+        http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+        s = _seed()
+        edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+                  uploaded_file=make_upload(filename='pic.avif', fmt='PNG'))
+
+        assert heif_spy_calls == []
+        assert 'pillow_avif' in sys.modules
+        written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+        assert len(written) == 1
+    finally:
+        if had_pillow_avif is not None:
+            sys.modules['pillow_avif'] = had_pillow_avif
+        else:
+            sys.modules.pop('pillow_avif', None)
+
+
+def test_svg_extension_is_sanitized_successfully(db_session, chdir_upload, http_mock):
+    """`:495`'s TRUE arm (arc `495->500`) and `:500`'s FALSE arm (arc
+    `500->503`) -- `sanitize_svg` SUCCEEDS on `make_upload`'s genuine
+    `SVG_BYTES`, so `:501`'s raise is not taken and the call runs to
+    completion.
+
+    Verified in `make_upload`'s own docstring: saving `SVG_BYTES` to disk
+    and calling the REAL `sanitize_svg` on it returns True, rewriting the
+    file with py-svg-hush's re-serialized output -- so this needs no
+    monkeypatch, unlike `test_a_malformed_svg_fails_sanitization_and_is_rejected`
+    below, which is its paired positive control for `:500`'s TRUE arm.
+
+    `:513`'s Pillow re-encode is skipped entirely for a `.svg` path
+    (`final_place.endswith('.svg')` is True there), so the file this test
+    finds is the sanitizer's rewritten output, never touched by
+    `Image.open` -- the only upload test in this file where that is true.
+    """
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+    s = _seed()
+    edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+              uploaded_file=make_upload(filename='pic.svg', fmt='SVG'))
+
+    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+    assert len(written) == 1
+    db.session.refresh(s.post)
+    assert s.post.image_id is not None
+
+
+def test_a_malformed_svg_fails_sanitization_and_is_rejected(db_session, chdir_upload):
+    """`:500`'s TRUE arm, arc `500->501` -- `sanitize_svg` returns False and
+    `:501` raises. Positive control for
+    `test_svg_extension_is_sanitized_successfully` above, using
+    `MALFORMED_SVG_BYTES` (see its own docstring for the verified
+    `ValueError` this triggers inside `sanitize_svg`).
+
+    `sanitize_svg` destroys the file before returning False (`:496-499`
+    explains why -- `discard_unsanitized_svg` truncates then unlinks it),
+    so this asserts on the RAISE, not the file: by the time this test could
+    look, there is nothing left to inspect. The `rglob` assertion below
+    confirms no file survives anywhere under `chdir_upload` -- consistent
+    with `discard_unsanitized_svg` having unlinked the exact file `:487`
+    saved, with nothing after `:501`'s raise getting a chance to write
+    another one.
+
+    No `http_mock`: the raise happens before `:535` builds a url, so this
+    call never reaches `:601`'s HEAD request.
+    """
+    upload = FileStorage(stream=BytesIO(MALFORMED_SVG_BYTES), filename='evil.svg',
+                         content_type='image/svg+xml')
+    s = _seed()
+    with pytest.raises(Exception, match='SVG file could not be sanitized'):
+        edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+                  uploaded_file=upload)
+
+    assert not list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
