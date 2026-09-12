@@ -6499,6 +6499,117 @@ following it would produce a test that takes the opposite arm and passes. Assert
 fixture that silently fails to clear both fields announces itself instead of
 exercising the wrong arm.
 
+**224. `make_post` NEEDS `with_keys=True` ON ITS LOCAL AUTHOR, AND WITHOUT IT
+THE FAILURE MESSAGE POINTS AWAY FROM THE CAUSE.** `can_create_post`
+(`app/utils.py:2504-2506`) opens `if user.is_local(): if user.verified is
+False or user.private_key is None: return False` -- a LOCAL user is refused
+if `private_key` is `None`, which is exactly what `make_user(..., local=True)`
+leaves it unless `with_keys=True` is passed (`tests/factories.py:41-51`).
+Every `make_post` test needs a local author that PASSES `can_create_post`, so
+this is load-bearing, not incidental. Cost: keypair generation via
+`RsaKeys.generate_keypair()` takes roughly a second
+(`tests/factories.py:44-45`'s own docstring), which is why
+`tests/test_shared_post_make.py`'s `seed_make_context` mints exactly ONE keyed
+author and every test in the file reuses it rather than seeding a fresh one
+per test. The error it prevents is actively misleading: without
+`with_keys=True`, every call dies at `make_post:187` with `Exception('You are
+not permitted to make posts in this community')` -- a message naming a
+PERMISSION problem, with nothing in it hinting that the real cause is a
+missing RSA key rather than an actual authorisation gap. (`with_keys=True`
+also covers fact 224's OWN prerequisite for a *sending* actor per
+`make_user`'s docstring -- `HttpSignature.signed_request` calls `.encode()` on
+the private key, so a keyless sender separately dies at signing with
+`'NoneType' object has no attribute 'encode'`; `make_post`'s failure mode is
+earlier and different, at the permission gate rather than at signing.)
+
+**225. `g.site` MUST BE SUPPLIED EXPLICITLY FOR `make_post`, AND
+`can_create_post`'S OWN `g.site` FALLBACK DOES NOT HELP A LOCAL AUTHOR.**
+`make_post:219` is `community.last_active = g.site.last_active = utcnow()`,
+executed unconditionally partway through the function -- with no `g.site` set,
+this raises `AttributeError` on a bare `g` the first time any harness call
+reaches it. `can_create_post` (app/utils.py) has its own `g.site` fallback at
+`:2508-2509` (`if not hasattr(g, 'site'): g.site = db.session.query(Site).get(1)`),
+but it sits on the REMOTE-user `else` branch (`:2507`) -- a LOCAL author (fact
+224's keyed user) takes the `if user.is_local():` branch two lines above and
+never reaches it. In production `g.site` is populated by the `before_request`
+hook (`app/request_hooks.py:79`, registered at `app/__init__.py:366`, doing
+the actual write at `:94-95` for every request except `/inbox` and
+`/static/`); this harness dispatches no real request for either arm --
+`web_ctx` only pushes a Flask REQUEST context on top of the `app` fixture's
+already-open APP context, and the SRC_API arm has no request context at all --
+so `before_request` never runs and `g.site` must be set by the test itself.
+`tests/test_shared_post_make.py`'s `seed_make_context` does this directly
+(`g.site = site`), and because `g` is bound to the app context rather than the
+request context, setting it there ONCE is visible both to later `web_ctx`
+blocks (which push/pop only a request context on top of the same app context)
+and to the SRC_API arm (which runs inside the same per-test app context with
+no request context needed at all) -- no per-arm mechanism required.
+
+**226. `notify_about_post` DISPATCHES A CELERY TASK THAT RUNS INLINE UNDER
+THIS HARNESS'S EAGER CONFIG, AND IT WRITES REAL `Notification` ROWS THROUGH A
+SEPARATE DB SESSION.** `notify_about_post` (`app/activitypub/util.py:2796`)
+calls `notify_about_post_task.delay(post.id)` (or invokes it directly under
+`current_app.debug`); `tests/conftest.py:106` sets `task_always_eager=True`,
+so `.delay(...)` runs the task's body inline and synchronously rather than
+enqueueing it for a worker that nothing in this harness drains. The task body
+opens its OWN session (`get_task_session()`/`patch_db_session`), re-queries
+the `Post`, its author and its community by id, and writes real `Notification`
+rows for every matching subscriber it finds -- it is not a no-op and not
+mocked by default. `make_post:238` guards the call on `post.status ==
+POST_STATUS_PUBLISHED`, the column default, so the ordinary path through
+`make_post` reaches it every time. Two consequences for a test in this file:
+(a) a test that does not care what happens downstream should monkeypatch
+`post_module.notify_about_post` itself (the `stub_notify` fixture in
+`tests/test_shared_post_make.py` does exactly this, PER TEST rather than as an
+autouse fixture or a module-level patch, because a global suppression would
+hide the call from a test that specifically needs to observe it); (b) a test
+that DOES need to observe it should replace `post_module.notify_about_post`
+with a recorder rather than let the real Celery body run, since the real
+body's own side effects (subscriber notifications) are out of scope for
+`make_post`'s own tests.
+
+**227. CROSS-MODULE TEST HELPER IMPORTS ARE ESTABLISHED PRECEDENT HERE, AND
+CARRY A RULE OF THREE.** `tests/test_shared_post_make.py` imports `_api_input`,
+`_web_form`, `_Field` and `_OMIT` directly from `tests.test_shared_post_edit`
+rather than duplicating them, because `make_post:231` passes its own `input`
+straight through to `edit_post`, so the two functions' tests need the SAME
+input shapes (`_web_form` already carries the `link_url`/`video_url` fields
+Group D's url-arm tests need, `tests/test_shared_post_edit.py:152`). This is
+not a new pattern: `tests/test_ap_collections.py:6` already imports
+`seed_actors` from `tests/test_actor_profiles.py`, and `tests/__init__.py`
+makes `tests` a package so such imports resolve at all. The imported names are
+underscore-prefixed, which ordinarily signals module-private -- importing them
+anyway is a deliberate choice to avoid a second, drifting copy of the same
+fixture shape, not an oversight. **Rule of three**: a THIRD consumer of the
+same helper justifies promoting it out of whichever test file first defined it
+and into `tests/factories.py`; two consumers importing from one original
+module does not yet meet that bar.
+
+**228. `edit_post` DUPLICATES FOUR OF `make_post`'S BLOCKS, SO A TEST
+ASSERTING ON THE FINISHED POST MAY BE WITNESSING `edit_post`, NOT THE FUNCTION
+IT NAMES.** `make_post:231` always calls `edit_post(..., from_scratch=True)`,
+and `edit_post` independently re-derives and re-checks four of the same
+things `make_post` itself just computed: the post's title (`make_post:168`/
+`:173` vs `edit_post:254`/`:318`, with `edit_post:395` unconditionally
+overwriting `post.title` afterward regardless of which value `make_post`
+produced), its url (`make_post:169`/`:174-179` vs `edit_post:256`/`:321-327`
+-- `make_post`'s own `url` local never reaches the `Post` row at all, since
+`make_post:206-207`'s constructor call takes only `title` and `language_id`),
+the domain-ban check (`make_post:190-195` vs `edit_post:565-569`, the guarded
+raise itself byte-identical) and the upload-extension check
+(`make_post:197-204` vs `edit_post:461-468`, byte-identical including the
+comment). Practically: a test that asserts `post.url == '...'` or reads
+`post.title` after a `make_post` call is reading a value `edit_post` produced,
+not one `make_post`'s own arms are responsible for -- a regression in
+`make_post`'s own url/title derivation can pass such a test undetected, because
+`edit_post`'s copy silently reproduces the same-looking result from the same
+underlying form/API input. Isolate what `make_post`'s OWN arms did by either
+recording whether `edit_post` was entered at all (a `post_module.edit_post`
+recorder that delegates to the original) or by stubbing `edit_post` to
+identity and reading the Post fields `make_post` itself sets directly
+(`up_votes`, `score`, community/user counters, `PostVote`) -- never by reading
+`post.title`/`post.url` as if `make_post` were the only writer.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
