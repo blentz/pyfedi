@@ -616,7 +616,12 @@ def test_heic_extension_registers_the_heif_opener(db_session, chdir_upload, http
     witness.
 
     `495->503`: `post_module.sanitize_svg` is spied and asserted uncalled --
-    a `.heic` file must never reach the SVG sanitizer.
+    a `.heic` file must never reach the SVG sanitizer. Positive control:
+    `test_svg_extension_is_sanitized_successfully` below spies the SAME
+    name with the SAME call-recording technique and asserts a non-empty
+    result for a `.svg` file -- an empty list here could otherwise mean "the
+    skip is correct", "the spy never installed", or "the patch targeted the
+    wrong name" indistinguishably; the paired test rules out the latter two.
     """
     heif_spy_calls = []
     real_register_heif_opener = post_module.register_heif_opener
@@ -649,7 +654,7 @@ def test_heic_extension_registers_the_heif_opener(db_session, chdir_upload, http
             sys.modules.pop('pillow_avif', None)
 
 
-def test_avif_extension_imports_pillow_avif(db_session, chdir_upload, http_mock, monkeypatch):
+def test_avif_extension_imports_pillow_avif(db_session, chdir_upload, http_mock, app, monkeypatch):
     """`:493`'s TRUE arm (arc `493->494`), and, on the SAME call, `:491`'s
     FALSE arm (arc `491->493`) -- `.avif` does not match the `.heic` check
     ahead of it.
@@ -684,10 +689,33 @@ def test_avif_extension_imports_pillow_avif(db_session, chdir_upload, http_mock,
 
     `491->493`: `post_module.register_heif_opener` is spied and asserted
     uncalled -- an `.avif` file must never reach the HEIF registration.
+
+    THIS TEST'S SOUNDNESS RESTS ON AN ENVIRONMENTAL FACT THAT IS NOW PINNED
+    RATHER THAN ASSUMED: `:511` is a SECOND `import pillow_avif`, gated only
+    on `current_app.config['MEDIA_IMAGE_FORMAT'] == 'AVIF'`, not on
+    `final_ext` -- so it is entirely independent of the `:493`/`:494` pair
+    this test targets. If that config were `'AVIF'`, `:511` would import
+    `pillow_avif` regardless of whether `:494` ran at all, and a mutant that
+    deleted `:494` outright would STILL leave `'pillow_avif' in sys.modules`
+    True after this call -- the exact same false-witness shape as the
+    AVIF-native-support problem this test already works around, just one
+    level further out, and it would fail SILENTLY (wrong config some day)
+    rather than loudly (a code review catching it). `config.py:141` defaults
+    `MEDIA_IMAGE_FORMAT` to `''`, and nothing in `TestConfig` overrides it,
+    so `:511` never fires today -- but nothing in the test SAID so before
+    this fix. `monkeypatch.setitem` below pins it explicitly for this test
+    regardless of what any future default becomes, and the assertion right
+    after makes that pin itself verifiable rather than a silent setup step:
+    if `:511`'s gate condition were ever satisfied here, `sys.modules`
+    membership would no longer be evidence of `:494` alone, and this
+    assertion is what would catch that BEFORE the `sys.modules` assertion
+    could be misread as a clean pass.
     """
     heif_spy_calls = []
     monkeypatch.setattr(post_module, 'register_heif_opener',
                         lambda: heif_spy_calls.append(True))
+    monkeypatch.setitem(app.config, 'MEDIA_IMAGE_FORMAT', '')
+    assert app.config['MEDIA_IMAGE_FORMAT'] != 'AVIF'
 
     had_pillow_avif = sys.modules.pop('pillow_avif', None)
     try:
@@ -707,7 +735,7 @@ def test_avif_extension_imports_pillow_avif(db_session, chdir_upload, http_mock,
             sys.modules.pop('pillow_avif', None)
 
 
-def test_svg_extension_is_sanitized_successfully(db_session, chdir_upload, http_mock):
+def test_svg_extension_is_sanitized_successfully(db_session, chdir_upload, http_mock, monkeypatch):
     """`:495`'s TRUE arm (arc `495->500`) and `:500`'s FALSE arm (arc
     `500->503`) -- `sanitize_svg` SUCCEEDS on `make_upload`'s genuine
     `SVG_BYTES`, so `:501`'s raise is not taken and the call runs to
@@ -715,20 +743,41 @@ def test_svg_extension_is_sanitized_successfully(db_session, chdir_upload, http_
 
     Verified in `make_upload`'s own docstring: saving `SVG_BYTES` to disk
     and calling the REAL `sanitize_svg` on it returns True, rewriting the
-    file with py-svg-hush's re-serialized output -- so this needs no
-    monkeypatch, unlike `test_a_malformed_svg_fails_sanitization_and_is_rejected`
-    below, which is its paired positive control for `:500`'s TRUE arm.
+    file with py-svg-hush's re-serialized output. `post_module.sanitize_svg`
+    is spied here (wrapping the real function, so behaviour is unchanged)
+    for a second reason beyond this test's own arc: it is the POSITIVE
+    CONTROL for `test_heic_extension_registers_the_heif_opener`'s
+    `svg_spy_calls == []` assertion above -- same monkeypatch target, same
+    call-recording technique, opposite extension, non-empty result. Without
+    this, that emptiness assertion had no same-mechanism control: an empty
+    list there was equally consistent with "the skip is correct", "the spy
+    never installed", and "the patch targeted the wrong name". This test's
+    non-empty `svg_spy_calls` rules out the latter two for that spy target.
+    Unlike `test_a_malformed_svg_fails_sanitization_and_is_rejected` below
+    (`:500`'s TRUE-arm positive control, needing no monkeypatch at all since
+    it drives the real function to a real failure), this test's monkeypatch
+    is there only to observe the real call, not to change its outcome.
 
     `:513`'s Pillow re-encode is skipped entirely for a `.svg` path
     (`final_place.endswith('.svg')` is True there), so the file this test
     finds is the sanitizer's rewritten output, never touched by
     `Image.open` -- the only upload test in this file where that is true.
     """
+    svg_spy_calls = []
+    real_sanitize_svg = post_module.sanitize_svg
+
+    def svg_spy(path):
+        svg_spy_calls.append(path)
+        return real_sanitize_svg(path)
+
+    monkeypatch.setattr(post_module, 'sanitize_svg', svg_spy)
+
     http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
     s = _seed()
     edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
               uploaded_file=make_upload(filename='pic.svg', fmt='SVG'))
 
+    assert svg_spy_calls != []
     written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
     assert len(written) == 1
     db.session.refresh(s.post)
