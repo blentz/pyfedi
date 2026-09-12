@@ -117,7 +117,7 @@ class _RecordingS3Client:
     """Stands in for the boto3 S3 client `edit_post` builds at `:550`,
     recording every `upload_file` call's positional and keyword arguments.
 
-    Task 3's `_StubS3Client` above deliberately records nothing -- that
+    Task 3's `_StubS3Client` below deliberately records nothing -- that
     class belongs to the `:472` directory-fork arc, not the S3 upload
     itself. This class is Task 6's own: `:546`/`:548` build `extra_args`
     whose only observable effect is the `ExtraArgs` kwarg passed to
@@ -304,16 +304,6 @@ def chdir_upload(tmp_path, monkeypatch):
     return tmp_path
 
 
-def seed_upload_context(**over):
-    """Thin wrapper over `_seed()`, named for this file's upload tests.
-
-    `_seed` already seeds instance/user/community/post with `url=None`; this
-    exists only so later tasks in this file have a name that documents intent
-    at the call site rather than importing `_seed` directly each time.
-    """
-    return _seed(**over)
-
-
 def test_an_uploaded_image_is_saved_and_linked(db_session, chdir_upload, http_mock):
     """The default path end to end: `:461` true, through `:487`'s save and
     `:531`'s re-encode, to a `File` row linked on the post.
@@ -335,7 +325,7 @@ def test_an_uploaded_image_is_saved_and_linked(db_session, chdir_upload, http_mo
     prefix is gone from it, closing that gap.
     """
     http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
-    s = seed_upload_context()
+    s = _seed()
     edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
               uploaded_file=make_upload())
 
@@ -462,7 +452,12 @@ def test_a_non_video_post_ignores_can_upload_video_even_when_enabled(db_session,
     memoize inert (both recorded in that report).
 
     No `http_mock`: the raise happens before any network call. No file
-    exists afterward, confirming `:468` fired rather than `:533`.
+    exists afterward, confirming `:468` fired rather than `:533`. Same-glob
+    positive control for the emptiness itself (distinct from the two named
+    tests above, which control for the `and`-vs-`or` argument, not for this
+    glob returning a non-empty list): `test_an_allowed_extension_passes`
+    asserts `len(written) == 1` on this exact glob
+    (`app/static/media/posts/*/*/*`).
     """
     s = _seed()
     original = get_setting('allow_video_file_uploads')
@@ -494,6 +489,24 @@ def test_a_video_upload_is_accepted_when_video_uploads_are_enabled(db_session, c
     `:487`'s original save could have produced it. Needs `http_mock` for the
     same reason as `test_an_allowed_extension_passes`: this call reaches
     `:601`'s HEAD request in `edit_post`'s shared tail.
+
+    DELIBERATELY NO `post.image_id` ASSERTION. An earlier version of this
+    test asserted `post.image_id is not None` here, which passed only
+    because `http_mock`'s route reports `Content-Type: image/png` for this
+    `.mp4` url -- a deliberate lie needed to keep every full `edit_post`
+    call in this file off the `opengraph_parse` arms (see the module
+    docstring). `:601`'s `is_image_url` classifies on that header via
+    `mime_type_using_head`; a real server serving an actual `.mp4` would
+    answer `video/mp4`, `'.mp4'` is not in `common_image_extensions`,
+    `is_image_url` would be False, `:601`'s arm would never run, and
+    `post.image_id` would stay `None` -- so that assertion would FAIL
+    against a real collaborator. The target arc (`:464`, both conjuncts
+    True) is already soundly witnessed by the file-existence assertion
+    below, which does not depend on the stub's lie. This test's sibling,
+    `test_a_video_upload_skips_image_hashing_even_when_the_endpoint_is_configured`,
+    makes the same call shape and correctly asserts only on its spy and the
+    file, with no `image_id` claim -- that is the pattern this test now
+    follows instead of the stub-propped one.
     """
     http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
     s = _seed()
@@ -507,8 +520,6 @@ def test_a_video_upload_is_accepted_when_video_uploads_are_enabled(db_session, c
 
     written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
     assert len(written) == 1
-    db.session.refresh(s.post)
-    assert s.post.image_id is not None
 
 
 def test_an_upload_lands_in_the_per_post_media_directory(db_session, chdir_upload, http_mock):
@@ -709,6 +720,20 @@ def test_heic_extension_registers_the_heif_opener(db_session, chdir_upload, http
     result for a `.svg` file -- an empty list here could otherwise mean "the
     skip is correct", "the spy never installed", or "the patch targeted the
     wrong name" indistinguishably; the paired test rules out the latter two.
+
+    AN UNRESTORED GLOBAL, of the same class as `:503`'s `MAX_IMAGE_PIXELS`
+    write (see the module docstring). The spy WRAPS and calls the real
+    `register_heif_opener`, so this test permanently registers Pillow's
+    HEIF opener -- `.heic`/`.heif` join `Image.registered_extensions()` for
+    the rest of the process, for every test that runs after this one in the
+    same session, with no un-registration and no `finally`. Harmless today:
+    `grep -rn "register_heif_opener" tests/` outside this file returns
+    nothing, so no other test's outcome depends on whether the opener is
+    registered. Not restored here because Pillow exposes no supported
+    "unregister" call -- a half-working restore (e.g. popping the format
+    from an internal registry dict) would be worse than this documented
+    leak, per the same reasoning the module docstring already applies to
+    `:503`.
     """
     heif_spy_calls = []
     real_register_heif_opener = post_module.register_heif_opener
@@ -776,6 +801,12 @@ def test_avif_extension_imports_pillow_avif(db_session, chdir_upload, http_mock,
 
     `491->493`: `post_module.register_heif_opener` is spied and asserted
     uncalled -- an `.avif` file must never reach the HEIF registration.
+    Positive control: `test_heic_extension_registers_the_heif_opener` above
+    spies the SAME `post_module.register_heif_opener` target and asserts
+    `heif_spy_calls == [True]` for a `.heic` upload -- ruling out "the spy
+    never installed" or "the patch targeted the wrong name" as explanations
+    for the empty list here, the same D451-mechanism-3 argument used
+    elsewhere in this file for other emptiness assertions.
 
     THIS TEST'S SOUNDNESS RESTS ON AN ENVIRONMENTAL FACT THAT IS NOW PINNED
     RATHER THAN ASSUMED: `:511` is a SECOND `import pillow_avif`, gated only
@@ -1292,6 +1323,13 @@ def test_a_malformed_svg_fails_sanitization_and_is_rejected(db_session, chdir_up
 
     No `http_mock`: the raise happens before `:535` builds a url, so this
     call never reaches `:601`'s HEAD request.
+
+    Same-glob positive control for the emptiness itself (distinct from
+    declaring itself the control for `test_svg_extension_is_sanitized_successfully`,
+    which controls for the sanitization outcome, not for this glob returning
+    a non-empty list): `test_an_allowed_extension_passes` asserts
+    `len(written) == 1` on this exact glob
+    (`app/static/media/posts/*/*/*`).
     """
     upload = FileStorage(stream=BytesIO(MALFORMED_SVG_BYTES), filename='evil.svg',
                          content_type='image/svg+xml')
@@ -1807,6 +1845,25 @@ def test_an_s3_upload_removes_the_local_file(db_session, chdir_upload, http_mock
     every assertion elsewhere in this test, which never reads the built
     url at all. The stored `File.source_url` is the only place it is
     checked.
+
+    THE `app/static/tmp/*` EMPTINESS ASSERTION BELOW NEEDS A SAME-GLOB
+    POSITIVE CONTROL, AND NO OTHER TEST IN THIS FILE PROVIDES ONE.
+    `test_the_local_file_survives_when_s3_is_not_configured` above is the
+    control named for the DIRECTORY-WIDE ARGUMENT (a file surviving when
+    `:543` is False), but it asserts under a DIFFERENT glob
+    (`app/static/media/posts/*/*/*`), not this one -- a control under a
+    different glob is not a control for this glob. The only other test that
+    reaches this directory, `test_an_upload_lands_in_the_s3_tmp_directory`,
+    deliberately asserts on the directory existing rather than a file
+    inside it, because by the time it can look, `:563` has already
+    unlinked the file. So this test supplies its OWN same-glob control:
+    `post_module.os.unlink` is spied (wrapping the real function) to
+    snapshot this exact glob immediately BEFORE the real unlink runs,
+    proving the glob is capable of matching a real file at the one moment
+    it is known to be present -- `:487`'s save, right before `:563`
+    removes it. `monkeypatch.setattr` restores the real `os.unlink` after
+    this test regardless of outcome, per this file's standing rule for any
+    module-level patch.
     """
     session = _RecordingBoto3Session()
     monkeypatch.setattr(post_module, 'boto3',
@@ -1815,6 +1872,15 @@ def test_an_s3_upload_removes_the_local_file(db_session, chdir_upload, http_mock
     monkeypatch.setitem(app.config, 'S3_ACCESS_SECRET', 'test-secret')
     monkeypatch.setitem(app.config, 'S3_ENDPOINT', 'https://s3.example.test')
     monkeypatch.setitem(app.config, 'S3_PUBLIC_URL', 'cdn.example.test')
+
+    pre_unlink_snapshots = []
+    real_unlink = post_module.os.unlink
+
+    def unlink_spy(path):
+        pre_unlink_snapshots.append(list(chdir_upload.rglob('app/static/tmp/*')))
+        real_unlink(path)
+
+    monkeypatch.setattr(post_module.os, 'unlink', unlink_spy)
 
     http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
     s = _seed()
@@ -1825,6 +1891,8 @@ def test_an_s3_upload_removes_the_local_file(db_session, chdir_upload, http_mock
     assert len(calls) == 1
     local_path = calls[0][0][0]
     assert not (chdir_upload / local_path).exists()
+    assert len(pre_unlink_snapshots) == 1
+    assert len(pre_unlink_snapshots[0]) == 1
     assert list(chdir_upload.rglob('app/static/tmp/*')) == []
     assert session.client_instance.close_calls == 1
 
