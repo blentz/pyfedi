@@ -1187,7 +1187,16 @@ def test_default_media_image_quality_passes_the_quality_kwarg(
 
     Per D451: this test's correctness depends on `MEDIA_IMAGE_QUALITY`
     defaulting to `90` (`config.py:142`), so that default is asserted
-    explicitly rather than assumed.
+    explicitly rather than assumed. It ALSO depends on `MEDIA_IMAGE_FORMAT`
+    defaulting to `''` (`config.py:141`) for the `len(written) == 1`
+    assertion below -- a non-empty default there would take `:524`'s TRUE
+    arm too, rewrite `final_place` at `:527`, and leave the original `.png`
+    behind unremoved (the same registered defect
+    `test_a_configured_format_rewrites_the_saved_extension` pins
+    deliberately), turning this into a 2-file case and failing the `== 1`
+    assertion for a reason this docstring would not have explained. That
+    default is asserted explicitly too, below -- this assertion is
+    load-bearing, not decorative.
 
     `PIL.Image.Image.save` (the class method, not a particular instance) is
     spied so calls are seen regardless of which `Image` object ends up
@@ -1197,9 +1206,23 @@ def test_default_media_image_quality_passes_the_quality_kwarg(
     WRAPS the real method (still saves for real) and records every call's
     kwargs. `make_upload`'s own internal `Image.new(...).save(buf,
     format=fmt)` call is also caught by this class-level patch, so calls
-    are filtered down to the one carrying `optimize=True` -- the literal
-    kwarg `:531` passes and no other call site in this test does -- which
-    isolates the `:531` call specifically.
+    are filtered down to the one carrying `optimize=True`.
+
+    That filter is a COUNT-BASED discriminator, not a uniqueness claim --
+    `optimize=True` is not exclusive to `:531` in this codebase.
+    `app/activitypub/util.py:1872` and `:1919`, inside
+    `make_image_sizes_async` (a near-verbatim copy of this block, reached
+    from `edit_post` via `make_image_sizes` at `:614`/`:616`), pass the same
+    literal kwarg to their own `img.save` calls. Neither fires in this test:
+    `make_image_sizes_async` downloads `file.source_url` via `get_request`
+    before it ever reaches its own kwargs-building block, and this suite's
+    convention of registering no GET route (see the module docstring) makes
+    that call fail first. So `reencode_calls` here is filtered by
+    `optimize=True` alone, but it is `assert len(reencode_calls) == 1`
+    immediately below -- not the filter's exclusivity -- that is what makes
+    the subsequent `reencode_calls[0]` safe to index; a change that made one
+    of those other call sites reachable under this harness would show up as
+    that count assertion failing, not as a silent misattribution.
 
     Asserting the recorded `quality` kwarg equals the configured `90`
     (not just that the key is present) is the positive control for
@@ -1212,6 +1235,7 @@ def test_default_media_image_quality_passes_the_quality_kwarg(
     rules out the latter two.
     """
     assert app.config['MEDIA_IMAGE_QUALITY'] == 90
+    assert app.config['MEDIA_IMAGE_FORMAT'] == ''
 
     save_calls = []
     real_save = Image.Image.save
@@ -1249,18 +1273,37 @@ def test_falsy_media_image_quality_omits_the_quality_kwarg(
     dict). `0` was verified to actually reach `:528` as falsy and to leave
     `kwargs` without a `'quality'` key -- see the assertions below.
 
+    Per D451, `MEDIA_IMAGE_FORMAT` defaulting to `''` (`config.py:141`) is
+    also load-bearing here, not merely assumed: this test asserts
+    `len(written) == 1` below, and a non-empty default would take `:524`'s
+    TRUE arm too, rewriting `final_place` at `:527` and leaving the original
+    `.png` behind unremoved (the registered defect
+    `test_a_configured_format_rewrites_the_saved_extension` pins
+    deliberately) -- turning this into a 2-file case for a reason unrelated
+    to the `:528` arm this test targets. Asserted explicitly below.
+
     Same spy mechanism as `test_default_media_image_quality_passes_the_quality_kwarg`
     above (`PIL.Image.Image.save` spied at the class level, calls filtered
-    to the one carrying `optimize=True` to isolate `:531`'s call from
-    `make_upload`'s own internal save) -- that test is this one's positive
+    to the one carrying `optimize=True`) -- that test is this one's positive
     control: it shows the SAME spy, on the SAME filtered call, records a
     `quality` key with the configured value when `:528` is True. Without
     it, this test's absent-key assertion would be equally consistent with
     "the falsy guard worked", "the spy never installed", or "the patch
     targeted the wrong name" (D451 mechanism 3).
+
+    The `optimize=True` filter discriminates `:531`'s call from
+    `make_upload`'s own internal `Image.new(...).save(...)` call, but it is
+    NOT a claim that `:531` is the only call site in the codebase passing
+    that literal kwarg -- see
+    `test_default_media_image_quality_passes_the_quality_kwarg`'s docstring
+    for the two other call sites (`app/activitypub/util.py:1872`, `:1919`)
+    and why they cannot fire under this harness's conventions. The
+    `assert len(reencode_calls) == 1` below is what makes indexing
+    `reencode_calls[0]` safe, not the filter's exclusivity.
     """
     monkeypatch.setitem(app.config, 'MEDIA_IMAGE_QUALITY', 0)
     assert app.config['MEDIA_IMAGE_QUALITY'] == 0
+    assert app.config['MEDIA_IMAGE_FORMAT'] == ''
 
     save_calls = []
     real_save = Image.Image.save
