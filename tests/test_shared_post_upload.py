@@ -107,6 +107,7 @@ from werkzeug.datastructures import FileStorage
 import app.shared.post as post_module
 from app import db
 from app.constants import POST_TYPE_ARTICLE, POST_TYPE_IMAGE, POST_TYPE_VIDEO, SRC_API
+from app.models import File
 from app.shared.post import edit_post
 from app.utils import get_setting, set_setting
 from tests.test_shared_post_edit import _api_input, _seed
@@ -121,18 +122,21 @@ class _RecordingS3Client:
     itself. This class is Task 6's own: `:546`/`:548` build `extra_args`
     whose only observable effect is the `ExtraArgs` kwarg passed to
     `upload_file` at `:557-559`, so those two arcs need the call recorded,
-    not silently discarded. `close` is a no-op, matching the real client's
-    use at `:562`.
+    not silently discarded. `close` COUNTS its calls (Task 7's addition)
+    rather than being a bare no-op -- a no-op made `:562`'s call
+    undetectable by construction, not by any test's oversight, since
+    nothing could ever tell "called" from "never called" either way.
     """
 
     def __init__(self):
         self.upload_file_calls = []
+        self.close_calls = 0
 
     def upload_file(self, *args, **kwargs):
         self.upload_file_calls.append((args, kwargs))
 
     def close(self):
-        pass
+        self.close_calls += 1
 
 
 class _RecordingBoto3Session:
@@ -307,6 +311,14 @@ def test_an_uploaded_image_is_saved_and_linked(db_session, chdir_upload, http_mo
     `http_mock` registers a `url__regex` route rather than an exact url,
     because the saved path (and so the url built at `:535`) embeds
     `gibberish(15)` and is different on every run -- see the module docstring.
+
+    THE `url__regex=r'.*'` ROUTE ABOVE matches any string, so it cannot
+    itself prove `:535`'s `.replace('app/', '')` actually ran -- a mutant
+    that stripped a different, never-matching prefix (Task 7's mutation
+    pass tried `'App/'`) would still match the same wildcard route and
+    leave every prior assertion here green. The `File.source_url` check
+    below reads the actual stored url and pins that the on-disk `app/`
+    prefix is gone from it, closing that gap.
     """
     http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
     s = seed_upload_context()
@@ -317,6 +329,9 @@ def test_an_uploaded_image_is_saved_and_linked(db_session, chdir_upload, http_mo
     assert len(written) == 1
     db.session.refresh(s.post)
     assert s.post.image_id is not None
+    file = File.query.get(s.post.image_id)
+    assert '/app/' not in file.source_url
+    assert '/static/media/posts/' in file.source_url
 
 
 def test_a_disallowed_extension_is_refused(db_session, chdir_upload):
@@ -496,6 +511,15 @@ def test_an_upload_lands_in_the_per_post_media_directory(db_session, chdir_uploa
     coincidence that a file merely landed somewhere -- see
     `test_an_upload_lands_in_the_s3_tmp_directory` below for the paired
     positive control showing the opposite once S3 IS configured.
+
+    THE TWO PATH-SHAPE ASSERTIONS ABOVE cannot distinguish `:475`'s actual
+    `new_filename[0:2]` / `new_filename[2:4]` split from a mutant widening
+    either slice (e.g. `[0:3]`) -- both still glob-match `*/*/*` under
+    `posts/`. Task 7's mutation pass found this: `[0:2]` -> `[0:3]` survived
+    every existing assertion in this file. The two length/prefix checks
+    below pin the exact split against the leaf filename itself (which is
+    `new_filename` unmodified, since no format conversion runs for a
+    default PNG upload), closing that gap.
     """
     http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
     s = _seed()
@@ -505,6 +529,12 @@ def test_an_upload_lands_in_the_per_post_media_directory(db_session, chdir_uploa
     written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
     assert len(written) == 1
     assert not list(chdir_upload.rglob('app/static/tmp'))
+
+    leaf = written[0]
+    level2, level1 = leaf.parent.name, leaf.parent.parent.name
+    assert len(level1) == 2 and len(level2) == 2
+    assert leaf.stem[0:2] == level1
+    assert leaf.stem[2:4] == level2
 
 
 def test_an_upload_lands_in_the_s3_tmp_directory(db_session, chdir_upload, http_mock, app, monkeypatch):
@@ -1117,6 +1147,13 @@ def test_a_non_jpeg_upload_takes_the_rgba_conversion_path(db_session, chdir_uplo
     converge on the same `img.save(...)` call one line later, so "the file
     exists and `post.image_id` is set" would pass identically under either
     arm and would not, on its own, discriminate them.
+
+    NEITHER of the assertions above pins WHICH conversion `:520` performs --
+    `to_srgb` being uncalled is consistent with `:520` running
+    `img.convert('RGBA')` as written, but equally consistent with a mutant
+    that instead ran `img.convert('RGB')` (Task 7's mutation pass tried
+    this and it survived unnoticed). The saved file's mode, opened below,
+    is the only place that distinguishes the two.
     """
     assert app.config['MEDIA_IMAGE_FORMAT'] == ''
 
@@ -1133,6 +1170,83 @@ def test_a_non_jpeg_upload_takes_the_rgba_conversion_path(db_session, chdir_uplo
     assert len(written) == 1
     db.session.refresh(s.post)
     assert s.post.image_id is not None
+    with Image.open(written[0]) as saved:
+        assert saved.mode == 'RGBA'
+
+
+def test_the_configured_max_dimension_actually_shrinks_the_thumbnail(
+        db_session, chdir_upload, http_mock, app, monkeypatch):
+    """`:506`'s read of `MEDIA_IMAGE_MAX_DIMENSION` into `image_max_dimension`,
+    fed to `:521`'s `img.thumbnail(...)`.
+
+    Every OTHER test in this file uploads an 8x8 image against the
+    default `MEDIA_IMAGE_MAX_DIMENSION` of `2000` (`config.py:139`) --
+    already larger than the source in both dimensions, so
+    `Image.thumbnail()` is a byte-for-byte no-op (VERIFIED: resizing an
+    8x8 image toward a 2000x2000 target with `Image.thumbnail` leaves its
+    bytes identical to the untouched original, independent of resample
+    method). Task 7's mutation pass found that `:506` hardcoded to `1`
+    survived every existing test for exactly this reason -- nothing forces
+    a real resize to happen, so nothing could tell whether this line's
+    value was even read.
+
+    Configuring a `MEDIA_IMAGE_MAX_DIMENSION` smaller than the 8x8 source
+    forces a genuine resize, so the saved file's pixel dimensions directly
+    witness the configured value rather than merely being consistent with
+    it.
+    """
+    assert app.config['MEDIA_IMAGE_FORMAT'] == ''
+    monkeypatch.setitem(app.config, 'MEDIA_IMAGE_MAX_DIMENSION', 4)
+
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+    s = _seed()
+    edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+              uploaded_file=make_upload(filename='pic.png', fmt='PNG', size=(8, 8)))
+
+    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+    assert len(written) == 1
+    with Image.open(written[0]) as saved:
+        assert saved.size == (4, 4)
+
+
+def test_exif_orientation_is_corrected_before_conversion(
+        db_session, chdir_upload, http_mock):
+    """`:516`'s `img = ImageOps.exif_transpose(img)`.
+
+    No image `make_upload` can build carries EXIF orientation metadata --
+    every one of them is a synthetic `Image.new(...)` with no EXIF block
+    at all, so `:516` has no observable effect on any of them whether it
+    runs or not. Task 7's mutation pass found that skipping this line
+    outright (replacing it with `pass`) survived every existing test for
+    exactly that reason.
+
+    `make_upload`'s own docstring says content it cannot produce "would
+    need a different helper" -- this test is that helper, built directly
+    (bypassing `make_upload`, same as `MALFORMED_SVG_BYTES` above) rather
+    than adding a binary asset to the repository. A real, non-square (8x4)
+    JPEG is built in memory with Pillow and given an EXIF `Orientation`
+    tag of `6` (VERIFIED: `ImageOps.exif_transpose` on an (8, 4) image
+    carrying that tag returns a (4, 8) image -- width and height swapped).
+    Whether `:516` ran is therefore visible directly in the saved file's
+    dimensions: swapped if it did, unchanged if it did not.
+    """
+    buf = BytesIO()
+    img = Image.new('RGB', (8, 4), (10, 20, 30))
+    exif = img.getexif()
+    exif[0x0112] = 6  # Orientation: needs a 270-degree rotation to display upright
+    img.save(buf, format='JPEG', exif=exif)
+    buf.seek(0)
+    uploaded_file = FileStorage(stream=buf, filename='pic.jpg', content_type='image/jpeg')
+
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/jpeg'})
+    s = _seed()
+    edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+              uploaded_file=uploaded_file)
+
+    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+    assert len(written) == 1
+    with Image.open(written[0]) as saved:
+        assert saved.size == (4, 8)
 
 
 def test_a_malformed_svg_fails_sanitization_and_is_rejected(db_session, chdir_upload):
@@ -1276,6 +1390,12 @@ def test_default_media_image_quality_passes_the_quality_kwarg(
     installed", or "the patch targeted the wrong name" (D451 mechanism 3).
     This test's non-empty, correct-valued result for the same spy target
     rules out the latter two.
+
+    The `'optimize' in kw` FILTER above discriminates calls by KEY presence
+    only, so it cannot tell `optimize=True` from `optimize=False` -- a
+    mutant flipping that literal (Task 7's mutation pass tried it) still
+    has exactly one call with an `'optimize'` key and a `quality` of `90`,
+    surviving both assertions above. The value check below closes that gap.
     """
     assert app.config['MEDIA_IMAGE_QUALITY'] == 90
     assert app.config['MEDIA_IMAGE_FORMAT'] == ''
@@ -1297,6 +1417,7 @@ def test_default_media_image_quality_passes_the_quality_kwarg(
     reencode_calls = [kw for kw in save_calls if 'optimize' in kw]
     assert len(reencode_calls) == 1
     assert reencode_calls[0].get('quality') == 90
+    assert reencode_calls[0].get('optimize') is True
 
     written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
     assert len(written) == 1
@@ -1489,6 +1610,12 @@ def test_image_hashing_retrieves_a_hash_for_a_configured_endpoint_and_non_video_
     (it asserts the same spy IS called once, with a truthy hash).
 
     The call completes normally: a falsy hash never reaches `:540`'s raise.
+
+    `assert len(hash_calls) == 1` proves `:538` ran but not what it passed --
+    a mutant calling `retrieve_image_hash('')` instead of `retrieve_image_hash(url)`
+    (Task 7's mutation pass tried this) still appends exactly one item.
+    The value check below reads the recorded argument and pins that it is
+    the real, non-empty built url rather than an empty placeholder.
     """
     monkeypatch.setitem(app.config, 'IMAGE_HASHING_ENDPOINT', 'https://hash.example.test')
 
@@ -1506,6 +1633,8 @@ def test_image_hashing_retrieves_a_hash_for_a_configured_endpoint_and_non_video_
               uploaded_file=make_upload())
 
     assert len(hash_calls) == 1
+    assert hash_calls[0] != ''
+    assert '/static/media/posts/' in hash_calls[0]
     assert blocked_calls == []
     written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
     assert len(written) == 1
@@ -1635,6 +1764,24 @@ def test_an_s3_upload_removes_the_local_file(db_session, chdir_upload, http_mock
     `test_the_local_file_survives_when_s3_is_not_configured` above shows
     the same kind of file surviving when `:543` is False and `:563` never
     runs.
+
+    TWO FURTHER ARCS have no other witness in this file and are pinned
+    here rather than in new tests, since this is already the S3-true-arm
+    call with the recording double in place:
+
+    `:562`'s `s3.close()` has no OTHER observable effect in this harness --
+    `_RecordingS3Client.close` was, before this task, a bare no-op, so
+    deleting the call outright was undetectable by construction, not by
+    oversight (Task 7's mutation pass). `close_calls` below is the
+    counter this task added to that fixture to make the call itself
+    observable.
+
+    `:560-561` build the public url as `https://{S3_PUBLIC_URL}/posts/...`;
+    a mutant using `http://` (Task 7's mutation pass) is invisible to the
+    `url__regex=r'.*'` HEAD route above (it matches either scheme) and to
+    every assertion elsewhere in this test, which never reads the built
+    url at all. The stored `File.source_url` is the only place it is
+    checked.
     """
     session = _RecordingBoto3Session()
     monkeypatch.setattr(post_module, 'boto3',
@@ -1654,6 +1801,11 @@ def test_an_s3_upload_removes_the_local_file(db_session, chdir_upload, http_mock
     local_path = calls[0][0][0]
     assert not (chdir_upload / local_path).exists()
     assert list(chdir_upload.rglob('app/static/tmp/*')) == []
+    assert session.client_instance.close_calls == 1
+
+    db.session.refresh(s.post)
+    file = File.query.get(s.post.image_id)
+    assert file.source_url.startswith('https://cdn.example.test/posts/')
 
 
 def test_extra_args_include_storage_class_and_public_acl_when_configured(
@@ -1749,6 +1901,14 @@ def test_extra_args_omit_storage_class_and_public_acl_by_default(
     truthy there) --
     `test_extra_args_distinguish_storage_class_from_public_acl_when_only_one_is_set`
     below closes that gap.
+
+    THE UNCONDITIONAL `ContentType` KEY, claimed above as the reason this
+    test's assertions stay narrow, was never itself checked anywhere in
+    this file -- a mutant typo'ing `:545`'s key (Task 7's mutation pass
+    tried `'ContentTypeX'`) survived every existing assertion. This is the
+    one test in the file guaranteed to build `extra_args` regardless of
+    S3_STORAGE_CLASS/S3_PUBLIC_ACL, so the value check below verifies the
+    docstring's own claim instead of just asserting it.
     """
     assert app.config['S3_STORAGE_CLASS'] == ''
     assert app.config['S3_PUBLIC_ACL'] is False
@@ -1771,6 +1931,7 @@ def test_extra_args_omit_storage_class_and_public_acl_by_default(
     extra_args = calls[0][1]['ExtraArgs']
     assert 'StorageClass' not in extra_args
     assert 'ACL' not in extra_args
+    assert extra_args['ContentType'] == 'image/png'
 
 
 def test_extra_args_distinguish_storage_class_from_public_acl_when_only_one_is_set(
