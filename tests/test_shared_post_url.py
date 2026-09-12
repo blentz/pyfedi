@@ -849,3 +849,221 @@ class TestS3VideoTeardown:
         assert Domain.query.count() == 0
         db.session.refresh(s.post)
         assert s.post.url == '/relative/clip.mp4'
+
+
+class _RecordingMakeImageSizes:
+    """Records `make_image_sizes` calls instead of running the real pipeline.
+
+    `:614` and `:616` differ ONLY in their size arguments (170/2000 against
+    512/1200), so an assertion on the resulting `File` cannot tell them apart
+    -- false-witness mechanism 1, since both arms set `post.image_id` the same
+    way at `:608`. The arguments are the witness.
+
+    `make_image_sizes` is imported at MODULE level
+    (`app/shared/post.py:17`, `from app.activitypub.util import
+    make_image_sizes, notify_about_post`), so
+    `app.shared.post.make_image_sizes` is the name to patch. That is unlike
+    `:447`'s `delete_from_s3`, whose import sits inside the function body and
+    therefore has to be patched on its defining module -- see
+    `TestS3VideoTeardown` above.
+
+    Patching also removes the need for the bodiless-404 technique
+    (tests/test_shared_post_edit.py:44-52): under eager Celery the real
+    `make_image_sizes` EXECUTES, and would otherwise issue a GET these tests
+    have no reason to serve -- and which `http_mock`'s `assert_all_called=True`
+    would then require them to register.
+    """
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+
+
+PAGE_URL = 'https://example.com/thing'
+
+
+class TestImageArmEventBanner:
+    """`:601`'s true arm, and `:612`'s fork inside it.
+
+    THIS CLASS FOLLOWS FACT 229's CONVENTION, not this file's inverted one: a
+    HEAD reporting `image/png` and NO GET route. `:601` true is the whole
+    point, and `:601` is the one arm of the four at `:601`/`:619`/`:630`/`:641`
+    that never calls `opengraph_parse` (`:621`, `:632` and `:642` are the other
+    three), so a GET route here would go unreached and fail `http_mock`'s
+    `assert_all_called=True` at teardown.
+
+    Exactly ONE HEAD is issued per test: `_seed()` leaves `post.url` None, so
+    `:403` is false and `:410`'s `is_image_url(post.url)` never runs; `:601`'s
+    `is_image_url(url)` is the only caller.
+    """
+
+    def test_an_event_with_an_image_url_keeps_no_url_and_gets_a_banner(
+            self, db_session, http_mock, monkeypatch):
+        """`:612` true -> `:613`, `:614`. Arc 612->613; statements 613, 614.
+
+        Two independent witnesses, because either alone is weak: `post.url`
+        ends up None (only `:613` writes that; `:618` writes the url), and
+        `make_image_sizes` is called with the banner sizes 170/2000 (only
+        `:614` passes those; `:616` passes 512/1200).
+
+        `post.url` being None is NOT merely the seeded value surviving --
+        false-witness mechanism 1. `_seed()` does seed None, but reaching
+        `:612` at all requires `:565` true, and the `if`/`else` at `:612`
+        writes `post.url` on BOTH arms (`:613` None, `:618` the url). The
+        control below is the same-mechanism positive: identical input but a
+        different `type`, and it comes back with the url set.
+
+        THE `event` KEY IS REQUIRED, AND THAT WAS MEASURED RATHER THAN READ.
+        Without it `input.get('event', None)` is None (`:285`), so `:696`'s
+        `if type == POST_TYPE_EVENT and event_data:` is false and NO `Event`
+        row is created -- while `:398` has already written
+        `post.type = POST_TYPE_EVENT`. `from_scratch=True` then reaches `:741`'s
+        `task_selector('make_post', ...)`, which under eager Celery runs
+        `app/shared/tasks/pages.py:231-233` and dereferences
+        `Event.query.filter_by(post_id=post.id).first().start` -- AttributeError
+        on None, downstream of everything this test witnesses. The `event` dict
+        has no effect on `:612`, which tests the `type` PARAMETER and not
+        `event_data`; it only keeps the post a well-formed event so federation
+        can serialise it.
+        """
+        rec = _RecordingMakeImageSizes()
+        monkeypatch.setattr('app.shared.post.make_image_sizes', rec)
+        http_mock.head(PAGE_URL).respond(200, headers={'Content-Type': 'image/png'})
+        s = _seed()
+
+        edit_post(_api_input(url=PAGE_URL,
+                             event={'start': '2030-01-01T09:00:00Z',
+                                    'end': '2030-01-01T10:00:00Z'}),
+                  s.post, POST_TYPE_EVENT, SRC_API,
+                  user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.url is None
+        assert s.post.image_id is not None
+        assert len(rec.calls) == 1
+        assert rec.calls[0][0][1:3] == (170, 2000)
+
+    def test_a_non_event_with_an_image_url_keeps_the_url_and_gets_a_thumbnail(
+            self, db_session, http_mock, monkeypatch):
+        """`:612` false -> `:616`, `:617`, `:618`. Arc 612->616.
+
+        THE POSITIVE CONTROL for the test above: it differs in the post TYPE
+        alone and produces the opposite value on both witnesses -- the url is
+        written rather than cleared, and the sizes are 512/1200.
+
+        `POST_TYPE_IMAGE` at `:617` is a real witness rather than a default:
+        `:398` wrote `POST_TYPE_LINK` here, and `Post.type`'s column default is
+        `POST_TYPE_ARTICLE` (app/models.py:1715), so IMAGE is neither the
+        seeded value nor the submitted one. The only other writers of IMAGE are
+        `:405` and `:411`, both inside `:403`'s block, which cannot run --
+        `_seed()` leaves `post.url` None.
+        """
+        rec = _RecordingMakeImageSizes()
+        monkeypatch.setattr('app.shared.post.make_image_sizes', rec)
+        http_mock.head(PAGE_URL).respond(200, headers={'Content-Type': 'image/png'})
+        s = _seed()
+
+        edit_post(_api_input(url=PAGE_URL), s.post, POST_TYPE_LINK, SRC_API,
+                  user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.url == PAGE_URL
+        assert s.post.type == POST_TYPE_IMAGE
+        assert len(rec.calls) == 1
+        assert rec.calls[0][0][1:3] == (512, 1200)
+
+
+class TestVideoHostingSiteArm:
+    """`:660-661` -- the `elif` after `:565`, reached only when `:565` is FALSE
+    while `url` is still truthy.
+
+    `:565` is `if url and (from_scratch or url_changed):`, so closing it with a
+    url present means `from_scratch=False` AND `url_changed` false. `:435` sets
+    `url_changed` only when `url != post.url or uploaded_file`, so the post is
+    seeded with the SAME url that is submitted, and no file is uploaded.
+
+    THIS CLASS USES THE INVERTED CONVENTION -- a HEAD reporting a non-image
+    type -- and for a reason the previous class does not share: `:403`'s
+    `if post.url:` is true here (the post has a url), so `:410`'s
+    `is_image_url(post.url)` runs and issues a HEAD. `text/html` keeps
+    `:403-411` from retyping the post, leaving `:661` the only writer of
+    `post.type` below `:398`.
+
+    BOTH TESTS SUBMIT `POST_TYPE_LINK`, NOT `POST_TYPE_ARTICLE`. `:398` writes
+    whatever `type` is passed, and `Post.type`'s column default is
+    `POST_TYPE_ARTICLE` (app/models.py:1715) while `make_post` never sets
+    `type` -- so a seeded post is ALREADY ARTICLE before `edit_post` runs, and
+    an `== POST_TYPE_ARTICLE` assertion in the control below could not tell
+    "`:661` was skipped" from "`edit_post` did nothing to `type` at all"
+    (false-witness mechanism 1). LINK is not the default, so the control's
+    assertion is a positive statement that `:398` ran and `:661` did not.
+    """
+
+    def test_a_youtube_url_that_did_not_change_still_retypes_the_post_as_video(
+            self, db_session, http_mock):
+        """`:660` true -> `:661`. Arc 660->661, statement 661.
+
+        `type=POST_TYPE_LINK` is submitted, so `:398` writes LINK and only
+        `:661` can produce VIDEO: `:407`/`:409` are shut out because the url is
+        neither a loops.video url nor one with a video extension, and `:655`
+        is inside the `:565` block this test deliberately closes.
+
+        `is_video_hosting_site` (app/utils.py:316-329) matches on the
+        'https://youtube.com' prefix (app/utils.py:319) and issues no request
+        of its own, so the one registered HEAD is `:410`'s and is consumed.
+        """
+        youtube = 'https://youtube.com/watch?v=abc123'
+        http_mock.head(youtube).respond(200, headers={'Content-Type': 'text/html'})
+        s = _seed(url=youtube)
+
+        edit_post(_api_input(url=youtube), s.post, POST_TYPE_LINK, SRC_API,
+                  user=s.user, from_scratch=False)
+
+        db.session.refresh(s.post)
+        assert s.post.type == POST_TYPE_VIDEO
+
+    def test_a_plain_url_that_did_not_change_leaves_the_type_alone(
+            self, db_session, http_mock):
+        """`:660` false -> `:663`. THE POSITIVE CONTROL: identical except the
+        host is not a video-hosting site, so the post keeps the LINK type
+        `:398` wrote.
+
+        The url ends '/watch-this' rather than '/watch' on purpose: it holds
+        the word 'watch' without holding the substring 'videos/watch', which
+        `app/utils.py:326-327` accepts as PeerTube. Otherwise this control
+        would take `:660`'s TRUE arm -- false-witness mechanism 4.
+        """
+        plain = 'https://example.com/watch-this'
+        http_mock.head(plain).respond(200, headers={'Content-Type': 'text/html'})
+        s = _seed(url=plain)
+
+        edit_post(_api_input(url=plain), s.post, POST_TYPE_LINK, SRC_API,
+                  user=s.user, from_scratch=False)
+
+        db.session.refresh(s.post)
+        assert s.post.type == POST_TYPE_LINK
+
+    def test_a_peertube_url_that_did_not_change_also_retypes_the_post_as_video(
+            self, db_session, http_mock):
+        """`:660` true -> `:661` by the SECOND, independent route into
+        `is_video_hosting_site`: `'videos/watch' in url` (app/utils.py:326-327,
+        PeerTube), which no prefix in the `video_hosting_sites` list
+        (app/utils.py:319-321) can reach.
+
+        This adds no arc and no statement in `app/shared/post.py` that the
+        youtube test above does not already close -- it is here because the
+        youtube url short-circuits at app/utils.py:323-324 and therefore leaves
+        `:326`'s substring test unexecuted. Without this test a mutation that
+        deletes or negates `:326-327` survives the whole file.
+        """
+        peertube = 'https://tube.example.org/videos/watch/abc-123'
+        http_mock.head(peertube).respond(200, headers={'Content-Type': 'text/html'})
+        s = _seed(url=peertube)
+
+        edit_post(_api_input(url=peertube), s.post, POST_TYPE_LINK, SRC_API,
+                  user=s.user, from_scratch=False)
+
+        db.session.refresh(s.post)
+        assert s.post.type == POST_TYPE_VIDEO
