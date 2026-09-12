@@ -1587,3 +1587,84 @@ def test_a_remote_communitys_instance_is_flagged_even_when_ids_collide(db_sessio
         post_module.task_selector = original
 
     assert calls == [{instance.id, remote_instance.id}]
+
+
+def test_the_communitys_instance_is_not_re_added_when_already_present(db_session):
+    """`:905`'s FALSE arm, reached when a moderator already put the
+    community's own instance in the set before `:905` runs.
+
+    THIS TEST PINS AN ARC, NOT A BEHAVIOURAL DIFFERENCE, and says so rather
+    than pretending otherwise. `:906` adds to a set, so adding an id already
+    present is a no-op: both arms of `:905` leave `remote_instance_ids` in
+    exactly the same state, and no assertion can distinguish them. What the
+    test does establish is that the guarded path runs and produces no
+    duplicate and no error.
+
+    Compare `test_a_remote_suspects_instance_is_not_added_twice`, which pins
+    `:908`'s FALSE arm for the identical reason and is labelled the same way.
+    An arc being equivalent does not make every mutation of `:905`
+    equivalent -- a mutant that swapped which SET `:905` tests against would
+    still be a real defect (that is exactly what
+    `test_a_remote_communitys_instance_is_flagged_even_when_ids_collide`
+    catches); this test only closes the coverage arc for `:905`'s FALSE arm,
+    it does not claim to catch a regression there.
+
+    THE SETUP. `:904` needs the community NON-LOCAL. Setting only `ap_id` is
+    not enough: `Community.is_local()` (app/models.py:796) is `self.ap_id is
+    None or self.profile_id().startswith(SERVER_URL)`, and `make_community`'s
+    default `ap_profile_id` already starts with this test environment's
+    `SERVER_URL`, so the second disjunct alone would keep the community local
+    regardless of `ap_id`. Both `ap_id` and `ap_profile_id` are overridden
+    below to a remote-looking value, and `is_local()` is asserted False
+    before calling `report_post` so a fixture that silently fails to reach
+    `:904` announces itself instead of passing for the wrong reason.
+
+    To make `:905` see the community's own instance already in the set, the
+    moderator loop above it (`:886`-`:890`) has to add
+    `post.community.instance_id` itself. A moderator's `instance_id` is
+    independent of `Community.is_local()` (which reads only `ap_id`/
+    `ap_profile_id`), so a moderator can sit on `s.instance` -- the same row
+    `post.community.instance_id` points at -- while the community's AP
+    identity is overridden to look remote. `make_user(s.instance, name,
+    local=False)` (tests/factories.py:41) sets `ap_id` while leaving
+    `instance_id` at the instance passed in, and `User.is_local()`
+    (app/models.py:1252) reads only `ap_id`/`ap_profile_id`, never
+    `instance_id` -- so this moderator is non-local and lands on the
+    community's own instance. Under `report_remote=True`, `:890` adds
+    `moderator.instance_id` (== `post.community.instance_id`) to
+    `remote_instance_ids` unconditionally, before `:905` ever runs.
+
+    The suspect (`s.author`) stays LOCAL (`seed_post_context`'s default), so
+    `:907` is false and `:908`-`:909` do not also touch
+    `remote_instance_ids` -- keeping the observation scoped to `:905`.
+    """
+    calls = []
+    s = seed_post_context(community_name='lifecycle')
+
+    s.community.ap_id = 'lifecycle@remote.example'
+    s.community.ap_profile_id = 'https://remote.example/c/lifecycle'
+    db.session.commit()
+    assert s.community.is_local() is False
+
+    modmate = make_user(s.instance, 'modmate', local=False)
+    make_community_member(modmate, s.community, is_moderator=True)
+
+    import app.shared.post as post_module
+    original = post_module.task_selector
+
+    def recorder(task_key, **kwargs):
+        calls.append(set(kwargs.get('instance_ids') or []))
+        return original(task_key, **kwargs)
+
+    post_module.task_selector = recorder
+    try:
+        report_post(
+            s.post,
+            {'reason': 'spam', 'description': 'x', 'report_remote': True},
+            SRC_API,
+            auth=bearer(s.voter),
+        )
+    finally:
+        post_module.task_selector = original
+
+    assert calls == [{s.instance.id}]
