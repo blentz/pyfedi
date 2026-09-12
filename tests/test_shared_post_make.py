@@ -100,6 +100,7 @@ from tests.factories import (
     web_ctx,
 )
 from tests.test_shared_post_edit import _OMIT, _Field, _api_input, _web_form
+from app.utils import get_setting, set_setting
 
 import app.shared.post as post_module
 from app.shared.post import make_post
@@ -590,3 +591,223 @@ def test_an_ordinary_domain_is_allowed(db_session, http_mock):
                               auth=bearer(s.author))
 
     assert post.url == 'https://clean.example/thing'
+
+
+def test_no_uploaded_file_skips_the_extension_check(db_session):
+    """`:197`'s FIRST condition taken false via `uploaded_file=None`,
+    straight to `:206` -- arc `197->206`.
+
+    `edit_post` is left to run for real: `uploaded_file=None` makes its own
+    identical guard (`:461`, verbatim copy of `:197`) false too, so there is
+    nothing downstream for the two copies to disagree about.
+    """
+    s = seed_make_context()
+
+    user_id, post = make_post(_api_input(), s.community, POST_TYPE_ARTICLE,
+                              SRC_API, auth=bearer(s.author))
+
+    assert post.title == 'a title'
+
+
+def test_an_uploaded_file_with_an_empty_filename_is_ignored(db_session):
+    """`:197`'s SECOND condition taken false, with the first TRUE -- the
+    other route to arc `197->206`.
+
+    A `FileStorage` with no filename is what a browser sends for an empty
+    file input, so this is the ordinary no-upload submission rather than an
+    edge case. Distinguishing it from `uploaded_file=None` is the point: both
+    reach `:206`, and only this test shows the `.filename != ''` half is
+    load-bearing -- a mutant that dropped it and tested only truthiness of
+    `uploaded_file` would still pass the test above but fail this one only if
+    the SimpleNamespace itself were falsy, which it is not, so this test
+    exists to pin the correct condition rather than merely a truthy object.
+
+    `edit_post` runs for real: its own `:461` reads the same empty-filename
+    object and takes the same false arm, so nothing downstream disagrees.
+    """
+    s = seed_make_context()
+
+    user_id, post = make_post(_api_input(), s.community, POST_TYPE_ARTICLE,
+                              SRC_API, auth=bearer(s.author),
+                              uploaded_file=SimpleNamespace(filename=''))
+
+    assert post.title == 'a title'
+
+
+def test_a_disallowed_extension_is_refused(db_session):
+    """`:203`'s true arm and `:204`'s raise -- arc `203->204`.
+
+    `edit_post` IS STUBBED TO IDENTITY. `edit_post:461-468` reimplements
+    `:197-204` VERBATIM, including the exact exception string, so with
+    `edit_post` left to run for real a mutation that silences `make_post`'s
+    OWN `:203` check (e.g. inverting `not in` to `in`) would not fail this
+    test: `make_post`'s check would go quiet, but a Post and Vote would then
+    be created and `edit_post` would independently re-run the SAME check on
+    the SAME `uploaded_file`/`type`, raise the SAME 'filetype not allowed'
+    message, and `:230-236` would catch and re-raise it unchanged -- an
+    indistinguishable false pass. Stubbing `edit_post` removes its copy of
+    the check, so the only source of a raise here is `make_post`'s own
+    `:203`/`:204`.
+    """
+    s = seed_make_context()
+
+    original_edit_post = post_module.edit_post
+    post_module.edit_post = lambda *args, **kwargs: args[1]
+    try:
+        with pytest.raises(Exception, match='filetype not allowed'):
+            make_post(_api_input(), s.community, POST_TYPE_ARTICLE, SRC_API,
+                      auth=bearer(s.author),
+                      uploaded_file=SimpleNamespace(filename='payload.exe'))
+    finally:
+        post_module.edit_post = original_edit_post
+
+    assert db.session.query(Post).count() == 0
+
+
+def test_an_allowed_image_extension_passes(db_session):
+    """`:203`'s false arm -- arc `203->206` -- the positive control for the
+    test above.
+
+    Same shape, an allowed extension (case-mixed, exercising `:202`'s
+    `.lower()`), no raise. `:199`'s list is the witness: change it and this
+    test fails where the refusal test would not.
+
+    `edit_post` IS STUBBED TO IDENTITY, for a different reason than the raise
+    test above: with `uploaded_file` a bare `SimpleNamespace(filename=...)`,
+    letting `edit_post` run for real past its own `:461` guard would reach
+    `:479`'s `uploaded_file.seek(0)`, which `SimpleNamespace` does not
+    support -- an `AttributeError`, not the assertion under test. Stubbing
+    sidesteps that entirely; the value asserted below (`post.title`) is set
+    by `make_post` itself at `:206-207`, before `edit_post` is ever called.
+    """
+    s = seed_make_context()
+
+    original_edit_post = post_module.edit_post
+    post_module.edit_post = lambda *args, **kwargs: args[1]
+    try:
+        user_id, post = make_post(_api_input(), s.community, POST_TYPE_ARTICLE,
+                                  SRC_API, auth=bearer(s.author),
+                                  uploaded_file=SimpleNamespace(filename='pic.PNG'))
+    finally:
+        post_module.edit_post = original_edit_post
+
+    assert post.title == 'a title'
+
+
+def test_a_video_upload_is_refused_when_video_uploads_are_off(db_session):
+    """`:200`'s SECOND conjunct taken false, with the first TRUE -- arc
+    `200->202`.
+
+    `can_upload_video` (app/utils.py:2586-2589) returns False when
+    `allow_video_file_uploads` is 'no', which is the default the test suite
+    leaves in place, so `:201` never runs and '.mp4' stays out of the
+    allowed list. A regression dropping the `can_upload_video()` conjunct
+    (leaving bare `if type == POST_TYPE_VIDEO:`) would let '.mp4' through
+    for a POST_TYPE_VIDEO post regardless of the setting.
+
+    `edit_post` IS STUBBED TO IDENTITY, load-bearing for the same reason as
+    `test_a_disallowed_extension_is_refused`: `edit_post:464` reimplements
+    `:200`'s exact compound against its own re-derived `type`, so with
+    `edit_post` left to run for real, a mutant dropping `:200`'s second
+    conjunct would go quiet in `make_post` but `edit_post`'s untouched copy
+    would independently raise the same message one call later -- verified
+    empirically as the required verification step below.
+    """
+    s = seed_make_context()
+
+    original_edit_post = post_module.edit_post
+    post_module.edit_post = lambda *args, **kwargs: args[1]
+    try:
+        with pytest.raises(Exception, match='filetype not allowed'):
+            make_post(_api_input(), s.community, POST_TYPE_VIDEO, SRC_API,
+                      auth=bearer(s.author),
+                      uploaded_file=SimpleNamespace(filename='clip.mp4'))
+    finally:
+        post_module.edit_post = original_edit_post
+
+    assert db.session.query(Post).count() == 0
+
+
+def test_a_video_upload_is_accepted_when_video_uploads_are_enabled(db_session):
+    """`:200`'s true arm -- arc `200->201` -- both conjuncts TRUE.
+
+    `allow_video_file_uploads` is set to `'yes'` via `set_setting`, the
+    mechanism this suite already uses (e.g. tests/test_utils_upload_video.py,
+    tests/test_ap_actor_json_group.py:812). `can_upload_video`
+    (app/utils.py:2586-2596) reads that setting through `get_setting`, finds
+    it neither `'no'`, `'user 1'`, `'admins'` nor `'users'`, and falls through
+    to `return True` at `:2596` without ever touching `current_user` -- so
+    this needs no `web_ctx` even though the call happens through the SRC_API
+    arm with no request context. `:201` then extends the allowed list with
+    `.mp4`, so `:203` is false and no exception is raised: this is the
+    positive control for the test above, and together the pair separates
+    `:200`'s two conjuncts, which coverage.py otherwise scores as a single
+    arc pair.
+
+    `edit_post` IS STUBBED TO IDENTITY, for the same `uploaded_file.seek(0)`
+    `AttributeError` reason as `test_an_allowed_image_extension_passes` --
+    the setting is genuinely 'yes' here, so `edit_post`'s own copy of the
+    check (`:464`) would also take the true arm and attempt to actually save
+    and process the fake file.
+
+    The setting is restored in `finally` because it is process-global state,
+    not per-test: `cache.delete_memoized(get_setting)` at `app/utils.py:222`
+    is a no-op under `.env.test`'s `NullCache`, but the underlying `Settings`
+    row would otherwise leak into every later test in the session.
+    """
+    s = seed_make_context()
+
+    original_setting = get_setting('allow_video_file_uploads')
+    set_setting('allow_video_file_uploads', 'yes')
+    original_edit_post = post_module.edit_post
+    post_module.edit_post = lambda *args, **kwargs: args[1]
+    try:
+        user_id, post = make_post(_api_input(), s.community, POST_TYPE_VIDEO,
+                                  SRC_API, auth=bearer(s.author),
+                                  uploaded_file=SimpleNamespace(filename='clip.mp4'))
+    finally:
+        post_module.edit_post = original_edit_post
+        set_setting('allow_video_file_uploads', original_setting)
+
+    assert post.title == 'a title'
+    assert db.session.query(Post).count() == 1
+
+
+def test_a_non_video_post_ignores_can_upload_video_even_when_enabled(db_session):
+    """`:200`'s FIRST conjunct taken false, with the SECOND conjunct TRUE --
+    the short-circuit witness `and` requires but `or` would not.
+
+    `type` is POST_TYPE_ARTICLE, not POST_TYPE_VIDEO, so `:200`'s first
+    conjunct is false and Python's `and` never evaluates `can_upload_video()`
+    at all -- yet the setting is forced to `'yes'` anyway, so a mutant that
+    weakened `:200` to `or` (`if type == POST_TYPE_VIDEO or
+    can_upload_video():`) would flip this arm: `.mp4` would join the allowed
+    list for an ARTICLE post and the raise below would not happen. Neither
+    of the two tests above can catch that particular mutation on its own --
+    `test_a_video_upload_is_accepted_when_video_uploads_are_enabled` has
+    `type == POST_TYPE_VIDEO` already true, and
+    `test_a_video_upload_is_refused_when_video_uploads_are_off` has the
+    setting already 'no' -- only holding `type` false and the setting true
+    at once separates `and` from `or`.
+
+    `edit_post` IS STUBBED TO IDENTITY for the same reason as the other
+    raise tests in this group: `edit_post:464` reimplements the identical
+    compound against its own re-derived `type`, so leaving it live would let
+    its copy mask a mutation to `make_post`'s own `:200`.
+    """
+    s = seed_make_context()
+
+    original_setting = get_setting('allow_video_file_uploads')
+    set_setting('allow_video_file_uploads', 'yes')
+    original_edit_post = post_module.edit_post
+    post_module.edit_post = lambda *args, **kwargs: args[1]
+    try:
+        with pytest.raises(Exception, match='filetype not allowed'):
+            make_post(_api_input(), s.community, POST_TYPE_ARTICLE, SRC_API,
+                      auth=bearer(s.author),
+                      uploaded_file=SimpleNamespace(filename='clip.mp4'))
+    finally:
+        post_module.edit_post = original_edit_post
+        set_setting('allow_video_file_uploads', original_setting)
+
+    assert db.session.query(Post).count() == 0
