@@ -460,6 +460,7 @@ def test_an_article_post_reads_neither_url_field(db_session, app, stub_notify):
 
     assert post is not None
     assert db.session.query(Post).count() == 1
+```
 
 
 - [ ] **Step 5: Write the rate-limit test**
