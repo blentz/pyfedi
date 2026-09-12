@@ -6610,6 +6610,79 @@ identity and reading the Post fields `make_post` itself sets directly
 (`up_votes`, `score`, community/user counters, `PostVote`) -- never by reading
 `post.title`/`post.url` as if `make_post` were the only writer.
 
+**229. `edit_post`'S FILE-UPLOAD BLOCK (`:461-563`) NEEDED THREE HARNESS
+FACTS NOTHING EARLIER IN THE CAMPAIGN HAD NEEDED, PLUS AN `http_mock`
+REQUIREMENT WITH NO GET ROUTE, AN AVIF TRAP, AND A SHARED RAISE MESSAGE.**
+This is the first block driving a real file through a real image pipeline
+rather than pure control flow over database rows, and `tests/test_shared_
+post_upload.py` is a new file built around five things worth carrying
+forward:
+
+1. **`chdir_upload`.** `:475` builds its directory as `'app/static/media/
+   posts/' + ...` -- RELATIVE to the process's working directory, which in
+   the container is the bind-mounted repo root. Left unredirected, every
+   test would write a real file into the source tree under a random
+   `gibberish(15)` name (`:470`); `.gitignore:162-163` hides it from `git
+   status`, but nothing removes it, so the files accumulate silently.
+   `chdir_upload` (`monkeypatch.chdir(tmp_path)`) redirects every relative
+   write into pytest's own per-test `tmp_path`, cleaned up automatically.
+   Verified end to end (a file found under
+   `tmp_path/app/static/media/posts/XX/YY/<gibberish>.png`) and verified
+   negatively (the repository's own `app/static/media/` file and directory
+   counts identical before and after every task's run in this round).
+
+2. **`make_upload`'s genuine-versus-renamed split.** The helper produces
+   GENUINE content for `fmt` in `PNG`, `GIF`, `JPEG` (real
+   `Image.new(...).save(buf, format=fmt)` bytes) and for `fmt='SVG'` (real
+   SVG/XML text, since Pillow has no SVG writer and SVG is not a raster
+   format). It produces RENAMED RASTER BYTES ONLY for `HEIC`, `AVIF`, or any
+   video-like filename (e.g. `.mp4`): real PNG/GIF/JPEG bytes wearing a
+   different extension, sufficient for branches gated on the FILENAME string
+   alone (`:491`'s `.heic` check, `:493`'s `.avif` check, `:513`'s
+   `is_video_url(final_place)`) but insufficient for a real HEIC/AVIF decode,
+   a genuine format-mismatch at `:515` for those formats, or any real
+   video-content behaviour. A test needing that needs a different helper.
+
+3. **The `http_mock` `url__regex` requirement, with NO GET route, and why.**
+   Calling `edit_post` at all with `uploaded_file=` set reaches `:601`'s
+   `is_image_url(url)` on the NEWLY BUILT url (`:535`, which embeds
+   `gibberish(15)`) regardless of how narrow a test's intent is -- this is
+   downstream of the upload block entirely, in the function's shared tail.
+   A plain `http_mock.head('https://...')` (exact URL) cannot be used here,
+   since the filename is random; every full `edit_post()` call in this file
+   needs `http_mock.head(url__regex=r'.*')` instead. Registering a GET route
+   for the same pattern is a MISTAKE, not a safety margin: `:601`/`:619`/
+   `:630`/`:641` form one mutually exclusive `if`/`elif`/`elif`/`else` chain,
+   and the HEAD mock's `Content-Type: image/png` makes `is_image_url` return
+   `True`, taking `:601`'s branch -- the only one of the four that does NOT
+   call `opengraph_parse` (which is what would issue a GET). A registered
+   but unreached GET route fails `http_mock`'s `assert_all_called=True` at
+   teardown.
+
+4. **The AVIF trap.** This container's Pillow (12.3.0) registers AVIF
+   natively -- `features.check('avif')` is `True`, and an AVIF save
+   SUCCEEDS even with `pillow_avif` absent from `sys.modules` -- so a
+   successful-save assertion proves nothing about whether `:494`'s
+   (filename-gated) or `:511`'s (config-gated, `MEDIA_IMAGE_FORMAT ==
+   'AVIF'`) `import pillow_avif` actually ran. Both had to be witnessed
+   through `sys.modules` MEMBERSHIP instead (popped before, asserted
+   present/absent after, restored in `finally`). A witness for one of the
+   two imports must also PIN the other import's gate to its non-triggering
+   value (e.g. `assert app.config['MEDIA_IMAGE_FORMAT'] != 'AVIF'` for a
+   `:494` test) -- otherwise the same `sys.modules` key being written by
+   either import makes the assertion ambiguous between them.
+
+5. **`:468` and `:533` raise byte-identical messages.** Both are
+   `raise Exception('filetype not allowed')` -- `:468` fires BEFORE `:487`'s
+   save (no file exists on disk afterward), `:533` fires AFTER it, following
+   `:515`'s failed post-decode format check (`:487`'s original save survives
+   untouched -- `:531`, the only thing that would overwrite it, is the
+   mutually exclusive `if` arm of the same check, so it never ran before
+   `:533`'s `else` fired). A test of either raise must assert whether the
+   uploaded file EXISTS afterward, not just match the exception message --
+   otherwise a mutant that made the wrong one of the two fire would still
+   pass.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
