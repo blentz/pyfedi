@@ -945,6 +945,10 @@ def test_an_admin_who_is_already_a_notified_moderator_is_not_notified_twice(db_s
     vacuously and witness nothing. `seed_site_admin` mints a LOCAL user, so
     `:876` routes it to the notification branch and `:884` adds it to
     `already_notified`.
+
+    `reason='spam'` matches none of `:828`'s needles, so `notify_admins` is
+    forced True here by `s.community.un_moderated = True` and `:842`'s
+    override, not by the reason text.
     """
     s = seed_post_context(community_name='lifecycle')
     admin = seed_site_admin(s)
@@ -971,6 +975,10 @@ def test_notifying_an_admin_increments_their_unread_counter(db_session):
 
     The moderator notification at `:883` has NO counterpart increment -- that
     asymmetry is registered, not fixed. Catches a regression dropping `:900`.
+
+    `reason='spam'` matches none of `:828`'s needles, so `notify_admins` is
+    forced True here by `s.community.un_moderated = True` and `:842`'s
+    override, not by the reason text.
     """
     s = seed_post_context(community_name='lifecycle')
     admin = seed_site_admin(s)
@@ -1161,6 +1169,39 @@ def test_the_web_arm_escalates_on_reason_six(db_session, app):
         title='Suspicious content').count() == 1
 
 
+def test_the_web_arm_does_not_escalate_on_reason_seventeen_on_piefed(db_session, app):
+    """`:838`'s THIRD disjunct, software conjunct taken FALSE.
+
+    The WEB arm's counterpart to `test_an_api_ai_flair_report_does_not_escalate_on_piefed`.
+    A PieFed instance handles its own flair, so `'17'` alone must not
+    escalate. Catches a regression turning `:838`'s `and` into an `or`, or
+    dropping the software check outright, either of which would let `'17'`
+    escalate unconditionally -- a mutation that the reason-seventeen
+    non-piefed test above does not catch, since it never varies the software.
+
+    `seed_site_admin` is required: a zero from an empty `Site.admins()` is not
+    a refusal.
+    """
+    from types import SimpleNamespace
+
+    s = seed_post_context(community_name='lifecycle')
+    seed_site_admin(s)
+    s.instance.software = 'piefed'
+    db.session.commit()
+    form = SimpleNamespace(
+        reasons=SimpleNamespace(data=['17']),
+        description=SimpleNamespace(data='x'),
+        report_remote=SimpleNamespace(data=False),
+        reasons_to_string=lambda data: 'AI content that needs flair',
+    )
+
+    with web_ctx(app, s.voter):
+        report_post(s.post, form, SRC_WEB)
+
+    assert db.session.query(Notification).filter_by(
+        title='Suspicious content').count() == 0
+
+
 def test_the_web_arm_escalates_on_reason_seventeen_on_a_non_piefed_instance(db_session, app):
     """`:838`'s THIRD disjunct, with both conjuncts true.
 
@@ -1188,3 +1229,82 @@ def test_the_web_arm_escalates_on_reason_seventeen_on_a_non_piefed_instance(db_s
 
     assert db.session.query(Notification).filter_by(
         title='Suspicious content').count() == 1
+
+
+def test_a_report_on_a_remote_authors_post_flags_their_instance(db_session):
+    """`:907`'s true arm and `:909`'s add.
+
+    Every other test in this file reports a post by `s.author`, who is local,
+    so `:907` is false and this arc never runs. The suspect has to be a REMOTE
+    user before the block below `:903` reaches `:909` at all.
+
+    Catches a regression dropping `:909`, after which a report about a remote
+    user's post would never reach the instance hosting them.
+    """
+    calls = []
+    s = seed_post_context(community_name='lifecycle')
+    suspect_instance = make_instance('suspect.example', software='lemmy')
+    suspect = make_user(suspect_instance, 'remoteauthor')
+    remote_post = make_post(s.community, suspect, 'https://suspect.example/p/9')
+
+    import app.shared.post as post_module
+    original = post_module.task_selector
+
+    def recorder(task_key, **kwargs):
+        calls.append(set(kwargs.get('instance_ids') or []))
+        return original(task_key, **kwargs)
+
+    post_module.task_selector = recorder
+    try:
+        report_post(
+            remote_post,
+            {'reason': 'spam', 'description': 'x', 'report_remote': True},
+            SRC_API,
+            auth=bearer(s.voter),
+        )
+    finally:
+        post_module.task_selector = original
+
+    assert calls == [{suspect_instance.id}]
+
+
+def test_a_remote_suspects_instance_is_not_added_twice(db_session):
+    """`:908`'s FALSE arm, reached when a moderator already put the suspect's
+    instance in the set.
+
+    THIS TEST PINS AN ARC, NOT A BEHAVIOURAL DIFFERENCE, and says so rather
+    than pretending otherwise. `:909` adds to a set, so adding an id already
+    present is a no-op: both arms of `:908` leave exactly the same state, and
+    no assertion can distinguish them. What the test does establish is that the
+    guarded path runs and produces no duplicate and no error.
+
+    Compare `test_deleting_with_no_notifications_takes_the_loops_zero_exit`,
+    which is weak for the same reason and is labelled the same way.
+    """
+    calls = []
+    s = seed_post_context(community_name='lifecycle')
+    suspect_instance = make_instance('suspect.example', software='lemmy')
+    suspect = make_user(suspect_instance, 'remoteauthor')
+    remote_post = make_post(s.community, suspect, 'https://suspect.example/p/9')
+    comod = make_user(suspect_instance, 'comod')
+    make_community_member(comod, s.community, is_moderator=True)
+
+    import app.shared.post as post_module
+    original = post_module.task_selector
+
+    def recorder(task_key, **kwargs):
+        calls.append(set(kwargs.get('instance_ids') or []))
+        return original(task_key, **kwargs)
+
+    post_module.task_selector = recorder
+    try:
+        report_post(
+            remote_post,
+            {'reason': 'spam', 'description': 'x', 'report_remote': True},
+            SRC_API,
+            auth=bearer(s.voter),
+        )
+    finally:
+        post_module.task_selector = original
+
+    assert calls == [{suspect_instance.id}]
