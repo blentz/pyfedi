@@ -1424,7 +1424,95 @@ def test_the_web_arm_escalates_on_reason_five(db_session, app):
 
 **Verify the form stand-in works before relying on it.** If `report_post` reads an attribute the stand-in lacks, the test fails with `AttributeError` rather than an assertion — add whatever `:836-839` actually touches.
 
-`:838`'s second and third disjuncts (`'6'`, and `'17'` with the software conjunct) need their own witnesses. Add them.
+`:838`'s second and third disjuncts need their own witnesses, and so does the third disjunct's SECOND CONJUNCT taken false. Three more tests:
+
+- `'6' in reasons` — the doxing id.
+- `'17' in reasons` with non-piefed software — escalates.
+- **`'17' in reasons` with `'piefed'` software — does NOT escalate.** This is the WEB counterpart of `test_an_api_ai_flair_report_does_not_escalate_on_piefed`. Without it, a mutation turning `:838`'s `and` into an `or`, or deleting the software check entirely so `'17'` alone always escalates, passes every test in the file. Coverage.py scores the whole three-disjunct compound as one arc pair, so nothing about the line's coverage percentage reveals the gap.
+
+**`:903-909` is only half reachable from the fixtures used so far, and the rest is this task's job.** Under `seed_post_context` the community is local and the post's author is local, so `:904` and `:907` are both false and NONE of `:905-909` executes. Task 9 reaches `:905-906` by making the community non-local. This task must reach `:907-909`, which needs a post whose AUTHOR is remote:
+
+```python
+def test_a_report_on_a_remote_authors_post_flags_their_instance(db_session):
+    """`:907`'s true arm and `:909`'s add.
+
+    Every other test in this file reports a post by `s.author`, who is local,
+    so `:907` is false and this arc never runs. The suspect has to be a REMOTE
+    user before the block below `:903` reaches `:909` at all.
+
+    Catches a regression dropping `:909`, after which a report about a remote
+    user's post would never reach the instance hosting them.
+    """
+    calls = []
+    s = seed_post_context(community_name='lifecycle')
+    suspect_instance = make_instance('suspect.example', software='lemmy')
+    suspect = make_user(suspect_instance, 'remoteauthor')
+    remote_post = make_post(s.community, suspect, 'https://suspect.example/p/9')
+
+    import app.shared.post as post_module
+    original = post_module.task_selector
+
+    def recorder(task_key, **kwargs):
+        calls.append(set(kwargs.get('instance_ids') or []))
+        return original(task_key, **kwargs)
+
+    post_module.task_selector = recorder
+    try:
+        report_post(
+            remote_post,
+            {'reason': 'spam', 'description': 'x', 'report_remote': True},
+            SRC_API,
+            auth=bearer(s.voter),
+        )
+    finally:
+        post_module.task_selector = original
+
+    assert calls == [{suspect_instance.id}]
+
+
+def test_a_remote_suspects_instance_is_not_added_twice(db_session):
+    """`:908`'s FALSE arm, reached when a moderator already put the suspect's
+    instance in the set.
+
+    THIS TEST PINS AN ARC, NOT A BEHAVIOURAL DIFFERENCE, and says so rather
+    than pretending otherwise. `:909` adds to a set, so adding an id already
+    present is a no-op: both arms of `:908` leave exactly the same state, and
+    no assertion can distinguish them. What the test does establish is that the
+    guarded path runs and produces no duplicate and no error.
+
+    Compare `test_deleting_with_no_notifications_takes_the_loops_zero_exit`,
+    which is weak for the same reason and is labelled the same way.
+    """
+    calls = []
+    s = seed_post_context(community_name='lifecycle')
+    suspect_instance = make_instance('suspect.example', software='lemmy')
+    suspect = make_user(suspect_instance, 'remoteauthor')
+    remote_post = make_post(s.community, suspect, 'https://suspect.example/p/9')
+    comod = make_user(suspect_instance, 'comod')
+    make_community_member(comod, s.community, is_moderator=True)
+
+    import app.shared.post as post_module
+    original = post_module.task_selector
+
+    def recorder(task_key, **kwargs):
+        calls.append(set(kwargs.get('instance_ids') or []))
+        return original(task_key, **kwargs)
+
+    post_module.task_selector = recorder
+    try:
+        report_post(
+            remote_post,
+            {'reason': 'spam', 'description': 'x', 'report_remote': True},
+            SRC_API,
+            auth=bearer(s.voter),
+        )
+    finally:
+        post_module.task_selector = original
+
+    assert calls == [{suspect_instance.id}]
+```
+
+**Both docstrings for the two admin tests must say WHY `notify_admins` is true.** `test_an_admin_who_is_already_a_notified_moderator_is_not_notified_twice` and `test_notifying_an_admin_increments_their_unread_counter` use `reason='spam'`, which matches none of `:828`'s needles. It is `s.community.un_moderated = True` and `:842` that force the flag. Left unsaid, a reader concludes the reason text is what escalates — and a later edit changing the reason would silently make both tests vacuous.
 
 - [ ] **Step 3: Run and report the collection line**
 
