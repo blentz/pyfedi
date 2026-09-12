@@ -931,3 +931,260 @@ def test_an_unmoderated_local_community_always_notifies_admins_through_the_api(d
 
     assert db.session.query(Notification).filter_by(
         title='Suspicious content').count() == 1
+
+
+def test_an_admin_who_is_already_a_notified_moderator_is_not_notified_twice(db_session):
+    """`:894`'s false arm.
+
+    `already_notified` is populated at `:884` for local moderators only. An
+    admin who moderates the community is in that set and must not receive a
+    second notification. Catches a regression dropping the guard.
+
+    The admin must be seeded with `seed_site_admin` (Task 5): `Site.admins()`
+    is empty otherwise, which would make the `== 0` assertion below pass
+    vacuously and witness nothing. `seed_site_admin` mints a LOCAL user, so
+    `:876` routes it to the notification branch and `:884` adds it to
+    `already_notified`.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    admin = seed_site_admin(s)
+    make_community_member(admin, s.community, is_moderator=True)
+    s.community.un_moderated = True
+    db.session.commit()
+
+    report_post(
+        s.post,
+        {'reason': 'spam', 'description': 'x', 'report_remote': False},
+        SRC_API,
+        auth=bearer(s.voter),
+    )
+
+    assert db.session.query(Notification).filter_by(
+        title='Suspicious content').count() == 0
+    mod_notifs = db.session.query(Notification).filter_by(
+        title='A post has been reported').all()
+    assert {n.user_id for n in mod_notifs} == {admin.id}
+
+
+def test_notifying_an_admin_increments_their_unread_counter(db_session):
+    """`:900`'s `admin.unread_notifications += 1`.
+
+    The moderator notification at `:883` has NO counterpart increment -- that
+    asymmetry is registered, not fixed. Catches a regression dropping `:900`.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    admin = seed_site_admin(s)
+    admin.unread_notifications = 0
+    s.community.un_moderated = True
+    db.session.commit()
+
+    report_post(
+        s.post,
+        {'reason': 'spam', 'description': 'x', 'report_remote': False},
+        SRC_API,
+        auth=bearer(s.voter),
+    )
+
+    db.session.refresh(admin)
+    assert admin.unread_notifications == 1
+
+
+def test_a_report_with_no_remote_moderators_federates_nothing(db_session):
+    """`:914`'s false arm.
+
+    An empty `remote_instance_ids` must not dispatch a Flag. Catches a
+    regression making `:919`'s task_selector unconditional, which would send an
+    empty instance list to the federation layer.
+    """
+    calls = []
+    s = seed_post_context(community_name='lifecycle')
+    seed_local_moderator(s)
+
+    import app.shared.post as post_module
+    original = post_module.task_selector
+
+    def recorder(task_key, **kwargs):
+        calls.append(task_key)
+        return original(task_key, **kwargs)
+
+    post_module.task_selector = recorder
+    try:
+        report_post(
+            s.post,
+            {'reason': 'spam', 'description': 'x', 'report_remote': False},
+            SRC_API,
+            auth=bearer(s.voter),
+        )
+    finally:
+        post_module.task_selector = original
+
+    assert calls == []
+
+
+def test_the_federated_summary_joins_reason_and_description(db_session):
+    """`:916`'s true arm and `:917`'s concatenation.
+
+    Catches a regression dropping the description, which would federate a Flag
+    carrying only the reason.
+    """
+    calls = []
+    s = seed_post_context(community_name='lifecycle')
+    seed_remote_moderator(s)
+
+    import app.shared.post as post_module
+    original = post_module.task_selector
+
+    def recorder(task_key, **kwargs):
+        calls.append(kwargs.get('summary'))
+        return original(task_key, **kwargs)
+
+    post_module.task_selector = recorder
+    try:
+        report_post(
+            s.post,
+            {'reason': 'spam', 'description': 'unsolicited', 'report_remote': True},
+            SRC_API,
+            auth=bearer(s.voter),
+        )
+    finally:
+        post_module.task_selector = original
+
+    assert calls == ['spam - unsolicited']
+
+
+def test_an_empty_description_leaves_the_summary_as_the_reason(db_session):
+    """`:916`'s false arm.
+
+    Catches a regression making `:917` unconditional, which would append a bare
+    separator to every summary.
+    """
+    calls = []
+    s = seed_post_context(community_name='lifecycle')
+    seed_remote_moderator(s)
+
+    import app.shared.post as post_module
+    original = post_module.task_selector
+
+    def recorder(task_key, **kwargs):
+        calls.append(kwargs.get('summary'))
+        return original(task_key, **kwargs)
+
+    post_module.task_selector = recorder
+    try:
+        report_post(
+            s.post,
+            {'reason': 'spam', 'description': '', 'report_remote': True},
+            SRC_API,
+            auth=bearer(s.voter),
+        )
+    finally:
+        post_module.task_selector = original
+
+    assert calls == ['spam']
+
+
+def test_the_web_arm_returns_none_and_reads_the_form(db_session, app):
+    """`:822`'s false arm, `:836-839`'s form reads, and `:924`'s bare return.
+
+    The WEB arm takes a WTForms object, not a dict. Build a minimal stand-in
+    exposing `reasons_to_string`, `reasons.data`, `description.data` and
+    `report_remote.data`.
+    """
+    from types import SimpleNamespace
+
+    s = seed_post_context(community_name='lifecycle')
+    form = SimpleNamespace(
+        reasons=SimpleNamespace(data=['1']),
+        description=SimpleNamespace(data='unsolicited'),
+        report_remote=SimpleNamespace(data=False),
+        reasons_to_string=lambda data: 'spam',
+    )
+
+    with web_ctx(app, s.voter):
+        result = report_post(s.post, form, SRC_WEB)
+
+    assert result is None
+    rows = db.session.query(Report).all()
+    assert len(rows) == 1
+    assert rows[0].reasons == 'spam'
+
+
+def test_the_web_arm_escalates_on_reason_five(db_session, app):
+    """`:838`'s FIRST disjunct.
+
+    The WEB arm matches reason IDs where the API arm matches text. `'5'` is
+    `Minor abuse or sexualization` (app/post/forms.py:36) -- the same policy
+    whose API equivalent is broken by PC1.
+    """
+    from types import SimpleNamespace
+
+    s = seed_post_context(community_name='lifecycle')
+    seed_site_admin(s)
+    form = SimpleNamespace(
+        reasons=SimpleNamespace(data=['5']),
+        description=SimpleNamespace(data='x'),
+        report_remote=SimpleNamespace(data=False),
+        reasons_to_string=lambda data: 'Minor abuse or sexualization',
+    )
+
+    with web_ctx(app, s.voter):
+        report_post(s.post, form, SRC_WEB)
+
+    assert db.session.query(Notification).filter_by(
+        title='Suspicious content').count() == 1
+
+
+def test_the_web_arm_escalates_on_reason_six(db_session, app):
+    """`:838`'s SECOND disjunct.
+
+    `'6'` is `Sharing personal info - doxing` (app/post/forms.py:35) -- the WEB
+    arm's counterpart to `test_a_doxing_report_notifies_admins_through_the_api`.
+    A regression collapsing this disjunct into the first would still pass
+    `test_the_web_arm_escalates_on_reason_five` above, so this needs its own
+    witness.
+    """
+    from types import SimpleNamespace
+
+    s = seed_post_context(community_name='lifecycle')
+    seed_site_admin(s)
+    form = SimpleNamespace(
+        reasons=SimpleNamespace(data=['6']),
+        description=SimpleNamespace(data='x'),
+        report_remote=SimpleNamespace(data=False),
+        reasons_to_string=lambda data: 'Sharing personal info - doxing',
+    )
+
+    with web_ctx(app, s.voter):
+        report_post(s.post, form, SRC_WEB)
+
+    assert db.session.query(Notification).filter_by(
+        title='Suspicious content').count() == 1
+
+
+def test_the_web_arm_escalates_on_reason_seventeen_on_a_non_piefed_instance(db_session, app):
+    """`:838`'s THIRD disjunct, with both conjuncts true.
+
+    `'17'` is `AI content that needs flair` (app/post/forms.py:30). The WEB
+    arm's counterpart to `test_an_api_ai_flair_report_notifies_admins_on_a_non_piefed_instance`.
+    `post.community.instance` is `s.instance` because the community under
+    `seed_post_context` is local, so setting `s.instance.software` reaches
+    `:838`'s software conjunct directly.
+    """
+    from types import SimpleNamespace
+
+    s = seed_post_context(community_name='lifecycle')
+    seed_site_admin(s)
+    s.instance.software = 'lemmy'
+    db.session.commit()
+    form = SimpleNamespace(
+        reasons=SimpleNamespace(data=['17']),
+        description=SimpleNamespace(data='x'),
+        report_remote=SimpleNamespace(data=False),
+        reasons_to_string=lambda data: 'AI content that needs flair',
+    )
+
+    with web_ctx(app, s.voter):
+        report_post(s.post, form, SRC_WEB)
+
+    assert db.session.query(Notification).filter_by(
+        title='Suspicious content').count() == 1
