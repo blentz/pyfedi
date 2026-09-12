@@ -831,6 +831,12 @@ def seed_site_admin(s, name='siteadmin'):
 Add `ROLE_ADMIN` to the `app.constants` import and `Role, user_role` to the
 `app.models` import at the top of the file.
 
+**Name every test in this task for the API arm it exercises.** Task 7 adds WEB-arm
+counterparts for the same policy, and a duplicate `def test_...` name does not
+raise — Python rebinds it at collection and the earlier test silently stops
+running. Names here carry `_api_` or `_through_the_api`; Task 7's carry
+`_the_web_arm_`. Neither task may rely on the other having been careful.
+
 **Seeding a dedicated admin also makes the counts unambiguous**: `Site.admins()`
 returns exactly this one user, so `count == 1` means this admin and nobody
 else. Do not make `s.author` the admin — it is the reported post's author, and
@@ -877,8 +883,8 @@ def test_a_doxing_report_notifies_admins_through_the_api(db_session):
 
     report_post(
         s.post,
-        {'reason': 'Sharing personal info - doxing', 'description': 'x',
-         'report_remote': False},
+        {'reason': 'Sharing personal info - doxing',
+         'description': 'unsolicited', 'report_remote': False},
         SRC_API,
         auth=bearer(s.voter),
     )
@@ -912,7 +918,7 @@ def test_an_ordinary_api_report_does_not_notify_admins(db_session):
         title='Suspicious content').count() == 0
 
 
-def test_an_ai_flair_report_notifies_admins_on_a_non_piefed_instance(db_session):
+def test_an_api_ai_flair_report_notifies_admins_on_a_non_piefed_instance(db_session):
     """`:830`'s THIRD disjunct, with both conjuncts true.
 
     `:830` uses exact equality and never calls `.lower()`, which is why it
@@ -935,7 +941,7 @@ def test_an_ai_flair_report_notifies_admins_on_a_non_piefed_instance(db_session)
         title='Suspicious content').count() == 1
 
 
-def test_an_ai_flair_report_does_not_escalate_on_piefed(db_session):
+def test_an_api_ai_flair_report_does_not_escalate_on_piefed(db_session):
     """`:830`'s SECOND conjunct taken false.
 
     A PieFed instance handles its own flair, so the escalation is suppressed.
@@ -958,7 +964,7 @@ def test_an_ai_flair_report_does_not_escalate_on_piefed(db_session):
         title='Suspicious content').count() == 0
 
 
-def test_an_unmoderated_local_community_always_notifies_admins(db_session):
+def test_an_unmoderated_local_community_always_notifies_admins_through_the_api(db_session):
     """`:841`'s two-conjunct override and `:842`'s assignment.
 
     An unmoderated local community has no moderators to notify, so every report
@@ -1179,6 +1185,14 @@ Subject: `test: cover report_post's moderator loop and remote-instance filtering
 Target: `:892-924` — the admin loop, `:894`'s `already_notified` guard, `:903-909`'s remote-instance block, `:914`'s truthiness, `:916`'s description fork, `:921`'s return fork.
 
 **`:905` contains PC2's defect. Task 9 fixes it.** Cover the block as it is; do not assert the broken guard is correct.
+
+**Every test name in this task must start with `test_the_web_arm_` where it has an
+API counterpart in Task 5.** A duplicate `def test_...` name does not raise:
+Python rebinds it at collection and the Task 5 test silently stops running,
+with nothing in the output to say so. Task 5's names were made API-explicit for
+the same reason; do not rely on that alone. Run
+`grep -oE "^def (test_[a-z_]+)" tests/test_shared_post_lifecycle.py | sort | uniq -d`
+before committing and confirm it prints nothing.
 
 - [ ] **Step 1: Re-derive the line numbers**
 
