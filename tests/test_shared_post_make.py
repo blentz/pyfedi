@@ -750,10 +750,17 @@ def test_a_video_upload_is_accepted_when_video_uploads_are_enabled(db_session):
     check (`:464`) would also take the true arm and attempt to actually save
     and process the fake file.
 
-    The setting is restored in `finally` because it is process-global state,
-    not per-test: `cache.delete_memoized(get_setting)` at `app/utils.py:222`
-    is a no-op under `.env.test`'s `NullCache`, but the underlying `Settings`
-    row would otherwise leak into every later test in the session.
+    The setting is restored in `finally` as a defensive, conventional move
+    matching the rest of this suite (e.g. tests/test_utils_upload_video.py),
+    NOT because it would otherwise leak into a later test: isolation here is
+    already guaranteed by `db_session`'s teardown, which runs a `DELETE FROM`
+    every table in `db.metadata.sorted_tables` (tests/conftest.py:126-127)
+    including `Settings`, executed via `exec_driver_sql`
+    (tests/conftest.py:191) once this fixture closes. `cache.delete_memoized
+    (get_setting)` at `app/utils.py:222` cannot cause staleness here either,
+    for a different reason than teardown: the test config sets `CACHE_TYPE =
+    'NullCache'` (tests/conftest.py:68), so `get_setting`'s `@cache.memoize`
+    is inert and every call already reads the database directly.
     """
     s = seed_make_context()
 
