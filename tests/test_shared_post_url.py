@@ -1477,11 +1477,21 @@ class TestLoopsArm:
        is irrelevant here -- it is a sibling of the whole `:601` chain, and
        loops.video is not in its list either.)
 
-    `:636` IS UNCONDITIONAL AND GLOBAL, and two tests at the bottom of this
-    class measure both halves of that rather than asserting it in prose: a
-    filename with no '.jpg' passes through unchanged, and one containing
-    '.jpg' more than once has EVERY occurrence rewritten. Task 9's mutation
-    pass needs both to know which variants of that line are viable.
+    `:636` IS GLOBAL: `str.replace` with no `count` rewrites EVERY occurrence,
+    and `test_every_jpg_in_a_loops_thumbnail_is_rewritten` at the bottom of
+    this class measures that rather than asserting it in prose. It closes no
+    arc; it earns its place by a unique mutant kill, which is the standing
+    requirement for a test that adds no coverage. See its docstring for the
+    one mutant of `:636` that NO test in this class kills.
+
+    `:636` is also UNCONDITIONAL, but that fact is NOT testable from here and
+    this class no longer pretends otherwise. A revision of this class carried
+    a sixth test feeding a '.png' thumbnail and asserting it reached
+    `File.source_url` unrewritten; it was REMOVED because it killed nothing.
+    A filename with no '.jpg' yields the identical stored value whether `:636`
+    runs, is guarded, is count-limited or is deleted outright -- an input that
+    takes the same path under every variant, which is false-witness mechanism
+    4 in pure form.
     """
 
     def test_a_loops_url_is_typed_as_video_and_rewrites_the_thumbnail_to_mp4(
@@ -1656,47 +1666,50 @@ class TestLoopsArm:
         assert s.post.image_id is None
         assert File.query.count() == 0
 
-    def test_a_loops_thumbnail_with_no_jpg_reaches_the_file_unrewritten(
-            self, db_session, http_mock):
-        """`:636` IS UNCONDITIONAL: it runs on every filename that clears
-        `:635`, and `str.replace` on a string with no '.jpg' is a no-op.
-
-        Takes the SAME arcs as the first test (630->631, 633->634, 635->636);
-        it adds no coverage and is not here for coverage. It is here because
-        Task 9 mutates `:636`, and the viable variants differ depending on
-        whether the line is guarded. A '.png' thumbnail arriving in
-        `File.source_url` byte-for-byte is the measurement that says it is
-        not: `:637` stores whatever `:636` returned.
-
-        This assertion is a positive witness of `:636` running and returning
-        its input, not of `:636` being skipped -- the two are indistinguishable
-        from the outside HERE, which is precisely why the first test (where
-        they ARE distinguishable) carries the '.720p.mp4' kill and this one
-        only documents the no-op.
-        """
-        http_mock.head(LOOPS_URL).respond(200, headers={'Content-Type': 'text/html'})
-        _opengraph_page(http_mock, LOOPS_URL,
-                        og_image='https://cdn.loops.example/thumb.png')
-        s = _seed()
-
-        edit_post(_api_input(url=LOOPS_URL), s.post, POST_TYPE_LINK, SRC_API,
-                  user=s.user, from_scratch=True)
-
-        db.session.refresh(s.post)
-        assert s.post.type == POST_TYPE_VIDEO
-        file = db.session.get(File, s.post.image_id)
-        assert file.source_url == 'https://cdn.loops.example/thumb.png'
-
     def test_every_jpg_in_a_loops_thumbnail_is_rewritten(self, db_session, http_mock):
         """`:636` IS GLOBAL: `str.replace` with no count argument replaces
         EVERY occurrence, including one in a directory segment rather than the
         extension.
 
-        Same arcs as the first test; again not here for coverage but for the
-        mutation pass. `.replace('.jpg', '.720p.mp4', 1)` is a viable mutant of
-        `:636` that the first test CANNOT kill -- its filename contains one
-        '.jpg' -- and this test kills it, because the surviving second '.jpg'
-        would show up in `File.source_url`.
+        Same arcs as the first test (630->631, 633->634, 635->636); it closes
+        no arc and no statement, and a test that closes neither earns its place
+        only by a UNIQUE MUTANT KILL. This one has it.
+        `.replace('.jpg', '.720p.mp4', 1)` is a viable mutant of `:636` that
+        the first test CANNOT kill -- its filename holds a single '.jpg' -- and
+        this test kills it, because the surviving second '.jpg' shows up in
+        `File.source_url`.
+
+        A SECOND EXPECTED SURVIVOR, recorded here because this is the only test
+        in the class where the shape of the input could ever have caught it,
+        and because it must survive the deletion of any report file. MEASURED,
+        not reasoned: the four variants of `:636` were run over every og:image
+        this class feeds, in this container::
+
+            input             orig / guard              count=1            deleted
+            thumb.jpg         thumb.720p.mp4 (same)     thumb.720p.mp4     thumb.jpg
+            alt.jpg           alt.720p.mp4   (same)     alt.720p.mp4       alt.jpg
+            /thumbs/clip9.jpg    -- blocked by `:635`, never reaches `:636` --
+            a.jpg/b.jpg       a.720p.mp4/b.720p.mp4     a.720p.mp4/b.jpg   a.jpg/b.jpg
+
+            guard   -> killed by: NOTHING (survives)
+            count=1 -> killed by: this test
+            deleted -> killed by: the first test, the fallback test, this test
+
+        So a GUARD-ADDING mutant -- `if filename.endswith('.jpg'):` wrapped
+        around `:636` -- SURVIVES EVERY TEST IN THIS CLASS. Every filename that
+        clears `:635` here ends in '.jpg', including this test's
+        'a.jpg/b.jpg', so the guard is always true and the mutant is
+        behaviourally identical. Killing it needs a filename containing '.jpg'
+        WITHOUT ending in it, such as 'a.jpg/b.png'. Task 9's mutation pass
+        should record that mutant as EXPECTED SURVIVING rather than hunt a kill
+        this round does not provide.
+
+        (An earlier revision of this class claimed the first test killed the
+        guard mutant and carried a sixth test, a '.png' thumbnail, to pin
+        `:636`'s unconditionality. Both were wrong: the first test's input ends
+        '.jpg' so the guard passes, and the '.png' test killed no mutant at all
+        because a filename with no '.jpg' is invariant under all four variants.
+        The test was removed and the claim is corrected here.)
         """
         http_mock.head(LOOPS_URL).respond(200, headers={'Content-Type': 'text/html'})
         _opengraph_page(http_mock, LOOPS_URL,
