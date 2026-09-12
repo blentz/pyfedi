@@ -81,9 +81,9 @@ from app import db
 from app.constants import (
     POST_STATUS_SCHEDULED, POST_TYPE_ARTICLE, POST_TYPE_EVENT,
     POST_TYPE_IMAGE, POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_VIDEO,
-    SRC_API, SRC_WEB,
+    ROLE_ADMIN, SRC_API, SRC_WEB,
 )
-from app.models import Domain, Event, File, Poll, PollChoice
+from app.models import Domain, Event, File, Poll, PollChoice, Role
 from app.shared.post import edit_post
 from tests.factories import make_community_member, make_user
 from tests.test_shared_post_edit import _api_input, _make_admin, _seed, _web_form
@@ -124,6 +124,35 @@ def _unreadable_page(http_mock, url):
     assertion-kill.
     """
     http_mock.get(url).respond(404)
+
+
+def _make_is_admin(user):
+    """Make `user` satisfy `User.is_admin()` (app/models.py:1259-1265).
+
+    `_make_admin` (tests/test_shared_post_edit.py:219-241) IS NOT ENOUGH ON ITS
+    OWN, and finding that out is part of Task 2's job. That helper exists for
+    `Site.admins()`, whose filter is `user_role.c.role_id == ROLE_ADMIN`
+    (app/models.py:3999-4000), so all it has to get right is the Role row's
+    ID; it names the row `f'role-{ROLE_ADMIN}'`, i.e. 'role-4'.
+    `User.is_admin()` consults neither `Site.admins()` nor the role id:
+
+        if self.id == 1:
+            return True
+        for role in self.roles:
+            if role.name == 'Admin':
+                return True
+        return False
+
+    -- so it wants the NAME. Measured in this container on a user whose id is
+    not 1: after `_make_admin(u)`, `[r.name for r in u.roles]` is `['role-4']`
+    and `u.is_admin()` is False. This delegates to `_make_admin` for the row
+    and the association, then supplies the one thing it does not.
+    `tests/test_shared_post_lifecycle.py:143` builds the same combined shape
+    (`Role(id=ROLE_ADMIN, name='Admin', weight=0)`) in one step.
+    """
+    _make_admin(user)
+    db.session.get(Role, ROLE_ADMIN).name = 'Admin'
+    db.session.commit()
 
 
 class TestExistingUrlTypeDispatch:
@@ -233,3 +262,210 @@ class TestExistingUrlTypeDispatch:
 
         db.session.refresh(s.post)
         assert s.post.type == POST_TYPE_ARTICLE
+
+
+class TestStickyPermission:
+    """`:387`'s three-disjunct compound and the `post.sticky` write it guards.
+
+    THE WITNESS IS A SEEDED `True`. `:388` is
+    `post.sticky = False if src == SRC_API else input.sticky.data`, so under
+    SRC_API the permitted path always writes False -- and False is also what a
+    freshly made post already carries (measured: `_seed().post.sticky` is
+    `False`). Asserting `post.sticky is False` on a default post witnesses
+    nothing at all (false-witness mechanism 1). Every test here seeds
+    `post.sticky = True` first, so the permitted arm CHANGES it and the refused
+    arm LEAVES it.
+
+    NO TEST HERE MAY USE `_seed()`'s OWN USER, and this is a correction to the
+    brief rather than a stylistic choice. `User.is_admin()`
+    (app/models.py:1259-1265) returns True unconditionally for `self.id == 1`,
+    and `_seed()`'s user IS id 1 -- `make_community` hardcodes `user_id=1` and
+    the db_session teardown resets every sequence, so the first `make_user` in
+    a test gets id 1 (tests/test_shared_post_edit.py:196-199). Measured in this
+    container: `_seed().user.id` is 1 and `_seed().user.is_admin()` is True
+    BEFORE anything is done to it. A moderator test written on that user would
+    move the first and third disjuncts together and could not tell a swap
+    between them apart -- false-witness mechanism 5. Each test below therefore
+    builds its own second user (id 2, `is_admin()` False, measured) and asserts
+    the operands it is NOT exercising are false, inline.
+
+    ONLY TWO OF THE THREE OPERANDS CAN BE WITNESSED ALONE. `moderators()`
+    (app/models.py:716-722) admits a `CommunityMember` row on
+    `is_owner OR is_moderator`, and `is_moderator(user)` (`:740`) then tests
+    only `user_id` over that list -- so a row with `is_owner=True,
+    is_moderator=False` makes BOTH predicates true, and the second disjunct can
+    never be the one that decides. Task 2 verified this by construction, not by
+    reading: on such a row `is_owner` -> True and `is_moderator` -> True.
+    `test_an_owner_may_set_sticky` documents the subsumption rather than
+    isolating the operand, because isolating it is impossible.
+    """
+
+    def _seed_sticky(self):
+        s = _seed()
+        s.post.sticky = True
+        db.session.commit()
+        return s
+
+    def test_a_plain_member_may_not_set_sticky(self, db_session):
+        """All three disjuncts false -> `:389`. Arc 387->389.
+
+        The user is a second, unrelated account. It has to be: `_seed()`'s own
+        user is id 1, for which `User.is_admin()` short-circuits to True at
+        app/models.py:1260, so the third disjunct would be true and `:387`
+        would take its TRUE arm -- the exact opposite of what this test wants.
+        The second user is id 2 and carries no `CommunityMember` row, so
+        `moderators()` is empty and all three operands are false.
+        """
+        s = self._seed_sticky()
+        outsider = make_user(s.instance, 'outsider', local=True)
+
+        assert s.community.is_moderator(outsider) is False
+        assert s.community.is_owner(outsider) is False
+        assert outsider.is_admin() is False
+
+        edit_post(_api_input(), s.post, POST_TYPE_ARTICLE, SRC_API,
+                  user=outsider, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.sticky is True
+
+    def test_a_moderator_may_set_sticky(self, db_session):
+        """First disjunct alone: `is_moderator=True, is_owner=False`, so
+        `is_moderator(user)` is true and `is_owner(user)` is false. This is the
+        one operand that CAN be isolated.
+
+        The two inline assertions are what make the isolation real: the
+        moderator is a second user so `is_admin()` is False, which keeps the
+        third disjunct out of lockstep with the first.
+        """
+        s = self._seed_sticky()
+        mod = make_user(s.instance, 'mod', local=True)
+        make_community_member(mod, s.community, is_moderator=True)
+
+        assert s.community.is_owner(mod) is False
+        assert mod.is_admin() is False
+
+        edit_post(_api_input(), s.post, POST_TYPE_ARTICLE, SRC_API,
+                  user=mod, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.sticky is False
+
+    def test_an_owner_may_set_sticky(self, db_session):
+        """Second disjunct, WHICH CANNOT BE ISOLATED -- an owner row satisfies
+        `is_moderator` too. The inline assertion records that, so a reader does
+        not mistake this for an isolating witness.
+
+        The third disjunct IS isolated out, as everywhere in this class: the
+        owner is a second user, so `is_admin()` is False.
+        """
+        s = self._seed_sticky()
+        owner = make_user(s.instance, 'owner', local=True)
+        member = make_community_member(owner, s.community, is_moderator=False)
+        member.is_owner = True
+        db.session.commit()
+
+        assert s.community.is_moderator(owner) is True  # the subsumption
+        assert owner.is_admin() is False
+
+        edit_post(_api_input(), s.post, POST_TYPE_ARTICLE, SRC_API,
+                  user=owner, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.sticky is False
+
+    def test_an_admin_may_set_sticky(self, db_session):
+        """Third disjunct alone: no `CommunityMember` row exists, so the first
+        two are false and `user.is_admin()` is the only thing that can be true.
+
+        The admin is a SECOND user, made admin through `_make_is_admin`'s named
+        Role, deliberately and not for symmetry: on `_seed()`'s id-1 user
+        `is_admin()` is already True and no helper would be exercised at all,
+        so the test would witness the id short-circuit at app/models.py:1260
+        rather than anything a test set up. Here `is_admin()` is False until
+        the Role named 'Admin' is attached, which is what the first two
+        assertions and the helper's own docstring pin down.
+        """
+        s = self._seed_sticky()
+        admin = make_user(s.instance, 'anadmin', local=True)
+        _make_is_admin(admin)
+
+        assert s.community.is_moderator(admin) is False
+        assert s.community.is_owner(admin) is False
+        assert admin.is_admin() is True
+
+        edit_post(_api_input(), s.post, POST_TYPE_ARTICLE, SRC_API,
+                  user=admin, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.sticky is False
+
+
+class TestScheduledGate:
+    """`:413-416` -- the scheduled-post gate.
+
+    MUST USE THE WEB BRANCH. `:281` is a bare `scheduled_for = None` on the
+    SRC_API branch, so `:413`'s `if scheduled_for:` can never be true through
+    `_api_input`; only `:337`'s `scheduled_for = input.scheduled_for.data`
+    (SRC_WEB) can make it truthy. A scheduled test written against the API
+    branch would take `:413`'s false arm and witness nothing -- false-witness
+    mechanism 4.
+
+    `:414` reads `post.timezone`, which `:401` has just written from
+    `input.timezone.data`; `_web_form` defaults it to 'UTC'.
+
+    WHICH URL FIELD, AND WHICH HTTP ROUTES. `:320-321` is
+    `if type == POST_TYPE_LINK: url = input.link_url.data.strip()` -- for
+    POST_TYPE_LINK the SRC_WEB branch reads `link_url`, never `video_url`
+    (`video_url` is `:323`, POST_TYPE_VIDEO only). `_web_form`'s `link_url`
+    default is 'https://example.com/page'
+    (tests/test_shared_post_edit.py:152), so that is the one url these tests
+    register, and POST_TYPE_LINK is what is passed so `:321` is the line that
+    reads it.
+
+    Two routes per test, not one. `_seed()` leaves `post.url` None, so `:403`
+    is false and the FIRST `is_image_url` never runs; but `url` is truthy and
+    `from_scratch=True`, so `:565` opens and `:601`'s `is_image_url(url)`
+    issues a HEAD. The HEAD answers `text/html`, which makes `is_image_url`
+    False and drops control into `:641`'s generic arm, whose `opengraph_parse`
+    needs a GET -- served by `_unreadable_page`. The alternative (a HEAD of
+    `image/png` and no GET, fact 229's convention) was rejected: it takes
+    `:601`'s true arm, which calls `make_image_sizes` and would drag the
+    `chdir_upload` fixture and a real image payload into a class that is about
+    the scheduled gate and nothing else. `http_mock`'s `assert_all_called=True`
+    means both routes are proven to have been fetched.
+    """
+
+    def test_a_future_schedule_marks_the_post_scheduled(self, db_session, http_mock):
+        """`:415` true -> `:416`. THE POSITIVE CONTROL for the test below:
+        without it, `post.status` merely still holding its seeded value proves
+        nothing about whether `:415` ran."""
+        http_mock.head('https://example.com/page').respond(
+            200, headers={'Content-Type': 'text/html'})
+        _unreadable_page(http_mock, 'https://example.com/page')
+        s = _seed()
+        future = datetime.utcnow() + timedelta(days=2)
+
+        edit_post(_web_form(scheduled_for=future), s.post, POST_TYPE_LINK,
+                  SRC_WEB, user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.status == POST_STATUS_SCHEDULED
+
+    def test_a_schedule_already_in_the_past_does_not_mark_the_post_scheduled(
+            self, db_session, http_mock):
+        """`:415` false -> `:418`. Arc 415->418.
+
+        Differs from the control above in the DATE alone.
+        """
+        http_mock.head('https://example.com/page').respond(
+            200, headers={'Content-Type': 'text/html'})
+        _unreadable_page(http_mock, 'https://example.com/page')
+        s = _seed()
+        past = datetime.utcnow() - timedelta(days=2)
+
+        edit_post(_web_form(scheduled_for=past), s.post, POST_TYPE_LINK,
+                  SRC_WEB, user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.status != POST_STATUS_SCHEDULED
