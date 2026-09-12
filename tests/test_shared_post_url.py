@@ -75,6 +75,7 @@ apart from `:652` (`post.url = embed_url`). See TestLoopsArm for what does.
 from datetime import datetime, timedelta
 from io import BytesIO
 
+import httpx
 from PIL import Image
 from sqlalchemy import text
 
@@ -1097,3 +1098,261 @@ class TestVideoHostingSiteArm:
 
         db.session.refresh(s.post)
         assert s.post.type == POST_TYPE_LINK
+
+
+PIXELFED_URL = 'https://pixelfed.social/p/alice/1'
+
+
+class TestPixelfedArm:
+    """`:619-629` -- the pixelfed arm of the `:601`/`:619`/`:630`/`:641` chain.
+
+    THE HARNESS IS INVERTED relative to tests/test_shared_post_upload.py. That
+    file's rule (tests/README.md fact 229 point 3) is a HEAD reporting
+    `image/png` and NO GET route, because an image content type makes `:601`
+    true and `:601` never calls `opengraph_parse`. Reaching `:619` requires the
+    opposite on both halves: a HEAD reporting a NON-image type so `:601` is
+    false, and a GET route because `:621` WILL call `opengraph_parse` -- with
+    ONE measured exception, the scheme-less test at the bottom, whose GET never
+    leaves `app/utils.py` at all.
+
+    A REGISTERED DIVERGENCE, PINNED HERE AND DELIBERATELY NOT FIXED. The two
+    lines were read off the file rather than recalled::
+
+        404	        if post.url.startswith('https://pixelfed.social/') or post.url.startswith('https://pixelfed.uno/'):
+        619	        elif url.startswith('https://pixelfed.social') or url.startswith('pixelfed.uno'):
+
+    `:404` matches `'https://pixelfed.social/'` and `'https://pixelfed.uno/'`
+    -- both with a scheme and a trailing slash. `:619` matches
+    `'https://pixelfed.social'` (no trailing slash) and `'pixelfed.uno'` (NO
+    SCHEME AT ALL). The scheme-less disjunct is REACHABLE, not dead:
+    `is_image_url('pixelfed.uno/p/bob/2')` is False, measured in this container
+    twice over -- once with respx absent, where httpx itself raises
+    `httpx.UnsupportedProtocol` (a subclass of `httpx.TransportError` ->
+    `httpx.RequestError` -> `httpx.HTTPError`, printed from `__mro__`) so
+    `mime_type_using_head`'s handler at app/utils.py:345 returns `''`; and once
+    with respx present and that same exception installed as the route's
+    side effect. Either way `is_image_url` falls through to extension sniffing
+    and finds no image extension.
+
+    The two sites also read DIFFERENT VALUES: `:403` tests `post.url`, the url
+    the post already has, while `:619` tests `url`, the newly submitted one,
+    which `:618`/`:628`/`:640`/`:652` have not yet written. So this is not one
+    value checked twice with different strictness; it is two classifiers of the
+    same kind of thing applied at different points, disagreeing. Whether
+    scheme-less input should be accepted at all is a product question, and this
+    round has no standing to answer it. Both branches are pinned as they behave
+    today; the divergence is registered, not endorsed and not condemned.
+
+    WHY RESPX HAS TO BE TOLD TO RAISE, for the scheme-less test only. This is a
+    CORRECTION to the brief, which predicted respx would never see the request.
+    Measured: `respx.mock` patches httpx BELOW the point where
+    `httpx.Client._transport_for_url` would raise `UnsupportedProtocol`, so
+    with a router active the HEAD *does* reach respx, as
+    `<Request('HEAD', '/pixelfed.uno/p/bob/2')>`. Registering no route at all
+    therefore raises `AllMockedAssertionError`, which is neither
+    `httpx.HTTPError` nor `httpx.InvalidURL` and escapes app/utils.py:345.
+    Registering a normal 200 does not work either: httpx's own cookie jar then
+    hands the scheme-less url to `urllib.request.Request` and dies with
+    `ValueError: unknown url type: '/pixelfed.uno/p/bob/2'`
+    (httpx/_models.py:1106 and :1250), which is likewise not an
+    `httpx.HTTPError`. The only faithful mock is the exception production
+    actually produces, so the route's side effect IS
+    `httpx.UnsupportedProtocol`.
+    """
+
+    def test_a_pixelfed_url_is_typed_as_an_image_and_keeps_its_url(
+            self, db_session, http_mock):
+        """`:619` true -> `:620`; `:622` true -> `:623`; `:624` true -> `:625`,
+        `:626`, `:627`; then `:628`, `:629`.
+        Arcs 619->620, 622->623, 624->625; statements 620-629.
+
+        FOUR witnesses, because no one of them is unique to this arm:
+          - `post.type` is IMAGE -- also what `:617` writes, but `:601` is
+            false here, which the single registered HEAD (answering
+            `text/html`) and the absence of any `make_image_sizes` work
+            confirm.
+          - `post.body` ends with the 'Source: ' suffix -- `:629` is the ONLY
+            line in the function that appends it, so this is the arm's
+            signature.
+          - a `File` exists whose `source_url` is the og:image, not the post
+            url -- `:602`'s File would carry the post url instead.
+          - the File's `alt_text` is `''`, NOT the og:title, and that is a
+            CORRECTION to the brief, which offered alt_text as the fourth
+            witness for `:625`. Measured: this test first asserted
+            `alt_text == 'A photo'` and failed with `assert '' == 'A photo'`.
+            `:663-666` (`if url and post.image:` / `file.alt_text =
+            image_alt_text`) runs AFTER the arm and overwrites `:625`'s value
+            unconditionally, with `''` because `_api_input` supplies no
+            `image_alt_text` and `:262` defaults it. So alt_text witnesses
+            `:666`, never `:625`, and `:625`'s `shorten_string(...)` argument
+            is not observable in the final row at all.
+            `test_a_pixelfed_url_falls_back_to_og_image_url` is the
+            same-mechanism positive control for that claim: it passes a
+            non-empty `image_alt_text` and gets it back, so the `''` here is
+            `:666` writing rather than `:625` failing to.
+        """
+        http_mock.head(PIXELFED_URL).respond(200, headers={'Content-Type': 'text/html'})
+        _opengraph_page(http_mock, PIXELFED_URL,
+                        og_image='https://cdn.example.com/shot.jpg',
+                        og_title='A photo')
+        s = _seed()
+
+        edit_post(_api_input(url=PIXELFED_URL), s.post, POST_TYPE_LINK, SRC_API,
+                  user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.type == POST_TYPE_IMAGE
+        assert s.post.url == PIXELFED_URL
+        assert s.post.body.endswith('\n\nSource: ')
+        file = db.session.get(File, s.post.image_id)
+        assert file.source_url == 'https://cdn.example.com/shot.jpg'
+        assert file.alt_text == ''  # `:666` overwrote `:625`'s 'A photo'
+
+    def test_a_pixelfed_url_falls_back_to_og_image_url(self, db_session, http_mock):
+        """`:622`'s SECOND disjunct alone, and `:623`'s `or` fallback.
+
+        The page carries `og:image:url` and no `og:image`, so
+        `opengraph.get('og:image', '') != ''` is False and the block is
+        admitted by the second disjunct; `:623`'s
+        `opengraph.get('og:image') or opengraph.get('og:image:url')` then
+        returns None on its left operand and falls through to the right.
+        `'og:image:url'` is one of `parse_page`'s `tags_to_search`
+        (app/utils.py:3181), so it really does reach the dict.
+
+        Without this test the two disjuncts move only in lockstep and a swap
+        between them is undetectable -- false-witness mechanism 5.
+
+        ALSO THE POSITIVE CONTROL for the `alt_text == ''` assertion in the
+        test above. `og:title` is 'Fallback' here and `image_alt_text` is a
+        different, distinctive string; the row comes back carrying the
+        `image_alt_text`, which shows `:666` is what writes that column on this
+        path and that the `''` above is a write rather than an absence
+        (false-witness mechanism 3).
+        """
+        http_mock.head(PIXELFED_URL).respond(200, headers={'Content-Type': 'text/html'})
+        _opengraph_page(http_mock, PIXELFED_URL,
+                        og_image_url='https://cdn.example.com/fallback.jpg',
+                        og_title='Fallback')
+        s = _seed()
+
+        edit_post(_api_input(url=PIXELFED_URL, image_alt_text='supplied by the caller'),
+                  s.post, POST_TYPE_LINK, SRC_API, user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        file = db.session.get(File, s.post.image_id)
+        assert file.source_url == 'https://cdn.example.com/fallback.jpg'
+        assert file.alt_text == 'supplied by the caller'  # `:666`, not `:625`
+
+    def test_a_pixelfed_url_with_an_unreadable_page_still_keeps_its_url(
+            self, db_session, http_mock):
+        """`:622` false -> `:628`. Arc 622->628.
+
+        `_unreadable_page` makes `parse_page` return False at
+        app/utils.py:3195-3196, so `opengraph` is falsy and the whole File
+        block is skipped -- but `:620`, `:628` and `:629` still run.
+
+        THE POSITIVE CONTROL for 'no File' is the first test in this class,
+        which builds one through the same mechanism. `post.type`, `post.url`
+        and the 'Source: ' suffix are asserted here too, so this is not a
+        bare emptiness assertion (false-witness mechanism 3).
+
+        THIS TEST AND `test_a_site_relative_og_image_is_not_turned_into_a_file`
+        ASSERT THE SAME ABSENCE, and are told apart by which mutation kills
+        them rather than by their assertions. Here the input makes `:622`
+        false; there `:622` is true and `:624` is false. See that test's
+        docstring for the pair of mutations Task 9 must confirm.
+        """
+        http_mock.head(PIXELFED_URL).respond(200, headers={'Content-Type': 'text/html'})
+        _unreadable_page(http_mock, PIXELFED_URL)
+        s = _seed()
+
+        edit_post(_api_input(url=PIXELFED_URL), s.post, POST_TYPE_LINK, SRC_API,
+                  user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.type == POST_TYPE_IMAGE
+        assert s.post.url == PIXELFED_URL
+        assert s.post.body.endswith('\n\nSource: ')
+        assert s.post.image_id is None
+        assert File.query.count() == 0
+
+    def test_a_site_relative_og_image_is_not_turned_into_a_file(
+            self, db_session, http_mock):
+        """`:624` false -> `:628`. Arc 624->628.
+
+        Here `opengraph` IS truthy and `:623` DID produce a filename -- the
+        difference from the test above is that the filename starts with '/',
+        so `:624`'s `not filename.startswith('/')` is false.
+
+        THE TWO TESTS ASSERT THE SAME ABSENCE, deliberately, and are told apart
+        by which mutation kills them rather than by their assertions: forcing
+        `:624` true makes THIS test build a File (a kill, and the reason the
+        og:image here is a well-formed relative path rather than junk), while
+        forcing `:622` false makes the FIRST test lose one. Neither mutation
+        touches the other test. Task 9 must confirm both.
+        """
+        http_mock.head(PIXELFED_URL).respond(200, headers={'Content-Type': 'text/html'})
+        _opengraph_page(http_mock, PIXELFED_URL, og_image='/relative/shot.jpg',
+                        og_title='Relative')
+        s = _seed()
+
+        edit_post(_api_input(url=PIXELFED_URL), s.post, POST_TYPE_LINK, SRC_API,
+                  user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.image_id is None
+        assert File.query.count() == 0
+        assert s.post.url == PIXELFED_URL
+
+    def test_a_scheme_less_pixelfed_uno_url_takes_the_same_arm(
+            self, db_session, http_mock):
+        """`:619`'s SECOND disjunct, which carries no scheme at all.
+
+        PINS A REGISTERED DIVERGENCE. `:404` would NOT match this string --
+        it requires 'https://pixelfed.uno/' -- so the same input is classified
+        differently depending on which of the two dispatches sees it. The test
+        records today's behaviour; it does not endorse it. See the class
+        docstring.
+
+        THE ROUTING IS MEASURED, AND BOTH HALVES CORRECT THE BRIEF.
+
+        The HEAD: with a respx router active the request DOES reach respx (as
+        `HEAD /pixelfed.uno/p/bob/2`), so a route is required rather than
+        forbidden -- but it must RAISE, because a mocked 200 kills httpx's
+        cookie jar with `ValueError: unknown url type`. The side effect is the
+        exception unmocked httpx raises for this very url, so `:601`'s
+        `is_image_url` is False by the same mechanism as in production. See the
+        class docstring for the two measurements.
+
+        The GET: there is NO GET route, and that is not an oversight.
+        `opengraph_parse` at `:621` DOES run, but `get_request`
+        (app/utils.py:131-134) rejects the uri through
+        `is_invalid_get_request_uri` (app/utils.py:5494-5501: `furl(uri).host`
+        is empty for a scheme-less string, so it returns True) and raises
+        `httpx.HTTPError` before any transport is reached. `opengraph_parse`'s
+        `except Exception` (app/utils.py:3006-3007) swallows it and returns
+        None. Measured: the router recorded 0 calls and logged
+        'invalid get request pixelfed.uno/p/bob/2'. So `:622` is FALSE here and
+        this test travels 622->628, the same arc as
+        `test_a_pixelfed_url_with_an_unreadable_page_still_keeps_its_url` --
+        by a different mechanism (a refused uri rather than a 404 page), which
+        is why it cannot substitute for that test and does not try to.
+
+        `http_mock`'s `assert_all_called=True` is load-bearing twice over: it
+        proves the HEAD was issued, and, with only one route registered, a GET
+        that ever did escape to the transport would raise
+        `AllMockedAssertionError` instead of passing unnoticed.
+        """
+        bare = 'pixelfed.uno/p/bob/2'
+        http_mock.head(url__regex=r'.*').mock(
+            side_effect=httpx.UnsupportedProtocol(
+                "Request URL is missing an 'http://' or 'https://' protocol."))
+        s = _seed()
+
+        edit_post(_api_input(url=bare), s.post, POST_TYPE_LINK, SRC_API,
+                  user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.type == POST_TYPE_IMAGE
+        assert s.post.url == bare
+        assert s.post.body.endswith('\n\nSource: ')
