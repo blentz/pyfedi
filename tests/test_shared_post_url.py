@@ -72,6 +72,7 @@ url itself -- and why `post.url` alone cannot tell `:640` (`post.url = url`)
 apart from `:652` (`post.url = embed_url`). See TestLoopsArm for what does.
 """
 
+import linecache
 import warnings
 from datetime import datetime, timedelta
 from io import BytesIO
@@ -1241,16 +1242,35 @@ class TestPixelfedArm:
             non-empty `image_alt_text` and gets it back, so the `''` here is
             `:666` writing rather than `:625` failing to.
 
-        AN EXPECTED SURVIVOR, NOT A HOLE. Because `:666` overwrites the column,
-        a mutation of `:625`'s `alt_text=shorten_string(opengraph.get('og:title'),
-        295)` -- the argument, not the line -- WILL SURVIVE this test and every
-        other test in this class, and Task 9's mutation pass should record it as
-        expected rather than chase it. The `source_url=filename` half of the
-        same line IS killed: this test and
+        SURVIVORS IN THIS CLASS, AND THE TWO HALVES OF `:625`'s ALT_TEXT
+        ARGUMENT MUST BE NAMED SEPARATELY. Because `:666` overwrites the
+        column, a mutation of `:625`'s
+        `alt_text=shorten_string(opengraph.get('og:title'), 295)` survives this
+        test and every other test IN THIS CLASS. Outside it the two halves now
+        part company:
+
+          - THE `og:title` OPERAND IS KILLED, and this is an UPDATE to an
+            earlier revision of this note, which said closing it "would need an
+            assertion taken before `:663` runs, or a change to `app/`". Neither
+            turned out to be necessary.
+            `TestPollAndEventTail::test_an_unflushed_thumbnail_is_not_found_by_its_own_foreign_key`
+            (at the bottom of this file) drives a BARE-DOMAIN pixelfed url, on
+            which `:659`'s `calculate_cross_posts` returns at
+            app/models.py:2362 before it can autoflush, so `post.image_id` is
+            still None at `:664`, `:665` is false and `:666` never runs. That
+            test asserts `alt_text == 'A photo'`, i.e. `:625`'s own value, so
+            the og key `:625` reads IS observable there.
+          - THE `295` WIDTH IS STILL AN EQUIVALENT MUTANT and Task 9 should NOT
+            hunt a kill for it. The og:title on that path is 'A photo', seven
+            characters, so `shorten_string` shortens nothing and any width
+            above seven produces the same string. No test in this file feeds an
+            og:title longer than 295 characters on a path where `:666` does not
+            overwrite, which is what a kill would require.
+
+        The `source_url=filename` half of the same line IS killed from inside
+        this class: this test and
         `test_a_pixelfed_url_falls_back_to_og_image_url` pin it to two
-        different og keys. Closing the alt_text half would need an assertion
-        taken before `:663` runs, or a change to `app/`, and neither is in this
-        round's scope.
+        different og keys.
         """
         http_mock.head(PIXELFED_URL).respond(200, headers={'Content-Type': 'text/html'})
         _opengraph_page(http_mock, PIXELFED_URL,
@@ -2300,6 +2320,20 @@ class TestGenericOpengraphArm:
 BARE_PIXELFED_URL = 'https://pixelfed.social'
 
 
+def _source_of(warning):
+    """The stripped SOURCE LINE a recorded warning is attributed to.
+
+    A warning carries `filename` and `lineno`; asserting on the NUMBER hard-codes
+    a production line and rots the moment anything above it moves. This reads the
+    line back instead, so the assertion pins WHICH STATEMENT raised the warning by
+    what that statement says. `checkcache` first, because `linecache` is a
+    process-wide cache that coverage and the warnings machinery have already
+    populated from this same file.
+    """
+    linecache.checkcache(warning.filename)
+    return linecache.getline(warning.filename, warning.lineno).strip()
+
+
 class TestPollAndEventTail:
     """`:662-703` -- five arms whose LINES all run and whose branches do not.
 
@@ -2380,8 +2414,15 @@ class TestPollAndEventTail:
         reconciliation is the url's PATH:
 
           - `post.image = file` (`:626`) is a RELATIONSHIP write. `post.image`
-            is truthy the instant it is assigned, but `post.image_id`
-            (app/models.py:559) is only synced at FLUSH.
+            is truthy the instant it is assigned, but `post.image_id` is only
+            synced at FLUSH. The pair is `Post.image_id` at app/models.py:1705
+            and `Post.image` at app/models.py:1764 -- re-derived with numbered
+            output, because `Community` carries a NEAR-IDENTICAL pair at
+            app/models.py:559 and :638 (`class Community` opens at :555,
+            `class Post` at :1700) and an earlier revision of this docstring
+            cited the Community lines by mistake. The two differ even in
+            loader strategy: `Post.image` is `lazy='joined'`, `Community.image`
+            is not.
           - `:659` `post.calculate_cross_posts(url_changed=url_changed)` is
             the only thing between `:626` and `:663` that can emit SQL, and
             SQL is what autoflushes. For a url WITH a path it queries, the
@@ -2389,24 +2430,42 @@ class TestPollAndEventTail:
             that is Task 7's case, and it is the test immediately below.
           - For a url that is a BARE DOMAIN it returns first, at
             app/models.py:2362 `if self.url.count('/') < 3 or ...: return`,
-            having touched only already-loaded attributes. NO SQL, NO
-            autoflush, so `post.image_id` is still None at `:664`.
+            having touched only already-loaded attributes -- `self.url` and
+            `self.cross_posts`, and `cross_posts` is an ARRAY COLUMN
+            (app/models.py:1745), not a relationship, so reading it is not a
+            lazy load. NO SQL, NO autoflush, so `post.image_id` is still None
+            at `:664`.
 
         `File.query.get(None)` then returns None rather than raising -- probed
         in this container: `PROBE File.query.get(None) -> None`, with
         `SAWarning: fully NULL primary key identity cannot load any object.`
 
-        THAT WARNING IS THIS TEST'S PRIMARY WITNESS, and it is the only
-        assertion here that separates `:665` FALSE from `:663` FALSE. It is
-        raised by SQLAlchemy only when a `get()` is handed an all-NULL primary
-        key, and it is attributed to the calling line, so
-        `filename.endswith('app/shared/post.py') and lineno == 664` says
-        exactly `:664` ran and was handed None -- i.e. `:663` was TRUE and
-        `:665` was FALSE. Measured: `PROBE hits [('/app/app/shared/post.py',
-        664, 'fully NULL primary key identity cannot load any object...')]`.
-        `:438` is the function's only other `File.query.get(post.image_id)`
-        and `from_scratch=True` closes the whole `:421-459` block, so `:664`
-        is the only candidate.
+        THAT WARNING IS THIS TEST'S PRIMARY WITNESS. It is raised by
+        SQLAlchemy only when a `get()` is handed an all-NULL primary key, and
+        it is attributed to the calling line, so it says `:664` RAN and was
+        handed None. Measured: `PROBE hits [('/app/app/shared/post.py', 664,
+        'fully NULL primary key identity cannot load any object...')]`. `:438`
+        is the function's only other `File.query.get(post.image_id)` and
+        `from_scratch=True` closes the whole `:421-459` block, so `:664` is
+        the only candidate; the assertion pins the line by SOURCE TEXT rather
+        than by number anyway, and `:664`'s `file = ...` and `:438`'s
+        `remove_file = ...` are distinguished by an exact `.strip()` compare
+        (a substring test would NOT separate them -- `:664`'s whole line is a
+        suffix of `:438`'s).
+
+        WHAT THE WARNING BUYS, STATED PRECISELY, because an earlier revision
+        of this docstring overclaimed that it was "the only assertion that
+        separates `:665` FALSE from `:663` FALSE". That is untrue of STATE:
+        both arms leave the alt_text at `:625`'s value, but only a true `:663`
+        leaves `post.image_id` pointing at a row, so
+        `assert s.post.image_id is not None` already separates them on state.
+        What the warning adds is DIRECTNESS -- it is the only assertion here
+        that observes `:664` executing and what it was given, rather than
+        inferring it from state the commit at `:734` produced afterwards. That
+        is a claim about the MUTATION sense rather than about this test's
+        verdict: a mutant that changes what `:664` is handed while leaving the
+        same final row is visible to the warning and invisible to both state
+        assertions.
 
         The alt_text is the second witness, and alone it would be a false
         witness: 'A photo' is what `:625` wrote, and `post.image` being falsy
@@ -2433,7 +2492,7 @@ class TestPollAndEventTail:
         null_pk = [w for w in caught
                    if 'fully NULL primary key' in str(w.message)
                    and w.filename.endswith('app/shared/post.py')
-                   and w.lineno == 664]
+                   and _source_of(w) == 'file = File.query.get(post.image_id)']
         assert len(null_pk) == 1
 
         db.session.refresh(s.post)
