@@ -11085,11 +11085,11 @@ in this section.
 |---|---|---|---|---|
 | D452 | `app/shared/post.py:903-909` | **Correction to Task 9's own report, not a new finding.** Task 9's report credited Task 7's two tests with confirming "no regression" at `:905-906` after PC2's fix. They cannot: both of Task 7's tests use a LOCAL community, so `:904`'s `if not post.community.is_local():` is False and neither `:905` nor `:906` executes in either of them -- exactly as Task 7's own report and its reviewer both already documented (Task 7's report: "`:905-906` and `:908-909` are never executed by any test"). Task 7's two tests are evidence for `:903` and for `:907-909`'s reachability question, and none at all for `:905-906`'s CORRECTNESS. **The only test reaching `:905-906` in this round is Task 9's own** (`test_a_remote_communitys_instance_is_flagged_even_when_ids_collide`), which is also PC2's fix's sole witness. This correction is recorded here rather than repeated in this round's own summary. | correction | `progress.md` ("every task 7 test runs with a LOCAL community, so `:904` is false and `:905-906` never execute. PC2's fix cannot change a task 7 result."); `task-7-review.md` (the reviewer's independent confirmation of the same fact, pre-dating Task 9) |
 
-### 17. Group C's remaining gap: `:905`'s False arm is the one arc no test in this round exercises -- D453
+### 17. Group C's last arc: `:905`'s False arm, registered open and then CLOSED -- D453
 
 | # | site | defect | status | evidence |
 |---|---|---|---|---|
-| D453 | `app/shared/post.py:905-906` (arc `[905, 907]`) | **Open, registered rather than closed -- this task's write scope excludes test files.** `report_post` measures 100% statements but 97.22% branches (35/36); the one missing arc is `905 -> 907`, the False arm of `if post.community.instance_id not in remote_instance_ids:` -- the case where the community's instance id is ALREADY in the set before this line runs, so `:906`'s add is skipped. No test across `test_shared_post_lifecycle.py`, `_moderation.py`, `_interactions.py` or `_edit.py` constructs that state; PC2's own collision test (**D438**) puts the COLLISION on the moderator's instance id, not the community's, and reaches only the True arm. **Almost certainly equivalent, by the identical argument that governs `:908` in D448's UNCORRECTED half**: `:905`'s guard tests membership in the exact set `:906` unconditionally adds to, and `set.add` of a present value is a no-op, so removing the guard entirely would produce the same final `remote_instance_ids` either way. **Unlike `:908`, this specific claim has not been checked against a mutation that changes WHAT is compared rather than WHETHER it is guarded** -- D448's correction shows that kind of check is exactly what turns a true equivalence claim about one guard's own two arms into a false one about a differently-mutated version of the same line, and that check was never run against `:905`. Left open for a future round with test-file scope over this module, rather than asserted closed on an unverified analogy. | open; likely equivalent, unverified | `/tmp/post36.json`'s `functions['report_post']` summary (`missing_branches: 1`, `percent_branches_covered: 97.22`) and `missing_branches` list (`[905, 907]`), read via `podman-compose ... exec test-runner python -c ...` at `2cdab539`; **D448** for the verified half of the same argument |
+| D453 | `app/shared/post.py:905-906` (arc `[905, 907]`) | **CLOSED at `01b44dcc`, after being registered open at `85a634d9`.** The measuring task's write scope excluded test files, so it registered the gap and reported it BEFORE raising the floor rather than rounding past it; a follow-up with test-file scope then closed it. `report_post` measures 100% statements but 97.22% branches (35/36); the one missing arc is `905 -> 907`, the False arm of `if post.community.instance_id not in remote_instance_ids:` -- the case where the community's instance id is ALREADY in the set before this line runs, so `:906`'s add is skipped. No test across `test_shared_post_lifecycle.py`, `_moderation.py`, `_interactions.py` or `_edit.py` constructs that state; PC2's own collision test (**D438**) puts the COLLISION on the moderator's instance id, not the community's, and reaches only the True arm. **Almost certainly equivalent, by the identical argument that governs `:908` in D448's UNCORRECTED half**: `:905`'s guard tests membership in the exact set `:906` unconditionally adds to, and `set.add` of a present value is a no-op, so removing the guard entirely would produce the same final `remote_instance_ids` either way. **Unlike `:908`, this specific claim has not been checked against a mutation that changes WHAT is compared rather than WHETHER it is guarded** -- D448's correction shows that kind of check is exactly what turns a true equivalence claim about one guard's own two arms into a false one about a differently-mutated version of the same line, and that check was never run against `:905`. So the equivalence claim was NOT relied on. `test_the_communitys_instance_is_not_re_added_when_already_present` now reaches the arc directly: a non-local moderator on the community's OWN instance puts that instance id into `remote_instance_ids` via `:890` under `report_remote=True`, the community's `ap_id` AND `ap_profile_id` are overridden so `:904` is true, and the suspect stays local so `:907-909` contribute nothing. Its docstring states that it pins an ARC rather than a behavioural difference -- both arms leave `remote_instance_ids` identical -- and that this does not excuse a mutant swapping WHICH set is tested, which is D448's distinction and is what D438's collision test catches. Re-measurement confirms `report_post`'s range `821-926` now reports `[]` missing branches, 36/36 arcs. | CLOSED | `/tmp/post36.json`'s `functions['report_post']` summary (`missing_branches: 1`, `percent_branches_covered: 97.22`) and `missing_branches` list (`[905, 907]`), read via `podman-compose ... exec test-runner python -c ...` at `2cdab539`; **D448** for the verified half of the same argument |
 
 Groups D and E remain: **Group D -- `make_post:163-249`.** **Group E --
 `edit_post:250-754`.** It owns **D422**'s third predicate at `:387`, and it is
@@ -11101,8 +11101,9 @@ lifecycle asymmetries; **D442** for the three admin predicates, now amended
 into `tests/README.md` fact 216 rather than left as a fourth contradicting
 fact; **D446-D449** for the mutation-pass methodology corrections, particularly
 **D448**'s narrowed equivalence claim, which the next round should apply
-skeptically rather than by analogy; **D453** for the one open arc this round
-did not close.
+skeptically rather than by analogy; **D453** for the last arc, registered open by the
+measuring task and closed by a follow-up rather than waved through on an
+unverified equivalence argument.
 
 **Next free number: D454.** D437-D453 were taken by this round -- **D437**
 PC1, the minor-abuse escalation, fixed and observed failing pre-fix; **D438**
@@ -11123,9 +11124,11 @@ assertion, drawn from `:799`; **D448** the corrected equivalence claim at
 equivalent; **D449** `:841`'s conjunct surviving three tasks' fixtures; **D450**
 `:875`'s guard being unreachable in production; **D451** the four-item
 false-witness checklist; **D452** a correction to Task 9's own report,
-overclaiming coverage of `:905-906` from Task 7's tests; **D453** the one
-branch arc Group C leaves open. The module's floor rose 64 -> 77 and the
-module is NOT closed -- Groups D and E remain. If you take D454, say so here
+overclaiming coverage of `:905-906` from Task 7's tests; **D453** Group C's last
+branch arc, registered open and then closed. Group C IS closed: zero missing
+statements, zero missing arcs across `delete_post`, `restore_post` and
+`report_post`. The module's floor rose 64 -> 77 and the MODULE is not closed --
+Groups D (`make_post`) and E (`edit_post`) remain. If you take D454, say so here
 in the change that takes it.
 
 ## Ratchet gotchas
