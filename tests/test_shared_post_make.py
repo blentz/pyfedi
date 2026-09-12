@@ -158,6 +158,14 @@ def test_an_article_post_is_created_through_the_web_arm(db_session, app):
     would still return it. `notify_about_post` is left to run for real here
     (Probe C found it harmless against a community/author with no followers)
     rather than stubbed, so this test also witnesses `:238`'s true arm.
+
+    `assert result is rows[0]` is load-bearing, not decorative: `result is not
+    None` alone is true of a two-tuple too, so a mutation of `:243`
+    (`if src == SRC_API:` -> `if src == SRC_WEB:`) that sends this SRC_WEB
+    call down `:244`'s `return user.id, post` arm instead of `:246`'s bare
+    return survived with only that check -- verified empirically. Identity
+    against the queried row additionally pins the docstring's "same object"
+    claim, which nothing here checked before.
     """
     s = seed_make_context()
 
@@ -169,6 +177,7 @@ def test_an_article_post_is_created_through_the_web_arm(db_session, app):
     assert len(rows) == 1
     assert rows[0].user_id == s.author.id
     assert rows[0].title == 'a title'
+    assert result is rows[0]
 
 
 def test_the_api_arm_returns_the_user_id_and_the_post(db_session):
@@ -1069,3 +1078,140 @@ def test_an_unbanned_domain_lets_edit_post_run(db_session, http_mock):
 
     assert calls == [True]
     assert db.session.query(Post).count() == 1
+
+
+def test_an_api_call_is_authorised_against_its_own_bearer_token(db_session):
+    """`:165`'s `authorise_api_user` call actually determines WHICH user
+    posts, not merely that `can_create_post` (`:187`) refuses someone.
+
+    Security-relevant mutation, verified empirically: replacing `:165` with
+    `user = User.query.order_by(User.id).first()` -- skipping authorisation
+    entirely but still yielding a real user, no crash -- passed all 29 other
+    tests in this file. Every one of them passes `bearer(s.author)`, and
+    `s.author` is also the FIRST (and in most of them the only) user
+    `seed_make_context` creates, so a mutant that ignores the bearer token
+    and substitutes "the first user in the table" is indistinguishable from
+    correct code against every existing fixture -- exactly the shape of hole
+    sub-project 36 found in `restore_post`.
+
+    `intruder` is created AFTER `s.author`, so `.order_by(User.id).first()`
+    still returns the author under the mutation, and is left UNKEYED
+    (`with_keys` defaults to False) rather than banned or unverified:
+    `authorise_api_user` (app/utils.py:3623-3624) itself rejects a banned or
+    unverified user's token with 'incorrect_login' before `make_post` is ever
+    reached -- the same confound `test_an_unverified_user_cannot_make_a_post`
+    documents above -- so this test would fail against CORRECT code too if it
+    used either. A missing `private_key` is refused only by `can_create_post`
+    (app/utils.py:2505-2506, the same check `seed_make_context`'s own
+    docstring names as the reason the shared author is minted WITH keys),
+    which the bearer-token layer never inspects. So under real
+    `authorise_api_user`, the token identifies `intruder`, and `:187` refuses
+    with the assertion below; under the mutation, `intruder`'s token is
+    ignored, the keyed (permitted) author is substituted instead, and the
+    post is created -- this `pytest.raises` would then fail to raise at all,
+    which is the mutation's actual failure mode, not merely "no post was
+    created" (a broken fixture, e.g. a typo'd fixture name, produces that
+    too, which is why the message is asserted specifically rather than only
+    the row count).
+    """
+    s = seed_make_context()
+    intruder = make_user(s.instance, 'intruder', local=True)
+    db.session.commit()
+
+    with pytest.raises(Exception, match='not permitted'):
+        make_post(_api_input(), s.community, POST_TYPE_ARTICLE, SRC_API,
+                  auth=bearer(intruder))
+
+    assert db.session.query(Post).count() == 0
+
+
+def test_a_video_posts_own_url_is_checked_before_edit_post_runs(db_session, app):
+    """`:176`'s video-url assignment, isolated from `edit_post`'s identical
+    re-derivation (`:321-327`/`:565-569`) by the same recorder technique as
+    `test_a_banned_domain_is_refused_before_any_row_is_created`.
+
+    Verified empirically as a real hole: swapping `:176`'s constant to
+    `elif type == POST_TYPE_LINK:` (so the VIDEO arm falls through to `:179`'s
+    `url = None`) passed all 29 other tests. `make_post`'s own local `url` at
+    `:176` never reaches the Post -- `edit_post` re-derives it independently
+    at `:323` and re-runs the identical domain check at `:565-569` -- so with
+    `edit_post` left to run for real (as it is in every other web-arm url
+    test), a `None` url from a broken `:176` merely means `edit_post` raises
+    the SAME message one call later, an indistinguishable false pass by
+    message alone. `link_url` is set to an UNBANNED host and `video_url` to a
+    BANNED one, so a `:176` that (correctly or via this fault) reads the wrong
+    field is also distinguishable by WHICH host's name appears -- but the
+    recorder is what proves WHEN the raise happened: `calls == []` only if
+    `make_post`'s own `:176`/`:190`/`:194`/`:195` refused before `:231` ever
+    delegated, which is what the mutation defeats even though the final
+    exception message it produces is identical.
+    """
+    calls = []
+    s = seed_make_context()
+    for host, banned in (('okvideohost.example', False), ('badvideohost.example', True)):
+        d = make_domain(host)
+        d.banned = banned
+    db.session.commit()
+    form = _web_form(link_url='https://okvideohost.example/page',
+                      video_url='https://badvideohost.example/v.mp4')
+
+    original = post_module.edit_post
+
+    def recorder(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+
+    post_module.edit_post = recorder
+    try:
+        with web_ctx(app, s.author):
+            with pytest.raises(Exception, match='badvideohost.example is blocked by admin'):
+                make_post(form, s.community, POST_TYPE_VIDEO, SRC_WEB)
+    finally:
+        post_module.edit_post = original
+
+    assert calls == []
+    assert db.session.query(Post).count() == 0
+
+
+def test_an_unbanned_video_url_lets_edit_post_run(db_session, app, http_mock):
+    """Positive control for
+    `test_a_video_posts_own_url_is_checked_before_edit_post_runs`.
+
+    That test's `calls == []` is an emptiness assertion, and an empty list is
+    also what a recorder that never installed would produce (D451 mechanism
+    3) -- nothing about an empty `calls` on its own proves `:176`/`:195`
+    refused early. This test uses the IDENTICAL recorder shape against an
+    unbanned video host: `:195` does not fire, `:231` is reached, and the
+    recorder records exactly one call on its way to delegating to the real
+    `edit_post`. `calls == [True]` here is the contrast that makes
+    `calls == []` there mean something.
+
+    Needs `http_mock`: nothing raises before `:231` delegates, so `edit_post`
+    reaches a real url and `is_image_url` fires one HEAD via
+    `mime_type_using_head` (app/utils.py:270); the response is not an image
+    and the host is neither pixelfed nor loops.video, so `opengraph_parse`
+    fires one GET (`:642`).
+    """
+    calls = []
+    s = seed_make_context()
+    http_mock.head('https://ok-video.example/v.mp4').respond(200, headers={'Content-Type': 'video/mp4'})
+    http_mock.get('https://ok-video.example/v.mp4').respond(200, html='<html></html>')
+    form = _web_form(link_url='https://unused.example/page',
+                      video_url='https://ok-video.example/v.mp4')
+
+    original = post_module.edit_post
+
+    def recorder(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+
+    post_module.edit_post = recorder
+    try:
+        with web_ctx(app, s.author):
+            post = make_post(form, s.community, POST_TYPE_VIDEO, SRC_WEB)
+    finally:
+        post_module.edit_post = original
+
+    assert calls == [True]
+    assert db.session.query(Post).count() == 1
+    assert post.url == 'https://ok-video.example/v.mp4'
