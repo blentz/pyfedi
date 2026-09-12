@@ -231,3 +231,135 @@ def test_restoring_federates_unconditionally(db_session):
         post_module.task_selector = original
 
     assert calls == ['restore_post']
+
+
+def test_deleting_through_the_api_sets_the_flag_and_attributes_it(db_session):
+    """`:756`'s true arm, `:771`'s flag, `:772`'s deleted_by, `:791`'s return.
+
+    `:758` authorises with `id_match=post.user_id`, so the actor must be the
+    post's author. Catches a regression dropping `:772`, which would delete the
+    post without recording who did it.
+    """
+    s = seed_post_context(community_name='lifecycle')
+
+    user_id, post = delete_post(s.post.id, False, SRC_API, bearer(s.author))
+
+    assert user_id == s.author.id
+    db.session.refresh(s.post)
+    assert s.post.deleted is True
+    assert s.post.deleted_by == s.author.id
+
+
+def test_deleting_decrements_both_counters_and_touches_last_seen(db_session):
+    """`:773`'s author.post_count, `:774`'s last_seen, `:775`'s community count.
+
+    `:774` has no counterpart in `restore_post`, which is one of the three
+    asymmetries this round registers rather than fixes. Catches a regression
+    dropping any of the three.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    s.post.author.post_count = 5
+    s.community.post_count = 7
+    s.post.author.last_seen = None
+    db.session.commit()
+
+    delete_post(s.post.id, False, SRC_API, bearer(s.author))
+
+    db.session.refresh(s.post.author)
+    db.session.refresh(s.community)
+    assert s.post.author.post_count == 4
+    assert s.community.post_count == 6
+    assert s.post.author.last_seen is not None
+
+
+def test_the_celery_path_attributes_the_deletion_to_user_one(db_session):
+    """`:760`'s FALSE arm and `:763`'s `user_id = 1`.
+
+    This is the live maintenance-task path. `app/shared/tasks/maintenance.py:150`
+    and `:185` call `delete_post` with SRC_WEB and auth=None from inside Celery
+    task bodies, where Flask-Login's `current_user` proxy resolves to None. No
+    `web_ctx` here -- the absence of a request context IS the condition under
+    test.
+
+    Catches a regression changing `:760` to `current_user.is_authenticated`,
+    which would raise on a None proxy and break both maintenance tasks.
+    """
+    s = seed_post_context(community_name='lifecycle')
+
+    delete_post(s.post.id, False, SRC_WEB, None)
+
+    db.session.refresh(s.post)
+    assert s.post.deleted is True
+    assert s.post.deleted_by == 1
+
+
+def test_the_web_path_with_a_logged_in_user_attributes_to_them(db_session, app):
+    """`:760`'s TRUE arm and `:761`'s `current_user.id`.
+
+    The counterpart of the test above, and the reason `:760` is a fork rather
+    than dead code. Catches a regression hardcoding `:763`'s fallback.
+    """
+    s = seed_post_context(community_name='lifecycle')
+
+    with web_ctx(app, s.voter):
+        result = delete_post(s.post.id, False, SRC_WEB, None)
+
+    assert result is None
+    db.session.refresh(s.post)
+    assert s.post.deleted_by == s.voter.id
+
+
+def test_deleting_a_post_with_a_url_tears_down_its_cross_post_links(db_session):
+    """`:768`'s true arm and `:769`'s `calculate_cross_posts(delete_only=True)`.
+
+    `delete_only=True` reaches app/models.py:2350-2356, which clears this
+    post's `cross_posts` and removes this post's id from each sibling that
+    listed it. The assertions are on cross_posts rather than on `deleted`,
+    because `deleted` is set at `:771` on every path: a test asserting only
+    that would pass with `:769` deleted outright.
+
+    Catches a regression dropping `:769`, after which a deleted post would stay
+    listed in its siblings' cross_posts and keep appearing as a cross-post of a
+    post that no longer exists.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    sibling = make_post(s.community, s.voter, 'https://local.example/p/2')
+    sibling.url = 'https://example.com/article'
+    s.post.url = 'https://example.com/article'
+    s.post.cross_posts = [sibling.id]
+    sibling.cross_posts = [s.post.id]
+    db.session.commit()
+
+    delete_post(s.post.id, False, SRC_API, bearer(s.author))
+
+    db.session.refresh(s.post)
+    db.session.refresh(sibling)
+    assert s.post.cross_posts == []
+    assert sibling.cross_posts == []
+
+
+def test_deleting_builds_no_new_cross_post_links(db_session):
+    """The `delete_only=True` ARGUMENT at `:769`, not merely the call.
+
+    app/models.py:2359 returns as soon as the teardown is done when
+    `delete_only` is set. WITHOUT the argument the function falls through to
+    :2371's search and would LINK the post being deleted to every sibling
+    sharing its url -- the opposite of what a delete should do.
+
+    This is the only test that distinguishes `calculate_cross_posts(delete_only=True)`
+    from a bare `calculate_cross_posts()`; the teardown test above passes under
+    both, because the teardown runs first either way. Starts with no links so a
+    link appearing can only have come from the search branch.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    sibling = make_post(s.community, s.voter, 'https://local.example/p/2')
+    sibling.url = 'https://example.com/article'
+    s.post.url = 'https://example.com/article'
+    db.session.commit()
+
+    delete_post(s.post.id, False, SRC_API, bearer(s.author))
+
+    db.session.refresh(s.post)
+    db.session.refresh(sibling)
+    assert not s.post.cross_posts
+    assert not sibling.cross_posts
