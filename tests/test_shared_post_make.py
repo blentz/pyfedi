@@ -74,6 +74,7 @@ it from a brief that only knows about this file's public surface.
 """
 
 import os
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -86,6 +87,7 @@ from app.constants import (
     POST_TYPE_LINK,
     POST_TYPE_VIDEO,
     POST_STATUS_PUBLISHED,
+    POST_STATUS_SCHEDULED,
     SRC_API,
     SRC_WEB,
 )
@@ -817,4 +819,205 @@ def test_a_non_video_post_ignores_can_upload_video_even_when_enabled(db_session)
         post_module.edit_post = original_edit_post
         set_setting('allow_video_file_uploads', original_setting)
 
+    assert db.session.query(Post).count() == 0
+
+
+# ---------------------------------------------------------------------------
+# Group D, Task 5: state mutations (:211-228), the rollback (:233-236, which
+# has NO branch arc at all), and the notify guard (:238-239 / :238->241).
+# ---------------------------------------------------------------------------
+
+
+def test_creating_a_post_seeds_its_author_upvote(db_session):
+    """`:211`'s up_votes, `:213`'s score, and `:226-227`'s PostVote row.
+
+    A new post starts with its author's own upvote. Catches a regression
+    dropping `:226`, which would leave the score claiming a vote that no
+    PostVote row backs -- a discrepancy no single-field assertion would show.
+    `edit_post` runs for real: it never touches `up_votes`, `score` or
+    `PostVote` (confirmed by grepping app/shared/post.py -- the only hits
+    for those names outside this function are in delete_post/restore_post/
+    mod_delete_post/mod_restore_post, none of which `edit_post` calls), so
+    nothing downstream could produce this result in `make_post`'s place.
+    """
+    s = seed_make_context()
+
+    user_id, post = make_post(_api_input(), s.community, POST_TYPE_ARTICLE,
+                              SRC_API, auth=bearer(s.author))
+
+    assert post.up_votes == 1
+    assert post.score == 1
+    votes = db.session.query(PostVote).filter_by(post_id=post.id).all()
+    assert len(votes) == 1
+    assert votes[0].user_id == s.author.id
+    assert votes[0].effect == 1
+
+
+def test_creating_a_post_increments_both_counters(db_session):
+    """`:218`'s community.post_count and `:220`'s user.post_count.
+
+    Both start at a known non-zero value so a regression that ASSIGNS rather
+    than increments fails here. Starting from zero would let `= 1` pass.
+    `edit_post` never touches `post_count` on the community or the author
+    it is passed here (see the grep summary in the test above); the
+    `post_count` writes it does contain live only in delete_post/restore_post
+    and friends, which `make_post` does not call.
+    """
+    s = seed_make_context()
+    s.community.post_count = 5
+    s.author.post_count = 7
+    db.session.commit()
+
+    make_post(_api_input(), s.community, POST_TYPE_ARTICLE, SRC_API,
+              auth=bearer(s.author))
+
+    db.session.refresh(s.community)
+    db.session.refresh(s.author)
+    assert s.community.post_count == 6
+    assert s.author.post_count == 8
+
+
+def test_a_failing_edit_post_rolls_back_the_post_and_the_vote(db_session):
+    """`:233`, `:234` and `:235` -- the rollback, which has NO branch arc.
+
+    coverage.py does not model `except` handlers as branches, so these four
+    statements are invisible to the arc count: full arc coverage of this
+    function says nothing about whether the rollback works. That is why this
+    test exists rather than riding along with the delegation tests.
+
+    `edit_post` is monkeypatched to raise because nothing else reaches `:232`
+    deterministically -- the whole point of the try is that `edit_post`
+    normally succeeds. The patch restores in a `finally`, since
+    `post_module.edit_post` is the name `make_post` resolves at call time and
+    a leaked patch would break every test after this one.
+    """
+    s = seed_make_context()
+
+    original = post_module.edit_post
+
+    def exploding_edit_post(*args, **kwargs):
+        raise Exception('edit blew up')
+
+    post_module.edit_post = exploding_edit_post
+    try:
+        with pytest.raises(Exception, match='edit blew up'):
+            make_post(_api_input(), s.community, POST_TYPE_ARTICLE, SRC_API,
+                      auth=bearer(s.author))
+    finally:
+        post_module.edit_post = original
+
+    assert db.session.query(Post).count() == 0
+    assert db.session.query(PostVote).count() == 0
+
+
+def test_a_failing_edit_post_re_raises_the_original_exception(db_session):
+    """`:236`'s `raise e`, distinct from the deletions above it.
+
+    The rollback must not swallow the cause. Catches a regression replacing
+    `raise e` with a bare `return` or a generic error -- both of which would
+    leave the two count assertions above passing while the caller lost the
+    reason.
+    """
+    s = seed_make_context()
+
+    original = post_module.edit_post
+
+    def exploding_edit_post(*args, **kwargs):
+        raise ValueError('the specific cause')
+
+    post_module.edit_post = exploding_edit_post
+    try:
+        with pytest.raises(ValueError, match='the specific cause'):
+            make_post(_api_input(), s.community, POST_TYPE_ARTICLE, SRC_API,
+                      auth=bearer(s.author))
+    finally:
+        post_module.edit_post = original
+
+
+def test_a_published_post_notifies(db_session):
+    """`:238`'s true arm and `:239`.
+
+    Status defaults to published, so this is the ordinary path. Records the
+    call rather than asserting on its effects, because `notify_about_post`
+    dispatches a Celery task whose body is out of scope here.
+    """
+    calls = []
+    s = seed_make_context()
+
+    original = post_module.notify_about_post
+    post_module.notify_about_post = lambda post: calls.append(post.id)
+    try:
+        user_id, post = make_post(_api_input(), s.community, POST_TYPE_ARTICLE,
+                                  SRC_API, auth=bearer(s.author))
+    finally:
+        post_module.notify_about_post = original
+
+    assert calls == [post.id]
+
+
+def test_an_unpublished_post_does_not_notify(db_session, app, stub_notify):
+    """`:238`'s false arm.
+
+    `edit_post`'s SRC_API branch hardcodes `scheduled_for = None` at `:281`
+    regardless of what `input` carries, so no API call can ever reach this
+    arm -- there is no key `_api_input` could add that `edit_post` would even
+    look at. The mechanism has to be SRC_WEB: `:337` reads
+    `input.scheduled_for.data`, and `:413-416` sets
+    `post.status = POST_STATUS_SCHEDULED` once that (timezone-aware) date is
+    still in the future relative to `utcnow`. `_web_form`'s `scheduled_for`
+    default is `None`; overriding it with a far-future datetime and leaving
+    `timezone` at its default `'UTC'` reaches `:416` and leaves
+    `post.status != POST_STATUS_PUBLISHED` by the time `make_post:238` runs.
+
+    Its positive control is `test_a_published_post_notifies` above: same
+    recorder shape (here, the `stub_notify` fixture), one call there and none
+    here -- an empty `calls` list on its own is indistinguishable from a
+    broken monkeypatch; the contrast with the positive control is what makes
+    it mean something.
+    """
+    s = seed_make_context()
+    form = _web_form(scheduled_for=datetime(2030, 1, 1, 9, 0))
+
+    with web_ctx(app, s.author):
+        post = make_post(form, s.community, POST_TYPE_ARTICLE, SRC_WEB)
+
+    assert post.status == POST_STATUS_SCHEDULED
+    assert stub_notify == []
+
+
+def test_a_banned_domain_is_refused_before_any_row_is_created(db_session, app):
+    """`:195` fires before `:231`, which is the only thing `make_post`'s
+    domain check buys.
+
+    `edit_post:565-569` reimplements `:190-195` verbatim -- same compound, same
+    exception string -- and `:231` passes `from_scratch=True`, so that copy
+    always runs. Refusing a banned domain is therefore NOT what `make_post`'s
+    check is for; refusing it CHEAPLY is. `edit_post` would raise the same
+    message at `:569`, after `:209` and `:228` committed a Post and a PostVote
+    that `:233-235` then has to delete.
+
+    Asserting `Post.count() == 0` cannot tell those apart -- the rollback
+    produces it too. Recording whether `edit_post` was ENTERED can.
+    """
+    calls = []
+    s = seed_make_context()
+    d = make_domain('banned.example')
+    d.banned = True
+    db.session.commit()
+
+    original = post_module.edit_post
+
+    def recorder(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+
+    post_module.edit_post = recorder
+    try:
+        with pytest.raises(Exception, match='banned.example is blocked by admin'):
+            make_post(_api_input(url='https://banned.example/x'), s.community,
+                      POST_TYPE_LINK, SRC_API, auth=bearer(s.author))
+    finally:
+        post_module.edit_post = original
+
+    assert calls == []
     assert db.session.query(Post).count() == 0
