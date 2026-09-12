@@ -19,20 +19,34 @@ tests/factories.py; the rules are tests/README.md facts 206-219. Four bind here:
     which goes through EVALSHA -- unimplemented in fakeredis. Without the
     fixture the call binds to the compose stack's real Redis and works.
 
-  - `s.author` LANDS ON id 1 BUT IS **NOT** AN ADMIN under `seed_post_context`.
-    `Site.admins()` (app/models.py:3994-4000) is
-    `.filter_by(deleted=False, banned=False).join(user_role).filter(or_(
-    user_role.c.role_id == ROLE_ADMIN, User.id == 1))`. The `id == 1` arm of
-    the `or_` looks like it should catch `s.author`, but the preceding
-    `.join(user_role)` is an INNER join: a user with zero rows in `user_role`
-    is dropped before the `WHERE` clause is ever evaluated. `make_user`
-    (tests/factories.py:41-67) never inserts a `user_role` row, so every
-    seeded user -- author included -- is invisible to `Site.admins()`
-    regardless of id. Task 1's Probe A confirmed this empirically:
-    `Site.admins()` returned `[]` even though `s.author.id == 1`. Any test in
-    this file that needs `notify_admins` to actually notify someone must seed
-    an explicit admin (a real `user_role` row with `ROLE_ADMIN`, or a
-    `g.admin_ids` override) -- `s.author` alone will not do it.
+  - `s.author` LANDS ON id 1, and WHETHER THAT MAKES IT AN ADMIN DEPENDS ON
+    WHICH OF THREE PREDICATES YOU ASK -- they disagree for a role-less id-1
+    user, which `s.author` is (`make_user`, tests/factories.py:41-67, never
+    inserts a `user_role` row). Two say yes, one says no:
+
+    - `User.is_admin()` (app/models.py:1259-1261): `if self.id == 1: return
+      True` -- checked before it ever looks at `self.roles`. Admin.
+    - `g.admin_ids` (app/request_hooks.py:100-106): a `UNION` of
+      `SELECT u.id FROM "user" u WHERE u.id = 1` with a second `SELECT`
+      joined to `user_role` for `ROLE_ADMIN`. The id-1 branch is a separate
+      `SELECT` with no join, so it needs no `user_role` row. Admin.
+    - `Site.admins()` (app/models.py:3999-4000): `.filter_by(deleted=False,
+      banned=False).join(user_role).filter(or_(user_role.c.role_id ==
+      ROLE_ADMIN, User.id == 1))`. Here the `id == 1` disjunct sits on the
+      far side of an INNER join to `user_role`, so a user with zero
+      `user_role` rows is dropped before that `WHERE` clause is ever
+      evaluated. NOT admin -- the outlier of the three, and, per
+      app/request_hooks.py's UNION, arguably a defect rather than a policy:
+      the other two predicates treat id 1 as admin unconditionally.
+
+    Task 1's Probe A exercised `Site.admins()` specifically and confirmed
+    `[]` even though `s.author.id == 1`. Any test in this file that drives
+    `report_post`'s `notify_admins` branch (`:892-900`, which calls
+    `Site.admins()`) must therefore seed an explicit admin (a real
+    `user_role` row with `ROLE_ADMIN`, or a `g.admin_ids` override) --
+    `s.author` alone will not reach `:894`'s loop body. This is specific to
+    `Site.admins()`; do not generalise it to `is_admin()` or `g.admin_ids`,
+    which both already treat `s.author` as an admin.
 
   - SRC_API ARMS NEED NO REQUEST CONTEXT. `get_ip_address` swallows the
     missing-context RuntimeError, and Task 1's Probe B confirmed
