@@ -25,7 +25,7 @@
 - **No ordered assertions over rows a query planner returned.** Compare sets.
 - **No test may request the `redis_double` fixture.** `delete_post:765` is a function-body `from app import redis_client` and `:766` locks on it; the fixture reaches that import and then breaks the lock release on `EVALSHA`.
 - **SRC_API tests must NOT be wrapped in `web_ctx`.**
-- **`s.author` is User id 1**, and `Site.admins()` (`app/models.py`) selects `role_id == ROLE_ADMIN` **OR `User.id == 1`** — so `s.author` is ALWAYS an admin. Use `s.voter` for unprivileged actors, and reason explicitly about admin counts.
+- **`s.author` is User id 1, but it is NOT a site admin.** Task 1's Probe A observed `Site.admins() == []` under a bare `seed_post_context`. `Site.admins()` (`app/models.py:3999-4000`) INNER-JOINS `user_role` before applying `or_(role_id == ROLE_ADMIN, User.id == 1)`, so a user with no `user_role` row produces no rows at all and the `User.id == 1` disjunct is never reached. `make_user` inserts no role row. **Every test asserting an admin notification must seed one explicitly with `seed_site_admin`, introduced in Task 5.** Use `s.voter` for unprivileged actors.
 - **Every line number must be re-derived** with numbered output: `awk 'NR>=X && NR<=Y {printf "%d\t%s\n",NR,$0}' FILE`.
 - **Sweep citations before committing** with `:[0-9]+(/:[0-9]+)?(-:?[0-9]+)?`, no backtick or path anchor. Colon-prefixed `:NNN` is a file line; bare numbers like `tests/README.md 206` are numbered FACTS.
 - **No duplicate test names.** Python silently rebinds, so a collision stops an earlier test running with no error. Check with `grep -oE "^def (test_[a-z_]+)" FILE | sort | uniq -d` before every commit.
@@ -729,7 +729,47 @@ The API and WEB arms express the same policy differently:
 
 Verify these against `app/post/forms.py` — the ids are at `:30`, `:35` and `:36`.
 
-- [ ] **Step 3: Write the tests**
+- [ ] **Step 3: Add the `seed_site_admin` helper**
+
+Task 1's Probe A established that `Site.admins()` is empty under
+`seed_post_context`. Every test below that asserts an admin notification needs
+a real admin, so add this helper beside Task 1's two:
+
+```python
+def seed_site_admin(s, name='siteadmin'):
+    """A user `Site.admins()` actually returns.
+
+    `Site.admins()` (app/models.py:3999-4000) INNER-JOINS user_role before
+    applying `or_(role_id == ROLE_ADMIN, User.id == 1)`, so a user with no
+    user_role row produces no rows at all and the id-1 disjunct is never
+    reached. `s.author` is User id 1 and has no role row, so it is NOT a site
+    admin -- Probe A observed `Site.admins() == []`.
+
+    The Role is created with an explicit id because user_role.role_id is a
+    foreign key to role.id and the query matches on that id, not on the role's
+    name.
+    """
+    role = db.session.query(Role).get(ROLE_ADMIN)
+    if role is None:
+        role = Role(id=ROLE_ADMIN, name='Admin', weight=0)
+        db.session.add(role)
+        db.session.commit()
+    admin = make_user(s.instance, name, local=True)
+    db.session.execute(user_role.insert().values(user_id=admin.id,
+                                                 role_id=ROLE_ADMIN))
+    db.session.commit()
+    return admin
+```
+
+Add `ROLE_ADMIN` to the `app.constants` import and `Role, user_role` to the
+`app.models` import at the top of the file.
+
+**Seeding a dedicated admin also makes the counts unambiguous**: `Site.admins()`
+returns exactly this one user, so `count == 1` means this admin and nobody
+else. Do not make `s.author` the admin — it is the reported post's author, and
+an admin who is also the suspect muddles every assertion below.
+
+- [ ] **Step 4: Write the tests**
 
 ```python
 def test_an_api_report_records_the_reason_and_description(db_session):
@@ -761,10 +801,12 @@ def test_a_doxing_report_notifies_admins_through_the_api(db_session):
     `'doxing'` is already lowercase so it matches a `.lower()`ed haystack.
     `'Minor abuse'` does not -- that is PC1, and Task 8 observes it failing.
 
-    `Site.admins()` includes `s.author` (User id 1) unconditionally, so this
-    asserts the admin notification exists rather than counting from zero.
+    `Site.admins()` is empty without `seed_site_admin`, so without it this test
+    would pass for the wrong reason after PC1 lands and fail for the wrong
+    reason before it.
     """
     s = seed_post_context(community_name='lifecycle')
+    admin = seed_site_admin(s)
 
     report_post(
         s.post,
@@ -777,7 +819,7 @@ def test_a_doxing_report_notifies_admins_through_the_api(db_session):
     admin_notifs = db.session.query(Notification).filter_by(
         title='Suspicious content').all()
     assert len(admin_notifs) == 1
-    assert admin_notifs[0].user_id == s.author.id
+    assert admin_notifs[0].user_id == admin.id
 
 
 def test_an_ordinary_api_report_does_not_notify_admins(db_session):
@@ -785,8 +827,12 @@ def test_an_ordinary_api_report_does_not_notify_admins(db_session):
 
     Catches a regression making `notify_admins` unconditional, which would
     escalate every report to every admin.
+
+    Seeds an admin so the zero is a real refusal rather than an empty
+    `Site.admins()`.
     """
     s = seed_post_context(community_name='lifecycle')
+    seed_site_admin(s)
 
     report_post(
         s.post,
@@ -806,6 +852,7 @@ def test_an_ai_flair_report_notifies_admins_on_a_non_piefed_instance(db_session)
     works where `:828`'s first needle does not.
     """
     s = seed_post_context(community_name='lifecycle')
+    seed_site_admin(s)
     s.instance.software = 'lemmy'
     db.session.commit()
 
@@ -828,6 +875,7 @@ def test_an_ai_flair_report_does_not_escalate_on_piefed(db_session):
     Catches a regression dropping the software check.
     """
     s = seed_post_context(community_name='lifecycle')
+    seed_site_admin(s)
     s.instance.software = 'piefed'
     db.session.commit()
 
@@ -848,8 +896,13 @@ def test_an_unmoderated_local_community_always_notifies_admins(db_session):
 
     An unmoderated local community has no moderators to notify, so every report
     escalates regardless of reason. Catches a regression dropping the override.
+
+    The community under `seed_post_context` is local -- `make_community` never
+    sets `ap_id` and `Community.is_local()` (app/models.py:796) is
+    `self.ap_id is None or ...` -- so `:841`'s first conjunct is already true.
     """
     s = seed_post_context(community_name='lifecycle')
+    seed_site_admin(s)
     s.community.un_moderated = True
     db.session.commit()
 
@@ -866,13 +919,13 @@ def test_an_unmoderated_local_community_always_notifies_admins(db_session):
 
 **`s.instance.software` and `post.community.instance.software` must be the same row** for the `:830` tests to work — `make_community` hardcodes `instance_id=1` and `seed_post_context` seeds the instance first, so they are. Confirm rather than assume.
 
-- [ ] **Step 4: Run and report the collection line**
+- [ ] **Step 5: Run and report the collection line**
 
-- [ ] **Step 5: State which disjunct each test witnesses, and which you could NOT witness and why**
+- [ ] **Step 6: State which disjunct each test witnesses, and which you could NOT witness and why**
 
 The `'Minor abuse'` disjunct cannot be witnessed — it is PC1. Say so explicitly so the gap reads as a decision.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 Subject: `test: cover report_post's source fork and admin-escalation compounds`
 
@@ -1076,11 +1129,15 @@ def test_an_admin_who_is_already_a_notified_moderator_is_not_notified_twice(db_s
     admin who moderates the community is in that set and must not receive a
     second notification. Catches a regression dropping the guard.
 
-    `s.author` is User id 1 and therefore always in `Site.admins()`; making it
-    a moderator too is what puts it in `already_notified`.
+    The admin must be seeded with `seed_site_admin` (Task 5): `Site.admins()`
+    is empty otherwise, which would make the `== 0` assertion below pass
+    vacuously and witness nothing. `seed_site_admin` mints a LOCAL user, so
+    `:876` routes it to the notification branch and `:884` adds it to
+    `already_notified`.
     """
     s = seed_post_context(community_name='lifecycle')
-    make_community_member(s.author, s.community, is_moderator=True)
+    admin = seed_site_admin(s)
+    make_community_member(admin, s.community, is_moderator=True)
     s.community.un_moderated = True
     db.session.commit()
 
@@ -1093,8 +1150,9 @@ def test_an_admin_who_is_already_a_notified_moderator_is_not_notified_twice(db_s
 
     assert db.session.query(Notification).filter_by(
         title='Suspicious content').count() == 0
-    assert db.session.query(Notification).filter_by(
-        title='A post has been reported').count() == 1
+    mod_notifs = db.session.query(Notification).filter_by(
+        title='A post has been reported').all()
+    assert {n.user_id for n in mod_notifs} == {admin.id}
 
 
 def test_notifying_an_admin_increments_their_unread_counter(db_session):
@@ -1104,7 +1162,8 @@ def test_notifying_an_admin_increments_their_unread_counter(db_session):
     asymmetry is registered, not fixed. Catches a regression dropping `:900`.
     """
     s = seed_post_context(community_name='lifecycle')
-    s.author.unread_notifications = 0
+    admin = seed_site_admin(s)
+    admin.unread_notifications = 0
     s.community.un_moderated = True
     db.session.commit()
 
@@ -1115,8 +1174,8 @@ def test_notifying_an_admin_increments_their_unread_counter(db_session):
         auth=bearer(s.voter),
     )
 
-    db.session.refresh(s.author)
-    assert s.author.unread_notifications == 1
+    db.session.refresh(admin)
+    assert admin.unread_notifications == 1
 
 
 def test_a_report_with_no_remote_moderators_federates_nothing(db_session):
@@ -1249,6 +1308,7 @@ def test_the_web_arm_escalates_on_reason_five(db_session, app):
     from types import SimpleNamespace
 
     s = seed_post_context(community_name='lifecycle')
+    seed_site_admin(s)
     form = SimpleNamespace(
         reasons=SimpleNamespace(data=['5']),
         description=SimpleNamespace(data='x'),
@@ -1305,8 +1365,14 @@ def test_a_minor_abuse_report_notifies_admins_through_the_api(db_session):
     disjunct is ALWAYS False and the escalation has never fired on this arm.
 
     Fails against the tree as it stands: no admin notification is written.
+
+    `seed_site_admin` is load-bearing here. Without it `Site.admins()` is empty
+    and this test fails BOTH before and after the fix -- a failing observation
+    that proves nothing, and the worst possible foundation for a production
+    change.
     """
     s = seed_post_context(community_name='lifecycle')
+    seed_site_admin(s)
 
     report_post(
         s.post,
@@ -1353,6 +1419,7 @@ def test_minor_abuse_in_the_description_also_notifies_admins(db_session):
     only the reason leaves `:829` unwitnessed.
     """
     s = seed_post_context(community_name='lifecycle')
+    seed_site_admin(s)
 
     report_post(
         s.post,
@@ -1435,9 +1502,15 @@ def test_a_remote_communitys_instance_is_flagged_even_when_ids_collide(db_sessio
     s = seed_post_context(community_name='lifecycle')
     remote_instance, _mod = seed_remote_moderator(s)
 
-    # Make the community remote, and force its id to equal the remote
-    # moderator's instance id so `:905`'s wrong comparison short-circuits.
+    # `:904` is `if not post.community.is_local():`, and a seed_post_context
+    # community IS LOCAL -- make_community never sets ap_id and
+    # Community.is_local() (app/models.py:796) is `self.ap_id is None or ...`.
+    # Without this line `:905` is never reached and the test fails looking
+    # exactly like the defect while witnessing nothing.
+    s.community.ap_id = f'lifecycle@{remote_instance.domain}'
     s.community.instance_id = remote_instance.id
+    # Force the community id to equal the remote moderator's instance id so
+    # `:905`'s wrong comparison short-circuits.
     s.community.id = remote_instance.id
     db.session.commit()
 
@@ -1462,7 +1535,13 @@ def test_a_remote_communitys_instance_is_flagged_even_when_ids_collide(db_sessio
     assert calls == [{remote_instance.id}]
 ```
 
-**Reassigning `s.community.id` may not work** — it is a primary key with dependent foreign keys. If SQLAlchemy refuses, construct the collision the other way: seed instances and communities in an order that makes the ids coincide naturally, or seed a second community whose id equals an instance id already in the set. **Work out an arrangement that actually reaches `:905` with the collision in place, and report what you had to do.** If you conclude the collision cannot be constructed at all, say so with the argument — that would make PC2 unobservable and the fix unverifiable, which is a finding in itself.
+**Two things about this fixture may not work as written. Both are your job to resolve, and reporting an argued impossibility is an acceptable outcome for either.**
+
+First, **reassigning `s.community.id`** — a primary key with dependent foreign keys — may be refused. If so, construct the collision the other way: seed instances and communities in an order that makes the ids coincide naturally, or seed a second community whose id equals an instance id already in the set.
+
+Second, **verify `Community.is_local()` is actually False** after setting `ap_id`. `:796` is `self.ap_id is None or self.profile_id().startswith(current_app.config['SERVER_URL'])`. Setting `ap_id` defeats the first disjunct, but if `ap_profile_id` — which `make_community` sets to `https://test.piefed.local/c/<name>` — happens to start with the configured `SERVER_URL`, the second disjunct keeps it local. Assert `s.community.is_local() is False` before calling `report_post`, so a fixture that silently fails to reach `:904` announces itself.
+
+**Work out an arrangement that actually reaches `:905` with the collision in place, and report what you had to do.** If you conclude the collision cannot be constructed at all, say so with the argument — that would make PC2 unobservable and the fix unverifiable, which is a finding in itself.
 
 - [ ] **Step 4: Run it and paste the verbatim failure**
 
@@ -1635,7 +1714,19 @@ Required:
 3. **The three `delete_post`/`restore_post` asymmetries**: unconditional federation on restore against a two-conjunct guard on delete; the missing `last_seen` bump; the missing redis lock.
 4. **The API/WEB source-instance divergence** at `:825` versus `:835` — a different source AND a different missing-row behaviour, `.one()` raising where `.get()` returns None.
 5. **The `user_id = 1` fallback is REACHABLE**, via `app/shared/tasks/maintenance.py:150` and `:185`, and `:760`'s `if current_user:` is correct. Registered because an earlier spec draft concluded the opposite.
-6. **`Site.admins()` includes User id 1 unconditionally** — the query is `role_id == ROLE_ADMIN` OR `User.id == 1`. Combined with `seed_post_context` seeding `author` first, the post's own author is always an admin, so a report against the seeded post notifies its own author.
+6. **Three predicates answer "is User id 1 an admin?" and they disagree.** For a User id 1 carrying no `user_role` row — which is every seeded user in this test suite, and the founding admin of any instance where nobody assigned an explicit Admin role:
+
+   | Predicate | Mechanism | Answer |
+   |---|---|---|
+   | `User.is_admin()` (`app/models.py:1259-1261`) | `if self.id == 1: return True`, before roles are read | admin |
+   | `Site.admins()` (`app/models.py:3999-4000`) | `.join(user_role).filter(or_(role_id == ROLE_ADMIN, User.id == 1))` — an INNER join, so a user with no role row produces no rows and the id-1 disjunct is never reached | NOT admin |
+   | `g.admin_ids` (`app/request_hooks.py:100-106`) | a SQL `UNION`: `SELECT u.id WHERE u.id = 1 UNION SELECT ... JOIN user_role ... role_id = :role_admin` | admin |
+
+   Two of the three agree, and the `UNION` is the in-file proof of what the policy is meant to be — the same shape of evidence that makes PC2 a defect, where `:908` gets the identical comparison right two lines below `:905`. `Site.admins()` is the outlier. Consequence on a real instance: a founding admin never given an explicit Admin role is in `g.admin_ids` and passes `is_admin()`, yet is absent from `Site.admins()` — so the same site reports different admin sets depending on which predicate the call path happens to use, and `report_post:893` uses the one that leaves them out. **Registered, NOT fixed** — `Site.admins()` is outside this round's module and has call sites this round has not read.
+
+   Found in two halves. Task 1's Probe A observed `Site.admins() == []` and refuted the claim that `s.author` is an unconditional admin. Task 1's review then caught the correction overclaiming in the opposite direction, because `User.is_admin()` does return `True` for id 1. Neither half is the whole finding.
+
+   Note what this cost, twice. The spec, the plan and `tests/README.md` all carried "`s.author` is an unconditional site admin" from an earlier round, where it was established about `User.is_admin()`. True of the predicate it was measured against, false of the one it was later applied to. The correction then made the same error mirrored — true of `Site.admins()`, written as though it were true of everything — and that survived until a reviewer checked it against `tests/README.md` fact 216, which the correcting docstring itself cited two paragraphs earlier. **A claim about "admin" that does not name its predicate is not a claim.** Record all three in `tests/README.md` in one place; a correction that lives only where it was noticed is not a correction.
 7. **The moderator/admin counter asymmetry** at `:883` versus `:900`.
 8. **`delete_post`'s notification-removal block duplicates `mod_remove_post`'s verbatim** — second sighting; Group B registered the first.
 9. **A CORRECTION to this round's own spec.** The spec claims `:849` and `:865` are "two meanings of source instance in one function". `Report.source_instance_id`'s column comment in `app/models.py` reads *"the instance of the reporter"*, which makes `:865` correct by its column's documented meaning. `targets_data`'s `source_instance_id` is a different field in a JSON blob. Confusing naming, not a defect — record it as such rather than as a finding.
@@ -1643,7 +1734,13 @@ Required:
 
 - [ ] **Step 6: Write the `tests/README.md` facts, from 220**
 
-At minimum: `Site.admins()`'s id-1 rule and its consequence for seeded fixtures; that `delete_post` is called from Celery tasks with no request context and the `user_id = 1` path is live; whatever Probe B established about `force_locale` and request contexts; and the WEB arm's form stand-in shape, since Groups D and E will need it.
+At minimum:
+
+- **The three admin predicates and their three mechanisms**, in one place, as the table in the register entry. `Site.admins()` returns `[]` under `seed_post_context` because its inner join to `user_role` drops a role-less user before the `User.id == 1` disjunct is evaluated; `User.is_admin()` returns `True` for id 1 before it reads roles; `g.admin_ids` includes id 1 via a `UNION`. A test asserting an admin notification must seed a role row. **Amend fact 216 rather than adding a fourth fact that contradicts it** — 216 is correct about `User.is_admin()` and is what the spec over-generalised from.
+- That `delete_post` is called from Celery tasks with **no request context** (`app/shared/tasks/maintenance.py:150`, `:185`) and the `user_id = 1` path is live.
+- Whatever Probe B established about `force_locale` and request contexts on the SRC_API arm.
+- The WEB arm's form stand-in shape, since Groups D and E will need it.
+- That `Community.is_local()` is True under `seed_post_context` because `make_community` never sets `ap_id` — the fact that decides whether `report_post:904` and `:841` are reachable in a test.
 
 - [ ] **Step 7: Run the full suite**
 
