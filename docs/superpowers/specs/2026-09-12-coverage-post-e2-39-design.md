@@ -67,7 +67,7 @@ Second, and more important: **the two sites do not test the same value.** `:403`
 Arc-only gaps, all reachable, none exotic:
 
 - **`665->668`** — `if file:` false. `post.image` is set but `File.query.get(post.image_id)` returns None: an orphaned reference.
-- **`673->682`** — `if 'choices' in poll_data:` false. Poll data carrying no choices key.
+- **`673->682`** — `if 'choices' in poll_data:` false. **Probably unreachable, and this was found while writing the plan rather than the spec.** Both entry points build `poll_data` as a fresh dict that always carries the key: `:306` is `'choices': poll_data.get('choices', [])` on the API branch, `:352` is `'choices': poll_choices` on the web branch. If the plan's proof holds, the arm takes the repository's existing `# pragma: no branch -- see proof in <test file>` treatment (`app/shared/tasks/pages.py:270`, `:312`, `:333`, `app/shared/tasks/follows.py:188`) and is registered.
 - **`675->674`** — the **loop-back** arc. A choice dict lacking `choice_text`, or whose text is whitespace, so the loop continues to the next iteration.
 - **`683->686`** — `if poll is None:` **false**. Editing a post that already has a `Poll` row, rather than creating one.
 - **`699->703`** — `if event is None:` **false**. The same for an existing `Event`.
@@ -86,7 +86,7 @@ The last two are the edit-an-existing case, which the create-path tests never re
 
 ## Production changes
 
-**None planned.** The pixelfed divergence is registered, not fixed, for the reasons above. If a genuine defect surfaces it gets the treatment PC1 and PC2 got — a pasted failing observation before the change — but no defect will be manufactured to justify the round.
+**No behaviour change planned.** The pixelfed divergence is registered, not fixed, for the reasons above. The one edit in prospect is a `# pragma: no branch` comment on `:673` if its false arm is proven unreachable — the treatment four sites in this repository already carry, changing no behaviour and no line count. If a genuine defect surfaces it gets the treatment PC1 and PC2 got — a pasted failing observation before the change — but no defect will be manufactured to justify the round.
 
 **Three registered defects are live in or adjacent to this code and stay unfixed:** D463 (`make_post`'s rollback leaving post counts inflated), D465 (the upload file-leak at `:527`), and D476 (`.mov` permitted but unrecognised).
 
@@ -112,7 +112,7 @@ Standing rules: a crash kill is not a kill unless a viable non-crashing variant 
 
 ## Success criteria
 
-- **`app/shared/post.py` at zero missing statements and zero missing arcs** — the module closed, confirmed by re-measurement with both endpoints of every arc checked pairwise rather than by inspecting a global min and max.
+- **`app/shared/post.py` at zero missing statements and zero missing arcs** — the module closed, confirmed by re-measurement with both endpoints of every arc checked pairwise rather than by inspecting a global min and max. An arm proven unreachable from both entry points counts as closed only with a `# pragma: no branch` carrying its proof, never by lowering the target.
 - The floor raised to the measured `percent_covered`, rounded down.
 - Full suite green, run by the controller, with the floors check chained by `&&`.
 - Findings registered from **D478**, marker updated.
