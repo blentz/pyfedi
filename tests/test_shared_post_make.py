@@ -1,6 +1,10 @@
 """`app/shared/post.py`'s `make_post` -- Group D of five.
 
-SCOPE. One function, `:163-249`, 61 statements and 26 branch arcs, and the
+SCOPE. One function, `:163-246` (final-review MINOR 5 corrects this from
+`:163-249`, which overshot by three and swallowed a line belonging to
+`edit_post`; re-derived via `ast`: `lineno=163`, `end_lineno=246` -- `:247`
+and `:248` are blank and `:249` is `edit_post`'s leading comment), 61
+statements and 26 branch arcs, and the
 only group in this module that began at ZERO PERCENT: no test had ever called
 it. Three collaborators block a first call, and Task 1 settled all three
 before any assertion in this file was written. They are recorded here because
@@ -91,7 +95,7 @@ from app.constants import (
     SRC_API,
     SRC_WEB,
 )
-from app.models import Domain, Post, PostVote
+from app.models import Domain, Post, PostVote, utcnow
 from tests.factories import (
     bearer,
     make_community,
@@ -166,6 +170,26 @@ def test_an_article_post_is_created_through_the_web_arm(db_session, app):
     return survived with only that check -- verified empirically. Identity
     against the queried row additionally pins the docstring's "same object"
     claim, which nothing here checked before.
+
+    `assert rows[0].slug.endswith('/a-title')` closes final-review MAJOR 3:
+    `:224`'s `post.generate_ap_id(community)` was, before this assertion,
+    both unmutated (absent from Task 6's mutation table) and unasserted
+    (`ap_id`/`slug` had zero hits anywhere in this file) -- and it is NOT
+    dead code the way D455(a) originally claimed `:173`'s title duplicate
+    was. `generate_ap_id` (app/models.py:2556-2568) reads `self.title` and
+    calls `slugify` on it at `:224`, which runs BEFORE `:231` delegates to
+    `edit_post` -- `edit_post` never regenerates `ap_id` or `slug` (grepped
+    `:250-751` for both names, zero hits), so whatever `:224` computes from
+    `make_post`'s own title (`:173`'s stripped value, via `:207`) is
+    permanent, unlike `post.title` itself, which `edit_post:395` overwrites
+    afterward. `_web_form()`'s default title is `'a title'`, `slugify('a
+    title')` is `'a-title'`, and `community.post_url_type` is unset (`None`)
+    on `make_community`'s row, so `generate_ap_id` takes the "friendly" arm
+    (app/models.py:2557) and sets `self.slug` to
+    `f'/c/{community.name}@.../p/{post.id}/a-title'`. Deleting `:224` leaves
+    `post.slug` at its column default (`None`) and `post.ap_id` at `:207`'s
+    10-character `gibberish()` -- verified empirically as a real hole before
+    this assertion existed.
     """
     s = seed_make_context()
 
@@ -178,6 +202,7 @@ def test_an_article_post_is_created_through_the_web_arm(db_session, app):
     assert rows[0].user_id == s.author.id
     assert rows[0].title == 'a title'
     assert result is rows[0]
+    assert rows[0].slug.endswith('/a-title')
 
 
 def test_the_api_arm_returns_the_user_id_and_the_post(db_session):
@@ -190,8 +215,35 @@ def test_the_api_arm_returns_the_user_id_and_the_post(db_session):
     This is also the false-arm witness for `:166`: `extra_rate_limit_check` is
     left unpatched, so it takes its ordinary `return False`, `:166` is taken
     false, and the call proceeds to `:168` and beyond.
+
+    `assert post.slug.endswith('/a-title')` pins `:168` specifically
+    (final-review MAJOR 4/3): `post.title` above is NOT a witness for `:168`
+    -- `edit_post` is unstubbed here and its own SRC_API branch re-reads the
+    SAME `input['title']` and overwrites `post.title` at `:395`, so `:168`
+    could read the wrong dict key entirely and `post.title` would still come
+    out right via `edit_post`'s independent copy. `post.slug`, by contrast,
+    is set once at `:224`, BEFORE `:231` delegates, from whatever `:168`
+    handed to `:207` -- `edit_post` never touches it (see the sibling
+    assertion's docstring in `test_an_article_post_is_created_through_the_web_arm`
+    above for the full `generate_ap_id` mechanism). A mutated `:168` changes
+    what `:224` slugifies without changing `post.title`'s final value, so
+    this assertion is the one thing in this test that actually depends on
+    `:168`'s own read rather than `edit_post`'s.
+
+    A throwaway post is seeded first so `:244`'s returned id cannot coincide
+    with `s.author.id` (final-review MAJOR 4): verified empirically as a
+    real hole -- mutating `:244` from `return user.id, post` to `return
+    post.id, post` survived, because `user` and `post` both reset to
+    sequence id 1 per test (tests/conftest.py), and this was the only post
+    in the test, so `post.id == s.author.id == 1` by pure fixture
+    coincidence (D451 mechanism 2). With a first post already occupying id
+    1, this call's `post.id` is 2 while `s.author.id` stays 1, so the two
+    can no longer agree by accident.
     """
     s = seed_make_context()
+
+    make_post(_api_input(title='seed post'), s.community, POST_TYPE_ARTICLE,
+              SRC_API, auth=bearer(s.author))
 
     result = make_post(_api_input(), s.community, POST_TYPE_ARTICLE, SRC_API,
                         auth=bearer(s.author))
@@ -199,7 +251,9 @@ def test_the_api_arm_returns_the_user_id_and_the_post(db_session):
     assert isinstance(result, tuple)
     user_id, post = result
     assert user_id == s.author.id
+    assert user_id != post.id
     assert post.title == 'a title'
+    assert post.slug.endswith('/a-title')
 
 
 def test_the_web_arm_strips_the_title_and_the_api_arm_does_not(db_session, app):
@@ -270,10 +324,14 @@ def test_a_link_post_picks_link_url_not_video_url(db_session, app):
     reached, which this test's LINK-typed shape cannot show.
 
     Both hosts are banned, so the arm that ran is named in the message:
-    `:195` raises `domain.name + ' is blocked by admin'`. Delete `:175` and url
-    is None, `:190` is false, and no raise happens -- this test fails. Swap
+    `:195` raises `domain.name + ' is blocked by admin'`. Delete `:175` (url
+    becomes `None`, `:190` is false in `make_post`) and this test does NOT
+    fail (final-review MINOR 2, correcting an earlier draft of this
+    paragraph that contradicted the finding two paragraphs up): `edit_post`
+    reaches the identical raise on its own, for the reason given above. Swap
     `:175` to read `video_url` and the message names the other host -- this
-    test fails.
+    test fails, because that fault survives into what `edit_post` re-derives
+    too.
     """
     s = seed_make_context()
     for host in ('linkhost.example', 'videohost.example'):
@@ -297,6 +355,16 @@ def test_a_video_post_picks_video_url_not_link_url(db_session, app):
     `type`, and the message names the OTHER host. Together the pair pins which
     field each arm reads -- neither test alone could, because a single banned
     host cannot distinguish "read the right field" from "read any field".
+
+    This test is masked by `edit_post` in exactly the same way its LINK
+    companion above is, for the mirror-image fault direction (final-review
+    MINOR 6, restoring the symmetry that companion's docstring carries):
+    a `:176` mutation that makes a VIDEO post's local `url` fall through to
+    `:179`'s `url = None` leaves THIS test green too, because `edit_post`
+    re-derives the same videohost url from `type`/`input.video_url` at
+    `:323` and reaches `:569`'s raise on its own. That mutation is killed by
+    `test_a_video_posts_own_url_is_checked_before_edit_post_runs`'s
+    recorder, not by this test.
     """
     s = seed_make_context()
     for host in ('linkhost.example', 'videohost.example'):
@@ -603,6 +671,15 @@ def test_an_ordinary_domain_is_allowed(db_session, http_mock):
     domain, no raise. Without it, a `pytest.raises` that passed because the
     call raised for some unrelated reason would look identical.
 
+    THE ARC'S WITNESS IS THE ABSENCE OF A RAISE, NOT `post.url`
+    (final-review MINOR 4, corrected): `post.url` is set by `edit_post`
+    (`:565`-ish onward), not by `make_post` -- D456(1)'s point, which three
+    other tests in this file were rewritten to stop relying on. The
+    assertion below is something `make_post` itself owns (the row exists,
+    meaning `:195` did not fire and `:206-228` ran to completion); neither
+    `:194` nor `:197` is observed directly by any single field, only by the
+    call having returned normally at all.
+
     Needs `http_mock`: unlike the refusal tests, nothing raises before `:231`
     delegates to `edit_post`, and `edit_post` reaches a real url this time
     (`'https://clean.example/thing'` has a resolvable host, unlike
@@ -620,7 +697,8 @@ def test_an_ordinary_domain_is_allowed(db_session, http_mock):
                               s.community, POST_TYPE_LINK, SRC_API,
                               auth=bearer(s.author))
 
-    assert post.url == 'https://clean.example/thing'
+    assert db.session.query(Post).count() == 1
+    assert post.up_votes == 1
 
 
 def test_no_uploaded_file_skips_the_extension_check(db_session):
@@ -647,10 +725,15 @@ def test_an_uploaded_file_with_an_empty_filename_is_ignored(db_session):
     file input, so this is the ordinary no-upload submission rather than an
     edge case. Distinguishing it from `uploaded_file=None` is the point: both
     reach `:206`, and only this test shows the `.filename != ''` half is
-    load-bearing -- a mutant that dropped it and tested only truthiness of
-    `uploaded_file` would still pass the test above but fail this one only if
-    the SimpleNamespace itself were falsy, which it is not, so this test
-    exists to pin the correct condition rather than merely a truthy object.
+    load-bearing -- a mutant that drops it (leaving bare `if uploaded_file:`)
+    IS caught by this test, not merely by the one above (final-review
+    MINOR 7 corrects an earlier draft's reasoning here, which talked itself
+    out of its own kill): with the guard weakened, this test's
+    `SimpleNamespace(filename='')` enters the block, `:202` gives
+    `os.path.splitext('')[1] == ''`, `''` is not in `allowed_extensions`, and
+    `:204` raises `'filetype not allowed'` -- an unhandled exception this
+    test does not expect, so it fails. Task 6's row 12 independently
+    confirms the kill by running the mutation.
 
     `edit_post` runs for real: its own `:461` reads the same empty-filename
     object and takes the same false arm, so nothing downstream disagrees.
@@ -698,9 +781,12 @@ def test_an_allowed_image_extension_passes(db_session):
     """`:203`'s false arm -- arc `203->206` -- the positive control for the
     test above.
 
-    Same shape, an allowed extension (case-mixed, exercising `:202`'s
-    `.lower()`), no raise. `:199`'s list is the witness: change it and this
-    test fails where the refusal test would not.
+    Same shape, an allowed extension (case-mixed, exercising `:203`'s
+    `.lower()` -- final-review MINOR 3 corrects this citation from an
+    earlier draft's `:202`, which is `file_ext = os.path.splitext(...)[1]`,
+    the line before the one with `.lower()` on it), no raise. `:199`'s list
+    is the witness: change it and this test fails where the refusal test
+    would not.
 
     `edit_post` IS STUBBED TO IDENTITY, for a different reason than the raise
     test above: with `uploaded_file` a bare `SimpleNamespace(filename=...)`,
@@ -780,21 +866,36 @@ def test_a_video_upload_is_accepted_when_video_uploads_are_enabled(db_session):
     check (`:464`) would also take the true arm and attempt to actually save
     and process the fake file.
 
-    The setting is restored in `finally` as a defensive, conventional move
-    matching the rest of this suite (e.g. tests/test_utils_upload_video.py),
-    NOT because it would otherwise leak into a later test: isolation here is
-    already guaranteed by `db_session`'s teardown, which runs a `DELETE FROM`
-    every table in `db.metadata.sorted_tables` (tests/conftest.py:126-127)
-    including `Settings`, executed via `exec_driver_sql`
-    (tests/conftest.py:191) once this fixture closes. `cache.delete_memoized
-    (get_setting)` at `app/utils.py:222` cannot cause staleness here either,
-    for a different reason than teardown: the test config sets `CACHE_TYPE =
-    'NullCache'` (tests/conftest.py:68), so `get_setting`'s `@cache.memoize`
-    is inert and every call already reads the database directly.
+    The setting IS restored to its actual default, not merely to whatever
+    `get_setting` happened to return before this test ran (final-review
+    MINOR 1, corrected): `get_setting(name, default=None)`
+    (app/utils.py:203-212) returns `default` when no `Settings` row exists,
+    and no such row exists here -- `make_site()` (tests/factories.py) creates
+    only the `Site` row, and `db_session` truncates `Settings` before every
+    test -- so an earlier draft's bare `get_setting('allow_video_file_uploads')`
+    captured `None`, and the `finally` then did
+    `set_setting('allow_video_file_uploads', None)`, which CREATES a row
+    holding the string `"null"`. `can_upload_video` (app/utils.py:2586) reads
+    `get_setting('allow_video_file_uploads', 'no')` -- with that row present
+    its own default is never used, `upload_access` is `None`, none of the
+    four `elif` branches match, and it falls through to `return True`: the
+    "restore" flipped video uploads from off to permanently ON. `original_setting`
+    is therefore captured with the SAME default the call site under test
+    uses (`'no'`), so the `finally` restores the real default rather than
+    inverting it. This was harmless only by coincidence: nothing runs after
+    the `finally` inside this test, and `db_session`'s teardown -- a
+    `DELETE FROM` every table in `db.metadata.sorted_tables`
+    (tests/conftest.py:126-127) including `Settings`, executed via
+    `exec_driver_sql` (tests/conftest.py:191) -- deletes the wrong row before
+    the next test could observe it. `cache.delete_memoized(get_setting)` at
+    `app/utils.py:222` cannot cause staleness either, for a different reason
+    than teardown: the test config sets `CACHE_TYPE = 'NullCache'`
+    (tests/conftest.py:68), so `get_setting`'s `@cache.memoize` is inert and
+    every call already reads the database directly.
     """
     s = seed_make_context()
 
-    original_setting = get_setting('allow_video_file_uploads')
+    original_setting = get_setting('allow_video_file_uploads', 'no')
     set_setting('allow_video_file_uploads', 'yes')
     original_edit_post = post_module.edit_post
     post_module.edit_post = lambda *args, **kwargs: args[1]
@@ -802,6 +903,38 @@ def test_a_video_upload_is_accepted_when_video_uploads_are_enabled(db_session):
         user_id, post = make_post(_api_input(), s.community, POST_TYPE_VIDEO,
                                   SRC_API, auth=bearer(s.author),
                                   uploaded_file=SimpleNamespace(filename='clip.mp4'))
+    finally:
+        post_module.edit_post = original_edit_post
+        set_setting('allow_video_file_uploads', original_setting)
+
+    assert post.title == 'a title'
+    assert db.session.query(Post).count() == 1
+
+
+def test_a_webm_upload_is_accepted_when_video_uploads_are_enabled(db_session):
+    """`:201`'s full extension list, not just `.mp4`.
+
+    Verified empirically as a real hole (final-review MAJOR 4): mutating
+    `:201` from `allowed_extensions.extend(['.mp4', '.webm', '.mov'])` to
+    `allowed_extensions.extend(['.mp4'])` -- dropping `.webm` and `.mov` --
+    survived all 33 other tests, because none of them uploads anything but a
+    `.mp4` file. This test is a near-copy of
+    `test_a_video_upload_is_accepted_when_video_uploads_are_enabled` above
+    with a `.webm` filename instead, closing that gap; `.mov` is left
+    unwitnessed since one additional extension already distinguishes
+    "the whole list" from "just `.mp4`" and a third near-identical copy would
+    add nothing `.webm` doesn't already prove.
+    """
+    s = seed_make_context()
+
+    original_setting = get_setting('allow_video_file_uploads', 'no')
+    set_setting('allow_video_file_uploads', 'yes')
+    original_edit_post = post_module.edit_post
+    post_module.edit_post = lambda *args, **kwargs: args[1]
+    try:
+        user_id, post = make_post(_api_input(), s.community, POST_TYPE_VIDEO,
+                                  SRC_API, auth=bearer(s.author),
+                                  uploaded_file=SimpleNamespace(filename='clip.webm'))
     finally:
         post_module.edit_post = original_edit_post
         set_setting('allow_video_file_uploads', original_setting)
@@ -834,7 +967,7 @@ def test_a_non_video_post_ignores_can_upload_video_even_when_enabled(db_session)
     """
     s = seed_make_context()
 
-    original_setting = get_setting('allow_video_file_uploads')
+    original_setting = get_setting('allow_video_file_uploads', 'no')
     set_setting('allow_video_file_uploads', 'yes')
     original_edit_post = post_module.edit_post
     post_module.edit_post = lambda *args, **kwargs: args[1]
@@ -856,17 +989,50 @@ def test_a_non_video_post_ignores_can_upload_video_even_when_enabled(db_session)
 # ---------------------------------------------------------------------------
 
 
+def test_a_bot_authors_post_is_flagged_from_bot(db_session):
+    """`:206`'s `from_bot=user.bot or user.bot_override`, unmutated by
+    Task 6 and unasserted anywhere in this file (final-review MAJOR 4) --
+    verified empirically as a real hole: hardcoding `from_bot=False`
+    survived all 34 other tests, because `seed_make_context`'s shared
+    author is never a bot and no other test sets `user.bot` or
+    `user.bot_override`. `can_create_post` (app/utils.py:2494-2540) has no
+    bot-related check, so flipping `bot` does not change whether the post
+    is permitted.
+    """
+    s = seed_make_context()
+    s.author.bot = True
+    db.session.commit()
+
+    user_id, post = make_post(_api_input(), s.community, POST_TYPE_ARTICLE,
+                              SRC_API, auth=bearer(s.author))
+
+    assert post.from_bot is True
+
+
 def test_creating_a_post_seeds_its_author_upvote(db_session):
-    """`:211`'s up_votes, `:213`'s score, and `:226-227`'s PostVote row.
+    """`:211`'s up_votes, `:213`'s score, `:214`/`:215`'s ranking fields, and
+    `:226-227`'s PostVote row.
 
     A new post starts with its author's own upvote. Catches a regression
     dropping `:226`, which would leave the score claiming a vote that no
     PostVote row backs -- a discrepancy no single-field assertion would show.
-    `edit_post` runs for real: it never touches `up_votes`, `score` or
-    `PostVote` (confirmed by grepping app/shared/post.py -- the only hits
-    for those names outside this function are in delete_post/restore_post/
-    mod_delete_post/mod_restore_post, none of which `edit_post` calls), so
-    nothing downstream could produce this result in `make_post`'s place.
+    `edit_post` runs for real: it never touches `up_votes`, `score`,
+    `ranking`, `ranking_scaled` or `PostVote` (confirmed by grepping
+    app/shared/post.py -- the only hits for those names outside this
+    function are in delete_post/restore_post/mod_delete_post/
+    mod_restore_post, none of which `edit_post` calls), so nothing
+    downstream could produce this result in `make_post`'s place.
+
+    `:214`/`:215` were, before these two assertions, unmutated by Task 6 and
+    unasserted anywhere in this file (final-review MAJOR 4) -- verified
+    empirically as a real hole: replacing either assignment's RHS with a
+    hardcoded `0` survived all 34 other tests. `Post.post_ranking` is
+    time-dependent (app/models.py:2715-2723, keyed off `post_date`), so the
+    expected value cannot be a literal; instead these assertions recompute
+    it from the SAME method against the persisted `post.score`/`post.posted_at`
+    and `community.scale_by()`, which is what pins `make_post` actually
+    STORING the call's result rather than some other value -- `post_ranking`'s
+    own correctness is out of scope here.
     """
     s = seed_make_context()
 
@@ -875,6 +1041,8 @@ def test_creating_a_post_seeds_its_author_upvote(db_session):
 
     assert post.up_votes == 1
     assert post.score == 1
+    assert post.ranking == post.post_ranking(post.score, post.posted_at)
+    assert post.ranking_scaled == int(post.ranking + s.community.scale_by())
     votes = db.session.query(PostVote).filter_by(post_id=post.id).all()
     assert len(votes) == 1
     assert votes[0].user_id == s.author.id
@@ -882,31 +1050,60 @@ def test_creating_a_post_seeds_its_author_upvote(db_session):
 
 
 def test_creating_a_post_increments_both_counters(db_session):
-    """`:218`'s community.post_count and `:220`'s user.post_count.
+    """`:218`'s community.post_count and `:220`'s user.post_count, plus
+    `:219`'s double-assignment timestamp and `:221`/`:222`'s author
+    activity fields.
 
-    Both start at a known non-zero value so a regression that ASSIGNS rather
-    than increments fails here. Starting from zero would let `= 1` pass.
-    `edit_post` never touches `post_count` on the community or the author
-    it is passed here (see the grep summary in the test above); the
-    `post_count` writes it does contain live only in delete_post/restore_post
-    and friends, which `make_post` does not call.
+    Both counters start at a known non-zero value so a regression that
+    ASSIGNS rather than increments fails here. Starting from zero would let
+    `= 1` pass. `edit_post` never touches `post_count` on the community or
+    the author it is passed here (see the grep summary in the test above);
+    the `post_count` writes it does contain live only in delete_post/
+    restore_post and friends, which `make_post` does not call.
+
+    `:219`/`:221`/`:222` were, before these assertions, unmutated by Task 6
+    and unasserted anywhere in this file (final-review MAJOR 4) -- verified
+    empirically as real holes: dropping `:219`'s `g.site.last_active` target
+    (keeping only `community.last_active`), or deleting `:221` or `:222`
+    outright, each survived all 34 other tests. `before`/`after` bound the
+    call rather than asserting an exact timestamp, since `utcnow()` is
+    called inside `make_post` and cannot be predicted from the test. `:219`
+    is a double assignment (`community.last_active = g.site.last_active =
+    utcnow()`) and both targets are checked separately so dropping either
+    one is caught; `g.site` is the SAME object `seed_make_context` stored as
+    `s.site` (both are the literal Python object `g.site` was assigned, not
+    a separate row), so no `db.session.refresh` is needed to see the write.
+    `:222`'s `ip_address()` (`app/utils.py:2308`, `app/__init__.py:43-78`)
+    catches `RuntimeError` for "no request context" and returns `''` -- this
+    call has none, being SRC_API -- so `''` is the SPECIFIC value only
+    `:222` actually running can produce; `make_user` never sets
+    `ip_address` (tests/factories.py), so its column default (`None`) is
+    what a dropped `:222` would leave instead, and `''` vs `None` are
+    cleanly distinguishable.
     """
     s = seed_make_context()
     s.community.post_count = 5
     s.author.post_count = 7
     db.session.commit()
 
+    before = utcnow()
     make_post(_api_input(), s.community, POST_TYPE_ARTICLE, SRC_API,
               auth=bearer(s.author))
+    after = utcnow()
 
     db.session.refresh(s.community)
     db.session.refresh(s.author)
     assert s.community.post_count == 6
     assert s.author.post_count == 8
+    assert before <= s.community.last_active <= after
+    assert before <= s.site.last_active <= after
+    assert before <= s.author.last_seen <= after
+    assert s.author.ip_address == ''
 
 
 def test_a_failing_edit_post_rolls_back_the_post_and_the_vote(db_session):
-    """`:233`, `:234` and `:235` -- the rollback, which has NO branch arc.
+    """`:233`, `:234`, `:235` and `:236` -- the rollback, which has NO branch
+    arc (final-review MINOR 8 corrects the heading, which named three).
 
     coverage.py does not model `except` handlers as branches, so these four
     statements are invisible to the arc count: full arc coverage of this
@@ -968,19 +1165,32 @@ def test_a_published_post_notifies(db_session):
     Status defaults to published, so this is the ordinary path. Records the
     call rather than asserting on its effects, because `notify_about_post`
     dispatches a Celery task whose body is out of scope here.
+
+    Records the OBJECT passed, and asserts identity (`calls == [post]`,
+    i.e. `calls[0] is post`), not `calls == [post.id]` as an earlier draft
+    did (final-review MAJOR 4): verified empirically as a real hole --
+    mutating `:239` from `notify_about_post(post)` to
+    `notify_about_post(user)` survived, because `s.author` is the first row
+    `seed_make_context` inserts into `user` and this call's `post` is the
+    first row inserted into `post` in this test, and `db_session` resets
+    both tables' sequences to 1 (tests/conftest.py) -- `user.id == post.id
+    == 1` by fixture coincidence (D451 mechanism 2), so recording `.id`
+    could not tell the two objects apart. Recording the object itself and
+    comparing identity cannot coincide this way regardless of which table's
+    sequence produced which integer.
     """
     calls = []
     s = seed_make_context()
 
     original = post_module.notify_about_post
-    post_module.notify_about_post = lambda post: calls.append(post.id)
+    post_module.notify_about_post = lambda post: calls.append(post)
     try:
         user_id, post = make_post(_api_input(), s.community, POST_TYPE_ARTICLE,
                                   SRC_API, auth=bearer(s.author))
     finally:
         post_module.notify_about_post = original
 
-    assert calls == [post.id]
+    assert calls == [post]
 
 
 def test_an_unpublished_post_does_not_notify(db_session, app, stub_notify):
@@ -1210,6 +1420,13 @@ def test_an_unbanned_video_url_lets_edit_post_run(db_session, app, http_mock):
     `mime_type_using_head` (app/utils.py:270); the response is not an image
     and the host is neither pixelfed nor loops.video, so `opengraph_parse`
     fires one GET (`:642`).
+
+    NO `post.url` ASSERTION (final-review MINOR 4, removed): an earlier
+    draft asserted `post.url == 'https://ok-video.example/v.mp4'` here, but
+    `post.url` is set by `edit_post`, not by `make_post` -- the same
+    confound D456(1) already removed from three other tests. `calls ==
+    [True]` and the row count above are both things `make_post` itself
+    owns; `post`'s url is left to `edit_post`'s own test file to verify.
     """
     calls = []
     s = seed_make_context()
@@ -1233,4 +1450,55 @@ def test_an_unbanned_video_url_lets_edit_post_run(db_session, app, http_mock):
 
     assert calls == [True]
     assert db.session.query(Post).count() == 1
-    assert post.url == 'https://ok-video.example/v.mp4'
+
+
+def test_a_link_posts_own_url_is_checked_before_edit_post_runs(db_session, app):
+    """`:174`/`:175`'s link-url assignment, isolated from `edit_post`'s
+    identical re-derivation (`:320-321`/`:565-569`) by the same recorder
+    technique as `test_a_video_posts_own_url_is_checked_before_edit_post_runs`
+    above -- the LINK arm's mirror of that hole (final-review MAJOR 2).
+
+    Verified empirically as a real hole, exactly like the VIDEO arm's: EITHER
+    mutating `:174` to `if type == POST_TYPE_IMAGE:` (a third constant, not
+    `POST_TYPE_VIDEO` -- swapping to VIDEO is Task 6's row 3, which a
+    different test already kills for an unrelated reason) OR mutating `:175`
+    to `url = None` makes a LINK-typed post's local `url` fall through
+    `:174`/`:176` to `:179`'s `url = None`, and BOTH survived all 32 tests
+    before this one was added. `make_post` then skips `:190-195` entirely;
+    `edit_post` runs unstubbed here (as in every other web-arm url test),
+    re-derives `url` from `input.link_url` at `:320-321`, and its own domain
+    check at `:565-569` raises the identical message one call later -- an
+    indistinguishable false pass by message alone, the same mechanism `:176`'s
+    hole used. The recorder distinguishes them exactly as the video test
+    does: `calls == []` only if `make_post`'s own
+    `:174`/`:175`/`:190`/`:194`/`:195` refused before `:231` ever delegated.
+
+    `link_url` is set to a BANNED host and `video_url` to an UNBANNED one, the
+    mirror image of the video test's hosts, so a `:174`/`:176` mix-up would
+    also be visible by which host's name is raised.
+    """
+    calls = []
+    s = seed_make_context()
+    for host, banned in (('badlinkhost.example', True), ('oklinkvideohost.example', False)):
+        d = make_domain(host)
+        d.banned = banned
+    db.session.commit()
+    form = _web_form(link_url='https://badlinkhost.example/page',
+                      video_url='https://oklinkvideohost.example/v.mp4')
+
+    original = post_module.edit_post
+
+    def recorder(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+
+    post_module.edit_post = recorder
+    try:
+        with web_ctx(app, s.author):
+            with pytest.raises(Exception, match='badlinkhost.example is blocked by admin'):
+                make_post(form, s.community, POST_TYPE_LINK, SRC_WEB)
+    finally:
+        post_module.edit_post = original
+
+    assert calls == []
+    assert db.session.query(Post).count() == 0
