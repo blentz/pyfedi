@@ -71,10 +71,11 @@ from app.constants import (
     NOTIF_REPORT_ESCALATION,
     POST_STATUS_PUBLISHED,
     REPORT_TYPE_POST,
+    ROLE_ADMIN,
     SRC_API,
     SRC_WEB,
 )
-from app.models import Instance, Notification, Report, User
+from app.models import Instance, Notification, Report, Role, User, user_role
 from app.shared.post import delete_post, report_post, restore_post
 from tests.factories import (
     bearer,
@@ -109,6 +110,31 @@ def seed_remote_moderator(s, domain='remote.example', name='remotemod'):
     mod = make_user(instance, name)
     make_community_member(mod, s.community, is_moderator=True)
     return instance, mod
+
+
+def seed_site_admin(s, name='siteadmin'):
+    """A user `Site.admins()` actually returns.
+
+    `Site.admins()` (app/models.py:3999-4000) INNER-JOINS user_role before
+    applying `or_(role_id == ROLE_ADMIN, User.id == 1)`, so a user with no
+    user_role row produces no rows at all and the id-1 disjunct is never
+    reached. `s.author` is User id 1 and has no role row, so it is NOT a site
+    admin -- Probe A observed `Site.admins() == []`.
+
+    The Role is created with an explicit id because user_role.role_id is a
+    foreign key to role.id and the query matches on that id, not on the role's
+    name.
+    """
+    role = db.session.query(Role).get(ROLE_ADMIN)
+    if role is None:
+        role = Role(id=ROLE_ADMIN, name='Admin', weight=0)
+        db.session.add(role)
+        db.session.commit()
+    admin = make_user(s.instance, name, local=True)
+    db.session.execute(user_role.insert().values(user_id=admin.id,
+                                                 role_id=ROLE_ADMIN))
+    db.session.commit()
+    return admin
 
 
 def test_restoring_a_deleted_post_clears_the_flag(db_session):
@@ -532,3 +558,148 @@ def test_deleting_builds_no_new_cross_post_links(db_session):
     db.session.refresh(sibling)
     assert not s.post.cross_posts
     assert not sibling.cross_posts
+
+
+def test_an_api_report_records_the_reason_and_description(db_session):
+    """`:822`'s true arm, `:857-866`'s Report construction, `:922`'s return.
+
+    `:857` and `:858` truncate to 255 characters; this pins the ordinary case.
+    """
+    s = seed_post_context(community_name='lifecycle')
+
+    reporter_id, report = report_post(
+        s.post,
+        {'reason': 'spam', 'description': 'unsolicited', 'report_remote': False},
+        SRC_API,
+        auth=bearer(s.voter),
+    )
+
+    assert reporter_id == s.voter.id
+    rows = db.session.query(Report).all()
+    assert len(rows) == 1
+    assert rows[0].reasons == 'spam'
+    assert rows[0].description == 'unsolicited'
+    assert rows[0].type == REPORT_TYPE_POST
+    assert rows[0].suspect_post_id == s.post.id
+
+
+def test_a_doxing_report_notifies_admins_through_the_api(db_session):
+    """`:828`'s SECOND needle, the one that works.
+
+    `'doxing'` is already lowercase so it matches a `.lower()`ed haystack.
+    `'Minor abuse'` does not -- that is PC1, and Task 8 observes it failing.
+
+    `Site.admins()` is empty without `seed_site_admin`, so without it this test
+    would pass for the wrong reason after PC1 lands and fail for the wrong
+    reason before it.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    admin = seed_site_admin(s)
+
+    report_post(
+        s.post,
+        {'reason': 'Sharing personal info - doxing', 'description': 'x',
+         'report_remote': False},
+        SRC_API,
+        auth=bearer(s.voter),
+    )
+
+    admin_notifs = db.session.query(Notification).filter_by(
+        title='Suspicious content').all()
+    assert len(admin_notifs) == 1
+    assert admin_notifs[0].user_id == admin.id
+
+
+def test_an_ordinary_api_report_does_not_notify_admins(db_session):
+    """`:828-830`'s false arm -- all three disjuncts false.
+
+    Catches a regression making `notify_admins` unconditional, which would
+    escalate every report to every admin.
+
+    Seeds an admin so the zero is a real refusal rather than an empty
+    `Site.admins()`.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    seed_site_admin(s)
+
+    report_post(
+        s.post,
+        {'reason': 'spam', 'description': 'unsolicited', 'report_remote': False},
+        SRC_API,
+        auth=bearer(s.voter),
+    )
+
+    assert db.session.query(Notification).filter_by(
+        title='Suspicious content').count() == 0
+
+
+def test_an_ai_flair_report_notifies_admins_on_a_non_piefed_instance(db_session):
+    """`:830`'s THIRD disjunct, with both conjuncts true.
+
+    `:830` uses exact equality and never calls `.lower()`, which is why it
+    works where `:828`'s first needle does not.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    seed_site_admin(s)
+    s.instance.software = 'lemmy'
+    db.session.commit()
+
+    report_post(
+        s.post,
+        {'reason': 'AI content that needs flair', 'description': 'x',
+         'report_remote': False},
+        SRC_API,
+        auth=bearer(s.voter),
+    )
+
+    assert db.session.query(Notification).filter_by(
+        title='Suspicious content').count() == 1
+
+
+def test_an_ai_flair_report_does_not_escalate_on_piefed(db_session):
+    """`:830`'s SECOND conjunct taken false.
+
+    A PieFed instance handles its own flair, so the escalation is suppressed.
+    Catches a regression dropping the software check.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    seed_site_admin(s)
+    s.instance.software = 'piefed'
+    db.session.commit()
+
+    report_post(
+        s.post,
+        {'reason': 'AI content that needs flair', 'description': 'x',
+         'report_remote': False},
+        SRC_API,
+        auth=bearer(s.voter),
+    )
+
+    assert db.session.query(Notification).filter_by(
+        title='Suspicious content').count() == 0
+
+
+def test_an_unmoderated_local_community_always_notifies_admins(db_session):
+    """`:841`'s two-conjunct override and `:842`'s assignment.
+
+    An unmoderated local community has no moderators to notify, so every report
+    escalates regardless of reason. Catches a regression dropping the override.
+
+    The community under `seed_post_context` is local -- `make_community` never
+    sets `ap_id` and `Community.is_local()` (app/models.py:796) is
+    `self.ap_id is None or ...` -- so `:841`'s first conjunct is already true.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    seed_site_admin(s)
+    s.community.un_moderated = True
+    db.session.commit()
+
+    report_post(
+        s.post,
+        {'reason': 'spam', 'description': 'x', 'report_remote': False},
+        SRC_API,
+        auth=bearer(s.voter),
+    )
+
+    assert db.session.query(Notification).filter_by(
+        title='Suspicious content').count() == 1
