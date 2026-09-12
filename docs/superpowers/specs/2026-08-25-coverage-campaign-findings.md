@@ -11136,8 +11136,163 @@ overclaiming coverage of `:905-906` from Task 7's tests; **D453** Group C's last
 branch arc, registered open and then closed. Group C IS closed: zero missing
 statements, zero missing arcs across `delete_post`, `restore_post` and
 `report_post`. The module's floor rose 64 -> 77 and the MODULE is not closed --
-Groups D (`make_post`) and E (`edit_post`) remain. If you take D454, say so here
-in the change that takes it.
+Groups D (`make_post`) and E (`edit_post`) remain.
+
+## Sub-project 37: `app/shared/post.py` Group D -- `make_post`
+
+`.superpowers/sdd/2026-09-12-coverage-post-d-37/` (per-task briefs and reports;
+gitignored, deleted when the round closes), on branch `blentz`. This round took
+**Group D**: `make_post` alone, the one function in this module that had stood
+at **0.0%** through 36 prior sub-projects -- no test had ever called it. Tests
+live in the new `tests/test_shared_post_make.py` (**32 tests**). No production
+change was made. 29 mutations were run: 24 killed outright, 3 survived and were
+closed with a new/strengthened test, 1 argued equivalent (DB-level `ON DELETE
+CASCADE`), 1 void (a crash-kill discounted per fact 215, with its underlying
+fault separately confirmed killed by a non-crashing variant) -- 0 final
+survivors.
+
+**Re-derived function ranges**, not trusted from any earlier draft:
+`make_post:163-247` (`:248-249` a blank line and a comment before `edit_post`
+opens), `edit_post:250-751` (`:752-753` blank before the next function's
+leading comment at `:754`). Both re-confirmed directly against the live file
+this task:
+
+```
+163	def make_post(input, community, type, src, auth=None, uploaded_file=None):
+...
+246	        return post
+247	
+248	
+249	# 'from_scratch == True' means that it's not really a user edit, we're just re-using code for make_post()
+250	def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=None, from_scratch=False, hash=None):
+...
+749	            return user.id, post
+750	    elif from_scratch:
+751	        return post
+752
+753
+754	# just for deletes by owner (mod deletes are classed as 'remove')
+```
+
+**Group D IS fully closed: zero missing statements, zero missing arcs.**
+Measured with `--cov=app.shared.post --cov-branch` over
+`tests/test_shared_post_make.py` plus the four pre-existing files
+(`tests/test_shared_post_lifecycle.py`, `_moderation.py`, `_interactions.py`,
+`_edit.py`; **271 tests total**), against the 1193-line tree:
+`make_post`'s function-level summary reads `covered_lines: 61, num_statements:
+61, percent_covered: 100.0, missing_lines: [], num_branches: 26,
+missing_branches: [], percent_branches_covered: 100.0`. Both endpoints of
+every one of the 26 arcs were exercised task-by-task (Tasks 2-5: 10 + 8 + 6 +
+2), including `:238`'s false arm, which the plan had explicitly flagged as
+possibly unreachable -- see **D459** below for how it was reached.
+
+Whole-module figures at this measurement: **788 statements, 681 covered, 107
+missing; 438 branches, 363 covered, 75 missing, 21 partial; `percent_covered`
+85.15497553017944**. All 107 missing statements and all 75 missing branches
+are inside `edit_post` -- confirmed by summing every function's own
+`missing_lines`/`missing_branches` count from the JSON and checking the sum
+against the module total (both equal 107 and 75 exactly), not inferred from a
+summary line. `coverage_floors.ini`'s `app/shared/post.py` entry rose **77 ->
+85**. The module is NOT closed -- Group E (`edit_post`) is one more
+sub-project; its now-measured figures are **D461** below, so sub-project 38
+inherits a measurement instead of the stale 110/77.
+
+### 1. Why `make_post` stood at 0.0% through 36 sub-projects -- three blockers, each with its mechanism -- D454
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D454 | `app/utils.py:2504-2506` (`can_create_post`); `app/request_hooks.py:79,94-95` (`before_request`); `app/shared/post.py:17,239` with `tests/conftest.py:106` (`notify_about_post` / eager Celery) | **Not a defect -- three independent harness blockers, together sufficient to explain a whole function going untested for 36 rounds.** (1) `can_create_post` opens `if user.is_local(): if user.verified is False or user.private_key is None: return False` (`:2504-2506`) -- a LOCAL user is refused if `private_key` is `None`, which is exactly what `tests/factories.py`'s `make_user(..., local=True)` leaves it unless `with_keys=True` is passed (keypair generation costs roughly a second, which is why every prior naive attempt likely skipped it). Every `seed_post_context`-shaped local author is refused at `make_post:187` with `Exception('You are not permitted to make posts in this community')` -- a message naming a PERMISSION problem, giving no hint that the actual cause is a missing key. (2) `g.site` is never populated for a harness call: `make_post:219` is `community.last_active = g.site.last_active = utcnow()`, and `can_create_post` has its own `g.site` fallback at `:2508-2509` (`if not hasattr(g, 'site'): g.site = db.session.query(Site).get(1)`) -- but that fallback sits on the REMOTE-user `else` branch, which a local author never reaches. In production `g.site` is set by the `before_request` hook (`app/request_hooks.py:79`, the `@app.before_request` registered at `app/__init__.py:366`, populating `g.site` at `:95` for every request except `/inbox` and `/static/`); this harness dispatches no request for the SRC_API arm at all, and even the SRC_WEB arm's `web_ctx` only pushes a request context, not a real WSGI dispatch, so `before_request` never runs either way -- `g.site` must be supplied explicitly by the test fixture. (3) `notify_about_post` (imported at `:17`, called at `:239`) fires on the ordinary path: `:238`'s guard is `if post.status == POST_STATUS_PUBLISHED:`, which is the column default, and `tests/conftest.py:106` sets `task_always_eager=True`, so any Celery body inside it runs inline and synchronously rather than being silently swallowed by a queue nothing drains -- a naive first call pays for whatever that body does. All three needed to be settled BEFORE any assertion was possible; none is a production defect, and none was previously written down together as the reason this specific function was untested. | not a defect, registered so the reason is not re-derived | `app/utils.py:2504-2506`; `app/request_hooks.py:79,94-95`; `app/__init__.py:366`; `app/shared/post.py:17,187,219,238-239`; `tests/factories.py` (`make_user`'s `with_keys` parameter); `tests/conftest.py:106`; `.superpowers/sdd/2026-09-12-coverage-post-d-37/task-1-report.md` (Probes A-C) |
+
+### 2. `make_post` DUPLICATES `edit_post` in FOUR PLACES -- one finding, not four -- D455
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D455 | `app/shared/post.py:168-169`/`:173-179` against `:254`/`:256`,`:318`,`:321-327`; `:190-195` against `:565-569`; `:197-204` against `:461-468` | **Not a defect -- `make_post:231` passes `from_scratch=True` to `edit_post`, so all four duplicate ranges below always run on every call, and `make_post:183`'s own comment ("instead, make_post shares code with edit_post") states an intent the code only HALF-implements: the `:231` delegation is the sharing; these four blocks are the part that duplicates instead.** (a) **Title**, `:168` (SRC_API, bare `input['title']`) / `:173` (SRC_WEB, `.strip()`ped) against `edit_post:254` (`.strip()`ped) / `:318` (`.strip()`ped) -- recomputed by `edit_post`, then unconditionally overwritten onto the Post at `edit_post:395` (`post.title = title`), so `make_post`'s own value is visible nowhere in the finished row. (b) **Url**, `:169`/`:174-179` against `edit_post:256`/`:321-327` -- also recomputed; `make_post`'s local `url` never reaches the `Post` at all, since `:206-207`'s constructor call takes only `title` and `language_id` (`Post(user_id=..., community_id=..., instance_id=..., from_bot=..., posted_at=..., ap_id=..., title=title, language_id=language_id)`) with no `url=` keyword. (c) **Domain check**, `:190-195` against `:565-569` -- the guarded raise itself (`:194-195` / `:568-569`) is byte-identical text at identical indentation (`if domain.banned or domain.name.endswith('.pages.dev'): raise Exception(domain.name + ' is blocked by admin')`); only the OUTER guard's condition differs (`:190` bare `if url:` vs `:565` `if url and (from_scratch or url_changed):`). (d) **Extension check**, `:197-204` against `:461-468` -- **byte-identical including the comment** (`# check if this is an allowed type of file`), confirmed line-for-line. **The duplication is not merely redundant -- the domain and extension checks buy TIMING, at a real cost the other two ranges do not.** `make_post`'s copies refuse BEFORE `:206` creates anything; `edit_post`'s copies refuse AFTER `:209`/`:228` have already committed a Post and a PostVote, which `:233-235`'s `except` block must then explicitly delete. The title and url duplicates buy nothing at all -- their own values are thrown away downstream (title overwritten, url never used) -- so of the four, only (c) and (d) have a reason to exist as written; (a) and (b) are pure waste that happens to be harmless because nothing downstream reads them. | not a defect, registered (duplication, not a bug) | `app/shared/post.py:168-169,173-179,183,190-207,231,254,256,318,321-327,395,461-468,565-569` read this round; `.superpowers/sdd/2026-09-12-coverage-post-d-37/task-2-report.md`, `task-3-report.md` |
+
+### 3. This round's testing cost of the duplication in D455 -- three false witnesses, found only by mutation -- D456
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D456 | `tests/test_shared_post_make.py` (this round's own file, before its fix rounds) | **Process finding -- three separate instances, all in this round's own test file, all found only by running the prescribed mutation, never by a passing test.** (1) **Three url-arm tests originally asserted `post.url` directly and witnessed `edit_post`, not `make_post`.** `test_a_link_post_picks_link_url_not_video_url`, `test_a_video_post_picks_video_url_not_link_url` and `test_an_article_post_reads_neither_url_field` were first written asserting `post.url == '...'`, which is confounded by D455(b): `make_post`'s own local `url` at `:174-179` never reaches the Post, so a version of `:174`/`:176`/`:179` that read the WRONG field would still pass, because `edit_post:321-327` re-derives `url` independently from the same `type`/form fields and sets `post.url` itself. Task 2's fix round rewrote all three to assert on WHICH banned host's name appears in `:195`'s raise instead, since `:195` fires before `:231` ever delegates. (2) **A `:194` mutation (drop the `.pages.dev` disjunct) killed zero tests on first run.** `edit_post:568`'s byte-identical copy of the same compound (D455c) fired one call later and raised the identical message, masking `make_post`'s own weakened check completely -- 14/14 tests passed against the mutant. Closed by stubbing `post_module.edit_post` to identity in both domain-refusal tests, isolating `make_post:194`/`:195` as the only possible raise source; re-mutated, exactly 1 of 14 failed. (3) **A `:174` docstring claimed an arc it did not guard.** `test_a_link_post_picks_link_url_not_video_url`'s docstring asserted `:195`'s raise was "the ONLY effect of `make_post`'s local url that nothing downstream can reproduce" -- a live `:174` mutation (swap `POST_TYPE_LINK`->`POST_TYPE_VIDEO`) left this specific test GREEN, because `edit_post`'s own re-derivation at `:321` reproduces the same raise from the same (now-empty) url for the LINK case too. The mutation was still killed overall, by its companion `test_a_video_post_picks_video_url_not_line_url` -- but the LINK test's own claim about what IT was proving was false. Fixed by narrowing the docstring's claim to what the test actually pins (WHICH field `:174`/`:175` reads) rather than a false claim about exclusivity. Each of the three was found by a mutation, none by a passing assertion -- the same shape D451 already registers as a checklist, applied here to a different confound (duplicate ranges, not fixture coincidence). | closed (all three); registered as an instance of the D451 checklist against a new confound source | `.superpowers/sdd/2026-09-12-coverage-post-d-37/task-2-report.md` ("Critical finding" fix round, `test_the_web_arm_strips_the_title_and_the_api_arm_does_not`'s and the three url tests' rewrite); `task-3-report.md` ("A confound discovered during mutation verification", the 0-failure first attempt); `task-6-report.md` (docstring-mismatch #1) |
+
+### 4. THE `:165` AUTHORISATION HOLE -- THE SECOND CONSECUTIVE ROUND THE SAME MUTATION FOUND A REAL HOLE -- D457
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D457 | `app/shared/post.py:165` | **Registered as a general rule, cross-referencing D446(c)/D447 rather than repeating the lesson as a new instance.** Replacing `user = authorise_api_user(auth, return_type='model')` with a query that skips authorisation entirely (`user = User.query.order_by(User.id).first()`) SURVIVED all 29 tests in this file on first application. This is the SECOND CONSECUTIVE sub-project the identical mutation shape finds a real hole: sub-project 36's `restore_post:799` (`authorise_api_user(auth, id_match=post.user_id)` -> `post.user_id`, no authorisation) survived all 46 tests then in that file (**D446(c)**, general lesson **D447**). Both times, for the IDENTICAL reason: **every test authenticates as the permitted actor, so the suite asserts that the authorised path was TAKEN and nothing about authorisation having HAPPENED.** `s.author` is both the bearer-token holder in every `test_shared_post_make.py` test AND the first (in most, the only) row in the `User` table, so "return the first user" and "authorise the bearer" are indistinguishable against every existing fixture. Closed by `test_an_api_call_is_authorised_against_its_own_bearer_token`: a second, UNKEYED `intruder` user is created after `s.author` and given its own bearer token; real code identifies `intruder` via the token and `can_create_post` then refuses for a missing `private_key` (D454's blocker 1); the mutated code ignores the token and substitutes the keyed, first-row author instead, and the post would succeed. Re-mutated: fails this one test, 1/32. **The rule, stated generally so a third round does not have to rediscover it**: any test suite whose only authenticated actor is also the fixture's structurally-privileged default (first row, sole keyed user, etc.) cannot distinguish "authorisation ran" from "authorisation was skipped and a plausible default was substituted" -- a dedicated non-default, unprivileged, second identity is required to test authorisation AT ALL, not merely to test its refusal path. | closed; registered as a cross-referenced general rule (no new instance-lesson number) | `.superpowers/sdd/2026-09-12-coverage-post-d-37/task-6-report.md` (mutation M1, `:165`, and its closure); **D446(c)** and **D447** (sub-project 36's `restore_post:799` occurrence, cited rather than re-derived) |
+
+### 5. The `try`/`except` at `:230-236` has NO branch arc -- D458
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D458 | `app/shared/post.py:230-236` | **Process finding, general lesson, not a defect.** coverage.py does not model `except` handlers as branches -- the `try:`/`except Exception as e:` at `:230`/`:232` contributes no arc to the branch count at all, so `:233` (`db.session.delete(vote)`), `:234` (`db.session.delete(post)`), `:235` (`db.session.commit()`) and `:236` (`raise e`) are four statements COUNTED in the statement total but INVISIBLE to the arc count -- a function can reach 26/26 arcs, as `make_post` now does, while its own exception handler has never been reached by anything. It was reached and tested here (`test_a_failing_edit_post_rolls_back_the_post_and_the_vote`, monkeypatching `post_module.edit_post` to raise; `test_a_failing_edit_post_re_raises_the_original_exception`, asserting the SAME exception object propagates), and mutation-verified (`:234`'s delete and `:236`'s `raise e` -> `pass` both KILLED by these two tests) -- but nothing in the arc-coverage number itself would have revealed their absence had they not been. **General lesson for every future round in this module or any other: full arc coverage of a function says nothing about its exception handlers.** A `try`/`except` block must be checked for tests by name, never inferred as covered from a 100% branch figure. | not a defect; general lesson | `app/shared/post.py:230-236` read this round; `tests/test_shared_post_make.py:908-964` (`test_a_failing_edit_post_rolls_back_the_post_and_the_vote`, `test_a_failing_edit_post_re_raises_the_original_exception`); `.superpowers/sdd/2026-09-12-coverage-post-d-37/task-5-report.md` |
+
+### 6. `:238`'s false arm is reachable only through SRC_WEB -- the plan's flagged possibly-unreachable arc, resolved -- D459
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D459 | `app/shared/post.py:238` against `:281` (SRC_API) and `:337`,`:413-416` (SRC_WEB) | **Not a defect -- resolves an open question the plan itself raised rather than assuming past it.** `make_post:238` is `if post.status == POST_STATUS_PUBLISHED: notify_about_post(post)`; its False arm requires `post.status` to differ from the published default by the time `edit_post` (delegated to at `:231`) returns. `edit_post`'s SRC_API branch hardcodes `scheduled_for = None` at `:281` regardless of what `input` carries -- no key `_api_input` could add would ever reach this arm through the API. The SRC_WEB branch instead reads `scheduled_for = input.scheduled_for.data` at `:337`, and `:413-416` (`if scheduled_for: date_with_tz = post.scheduled_for.replace(tzinfo=ZoneInfo(post.timezone)); if date_with_tz.astimezone(ZoneInfo('UTC')) > utcnow(naive=False): post.status = POST_STATUS_SCHEDULED`) sets the non-published status once that date is confirmed still in the future. `test_an_unpublished_post_does_not_notify` reaches it: a `_web_form(scheduled_for=datetime(2030, 1, 1, 9, 0))` with `timezone` left at its default `'UTC'` reaches `:416`, leaving `post.status == POST_STATUS_SCHEDULED` by the time `make_post:238` runs; its positive control, `test_a_published_post_notifies`, uses the identical recorder shape (one call there, zero here) so the empty result means something rather than merely reflecting a broken monkeypatch. **The plan had explicitly flagged this arc as possibly unreachable from `make_post`'s own inputs, since the status is set inside `edit_post` rather than `make_post` itself; had it in fact been unreachable, this round could not have claimed zero missing arcs and would have had to register the gap instead of closing it, the same shape as sub-project 36's `:905` arc (D453).** It is reachable, through SRC_WEB only, and is now measured at 0 missing branches for `make_post` as confirmed by this round's own JSON. | resolved: reachable (SRC_WEB only); not a defect | `app/shared/post.py:238,281,337,413-416`; `tests/test_shared_post_make.py:965-1013` (`test_a_published_post_notifies`, `test_an_unpublished_post_does_not_notify`); `/tmp/post37.json` `functions['make_post']` (`missing_branches: []`) |
+
+### 7. A void mutation is worse than a survivor -- D460
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D460 | `app/shared/post.py:226` | **Process finding, general lesson (an instance of fact 215's rule, applied to this round).** Deleting `:226`'s `vote = PostVote(user_id=user.id, post_id=post.id, author_id=user.id, effect=1)` outright leaves the name `vote` undefined at `:233`'s `db.session.delete(vote)`, which every path through the `except` block executes -- the result is an immediate `NameError: name 'vote' is not defined` cascading through 18 of this file's tests. Taken at face value, 18 failing tests reads as an overwhelming, convincing kill; it is not one, by fact 215's own test ("is the crash the test observing the thing the mutation changed?") -- a `NameError` from a missing local name is a Python-scoping accident, not evidence that any test noticed the PostVote row itself was never created. The viable non-crashing variant of the SAME fault -- keep `vote` bound to something, so nothing crashes, but stop a real `PostVote` row from being created -- was constructed and run separately (`vote = post`, which binds the name and lets `:227`'s `db.session.add(vote)` proceed harmlessly against an already-tracked object, without inserting a second `PostVote` row). That variant IS killed, by `test_creating_a_post_seeds_its_author_upvote`'s direct query (`votes = db.session.query(PostVote).filter_by(post_id=post.id).all(); assert len(votes) == 1`), so the underlying fault is genuinely covered despite the literal deletion's crash being uninformative. **The general lesson: a void mutation is worse than a survivor, because a survivor is a finding someone still has to act on, while a void crash-kill is scored as evidence the site is covered when it has proven nothing about the fault at all** -- 17 convincing-looking failures (this round's analogue of sub-project 35's single false kill, fact 215) is a bigger false signal than one honest survivor would have been. | closed (fault genuinely covered via the non-crashing variant); void crash discounted per fact 215 | `.superpowers/sdd/2026-09-12-coverage-post-d-37/task-6-report.md` (mutation #21/#21b, the 18-test `NameError` cascade and the `vote = post` non-crashing re-run); `tests/test_shared_post_make.py:859-880` (`test_creating_a_post_seeds_its_author_upvote`); `tests/README.md` fact 215 |
+
+### 8. `extra_rate_limit_check` -- already registered as D406, not re-registered -- no new number
+
+`app/shared/post.py:155-160`'s unconditional `return False` and its duplicate
+in `app/shared/reply.py:134-139` (the docstrings differing in exactly one
+word, "posts" vs "comments", both carrying the same "who's" typo for "whose")
+were considered for registration again this round, since `make_post:166`
+calls it and Task 2 exercises both of its arcs. **They are already D406 --
+cross-reference it, do not add a fourth-and-fifth citation as a new entry.**
+The only new fact this round adds on top of D406: `make_post:166`'s True arm
+(`raise Exception('rate_limited')`) is reachable in this harness only by
+monkeypatching `post_module.extra_rate_limit_check` to `lambda user: True`
+(`test_a_rate_limited_api_user_is_refused`), since the real function can never
+return anything but `False` today -- consistent with D406's own "registered,
+not fixed" status and with the sibling stub in `app/shared/reply.py` sharing
+the identical shape. This is the search-the-register-first step sub-project 36
+added after D442 needlessly re-derived D295 from scratch; running it here cost
+one `grep` and saved a duplicate entry.
+
+### 9. Group E's arcs closed as a side effect, before and after -- D461
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D461 | `app/shared/post.py:250-751` (`edit_post`, the whole of Group E) | **Not a defect -- a measurement, recorded so sub-project 38 inherits a number instead of the stale 110/77 that D392 (sub-project 34's design document) carried forward from an earlier round, unexamined since.** This round's `make_post` tests call `edit_post` with `from_scratch=True` at `make_post:231` in nearly every test in the file (by design -- letting `edit_post` run for real is what proves the two functions compose, per this file's own docstring), reaching `edit_post:324`, `:421`, `:565`, `:739`, `:746` and `:750` for the first time; none of the six appears in this round's `missing_lines` for `edit_post`. **Before (stale, per D392): 110 missing statements, 77 missing branch arcs.** **After (measured this round, `/tmp/post37.json`, `functions['edit_post']['summary']`): 107 missing statements (`covered_lines: 243` of `num_statements: 350`, `percent_covered: 67.73%`), 75 missing branches (`covered_branches: 139` of `num_branches: 214`, 21 partial, `percent_branches_covered: 64.95%`).** Net closed as a side effect of Group D's own tests, with no test in this round targeting `edit_post` directly: **3 statements, 2 arcs.** `edit_post` is confirmed as the ONLY function in the module still carrying any missing coverage: summing `missing_lines`/`missing_branches` across every function in `/tmp/post37.json` gives exactly 107 and 75, matching the module-level summary's `missing_lines: 107`, `missing_branches: 75` exactly -- `make_post` and every Group A/B/C function are independently confirmed at zero. Group E remains open; this entry is a measurement for sub-project 38 to start from, not a claim that Group E is closed. | not a defect; measurement for the next sub-project | `/tmp/post37.json` `functions['edit_post']['summary']` and `['missing_lines']`/`['missing_branches']`; module `['summary']` (both read via `podman-compose ... exec test-runner python -c ...`); D392 (the stale 110/77 origin, sub-project 34's design document) |
+
+### 10. The mutation pass: 29 mutations, 24 killed, 3 holes closed, 1 equivalent, 1 void -- D462
+
+| # | site | defect | status | evidence |
+|---|---|---|---|---|
+| D462 | `app/shared/post.py:163-247` (all of Group D) | **29 first-pass mutations, plus 3 confirmation re-runs after a fix (32 mutate/test/revert cycles total). Final totals: 24 killed outright, 3 survived then closed with a new/strengthened test, 1 argued equivalent, 1 void (crash-kill discounted, fault separately confirmed killed) -- 0 final survivors, 0 unexplained.** Every survivor and its argument, beyond D457 (`:165`, the mandatory authorisation mutation) and D460 (`:226`'s void crash), both already registered above in full: **`:176`** (swap `POST_TYPE_VIDEO`->`POST_TYPE_LINK`) survived all 29 tests -- `edit_post:323`/`:565-569` masks a broken `:176` completely, the total form of the D455(b)/D456 confound; closed by `test_a_video_posts_own_url_is_checked_before_edit_post_runs`, using a recorder on `post_module.edit_post` (records whether it was entered at all, distinct from asserting the final url) plus a positive control, `test_an_unbanned_video_url_lets_edit_post_run`. **`:243`** (`SRC_API`->`SRC_WEB`, scoped to that one line since `:164` shares identical text) killed 11/29 outright but survived for `test_an_article_post_is_created_through_the_web_arm` specifically, whose only assertion (`result is not None`) is equally true of the SRC_API arm's two-tuple; closed by adding `assert result is rows[0]`, an identity check the two-tuple cannot satisfy. **`:233`** (delete `db.session.delete(vote)`) survived all 29 tests and was argued, not tested, as genuinely equivalent: `PostVote.post_id`'s FK carries `ON DELETE CASCADE` at the DATABASE level (migration `b38b253309dd`, applied via raw SQL specifically because, the migration's own comment says, `op.create_foreign_key(..., ondelete='CASCADE')` "doesn't actually create CASCADE" through Alembic's helper -- the ORM-level `ondelete='CASCADE'` declaration alone is not sufficient proof), so `:234`'s `db.session.delete(post)` plus `:235`'s commit cascade-deletes any dependent `PostVote` row at the Postgres level regardless of whether `:233` also issued its own redundant ORM-level delete, for every input that reaches this line. No test added; this is the only equivalence claim in the pass that was NOT separately checked against a mutation of what is compared rather than whether it is guarded (contrast **D448**'s corrected narrower claim, which this pass's own report cites explicitly as the reason to hold the `:233` claim to the higher, migration-sourced bar rather than the ORM declaration alone). Two structural crash-kills were reviewed under fact 215 and found NON-void, unlike `:226`: `:164`'s full dispatch inversion (`AttributeError`, dict-vs-`SimpleNamespace` shape mismatch -- the crash IS the fault, since the two arms use incompatible input types by design) and `:197`'s first conjunct drop (`AttributeError` on `None.filename` -- every test with the default `uploaded_file=None` must crash, with no non-crashing variant of "drop this specific conjunct" possible). Two docstring/failure mismatches were found and closed, both folded into **D456** above rather than repeated here. | 24 killed + 3 closed + 1 equivalent + 1 void = 29; 0 final survivors | `.superpowers/sdd/2026-09-12-coverage-post-d-37/task-6-report.md` (the full 29-row mutation table, the crash-kill analysis, the "Totals" section's row-by-row reconciliation: 24+3+1+1=29) |
+
+**Next free number: D463.** D454-D462 were taken by this round -- **D454**
+the three blockers behind `make_post`'s 36-round 0.0%; **D455** the four-place
+duplication between `make_post` and `edit_post`, registered as one finding;
+**D456** this round's three false-witness instances the duplication produced,
+each found only by mutation; **D457** the `:165` authorisation hole, the
+SECOND consecutive round the identical mutation shape found a real hole,
+cross-referencing **D446(c)**/**D447** rather than repeating the lesson;
+**D458** the `try`/`except` at `:230-236` carrying no branch arc at all;
+**D459** `:238`'s false arm, resolved reachable through SRC_WEB only, the one
+arc the plan itself had flagged as possibly unreachable; **D460** the `:226`
+void mutation, worse than a survivor because its 18-test `NameError` cascade
+reads as a kill while proving nothing, with the genuine non-crashing variant
+separately confirmed covered; **D461** Group E's arcs closed as a side effect
+of Group D's own tests, 110/77 -> 107/75, given as a measurement for
+sub-project 38 rather than left stale; **D462** the 29-mutation pass's full
+totals and its remaining survivors' arguments not already covered by D457 or
+D460. `extra_rate_limit_check` (`app/shared/post.py:155-160`) was considered
+and is **already D406** -- cross-referenced above under its own heading,
+**no new number taken for it**. **Group D IS closed: zero missing
+statements, zero missing arcs across `make_post`.** The module's floor rose
+**77 -> 85**, and the MODULE is not closed -- **Group E (`edit_post`)** is
+the one group remaining, now measured at 107 missing statements and 75
+missing branch arcs (**D461**) rather than the stale 110/77. If you take
+D463, say so here in the change that takes it.
 
 ## Ratchet gotchas
 
