@@ -1723,3 +1723,532 @@ class TestLoopsArm:
         file = db.session.get(File, s.post.image_id)
         assert file.source_url == \
             'https://cdn.loops.example/a.720p.mp4/b.720p.mp4'
+
+
+GENERIC_URL = 'https://news.example.com/article'
+THUMB_URL = 'https://cdn.example.com/lead.png'
+
+
+def _png_bytes():
+    """Genuine PNG bytes, small.
+
+    `url_to_thumbnail_file` opens what it downloads with `Image.open`
+    (app/utils.py:3085) and re-encodes it twice (`:3101`, `:3111`), so a
+    placeholder string would raise `PIL.UnidentifiedImageError` out of
+    `edit_post` -- `url_to_thumbnail_file` catches nothing around that block --
+    rather than producing a File.
+    """
+    buf = BytesIO()
+    Image.new('RGB', (8, 8), (7, 8, 9)).save(buf, format='PNG')
+    return buf.getvalue()
+
+
+def _written_media(tmp_path):
+    """Every regular file `url_to_thumbnail_file` left under `tmp_path`.
+
+    `chdir_upload` has moved the working directory to `tmp_path`, so
+    app/utils.py:3065's relative `'app/static/media/posts/' + ...` lands here
+    instead of in the repository.
+    """
+    root = tmp_path / 'app' / 'static' / 'media' / 'posts'
+    return sorted(p for p in root.rglob('*') if p.is_file()) if root.exists() else []
+
+
+class TestGenericOpengraphArm:
+    """`:641-657` -- the `else` arm of the `:601`/`:619`/`:630`/`:641` chain,
+    and the only one that FETCHES the thumbnail rather than merely recording
+    its url.
+
+    THE HARNESS IS THE INVERTED ONE, as in TestPixelfedArm and TestLoopsArm: a
+    HEAD reporting `text/html` so `is_image_url` is False and `:601` does not
+    take the chain, plus a GET route because `:642` WILL call
+    `opengraph_parse`. tests/README.md fact 229 point 3 records the opposite
+    rule and is correct only for tests/test_shared_post_upload.py.
+
+    `chdir_upload` IS REQUIRED HERE EVEN THOUGH NOTHING IS UPLOADED. `:646`'s
+    `url_to_thumbnail_file` writes the downloaded bytes and both re-encoded
+    thumbnails to a RELATIVE directory. Read out of the file rather than
+    recalled::
+
+        3061	            new_filename = gibberish(15)
+        3062	            if store_files_in_s3():
+        3063	                directory = 'app/static/tmp'
+        3064	            else:
+        3065	                directory = 'app/static/media/posts/' + new_filename[0:2] + '/' + new_filename[2:4]
+        3066	            ensure_directory_exists(directory)
+        3067	            temp_file_path = os.path.join(directory, new_filename + file_extension)
+
+    `store_files_in_s3()` (app/utils.py:4317-4319) is False under `TestConfig`
+    -- measured in this container, along with `current_app.debug` False and
+    `MEDIA_IMAGE_MEDIUM_FORMAT` 'WEBP' -- so `:3065` is the live branch and the
+    path is relative to the working directory, which without the fixture is the
+    bind-mounted repository root. Every file lands under `tmp_path` instead, and
+    `test_a_generic_url_downloads_the_opengraph_thumbnail` asserts they are
+    there rather than trusting the redirect.
+
+    THREE GETs ARE IN PLAY ACROSS THIS CLASS, not one, and `http_mock`'s
+    `assert_all_called=True` (tests/conftest.py:342) makes the count part of
+    every witness:
+
+      - the HEAD on the submitted url, from `:601`'s `is_image_url`;
+      - the GET on the submitted url, from `:642`'s `opengraph_parse`;
+      - the GET on the OG:IMAGE url, from `:646`'s `url_to_thumbnail_file`
+        (app/utils.py:3015), which goes through `httpx_client.get` DIRECTLY
+        rather than through `get_request`.
+
+    A test that does not reach the third must not register it, and a test that
+    does must -- which is what tells
+    `test_a_site_relative_og_image_skips_the_download` (never reaches it) apart
+    from `test_a_thumbnail_that_is_not_an_image_yields_no_file` (reaches it and
+    is refused there).
+
+    `is_invalid_get_request_uri` (app/utils.py:5493-5536) does NOT block either
+    host. Measured in this container under `TestConfig`::
+
+        invalid_uri https://cdn.example.com/lead.png False
+        invalid_uri https://news.example.com/article False
+
+    -- `furl` finds a host and an https scheme, and `socket.getaddrinfo` either
+    resolves to a global address or fails, and a resolution failure returns
+    False by `:5521-5522`'s deliberate fail-open. So `:3011`'s early return is
+    not what any test here relies on.
+
+    THIS ARM'S FILE IS BUILT DIFFERENTLY, AND THAT IS THE DISCRIMINATOR --
+    with a CORRECTION to the brief, read off app/utils.py rather than recalled::
+
+        3155	            return File(file_path=thumbnail_512_url, thumbnail_width=thumbnail_width, width=thumbnail_512_width,
+        3156	                        height=thumbnail_512_height,
+        3157	                        thumbnail_height=thumbnail_height, thumbnail_path=thumbnail_170_url,
+        3158	                        source_url=filename)
+
+    The brief predicted `file.source_url is None` on this arm. IT IS NOT:
+    `:3158` sets `source_url=filename`, the same column `:625` and `:637` set,
+    so source_url alone CANNOT tell this arm from the other two (false-witness
+    mechanism 1). What can is `file_path`, `thumbnail_path`, `width`, `height`,
+    `thumbnail_width` and `thumbnail_height`, ALL of which `:625` and `:637`
+    leave NULL because their `File(...)` calls pass neither. `file_path` is
+    asserted in the first test and is this class's signature.
+
+    MUTATION VERIFICATION, RUN RATHER THAN ARGUED. Four of the eight tests here
+    close no arc and no statement, and the standing rule is that such a test
+    earns its place only by a UNIQUE MUTANT KILL confirmed by running the
+    mutant. All five candidate mutants -- `:644`'s `or` fallback removed, and
+    each of `:654`'s four disjuncts removed in turn -- were applied to
+    `app/shared/post.py` one at a time and run against the whole of this file
+    (41 tests) and then against every other tests/test_shared_post_*.py file
+    (308 tests). Measured, for each of the five::
+
+        this file:      1 failed, 40 passed   (the failure being the test that claims it)
+        the other six:  308 passed
+
+    So each of the five is killed by exactly one test in 349, and 'no other test
+    in the suite' below is a measurement rather than a hope. `app/` was restored
+    from a pristine copy after each run and `git diff -- app/` is empty.
+    """
+
+    def test_a_generic_url_downloads_the_opengraph_thumbnail(
+            self, db_session, http_mock, chdir_upload):
+        """`:643` true -> `:644`; `:645` true -> `:646`; `:647` true -> `:648`,
+        `:649`, `:650`; then `:652`, `:654` false -> `:657`.
+        Arcs 643->644, 645->646, 647->648; statements 644-650.
+
+        FOUR witnesses, and the first two are the ones that are unique to this
+        arm:
+
+          - `file.file_path` is a real path ending '_512.webp'. Only
+            app/utils.py:3155 populates that column on any of the four arms of
+            the `:601` chain (class docstring), and only `:646` calls it. The
+            '_512' comes from app/utils.py:3110 and the '.webp' from `:3096`
+            via `MEDIA_IMAGE_MEDIUM_FORMAT`, measured 'WEBP' in this container.
+          - THREE files exist under `chdir_upload`. app/utils.py:3069-3070
+            saves the downloaded PNG, `:3101` saves the 170px WEBP over a
+            DIFFERENT path (`:3097` re-points `temp_file_path` to the .webp
+            name, leaving the .png behind), and `:3111` saves the 512px WEBP.
+            Neither `:619`'s nor `:630`'s arm writes anything -- they only
+            record a url -- so disk output separates this arm from those two.
+            It does NOT separate it from `:601`'s, which writes through
+            `make_image_sizes` at `:614`/`:616`; that arm is ruled out instead
+            by the `if`/`elif` chain, which cannot run two arms in one call,
+            and by `post.type` being LINK rather than IMAGE.
+            This assertion is also what proves `chdir_upload` redirected the
+            writes rather than merely being present: the files are found under
+            `tmp_path`, and the task report records that the repository's own
+            app/static/media held the same zero files afterwards as before.
+          - `post.type` is LINK, written by `:657`, because `:654`'s four
+            disjuncts are all false for this url -- see the video tests below
+            for the measurements.
+          - `file.source_url` is the OG:IMAGE url, not the post url. `:602`'s
+            File would carry the post url instead. NOT an arm discriminator
+            against `:625`/`:637`, which set the same column; see the class
+            docstring.
+
+        `post.url` is asserted as a fact about `:652` having run. It is NOT a
+        discriminator: `fixup_url` returns `(url, url)` for this host, so
+        `:640`'s `post.url = url` writes the identical value (module docstring).
+
+        A CORRECTION TO THE BRIEF, MEASURED. The brief's fourth assertion was
+        `file.alt_text == 'A headline'`. It is `''`, for exactly the reason
+        Tasks 5 and 6 found on the pixelfed and loops arms, and the reason
+        survives the difference in how this arm's File is built. Read out of the
+        file::
+
+            647	                    if file:
+            648	                        file.alt_text = shorten_string(opengraph.get('og:title'), 295)
+            649	                        post.image = file
+            650	                        db.session.add(file)
+            ...
+            663	    if url and post.image:
+            664	        file = File.query.get(post.image_id)
+            665	        if file:
+            666	            file.alt_text = image_alt_text
+
+        and, for the default::
+
+            262	        image_alt_text = input['image_alt_text'] if 'image_alt_text' in input else ''
+
+        `:649` sets `post.image`, so `:663` is true; `File.query.get` autoflushes,
+        which is what gives `post.image_id` a value at `:664`; and `:666`
+        overwrites `:648`'s value unconditionally with `''`. That `:648` writes
+        the attribute on an already-constructed object rather than through a
+        `File(...)` keyword makes no difference -- both reach the same column
+        before `:666` runs. So alt_text on this row witnesses `:666`, never
+        `:648`. `test_a_generic_url_falls_back_to_og_image_url` is the
+        same-mechanism positive control (false-witness mechanism 3): it passes a
+        distinctive `image_alt_text` and gets it back.
+
+        AN EXPECTED SURVIVOR, NOT A HOLE. Because `:666` overwrites the column,
+        a mutation of `:648`'s ARGUMENT -- `shorten_string(opengraph.get(
+        'og:title'), 295)` -- survives every test in this class, exactly as on
+        the other two arms: no assertion anywhere in this file is taken before
+        `:663` runs, so no assertion can see what `:648` wrote. Task 9's
+        mutation pass should record that ARGUMENT mutation as expected rather
+        than chase it. Closing it would need either an assertion taken before
+        `:663` or a change to `app/`, and neither is in this round's scope.
+        (This says nothing about mutations that remove `:648` as a whole, whose
+        fate depends on the mutation scheme used and is not predicted here.)
+        """
+        http_mock.head(GENERIC_URL).respond(200, headers={'Content-Type': 'text/html'})
+        _opengraph_page(http_mock, GENERIC_URL, og_image=THUMB_URL,
+                        og_title='A headline')
+        http_mock.get(THUMB_URL).respond(200, headers={'Content-Type': 'image/png'},
+                                         content=_png_bytes())
+        s = _seed()
+
+        edit_post(_api_input(url=GENERIC_URL), s.post, POST_TYPE_LINK, SRC_API,
+                  user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.url == GENERIC_URL  # `:652`; NOT an arm discriminator
+        assert s.post.type == POST_TYPE_LINK  # `:657`
+        file = db.session.get(File, s.post.image_id)
+        assert file.file_path.endswith('_512.webp')  # app/utils.py:3155, this arm only
+        assert file.thumbnail_path is not None  # app/utils.py:3157, this arm only
+        assert file.source_url == THUMB_URL  # NOT None, app/utils.py:3158
+        assert file.alt_text == ''  # `:666` overwrote `:648`'s 'A headline'
+        assert len(_written_media(chdir_upload)) == 3  # png + 170 webp + 512 webp
+
+    def test_a_generic_url_falls_back_to_og_image_url(
+            self, db_session, http_mock, chdir_upload):
+        """`:643`'s SECOND disjunct alone, and `:644`'s `or` fallback.
+
+        The page carries `og:image:url` and no `og:image`, so
+        `opengraph.get('og:image', '') != ''` is False and the block is
+        admitted only by the second disjunct; `:644`'s
+        `opengraph.get('og:image') or opengraph.get('og:image:url')` then gets
+        None from its left operand and falls through to the right.
+        'og:image:url' is one of `parse_page`'s `tags_to_search`
+        (app/utils.py:3181), so it really does reach the dict.
+
+        CLOSES NO NEW ARC -- 643->644 is already closed by the test above -- so
+        it earns its place by a UNIQUE MUTANT KILL, verified by running the
+        mutant rather than argued. Dropping `:644`'s fallback to
+        `filename = opengraph.get('og:image')` leaves `filename` None here and
+        `:645`'s `filename.startswith('/')` raises AttributeError, while the
+        test above is untouched because its page carries 'og:image'. Measured in
+        this container over the whole 41-test file: '1 failed, 40 passed, 1
+        error', the failure and the error both being THIS test -- the error is
+        respx's teardown noticing that the thumbnail GET registered below was
+        never reached, because the AttributeError fires first, which is a second
+        independent signal of the same kill.
+
+        Without this test the two disjuncts of `:643` move only in
+        lockstep and a swap between them is undetectable (false-witness
+        mechanism 5).
+
+        ALSO THE POSITIVE CONTROL for the `alt_text == ''` assertion above.
+        `og:title` is 'Fallback' here while `image_alt_text` is a different,
+        distinctive string, and the row comes back carrying the
+        `image_alt_text` -- which shows `:666` is what writes that column on
+        this path and that the `''` above is a write rather than an absence
+        (false-witness mechanism 3).
+        """
+        http_mock.head(GENERIC_URL).respond(200, headers={'Content-Type': 'text/html'})
+        _opengraph_page(http_mock, GENERIC_URL, og_image_url=THUMB_URL,
+                        og_title='Fallback')
+        http_mock.get(THUMB_URL).respond(200, headers={'Content-Type': 'image/png'},
+                                         content=_png_bytes())
+        s = _seed()
+
+        edit_post(_api_input(url=GENERIC_URL, image_alt_text='supplied by the caller'),
+                  s.post, POST_TYPE_LINK, SRC_API, user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        file = db.session.get(File, s.post.image_id)
+        assert file.source_url == THUMB_URL
+        assert file.file_path.endswith('_512.webp')  # still THIS arm's File
+        assert file.alt_text == 'supplied by the caller'  # `:666`, not `:648`
+
+    def test_a_site_relative_og_image_skips_the_download(
+            self, db_session, http_mock, chdir_upload):
+        """`:645` false -> `:652`. Arc 645->652.
+
+        `opengraph` IS truthy and `:644` DID produce a filename; the only thing
+        stopping the File is the '/' prefix, which makes `:645`'s
+        `not filename.startswith('/')` false.
+
+        NO GET IS REGISTERED FOR THE THUMBNAIL, and that absence is itself part
+        of the witness. `url_to_thumbnail_file` is never called, so a registered
+        route would go unreached and `assert_all_called=True` would fail the
+        test at teardown; had `:645` been inverted, the call WOULD happen and
+        respx would raise `AllMockedAssertionError` on the unmatched request.
+        The test fails loudly either way round, which is what separates it from
+        `test_a_thumbnail_that_is_not_an_image_yields_no_file` below, where the
+        GET is reached and registered.
+
+        NOTHING IS WRITTEN TO DISK either, and that is the same claim in a
+        second currency: app/utils.py:3069-3070 is downstream of the call that
+        never happens. The positive control for both assertions is the first
+        test in this class, which writes three files through the same mechanism
+        (false-witness mechanism 3).
+        """
+        http_mock.head(GENERIC_URL).respond(200, headers={'Content-Type': 'text/html'})
+        _opengraph_page(http_mock, GENERIC_URL, og_image='/assets/lead.png')
+        s = _seed()
+
+        edit_post(_api_input(url=GENERIC_URL), s.post, POST_TYPE_LINK, SRC_API,
+                  user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.image_id is None
+        assert File.query.count() == 0
+        assert _written_media(chdir_upload) == []
+        assert s.post.url == GENERIC_URL  # `:652` ran
+
+    def test_a_thumbnail_that_is_not_an_image_yields_no_file(
+            self, db_session, http_mock, chdir_upload):
+        """`:647` false -> `:652`. Arc 647->652.
+
+        `url_to_thumbnail_file` returns None when the response's content type
+        does not start with 'image'. Read out of the file rather than
+        recalled::
+
+            3019	    if response.status_code == 200:
+            3020	        content_type = response.headers.get('content-type')
+            3021	        if content_type and content_type.startswith('image'):
+
+        -- a 'text/plain' body takes neither the `:3021` branch nor any
+        `return`, so the function falls off its end and yields None. That is the
+        cheapest of the five None paths (`:3011` needs a uri the guard rejects,
+        `:3016` needs a transport exception, `:3019` needs a non-200, `:3056`
+        needs an unsanitizable SVG), and it needs no extra config.
+
+        THE GET IS REACHED HERE, unlike in the test above, and IS registered.
+        `assert_all_called=True` is what proves it ran: this test and that one
+        assert the same absence and are told apart by the request count and by
+        which mutation kills them, not by their assertions. Forcing `:647` true
+        crashes THIS test on `None.alt_text`; forcing `:645` true makes the test
+        above attempt an unmocked GET. Neither touches the other.
+
+        NOTHING REACHES DISK: app/utils.py:3069 is inside the `:3021` block that
+        this content type never enters.
+        """
+        http_mock.head(GENERIC_URL).respond(200, headers={'Content-Type': 'text/html'})
+        _opengraph_page(http_mock, GENERIC_URL, og_image=THUMB_URL)
+        http_mock.get(THUMB_URL).respond(200, headers={'Content-Type': 'text/plain'},
+                                         text='not an image')
+        s = _seed()
+
+        edit_post(_api_input(url=GENERIC_URL), s.post, POST_TYPE_LINK, SRC_API,
+                  user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.image_id is None
+        assert File.query.count() == 0
+        assert _written_media(chdir_upload) == []
+
+    # ------------------------------------------------------------------
+    # `:654`'s four disjuncts. Read out of the file rather than recalled::
+    #
+    #     654	            if is_video_url(url) or url.endswith('.mp4') or url.endswith('.webm') or is_video_hosting_site(embed_url):
+    #     655	                post.type = POST_TYPE_VIDEO
+    #     656	            else:
+    #     657	                post.type = POST_TYPE_LINK
+    #
+    # COVERAGE SCORES THIS AS ONE ARC PAIR, so the four operands are
+    # indistinguishable to it and only mutation can separate them. Each test
+    # below feeds an input making EXACTLY ONE disjunct true, measured in this
+    # container before the tests were written::
+    #
+    #   url                                    d1 is_video_url  d2 .mp4  d3 .webm  d4 hosting
+    #   'https://cdn.example.com/MOVIE.MP4'    True            False    False     False
+    #   'https://x.example/clip#b.mp4'         False           True     False     False
+    #   'https://y.example/clip#b.webm'        False           False    True      False
+    #   'https://vimeo.com/12345'              False           False    False     True
+    #   'https://cdn.example.com/movie.mp4'    True            True     False     False   <- LOCKSTEP, not used
+    #   'https://cdn.example.com/clip.webm'    True            False    True      False   <- LOCKSTEP, not used
+    #   'https://cdn.example.com/clip.mov'     False           False    False     False   <- see D476 below
+    #
+    # The two lockstep rows are why the brief's proposed 'movie.mp4' input is
+    # NOT used: with d1 and d2 both true, deleting either one alone changes
+    # nothing and the mutant survives (false-witness mechanism 5).
+    #
+    # d1 AND d2 DO NOT SUBSUME EACH OTHER, and the table above is the proof in
+    # both directions. `is_video_url` (app/utils.py:294-313) LOWERCASES and
+    # tests `urlparse(url).path`; `url.endswith('.mp4')` tests the RAW string
+    # case-sensitively, including any query or fragment. So an uppercase
+    # extension makes only d1 true, and a fragment -- which `urlparse` keeps
+    # OUT of `.path` -- makes only d2 true. (A trailing query, e.g.
+    # 'movie.mp4?v=2', also gives d1 alone: measured True/False.)
+    #
+    # D476, THIRD SITE. `:654` admits '.mp4' and '.webm' and NOT '.mov',
+    # exactly as `is_video_url` does (app/utils.py:295), while `edit_post`'s own
+    # upload block accepts '.mov'. Read out of the file rather than recalled --
+    # and this paste is itself a CORRECTION, of a first draft of this comment
+    # that cited `:465` for the wrong line::
+    #
+    #     463	        allowed_extensions = ['.gif', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.mpo', '.avif', '.svg']
+    #     464	        if type == POST_TYPE_VIDEO and can_upload_video():
+    #     465	            allowed_extensions.extend(['.mp4', '.webm', '.mov'])
+    #     466	        file_ext = os.path.splitext(uploaded_file.filename)[1]
+    #     467	        if file_ext.lower() not in allowed_extensions:
+    #
+    # `:463`'s list does NOT hold '.mov'; `:465` adds it, and only when the
+    # submitted type is POST_TYPE_VIDEO and `can_upload_video()` is true. The
+    # gate itself is `:467`. So '.mov' is a permitted upload extension that
+    # `:654` then refuses to recognise as video -- measured: all four disjuncts
+    # False for 'https://cdn.example.com/clip.mov', so `:657` writes
+    # POST_TYPE_LINK.
+    #
+    # WHICH SUBMISSION ACTUALLY REACHES THIS SITE is worth stating exactly,
+    # because D476's registered site is UPSTREAM of it. An UPLOADED '.mov'
+    # never gets here: `:513`'s `not is_video_url(final_place)` is true for
+    # '.mov' (the same missing extension), so `:514`'s `Image.open` meets a
+    # QuickTime container and raises `UnidentifiedImageError` out of
+    # `edit_post` -- that crash IS D476 as registered. The path that reaches
+    # `:654` is a PLAIN URL SUBMISSION of a '.mov' with no uploaded_file, where
+    # nothing decodes the bytes and the only consequence is the wrong
+    # `post.type`. Same missing equivalence class, second consequence.
+    #
+    # RECORDED AGAINST D476, NOT FIXED: a missing equivalence class is
+    # invisible to both coverage and mutation, which is what made D476 worth
+    # registering, and fixing it would change app/ which this round may not do.
+    # No test here feeds a '.mov'; one would pin today's wrong answer as
+    # correct, and a test whose whole content is a defect is worse than the
+    # note.
+    #
+    # d4 IS ISOLABLE BY VALUE BUT ITS ARGUMENT IS NOT. `is_video_hosting_site`
+    # is the only operand reading `embed_url` rather than `url`, and
+    # `fixup_url` (app/utils.py:3311-3312) opens `thumbnail_url = embed_url =
+    # url` and diverges only for youtube domains and for a peertube url whose
+    # last 25 characters begin '/w/' (app/utils.py:3330) -- neither of which any
+    # url in this file is. So `embed_url == url` throughout, the vimeo test
+    # below DOES kill a mutant that deletes the operand, but a mutant that
+    # merely swaps its ARGUMENT to `is_video_hosting_site(url)` is EQUIVALENT
+    # here and cannot be killed from this file. Task 9 should record that one as
+    # equivalent rather than hunt a kill for it.
+    # ------------------------------------------------------------------
+
+    def _drive_video(self, http_mock, url):
+        """HEAD text/html + an unreadable page, then submit `url` as a LINK.
+
+        `_unreadable_page` makes `parse_page` return False
+        (app/utils.py:3195-3196) so `:643` is false and no File is built -- the
+        thumbnail is irrelevant to what these tests witness, and skipping it
+        keeps the og:image GET out of the request count.
+        """
+        http_mock.head(url).respond(200, headers={'Content-Type': 'text/html'})
+        _unreadable_page(http_mock, url)
+        s = _seed()
+        edit_post(_api_input(url=url), s.post, POST_TYPE_LINK, SRC_API,
+                  user=s.user, from_scratch=True)
+        db.session.refresh(s.post)
+        return s.post
+
+    def test_an_uppercase_video_extension_is_typed_as_video(
+            self, db_session, http_mock, chdir_upload):
+        """`:654`'s FIRST disjunct alone -> `:655`. Arc 654->655, statement 655.
+
+        A CORRECTION TO THE BRIEF, which stated the arcs here were already
+        covered and that the test existed only for Task 9. Measured on the
+        33-test baseline immediately before this class was written: 655 was in
+        `missing_lines` and `[654, 655]` in `missing_branches`. This test closes
+        both.
+
+        'MOVIE.MP4' is uppercase on purpose. `is_video_url` lowercases the
+        parsed path (app/utils.py:312) so d1 is True, while `url.endswith(
+        '.mp4')` is case-sensitive so d2 is False, and d3/d4 are False --
+        exactly one disjunct carries the branch. `POST_TYPE_VIDEO` is a positive
+        witness rather than a default: `:398` wrote LINK from the submitted
+        `type`, and `:661` is unreachable because `:565` is true here.
+        """
+        post = self._drive_video(http_mock, 'https://cdn.example.com/MOVIE.MP4')
+        assert post.type == POST_TYPE_VIDEO
+
+    def test_a_raw_mp4_suffix_outside_the_path_is_typed_as_video(
+            self, db_session, http_mock, chdir_upload):
+        """`:654`'s SECOND disjunct alone -> `:655`.
+
+        CLOSES NO ARC AND NO STATEMENT -- the test above closes 654->655 -- so
+        it earns its place by a UNIQUE MUTANT KILL, verified by running the
+        mutant. Deleting `url.endswith('.mp4') or` from `:654` fails THIS test
+        and no other in the suite; the uppercase test is untouched because its
+        d2 is already False.
+
+        The fragment is what separates the operands: `urlparse` puts '#b.mp4'
+        in `.fragment`, leaving `.path` as '/clip', so `is_video_url` is False
+        while the raw string still ends '.mp4'. Measured before writing.
+        """
+        post = self._drive_video(http_mock, 'https://x.example/clip#b.mp4')
+        assert post.type == POST_TYPE_VIDEO
+
+    def test_a_raw_webm_suffix_outside_the_path_is_typed_as_video(
+            self, db_session, http_mock, chdir_upload):
+        """`:654`'s THIRD disjunct alone -> `:655`.
+
+        CLOSES NO ARC AND NO STATEMENT; earns its place by a unique mutant
+        kill, verified by running the mutant. Deleting `url.endswith('.webm')
+        or` from `:654` fails THIS test and no other in the suite -- no other
+        test in this file feeds a url whose RAW string ends '.webm' while its
+        parsed path does not.
+
+        Same fragment mechanism as the test above, and the same reason it is
+        not redundant with it: d2 and d3 are separate operands, and an input
+        making both false-but-one would leave a swap between them undetectable
+        (false-witness mechanism 5).
+        """
+        post = self._drive_video(http_mock, 'https://y.example/clip#b.webm')
+        assert post.type == POST_TYPE_VIDEO
+
+    def test_a_vimeo_url_is_typed_as_video_by_the_hosting_site_disjunct(
+            self, db_session, http_mock, chdir_upload):
+        """`:654`'s FOURTH disjunct alone -> `:655`.
+
+        CLOSES NO ARC AND NO STATEMENT; earns its place by a unique mutant
+        kill, verified by running the mutant. Deleting `or
+        is_video_hosting_site(embed_url)` from `:654` fails THIS test and no
+        other in the suite. It is the only test anywhere in this file that
+        reaches `is_video_hosting_site` from `:654` rather than from `:660`:
+        `TestVideoHostingSiteArm` drives `:660` with `from_scratch=False`, which
+        closes `:565` and makes `:654` unreachable in the same call.
+
+        'https://vimeo.com' is one of the six prefixes at app/utils.py:319-321,
+        and the url holds no '.mp4'/'.webm' in any form, so d1, d2 and d3 are
+        all False -- measured before writing.
+
+        THE OPERAND'S ARGUMENT IS NOT WITNESSED, and this is deliberate rather
+        than an omission: `embed_url == url` for this host (see the block
+        comment above), so swapping `is_video_hosting_site(embed_url)` for
+        `is_video_hosting_site(url)` is an EQUIVALENT mutant from this file.
+        """
+        post = self._drive_video(http_mock, 'https://vimeo.com/12345')
+        assert post.type == POST_TYPE_VIDEO
