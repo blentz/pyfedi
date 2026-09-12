@@ -1072,15 +1072,31 @@ def test_a_remote_moderator_gets_no_local_notification(db_session):
         title='A post has been reported').count() == 0
 
 
-def test_report_remote_true_includes_every_remote_moderators_instance(db_session):
-    """`:886`'s FALSE arm and `:890`'s unconditional add.
+def test_api_report_remote_true_adds_a_moderator_the_filter_would_exclude(db_session):
+    """`:886`'s FALSE arm and `:890`'s UNCONDITIONAL add.
 
-    With `report_remote` set the reporter has opted in, so every remote
-    moderator's instance receives the Flag with no filtering.
+    THE MODERATOR MUST BE ONE `:887` WOULD REJECT. This one is non-local but
+    carries the community's own `instance_id`, so `:887`'s second conjunct is
+    false and the filtered arm would drop it. Under `report_remote` the add at
+    `:890` happens anyway.
+
+    That fixture is the whole test. A moderator on some THIRD instance --
+    distinct from both the suspect's and the community's -- passes `:887` too,
+    so a test using one would pass identically whether `:886` routed it to
+    `:890` or to `:888`, and would witness nothing about which arm ran. Swap
+    the arms here and `remote_instance_ids` is empty, `:914` is false, and no
+    `task_selector` call happens at all.
+
+    `make_user(..., local=False)` sets `ap_id` (tests/factories.py:60) while
+    leaving `instance_id` at the instance passed in, and `User.is_local()`
+    (app/models.py:1252) reads only `ap_id`/`ap_profile_id` -- never
+    `instance_id`. That is what lets a user be non-local and still sit on the
+    local instance.
     """
     calls = []
     s = seed_post_context(community_name='lifecycle')
-    remote_instance, _mod = seed_remote_moderator(s)
+    oddmod = make_user(s.instance, 'filtermod', local=False)
+    make_community_member(oddmod, s.community, is_moderator=True)
 
     import app.shared.post as post_module
     original = post_module.task_selector
@@ -1102,7 +1118,7 @@ def test_report_remote_true_includes_every_remote_moderators_instance(db_session
 
     assert len(calls) == 1
     assert calls[0][0] == 'report_post'
-    assert set(calls[0][1]) == {remote_instance.id}
+    assert set(calls[0][1]) == {s.instance.id}
 
 
 def test_report_remote_false_excludes_the_suspects_own_instance(db_session):
@@ -1165,7 +1181,9 @@ def test_a_moderator_row_whose_user_is_gone_is_skipped(db_session):
         title='A post has been reported').count() == 0
 ```
 
-**`:887`'s second conjunct** — `moderator.instance_id != post.community.instance_id` — needs its own witness. Work out a fixture that makes the first conjunct true and the second false, and if you conclude it is unreachable under `seed_post_context` (because `make_community` hardcodes `instance_id=1`), say so with the argument rather than leaving the gap silent.
+**`:887`'s second conjunct** — `moderator.instance_id != post.community.instance_id` — needs its own witness: a fixture making the first conjunct true and the second false. It IS reachable. An earlier draft of this plan guessed it might not be, reasoning that a moderator on the community's instance would be local and take `:876`'s true arm without ever reaching `:887`. That reasoning was wrong: `User.is_local()` (`app/models.py:1252`) tests `ap_id`/`ap_profile_id` and never consults `instance_id`, so `make_user(s.instance, name, local=False)` produces a user who is non-local while sitting on the community's own instance. Move the suspect to a third instance and the first conjunct is true while the second is false.
+
+**Name every test in this task for the arm it exercises.** Task 7 adds WEB-arm counterparts for this same function; a duplicate `def test_...` name does not raise, it rebinds at collection and the earlier test silently stops running. Tests whose behaviour differs by arm carry `api` in the name. A test that is arm-agnostic — the orphaned-moderator-row one — does not need the marker, because no WEB counterpart is possible.
 
 - [ ] **Step 4: Run and report the collection line**
 
