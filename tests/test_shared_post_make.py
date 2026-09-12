@@ -246,9 +246,28 @@ def test_a_link_post_picks_link_url_not_video_url(db_session, app):
     earlier draft of this file did exactly that, and a fix-round caught it.)
 
     A Domain-row assertion is confounded too, because `edit_post:566` calls
-    `domain_from_url` as well. The ONLY effect of `make_post`'s local url that
-    nothing downstream can reproduce is `:195`'s raise, which happens before
-    `:231` delegates at all.
+    `domain_from_url` as well. `:195`'s raise is NOT the only effect of
+    `make_post`'s local url that survives downstream, and asserting on the
+    raise is therefore not proof of `:174`/`:175` alone: `edit_post`'s own
+    copy of this exact check (`:565-569`) reaches the identical exception,
+    with the identical message, for this same LINK-typed input if
+    `make_post`'s own url selection is broken and `edit_post` runs unstubbed
+    (as it does here) -- verified empirically. A live mutation of `:174`
+    (swapping its constant so a LINK post's local `url` falls through to
+    `:179`'s `url = None`) leaves THIS test green, because `edit_post`
+    re-derives the same linkhost url from `type`/`input.link_url` at `:321`
+    and reaches `:569`'s raise on its own, one call later. What `make_post`'s
+    own check controls -- and what nothing downstream can reproduce -- is
+    WHEN the refusal happens: before `:231` ever delegates, so no Post or
+    Vote row is created first; that timing is what
+    `test_a_banned_domain_is_refused_before_any_row_is_created`'s recorder
+    pins, not this test. What THIS test actually witnesses is narrower: WHICH
+    field `:174`/`:175` read, via the raised message naming the right host.
+    A `:174` mutation is killed by its companion,
+    `test_a_video_post_picks_video_url_not_link_url`, not reliably by this
+    test alone -- a VIDEO-typed call under that same mutation raises
+    immediately with the WRONG host's name, before `edit_post` is ever
+    reached, which this test's LINK-typed shape cannot show.
 
     Both hosts are banned, so the arm that ran is named in the message:
     `:195` raises `domain.name + ' is blocked by admin'`. Delete `:175` and url
@@ -1097,7 +1116,7 @@ def test_an_api_call_is_authorised_against_its_own_bearer_token(db_session):
     `intruder` is created AFTER `s.author`, so `.order_by(User.id).first()`
     still returns the author under the mutation, and is left UNKEYED
     (`with_keys` defaults to False) rather than banned or unverified:
-    `authorise_api_user` (app/utils.py:3623-3624) itself rejects a banned or
+    `authorise_api_user` (app/utils.py:3628-3629) itself rejects a banned or
     unverified user's token with 'incorrect_login' before `make_post` is ever
     reached -- the same confound `test_an_unverified_user_cannot_make_a_post`
     documents above -- so this test would fail against CORRECT code too if it
