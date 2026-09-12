@@ -35,18 +35,28 @@ tests/factories.py; the rules are tests/README.md facts 206-219. Four bind here:
       ROLE_ADMIN, User.id == 1))`. Here the `id == 1` disjunct sits on the
       far side of an INNER join to `user_role`, so a user with zero
       `user_role` rows is dropped before that `WHERE` clause is ever
-      evaluated. NOT admin -- the outlier of the three, and, per
-      app/request_hooks.py's UNION, arguably a defect rather than a policy:
-      the other two predicates treat id 1 as admin unconditionally.
+      evaluated. NOT admin -- IN THIS HARNESS. See below; that is not
+      production's answer.
+
+    THE THIRD ROW IS A HARNESS ARTIFACT. `Site.admins()` has two branches:
+    app/models.py:3996-3997 returns `User.id.in_(tuple(g.admin_ids))` whenever
+    `g.admin_ids` is set, and only falls through to the join query when it is
+    not. app/request_hooks.py:79 is an `@app.before_request` (registered at
+    app/__init__.py:366) setting `g.admin_ids` on every request except
+    `/inbox` and `/static/` (`:94`). So on a live request path all three
+    predicates AGREE. The join branch is reached only with `g.admin_ids`
+    unset -- outside a request context, or on `/inbox`. This file never
+    dispatches a request: `web_ctx` uses `test_request_context`, which pushes
+    a context but does not run `before_request`. Hence the `[]`.
 
     Task 1's Probe A exercised `Site.admins()` specifically and confirmed
     `[]` even though `s.author.id == 1`. Any test in this file that drives
     `report_post`'s `notify_admins` branch (`:892-900`, which calls
     `Site.admins()`) must therefore seed an explicit admin (a real
-    `user_role` row with `ROLE_ADMIN`, or a `g.admin_ids` override) --
-    `s.author` alone will not reach `:894`'s loop body. This is specific to
-    `Site.admins()`; do not generalise it to `is_admin()` or `g.admin_ids`,
-    which both already treat `s.author` as an admin.
+    `user_role` row with `ROLE_ADMIN`) -- `s.author` alone will not reach
+    `:894`'s loop body HERE. Do not read that as a production defect, and do
+    not generalise it to `is_admin()` or `g.admin_ids`, which treat
+    `s.author` as an admin everywhere.
 
   - SRC_API ARMS NEED NO REQUEST CONTEXT. `get_ip_address` swallows the
     missing-context RuntimeError, and Task 1's Probe B confirmed
