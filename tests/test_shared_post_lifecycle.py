@@ -935,6 +935,43 @@ def test_an_unmoderated_local_community_always_notifies_admins_through_the_api(d
         title='Suspicious content').count() == 1
 
 
+def test_an_unmoderated_remote_community_does_not_force_admin_notification(db_session):
+    """`:841`'s FIRST conjunct (`is_local()`) taken false, with the second
+    (`un_moderated`) true.
+
+    The override at `:842` is scoped to LOCAL unmoderated communities -- a
+    remote community's `un_moderated` flag describes moderation on ITS home
+    instance, not ours, so it must not force a local admin escalation. Catches
+    a regression collapsing the two-conjunct guard down to `un_moderated`
+    alone, which would force every report on a remote unmoderated community to
+    escalate regardless of reason.
+
+    `reason='spam'` matches none of `:828-830`'s needles, so `notify_admins`
+    has no other source here: a True count below could only come from the
+    override reaching too far. Positive control:
+    `test_an_unmoderated_local_community_always_notifies_admins_through_the_api`
+    above, identical fixture shape apart from locality, non-zero count.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    seed_site_admin(s)
+    s.community.un_moderated = True
+    remote_instance = make_instance('remote.example', software='lemmy')
+    s.community.ap_id = f'lifecycle@{remote_instance.domain}'
+    s.community.ap_profile_id = f'https://{remote_instance.domain}/c/lifecycle'
+    db.session.commit()
+    assert s.community.is_local() is False
+
+    report_post(
+        s.post,
+        {'reason': 'spam', 'description': 'x', 'report_remote': False},
+        SRC_API,
+        auth=bearer(s.voter),
+    )
+
+    assert db.session.query(Notification).filter_by(
+        title='Suspicious content').count() == 0
+
+
 def test_an_admin_who_is_already_a_notified_moderator_is_not_notified_twice(db_session):
     """`:894`'s false arm.
 
