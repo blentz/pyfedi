@@ -29,6 +29,7 @@
 - **No duplicate test names.** Python rebinds at collection and the earlier test silently stops running. Check with `grep -oE "^def (test_[a-z_]+)" tests/test_shared_post_make.py | sort | uniq -d` before every commit.
 - **Every line number re-derived** with numbered output: `awk 'NR>=X && NR<=Y {printf "%d\t%s\n",NR,$0}' FILE`. Cite a statement's own line, not the `if` guarding it.
 - **Sweep citations before committing** with `:[0-9]+(/:[0-9]+)?(-:?[0-9]+)?`, no backtick or path anchor.
+- **VERIFY EVERY CITATION MECHANICALLY AND PASTE THE PROOF.** Tasks 1, 2 and 3 each shipped exactly one Major finding and all three were citations — a neighbouring line, a neighbouring line, and a wrong FILE. Sweeping for the pattern is not enough, because a well-formed citation can still point at the wrong thing. For every `file:line` you add or change in a commit, run `awk 'NR>=X && NR<=Y {printf "%d\t%s\n",NR,$0}' FILE` and **paste the numbered output into your report next to the claim it supports**. A citation whose proof is not in the report is not verified, and a reviewer will treat it as a finding.
 - **Mutations:** one at a time, **line-scoped `sed`**, dry-run and read the produced line first, apply, run, restore, then assert empty `git diff -- app/` and `wc -l app/shared/post.py` = 1193. Restore before any point where you might stop.
 - Commit with `git commit -F <file>`, never `-m`. Lowercase `type:` subject prefix, normal English prose.
 - **Commit trailer, last two lines, in this order.** `Claude Opus 5` is a LITERAL CONSTANT, not a field describing the agent:
@@ -934,11 +935,67 @@ def test_an_unpublished_post_does_not_notify(db_session):
 
 **This second test is deliberately left unfinished.** `:238`'s false arm requires a post that is not published after `edit_post` runs, and the mechanism is `edit_post`'s scheduling logic — which this round does not otherwise touch. Find it, or argue it is unreachable from `make_post`'s inputs and report that. **Do not delete the arc silently**; if it cannot be reached, Task 7 registers it and the round does not claim zero missing arcs.
 
-- [ ] **Step 5: Run and report the collection line**
+- [ ] **Step 5: Witness that `make_post` refuses BEFORE it creates anything**
 
-- [ ] **Step 6: Report whether `:238`'s false arm was reached**, and if not, the argument
+`make_post:190-195` is redundant in OUTCOME — `edit_post:565-569` reimplements
+the identical compound, four lines including the exception string, and
+`:231` passes `from_scratch=True` so that guard always fires. What
+`make_post`'s copy buys is TIMING: it raises at `:195` before `:206` creates
+the Post, where `edit_post` raises at `:569` after the Post and vote are
+committed at `:209` and `:228`, which is the whole reason `:230-236` exists.
 
-- [ ] **Step 7: Commit**
+No test so far distinguishes those two, because both leave `Post.count() == 0`
+— one by never creating a row, the other by rolling one back. This one does:
+
+```python
+def test_a_banned_domain_is_refused_before_any_row_is_created(db_session, app):
+    """`:195` fires before `:231`, which is the only thing `make_post`'s
+    domain check buys.
+
+    `edit_post:565-569` reimplements `:190-195` verbatim -- same compound, same
+    exception string -- and `:231` passes `from_scratch=True`, so that copy
+    always runs. Refusing a banned domain is therefore NOT what `make_post`'s
+    check is for; refusing it CHEAPLY is. `edit_post` would raise the same
+    message at `:569`, after `:209` and `:228` committed a Post and a PostVote
+    that `:233-235` then has to delete.
+
+    Asserting `Post.count() == 0` cannot tell those apart -- the rollback
+    produces it too. Recording whether `edit_post` was ENTERED can.
+    """
+    calls = []
+    s = seed_make_context()
+    d = make_domain('banned.example')
+    d.banned = True
+    db.session.commit()
+
+    import app.shared.post as post_module
+    original = post_module.edit_post
+
+    def recorder(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+
+    post_module.edit_post = recorder
+    try:
+        with pytest.raises(Exception, match='banned.example is blocked by admin'):
+            make_post(_api_input(url='https://banned.example/x'), s.community,
+                      POST_TYPE_LINK, SRC_API, auth=bearer(s.author))
+    finally:
+        post_module.edit_post = original
+
+    assert calls == []
+    assert db.session.query(Post).count() == 0
+```
+
+Verify it: move `:190-195` to below `:231` — or simply delete `:194`'s raise —
+and confirm this test fails because `calls` is no longer empty. Restore, and
+confirm `git diff -- app/` is empty and `wc -l app/shared/post.py` reads 1193.
+
+- [ ] **Step 6: Run and report the collection line**
+
+- [ ] **Step 7: Report whether `:238`'s false arm was reached**, and if not, the argument
+
+- [ ] **Step 8: Commit**
 
 Subject: `test: cover make_post's state mutations, rollback and notify guard`
 
