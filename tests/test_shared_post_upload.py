@@ -126,6 +126,17 @@ class _RecordingS3Client:
     rather than being a bare no-op -- a no-op made `:562`'s call
     undetectable by construction, not by any test's oversight, since
     nothing could ever tell "called" from "never called" either way.
+
+    `download_file` is a DELIBERATE no-op, added for a mutation this class
+    does not otherwise witness: `:557`'s `s3.upload_file(...)` swapped for
+    `s3.download_file(...)` (Task 7 fix round 1, Major 2). Without this
+    method the swap crashes with `AttributeError` before any test
+    assertion runs, and Rule 1 of the mutation pass ("a crash kill is not
+    a kill") requires checking for a non-crashing variant of the same
+    fault rather than accepting the crash as evidence. With this no-op in
+    place, that exact mutation instead leaves `upload_file_calls` empty
+    and every test that calls `edit_post` with S3 configured fails at its
+    own `assert len(calls) == 1` -- a plain `AssertionError`, not a crash.
     """
 
     def __init__(self):
@@ -134,6 +145,9 @@ class _RecordingS3Client:
 
     def upload_file(self, *args, **kwargs):
         self.upload_file_calls.append((args, kwargs))
+
+    def download_file(self, *args, **kwargs):
+        pass
 
     def close(self):
         self.close_calls += 1
@@ -1210,7 +1224,7 @@ def test_the_configured_max_dimension_actually_shrinks_the_thumbnail(
 
 
 def test_exif_orientation_is_corrected_before_conversion(
-        db_session, chdir_upload, http_mock):
+        db_session, chdir_upload, http_mock, app):
     """`:516`'s `img = ImageOps.exif_transpose(img)`.
 
     No image `make_upload` can build carries EXIF orientation metadata --
@@ -1229,7 +1243,18 @@ def test_exif_orientation_is_corrected_before_conversion(
     carrying that tag returns a (4, 8) image -- width and height swapped).
     Whether `:516` ran is therefore visible directly in the saved file's
     dimensions: swapped if it did, unchanged if it did not.
+
+    The final `saved.size == (4, 8)` assertion below is only valid because
+    `:521`'s `img.thumbnail((image_max_dimension, image_max_dimension),
+    ...)` is a no-op on an image this small -- which depends on
+    `MEDIA_IMAGE_MAX_DIMENSION`'s DEFAULT (`config.py:139`) being >= 8.
+    Per D451/the standing rule that a test depending on a config default
+    must assert it, that default is asserted explicitly below, the same
+    way `test_the_configured_max_dimension_actually_shrinks_the_thumbnail`
+    above asserts `MEDIA_IMAGE_FORMAT`'s default.
     """
+    assert app.config['MEDIA_IMAGE_MAX_DIMENSION'] == 2000
+
     buf = BytesIO()
     img = Image.new('RGB', (8, 4), (10, 20, 30))
     exif = img.getexif()
@@ -1811,7 +1836,11 @@ def test_an_s3_upload_removes_the_local_file(db_session, chdir_upload, http_mock
 def test_extra_args_include_storage_class_and_public_acl_when_configured(
         db_session, chdir_upload, http_mock, app, monkeypatch):
     """`:546`'s TRUE arm (arc `546->547`) and `:548`'s TRUE arm (arc
-    `548->549`).
+    `548->549`) -- the latter arc lands on `:549`'s
+    `extra_args['ACL'] = 'public-read'`, whose literal VALUE (not just its
+    presence) this test's `extra_args['ACL'] == 'public-read'` assertion
+    below pins; a mutant changing that literal (Task 7's mutation pass
+    tried `'private'`) is caught here.
 
     These pin ARGUMENTS, not behaviour: `:546` and `:548` are two
     independent config checks (not a compound condition -- each is its own
