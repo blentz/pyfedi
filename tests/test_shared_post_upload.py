@@ -112,6 +112,49 @@ from app.utils import get_setting, set_setting
 from tests.test_shared_post_edit import _api_input, _seed
 
 
+class _RecordingS3Client:
+    """Stands in for the boto3 S3 client `edit_post` builds at `:550`,
+    recording every `upload_file` call's positional and keyword arguments.
+
+    Task 3's `_StubS3Client` above deliberately records nothing -- that
+    class belongs to the `:472` directory-fork arc, not the S3 upload
+    itself. This class is Task 6's own: `:546`/`:548` build `extra_args`
+    whose only observable effect is the `ExtraArgs` kwarg passed to
+    `upload_file` at `:557-559`, so those two arcs need the call recorded,
+    not silently discarded. `close` is a no-op, matching the real client's
+    use at `:562`.
+    """
+
+    def __init__(self):
+        self.upload_file_calls = []
+
+    def upload_file(self, *args, **kwargs):
+        self.upload_file_calls.append((args, kwargs))
+
+    def close(self):
+        pass
+
+
+class _RecordingBoto3Session:
+    """Stands in for `boto3.session.Session`.
+
+    Callable so `boto3.session.Session()` at `:544` returns this instance,
+    and `.client(...)` at `:550` returns ONE shared `_RecordingS3Client` --
+    shared, rather than a fresh instance per call, so a test can hold a
+    reference to it before `edit_post` runs and inspect its recorded calls
+    after.
+    """
+
+    def __init__(self):
+        self.client_instance = _RecordingS3Client()
+
+    def __call__(self):
+        return self
+
+    def client(self, **kwargs):
+        return self.client_instance
+
+
 SVG_BYTES = (b'<?xml version="1.0" encoding="UTF-8"?>'
             b'<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">'
             b'<rect width="8" height="8" fill="#0a141e"/></svg>')
@@ -1327,3 +1370,383 @@ def test_falsy_media_image_quality_omits_the_quality_kwarg(
     assert len(written) == 1
     db.session.refresh(s.post)
     assert s.post.image_id is not None
+
+
+# ---------------------------------------------------------------------------
+# Task 6: image hashing (`:537`-`:540`) and the S3 upload (`:543`-`:563`).
+# ---------------------------------------------------------------------------
+
+
+def test_image_hashing_endpoint_disabled_by_default_skips_hash_retrieval(
+        db_session, chdir_upload, http_mock, app, monkeypatch):
+    """`:537`'s FALSE arm via its FIRST conjunct, arc `537->543`.
+
+    `:537` is `if current_app.config['IMAGE_HASHING_ENDPOINT'] and not
+    is_video_url(final_place):` -- two conditions folded into one arc pair.
+    Per the round's ruling on this compound, each conjunct needs its OWN
+    false-arm witness: this test supplies the first (an empty endpoint);
+    `test_a_video_upload_skips_image_hashing_even_when_the_endpoint_is_configured`
+    below supplies the second (a video path with the endpoint SET).
+
+    Per D451, `IMAGE_HASHING_ENDPOINT` defaulting to `''` (`config.py:127`)
+    is asserted explicitly rather than assumed. `post_module.retrieve_image_hash`
+    is spied and asserted UNCALLED -- `:538` would call it with the built
+    url if `:537`'s guard failed to skip. Positive control:
+    `test_image_hashing_retrieves_a_hash_for_a_configured_endpoint_and_non_video_upload`
+    below shows the SAME spy called once when the endpoint IS configured;
+    without it, an empty call list here would be equally consistent with
+    "the guard correctly skipped the block", "the spy never installed", or
+    "the patch targeted the wrong name" (D451 mechanism 3).
+    """
+    assert app.config['IMAGE_HASHING_ENDPOINT'] == ''
+
+    hash_calls = []
+    monkeypatch.setattr(post_module, 'retrieve_image_hash',
+                        lambda url: hash_calls.append(url))
+
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+    s = _seed()
+    edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+              uploaded_file=make_upload())
+
+    assert hash_calls == []
+    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+    assert len(written) == 1
+    db.session.refresh(s.post)
+    assert s.post.image_id is not None
+
+
+def test_a_video_upload_skips_image_hashing_even_when_the_endpoint_is_configured(
+        db_session, chdir_upload, http_mock, app, monkeypatch):
+    """`:537`'s FALSE arm via its SECOND conjunct, arc `537->543` -- the
+    other half of the compound's false-arm pair, alongside
+    `test_image_hashing_endpoint_disabled_by_default_skips_hash_retrieval`
+    above.
+
+    `IMAGE_HASHING_ENDPOINT` is set to a non-empty value here -- the
+    OPPOSITE of the other test's setup -- so this test isolates the SECOND
+    conjunct (`not is_video_url(final_place)`) as what makes `:537` False:
+    a `.mp4` upload makes `is_video_url(final_place)` True, so `not
+    is_video_url(...)` is False regardless of the endpoint. Without a
+    dedicated test for this conjunct, a mutation weakening `:537`'s `and`
+    to `or` could still pass every other test in this file (which either
+    leave the endpoint empty, or upload a non-video file), since neither
+    condition alone would then matter for those inputs.
+
+    Video uploads are enabled via the same `set_setting`/`finally`
+    mechanism as `test_a_video_upload_is_accepted_when_video_uploads_are_enabled`
+    above, restoring the original value afterward.
+
+    `post_module.retrieve_image_hash` is spied and asserted UNCALLED.
+    Positive control:
+    `test_image_hashing_retrieves_a_hash_for_a_configured_endpoint_and_non_video_upload`
+    below shows the SAME spy called once for a non-video upload with the
+    SAME endpoint configured -- ruling out "the spy never installed" or
+    "the patch targeted the wrong name" as explanations for the empty list
+    here (D451 mechanism 3).
+    """
+    monkeypatch.setitem(app.config, 'IMAGE_HASHING_ENDPOINT', 'https://hash.example.test')
+
+    hash_calls = []
+    monkeypatch.setattr(post_module, 'retrieve_image_hash',
+                        lambda url: hash_calls.append(url))
+
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+    s = _seed()
+    original = get_setting('allow_video_file_uploads')
+    try:
+        set_setting('allow_video_file_uploads', 'yes')
+        edit_post(_api_input(), s.post, POST_TYPE_VIDEO, SRC_API, user=s.user,
+                  uploaded_file=make_upload(filename='clip.mp4'))
+    finally:
+        set_setting('allow_video_file_uploads', original)
+
+    assert hash_calls == []
+    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+    assert len(written) == 1
+
+
+def test_image_hashing_retrieves_a_hash_for_a_configured_endpoint_and_non_video_upload(
+        db_session, chdir_upload, http_mock, app, monkeypatch):
+    """`:537`'s TRUE arm, arc `537->538` -- positive control for both
+    false-arm witnesses above. ALSO `:539`'s FALSE arm via its FIRST
+    conjunct, arc `539->543`: `retrieve_image_hash` returns a falsy value
+    here, so `hash and hash_matches_blocked_image(hash)` short-circuits
+    without calling the second function.
+
+    `post_module.retrieve_image_hash` is spied (returning `None`, standing
+    in for "no hash available", rather than issuing a real HTTP request)
+    and asserted called exactly once -- proof `:538` ran, which is what
+    makes the empty call lists in the two tests above meaningful rather
+    than a broken spy. `post_module.hash_matches_blocked_image` is ALSO
+    spied here and asserted UNCALLED: if a mutation weakened `:539`'s `and`
+    to `or`, Python would still need to evaluate the second operand to
+    decide the truth of `hash or hash_matches_blocked_image(hash)` when
+    `hash` is falsy -- so `hash_matches_blocked_image` WOULD be called
+    under that mutant, and this assertion catches it.
+    `test_a_blocked_image_hash_raises_and_rejects_the_post` below is the
+    positive control for `hash_matches_blocked_image` being spied at all
+    (it asserts the same spy IS called once, with a truthy hash).
+
+    The call completes normally: a falsy hash never reaches `:540`'s raise.
+    """
+    monkeypatch.setitem(app.config, 'IMAGE_HASHING_ENDPOINT', 'https://hash.example.test')
+
+    hash_calls = []
+    monkeypatch.setattr(post_module, 'retrieve_image_hash',
+                        lambda url: hash_calls.append(url) or None)
+
+    blocked_calls = []
+    monkeypatch.setattr(post_module, 'hash_matches_blocked_image',
+                        lambda hash: blocked_calls.append(hash) or False)
+
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+    s = _seed()
+    edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+              uploaded_file=make_upload())
+
+    assert len(hash_calls) == 1
+    assert blocked_calls == []
+    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+    assert len(written) == 1
+    db.session.refresh(s.post)
+    assert s.post.image_id is not None
+
+
+def test_a_blocked_image_hash_raises_and_rejects_the_post(
+        db_session, chdir_upload, http_mock, app, monkeypatch):
+    """`:539`'s TRUE arm, arc `539->540` -- both conjuncts truthy, so `:540`
+    raises `Exception('This image is blocked')`.
+
+    `post_module.retrieve_image_hash` is spied to return a fixed, non-empty
+    binary-looking string (standing in for a genuine PDQ hash this harness
+    cannot produce without a real hashing endpoint) and
+    `post_module.hash_matches_blocked_image` is spied to return `True`
+    (standing in for a real Hamming-distance match against
+    `blocked_image`, which would need a seeded row and a real hash to
+    compute against). `hash_matches_blocked_image` is asserted called
+    exactly once, with the hash `retrieve_image_hash` returned -- the
+    positive control for
+    `test_image_hashing_retrieves_a_hash_for_a_configured_endpoint_and_non_video_upload`
+    above, which spies the SAME name and asserts it UNCALLED; without this
+    test, that assertion would have no same-mechanism control (D451
+    mechanism 3).
+
+    This exception's message ('This image is blocked') is distinct from
+    the two byte-identical 'filetype not allowed' messages the module
+    docstring discusses, so there is no message-ambiguity here -- but the
+    file-presence check is still asserted for consistency with this file's
+    convention of asserting full state: `:540` fires AFTER `:487`'s save
+    (and, for this PNG upload, after `:531`'s re-encode too), so a file
+    DOES exist under `chdir_upload` when this raises.
+    """
+    monkeypatch.setitem(app.config, 'IMAGE_HASHING_ENDPOINT', 'https://hash.example.test')
+    monkeypatch.setattr(post_module, 'retrieve_image_hash', lambda url: '1' * 256)
+
+    blocked_calls = []
+
+    def fake_hash_matches_blocked_image(hash):
+        blocked_calls.append(hash)
+        return True
+
+    monkeypatch.setattr(post_module, 'hash_matches_blocked_image', fake_hash_matches_blocked_image)
+
+    s = _seed()
+    with pytest.raises(Exception, match='This image is blocked'):
+        edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+                  uploaded_file=make_upload())
+
+    assert blocked_calls == ['1' * 256]
+    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+    assert len(written) == 1
+
+
+def test_the_local_file_survives_when_s3_is_not_configured(db_session, chdir_upload, http_mock, app):
+    """`:543`'s FALSE arm, arc `543->565` -- the positive control for
+    `test_an_s3_upload_removes_the_local_file` below.
+
+    Per D451, all three of `S3_ACCESS_KEY` (`config.py:106`),
+    `S3_ACCESS_SECRET` (`:107`) and `S3_ENDPOINT` (`:104`) defaulting to
+    `''` is asserted explicitly -- `store_files_in_s3()`
+    (`app/utils.py:4317-4319`) is False only because all three are empty.
+    No `post_module.boto3` patch is needed or installed: with `:543` False,
+    `:544`'s `boto3.session.Session()` and `:550`'s `.client(...)` never
+    run, so nothing would call out to the real module even unpatched.
+
+    The witness is the file's CONTINUED PRESENCE under
+    `app/static/media/posts` -- the same location and glob
+    `test_an_uploaded_image_is_saved_and_linked` already asserts for the
+    unrelated `:461` end-to-end case, but named here specifically as the
+    paired control for `test_an_s3_upload_removes_the_local_file`'s
+    absence assertion: without this test, that file being gone would be
+    equally consistent with ":563 correctly ran" and "the file was never
+    written in the first place" or "chdir_upload silently failed" -- this
+    test rules those out by showing the same kind of file DOES survive
+    when `:563` never runs.
+    """
+    assert app.config['S3_ACCESS_KEY'] == ''
+    assert app.config['S3_ACCESS_SECRET'] == ''
+    assert app.config['S3_ENDPOINT'] == ''
+
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+    s = _seed()
+    edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+              uploaded_file=make_upload())
+
+    written = list(chdir_upload.rglob('app/static/media/posts/*/*/*'))
+    assert len(written) == 1
+
+
+def test_an_s3_upload_removes_the_local_file(db_session, chdir_upload, http_mock, app, monkeypatch):
+    """`:543`'s true arm through `:563`'s unlink.
+
+    The local file being GONE is the observable difference between the two
+    arms -- stronger than asserting on the mock's call list, which would
+    pass even if `:563` were deleted. `boto3` is patched because `:544` and
+    `:550` would otherwise open a real session and attempt a network call.
+
+    All three of `S3_ACCESS_KEY`, `S3_ACCESS_SECRET` and `S3_ENDPOINT` are
+    set non-empty, flipping `store_files_in_s3()` True; `S3_PUBLIC_URL` is
+    also set (a syntactically valid host) because `:560-561` build the
+    post's url from it once the S3 branch runs, and `:601`'s
+    `is_image_url` still issues a HEAD request against whatever url comes
+    out -- see the module docstring on why every full `edit_post` call in
+    this file needs `http_mock`.
+
+    `post_module.boto3` is patched with this file's own
+    `_RecordingBoto3Session`/`_RecordingS3Client` pair, NOT Task 3's silent
+    `_StubBoto3Session`/`_StubS3Client` -- this test needs the exact local
+    path `edit_post` passed to `upload_file` at `:557` in order to check
+    it afterward, which the silent stub never records.
+
+    The FIRST positional argument to `upload_file` (`:557`) is
+    `final_place`, the local path `:563` unlinks -- asserted absent both
+    directly (`chdir_upload / local_path`) and via a directory-wide rglob
+    under `app/static/tmp`, matching this file's preference for a
+    full-state assertion over a single-file one: an rglob returning empty
+    also rules out some OTHER file having been left behind by a mutant
+    that unlinked the wrong path. Positive control:
+    `test_the_local_file_survives_when_s3_is_not_configured` above shows
+    the same kind of file surviving when `:543` is False and `:563` never
+    runs.
+    """
+    session = _RecordingBoto3Session()
+    monkeypatch.setattr(post_module, 'boto3',
+                        SimpleNamespace(session=SimpleNamespace(Session=session)))
+    monkeypatch.setitem(app.config, 'S3_ACCESS_KEY', 'test-key')
+    monkeypatch.setitem(app.config, 'S3_ACCESS_SECRET', 'test-secret')
+    monkeypatch.setitem(app.config, 'S3_ENDPOINT', 'https://s3.example.test')
+    monkeypatch.setitem(app.config, 'S3_PUBLIC_URL', 'cdn.example.test')
+
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+    s = _seed()
+    edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+              uploaded_file=make_upload())
+
+    calls = session.client_instance.upload_file_calls
+    assert len(calls) == 1
+    local_path = calls[0][0][0]
+    assert not (chdir_upload / local_path).exists()
+    assert list(chdir_upload.rglob('app/static/tmp/*')) == []
+
+
+def test_extra_args_include_storage_class_and_public_acl_when_configured(
+        db_session, chdir_upload, http_mock, app, monkeypatch):
+    """`:546`'s TRUE arm (arc `546->547`) and `:548`'s TRUE arm (arc
+    `548->549`).
+
+    These pin ARGUMENTS, not behaviour: `:546` and `:548` are two
+    independent config checks (not a compound condition -- each is its own
+    `if`, not joined by `and`/`or`) whose only observable effect is a key
+    added to the `extra_args` dict passed as `upload_file`'s `ExtraArgs`
+    kwarg at `:559`. Nothing else in `edit_post` reads `extra_args`, so the
+    dict recorded by `_RecordingS3Client` is the only place these arcs are
+    observable at all.
+
+    `S3_STORAGE_CLASS` is set to a non-empty string and `S3_PUBLIC_ACL` to
+    `True` -- both config keys checked independently at `:546`/`:548`, so
+    setting both together exercises both TRUE arms on the SAME call rather
+    than needing two separate S3 uploads. Positive control (both the FALSE
+    arms and the config defaults):
+    `test_extra_args_omit_storage_class_and_public_acl_by_default` below
+    leaves both at their defaults and asserts the corresponding keys
+    ABSENT -- without it, the absence there would have no same-mechanism
+    control (D451 mechanism 3).
+
+    `post_module.boto3` is patched with `_RecordingBoto3Session` for the
+    same network-avoidance reason as `test_an_s3_upload_removes_the_local_file`
+    above.
+    """
+    session = _RecordingBoto3Session()
+    monkeypatch.setattr(post_module, 'boto3',
+                        SimpleNamespace(session=SimpleNamespace(Session=session)))
+    monkeypatch.setitem(app.config, 'S3_ACCESS_KEY', 'test-key')
+    monkeypatch.setitem(app.config, 'S3_ACCESS_SECRET', 'test-secret')
+    monkeypatch.setitem(app.config, 'S3_ENDPOINT', 'https://s3.example.test')
+    monkeypatch.setitem(app.config, 'S3_PUBLIC_URL', 'cdn.example.test')
+    monkeypatch.setitem(app.config, 'S3_STORAGE_CLASS', 'GLACIER')
+    monkeypatch.setitem(app.config, 'S3_PUBLIC_ACL', True)
+
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+    s = _seed()
+    edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+              uploaded_file=make_upload())
+
+    calls = session.client_instance.upload_file_calls
+    assert len(calls) == 1
+    extra_args = calls[0][1]['ExtraArgs']
+    assert extra_args['StorageClass'] == 'GLACIER'
+    assert extra_args['ACL'] == 'public-read'
+
+
+def test_extra_args_omit_storage_class_and_public_acl_by_default(
+        db_session, chdir_upload, http_mock, app, monkeypatch):
+    """`:546`'s FALSE arm (arc `546->548`) and `:548`'s FALSE arm (arc
+    `548->550`) -- the positive control for
+    `test_extra_args_include_storage_class_and_public_acl_when_configured`
+    above.
+
+    These pin ARGUMENTS, not behaviour: the only observable effect of
+    `:546`/`:548` taking their FALSE arms is that `StorageClass` and `ACL`
+    are ABSENT from `extra_args` -- everything else about the call
+    (`ContentType`, the bucket, the key) is set unconditionally by `:545`
+    and `:557-559` regardless of these two checks, so this test's
+    assertions are narrowly about the two conditional keys, not the call
+    as a whole.
+
+    Per D451, `S3_STORAGE_CLASS` defaulting to `''` (`config.py:110`) and
+    `S3_PUBLIC_ACL` defaulting to `False` (`:109`) are asserted explicitly
+    -- both are falsy, but by different Python values, which is worth
+    pinning: a future change coercing `S3_PUBLIC_ACL`'s default to `''`
+    or `None` would not change `:548`'s behaviour, but a silent change to
+    a TRUTHY default (e.g. `'false'`, a non-empty string) would flip this
+    arc without any code change here to trigger a review.
+
+    Without the paired test above, `'StorageClass' not in extra_args` and
+    `'ACL' not in extra_args` would be equally consistent with "the FALSE
+    arm correctly omitted the key", "the spy never installed", or "the
+    patch targeted the wrong name" (D451 mechanism 3); that test's
+    non-empty result for the SAME recording mechanism rules out the latter
+    two.
+    """
+    assert app.config['S3_STORAGE_CLASS'] == ''
+    assert app.config['S3_PUBLIC_ACL'] is False
+
+    session = _RecordingBoto3Session()
+    monkeypatch.setattr(post_module, 'boto3',
+                        SimpleNamespace(session=SimpleNamespace(Session=session)))
+    monkeypatch.setitem(app.config, 'S3_ACCESS_KEY', 'test-key')
+    monkeypatch.setitem(app.config, 'S3_ACCESS_SECRET', 'test-secret')
+    monkeypatch.setitem(app.config, 'S3_ENDPOINT', 'https://s3.example.test')
+    monkeypatch.setitem(app.config, 'S3_PUBLIC_URL', 'cdn.example.test')
+
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+    s = _seed()
+    edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+              uploaded_file=make_upload())
+
+    calls = session.client_instance.upload_file_calls
+    assert len(calls) == 1
+    extra_args = calls[0][1]['ExtraArgs']
+    assert 'StorageClass' not in extra_args
+    assert 'ACL' not in extra_args
