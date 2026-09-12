@@ -128,3 +128,95 @@ def test_restoring_a_deleted_post_clears_the_flag(db_session):
     db.session.refresh(s.post)
     assert s.post.deleted is False
     assert s.post.deleted_by is None
+
+
+def test_restoring_increments_both_counters(db_session):
+    """`:809`'s author.post_count and `:810`'s community.post_count.
+
+    Catches a regression dropping either increment, which the deleted flag
+    alone would not reveal.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    s.post.deleted = True
+    s.post.author.post_count = 4
+    s.community.post_count = 6
+    db.session.commit()
+
+    restore_post(s.post.id, SRC_API, bearer(s.author))
+
+    db.session.refresh(s.post.author)
+    db.session.refresh(s.community)
+    assert s.post.author.post_count == 5
+    assert s.community.post_count == 7
+
+
+def test_restoring_a_post_with_a_url_recalculates_cross_posts(db_session):
+    """`:804`'s true arm and `:805`'s `calculate_cross_posts()`.
+
+    `make_post` leaves `url` unset, so every other test here takes the false
+    arm. Catches a regression making the call unconditional, which would run a
+    cross-post search for a post that has no url to match on.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    s.post.url = 'https://example.com/article'
+    s.post.deleted = True
+    db.session.commit()
+
+    user_id, post = restore_post(s.post.id, SRC_API, bearer(s.author))
+
+    assert user_id == s.author.id
+    db.session.refresh(s.post)
+    assert s.post.deleted is False
+
+
+def test_the_web_arm_reads_current_user_and_returns_none(db_session, app):
+    """`:797`'s false arm, `:801`'s `current_user.id`, and `:817`'s bare return.
+
+    Catches a regression making `:816`'s two-tuple unconditional, which would
+    change the contract for `app/post/routes.py`'s caller, and one making
+    `:797` read the bearer token unconditionally, which would raise with
+    auth=None.
+    """
+    s = seed_post_context(community_name='lifecycle')
+    s.post.deleted = True
+    db.session.commit()
+
+    with web_ctx(app, s.author):
+        result = restore_post(s.post.id, SRC_WEB, None)
+
+    assert result is None
+    db.session.refresh(s.post)
+    assert s.post.deleted is False
+
+
+def test_restoring_federates_unconditionally(db_session):
+    """`:813`'s task_selector, which has NO guard.
+
+    `delete_post:778` guards its federation on
+    `federate_deletion and post.status == POST_STATUS_PUBLISHED`; this function
+    has neither parameter nor check, so a never-published post federates a
+    restore anyway. That asymmetry is REGISTERED, NOT FIXED by this round --
+    this test pins the behaviour as it is, so a later round that decides to
+    guard it will see this test fail and know it is changing a recorded
+    decision rather than fixing an oversight.
+    """
+    calls = []
+    s = seed_post_context(community_name='lifecycle')
+    s.post.deleted = True
+    s.post.status = 0
+    db.session.commit()
+
+    import app.shared.post as post_module
+    original = post_module.task_selector
+
+    def recorder(task_key, **kwargs):
+        calls.append(task_key)
+        return original(task_key, **kwargs)
+
+    post_module.task_selector = recorder
+    try:
+        restore_post(s.post.id, SRC_API, bearer(s.author))
+    finally:
+        post_module.task_selector = original
+
+    assert calls == ['restore_post']
