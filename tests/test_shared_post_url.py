@@ -564,7 +564,52 @@ class TestOldImageTeardown:
         transaction instead. The subsequent `edit_post` never re-checks the
         constraint: PostgreSQL's referential-integrity trigger on the child
         skips an UPDATE that does not change the key columns, and the only
-        other write to `image_id` is `:441`'s NULL, which satisfies it.
+        other write to `image_id` is `:441`'s NULL, which satisfies it. The
+        repository already sanctions this mechanism for exactly this kind of
+        orphan: tests/test_shared_post_lifecycle.py:928-937 disables the same
+        GUC to build a `CommunityMember` row whose `user_id` no `user` row
+        backs.
+
+        THE BRANCH IS NOT DEAD, and this paragraph exists so nobody reads the
+        one above and concludes it is. The foreign key forbids CONSTRUCTING
+        the state directly; it does not forbid OBSERVING it. `:438` reads an
+        in-memory `post.image_id`, not the current database value, and both
+        code paths in app/ that delete a post's `File` row null the reference,
+        commit, and only THEN delete the row and commit again::
+
+            app/post/routes.py
+            2247	            if post.image_id:
+            2248	                file_entry_to_delete = post.image_id
+            2249	            post.image_id = None
+            2250	            post.url = None
+            2251	            db.session.commit()
+            2252	            if file_entry_to_delete:
+            2253	                File.query.filter_by(id=file_entry_to_delete).delete()
+            2254	                db.session.commit()
+
+            app/activitypub/util.py   (id captured at :3390 / :3475)
+            3565	                post.image_id = None
+            ...
+            3569	        db.session.commit()
+            3570	        if old_db_entry_to_delete:
+            3571	            File.query.filter_by(id=old_db_entry_to_delete).delete()
+            3572	            db.session.commit()
+
+        A concurrent `edit_post` that loaded the post before that FIRST commit
+        still holds the old id in its own session. Under READ COMMITTED -- the
+        PostgreSQL default -- its `File.query.get` at `:438` is a NEW statement
+        and therefore sees the SECOND commit, so it gets None back. The
+        constraint is never violated at any point: by the time the `File` row
+        is gone, the only committed `post.image_id` is NULL; the stale id lives
+        only in the editing session's memory. That race is what `:439` guards
+        against, so the branch must stay covered rather than acquire a
+        `# pragma: no branch`.
+
+        The constraint carries no `ON DELETE` clause --
+        migrations/versions/54f1dd40e066_initial_tables.py:200 is
+        `sa.ForeignKeyConstraint(['image_id'], ['file.id'], )`, i.e. NO ACTION
+        -- which is precisely why the delete has to be ordered after the null
+        in both call sites, and therefore why the window exists at all.
 
         THE POSITIVE CONTROL is the test above, which uses the same mechanism
         -- a real file under `chdir_upload` -- and shows it being removed.
