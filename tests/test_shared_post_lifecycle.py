@@ -598,8 +598,8 @@ def test_a_doxing_report_notifies_admins_through_the_api(db_session):
 
     report_post(
         s.post,
-        {'reason': 'Sharing personal info - doxing', 'description': 'x',
-         'report_remote': False},
+        {'reason': 'Sharing personal info - doxing',
+         'description': 'unsolicited', 'report_remote': False},
         SRC_API,
         auth=bearer(s.voter),
     )
@@ -633,7 +633,7 @@ def test_an_ordinary_api_report_does_not_notify_admins(db_session):
         title='Suspicious content').count() == 0
 
 
-def test_an_ai_flair_report_notifies_admins_on_a_non_piefed_instance(db_session):
+def test_an_api_ai_flair_report_notifies_admins_on_a_non_piefed_instance(db_session):
     """`:830`'s THIRD disjunct, with both conjuncts true.
 
     `:830` uses exact equality and never calls `.lower()`, which is why it
@@ -656,7 +656,7 @@ def test_an_ai_flair_report_notifies_admins_on_a_non_piefed_instance(db_session)
         title='Suspicious content').count() == 1
 
 
-def test_an_ai_flair_report_does_not_escalate_on_piefed(db_session):
+def test_an_api_ai_flair_report_does_not_escalate_on_piefed(db_session):
     """`:830`'s SECOND conjunct taken false.
 
     A PieFed instance handles its own flair, so the escalation is suppressed.
@@ -679,7 +679,7 @@ def test_an_ai_flair_report_does_not_escalate_on_piefed(db_session):
         title='Suspicious content').count() == 0
 
 
-def test_an_unmoderated_local_community_always_notifies_admins(db_session):
+def test_an_unmoderated_local_community_always_notifies_admins_through_the_api(db_session):
     """`:841`'s two-conjunct override and `:842`'s assignment.
 
     An unmoderated local community has no moderators to notify, so every report
