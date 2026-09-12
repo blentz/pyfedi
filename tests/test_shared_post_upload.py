@@ -1514,7 +1514,7 @@ def test_image_hashing_retrieves_a_hash_for_a_configured_endpoint_and_non_video_
 
 
 def test_a_blocked_image_hash_raises_and_rejects_the_post(
-        db_session, chdir_upload, http_mock, app, monkeypatch):
+        db_session, chdir_upload, app, monkeypatch):
     """`:539`'s TRUE arm, arc `539->540` -- both conjuncts truthy, so `:540`
     raises `Exception('This image is blocked')`.
 
@@ -1539,6 +1539,12 @@ def test_a_blocked_image_hash_raises_and_rejects_the_post(
     convention of asserting full state: `:540` fires AFTER `:487`'s save
     (and, for this PNG upload, after `:531`'s re-encode too), so a file
     DOES exist under `chdir_upload` when this raises.
+
+    No `http_mock` fixture: `:535` builds the url, but `:540`'s raise
+    propagates out of `edit_post` before that url ever reaches `:601`'s
+    `is_image_url` HEAD check in the function's shared tail, so no HTTP
+    request occurs on this path and there is no route for `http_mock` to
+    register.
     """
     monkeypatch.setitem(app.config, 'IMAGE_HASHING_ENDPOINT', 'https://hash.example.test')
     monkeypatch.setattr(post_module, 'retrieve_image_hash', lambda url: '1' * 256)
@@ -1676,6 +1682,14 @@ def test_extra_args_include_storage_class_and_public_acl_when_configured(
     `post_module.boto3` is patched with `_RecordingBoto3Session` for the
     same network-avoidance reason as `test_an_s3_upload_removes_the_local_file`
     above.
+
+    NEITHER this test nor
+    `test_extra_args_omit_storage_class_and_public_acl_by_default` can
+    catch a mutant that SWAPS which `if` gates which assignment, because
+    both move `S3_STORAGE_CLASS` and `S3_PUBLIC_ACL` together (both
+    truthy here, both falsy there) --
+    `test_extra_args_distinguish_storage_class_from_public_acl_when_only_one_is_set`
+    below closes that gap with the two flags set to DIFFERENT values.
     """
     session = _RecordingBoto3Session()
     monkeypatch.setattr(post_module, 'boto3',
@@ -1728,6 +1742,13 @@ def test_extra_args_omit_storage_class_and_public_acl_by_default(
     patch targeted the wrong name" (D451 mechanism 3); that test's
     non-empty result for the SAME recording mechanism rules out the latter
     two.
+
+    NEITHER this test nor the paired test above can catch a mutant that
+    SWAPS which `if` gates which assignment, since both move
+    `S3_STORAGE_CLASS` and `S3_PUBLIC_ACL` together (both falsy here, both
+    truthy there) --
+    `test_extra_args_distinguish_storage_class_from_public_acl_when_only_one_is_set`
+    below closes that gap.
     """
     assert app.config['S3_STORAGE_CLASS'] == ''
     assert app.config['S3_PUBLIC_ACL'] is False
@@ -1749,4 +1770,70 @@ def test_extra_args_omit_storage_class_and_public_acl_by_default(
     assert len(calls) == 1
     extra_args = calls[0][1]['ExtraArgs']
     assert 'StorageClass' not in extra_args
+    assert 'ACL' not in extra_args
+
+
+def test_extra_args_distinguish_storage_class_from_public_acl_when_only_one_is_set(
+        db_session, chdir_upload, http_mock, app, monkeypatch):
+    """`:546` and `:548` set to DIFFERENT truth values -- closes a
+    mutation-survival gap the two lockstep tests above cannot close
+    (task-6-review.md Finding 1), regardless of how key-specific their
+    assertions are.
+
+    THE GAP: a mutant that SWAPS which `if` gates which assignment --
+    `:546` testing `S3_PUBLIC_ACL` while still executing `:547`'s
+    `extra_args['StorageClass'] = ...`, and `:548` testing
+    `S3_STORAGE_CLASS` while still executing `:549`'s
+    `extra_args['ACL'] = 'public-read'` -- survives BOTH
+    `test_extra_args_include_storage_class_and_public_acl_when_configured`
+    and `test_extra_args_omit_storage_class_and_public_acl_by_default`,
+    because both of those fixtures move `S3_STORAGE_CLASS` and
+    `S3_PUBLIC_ACL` in LOCKSTEP (both truthy, or both falsy). Under a
+    swap, two independent `if`s gated on values that agree with each
+    other still gate the exact same set of assignments, so `extra_args`
+    comes out byte-identical to the unmutated code either way -- no
+    assertion on `extra_args`'s contents, however key-specific, can tell
+    the two apart when the inputs never disagree.
+
+    THIS IS A DISTINCT FALSE-WITNESS SHAPE, not previously recorded in
+    this campaign: two independent conditions exercised only IN LOCKSTEP
+    cannot detect a swap between them, however precise the assertions.
+    It is adjacent to the registered mechanism about an input taking the
+    same path under both arms, but not the same mechanism -- there, a
+    SINGLE input is ambiguous between two arms of ONE condition; here,
+    TWO SEPARATE tests each use a perfectly unambiguous input, and the
+    gap only exists because the two tests' inputs never differ FROM EACH
+    OTHER on the one axis (which flag is on) that would expose a swap
+    between the two conditions.
+
+    THE FIX: `S3_STORAGE_CLASS` is set non-empty while `S3_PUBLIC_ACL` is
+    left at its D451 default (`False`, `config.py:109`, asserted
+    explicitly below) -- the two flags now disagree. Under the REAL code,
+    `:546` is True (sets `StorageClass`) and `:548` is False (`ACL`
+    absent). Under the SWAP mutant described above, `:546` would instead
+    test the falsy `S3_PUBLIC_ACL` (so `StorageClass` would be ABSENT) and
+    `:548` would instead test the truthy `S3_STORAGE_CLASS` (so `ACL`
+    WOULD be present) -- the exact opposite of both assertions below, so
+    the swap is caught.
+    """
+    assert app.config['S3_PUBLIC_ACL'] is False
+
+    session = _RecordingBoto3Session()
+    monkeypatch.setattr(post_module, 'boto3',
+                        SimpleNamespace(session=SimpleNamespace(Session=session)))
+    monkeypatch.setitem(app.config, 'S3_ACCESS_KEY', 'test-key')
+    monkeypatch.setitem(app.config, 'S3_ACCESS_SECRET', 'test-secret')
+    monkeypatch.setitem(app.config, 'S3_ENDPOINT', 'https://s3.example.test')
+    monkeypatch.setitem(app.config, 'S3_PUBLIC_URL', 'cdn.example.test')
+    monkeypatch.setitem(app.config, 'S3_STORAGE_CLASS', 'GLACIER')
+
+    http_mock.head(url__regex=r'.*').respond(200, headers={'Content-Type': 'image/png'})
+    s = _seed()
+    edit_post(_api_input(), s.post, POST_TYPE_IMAGE, SRC_API, user=s.user,
+              uploaded_file=make_upload())
+
+    calls = session.client_instance.upload_file_calls
+    assert len(calls) == 1
+    extra_args = calls[0][1]['ExtraArgs']
+    assert extra_args['StorageClass'] == 'GLACIER'
     assert 'ACL' not in extra_args
