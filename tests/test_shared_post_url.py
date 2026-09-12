@@ -1416,3 +1416,297 @@ class TestPixelfedArm:
         assert s.post.type == POST_TYPE_IMAGE
         assert s.post.url == bare
         assert s.post.body.endswith('\n\nSource: ')
+
+
+LOOPS_URL = 'https://loops.video/v/clip9'
+
+
+class TestLoopsArm:
+    """`:630-640` -- the loops.video arm of the `:601`/`:619`/`:630`/`:641` chain.
+
+    THE HARNESS IS THE INVERTED ONE, the same as TestPixelfedArm's: a HEAD
+    reporting `text/html` so `is_image_url` is False and `:601` does not take
+    the chain, plus a GET route because `:632` WILL call `opengraph_parse`.
+    tests/README.md fact 229 point 3 records the opposite rule, and it is
+    correct only for tests/test_shared_post_upload.py.
+
+    `post.url` IS NOT A WITNESS HERE, and this is the class's central
+    constraint. Read out of the file rather than recalled::
+
+        640	            post.url = url
+        652	            post.url = embed_url
+
+    and `fixup_url` (app/utils.py:3311-3312) opens
+    `thumbnail_url = embed_url = url`, diverging only for youtube domains and
+    for a peertube url whose last 25 characters begin '/w/' (app/utils.py:3330).
+    Measured on this class's url: `len('https://loops.video/v/clip9')` is 27,
+    so the length test passes, but `url[-25:][:3]` is 'tps', not '/w/'. So
+    `embed_url == url`, the two arms leave `post.url` IDENTICAL, and asserting
+    on it discriminates nothing -- false-witness mechanism 1 in its subtlest
+    form. Where these tests assert `post.url` at all it is annotated as a
+    non-discriminator.
+
+    TWO THINGS DO DISCRIMINATE, and every test leans on one or both:
+
+    1. `:636`'s `.replace('.jpg', '.720p.mp4')`. `:637` stores
+       `source_url=filename` AFTER the rewrite, so a `File.source_url` ending
+       '.720p.mp4' can only have come from `:636`. Neither `:625` (pixelfed)
+       nor `:646` (generic, via `url_to_thumbnail_file`) rewrites anything.
+
+    2. `:631`'s unconditional `post.type = POST_TYPE_VIDEO`. The generic arm
+       decides the type at `:654-657`, and for THIS url it would decide LINK.
+       Read out of app/utils.py rather than recalled::
+
+           294	def is_video_url(url: str) -> bool:
+           295	    common_video_extensions = ['.mp4', '.webm']
+           ...
+           316	def is_video_hosting_site(url: str) -> bool:
+           ...
+           319	    video_hosting_sites = ['https://youtube.com', 'https://www.youtube.com', 'https://youtu.be',
+           320	                           'https://www.vimeo.com', 'https://vimeo.com', 'https://streamable.com',
+           321	                           'https://www.redgifs.com/watch/']
+           ...
+           326	    if 'videos/watch' in url:  # PeerTube
+           327	        return True
+
+       'https://loops.video/v/clip9' has no '.mp4'/'.webm' path extension, is
+       on none of those six prefixes and contains no 'videos/watch', so
+       `:654`'s four disjuncts are all false and `:657` would write
+       POST_TYPE_LINK. VIDEO on this url is therefore the arm's signature.
+       (The same reading is why `:660`'s `elif url and is_video_hosting_site(url)`
+       is irrelevant here -- it is a sibling of the whole `:601` chain, and
+       loops.video is not in its list either.)
+
+    `:636` IS UNCONDITIONAL AND GLOBAL, and two tests at the bottom of this
+    class measure both halves of that rather than asserting it in prose: a
+    filename with no '.jpg' passes through unchanged, and one containing
+    '.jpg' more than once has EVERY occurrence rewritten. Task 9's mutation
+    pass needs both to know which variants of that line are viable.
+    """
+
+    def test_a_loops_url_is_typed_as_video_and_rewrites_the_thumbnail_to_mp4(
+            self, db_session, http_mock):
+        """`:630` true -> `:631`; `:633` true -> `:634`; `:635` true -> `:636`,
+        `:637`, `:638`, `:639`; then `:640`.
+        Arcs 630->631, 633->634, 635->636; statements 631-640.
+
+        TWO witnesses, and neither is this arm's on its own account alone:
+          - `post.type` is VIDEO for a url that `:654`'s four disjuncts all
+            reject, so the generic arm would have written LINK at `:657`. See
+            the class docstring for the reading that establishes it.
+          - a `File` whose `source_url` ends '.720p.mp4' although the og:image
+            ends '.jpg'. `:636` is the ONLY line in `edit_post` that performs
+            that substitution, so this pins `:636` and `:637` together.
+
+        `post.url` IS DELIBERATELY NOT ASSERTED HERE. `:640` and `:652` write
+        the same value for this url (class docstring), so it would be a
+        false witness.
+
+        A CORRECTION TO THE BRIEF, measured rather than reasoned. The brief's
+        fourth assertion was `file.alt_text == 'A clip'`. That is wrong, for
+        exactly the reason Task 5 found on the pixelfed arm. Read out of the
+        file::
+
+            663	    if url and post.image:
+            664	        file = File.query.get(post.image_id)
+            665	        if file:
+            666	            file.alt_text = image_alt_text
+
+        and, for the default::
+
+            262	        image_alt_text = input['image_alt_text'] if 'image_alt_text' in input else ''
+
+        `:663-666` runs AFTER the whole `:601` chain and overwrites `:637`'s
+        alt_text UNCONDITIONALLY, with '' because `_api_input` supplies no
+        `image_alt_text`. So alt_text on this row witnesses `:666`, never
+        `:637`. `test_a_loops_url_falls_back_to_og_image_url` is the
+        same-mechanism positive control: it passes a distinctive
+        `image_alt_text` and gets it back, which shows the '' here is `:666`
+        WRITING rather than `:637` failing to (false-witness mechanism 3).
+
+        AN EXPECTED SURVIVOR, NOT A HOLE. Because `:666` overwrites the
+        column, a mutation of `:637`'s `alt_text=shorten_string(
+        opengraph.get('og:title'), 295)` -- the ARGUMENT, not the whole line --
+        WILL SURVIVE this test and every other test in this class. Task 9's
+        mutation pass should record it as expected rather than chase it. The
+        `source_url=filename` half of `:637` IS killed: this test and
+        `test_a_loops_url_falls_back_to_og_image_url` pin it to two different
+        og keys. Closing the alt_text half would need an assertion taken
+        before `:663` runs, or a change to `app/`, and neither is in scope.
+        """
+        http_mock.head(LOOPS_URL).respond(200, headers={'Content-Type': 'text/html'})
+        _opengraph_page(http_mock, LOOPS_URL,
+                        og_image='https://cdn.loops.example/thumb.jpg',
+                        og_title='A clip')
+        s = _seed()
+
+        edit_post(_api_input(url=LOOPS_URL), s.post, POST_TYPE_LINK, SRC_API,
+                  user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.type == POST_TYPE_VIDEO
+        file = db.session.get(File, s.post.image_id)
+        assert file.source_url == 'https://cdn.loops.example/thumb.720p.mp4'
+        assert file.alt_text == ''  # `:666` overwrote `:637`'s 'A clip'
+
+    def test_a_loops_url_falls_back_to_og_image_url(self, db_session, http_mock):
+        """`:633`'s SECOND disjunct alone, and `:634`'s `or` fallback.
+
+        The page carries `og:image:url` and no `og:image`, so
+        `opengraph.get('og:image', '') != ''` is False and the block is
+        admitted only by the second disjunct; `:634`'s
+        `opengraph.get('og:image') or opengraph.get('og:image:url')` then gets
+        None from its left operand and falls through to the right.
+        'og:image:url' is one of `parse_page`'s `tags_to_search`
+        (app/utils.py:3181), so it really does reach the dict.
+
+        Without this test the two disjuncts of `:633` move only in lockstep
+        with the first, and a swap between them is undetectable --
+        false-witness mechanism 5.
+
+        ALSO THE POSITIVE CONTROL for the `alt_text == ''` assertion in the
+        test above. `og:title` is 'Fallback' here while `image_alt_text` is a
+        different, distinctive string, and the row comes back carrying the
+        `image_alt_text` -- which shows `:666` is what writes that column on
+        this path, and that the '' above is a write rather than an absence
+        (false-witness mechanism 3).
+
+        The '.720p.mp4' tail keeps `:636` witnessed on this path too, so the
+        fallback is not merely reaching a File but reaching THIS arm's File.
+        """
+        http_mock.head(LOOPS_URL).respond(200, headers={'Content-Type': 'text/html'})
+        _opengraph_page(http_mock, LOOPS_URL,
+                        og_image_url='https://cdn.loops.example/alt.jpg',
+                        og_title='Fallback')
+        s = _seed()
+
+        edit_post(_api_input(url=LOOPS_URL, image_alt_text='supplied by the caller'),
+                  s.post, POST_TYPE_LINK, SRC_API, user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        file = db.session.get(File, s.post.image_id)
+        assert file.source_url == 'https://cdn.loops.example/alt.720p.mp4'
+        assert file.alt_text == 'supplied by the caller'  # `:666`, not `:637`
+
+    def test_a_loops_url_with_an_unreadable_page_is_still_typed_as_video(
+            self, db_session, http_mock):
+        """`:633` false -> `:640`. Arc 633->640.
+
+        `_unreadable_page` makes `parse_page` return False at
+        app/utils.py:3195-3196, so `opengraph` is falsy and the whole File
+        block `:634-639` is skipped -- but `:631` has ALREADY run, so the
+        `post.type == POST_TYPE_VIDEO` assertion is a real positive witness of
+        this arm (the generic arm would have written LINK for this url) rather
+        than a bare absence. That is what keeps this out of false-witness
+        mechanism 3; the positive control for 'a File can be built here at
+        all' is the first test in this class, which builds one the same way.
+
+        `post.url` is asserted only as a fact about `:640` having run; it is
+        NOT a discriminator between this arm and the generic one, which writes
+        the identical value at `:652`. See the class docstring.
+
+        THIS TEST AND `test_a_site_relative_loops_thumbnail_is_not_turned_into_a_file`
+        ASSERT THE SAME ABSENCE and are told apart by which mutation kills
+        them, not by their assertions: here the input makes `:633` false;
+        there `:633` is true and `:635` is false.
+        """
+        http_mock.head(LOOPS_URL).respond(200, headers={'Content-Type': 'text/html'})
+        _unreadable_page(http_mock, LOOPS_URL)
+        s = _seed()
+
+        edit_post(_api_input(url=LOOPS_URL), s.post, POST_TYPE_LINK, SRC_API,
+                  user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.type == POST_TYPE_VIDEO
+        assert s.post.url == LOOPS_URL  # `:640` ran; NOT an arm discriminator
+        assert s.post.image_id is None
+        assert File.query.count() == 0
+
+    def test_a_site_relative_loops_thumbnail_is_not_turned_into_a_file(
+            self, db_session, http_mock):
+        """`:635` false -> `:640`. Arc 635->640.
+
+        Here `opengraph` IS truthy and `:634` DID produce a filename -- the
+        only thing stopping the File is the '/' prefix, which makes `:635`'s
+        `not filename.startswith('/')` false. The og:image is a well-formed
+        relative path ending '.jpg' on purpose: forcing `:635` true would then
+        build a File whose `source_url` is '/thumbs/clip9.720p.mp4', a clean
+        kill.
+
+        TOLD APART FROM THE TEST ABOVE BY MUTATION, exactly as in
+        TestPixelfedArm: forcing `:635` true makes THIS test grow a File,
+        while forcing `:633` false makes the UNREADABLE-PAGE test lose
+        nothing it had (it has none) but makes the FIRST test lose one.
+        Neither mutation touches the other test. Task 9 must confirm both.
+
+        `post.type` is still VIDEO because `:631` precedes the File block, so
+        this is not a bare emptiness assertion either.
+        """
+        http_mock.head(LOOPS_URL).respond(200, headers={'Content-Type': 'text/html'})
+        _opengraph_page(http_mock, LOOPS_URL, og_image='/thumbs/clip9.jpg',
+                        og_title='Relative')
+        s = _seed()
+
+        edit_post(_api_input(url=LOOPS_URL), s.post, POST_TYPE_LINK, SRC_API,
+                  user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.type == POST_TYPE_VIDEO
+        assert s.post.image_id is None
+        assert File.query.count() == 0
+
+    def test_a_loops_thumbnail_with_no_jpg_reaches_the_file_unrewritten(
+            self, db_session, http_mock):
+        """`:636` IS UNCONDITIONAL: it runs on every filename that clears
+        `:635`, and `str.replace` on a string with no '.jpg' is a no-op.
+
+        Takes the SAME arcs as the first test (630->631, 633->634, 635->636);
+        it adds no coverage and is not here for coverage. It is here because
+        Task 9 mutates `:636`, and the viable variants differ depending on
+        whether the line is guarded. A '.png' thumbnail arriving in
+        `File.source_url` byte-for-byte is the measurement that says it is
+        not: `:637` stores whatever `:636` returned.
+
+        This assertion is a positive witness of `:636` running and returning
+        its input, not of `:636` being skipped -- the two are indistinguishable
+        from the outside HERE, which is precisely why the first test (where
+        they ARE distinguishable) carries the '.720p.mp4' kill and this one
+        only documents the no-op.
+        """
+        http_mock.head(LOOPS_URL).respond(200, headers={'Content-Type': 'text/html'})
+        _opengraph_page(http_mock, LOOPS_URL,
+                        og_image='https://cdn.loops.example/thumb.png')
+        s = _seed()
+
+        edit_post(_api_input(url=LOOPS_URL), s.post, POST_TYPE_LINK, SRC_API,
+                  user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.type == POST_TYPE_VIDEO
+        file = db.session.get(File, s.post.image_id)
+        assert file.source_url == 'https://cdn.loops.example/thumb.png'
+
+    def test_every_jpg_in_a_loops_thumbnail_is_rewritten(self, db_session, http_mock):
+        """`:636` IS GLOBAL: `str.replace` with no count argument replaces
+        EVERY occurrence, including one in a directory segment rather than the
+        extension.
+
+        Same arcs as the first test; again not here for coverage but for the
+        mutation pass. `.replace('.jpg', '.720p.mp4', 1)` is a viable mutant of
+        `:636` that the first test CANNOT kill -- its filename contains one
+        '.jpg' -- and this test kills it, because the surviving second '.jpg'
+        would show up in `File.source_url`.
+        """
+        http_mock.head(LOOPS_URL).respond(200, headers={'Content-Type': 'text/html'})
+        _opengraph_page(http_mock, LOOPS_URL,
+                        og_image='https://cdn.loops.example/a.jpg/b.jpg')
+        s = _seed()
+
+        edit_post(_api_input(url=LOOPS_URL), s.post, POST_TYPE_LINK, SRC_API,
+                  user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        file = db.session.get(File, s.post.image_id)
+        assert file.source_url == \
+            'https://cdn.loops.example/a.720p.mp4/b.720p.mp4'
