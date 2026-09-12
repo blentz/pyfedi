@@ -25,7 +25,7 @@
 - **No test may request the `redis_double` fixture.**
 - **SRC_API tests must NOT be wrapped in `web_ctx`; SRC_WEB tests that read `current_user` must be.**
 - **Every monkeypatch must restore in a `finally`, or be a pytest `monkeypatch` fixture**, and must patch `post_module.<name>`. `boto3`, `Image`, `os`, `can_upload_video`, `store_files_in_s3`, `is_video_url`, `retrieve_image_hash`, `hash_matches_blocked_image`, `sanitize_svg`, `inspect_image_c2pa` are all module-level in `app/shared/post.py`. **Never patch `app.utils` directly.**
-- **No duplicate test names.** Check with `grep -oE "^def (test_[a-z_]+)" tests/test_shared_post_upload.py | sort | uniq -d` before every commit.
+- **No duplicate test names.** Check with `grep -oE "^def (test_[a-z0-9_]+)" tests/test_shared_post_upload.py | sort | uniq -d` before every commit. **The character class must include `0-9`.** Earlier dispatches in this campaign used `[a-z_]+`, which stops at the first digit: `test_c2pa_flags_...` and `test_c2pa_leaves_...` both truncate to `test_c` and report as a false duplicate. The flaw is false-positive only — a genuine duplicate still truncates identically and is still caught — but a check that cries wolf is a check people learn to ignore.
 - **Every line number re-derived** with `awk 'NR>=X && NR<=Y {printf "%d\t%s\n",NR,$0}' FILE`. Cite a statement's own line, not the `if` guarding it and not a neighbour.
 - **VERIFY EVERY CITATION MECHANICALLY AND PASTE THE PROOF.** For every `file:line` you add or change, run `awk` over it and paste the numbered output into your report beside the claim. In sub-project 37, three consecutive tasks each shipped exactly one Major and all three were citations; the four tasks after this rule was added shipped none, and the rule's own first use found a fourth error three reviewers had missed.
 - **Mutations:** one at a time, **line-scoped `sed`**, dry-run and read the line first, apply, run, restore, then assert empty `git diff -- app/` and `wc -l app/shared/post.py` = 1193. Restore before any point where you might stop.
@@ -594,7 +594,7 @@ Neutralise `:467`'s extension check so it never refuses. **Two consecutive round
 ```bash
 git diff -- app/
 wc -l app/shared/post.py
-grep -oE "^def (test_[a-z_]+)" tests/test_shared_post_upload.py | sort | uniq -d
+grep -oE "^def (test_[a-z0-9_]+)" tests/test_shared_post_upload.py | sort | uniq -d
 ./run_tests.sh tests/test_shared_post_upload.py -q
 ```
 
