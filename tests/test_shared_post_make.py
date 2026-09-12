@@ -337,3 +337,255 @@ def test_a_rate_limited_api_user_is_refused(db_session):
     # Proves the raise happened BEFORE :206 created a row -- without this the
     # test would pass even if the raise moved below the creation.
     assert db.session.query(Post).count() == 0
+
+
+def test_an_unverified_user_cannot_make_a_post(db_session, app):
+    """`:187`'s FIRST disjunct and `:188`'s raise.
+
+    SRC_WEB, not SRC_API. `authorise_api_user` (app/utils.py:3620-3622)
+    itself raises `'incorrect_login'` for `user.verified is False` before
+    `make_post` is ever reached -- verified empirically: the API-arm version
+    of this test failed with `'incorrect_login'` rather than `'not
+    permitted'`, so the bearer-token layer refused first and `:187` was never
+    exercised. `current_user` (`:172`) has no such gate: `login_user`
+    (`tests/factories.py:1224`) does not consult `verified`, since `User`
+    inherits flask-login's default `is_active = True`. The SRC_WEB arm is
+    therefore the only way to reach `:187` with an unverified user and have
+    the refusal come from `can_create_post` (app/utils.py:2504-2506) -- the
+    check under test -- rather than from the token layer.
+
+    Positive control: `test_an_article_post_is_created_through_the_web_arm`,
+    same web arm and a verified author, no raise.
+    """
+    s = seed_make_context()
+    s.author.verified = False
+    db.session.commit()
+
+    with web_ctx(app, s.author):
+        with pytest.raises(Exception, match='not permitted'):
+            make_post(_web_form(), s.community, POST_TYPE_ARTICLE, SRC_WEB)
+
+    assert db.session.query(Post).count() == 0
+
+
+def test_an_ip_banned_user_cannot_make_a_post(db_session):
+    """`:187`'s SECOND disjunct, with the first FALSE.
+
+    The author is fully permitted -- keyed, verified, unbanned -- so
+    `can_create_post` returns True and only `user_ip_banned()` refuses. That
+    separation is the whole test: a fixture failing both disjuncts would pass
+    while witnessing only the first.
+
+    `user_ip_banned` is a module-level import at `app/shared/post.py:28`
+    (`from app.utils import ... user_ip_banned, ...`), so `make_post` reads
+    the name out of `post_module`'s own namespace -- patching `app.utils`
+    directly would leave `post_module.user_ip_banned` pointing at the
+    original function. `post_module.user_ip_banned` is therefore the binding
+    site patched here, per tests/README.md's convention for this campaign.
+
+    Positive control: `test_the_api_arm_returns_the_user_id_and_the_post`,
+    same author, `user_ip_banned` unpatched, no raise.
+    """
+    s = seed_make_context()
+
+    original = post_module.user_ip_banned
+    post_module.user_ip_banned = lambda: True
+    try:
+        with pytest.raises(Exception, match='not permitted'):
+            make_post(_api_input(), s.community, POST_TYPE_ARTICLE, SRC_API,
+                      auth=bearer(s.author))
+    finally:
+        post_module.user_ip_banned = original
+
+    assert db.session.query(Post).count() == 0
+
+
+def test_a_post_with_no_url_skips_the_domain_check(db_session):
+    """`:190`'s false arm, straight to `:197`.
+
+    `_api_input` defaults `url` to None, so this is the ordinary article path.
+    Asserts no Domain row was created, which is what distinguishes skipping
+    the block from running it against a url that happens to be clean.
+    """
+    s = seed_make_context()
+    before = db.session.query(Domain).count()
+
+    make_post(_api_input(), s.community, POST_TYPE_ARTICLE, SRC_API,
+              auth=bearer(s.author))
+
+    assert db.session.query(Domain).count() == before
+
+
+def test_a_hostless_url_skips_the_domain_check(db_session):
+    """`:193`'s false arm: `url` truthy and surviving `:191`'s `.strip()`,
+    but `domain_from_url` returns None.
+
+    `domain_from_url` (app/utils.py:1561-1596) returns None in three
+    situations: a falsy url (`:1562-1568`, excluded here because `:190`
+    already requires url to be truthy before this function is even called), a
+    `ValueError` escaping `urlparse` (`:1569-1582`, e.g. an unbalanced IPv6
+    bracket), and -- the case this test exercises -- a url that `urlparse`
+    parses WITHOUT error but whose `.hostname` comes back None, which takes
+    the `else: return None` arm at `:1595-1596`.
+
+    `'not-a-url'` is such a url: it has no `://` and no netloc, so
+    `urlparse('not-a-url'.lower())` succeeds (no exception) and yields
+    `hostname=None`. It is truthy going into `:190`, and `.strip()` at `:191`
+    leaves it unchanged (no surrounding whitespace to strip), so it reaches
+    `:192`'s `domain_from_url` call exactly as written -- domain comes back
+    None, `:193` is false, and control falls straight to `:197` with no raise.
+
+    `edit_post` IS STUBBED TO IDENTITY HERE, following
+    `test_the_web_arm_strips_the_title_and_the_api_arm_does_not`'s precedent
+    above. `edit_post` re-derives its OWN url from the same `input` (`:256`)
+    and re-runs its OWN `domain_from_url` call (`:566`) against it, and for a
+    truthy, non-empty url it goes on to call `is_image_url`/`opengraph_parse`
+    (app/utils.py:601, :642), which reach real httpx machinery. Verified
+    empirically, and worth recording because it very nearly produced a
+    silently-broken test: `httpx.Client.build_request` MERGES a url containing
+    no `//authority` against its (empty) `base_url`, stripping even an
+    explicit scheme prefix like `'https:nohost'` down to a bare relative path
+    before the request ever leaves the client -- so a route registered for
+    the url as written never matches the request respx actually sees. And a
+    fully schemeless string such as `'not-a-url'`, once respx (installed by
+    the session-scoped `block_outbound_http` fixture, tests/conftest.py:260)
+    returns a mocked response for it, crashes with a `ValueError` deep in
+    httpx's OWN cookie-jar bookkeeping (`urllib.request.Request._splittype`
+    demands a `scheme:rest` prefix) -- a failure in httpx's plumbing, not in
+    `:193`. Stubbing `edit_post` sidesteps all of it: this test's target line
+    is `make_post:193`, not `edit_post`'s independent re-derivation of the
+    same url.
+
+    Asserts no Domain row was created, which is what proves `domain_from_url`
+    took its hostless `else` arm (`:1595-1596`) rather than the branch that
+    constructs one (`app/utils.py:1591`, reached only when
+    `parsed_url.hostname` is truthy) -- the same observable
+    `test_a_post_with_no_url_skips_the_domain_check` uses for `:190`'s false
+    arm, but reached here with `:190` TRUE and `:193` FALSE instead of `:190`
+    FALSE.
+    """
+    s = seed_make_context()
+    before = db.session.query(Domain).count()
+
+    original_edit_post = post_module.edit_post
+    post_module.edit_post = lambda *args, **kwargs: args[1]
+    try:
+        result = make_post(_api_input(url='not-a-url'), s.community,
+                            POST_TYPE_LINK, SRC_API, auth=bearer(s.author))
+    finally:
+        post_module.edit_post = original_edit_post
+
+    assert result is not None
+    assert db.session.query(Domain).count() == before
+
+
+def test_a_banned_domain_is_refused(db_session):
+    """`:194`'s FIRST disjunct and `:195`'s raise.
+
+    `domain_from_url` (app/utils.py:1561) creates the Domain when absent, so
+    the row is seeded banned FIRST -- otherwise the call would create a fresh
+    unbanned one and the guard would never fire.
+
+    THE ASSERTION IS ON THE RAISE, NOT ON `post.url` OR A `Domain` ROW: both
+    are confounded, per `test_a_link_post_picks_link_url_not_video_url`'s
+    docstring above. `make_post` never puts its local `url` on the Post
+    (`:206-207` passes `title` and `language_id` only), and `edit_post:566`
+    calls `domain_from_url` again on its own re-derived url, so a Domain row
+    existing proves nothing about `:192` specifically.
+
+    `edit_post` IS STUBBED TO IDENTITY, and this is load-bearing for the
+    raise assertion too, not just for the Domain-row point above --
+    discovered by running the mutation this test is meant to catch.
+    `edit_post:568` reimplements `:194`'s EXACT compound
+    (`if domain.banned or domain.name.endswith('.pages.dev'):`) against its
+    own re-derived url, and raises the SAME message
+    (`domain.name + ' is blocked by admin'`, `edit_post:569`). `make_post`'s
+    `:230-236` catches ANY exception `edit_post` raises, deletes the vote and
+    the post, and re-raises it unchanged -- so with `edit_post` left to run
+    for real, deleting `:194`'s first disjunct in `make_post` (leaving bare
+    `if domain.banned:`) does not fail this test: `make_post`'s own check goes
+    quiet, but `edit_post`'s untouched copy of the SAME check fires one call
+    later and produces an indistinguishable raise. `Post` count stays 0
+    either way too, because the except block at `:233-236` deletes the row
+    even when `edit_post` is the one that raised. Stubbing `edit_post` to
+    identity removes its copy of the check entirely, so the only way this
+    test can still raise is `make_post`'s own `:194`/`:195`.
+    """
+    s = seed_make_context()
+    domain = make_domain('banned.example')
+    domain.banned = True
+    db.session.commit()
+
+    original_edit_post = post_module.edit_post
+    post_module.edit_post = lambda *args, **kwargs: args[1]
+    try:
+        with pytest.raises(Exception, match='blocked by admin'):
+            make_post(_api_input(url='https://banned.example/thing'), s.community,
+                      POST_TYPE_LINK, SRC_API, auth=bearer(s.author))
+    finally:
+        post_module.edit_post = original_edit_post
+
+    assert db.session.query(Post).count() == 0
+
+
+def test_a_pages_dev_domain_is_refused_even_when_not_banned(db_session):
+    """`:194`'s SECOND disjunct, with the first FALSE.
+
+    The domain is created by `domain_from_url` and left UNBANNED, so
+    `domain.banned` is False and only the `.pages.dev` suffix test refuses.
+    This is the only test that distinguishes the two operands of `:194`, which
+    coverage.py scores as a single arc pair: a fixture that made both
+    disjuncts true at once would pass under a mutant that deleted this one.
+
+    `edit_post` IS STUBBED TO IDENTITY -- required, not optional, and found
+    the hard way: `edit_post:568` reimplements `:194`'s exact compound against
+    its own re-derived url and raises the identical message, so without this
+    stub a mutant deleting `:194`'s SECOND disjunct (leaving bare
+    `if domain.banned:`) sails through. Confirmed empirically: with the stub
+    absent, dropping `:194`'s `.pages.dev` operand left every test in this
+    file green, because `make_post`'s own check went quiet while
+    `edit_post`'s untouched copy fired one call later at `:231` and produced
+    the same 'blocked by admin' message, caught and re-raised unchanged by
+    `make_post`'s `:230-236`. See `test_a_banned_domain_is_refused`'s
+    docstring above for the full mechanism. With the stub in place, the only
+    source of a raise is `make_post`'s own `:194`/`:195`.
+    """
+    s = seed_make_context()
+
+    original_edit_post = post_module.edit_post
+    post_module.edit_post = lambda *args, **kwargs: args[1]
+    try:
+        with pytest.raises(Exception, match='blocked by admin'):
+            make_post(_api_input(url='https://someone.pages.dev/thing'),
+                      s.community, POST_TYPE_LINK, SRC_API, auth=bearer(s.author))
+    finally:
+        post_module.edit_post = original_edit_post
+
+    assert db.session.query(Post).count() == 0
+
+
+def test_an_ordinary_domain_is_allowed(db_session, http_mock):
+    """`:194`'s false arm -- BOTH disjuncts false -- and `:197`.
+
+    The positive control for the two refusal tests above: same shape, clean
+    domain, no raise. Without it, a `pytest.raises` that passed because the
+    call raised for some unrelated reason would look identical.
+
+    Needs `http_mock`: unlike the refusal tests, nothing raises before `:231`
+    delegates to `edit_post`, and `edit_post` reaches a real url this time
+    (`'https://clean.example/thing'` has a resolvable host, unlike
+    `test_a_hostless_url_skips_the_domain_check`'s input), so `is_image_url`
+    fires one HEAD and, since the response is not an image, `opengraph_parse`
+    fires one GET -- both registered here, matching
+    `test_web_branch_takes_the_link_url_for_a_link_post`
+    (tests/test_shared_post_edit.py) for the same shape.
+    """
+    s = seed_make_context()
+    http_mock.head('https://clean.example/thing').respond(200, headers={'Content-Type': 'text/html'})
+    http_mock.get('https://clean.example/thing').respond(200, html='<html></html>')
+
+    user_id, post = make_post(_api_input(url='https://clean.example/thing'),
+                              s.community, POST_TYPE_LINK, SRC_API,
+                              auth=bearer(s.author))
+
+    assert post.url == 'https://clean.example/thing'
