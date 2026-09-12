@@ -44,11 +44,23 @@ rather than assumed.
      matches on `url__regex` (the filename is `gibberish(15)`, unknown ahead of
      time) -- a plain `http_mock.head('https://...').respond(...)` as used
      throughout `test_shared_post_edit.py` cannot be used here. Registering a
-     `GET` route for the same pattern is a mistake, not a safety margin. It is
-     never called (`test.piefed.local`'s `.local` suffix makes it an invalid
-     get-request URI, logged and skipped, per `app/utils.py:132-133`) and
-     `http_mock`'s `assert_all_called=True` then fails the test at teardown for
-     an unrelated reason.
+     `GET` route for the same pattern is a mistake, not a safety margin. The
+     HEAD mock reports `Content-Type: image/png`, so `is_image_url` returns
+     `True` and `edit_post` takes `:601`'s `if is_image_url(url):` branch --
+     the ONLY one of the four mutually exclusive `if`/`elif`/`elif`/`else` arms
+     at `:601`/`:619`/`:630`/`:641` that does not call `opengraph_parse`
+     (`:621`/`:632`/`:642`), which is what would issue a GET via `get_request`.
+     Taking the `:601` branch makes the other three arms, and every GET they
+     could cause, unreachable in the same call -- not merely unlikely, but
+     structurally excluded by the `if`/`elif` chain. So no GET is ever
+     attempted on this url in this test, independent of the host: a registered
+     GET route would simply never be called, and `http_mock`'s
+     `assert_all_called=True` would fail the test at teardown for that reason.
+     (`test.piefed.local`'s `.local` suffix DOES make `get_request` skip with
+     an "invalid get request" log per `app/utils.py:132-133` -- that mechanism
+     is real, but it never engages on this path, since `get_request` is never
+     called here at all. A later task whose post takes one of the other three
+     arms would hit that mechanism directly and should cite it instead.)
 
   3. `c2pa` IS INSTALLED, so `:480` runs for real rather than needing a stub
      (`app/utils.py:5757` does `import c2pa` inside the function). PROBE C
@@ -74,9 +86,12 @@ later tasks depend on it. `:468` and `:533` both raise
 which line fired: a test aimed at one could pass because the other fired
 instead. The discriminator is the FILE, not the message: `:468` raises BEFORE
 `:487` saves anything, so no file exists under `chdir_upload` afterward;
-`:533` raises AFTER `:487`'s save (and after any re-encode up to `:531`
-that ran before the raise), so a file DOES exist under `chdir_upload`
-afterward. Every test in this file that asserts the 'filetype not allowed'
+`:533` raises AFTER `:487`'s save, so a file DOES exist under `chdir_upload`
+afterward. `:531`'s re-encode and `:533`'s raise are mutually exclusive arms
+of the SAME `if`/`else` at `:515` -- `:531` runs only in the `if` branch,
+`:533` only in the `else` -- so `:531` never runs before `:533` fires; the
+file present when `:533` raises is solely the one `:487` originally saved,
+untouched by `:531`. Every test in this file that asserts the 'filetype not allowed'
 message must also assert whether a file exists under `chdir_upload` --
 absent for `:468`, present for `:533`.
 """
@@ -93,18 +108,60 @@ from app.shared.post import edit_post
 from tests.test_shared_post_edit import _api_input, _seed
 
 
+SVG_BYTES = (b'<?xml version="1.0" encoding="UTF-8"?>'
+            b'<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">'
+            b'<rect width="8" height="8" fill="#0a141e"/></svg>')
+"""Real, minimal SVG/XML. SVG is text, not a raster format, so it needs no
+image library at all -- see `make_upload`'s `fmt='SVG'` case.
+"""
+
+
 def make_upload(filename='pic.png', fmt='PNG', size=(8, 8), colour=(10, 20, 30),
                 content_type=None):
-    """A real `FileStorage` carrying real image bytes.
+    """A real `FileStorage`, genuine-content for some formats, renamed for others.
 
     Built in memory rather than from a fixture file, following
     tests/test_utils_images.py, which constructs every image it needs with
     `Image.new(...)` -- no binary assets live in this repository and none
     should be added. 8x8 keeps encode and thumbnail cost negligible.
 
+    GENUINE CONTENT for `fmt` in `PNG`, `GIF`, `JPEG` -- Pillow encodes real
+    bytes of that format via `Image.new(...).save(buf, format=fmt)`, and
+    `fmt='SVG'` (case-insensitive) takes an entirely different path, returning
+    `SVG_BYTES` (real SVG/XML text, since Pillow has no SVG writer and SVG is
+    not a raster format at all). VERIFIED against `:500`'s real
+    `sanitize_svg(final_place)`: saving `SVG_BYTES` to disk and calling
+    `sanitize_svg` on it returns `True` (successful sanitization), rewriting
+    the file with py-svg-hush's re-serialized, still-valid-and-equivalent SVG.
+    So `:500`'s condition (`not sanitize_svg(final_place)`) is False for
+    `SVG_BYTES` and `:501`'s raise is NOT taken -- `make_upload(fmt='SVG')`
+    exercises the SUCCESSFUL-sanitization path through `:500`. A test wanting
+    `:500`'s TRUE condition (`:501`'s raise, an SVG that FAILS sanitization)
+    needs a different, malformed payload -- `SVG_BYTES` alone cannot produce
+    that outcome.
+
+    RENAMED RASTER BYTES ONLY for `fmt` in `HEIC`, `AVIF`, or any video-like
+    extension via `filename` (e.g. `.mp4`): this helper always falls through to
+    `Image.new(...).save(buf, format=fmt)` for anything other than `'SVG'`, and
+    Pillow cannot encode HEIC without `register_heif_opener()` having already
+    run, or AVIF without `pillow_avif` registered -- neither happens here. A
+    call like `make_upload(filename='pic.heic', fmt='PNG')` therefore produces
+    real PNG bytes wearing a `.heic` filename, not genuine HEIC content. That is
+    sufficient for branches gated on the FILENAME alone (`:491`'s
+    `if final_ext == '.heic':`, `:493`'s `.avif` check, and `:513`'s
+    `is_video_url(final_place)`, all of which read the extension string, not
+    the bytes), but it cannot exercise a real HEIC/AVIF decode, a genuine
+    format-mismatch at `:515` for those formats, or any video-content-specific
+    behaviour. A test that needs that would need a different helper.
+
     `content_type` becomes `.mimetype`, which `:480` passes to
-    `inspect_image_c2pa`; it defaults to `image/<fmt lowered>`.
+    `inspect_image_c2pa`; it defaults to `image/<fmt lowered>`
+    (`image/svg+xml` for `fmt='SVG'`).
     """
+    if fmt.upper() == 'SVG':
+        buf = BytesIO(SVG_BYTES)
+        return FileStorage(stream=buf, filename=filename,
+                           content_type=content_type or 'image/svg+xml')
     buf = BytesIO()
     Image.new('RGB', size, colour).save(buf, format=fmt)
     buf.seek(0)
