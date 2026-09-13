@@ -87,10 +87,12 @@ from app.constants import (
     POST_TYPE_IMAGE, POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_VIDEO,
     ROLE_ADMIN, SRC_API, SRC_WEB,
 )
-from app.models import Domain, Event, File, Poll, PollChoice, Role
+from app.models import (
+    Domain, Event, File, Poll, PollChoice, PollChoiceVote, Role,
+)
 from app.shared.post import edit_post
 from app.utils import store_files_in_s3
-from tests.factories import make_community_member, make_user
+from tests.factories import make_community_member, make_poll_choice, make_user
 from tests.test_shared_post_edit import _api_input, _make_admin, _seed, _web_form
 from tests.test_shared_post_upload import chdir_upload  # noqa: F401
 
@@ -886,6 +888,10 @@ class _RecordingMakeImageSizes:
 
 PAGE_URL = 'https://example.com/thing'
 
+# The url the EXISTING post carries in TestImageArmEventBanner. See that
+# class's docstring for why it is a loops.video url and not a pixelfed one.
+SEEDED_OLD_URL = 'https://loops.video/v/old'
+
 
 class TestImageArmEventBanner:
     """`:601`'s true arm, and `:612`'s fork inside it.
@@ -901,7 +907,9 @@ class TestImageArmEventBanner:
     `:403` is false and `:410`'s `is_image_url(post.url)` never runs; `:601`'s
     `is_image_url(url)` is the only caller.
 
-    THE TWO TESTS DIFFER IN THE `type` ARGUMENT AND IN NOTHING ELSE. Both pass
+    THE FIRST TWO TESTS DIFFER IN THE `type` ARGUMENT AND IN NOTHING ELSE.
+    (The class now holds FOUR; the third and fourth are deliberately outside
+    that pair and are introduced by their own comment block below.) Both pass
     the same url, the same recorder, the same HEAD route and -- importantly --
     the SAME `event` dict, even though only the event test needs one (see that
     test's docstring for why it needs one at all). Giving the `event` dict to
@@ -912,6 +920,37 @@ class TestImageArmEventBanner:
     conjunct (`type == POST_TYPE_EVENT`) is false there, so no `Event` row is
     built, and `:617` types the post IMAGE so `app/shared/tasks/pages.py:231`'s
     `elif post.type == POST_TYPE_EVENT:` is never taken either.
+
+    THE PAIR SEEDS `post.url` WITH `SEEDED_OLD_URL`, AND THE CHOICE OF URL IS
+    LOAD-BEARING. Task 9's mutation pass found that DELETING `:613` survived
+    all 354 tests, because `_seed()` leaves `post.url` None and the event
+    test's `assert s.post.url is None` was then the seeded value surviving --
+    false-witness mechanism 1, and the paragraph in that test which denied it
+    is corrected in place below. A non-None seeded url makes None a value only
+    `:613` can have written.
+
+    IT HAD TO BE A loops.video URL RATHER THAN A PIXELFED ONE. Any seeded
+    `post.url` makes `:403` true, and the chain then decides what `post.type`
+    becomes before `:612` is ever reached. Read out of the file rather than
+    recalled::
+
+        403	    if post.url:
+        404	        if post.url.startswith('https://pixelfed.social/') or post.url.startswith('https://pixelfed.uno/'):
+        405	            post.type = POST_TYPE_IMAGE
+        406	        elif post.url.startswith('https://loops.video/'):
+        407	            post.type = POST_TYPE_VIDEO
+        408	        elif is_video_url(post.url):
+        409	            post.type = POST_TYPE_VIDEO
+        410	        elif is_image_url(post.url):
+        411	            post.type = POST_TYPE_IMAGE
+
+    A pixelfed url takes `:404`/`:405` and writes IMAGE -- which would have
+    destroyed the CONTROL test's `post.type == POST_TYPE_IMAGE` witness for
+    `:617`, trading one false witness for another. A loops.video url takes
+    `:406`/`:407` and writes VIDEO, so IMAGE remains a value only `:617`
+    produces, and `:613`'s None becomes real at the same time. `:404`, `:406`
+    and `:407` are all pure string tests, so this costs NO extra HTTP route:
+    `:410`'s `is_image_url` is an `elif` the chain never reaches.
 
     `:663`'s `if url and post.image:` IS REACHED BY BOTH TESTS, and `post.image`
     there is an implicit lazy load rather than anything the code assigns.
@@ -944,12 +983,21 @@ class TestImageArmEventBanner:
         pair -- a second varying input is exactly what the class docstring
         explains this pair must not have.
 
-        `post.url` being None is NOT merely the seeded value surviving --
-        false-witness mechanism 1. `_seed()` does seed None, but reaching
-        `:612` at all requires `:565` true, and the `if`/`else` at `:612`
-        writes `post.url` on BOTH arms (`:613` None, `:618` the url). The
-        control below is the same-mechanism positive: identical input but a
-        different `type`, and it comes back with the url set.
+        `post.url` being None IS NOW A REAL WITNESS OF `:613`, AND A CORRECTION
+        IS RECORDED HERE. An earlier revision of this docstring claimed it was
+        "NOT merely the seeded value surviving" on the strength of the ARC
+        argument below. That arc argument is TRUE and is kept. What it does not
+        establish is PROVENANCE for the STATEMENT, and Task 9's mutation pass
+        measured the gap: with `_seed()`'s url=None, DELETING `:613` outright
+        survived all 354 tests, because the assertion held on the seeded value.
+        The pair now seeds `SEEDED_OLD_URL`, so None can only have come from
+        `:613`. See the class docstring for why that url is a loops.video one.
+
+        THE ARC ARGUMENT, unchanged and still correct: reaching `:612` at all
+        requires `:565` true, and the `if`/`else` at `:612` writes `post.url`
+        on BOTH arms (`:613` None, `:618` the url). The control below is the
+        same-mechanism positive: identical input but a different `type`, and it
+        comes back with the url set.
 
         THE `event` KEY IS REQUIRED, AND THAT WAS MEASURED RATHER THAN READ.
         Without it `input.get('event', None)` is None (`:285`), so `:696`'s
@@ -967,7 +1015,7 @@ class TestImageArmEventBanner:
         rec = _RecordingMakeImageSizes()
         monkeypatch.setattr('app.shared.post.make_image_sizes', rec)
         http_mock.head(PAGE_URL).respond(200, headers={'Content-Type': 'image/png'})
-        s = _seed()
+        s = _seed(url=SEEDED_OLD_URL)
 
         edit_post(_api_input(url=PAGE_URL,
                              event={'start': '2030-01-01T09:00:00Z',
@@ -998,8 +1046,13 @@ class TestImageArmEventBanner:
         `:398` wrote `POST_TYPE_LINK` here, and `Post.type`'s column default is
         `POST_TYPE_ARTICLE` (app/models.py:1715), so IMAGE is neither the
         seeded value nor the submitted one. The only other writers of IMAGE are
-        `:405` and `:411`, both inside `:403`'s block, which cannot run --
-        `_seed()` leaves `post.url` None.
+        `:405` and `:411`, both inside `:403`'s block. `:403` IS now entered --
+        the pair seeds `SEEDED_OLD_URL` to give `:613` a witness -- but that
+        url is a loops.video one, so the chain takes `:406`/`:407` and writes
+        VIDEO. `:405` and `:411` are `if`/`elif` siblings the chain never
+        reaches, so IMAGE still has exactly one possible source here. That is
+        the whole reason the seeded url is not a pixelfed one; see the class
+        docstring.
 
         The argument tuple is pinned in full for the same reason as in the test
         above, and with the same limit on what an unchanged `low_quality` can
@@ -1008,7 +1061,7 @@ class TestImageArmEventBanner:
         rec = _RecordingMakeImageSizes()
         monkeypatch.setattr('app.shared.post.make_image_sizes', rec)
         http_mock.head(PAGE_URL).respond(200, headers={'Content-Type': 'image/png'})
-        s = _seed()
+        s = _seed(url=SEEDED_OLD_URL)
 
         edit_post(_api_input(url=PAGE_URL,
                              event={'start': '2030-01-01T09:00:00Z',
@@ -2887,8 +2940,19 @@ class TestPollAndEventTail:
         to the row it found rather than to some other one, that is the
         identity-plus-write pair. Asserting the mode alone would pass against
         a freshly created row (mechanism 1).
+
+        THE SEEDED `post.url` CLOSES `:670`, and is the same device this file
+        uses at `:657`. `:669` requires `type == POST_TYPE_POLL`, so `:398`'s
+        `post.type = type` has ALWAYS already written POLL by the time `:670`
+        runs -- which made `assert post.type == POST_TYPE_POLL` the submitted
+        value surviving, and Task 9 measured it: deleting `:670` outright
+        survived all 354 tests. Seeding a pixelfed url makes `:403` true and
+        `:404`/`:405` write `POST_TYPE_IMAGE` in between, so POLL at the end
+        can only have come from `:670`. `:404` is a pure `startswith`, so this
+        costs no HTTP route, and the input's `url` is still None so `:565`,
+        `:660` and `:663` are all false exactly as before.
         """
-        s = _seed()
+        s = _seed(url='https://pixelfed.social/p/old/1')
         db.session.add(Poll(post_id=s.post.id, mode='single',
                             end_poll=datetime(2031, 3, 4, 5, 6, 7)))
         db.session.commit()
@@ -2897,6 +2961,8 @@ class TestPollAndEventTail:
             {'choice_text': 'a', 'sort_order': 1}]}),
             s.post, POST_TYPE_POLL, SRC_API, user=s.user, from_scratch=True)
 
+        db.session.refresh(s.post)
+        assert s.post.type == POST_TYPE_POLL  # only `:670` writes this here
         polls = Poll.query.filter_by(post_id=s.post.id).all()
         assert len(polls) == 1
         assert polls[0].mode == 'multiple'  # `:686` wrote to the row it found
@@ -2917,8 +2983,16 @@ class TestPollAndEventTail:
         `Event(post_id=post.id)` would have `start` None. `timezone` is
         written unconditionally at `:708`, so asserting it shows `:708` wrote
         to the row that `:698` found.
+
+        THE SEEDED `post.url` CLOSES `:697`, the exact twin of `:670` in the
+        poll test above and of `:657` in `TestGenericOpengraphArm`: `:696`
+        requires `type == POST_TYPE_EVENT`, so `:398` has already written
+        EVENT and deleting `:697` outright survived all 354 tests. The pixelfed
+        url makes `:404`/`:405` write IMAGE in between, so EVENT at the end has
+        exactly one possible source. See the poll test for why this costs no
+        HTTP route.
         """
-        s = _seed()
+        s = _seed(url='https://pixelfed.social/p/old/1')
         db.session.add(Event(post_id=s.post.id,
                              start=datetime(2032, 7, 8, 9, 10, 11)))
         db.session.commit()
@@ -2928,8 +3002,69 @@ class TestPollAndEventTail:
                   s.post, POST_TYPE_EVENT, SRC_API, user=s.user,
                   from_scratch=True)
 
+        db.session.refresh(s.post)
+        assert s.post.type == POST_TYPE_EVENT  # only `:697` writes this here
         events = Event.query.filter_by(post_id=s.post.id).all()
         assert len(events) == 1
         assert events[0].timezone == 'Europe/Berlin'  # `:708` wrote the row
         assert events[0].max_attendees == 5
         assert events[0].start == datetime(2032, 7, 8, 9, 10, 11)
+
+    def test_re_editing_a_poll_clears_the_old_choices_and_their_votes(
+            self, db_session):
+        """`:431` and `:432`, the raw-SQL deletes in the `not from_scratch`
+        block.
+
+        ADDED BY TASK 9's FIX ROUND. Deleting either statement survived all 354
+        tests, and the comment above them says why that matters more than the
+        coverage number does::
+
+            429	        # Remove any poll votes that currently exists
+            430	        # Partially because it's easier to code but also to stop malicious alterations to polls after people have already voted
+            431	        db.session.execute(text('DELETE FROM "poll_choice_vote" WHERE post_id = :post_id'), {'post_id': post.id})
+            432	        db.session.execute(text('DELETE FROM "poll_choice" WHERE post_id = :post_id'), {'post_id': post.id})
+
+        -- so a silent regression here reintroduces exactly the alteration the
+        lines exist to prevent. This is the only test in the round's three
+        regions that passes `from_scratch=False`; every other one switches
+        `:421-459` off entirely, which is why the block's statements went
+        unwitnessed.
+
+        `:432` IS KILLED BY VALUE. With it deleted the old choice survives
+        alongside the new one, so the text set comes back as
+        `{'stale', 'fresh'}` rather than `{'fresh'}`.
+
+        `:431` IS KILLED BY THE EXCEPTION, AND THAT IS THE FAULT'S WHOLE
+        MEANING HERE rather than a weaker substitute for a value assertion.
+        `PollChoiceVote.choice_id` is a foreign key onto `poll_choice.id`
+        (app/models.py:3832-3835), and `:432` deletes EVERY choice for the
+        post, so there is no input under which a surviving vote could be
+        observed as a value -- with `:431` gone, `:432` violates the
+        constraint. The statement's only job is to clear the dependent rows
+        before the parent delete, and the violation is that job not being done.
+        The vote count is asserted anyway, so the test still reads as a
+        behavioural claim rather than as a crash probe.
+
+        NO `http_mock`: the input's `url` is None and `_seed` leaves
+        `post.url` None, so `:435`'s `url != post.url or uploaded_file` is
+        false, the teardown at `:437-451` is skipped, and `:565`, `:660` and
+        `:663` are all false. This call makes no outbound request.
+        """
+        s = _seed()
+        db.session.add(Poll(post_id=s.post.id, mode='single'))
+        db.session.commit()
+        stale = make_poll_choice(s.post, 'stale', sort_order=1)
+        voter = make_user(s.instance, 'voter', local=True)
+        db.session.add(PollChoiceVote(choice_id=stale.id, user_id=voter.id,
+                                      post_id=s.post.id))
+        db.session.commit()
+        assert PollChoiceVote.query.filter_by(post_id=s.post.id).count() == 1
+
+        edit_post(_api_input(poll={'mode': 'single', 'choices': [
+            {'choice_text': 'fresh', 'sort_order': 1}]}),
+            s.post, POST_TYPE_POLL, SRC_API, user=s.user, from_scratch=False)
+
+        texts = {c.choice_text for c in
+                 PollChoice.query.filter_by(post_id=s.post.id).all()}
+        assert texts == {'fresh'}                                    # `:432`
+        assert PollChoiceVote.query.filter_by(post_id=s.post.id).count() == 0
