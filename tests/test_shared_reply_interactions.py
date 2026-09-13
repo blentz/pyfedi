@@ -68,12 +68,19 @@ WHAT IS NEW, AND HAS NO POST TWIN:
     populated one. `child_count` (app/models.py:2899) is likewise unset by the
     factory, but has a column default of 0 rather than None.
 
-TWO DEFECTS ARE PINNED HERE AND DELIBERATELY NOT FIXED. `restore_reply:279-281`
+TWO DEFECTS ARE PINNED HERE AND DELIBERATELY NOT FIXED. `restore_reply:279-280`
 increments one counter (`reply.post.reply_count`) where `delete_reply:251-254`
 decrements three (`reply.post.reply_count`, `reply.post.reply_count_cross_posted`
-and `reply.community.post_reply_count`), and `vote_for_reply:22`/`:24` apply
-`can_upvote`/`can_downvote` only inside the `if src == SRC_API:` arm, the
-`else` at `:26-28` having no equivalent. NEITHER IS IN THE CAMPAIGN REGISTER
+and `reply.community.post_reply_count`). THE RANGES STOP WHERE THEY DO ON
+PURPOSE: `delete_reply:255` and `restore_reply:281` both adjust
+`reply.author.post_reply_count`, both sit at four-space indent OUTSIDE the
+`if not reply.author.bot:` guard that opens each block, and they mirror each
+other exactly. The asymmetry is confined to the bot-guarded block, so a test
+pinning it must read `post.reply_count`, `post.reply_count_cross_posted` and
+`community.post_reply_count` and must NOT read `author.post_reply_count`,
+which is symmetric and would witness nothing. Separately,
+`vote_for_reply:22`/`:24` apply `can_upvote`/`can_downvote` only inside the
+`if src == SRC_API:` arm, the `else` at `:26-28` having no equivalent. NEITHER IS IN THE CAMPAIGN REGISTER
 YET -- both are slated for it at this round's end. Until then the argument for
 leaving each unfixed lives in
 `docs/superpowers/specs/2026-09-12-coverage-reply-ac-40-design.md`, under the
