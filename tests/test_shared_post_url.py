@@ -1023,6 +1023,90 @@ class TestImageArmEventBanner:
         assert s.community.low_quality is False
         assert rec.calls[0] == ((s.post.image_id, 512, 1200, 'posts', False), {})
 
+    # ------------------------------------------------------------------
+    # The two tests below are the THIRD and FOURTH in this class and are
+    # DELIBERATELY OUTSIDE THE PAIR ABOVE. They exist only to kill the fifth
+    # argument of `:614`/`:616` mutated to the LITERAL `False`, which the pair
+    # cannot kill because `make_community` leaves `Community.low_quality` at
+    # its column default of False (app/models.py:555 `class Community`,
+    # app/models.py:576 `low_quality = db.Column(db.Boolean, default=False)`).
+    #
+    # WHY A THIRD AND FOURTH TEST RATHER THAN A CHANGE TO THE PAIR. Task 4
+    # showed that varying `low_quality` ACROSS the pair moves the hole instead
+    # of closing it: pairing EVENT with True and LINK with False lets a
+    # predicate written `if post.community.low_quality:` pass both, and the
+    # anti-correlated pairing lets `if not post.community.low_quality:` pass
+    # both. The pair's own invariant -- `type` is the ONLY input that varies --
+    # is what makes it a witness for `:612`, so `low_quality` has to move in a
+    # test where `type` is held against the pair's value instead.
+    #
+    # `:614` and `:616` are mutually exclusive arms of `:612`, so ONE extra
+    # test cannot reach both call sites; each arm needs its own. Task 9's brief
+    # authorised one; two are added, because closing `:616` and leaving `:614`
+    # open would have left half the finding standing.
+
+    def test_a_low_quality_community_reaches_the_event_banner_call(
+            self, db_session, http_mock, monkeypatch):
+        """`:614`'s FIFTH argument, and nothing else.
+
+        Identical in every input to
+        `test_an_event_with_an_image_url_keeps_no_url_and_gets_a_banner` except
+        that the community's `low_quality` is True, so the ONLY assertion that
+        can come back different is the last element of the recorded argument
+        tuple. The sizes are still asserted as 170/2000 so this remains a test
+        OF `:614` rather than of `:616`.
+
+        `s.community.low_quality is True` is asserted before the tuple for the
+        same reason the pair asserts it False: without it, a tuple ending True
+        would be consistent with `make_community` having changed its default,
+        and the witness would be reading the fixture rather than the call.
+        """
+        rec = _RecordingMakeImageSizes()
+        monkeypatch.setattr('app.shared.post.make_image_sizes', rec)
+        http_mock.head(PAGE_URL).respond(200, headers={'Content-Type': 'image/png'})
+        s = _seed()
+        s.community.low_quality = True
+        db.session.commit()
+
+        edit_post(_api_input(url=PAGE_URL,
+                             event={'start': '2030-01-01T09:00:00Z',
+                                    'end': '2030-01-01T10:00:00Z'}),
+                  s.post, POST_TYPE_EVENT, SRC_API,
+                  user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.community.low_quality is True
+        assert len(rec.calls) == 1
+        assert rec.calls[0] == ((s.post.image_id, 170, 2000, 'posts', True), {})
+
+    def test_a_low_quality_community_reaches_the_thumbnail_call(
+            self, db_session, http_mock, monkeypatch):
+        """`:616`'s FIFTH argument, and nothing else.
+
+        The same construction as the test above against the OTHER arm of
+        `:612`: identical to
+        `test_a_non_event_with_an_image_url_keeps_the_url_and_gets_a_thumbnail`
+        except for the community's `low_quality`, with 512/1200 still asserted
+        so it stays a test of `:616`.
+        """
+        rec = _RecordingMakeImageSizes()
+        monkeypatch.setattr('app.shared.post.make_image_sizes', rec)
+        http_mock.head(PAGE_URL).respond(200, headers={'Content-Type': 'image/png'})
+        s = _seed()
+        s.community.low_quality = True
+        db.session.commit()
+
+        edit_post(_api_input(url=PAGE_URL,
+                             event={'start': '2030-01-01T09:00:00Z',
+                                    'end': '2030-01-01T10:00:00Z'}),
+                  s.post, POST_TYPE_LINK, SRC_API,
+                  user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.community.low_quality is True
+        assert len(rec.calls) == 1
+        assert rec.calls[0] == ((s.post.image_id, 512, 1200, 'posts', True), {})
+
 
 class TestVideoHostingSiteArm:
     """`:660-661` -- the `elif` after `:565`, reached only when `:565` is FALSE
@@ -1345,6 +1429,51 @@ class TestPixelfedArm:
         """
         http_mock.head(PIXELFED_URL).respond(200, headers={'Content-Type': 'text/html'})
         _unreadable_page(http_mock, PIXELFED_URL)
+        s = _seed()
+
+        edit_post(_api_input(url=PIXELFED_URL), s.post, POST_TYPE_LINK, SRC_API,
+                  user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.type == POST_TYPE_IMAGE
+        assert s.post.url == PIXELFED_URL
+        assert s.post.body.endswith('\n\nSource: ')
+        assert s.post.image_id is None
+        assert File.query.count() == 0
+
+    def test_a_readable_page_with_no_og_image_builds_no_file(
+            self, db_session, http_mock):
+        """`:622`'s SECOND conjunct is the ONLY thing that decides here.
+
+        ADDED BY TASK 9's MUTATION PASS, which found the second conjunct
+        unwitnessed in all three arms. Every other test in this class moves the
+        two conjuncts in lockstep or moves only the first:
+
+            unreadable page      opengraph is False   -> conjunct 1 decides
+            og:image present     both true            -> neither decides alone
+            og:image:url only    both true            -> neither decides alone
+
+        so replacing `opengraph.get('og:image', '') != '' or
+        opengraph.get('og:image:url', '') != ''` with `True` changed nothing
+        that any test could see. Here `opengraph` is a NON-EMPTY dict --
+        `{'og:title': 'Only a title'}` -- so the first conjunct is true and
+        cannot decide, while both og:image keys are absent so the second is
+        false. Under the mutant `:623` yields None and `:624`'s
+        `filename.startswith` raises AttributeError.
+
+        THE EMPTY-TAG PAGE WOULD NOT DO. `_opengraph_page` with no tags returns
+        an EMPTY dict, which is falsy, so it decides at the first conjunct just
+        as `_unreadable_page` does -- see that helper's docstring. A tag the
+        code does not read is what makes the dict truthy without making the
+        second conjunct true, and `og:title` is the natural one because
+        `:625` would have consumed it had the block been entered.
+
+        `post.type`, `post.url` and the 'Source: ' suffix are asserted so this
+        is not a bare emptiness assertion (false-witness mechanism 3); `:620`,
+        `:628` and `:629` all run on this path.
+        """
+        http_mock.head(PIXELFED_URL).respond(200, headers={'Content-Type': 'text/html'})
+        _opengraph_page(http_mock, PIXELFED_URL, og_title='Only a title')
         s = _seed()
 
         edit_post(_api_input(url=PIXELFED_URL), s.post, POST_TYPE_LINK, SRC_API,
@@ -1745,6 +1874,76 @@ class TestLoopsArm:
         assert file.source_url == \
             'https://cdn.loops.example/a.720p.mp4/b.720p.mp4'
 
+    def test_a_jpg_that_is_not_the_extension_is_still_rewritten(
+            self, db_session, http_mock):
+        """`:636` IS UNCONDITIONAL, and this is the input that can show it.
+
+        ADDED BY TASK 9's MUTATION PASS, and it closes exactly the survivor the
+        test above registers: a GUARD-ADDING mutant of `:636` --
+        `filename.replace('.jpg', '.720p.mp4') if filename.endswith('.jpg')
+        else filename` -- survived every test in this class, because every
+        filename that clears `:635` here ends in '.jpg' and the guard is
+        therefore always true.
+
+        'a.jpg/b.png' holds a '.jpg' WITHOUT ending in one, which is the shape
+        the test above names as the one that would kill it. Original and
+        guarded now disagree::
+
+            original   -> https://cdn.loops.example/a.720p.mp4/b.png
+            guarded    -> https://cdn.loops.example/a.jpg/b.png
+
+        It is NOT the '.png' test that was removed from this class. That one
+        fed a filename with NO '.jpg' at all and was invariant under all four
+        variants of `:636` -- false-witness mechanism 4. This filename contains
+        a '.jpg' that `:636` must rewrite, so the stored value differs.
+
+        `post.type == POST_TYPE_VIDEO` is asserted alongside, because for this
+        url the generic arm would have written LINK (see the class docstring):
+        the assertion keeps the test pinned to `:630`'s arm rather than merely
+        to a string.
+        """
+        http_mock.head(LOOPS_URL).respond(200, headers={'Content-Type': 'text/html'})
+        _opengraph_page(http_mock, LOOPS_URL,
+                        og_image='https://cdn.loops.example/a.jpg/b.png')
+        s = _seed()
+
+        edit_post(_api_input(url=LOOPS_URL), s.post, POST_TYPE_LINK, SRC_API,
+                  user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.type == POST_TYPE_VIDEO
+        file = db.session.get(File, s.post.image_id)
+        assert file.source_url == 'https://cdn.loops.example/a.720p.mp4/b.png'
+
+    def test_a_readable_loops_page_with_no_og_image_builds_no_file(
+            self, db_session, http_mock):
+        """`:633`'s SECOND conjunct is the ONLY thing that decides here.
+
+        ADDED BY TASK 9's MUTATION PASS. The same construction, and the same
+        finding, as
+        `TestPixelfedArm.test_a_readable_page_with_no_og_image_builds_no_file`
+        -- see that docstring for why an empty-tag page would not do. Replacing
+        `:633`'s second conjunct with `True` changed nothing any test in this
+        class could see; with a truthy `opengraph` carrying no og:image, `:634`
+        yields None and `:635`'s `filename.startswith` raises AttributeError
+        under the mutant.
+
+        `post.type == POST_TYPE_VIDEO` is the positive witness that this arm
+        ran at all (`:631` precedes the File block), so the two absence
+        assertions are not standing alone.
+        """
+        http_mock.head(LOOPS_URL).respond(200, headers={'Content-Type': 'text/html'})
+        _opengraph_page(http_mock, LOOPS_URL, og_title='Only a title')
+        s = _seed()
+
+        edit_post(_api_input(url=LOOPS_URL), s.post, POST_TYPE_LINK, SRC_API,
+                  user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.type == POST_TYPE_VIDEO
+        assert s.post.image_id is None
+        assert File.query.count() == 0
+
 
 GENERIC_URL = 'https://news.example.com/article'
 THUMB_URL = 'https://cdn.example.com/lead.png'
@@ -2108,6 +2307,55 @@ class TestGenericOpengraphArm:
                   user=s.user, from_scratch=True)
 
         db.session.refresh(s.post)
+        assert s.post.image_id is None
+        assert File.query.count() == 0
+        assert _written_media(chdir_upload) == []
+
+    def test_a_readable_generic_page_with_no_og_image_downloads_nothing(
+            self, db_session, http_mock, chdir_upload):
+        """`:643`'s SECOND conjunct is the ONLY thing that decides here.
+
+        ADDED BY TASK 9's MUTATION PASS. The third of the set -- see
+        `TestPixelfedArm.test_a_readable_page_with_no_og_image_builds_no_file`
+        for the construction and for why an empty-tag page would not do.
+        Replacing `:643`'s second conjunct with `True` changed nothing any test
+        could see; here `opengraph` is truthy and carries no og:image, so
+        `:644` yields None and `:645`'s `filename.startswith` raises
+        AttributeError under the mutant.
+
+        NO GET IS REGISTERED FOR A THUMBNAIL, and that absence is part of the
+        witness in the same way as in
+        `test_a_site_relative_og_image_skips_the_download`: `:646` is never
+        reached, so a registered route would go unreached and
+        `assert_all_called=True` would fail this test at teardown.
+
+        `post.url` and `post.type` are asserted because `:652` and `:657` run
+        on this path regardless of the File block, which keeps this off a bare
+        emptiness assertion. LINK is the right expectation: this url satisfies
+        none of `:654`'s four disjuncts (see
+        `TestVideoHostingSiteArm` and the `is_video_url` reading in
+        `TestLoopsArm`'s docstring).
+
+        THE SUBMITTED TYPE IS `POST_TYPE_ARTICLE`, AND THAT IS DELIBERATE.
+        Every other test in this class submits `POST_TYPE_LINK`, which `:398`'s
+        `post.type = type` has already written by the time `:657` runs -- so
+        `assert s.post.type == POST_TYPE_LINK` was the submitted value
+        surviving, false-witness mechanism 1, and Task 9's mutation pass
+        measured it: DELETING `:657` outright survived all 354 tests. Submitting
+        ARTICLE makes LINK a value only `:657` can have written, since `:403` is
+        false here (`_seed` leaves `post.url` None) and no other line in the
+        generic arm writes it.
+        """
+        http_mock.head(GENERIC_URL).respond(200, headers={'Content-Type': 'text/html'})
+        _opengraph_page(http_mock, GENERIC_URL, og_title='Only a title')
+        s = _seed()
+
+        edit_post(_api_input(url=GENERIC_URL), s.post, POST_TYPE_ARTICLE, SRC_API,
+                  user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.type == POST_TYPE_LINK
+        assert s.post.url == GENERIC_URL
         assert s.post.image_id is None
         assert File.query.count() == 0
         assert _written_media(chdir_upload) == []
@@ -2577,6 +2825,24 @@ class TestPollAndEventTail:
         `:675`'s SECOND conjunct, `choice['choice_text'].strip()`, that
         decides -- the two conjuncts are not moved in lockstep here.
 
+        THE KEYLESS FIRST ENTRY WAS ADDED BY TASK 9's MUTATION PASS, which
+        found `:675`'s FIRST conjunct unwitnessed: replacing
+        `'choice_text' in choice` with `True` survived the whole
+        tests/test_shared_post_* suite, because every choice dict any test fed
+        carried the key and the conjunct could never decide. `{'sort_order': 1}`
+        has no 'choice_text' at all, so under the mutant `choice['choice_text']`
+        raises KeyError while the original skips the entry. It is placed FIRST
+        so that 'kept' still proves the loop ran on past it, exactly as the
+        blank entry's own witness works.
+
+        'kept' IS SUBMITTED AS ' kept ' FOR THE SAME REASON, and closes a
+        second hole the pass found: `:678`'s `choice['choice_text'].strip()`
+        with the `.strip()` REMOVED also survived the whole suite, because the
+        only whitespace any test fed was the all-blank `'   '`, which `:675`
+        skips before `:678` can see it. A value that is both padded and
+        non-blank is the one shape that reaches `:678` and can tell the two
+        apart.
+
         No `http_mock`: `_seed` leaves `post.url` None so `:403` is false, and
         the input's `url` is None so `:565`, `:660` and `:663` are all false.
         This call makes no outbound request at all, and a registered route
@@ -2585,8 +2851,9 @@ class TestPollAndEventTail:
         s = _seed()
 
         edit_post(_api_input(poll={'choices': [
-            {'choice_text': '   ', 'sort_order': 1},
-            {'choice_text': 'kept', 'sort_order': 2},
+            {'sort_order': 1},                          # no 'choice_text' key
+            {'choice_text': '   ', 'sort_order': 2},
+            {'choice_text': ' kept ', 'sort_order': 3},
         ]}), s.post, POST_TYPE_POLL, SRC_API, user=s.user, from_scratch=True)
 
         db.session.refresh(s.post)
