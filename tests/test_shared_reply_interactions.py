@@ -76,13 +76,32 @@ WHAT IS NEW, AND HAS NO POST TWIN:
     `render_template`, which wraps Flask's) -> `current_theme()`
     (app/utils.py:3228-3240). `:3230`'s `if hasattr(g, 'site')` is FALSE under
     `web_ctx`, because `test_request_context` never runs `before_request`, so
-    `:3233` falls back to `Site.query.get(1)` and `:3238` dereferences the None
-    it gets. Tests that render call `make_site()` (tests/factories.py:353)
-    themselves; the bookmark tests above do not, because `bookmark_reply` and
+    `:3233` falls back to `Site.query.get(1)`. `:3235` then does NOT rescue it:
+    `User.theme` (app/models.py:1031, in `class User` which opens at
+    app/models.py:973) is `db.Column(db.String(20), default='')`, so a
+    `make_user` user has `theme == ''` and it is the `!= ''` half of `:3235`'s
+    compound test that fails, not the `is not None` half. Control reaches
+    `:3238`, which dereferences the None from `:3233`.
+
+    WITH a `Site` row the same two steps still do not produce a theme:
+    `Site.default_theme` (app/models.py:3975, in `class Site` which opens at
+    app/models.py:3942) ALSO defaults to `''`, so `:3238`'s `is not None` guard
+    is satisfied and it returns `''` rather than its `'piefed'` literal --
+    which makes app/utils.py:76's `if theme != ''` short-circuit before any
+    filesystem check and `:79` render the base template. A later test that
+    wants a THEMED render must set `default_theme` explicitly; `make_site()`
+    alone will not give it one. All of this was measured, not read.
+
+    Tests that render call `make_site()` (tests/factories.py:353) themselves;
+    the bookmark tests above do not, because `bookmark_reply` and
     `remove_bookmark_reply` flash and fall off the end of the function without
-    rendering anything. `subscribe_reply` additionally has two statements no
-    production source value can reach -- see `TestSubscribeReply`'s docstring
-    for what `:98` does to the web arm.
+    rendering anything. The OTHER renderer in this module is
+    `vote_for_reply:51`, the only other `render_template` call in
+    app/shared/reply.py -- `delete_reply` and `restore_reply` never render, so
+    the delete/restore lifecycle tests need no `Site` row.
+    `subscribe_reply` additionally has two statements no production source
+    value can reach -- see `TestSubscribeReply`'s docstring for what `:98` does
+    to the web arm.
 
 TWO DEFECTS ARE PINNED HERE AND DELIBERATELY NOT FIXED. `restore_reply:279-280`
 increments one counter (`reply.post.reply_count`) where `delete_reply:251-254`
@@ -301,13 +320,21 @@ class TestSubscribeReply:
 
     Both flash branches additionally require `src != SRC_API`, so neither of
     the two source values any production caller passes can reach `:111` or
-    `:119`. The two tests below that exhaust the web arm's state space --
-    `..._ignores_the_subscribe_argument...` for the empty state,
-    `..._deletes_an_existing_subscription...` for the occupied one -- are
-    jointly the evidence for that, and they are why the brief's third and fifth
-    tests are not here: both asserted an outcome the web arm cannot produce and
-    both were falsified by running. What DOES reach the two flash branches is a
-    third source constant, and the last test in this class uses one; the twin
+    `:119`.
+
+    THE PROOF OF THAT IS THE DEDUCTION ABOVE, NOT THE TESTS BELOW, and the
+    order matters. `:98` and `:100` evaluate the same predicate over the same
+    session with no write between them, so the web arm has exactly TWO possible
+    states and the deduction rules out the mismatched arms of both. The two web
+    tests -- `..._ignores_the_subscribe_argument...` for the empty state,
+    `..._deletes_an_existing_subscription...` for the occupied one -- then
+    CONFIRM the deduction by landing on the two states it names. Reading them
+    as the proof would be the weaker and wrong argument: two passing tests
+    cannot by themselves establish that a state space has only two members.
+    They are also why the brief's third and fifth tests are not here: both
+    asserted an outcome the web arm cannot produce and both were falsified by
+    running. What DOES reach the two flash branches is a third source
+    constant, and the last test in this class uses one; the twin
     function `subscribe_post` has the identical shape and the identical
     resolution at tests/test_shared_post_interactions.py:577-639.
 
@@ -445,19 +472,25 @@ class TestSubscribeReply:
         `:116`'s false arm and `:119`'s flash. Arcs 108->111 and 116->119;
         statements 111, 119.
 
-        NEITHER SRC_WEB NOR SRC_API CAN REACH `:111`/`:119`, which the class
-        docstring derives from `:98` and the two web tests above demonstrate:
+        NEITHER SRC_WEB NOR SRC_API CAN REACH `:111`/`:119`. The class
+        docstring DERIVES that from `:98`; the two web tests above only confirm
+        the derivation by landing on the two states it names. In short:
         SRC_WEB keeps `subscribe` and `existing_notification` in lockstep, so
         `:103`'s false arm and `:114`'s true arm are jointly unreachable there,
         and under SRC_API `:108`/`:116` always take the raise. A third source
         value is the only way in -- it is (a) not SRC_WEB, so `:97` skips the
         override and the caller's `subscribe` argument survives, and (b) not
         SRC_API, so `:108`/`:116` take the else. SRC_PLD (app/constants.py:94,
-        the admin preload path) is used here purely as such a value. IT IS NOT
-        HOW THE CODE IS USED IN PRODUCTION -- app/api/alpha/utils/reply.py:462
-        passes SRC_API and app/post/routes.py:2098 passes SRC_WEB, and those are
-        the only two callers -- and this docstring says so rather than implying
-        otherwise. The precedent, down to the constant, is
+        the admin preload path) is used here as such a value. IT IS NOT HOW
+        *THIS* FUNCTION IS CALLED IN PRODUCTION -- app/api/alpha/utils/reply.py
+        :462 passes SRC_API and app/post/routes.py:2098 passes SRC_WEB, and
+        those are the only two callers -- and this docstring says so rather
+        than implying otherwise. It is NOT a made-up value, though: SRC_PLD is
+        a real constant the shared layer branches on elsewhere
+        (app/shared/community.py:50, app/shared/tasks/follows.py:53, :67, :99),
+        and `:108`/`:116` are written as `if src == SRC_API` with an `else`
+        over every other source, so the contract these two lines declare
+        admits it. The precedent, down to the constant, is
         tests/test_shared_post_interactions.py:577-639 against the twin
         `subscribe_post`.
 
