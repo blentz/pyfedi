@@ -893,8 +893,9 @@ class TestLockPostReply:
 
     AN EARLIER WORDING OF THIS PARAGRAPH ADDED "because the web routes do their
     own authorization before calling". THAT IS FALSE AT SOURCE. It is retracted
-    here rather than quietly deleted, because believed it closes a live
-    registered defect as a non-defect, and a later round reading this file
+    here rather than quietly deleted, because a reader who believed it would
+    take it as closing a live registered defect as a non-defect, and a later
+    round reading this file
     would have had no reason to doubt it. Re-derived with numbered output in
     sub-project 41's final fix wave, from `app/post/routes.py` lines 1666-1680
     printed by an awk that emits `NR` beside an unmodified `$0` (D536 -- an awk
@@ -927,8 +928,8 @@ class TestLockPostReply:
 
     AND THE API HALF DOES NOT ANSWER 403. A bare `Exception` out of an API
     handler reaches `shared_error_handler` (`app/api/alpha/__init__.py:108-114`),
-    which returns HTTP **400**, and logs the exception plus a Sentry event on the
-    way. So the same denial is 400 through the API and 403 through the web. That
+    which returns HTTP **400**, and logs the exception -- plus a Sentry event when
+    `SENTRY_DSN` is configured, which guards only the Sentry call and not the log. So the same denial is 400 through the API and 403 through the web. That
     is faithful to the twin and it is register entry D537; no test here asserts a
     status code, because these tests call the shared function directly.
 
