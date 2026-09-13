@@ -45,10 +45,13 @@ sets or increments `votes_cast_{today}_{user_id}` on the real redis the
 compose stack shares, and tests/conftest.py:131 resets id sequences after
 every test -- so a later test whose user reuses that id inherits a stale
 count. THE RULE FOR THIS FILE IS THAT EVERY TEST COMPLETING A REAL VOTE
-CLEARS THE KEY IN A `finally`. Three tests now do -- the three in
-`TestVoteForReplySourceAndPermission` that reach `:36`; the two that refuse at
-`:23`/`:25` deliberately do not, because no vote completed and the absence is
-part of what they assert. The pattern and the reason are
+CLEARS THE KEY IN A `finally`. Five tests now do -- the three in
+`TestVoteForReplySourceAndPermission` that reach `:36` and the two web tests in
+`TestVoteForReplyGuardsAndReturns` that do. The four that refuse earlier
+deliberately do not, because no vote completed and the absence is part of what
+they assert: `:23`/`:25`'s permission returns, `:31`'s abort and `:34`'s. The
+undo test clears the key ONCE for its two calls, which is correct rather than an
+oversight -- see its docstring. The pattern and the reason are
 tests/test_shared_post_interactions.py:153-173.
 
 WHAT IS NEW, AND HAS NO POST TWIN:
@@ -100,7 +103,16 @@ WHAT IS NEW, AND HAS NO POST TWIN:
     as does any test reaching `can_downvote`, per the two-reasons note above;
     the bookmark tests above do not, because `bookmark_reply` and
     `remove_bookmark_reply` flash and fall off the end of the function without
-    rendering anything. The OTHER renderer in this module is
+    rendering anything. THE TWO REASONS ARE NOT ALWAYS SEPARATE: a TEMPLATE can
+    be the thing that reaches `can_downvote`. `post/_comment_voting_buttons.html`
+    line 10 reads `can_downvote(current_user, community,
+    communities_banned_from_list)` -- a Jinja global registered at
+    app/request_hooks.py:54 -- and `vote_for_reply:51` passes no
+    `can_downvote_here` to short-circuit it, so every test rendering THAT
+    template needs the row on both counts at once.
+    `post/_reply_notification_toggle.html`, the other template this round
+    renders, calls neither gate and needs it for the theme chain alone.
+    The OTHER renderer in this module is
     `vote_for_reply:51`, the only other `render_template` call in
     app/shared/reply.py -- `delete_reply` and `restore_reply` never render, and
     neither reaches `can_downvote` (`grep -n "can_upvote\|can_downvote"
@@ -134,7 +146,14 @@ leaving each unfixed lives in
 `docs/superpowers/specs/2026-09-12-coverage-reply-ac-40-design.md`, under the
 headings that name them. The tests that pin today's voting behaviour are
 `TestVoteForReplySourceAndPermission` below; the delete/restore asymmetry is
-still pinned by a later task of this round.
+still pinned by a later task of this round. NO TEST IN THIS FILE MAKES THE
+VOTING ASYMMETRY EXECUTABLE, and that is a decision rather than a gap: the
+construction that would -- a web downvote against a `Site` with
+`enable_downvotes` False, landing where the API arm refuses -- also makes
+`post/_comment_voting_buttons.html` line 10 false, which deletes the
+`voted_down` markup that `TestVoteForReplyGuardsAndReturns`'s downvote test
+needs as its witness for `:49`. The two cannot be had in one test, and `:49`'s
+witness won.
 """
 
 from datetime import date
@@ -142,6 +161,7 @@ from types import SimpleNamespace
 
 import pytest
 from flask import get_flashed_messages
+from werkzeug.exceptions import HTTPException
 
 from app import db
 from app.constants import SRC_API, SRC_PLD, SRC_WEB
@@ -594,9 +614,15 @@ class TestVoteForReplySourceAndPermission:
         `can_downvote` is never called. It votes and renders nothing --
         `:41` is true on the API arm, so it returns at `:42` and never reaches
         `:51`.
-      - the web test needs one, because it is the only test in this class that
-        reaches `:51`'s `render_template`. That is the module docstring's chain
-        executing.
+      - the web test needs one FOR TWO INDEPENDENT REASONS, not the one this
+        docstring first gave. It is the only test in this class that reaches
+        `:51`'s `render_template`, which is the module docstring's chain
+        executing -- but `:51`'s template ALSO calls `can_downvote` itself, at
+        `post/_comment_voting_buttons.html` line 10, and that reads
+        `Site.query.get(1)` at app/utils.py:2443 exactly as `:24`'s call does.
+        `TestVoteForReplyGuardsAndReturns` below derives that and its downvote
+        test witnesses it. Removing the row would therefore break this test
+        twice over, and "because it renders" names only the first break.
     """
 
     def test_an_api_upvote_from_a_bot_returns_early_without_voting(self, db_session):
@@ -778,5 +804,323 @@ class TestVoteForReplySourceAndPermission:
             assert 'redirect_login' not in body
             assert 'voted_up' in body
             assert 'fe-arrow-up-circle' in body
+        finally:
+            _clear_votes_cast(s.user.id)
+
+
+class TestVoteForReplyGuardsAndReturns:
+    """`:30-34` and `:44-51` -- the ban and quota guards, and the web arm's
+    three-way recently-voted fork.
+
+    FOUR TESTS, NOT THE SIX THE BRIEF DRAFTED, because
+    `TestVoteForReplySourceAndPermission` above had already closed two of them
+    and this was MEASURED before anything was written. Against the class above
+    alone, suite-scoped over this file plus
+    tests/test_shared_post_interactions.py with `--cov=app.shared.reply
+    --cov-branch`, statements 30, 33, 36, 38, 41, 42, 44, 45, 46, 47 and 51 are
+    already not-missing and so are arcs 30->33, 33->36, 41->42, 41->44 and
+    46->47. What was still missing was statements 31, 34, 48 and 49 and arcs
+    30->31, 33->34, 46->48, 48->49 and 48->51 -- exactly what the four tests
+    here take. The brief's `..._a_completed_api_vote_returns_the_user_id` and
+    `..._a_web_upvote_renders_with_the_reply_marked_recently_upvoted` would have
+    duplicated `..._passes_both_gates` and
+    `..._the_web_arm_loads_the_reply_and_reads_current_user` call for call while
+    asserting strictly less (`result is not None` against that test's markup
+    discrimination), so they are deliberately absent rather than overlooked.
+
+    WHY `:46`/`:48` NEED THREE INPUTS AND NOT TWO. `:46` is an `if` and `:48`
+    its `elif`, so `:48` is not evaluated at all when `:46` is true, and BOTH
+    lines carry `undo is None` as their second conjunct:
+
+      - upvote, `undo` None    -> `:46` true  -> `:47`, then `:51`
+      - downvote, `undo` None  -> `46->48`, `:48` true  -> `:49`, then `:51`
+      - either direction, `undo` NOT None -> `46->48`, `:48` false -> `:51`
+        with both lists left empty
+
+    The upvote case is the class above's web test. The other two are the third
+    and fourth tests here.
+
+    `undo` IS NON-None ONLY WHEN A VOTE IS REMOVED, and that was read at source
+    rather than assumed: `PostReply.vote` (app/models.py:3311, in `class
+    PostReply` which opens at app/models.py:2887) initialises `undo = None` at
+    `:3322` and assigns it in exactly two places -- `:3343`'s `undo = 'Like'`,
+    when an existing upvote is voted up again and deleted, and `:3357`'s
+    `undo = 'Dislike'`, when an existing downvote is voted down again. A
+    direction REVERSAL (`:3345`, `:3359`) edits the existing row and leaves
+    `undo` None, so reversing is NOT an input that reaches `48->51`; repeating
+    the same direction is.
+
+    WHICH TESTS NEED A `Site` ROW, decided against BOTH triggers -- the
+    `render_template` theme chain and a `can_downvote` call -- rather than by
+    reflex:
+
+      - the ban test needs none. It aborts at `:31`, so nothing renders, and
+        `:24`'s `can_downvote` is inside the `if src == SRC_API:` arm this test
+        does not take.
+      - the quota test needs none. It aborts at `:34`, so nothing renders, and
+        although it IS an SRC_API call, `:24`'s first conjunct is false for an
+        upvote so `can_downvote` is never called; `can_upvote`
+        (app/utils.py:2480-2491) reads no `Site` at all.
+      - BOTH web tests need one FOR BOTH REASONS AT ONCE. The first is the
+        theme chain the module docstring records. The second is the template's
+        own: `post/_comment_voting_buttons.html` line 10 reads
+        `{% if (can_downvote_here or can_downvote(current_user, community,
+        communities_banned_from_list)) ... %}`, `vote_for_reply:51` passes no
+        `can_downvote_here`, Jinja `Undefined` is falsy, so the `or` evaluates
+        `can_downvote` -- which is a Jinja global registered at
+        app/request_hooks.py:54 and reads `Site.query.get(1)` at
+        app/utils.py:2443, dereferencing it at `:2445`. The downvote test below
+        asserts the downvote button's markup, which line 10 emits only when that
+        call returns True, so that assertion is also the executable evidence
+        that the template read the row.
+
+    THE TEMPLATE'S OWN `can_upvote`/`can_downvote` GET JINJA `Undefined` FOR
+    `communities_banned_from_list`, because `:51` passes none. Both functions
+    test `if communities_banned_from_list is not None:` (app/utils.py:2470,
+    :2484) and `Undefined` is not None, so they take that arm and evaluate
+    `community.id in Undefined`, which is False rather than an error. The
+    community-ban check in the template is therefore a no-op on this path, and
+    no assertion below depends on it.
+    """
+
+    def test_a_banned_user_is_refused_with_403(self, db_session, app):
+        """`:30` true -> `:31`'s abort(403). Arc 30->31, statement 31.
+
+        THIS IS THE CORRECTION OF THE BRIEF'S FIRST TEST, which drove the ban
+        through SRC_API. That construction cannot reach `:30` at all:
+        `authorise_api_user` at `:21` rejects the bearer token first, because
+        app/utils.py:3628 reads
+
+            if user.ap_id is not None or user.verified is False or user.banned
+               is True or user.deleted is True:
+
+        and raises `Exception('incorrect_login')` at `:3629`. Setting
+        `banned` is precisely what makes that token unusable, so the API arm
+        cannot witness `:30`'s first disjunct by construction. MEASURED, not
+        argued: the brief's version was run verbatim in a scratch class in this
+        file and failed with
+
+            AssertionError: assert None == 403
+             +  where None = getattr(Exception('incorrect_login'), 'code', None)
+
+        -- the `pytest.raises(Exception)` it used was loose enough to catch the
+        authorisation refusal and pass it off as the abort.
+
+        The web arm has no such gate: `:28` binds `current_user` directly, and
+        `login_user` accepts a banned user because `User` (app/models.py:973,
+        `class User(UserMixin, db.Model)`) does not override `UserMixin`'s
+        `is_active`.
+
+        `:30`'s SECOND disjunct is False here, so `user.banned` alone decides --
+        but NOT for the module docstring's context-free reason, and the
+        difference was probed rather than assumed. `web_ctx` DOES supply a
+        request context, so the `except RuntimeError` at app/__init__.py:76
+        that rescues a context-free call is never taken. What makes
+        `ip_address()` (app/utils.py:2308, an alias of `app.get_ip_address`)
+        return `''` anyway is that both of its sources are empty under
+        `test_request_context`: `TRUSTED_CLIENT_IP_HEADER` is `''` by default
+        (config.py:60) so the header read at `:70` is skipped, and
+        `request.remote_addr` at `:75` is None -- measured, `flask.Flask(...)
+        .test_request_context('/?')` leaves REMOTE_ADDR unset. `user_ip_banned`
+        (app/utils.py:2311-2314) therefore returns None at its implicit
+        fall-off WITHOUT reaching `banned_ip_addresses()` at all. The same
+        empty string by a different route.
+
+        `HTTPException` RATHER THAN `Exception` IN THE `raises`, and that is
+        load-bearing. Probed in the container: `flask.abort(403)` raises
+        `werkzeug.exceptions.Forbidden` and `abort(429)` raises
+        `werkzeug.exceptions.TooManyRequests`, both `HTTPException` subclasses
+        carrying `.code`. A bare `Exception` would have caught the
+        `incorrect_login` above and, with `getattr(exc.value, 'code', None)`,
+        turned a wrong-path failure into a confusing assertion error instead of
+        a clear one.
+
+        The vote counts are asserted because raising is also what the quota
+        refusal below does -- the STATUS is the discriminator between the two,
+        and the same-mechanism positive control that a vote from this fixture
+        CAN land is
+        `TestVoteForReplySourceAndPermission`'s
+        `..._the_web_arm_loads_the_reply_and_reads_current_user`, the identical
+        web call with `banned` left False.
+        """
+        s = _seed_reply()
+        s.user.banned = True
+        db.session.commit()
+
+        with web_ctx(app, s.user):
+            with pytest.raises(HTTPException) as exc:
+                vote_for_reply(s.reply.id, 'upvote', True, None, SRC_WEB)
+
+        assert exc.value.code == 403
+
+        db.session.refresh(s.reply)
+        assert s.reply.up_votes == 0
+        assert PostReplyVote.query.filter_by(
+            post_reply_id=s.reply.id, user_id=s.user.id).count() == 0
+
+    def test_a_user_over_the_vote_quota_is_refused_with_429(self, db_session, app, monkeypatch):
+        """`:30` false -> `:33`, `:33` true -> `:34`'s abort(429).
+        Arcs 30->33 and 33->34; statements 33, 34.
+
+        The quota is `current_app.config['VOTE_QUOTA']` (config.py:203, default
+        240). Setting it to -1 makes `votes_cast_today`'s zero
+        (app/models.py:47-52, which returns 0 when the redis key is absent)
+        exceed it WITHOUT writing a redis key this test would then have to clean
+        up -- which is why there is no `finally` here and why there must not be
+        one: nothing votes.
+
+        `monkeypatch.setitem` is safe on the session-scoped `app` fixture
+        (tests/conftest.py:72-113) precisely because monkeypatch restores it at
+        teardown; the fixture pushes one `app_context` for the whole session, so
+        `current_app` at `:33` is this same object.
+
+        429 RATHER THAN 403 IS THE DISCRIMINATOR against the test above. Both
+        raise an `HTTPException` and both leave the reply unvoted, so the code
+        is the only thing that separates them -- and the two are not exercised
+        in lockstep: this user is not banned and `user_ip_banned()` is None
+        outside a request context, so `:30` is false here, while the banned test
+        has `votes_cast_today` at 0 against the default 240 and so takes
+        `33->36` if it ever got there. Swapping the two abort codes fails both
+        tests.
+
+        SRC_API is used deliberately, and it needs no `Site` row: `:22`'s
+        `can_upvote` reads none, and `:24`'s first conjunct is false for an
+        upvote so `can_downvote` -- the gate that does read one -- is never
+        called. No `web_ctx` either; this is the module docstring's
+        context-free API claim executing again.
+        """
+        s = _seed_reply()
+        monkeypatch.setitem(app.config, 'VOTE_QUOTA', -1)
+
+        with pytest.raises(HTTPException) as exc:
+            vote_for_reply(s.reply.id, 'upvote', True, None, SRC_API, auth=bearer(s.user))
+
+        assert exc.value.code == 429
+
+        db.session.refresh(s.reply)
+        assert s.reply.up_votes == 0
+        assert PostReplyVote.query.filter_by(
+            post_reply_id=s.reply.id, user_id=s.user.id).count() == 0
+
+    def test_a_web_downvote_takes_the_elif_and_marks_recently_downvoted(self, db_session, app):
+        """`:46` false -> `:48`, `:48` true -> `:49`, then `:51`.
+        Arcs 46->48 and 48->49; statements 48, 49.
+
+        DIFFERS FROM THE CLASS-ABOVE WEB TEST IN THE DIRECTION ALONE, which is
+        what sends control past `:46`'s first conjunct and into the elif.
+
+        THE WITNESS IS THE `voted_down` MARKUP, not the bare fact that
+        something rendered. `post/_comment_voting_buttons.html` line 11 emits
+        `voted_down` and line 13 `fe-arrow-down-circle` only when
+        `in_sorted_list(recently_downvoted_replies, comment.id)` is true, and
+        the only statement that can put this id into that list is `:49`. The
+        matching absence of `voted_up` is what rules out `:47` having run
+        instead -- a mutation swapping the two direction literals at `:46`/`:48`
+        would still render a 200 and still vote, and only the pair of assertions
+        tells the two arms apart. MEASURED, not argued: the two literals were
+        swapped in a line-scoped scratch mutant (`app/` restored afterwards and
+        the restore confirmed with `git diff --quiet -- app/`) and exactly two
+        tests failed -- this one and
+        `..._the_web_arm_loads_the_reply_and_reads_current_user` above, which is
+        its opposite-direction twin. Sixteen others passed against it.
+
+        That same markup is the evidence for the second `Site` trigger: line 10
+        gates the whole downvote block on `can_downvote(...)`, which returns
+        False without `site.enable_downvotes`, so `voted_down` appearing at all
+        proves the template's own `can_downvote` ran and read the row. Both
+        triggers apply to this test -- the theme chain and that call -- and
+        `make_site()` serves both. `enable_downvotes` is left exactly as
+        `make_site()` (tests/factories.py:353) leaves it, which is the column
+        default True (app/models.py:3954, in `class Site` which opens at
+        app/models.py:3942).
+
+        NO PERMISSION GATE STOPS THIS DOWNVOTE INSIDE `vote_for_reply` ITSELF,
+        because `:24`'s `can_downvote` is inside the SRC_API arm -- that is the
+        asymmetry `TestVoteForReplySourceAndPermission` registers. THIS TEST
+        DOES NOT WITNESS IT, and saying so is the point: `enable_downvotes` is
+        True here, so `can_downvote` would have permitted this downvote through
+        either arm and the vote landing proves nothing about the missing gate.
+        The construction that WOULD witness it -- the same call with
+        `enable_downvotes` False -- turns line 10 of the template false and
+        erases the `voted_down` markup this test needs for `:49`, so the two
+        cannot share a test. The module docstring records that trade.
+
+        This completes a real vote, hence the `finally`.
+        """
+        make_site()
+        s = _seed_reply()
+        try:
+            with web_ctx(app, s.user):
+                result = vote_for_reply(s.reply.id, 'downvote', True, None, SRC_WEB)
+                body = result.get_data(as_text=True)
+
+            db.session.refresh(s.reply)
+            assert s.reply.down_votes == 1
+            assert PostReplyVote.query.filter_by(
+                post_reply_id=s.reply.id, user_id=s.user.id).count() == 1
+            assert 'redirect_login' not in body
+            assert 'voted_down' in body
+            assert 'fe-arrow-down-circle' in body
+            assert 'voted_up' not in body
+        finally:
+            _clear_votes_cast(s.user.id)
+
+    def test_a_web_vote_that_undoes_an_existing_one_marks_neither(self, db_session, app):
+        """`:46` false -> `:48`, `:48` false -> `:51`. Arcs 46->48 and 48->51.
+
+        THE THIRD INPUT, and the one neither direction alone can produce. Both
+        `:46` and `:48` test `undo is None` as their second conjunct, so a vote
+        that UNDOES an existing one fails both and falls to `:51` with both
+        lists still at the `[]` `:44`/`:45` gave them.
+
+        VOTING UP TWICE IS WHAT MAKES `undo` NON-None, and that was read at
+        source before it was relied on: `PostReply.vote` deletes the existing
+        row and sets `undo = 'Like'` at app/models.py:3343 when
+        `existing_vote.effect > 0` and the new direction is 'upvote'. It is also
+        why `up_votes` is back to 0 and the `PostReplyVote` row is gone -- that
+        pair is the positive control that the second call really was an UNDO and
+        not, say, a silently refused duplicate, which would have left the count
+        at 1.
+
+        THE EMPTINESS IS ASSERTED WITH TWO SAME-MECHANISM POSITIVE CONTROLS,
+        because `voted_up`/`voted_down` being absent is otherwise exactly what a
+        template that rendered nothing, or that fell to its unauthenticated
+        `else`, would also produce. The controls are
+        `..._the_web_arm_loads_the_reply_and_reads_current_user` above, which
+        renders the same template through the same helper and gets `voted_up`,
+        and the downvote test immediately above, which gets `voted_down`.
+        `redirect_login` absent plus `upvote_button` present is the third
+        guard: it pins the render to line 1's authenticated branch, so the two
+        absences are the empty lists and not the wrong half of the template.
+
+        THIS IS THE ONLY TEST IN THE FILE THAT WITNESSES `undo is None` AT ALL,
+        and that was measured rather than claimed: deleting `and undo is None`
+        from `:46` in a line-scoped scratch mutant (`app/` restored afterwards
+        and the restore confirmed with `git diff --quiet -- app/`) failed this
+        test alone -- the other seventeen passed, because every one of them has
+        `undo` None anyway and cannot tell the conjunct from its absence.
+
+        ONE `_clear_votes_cast` FOR TWO CALLS, and that is correct rather than
+        an oversight: the key is per user and per day, and the undo path at
+        app/models.py:3337-3343 never reaches the `votes_cast` bookkeeping at
+        `:3382-3386`, which sits in the `else` for a first-time vote. So only
+        the first call wrote it.
+        """
+        make_site()
+        s = _seed_reply()
+        try:
+            with web_ctx(app, s.user):
+                vote_for_reply(s.reply.id, 'upvote', True, None, SRC_WEB)
+                result = vote_for_reply(s.reply.id, 'upvote', True, None, SRC_WEB)
+                body = result.get_data(as_text=True)
+
+            db.session.refresh(s.reply)
+            assert s.reply.up_votes == 0
+            assert PostReplyVote.query.filter_by(
+                post_reply_id=s.reply.id, user_id=s.user.id).count() == 0
+            assert 'redirect_login' not in body
+            assert 'upvote_button' in body
+            assert 'voted_up' not in body
+            assert 'voted_down' not in body
         finally:
             _clear_votes_cast(s.user.id)
