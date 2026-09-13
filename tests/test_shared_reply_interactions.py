@@ -67,9 +67,20 @@ WHAT IS NEW, AND HAS NO POST TWIN:
     factory reply has `path is None`. So `delete_reply:256`'s `if reply.path:`
     and `restore_reply:282`'s are FALSE by default and their true arms need a
     path seeded explicitly. A single-element path makes `reply.path[:-1]` an
-    EMPTY tuple, which is a different input to the raw SQL `IN` clause from a
-    populated one. `child_count` (app/models.py:2899) is likewise unset by the
-    factory, but has a column default of 0 rather than None.
+    EMPTY tuple, and THAT IS NOT MERELY A DIFFERENT INPUT TO THE RAW SQL `IN`
+    CLAUSE -- it is an illegal one. Measured in the container against the live
+    test database (sqlalchemy 2.0.52, `postgresql+psycopg2`) with
+    `delete_reply:257`'s own statement text: `(1, 2)` and `(1,)` both run and
+    return no rows, `()` raises `ProgrammingError: (psycopg2.errors.SyntaxError)
+    syntax error at or near ")"`, because psycopg2 renders it as `where id in
+    ()`. No production path is that short: app/models.py:3053-3059 gives a
+    top-level reply `path = [0, reply.id]` and a nested one
+    `in_reply_to.path[:] + [reply.id]`, so `path[:-1]` is at worst the
+    one-element `(0,)`. `TestDeleteReply` therefore seeds the three-element
+    production shape and leaves the empty tuple untested as unreachable; its
+    class docstring carries the full probe. `child_count`
+    (app/models.py:2899) is likewise unset by the factory, but has a column
+    default of 0 rather than None.
 
   - A `Site` ROW WITH id 1 IS NEEDED FOR TWO UNRELATED REASONS, and
     `_seed_reply` seeds one for neither. The render chain below is the first;
@@ -118,7 +129,9 @@ WHAT IS NEW, AND HAS NO POST TWIN:
     neither reaches `can_downvote` (`grep -n "can_upvote\|can_downvote"
     app/shared/reply.py` gives `:15`, the import, and `:22`/`:24` inside
     `vote_for_reply`, nothing else), so BOTH reasons are absent and the
-    delete/restore lifecycle tests need no `Site` row. The module's one other
+    delete/restore lifecycle tests need no `Site` row -- a prediction that is
+    now EXECUTED for `delete_reply` rather than merely read: `TestDeleteReply`'s
+    four tests call `make_site()` nowhere and pass. The module's one other
     `Site` touch is `Site.admins()` at `:365`, inside `report_reply`, which is
     a later sub-project's.
     `subscribe_reply` additionally has two statements no production source
@@ -1124,3 +1137,226 @@ class TestVoteForReplyGuardsAndReturns:
             assert 'voted_down' not in body
         finally:
             _clear_votes_cast(s.user.id)
+
+
+class TestDeleteReply:
+    """`delete_reply` (app/shared/reply.py:241-266) -- the author's own soft delete.
+
+    `:247` filters on `id`, `user_id` AND `deleted=False` and calls `.one()`, so
+    only the author can delete, only once, and a miss raises rather than
+    returning None. That is why no test here asserts "the wrong user got
+    nothing": the `.one()` would raise, and the raise is a later task's target.
+
+    `:248-249` set `deleted` and `deleted_by` on EVERY path through this
+    function, so asserting `deleted` alone witnesses nothing about the counter
+    arithmetic below it or about which source arm ran. Sub-project 36 shipped
+    exactly that test against `delete_post` and had to replace it. Every test
+    here asserts on a counter or on the return shape; `deleted` appears only
+    where its VALUE is arm-specific (`deleted_by` on the web test, which is the
+    id `:245` read out of `current_user`).
+
+    NO `Site` ROW IS SEEDED BY ANY TEST HERE, and that premise was re-derived
+    for this task rather than inherited. A test needs `make_site()` if it
+    reaches `render_template` or `can_downvote`; `delete_reply` reaches
+    neither. `grep -n "can_upvote\\|can_downvote" app/shared/reply.py` returns
+    `:15` (the import), `:22` and `:24` -- both inside `vote_for_reply`.
+    `grep -n "render_template" app/shared/reply.py` returns `:13` (the import),
+    `:51` (`vote_for_reply`) and `:131` (`subscribe_reply`). `grep -n
+    "Site\\|g\\.site"` returns `:10` (the import) and `:365`, `Site.admins()`
+    inside `report_reply`. Nothing in `:241-266` is in either list.
+
+    NO `_clear_votes_cast` IS NEEDED EITHER: `delete_reply` completes no vote,
+    so it never writes the `votes_cast_{today}_{user_id}` key the module
+    docstring's REAL REDIS note governs.
+
+    THE EAGER CELERY TASK AT `:261` SENDS NOTHING. `task_selector`
+    (app/shared/tasks/__init__.py:4) runs the body inline under
+    `current_app.debug`, and `app/shared/tasks/deletes.py:29`'s `delete_reply`
+    calls `delete_object` (`:118`), which returns at `:133` on
+    `if community.private or not community.instance.online():`. `_seed_reply`
+    defaults `private=True`, which is register entry D393(d)'s federation
+    lever. The task also opens its own session and re-queries the reply by id,
+    which is safe because `:259` commits before `:261` runs.
+
+    THE `path` QUESTION, MEASURED. `:256-258` runs raw SQL keyed on
+    `tuple(reply.path[:-1])`, and a SINGLE-element path makes that an EMPTY
+    tuple. An empty tuple is NOT a legal `IN` operand for this driver. Probed
+    against the live test database inside the container, sqlalchemy 2.0.52 on
+    `postgresql+psycopg2`, with the same statement text `:257` uses:
+
+        two-element (1, 2) -> OK []
+        one-element (1,)   -> OK []
+        empty      ()      -> RAISED ProgrammingError
+                              (psycopg2.errors.SyntaxError) syntax error at or near ")"
+
+    psycopg2 renders an empty tuple as `()`, giving `where id in ()`, which
+    Postgres rejects outright -- it is not an empty result, it is a syntax
+    error that would propagate out of `delete_reply`. PRODUCTION NEVER BUILDS
+    SUCH A PATH: app/models.py:3053-3059 (in `class PostReply`, which opens at
+    app/models.py:2887) gives a top-level reply `path = [0, reply.id]` and a
+    nested one `in_reply_to.path[:] + [reply.id]`, so the shortest real path
+    has two elements and `path[:-1]` is at worst the one-element `(0,)`. The
+    ancestor test below therefore seeds the three-element production shape
+    `[0, parent.id, reply.id]` -- a genuinely multi-element `IN` operand, with
+    a real ancestor row so the decrement has a witness. The empty-tuple case is
+    left untested because it is unreachable from production code; it is
+    recorded here so a future path-building change does not rediscover it as a
+    500.
+    """
+
+    def test_an_api_delete_decrements_all_four_counters(self, db_session):
+        """`:242` true -> `:243`; `:251` true -> `:252`-`:254`; `:256` false ->
+        `:259`; `:263` true -> `:264`.
+        Arcs 242->243, 251->252, 256->259, 263->264; statements 242, 243, 247,
+        248, 249, 251, 252, 253, 254, 255, 259, 261, 263, 264.
+
+        FOUR counters move and all four are asserted, because `:252`-`:255` are
+        four separate statements a mutation can remove one at a time. The
+        before-values are captured rather than assumed: the columns default to
+        0 (app/models.py:1722 `Post.reply_count`, `:1723`
+        `Post.reply_count_cross_posted`, `:571` `Community.post_reply_count`,
+        `:1011` `User.post_reply_count`) but a factory change could seed them,
+        and a test that hardcoded -1 would then fail for the wrong reason.
+
+        THE RETURN IS ASSERTED BY SHAPE AND IDENTITY, NOT BY `deleted`. `:264`
+        returns `(user_id, reply)`; unpacking it into two names is itself the
+        witness that `:266`'s bare `return` was not taken, and `reply.id`
+        pins which row came back. `reply.deleted` is deliberately NOT the
+        witness -- `:248` sets it on both arms.
+
+        THIS TEST ALSO WITNESSES `:256`'s FALSE ARM POSITIVELY rather than by
+        absence. `_seed_reply`'s reply has `path is None`, so `if reply.path:`
+        is false. Mutate `:256` to `if not reply.path:` and this test does not
+        merely stop asserting something -- it ERRORS, because `None[:-1]` is a
+        TypeError before the SQL is ever built. That was confirmed by running
+        the mutant, not reasoned about; see the task report.
+        """
+        s = _seed_reply()
+        before = (s.post.reply_count, s.post.reply_count_cross_posted,
+                  s.community.post_reply_count, s.user.post_reply_count)
+
+        user_id, reply = delete_reply(s.reply.id, SRC_API, auth=bearer(s.user))
+
+        assert (user_id, reply.id) == (s.user.id, s.reply.id)
+        db.session.refresh(s.post)
+        db.session.refresh(s.community)
+        db.session.refresh(s.user)
+        assert (s.post.reply_count, s.post.reply_count_cross_posted,
+                s.community.post_reply_count, s.user.post_reply_count) == \
+               (before[0] - 1, before[1] - 1, before[2] - 1, before[3] - 1)
+
+    def test_a_web_delete_reads_current_user_and_returns_none(self, db_session, app):
+        """`:242` false -> `:245`; `:263` false -> `:266`.
+        Arcs 242->245 and 263->266; statements 245, 266.
+
+        THE RETURN SHAPE IS THE DISCRIMINATOR. The API arm returns a
+        `(user_id, reply)` tuple and this arm returns None, so `is None` cannot
+        be produced by the other branch -- and the API test above cannot be
+        produced by this one, which is what makes the pair able to catch a swap
+        between `:242` and `:263` even though both read the same `src`.
+
+        THAT `:245` READ `current_user` AND NOT SOMETHING ELSE is witnessed
+        twice over. `:247` filters `user_id=user_id` and calls `.one()`, so a
+        wrong id raises `NoResultFound` instead of deleting; and `deleted_by`
+        (`:249`) carries the id `:245` produced, which is asserted directly.
+        `deleted_by` is an arm-specific VALUE here, unlike `deleted`, which
+        `:248` sets to True on every path and which is therefore not this
+        test's witness.
+
+        `auth=None` is passed explicitly because `delete_reply`'s signature at
+        `:241` is `(reply_id, src, auth)` with no default for `auth`; the web
+        arm never reads it.
+
+        A counter is asserted as well, so that a mutant gutting the body but
+        keeping the `return` cannot pass on the None alone.
+        """
+        s = _seed_reply()
+        before = s.user.post_reply_count
+
+        with web_ctx(app, s.user):
+            assert delete_reply(s.reply.id, SRC_WEB, auth=None) is None
+
+        db.session.refresh(s.reply)
+        db.session.refresh(s.user)
+        assert s.reply.deleted_by == s.user.id
+        assert s.user.post_reply_count == before - 1
+
+    def test_a_bot_authors_reply_skips_the_three_post_and_community_counters(self, db_session):
+        """`:251` false -> `:255`. Arc 251->255; statement 255 on its false leg.
+
+        `:251` is `if not reply.author.bot:`, so a bot author skips
+        `:252`-`:254` entirely -- but `:255`, the AUTHOR's own counter, sits
+        OUTSIDE the guard at four-space indent and still decrements. THAT
+        ASYMMETRY IS THE WITNESS: asserting only that the post and community
+        counters held would not distinguish this run from the function never
+        having been called at all, which is false-witness mechanism 3 --
+        emptiness with no same-mechanism positive control. `:255` is that
+        control, and it moves through the same commit as the three that did
+        not.
+
+        All three guarded counters are read, not just `post.reply_count`,
+        because `:252`-`:254` are separable statements and a guard that leaked
+        only one of them would otherwise go unseen.
+
+        `User.bot` is app/models.py:1016, in `class User` which opens at
+        app/models.py:973; it defaults False, so `_seed_reply`'s user takes the
+        true arm and this test is the only one here on the false leg.
+        `authorise_api_user` (app/utils.py:3628) rejects on `ap_id`,
+        `verified`, `banned` and `deleted` and says nothing about `bot`, so the
+        bearer token still authorises.
+        """
+        s = _seed_reply()
+        s.user.bot = True
+        db.session.commit()
+        before = (s.post.reply_count, s.post.reply_count_cross_posted,
+                  s.community.post_reply_count, s.user.post_reply_count)
+
+        delete_reply(s.reply.id, SRC_API, auth=bearer(s.user))
+
+        db.session.refresh(s.post)
+        db.session.refresh(s.community)
+        db.session.refresh(s.user)
+        assert (s.post.reply_count, s.post.reply_count_cross_posted,
+                s.community.post_reply_count) == before[:3]
+        assert s.user.post_reply_count == before[3] - 1
+
+    def test_a_reply_with_ancestors_decrements_their_child_counts(self, db_session):
+        """`:256` true -> `:257`. Arc 256->257; statements 256, 257.
+
+        `:257-258` is raw SQL against `post_reply.child_count`
+        (app/models.py:2899, in `class PostReply` which opens at
+        app/models.py:2887), keyed on `tuple(reply.path[:-1])` -- the reply's
+        ancestors, excluding itself. `path` (app/models.py:2898) is a nullable
+        ARRAY with no default and `make_post_reply` (tests/factories.py:455)
+        does not set it, so the path is seeded here by hand in the shape
+        production builds: `[0, parent.id, reply.id]`, per app/models.py:3054
+        and `:3059`. `path[:-1]` is then `(0, parent.id)` -- multi-element, so
+        the empty-tuple syntax error documented on the class does not arise,
+        and id 0 matches no row so only `parent` is hit.
+
+        THE WITNESS IS `parent.child_count`, and nothing else in `delete_reply`
+        writes that column, so it cannot be moved by any statement outside
+        `:257-258`. It is refreshed rather than read from the session because
+        the raw `UPDATE` bypasses the identity map.
+
+        A NEGATIVE CONTROL IS INCLUDED. `bystander` is a reply under the same
+        post with the same seeded `child_count` that is NOT in the path, and
+        its count must hold. Without it, a mutant that dropped the `where`
+        clause and decremented every row in the table would pass -- false
+        witness mechanism 1, asserting on state something else could have set
+        unconditionally.
+        """
+        s = _seed_reply()
+        parent = make_post_reply(s.post, s.user, body='parent')
+        bystander = make_post_reply(s.post, s.user, body='bystander')
+        parent.child_count = 1
+        bystander.child_count = 1
+        s.reply.path = [0, parent.id, s.reply.id]
+        db.session.commit()
+
+        delete_reply(s.reply.id, SRC_API, auth=bearer(s.user))
+
+        db.session.refresh(parent)
+        db.session.refresh(bystander)
+        assert parent.child_count == 0
+        assert bystander.child_count == 1
