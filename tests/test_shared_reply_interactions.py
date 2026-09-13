@@ -194,12 +194,20 @@ out here rather than the result alone:
   grep is not an enumeration; two methods that fail differently are closer to
   one.
 
-  1. app/models.py:3053-3059, in `class PostReply` (opens at
-     app/models.py:2887) -- the ActivityPub/web reply creator. Top-level gets
+  1. app/models.py:3058-3065, in `class PostReply` (opens at
+     app/models.py:2892) -- the ActivityPub/web reply creator. Top-level gets
      `[0, reply.id]`, nested gets `in_reply_to.path[:] + [reply.id]`. ALWAYS
-     >= 2 elements, and `:3060`'s `reply.root_id = reply.path[1]` would raise
+     >= 2 elements, and `:3065`'s `reply.root_id = reply.path[1]` would raise
      IndexError if it were ever shorter, which corroborates the convention
      independently. INCLUDES THE REPLY'S OWN ID as the last element.
+
+     THIS CITATION READ `:3053-3059` (and `:3060` for root_id, and `:2887`
+     for the class) until Task 7 of sub-project 41, and all three were wrong.
+     `:3053` is the bare `session.commit()` in the `try`; the range stopped
+     before the `else: reply.path = [0, reply.id]` at `:3063-3064` that
+     produces the very `[0, reply.id]` shape quoted right here; `root_id` is
+     assigned at `:3065`; and `class PostReply` opens at `:2892`. Re-derived
+     with numbered output.
   2. app/cli.py:694 and `:715`, inside `@app.cli.command("lemmy-import")`
      (app/cli.py:275). `piefed_path` is built at `:664-670` from
      `path_parts[1:-1]` -- ANCESTORS ONLY, THE REPLY'S OWN ID EXCLUDED, and
@@ -2185,8 +2193,10 @@ class TestDeleteReply:
     neither delete nor restore it. That is defect 3 there, and it is reachable,
     not latent.
 
-    app/models.py:3053-3059 (in `class PostReply`, which opens at
-    app/models.py:2887) is the writer whose convention the raw SQL assumes: a
+    app/models.py:3058-3065 (in `class PostReply`, which opens at
+    app/models.py:2892 -- this citation read `:3053-3059` and `:2887` until
+    Task 7 of sub-project 41; see this module's docstring for why both were
+    wrong) is the writer whose convention the raw SQL assumes: a
     top-level reply gets `[0, reply.id]` and a nested one
     `in_reply_to.path[:] + [reply.id]`, always at least two elements with the
     reply's own id last. The ancestor test below seeds THAT shape,

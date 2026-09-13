@@ -691,6 +691,12 @@ def post_reply_mark_as_answer(auth, data):
     user_details = authorise_api_user(auth, return_type='dict')
     user_id = user_details['id']
 
+    reply = db.session.query(PostReply).get(reply_id)
+    user = User.query.get(user_id)
+    if not (user.is_admin_or_staff() or reply.user_id == user.id
+            or reply.community.is_moderator(user)):
+        raise Exception('Does not have permission')
+
     if answer:
         choose_answer(reply_id, SRC_API, auth)
     else:

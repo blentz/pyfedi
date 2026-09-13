@@ -1,21 +1,47 @@
 """Group E and F of app/shared/reply.py -- the moderator verbs and the
 reply-only verbs.
 
-WHAT THIS FILE COVERS, and every line number here was re-derived with
-numbered output at the commit named in each task's report, never copied
-from the plan:
+WHAT THIS FILE COVERS. Every line number here was re-derived with numbered
+output, never copied from the plan. THE WHOLE TABLE WAS RE-DERIVED AGAIN AT
+TASK 7, because Task 7's production fix inserted two lines into
+`lock_post_reply` and two into `set_collapse_post_reply` and so moved every
+line at or after `:518`:
 
-    mod_remove_reply         :414   21 statements / 12 arcs
-    mod_restore_reply        :450   21 / 12
-    lock_post_reply          :486   24 / 14
-    set_collapse_post_reply  :523   15 / 12
-    choose_answer            :548   15 /  4
-    unchoose_answer          :579    9 /  4
+    mod_remove_reply         :414-447   21 statements / 12 arcs
+    mod_restore_reply        :450-483   21 / 12
+    lock_post_reply          :486-522   26 / 16
+    set_collapse_post_reply  :525-549   17 / 14
+    choose_answer            :552-580   15 /  4
+    unchoose_answer          :583-596    9 /  4
+
+The counts EXCLUDE each `def` line, which is the convention the table has
+carried since Task 1; they are `coverage.parser.PythonParser` statement counts
+and branch-arc counts for the range beside them, re-run in the container at
+Task 7's commit.
+
+TWO ROWS CHANGED AT TASK 7 AND THE RETRACTED FIGURES ARE NAMED HERE RATHER
+THAN OVERWRITTEN SILENTLY. `lock_post_reply` read `:486  24 / 14` and
+`set_collapse_post_reply` read `:523  15 / 12`; both were correct for the code
+as it stood through Task 6 and both are stale now, because Task 7 added
+`elif src == SRC_API: raise Exception('Does not have permission')` to each --
+two statements and two arcs apiece. `choose_answer` and `unchoose_answer` did
+not change, but Task 7's two insertions sit above them, so their starts moved
+from `:548` and `:579` to `:552` and `:583`.
+
+THE TABLE ALSO USED TO GIVE NO END AT ALL, only a start plus a count, and for
+`unchoose_answer` that implied a span ending near `:587` -- short of the
+function's true last line. Task 6's review caught it and deferred it here.
+Ends are now given explicitly for all six rows. `unchoose_answer` really runs
+to `:596`: `:595` is `if src == SRC_API:` and `:596` is
+`return user.id, post_reply`, the last line of the file.
 
 All six were at ZERO coverage when this file was created -- missing equal to
-total for every one. There was no partial coverage to build on and no existing
-test to read for the conventions, which is why the harness below is borrowed
-wholesale from two files rather than derived here.
+total for every one, against the pre-Task-7 figures named just above (`24 / 14`
+for `lock_post_reply`, `15 / 12` for `set_collapse_post_reply`, and the four
+unchanged rows as they stand). There was no partial
+coverage to build on and no existing test to read for the conventions, which is
+why the harness below is borrowed wholesale from two files rather than derived
+here.
 
 WHERE THE HARNESS COMES FROM. `tests/test_shared_post_moderation.py` covers
 `lock_post`, `mod_remove_post` and `mod_restore_post` -- the direct twins -- and
@@ -34,7 +60,7 @@ THREE PROBES WERE RUN BEFORE ANY TEST WAS WRITTEN (task-1-report.md carries
 the raw output). Two held; one falsified the plan's own prediction:
 
   - Probe A predicted that a factory user's `language_id` might point at a
-    nonexistent `Language` row and make `choose_answer:556`'s
+    nonexistent `Language` row and make `choose_answer:560`'s
     `get_recipient_language` raise on `lang.code`. IT DOES NOT RAISE, and not
     for the reason guarded against: `make_user` (tests/factories.py:41) never
     sets `language_id` at all, so it is `None`, not a dangling foreign key.
@@ -45,10 +71,21 @@ the raw output). Two held; one falsified the plan's own prediction:
     No `Language` row needs to be seeded for any test in this file.
 
   - Probe B confirmed the `@>` cascade at `lock_post_reply:503` works on a
-    manually-seeded path shaped like production's (`app/models.py:3053-3060`):
+    manually-seeded path shaped like production's (`app/models.py:3058-3065`):
     a child reply whose `path` is `[0, parent.id, child.id]` has
     `replies_enabled` flip to `False` when the parent is locked. A test
     exercising that line must seed `path` itself -- `make_post_reply` does not.
+
+    THIS CITATION READ `:3053-3060` UNTIL TASK 7 AND WAS WRONG AT BOTH ENDS.
+    `:3053` is the bare `session.commit()` inside the `try`, which has nothing
+    to do with `path`; and `:3060` stops one line before the `else:
+    reply.path = [0, reply.id]` at `:3063-3064` that produces the very
+    two-element shape the citation is invoked for. The construction is
+    `:3058-3065`: the `if in_reply_to and in_reply_to.path:` arm that appends
+    to the parent's path, the `else` arm that opens a root path, and
+    `:3065`'s `reply.root_id = reply.path[1]`. Corrected in all three places
+    it appeared in this file, and in the two in
+    `tests/test_shared_reply_interactions.py` that read `:3053-3059`.
 
   - Probe C confirmed which seeded user lands on id 1: in
     `_seed_moderated_reply`, `author` is minted before `actor`
@@ -66,6 +103,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 
 from app import db
+from app.api.alpha.utils.reply import post_reply_mark_as_answer
 from app.constants import SRC_API, SRC_WEB
 from app.models import ModLog, Notification, PostReply
 from app.shared.reply import (
@@ -315,7 +353,7 @@ class TestModRemoveReply:
         """`:430`'s true arm and the raw SQL at `:431-432`.
 
         The guard is D517's shape, `if reply.path and len(reply.path) > 1:`.
-        The path seeded here is production's -- app/models.py:3053-3060 gives
+        The path seeded here is production's -- app/models.py:3058-3065 gives
         `[0, parent.id, reply.id]` -- so `tuple(reply.path[:-1])` is
         `(0, parent.id)`, a genuine multi-element IN operand.
 
@@ -580,19 +618,31 @@ class TestModRestoreReply:
 
 
 class TestLockPostReply:
-    """`lock_post_reply` (app/shared/reply.py:486-520).
+    """`lock_post_reply` (app/shared/reply.py:486-522).
 
-    THIS FUNCTION FAILS SILENTLY AND ITS TWIN DOES NOT. `:501`'s guard has no
-    `else`, so an unauthorized SRC_API caller falls through to `:519-520` and
-    receives `user.id, post_reply` with nothing changed -- a 200 carrying the
-    unchanged object. `app/shared/post.py:968-969` is the same guard WITH
-    `elif src == SRC_API: raise Exception('Does not have permission')`, and
-    `move_post:999-1000` carries it too; both came from PC2 in sub-project 36.
-    These two reply functions were left behind.
+    THIS FUNCTION USED TO FAIL SILENTLY WHERE ITS TWIN RAISED. THAT IS FIXED,
+    AND THE PARAGRAPH THAT STOOD HERE THROUGH TASK 6 IS RETRACTED. It read:
+    "`:501`'s guard has no `else`, so an unauthorized SRC_API caller falls
+    through to `:519-520` and receives `user.id, post_reply` with nothing
+    changed -- a 200 carrying the unchanged object." That was true of the code
+    as it stood through Task 6 and it is stale now. Task 7 transcribed the
+    repair from the twin module -- `app/shared/post.py:968-969` in `lock_post`
+    and `:999-1000` in `move_post`, both from PC2 in sub-project 36 -- so
+    `:501`'s guard now carries `elif src == SRC_API: raise Exception('Does not
+    have permission')` at `:518-519`. An unauthorized API caller is refused.
+    The line numbers in this class shifted by two at or after `:518` as a
+    result; every one below was re-derived at Task 7's commit.
 
-    That makes false-witness mechanism (a) acute here: THE RETURN VALUE IS THE
-    SAME ON BOTH ARMS, so every test below asserts on state and never on the
-    return.
+    THE WEB ARM STILL FALLS THROUGH SILENTLY, and deliberately so: the `elif`
+    is guarded on `src == SRC_API`, matching the twin exactly. A SRC_WEB
+    caller who fails `:501` still reaches `:521` with nothing changed and no
+    flash, because the web routes do their own authorization before calling.
+
+    False-witness mechanism (a) is still why every test below asserts on state
+    rather than on the return: THE RETURN VALUE IS IDENTICAL ON EVERY ARM THAT
+    RETURNS AT ALL, so `user.id, post_reply` discriminates nothing. The
+    refusal is now witnessed by `pytest.raises` PLUS the same state
+    assertions, not by the raise alone.
 
     NO `make_site()` ANYWHERE IN THIS CLASS. The module docstring's rule only
     requires a `Site` row where a template renders or `can_downvote` runs, and
@@ -606,8 +656,11 @@ class TestLockPostReply:
     def test_a_moderator_locks_a_reply_through_the_api(self, db_session):
         """`:494`'s true arm, `:501`'s true arm, `:502`'s assignment.
 
-        Asserts `replies_enabled` rather than the return, because `:519-520`
-        returns the same shape on the refused path.
+        Asserts `replies_enabled` rather than the return, because `:521-522`
+        returns `user.id, post_reply` on every arm that returns at all. (This
+        docstring cited `:519-520` and "the refused path" through Task 6; the
+        lines moved when Task 7 inserted the refusal at `:518-519`, and there
+        is no longer a refused path that returns -- it raises.)
         """
         s = _seed_moderated_reply()
         seed_moderator(s)
@@ -639,7 +692,7 @@ class TestLockPostReply:
         `where path @> ARRAY[:parent_id]` matches every reply whose `path`
         CONTAINS the locked reply's id, which is how a lock reaches a whole
         subtree. The descendant's path is production's shape --
-        app/models.py:3053-3060, `[0, parent.id, child.id]` -- because
+        app/models.py:3058-3065, `[0, parent.id, child.id]` -- because
         `make_post_reply` does not set `path` at all.
 
         THE BYSTANDER IS THE WITNESS FOR THE `where` CLAUSE. A mutant dropping
@@ -676,39 +729,46 @@ class TestLockPostReply:
         db.session.refresh(s.reply)
         assert s.reply.replies_enabled is False
 
-    def test_an_unprivileged_api_caller_is_not_refused(self, db_session):
-        """`:501`'s false arm -- AND IT ASSERTS THE DEFECT ON PURPOSE.
+    def test_an_unprivileged_api_caller_is_refused(self, db_session):
+        """`:501`'s false arm into `:518-519`'s refusal.
 
-        Neither disjunct holds, so the whole body is skipped and control
-        reaches `:519`. The call returns `user.id, post_reply` normally: no
-        exception, no flash, nothing changed. The caller cannot tell this
-        apart from a success.
+        THIS TEST WAS CALLED `test_an_unprivileged_api_caller_is_not_refused`
+        AND ASSERTED THE OPPOSITE ON PURPOSE. Its claim was: "Neither disjunct
+        holds, so the whole body is skipped and control reaches `:519`. The
+        call returns `user.id, post_reply` normally: no exception, no flash,
+        nothing changed. The caller cannot tell this apart from a success."
+        That was an accurate description of a live defect when Task 4 wrote
+        it. IT IS NO LONGER TRUE, and the name went with the behaviour rather
+        than being left to contradict the body: a test name is a claim, and
+        `is_not_refused` in green pytest output would assert a defect that no
+        longer exists. Registered as finding 3 in the round's spec; closed by
+        Task 7.
 
-        THE TWIN RAISES. `app/shared/post.py:968-969` is
-        `elif src == SRC_API: raise Exception('Does not have permission')`,
-        and `tests/test_shared_post_moderation.py`'s
-        `test_an_unprivileged_user_changes_nothing` pins that shape with
-        `pytest.raises`.
+        THE FIX WAS TRANSCRIBED FROM THE TWIN, not invented here.
+        `app/shared/post.py:968-969` has carried
+        `elif src == SRC_API: raise Exception('Does not have permission')`
+        since PC2 in sub-project 36, and `move_post:999-1000` carries it too;
+        `tests/test_shared_post_moderation.py`'s
+        `test_an_unprivileged_user_changes_nothing` pins that shape there.
+        `lock_post_reply` was simply left behind. Task 7 copied the two lines
+        across, which is why `:518-519` reads identically to `:968-969`.
 
-        WHOEVER PROPAGATES THAT FIX MUST EDIT THIS TEST. The edit owed is to
-        INVERT it: wrap the call in
-        `pytest.raises(Exception, match='Does not have permission')` and keep
-        both state assertions. Its failure at that point is the fix landing,
-        not a regression. Registered as finding 3 in the round's spec.
-
-        THE STATE ASSERTIONS CARRY THE TEST, not the returned tuple. A mutant
-        that ran the body and then returned the same tuple would pass a
-        return-value assertion and is caught only by `replies_enabled` and the
-        empty ModLog.
+        WHAT THIS TEST NOW WITNESSES. `s.actor` is neither a moderator of the
+        community nor an instance admin, so `:501` is false and `:518`'s
+        `src == SRC_API` is true: the call raises rather than returning. The
+        state assertions are KEPT BELOW THE RAISE AND ARE NOT REDUNDANT WITH
+        IT -- the raise alone would still pass against a mutant that performed
+        the lock and then raised, so `replies_enabled` staying True and the
+        ModLog staying empty are what prove nothing happened before the
+        refusal.
         """
         s = _seed_moderated_reply()
         s.reply.replies_enabled = True
         db.session.commit()
 
-        user_id, reply = lock_post_reply(s.reply.id, True, SRC_API,
-                                         auth=bearer(s.actor))
+        with pytest.raises(Exception, match='Does not have permission'):
+            lock_post_reply(s.reply.id, True, SRC_API, auth=bearer(s.actor))
 
-        assert user_id == s.actor.id
         db.session.refresh(s.reply)
         assert s.reply.replies_enabled is True
         assert db.session.query(ModLog).count() == 0
@@ -796,18 +856,32 @@ class TestLockPostReply:
 
 
 class TestSetCollapsePostReply:
-    """`set_collapse_post_reply` (app/shared/reply.py:523-545).
+    """`set_collapse_post_reply` (app/shared/reply.py:525-549).
 
-    THE SECOND SILENT-FAILURE FUNCTION, and its guard differs from
-    `lock_post_reply`'s by one disjunct: `:531` is
+    THE SECOND SILENT-FAILURE FUNCTION UNTIL TASK 7, AND THAT LABEL IS NOW
+    RETRACTED. The class docstring through Task 6 called this "THE SECOND
+    SILENT-FAILURE FUNCTION" on the strength of `:531`'s guard (as it was then
+    numbered) having no `else`. Task 7 transcribed the twin module's repair
+    here as well, so the guard -- now at `:533` -- carries
+    `elif src == SRC_API: raise Exception('Does not have permission')` at
+    `:545-546`, and an unauthorized API caller is refused rather than handed
+    back an unchanged object. The function opened at `:523` and every line in
+    it moved by two when `lock_post_reply` grew; all citations below were
+    re-derived at Task 7's commit.
+
+    ITS GUARD STILL DIFFERS FROM `lock_post_reply`'s BY ONE DISJUNCT, which is
+    a separate finding and is NOT fixed: `:533` is
     `is_moderator or is_instance_admin or user.is_admin_or_staff()` where
     `:501` has only the first two. So a site admin who is not a moderator can
     make a comment collapsible but cannot lock it -- finding 2's second
     instance, and `test_a_site_admin_who_is_neither_may_collapse` below is
-    paired with `TestLockPostReply.test_an_unprivileged_api_caller_is_not_refused`
+    paired with `TestLockPostReply.test_an_unprivileged_api_caller_is_refused`
     to witness it: same role, opposite outcome, one line apart in the module.
+    (That cross-reference named `..._is_not_refused` until Task 7 renamed it
+    with the behaviour; the pairing itself is unchanged, except that the lock
+    side now raises instead of returning silently.)
 
-    `:538` and `:542` are COMMENTED-OUT `task_selector` calls, so this
+    `:540` and `:544` are COMMENTED-OUT `task_selector` calls, so this
     function federates nothing. A test asserting an empty recorder would
     witness the comment rather than the code; none is written here.
 
@@ -815,7 +889,7 @@ class TestSetCollapsePostReply:
     SEEDS AROUND IT. `PostReply.collapsible` defaults to **True**
     (app/models.py:2931) and `PostReply.new` sets it to
     `user.id != post.user_id` (`:3006`), so a test that asserts
-    `collapsible is True` without seeding False first would pass with `:532`
+    `collapsible is True` without seeding False first would pass with `:534`
     deleted -- mechanism (a), asserting on state something else set
     unconditionally. Every test here writes the opposite value before acting.
 
@@ -828,7 +902,7 @@ class TestSetCollapsePostReply:
     """
 
     def test_a_moderator_makes_a_reply_collapsible(self, db_session):
-        """`:531`'s true arm via `is_moderator`, `:532`'s assignment."""
+        """`:533`'s true arm via `is_moderator`, `:534`'s assignment."""
         s = _seed_moderated_reply()
         seed_moderator(s)
         s.reply.collapsible = False
@@ -842,7 +916,7 @@ class TestSetCollapsePostReply:
         assert s.reply.collapsible is True
 
     def test_clearing_collapsible_sets_it_back_to_false(self, db_session):
-        """`:532` with the other argument, and `:539`'s else arm."""
+        """`:534` with the other argument, and `:541`'s else arm."""
         s = _seed_moderated_reply()
         seed_moderator(s)
         s.reply.collapsible = True
@@ -854,7 +928,7 @@ class TestSetCollapsePostReply:
         assert s.reply.collapsible is False
 
     def test_an_instance_admin_may_collapse(self, db_session):
-        """`:531`'s SECOND disjunct alone."""
+        """`:533`'s SECOND disjunct alone."""
         s = _seed_moderated_reply()
         make_instance_admin(s.actor, s.instance)
         s.reply.collapsible = False
@@ -866,11 +940,14 @@ class TestSetCollapsePostReply:
         assert s.reply.collapsible is True
 
     def test_a_site_admin_who_is_neither_may_collapse(self, db_session):
-        """`:531`'s THIRD disjunct -- the one `lock_post_reply:501` lacks.
+        """`:533`'s THIRD disjunct -- the one `lock_post_reply:501` lacks.
 
-        Paired with `TestLockPostReply.test_an_unprivileged_api_caller_is_not_refused`:
-        the same role that silently does nothing there succeeds here, which
-        is the divergence finding 2 registers.
+        Paired with `TestLockPostReply.test_an_unprivileged_api_caller_is_refused`:
+        the same role succeeds here and is REFUSED there, which is the
+        divergence finding 2 registers. The pairing read "silently does
+        nothing there" until Task 7; after Task 7's fix the lock side raises,
+        so the divergence is now visible to the caller rather than silent --
+        but it is still a divergence, and finding 2 is still open.
         """
         s = _seed_moderated_reply()
         make_site_admin(s.actor)
@@ -882,46 +959,49 @@ class TestSetCollapsePostReply:
         db.session.refresh(s.reply)
         assert s.reply.collapsible is True
 
-    def test_an_unprivileged_api_caller_is_not_refused_either(self, db_session):
-        """`:531`'s false arm -- ASSERTS THE DEFECT ON PURPOSE.
+    def test_an_unprivileged_api_caller_is_refused_either(self, db_session):
+        """`:533`'s false arm into `:545-546`'s refusal.
 
-        Neither disjunct holds, so the whole body is skipped and control
-        reaches `:544`. The call returns `user.id, post_reply` normally: no
-        exception, nothing changed. The caller cannot tell this apart from a
-        success -- the same silent failure as `lock_post_reply`'s, registered
-        as finding 3's other instance.
+        THIS TEST WAS CALLED
+        `test_an_unprivileged_api_caller_is_not_refused_either` AND ASSERTED
+        THE OPPOSITE ON PURPOSE. Its claim was: "Neither disjunct holds, so
+        the whole body is skipped and control reaches `:544`. The call returns
+        `user.id, post_reply` normally: no exception, nothing changed. The
+        caller cannot tell this apart from a success." That described a live
+        defect accurately when Task 5 wrote it; it is stale now, and the name
+        was changed with it rather than left to contradict the body.
+        Registered as finding 3's other instance; closed by Task 7.
 
-        THE TWIN RAISES. `app/shared/post.py:968-969` is
-        `elif src == SRC_API: raise Exception('Does not have permission')`,
-        and `move_post:999-1000` carries it too.
-
-        WHOEVER PROPAGATES THAT FIX MUST EDIT THIS TEST. The fix turns
-        `:531`'s bare `if` into an `if`/`elif` pair -- adding
+        THE FIX WAS TRANSCRIBED FROM THE TWIN, not invented here.
+        `app/shared/post.py:968-969` and `move_post:999-1000` have carried
         `elif src == SRC_API: raise Exception('Does not have permission')`
-        right after the guarded block and before `:544`. THE EDIT OWED HERE
-        IS TO INVERT THIS TEST: wrap the call in
-        `pytest.raises(Exception, match='Does not have permission')` and keep
-        the state assertion below it. Its failure at that point is the fix
-        landing, not a regression.
+        since PC2 in sub-project 36. Task 7 turned `:533`'s bare `if` into an
+        `if`/`elif` pair by copying those two lines in at `:545-546`, after
+        the guarded block and before `:548`'s return.
 
-        `collapsible` is seeded False and asserted False, and `:533`'s commit
-        is the only write in the body, so the state assertion is what
-        discriminates; the returned tuple is identical on both arms of
-        `:531` since `:544`-`:545` return the same shape either way.
+        WHAT THIS TEST NOW WITNESSES. `s.actor` satisfies none of `:533`'s
+        three disjuncts, so `:545`'s `src == SRC_API` is reached and the call
+        raises. THE STATE ASSERTION IS KEPT BELOW THE RAISE and is not
+        redundant with it: `collapsible` is seeded False and asserted False,
+        and `:535`'s commit is the only write in the body, so a mutant that
+        collapsed the comment and then raised would satisfy `pytest.raises`
+        alone and is caught only here. The returned tuple would discriminate
+        nothing -- `:548`-`:549` return the same shape on every arm that
+        returns.
         """
         s = _seed_moderated_reply()
         s.reply.collapsible = False
         db.session.commit()
 
-        user_id, reply = set_collapse_post_reply(s.reply.id, True, SRC_API,
-                                                 auth=bearer(s.actor))
+        with pytest.raises(Exception, match='Does not have permission'):
+            set_collapse_post_reply(s.reply.id, True, SRC_API,
+                                    auth=bearer(s.actor))
 
-        assert user_id == s.actor.id
         db.session.refresh(s.reply)
         assert s.reply.collapsible is False
 
     def test_the_web_arm_flashes_the_collapsible_message(self, db_session, app):
-        """`:524`'s false arm, `:535`'s true arm, `:536`-`:537`.
+        """`:526`'s false arm, `:537`'s true arm, `:538`-`:539`.
 
         NO `make_site()` HERE -- see the class docstring. This arm only
         flashes; it neither renders a template nor calls `can_downvote`.
@@ -939,7 +1019,7 @@ class TestSetCollapsePostReply:
         assert 'Comment is collapsible.' in messages
 
     def test_the_web_arm_flashes_the_other_message_when_clearing(self, db_session, app):
-        """`:535`'s false arm, `:540`-`:541`."""
+        """`:537`'s false arm, `:542`-`:543`."""
         from flask import get_flashed_messages
         s = _seed_moderated_reply()
         seed_moderator(s)
@@ -954,21 +1034,38 @@ class TestSetCollapsePostReply:
 
 
 class TestChooseAnswer:
-    """`choose_answer` (app/shared/reply.py:548-576) and `unchoose_answer`
-    (`:579-592`).
+    """`choose_answer` (app/shared/reply.py:552-580) and `unchoose_answer`
+    (`:583-596`). Both ranges moved by four at Task 7, which inserted two
+    lines into each of the two functions above them in the module; the extents
+    read `:548-576` and `:579-592` through Task 6.
 
-    NEITHER FUNCTION CONTAINS A PERMISSION CHECK. Both establish `user` from
-    the source fork and then act. The WEB route guards -- app/post/routes.py
-    `:2443` and `:2453` require `current_user.is_admin_or_staff() or
-    post_reply.user_id == current_user.id or
-    post_reply.community.is_moderator()` -- but the API path does not:
-    app/api/alpha/routes.py:983 calls `post_reply_mark_as_answer`
-    (app/api/alpha/utils/reply.py:687-697), which calls `authorise_api_user`
-    and dispatches straight through. `authorise_api_user` establishes WHO the
-    caller is and says nothing about what they may do.
+    NEITHER FUNCTION CONTAINS A PERMISSION CHECK, AND THAT IS STILL TRUE AND
+    STILL DELIBERATE. Both establish `user` from the source fork and then act.
+    What changed at Task 7 is the API ENTRY POINT, not these two verbs.
+
+    THE PARAGRAPH THAT STOOD HERE THROUGH TASK 6 IS RETRACTED. It read: "but
+    the API path does not: app/api/alpha/routes.py:983 calls
+    `post_reply_mark_as_answer` (app/api/alpha/utils/reply.py:687-697), which
+    calls `authorise_api_user` and dispatches straight through." That was an
+    accurate trace of a live authorization hole. Task 7 closed it.
+    `post_reply_mark_as_answer` is now app/api/alpha/utils/reply.py:687-722,
+    and at `:694-698` it loads the reply and the caller and refuses unless
+    `user.is_admin_or_staff() or reply.user_id == user.id or
+    reply.community.is_moderator(user)` -- the web route's three-way guard at
+    app/post/routes.py:2443, mirrored. `is_moderator` is passed `user`
+    EXPLICITLY: its signature is `is_moderator(self, user=None)`
+    (app/models.py:736) and the `None` default reads `current_user`, which
+    does not exist on the API path.
+
+    WHAT REMAINS TRUE: `authorise_api_user` establishes WHO the caller is and
+    says nothing about what they may do, and `choose_answer` /
+    `unchoose_answer` remain plain verbs that check nothing. Calling either
+    one directly, as most tests in this class do, still bypasses all
+    authorization -- by design, so that both entry points guard in one place
+    each rather than the verb guarding twice.
 
     `force_locale(get_recipient_language(post_reply.user_id))` wraps the
-    title at `:556`; no `Language` row is needed for that path -- Task 1's
+    title at `:560`; no `Language` row is needed for that path -- Task 1's
     Probe A (this file's module docstring) established that `make_user`
     leaves `language_id` and `interface_language` unset, so
     `get_recipient_language` takes the `'en'` default arm and never queries
@@ -980,12 +1077,12 @@ class TestChooseAnswer:
     """
 
     def test_choosing_an_answer_sets_the_flag_and_notifies_the_author(self, db_session):
-        """`:554`-`:571` -- the flag, the Notification and the unread counter.
+        """`:558`-`:575` -- the flag, the Notification and the unread counter.
 
-        THREE ASSERTIONS BECAUSE `:555` ALONE WITNESSES ALMOST NOTHING: a
-        mutant deleting `:564`-`:570` leaves `answer` true and the test
+        THREE ASSERTIONS BECAUSE `:559` ALONE WITNESSES ALMOST NOTHING: a
+        mutant deleting `:568`-`:574` leaves `answer` true and the test
         green. The notification's `user_id` is asserted to be the AUTHOR's
-        rather than the actor's, which is what `:565` claims and what a
+        rather than the actor's, which is what `:569` claims and what a
         mutant swapping the two operands would break.
         """
         s = _seed_moderated_reply()
@@ -1004,7 +1101,7 @@ class TestChooseAnswer:
         assert {n.author_id for n in notifications} == {s.actor.id}
 
     def test_unchoosing_clears_the_flag_and_notifies_nobody(self, db_session):
-        """`:585`-`:587`, and the absence of a notification.
+        """`:589`-`:591`, and the absence of a notification.
 
         The positive control for the emptiness is the test above: it proves
         a Notification CAN be written by this fixture, so the zero here is
@@ -1021,44 +1118,57 @@ class TestChooseAnswer:
         assert s.reply.answer is False
         assert db.session.query(Notification).count() == 0
 
-    def test_any_authenticated_api_user_may_mark_any_comment_as_the_answer(self, db_session):
-        """THIS TEST ASSERTS A LIVE AUTHORIZATION DEFECT ON PURPOSE.
+    def test_an_unrelated_api_user_may_not_mark_a_comment_as_the_answer(self, db_session):
+        """app/api/alpha/utils/reply.py:694-698's guard, the API side of
+        app/post/routes.py:2443.
 
-        `stranger` is not the reply's author, not a moderator of its
-        community, not an instance admin and not site staff. The web route
-        would refuse them at app/post/routes.py:2443. The API path does not
-        check at all, so the call succeeds and the comment is marked as the
-        accepted answer by someone with no relationship to it.
+        THIS TEST WAS CALLED
+        `test_any_authenticated_api_user_may_mark_any_comment_as_the_answer`
+        AND ASSERTED A LIVE AUTHORIZATION DEFECT ON PURPOSE. Its claim was:
+        "The web route would refuse them at app/post/routes.py:2443. The API
+        path does not check at all, so the call succeeds and the comment is
+        marked as the accepted answer by someone with no relationship to it."
+        That was true when Task 6 wrote it. Task 7 closed the hole, so the
+        claim is retracted and the name went with the behaviour -- a test
+        named `may_mark_any_comment` passing green would assert a defect that
+        no longer exists.
 
-        WHOEVER CLOSES THIS MUST EDIT THIS TEST. The fix belongs at
-        app/api/alpha/utils/reply.py:687, mirroring the web route's
-        three-way guard, so that `choose_answer` stays a plain verb and both
-        entry points agree. Once that guard lands, `choose_answer` itself
-        will no longer be the thing to call here -- `post_reply_mark_as_answer`
-        is where the refusal will live, so THE EDIT OWED HERE IS TO INVERT
-        THIS TEST **and switch it to calling `post_reply_mark_as_answer`
-        (app/api/alpha/utils/reply.py:687) instead of `choose_answer`
-        directly**: the call must then be refused and `answer` must stay
-        False. Its failure at that point is the fix landing, not a
-        regression.
+        IT ALSO CHANGED WHAT IT CALLS, as its own predecessor required.
+        `choose_answer` is still a plain verb with no permission check, by
+        design; the refusal lives one level up, in `post_reply_mark_as_answer`
+        -- which is what `app/api/alpha/routes.py:983` actually calls. So this
+        test exercises the WRAPPER. Calling `choose_answer` directly here
+        would witness nothing, because nothing was added to it.
 
-        THE WITNESS IS `answer` BEING TRUE, not the return value: `:575`-
-        `:576` return the same shape whoever calls.
+        THE GUARD IS THE WEB ROUTE'S, MIRRORED, not a new policy:
+        `user.is_admin_or_staff() or reply.user_id == user.id or
+        reply.community.is_moderator(user)`. `user` is passed to
+        `is_moderator` EXPLICITLY because its default is `current_user`
+        (app/models.py:736) and there is no `current_user` on the API path.
+
+        `stranger` satisfies none of the three disjuncts: not the reply's
+        author, not a moderator of its community, not an instance admin, not
+        site staff. THE STATE ASSERTION IS KEPT BELOW THE RAISE -- `answer`
+        must still be False, which is what catches a mutant that marked the
+        answer and then refused. The return value would witness nothing:
+        `:579`-`:580` return the same shape whoever calls.
         """
         s = _seed_moderated_reply()
         stranger = make_user(s.instance, 'stranger', local=True)
         db.session.commit()
 
-        user_id, reply = choose_answer(s.reply.id, SRC_API, auth=bearer(stranger))
+        with pytest.raises(Exception, match='Does not have permission'):
+            post_reply_mark_as_answer(bearer(stranger),
+                                      {'comment_reply_id': s.reply.id,
+                                       'answer': True})
 
-        assert user_id == stranger.id
         db.session.refresh(s.reply)
-        assert s.reply.answer is True
+        assert s.reply.answer is False
 
     def test_the_web_arm_reads_current_user(self, db_session, app):
-        """`:549`'s false arm and `:552`, for both functions.
+        """`:553`'s false arm and `:556`, for both functions.
 
-        Returns None on the web arm because `:575` guards the return. NO
+        Returns None on the web arm because `:579` guards the return. NO
         `make_site()` HERE -- see the class docstring.
         """
         s = _seed_moderated_reply()
@@ -1071,7 +1181,7 @@ class TestChooseAnswer:
         assert s.reply.answer is True
 
     def test_the_web_arm_of_unchoose_reads_current_user(self, db_session, app):
-        """`:580`'s false arm and `:583`, and `:591`'s guarded return."""
+        """`:584`'s false arm and `:587`, and `:595`'s guarded return."""
         s = _seed_moderated_reply()
         s.reply.answer = True
         db.session.commit()
@@ -1084,7 +1194,7 @@ class TestChooseAnswer:
         assert s.reply.answer is False
 
     def test_both_verbs_select_their_federation_task(self, db_session):
-        """`:573` and `:589`.
+        """`:577` and `:593`.
 
         One test for both because the two calls are independent and neither
         has a branch; splitting them would add a test without adding a
