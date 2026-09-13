@@ -40,7 +40,7 @@ is reachable with plain factory rows.
 PROBE B's finding: `make_reply` calls `user_ip_banned()` at `:174` and
 `ip_address()` directly at `:201`. Both resolve to the SAME function --
 app/shared/reply.py imports `ip_address` from `app.utils`, which is
-`app.utils.ip_address = get_ip_address` (app/__init__.py), the identical
+`app.utils.ip_address = get_ip_address` (app/utils.py:2308), the identical
 function `user_ip_banned` calls internally. Group A already established that
 `get_ip_address` catches `RuntimeError` (no app/request context) and returns
 `''`. So SRC_API needs no request context at `:174` OR at `:201` -- same
@@ -80,7 +80,7 @@ from types import SimpleNamespace
 
 from app import db
 from app.constants import SRC_API, SRC_WEB
-from app.models import Notification, PostReply, PostReplyValidationError
+from app.models import Language, Notification, PostReply, PostReplyValidationError
 from app.shared.reply import edit_reply, make_reply
 from tests.factories import (
     bearer, make_community, make_community_member, make_instance, make_post,
@@ -133,6 +133,50 @@ def make_moderator(s, user=None):
     return make_community_member(user or s.actor, s.community, is_moderator=True)
 
 
+def _burn_a_seed():
+    """Advance the user/community/post sequences by one full `_seed_for_reply`
+    unit -- 2 users, 3 communities, 2 posts -- so the NEXT `_seed_for_reply`
+    call's `author` id is never 1.
+
+    `User.is_admin` (app/models.py:1259-1265) special-cases `self.id == 1`
+    as an admin regardless of roles or community membership. `db_session`
+    (tests/conftest.py) tears down with DELETE, not TRUNCATE, so id
+    sequences are NOT reset between tests -- whichever test happens to run
+    first against a fresh database hands `_seed_for_reply`'s `author` id 1
+    and silently turns it into an admin, bypassing `edit_reply:224`'s
+    moderator guard no matter what that test intends to prove. That is a
+    property of RUN ORDER, not of this test, so it cannot be fixed by
+    asserting an order.
+
+    THIS DOES NOT JUST CALL `_seed_for_reply()` AGAIN: that hardcodes the
+    instance domain `'local.example'`, so a second call in the same test
+    trips `ix_instance_domain`'s unique constraint -- caught by running this.
+
+    IT ALSO DOES NOT BURN A BARE USER: `_seed_for_reply` creates its two
+    users, three communities and two posts in a fixed 2:3:2 ratio per call,
+    which is exactly what keeps `community.id`, `post.id` and `author.id`
+    pairwise distinct FOR ANY starting point (D533) -- author is always
+    `2k+1`, post always `2k+2`, community always `3k+3` for the k-th call,
+    and those three formulas never coincide for any `k >= 0`. Burning a
+    single bare user instead (breaking that ratio) shifts the next call's
+    `author` to `2k+2`, exactly `post`'s formula -- a guaranteed collision,
+    not an occasional one, caught by running the two tests below inside the
+    full class rather than alone. Reproducing the same 2:3:2 ratio under a
+    distinct domain and distinct community names keeps the invariant intact
+    without colliding with `_seed_for_reply`'s own rows.
+    """
+    instance = make_instance('id-burner.example')
+    author = make_user(instance, 'id-burner-author', local=True)
+    make_user(instance, 'id-burner-actor', local=True)
+    make_community('id-burner-sequence-one')
+    make_community('id-burner-sequence-two')
+    community = make_community('id-burner-community')
+    db.session.commit()
+    make_post(community, author, 'https://id-burner.example/burner')
+    make_post(community, author, 'https://id-burner.example/p/1')
+    db.session.commit()
+
+
 class TestEditReply:
     """`edit_reply` (app/shared/reply.py:216-251)."""
 
@@ -180,3 +224,174 @@ class TestEditReply:
         assert 'Your changes have been saved.' in messages
         db.session.refresh(s.reply)
         assert 'edited through the web' in s.reply.body
+
+    def test_editing_writes_all_six_attributes_not_just_body(self, db_session):
+        """`:233`-`:238` write SIX attributes unconditionally: `body`,
+        `body_html`, `notify_author`, `community.last_active`, `edited_at`
+        and `language_id`. The other tests in this class already witness
+        `body`, `edited_at` and `notify_author`; this one closes the
+        remaining three, each of which would survive deletion of its own
+        line if only the other five were checked.
+
+        `community.last_active` is captured BEFORE the call and the
+        assertion is that it MOVED, not merely that it is not `None` -- the
+        fixture's `make_community` already leaves it non-`None`, so a bare
+        `is not None` would pass against a mutant that deleted `:236`
+        outright.
+
+        `language_id` starts `None` (no factory sets it) and is asserted to
+        become a real `Language.id` after the edit -- a value round-trip,
+        not just a non-`None` check, since a mutant that deleted `:238`
+        would leave it `None` too if the payload's default were `None`.
+        A genuine `Language` row is seeded here (nowhere else in this file
+        needs one) purely so a non-`None`, FK-satisfying value exists to
+        witness the write.
+        """
+        s = _seed_for_reply()
+        language = Language(code='en', name='English')
+        db.session.add(language)
+        db.session.commit()
+        original_last_active = s.community.last_active
+        payload = {'body': 'zzyzx marks the six', 'notify_author': True,
+                   'language_id': language.id, 'distinguished': False}
+
+        edit_reply(payload, s.reply, s.post, SRC_API, auth=bearer(s.author))
+
+        db.session.refresh(s.reply)
+        db.session.refresh(s.community)
+        assert 'zzyzx marks the six' in s.reply.body_html
+        assert s.community.last_active > original_last_active
+        assert s.reply.language_id == language.id
+
+    def test_a_moderator_may_distinguish_through_the_api(self, db_session):
+        """`:223`'s true arm with `:224` false, and `:239`-`:240`.
+
+        `:223` is `(not reply.distinguished and distinguished == True) or
+        (reply.distinguished == True and distinguished == False)` -- two
+        disjuncts, one arc pair to coverage.py. This takes the FIRST:
+        undistinguished becoming distinguished.
+        """
+        s = _seed_for_reply()
+        make_moderator(s, user=s.author)
+        s.reply.distinguished = False
+        db.session.commit()
+        payload = {'body': 'body', 'notify_author': False,
+                   'language_id': None, 'distinguished': True}
+
+        edit_reply(payload, s.reply, s.post, SRC_API, auth=bearer(s.author))
+
+        db.session.refresh(s.reply)
+        assert s.reply.distinguished is True
+
+    def test_undistinguishing_takes_the_second_disjunct(self, db_session):
+        """`:223`'s SECOND disjunct -- distinguished becoming undistinguished.
+
+        The first disjunct is false here (`reply.distinguished` is already
+        True), so this is the only test that can witness the second. Without
+        it the two move only in lockstep -- false-witness mechanism (e).
+        """
+        s = _seed_for_reply()
+        make_moderator(s, user=s.author)
+        s.reply.distinguished = True
+        db.session.commit()
+        payload = {'body': 'body', 'notify_author': False,
+                   'language_id': None, 'distinguished': False}
+
+        edit_reply(payload, s.reply, s.post, SRC_API, auth=bearer(s.author))
+
+        db.session.refresh(s.reply)
+        assert s.reply.distinguished is False
+
+    def test_a_non_moderator_changing_distinguished_is_refused_by_the_api(self, db_session):
+        """`:224`'s true arm and `:225`'s raise.
+
+        THE RAISE IS NOT THE ONLY WITNESS. A crash is a weak kill, so this
+        also asserts the body was NOT written: `:233` runs after the guard, so
+        a mutant that performed the edit and then raised would pass a bare
+        `pytest.raises`.
+
+        `_burn_a_seed()` runs first: `_seed_for_reply` hands `author`
+        whatever id the sequence is at, and `User.is_admin` special-cases
+        id 1 as an admin outright (app/models.py:1259-1261). Without the burn
+        this test is a coin flip on id 1 landing on `author` -- true the
+        first time any test in the whole run creates a user, in which case
+        `:224` is False (admin) and nothing raises.
+        """
+        _burn_a_seed()
+        s = _seed_for_reply()
+        s.reply.distinguished = False
+        db.session.commit()
+        original_body = s.reply.body
+        payload = {'body': 'should not be saved', 'notify_author': False,
+                   'language_id': None, 'distinguished': True}
+
+        with pytest.raises(Exception, match='Not a moderator'):
+            edit_reply(payload, s.reply, s.post, SRC_API, auth=bearer(s.author))
+
+        db.session.refresh(s.reply)
+        assert s.reply.body == original_body
+
+    def test_leaving_distinguished_unchanged_skips_the_moderator_check(self, db_session):
+        """`:223`'s false arm -- both disjuncts false, so `:224` never runs.
+
+        The same non-moderator as the test above succeeds here, which is what
+        proves `:223` gates `:224` rather than `:224` refusing unconditionally.
+        """
+        s = _seed_for_reply()
+        s.reply.distinguished = False
+        db.session.commit()
+        payload = {'body': 'saved fine', 'notify_author': False,
+                   'language_id': None, 'distinguished': False}
+
+        edit_reply(payload, s.reply, s.post, SRC_API, auth=bearer(s.author))
+
+        db.session.refresh(s.reply)
+        assert 'saved fine' in s.reply.body
+
+    def test_the_web_arm_silently_declines_distinguished(self, db_session, app):
+        """`:239`'s false arm -- AND IT ASSERTS A REGISTERED DEFECT ON PURPOSE.
+
+        `edit_reply` checks one permission TWICE, in two spellings, fifteen
+        lines apart. `:224` is
+        `not is_moderator and not is_owner and not is_staff() and not
+        is_admin()`; `:239` is `is_moderator or is_owner or
+        is_admin_or_staff()`. `is_admin_or_staff()` is exactly
+        `is_admin() or is_staff()` (app/models.py:1274-1275), so the two are
+        De Morgan twins over the same set.
+
+        The API arm RAISES at `:225`. The web arm has no equivalent, so a
+        non-moderator's `distinguished` is silently dropped at `:239` and the
+        caller is told nothing -- the same silent-failure shape sub-project 41
+        fixed twice in this module.
+
+        THIS TEST IS NOT INVERTED BY THIS ROUND. The finding is registered,
+        not fixed: this round's production budget is the counter fix. If a
+        later round adds the refusal, THE EDIT OWED HERE IS TO INVERT THIS
+        TEST -- the call must then raise and `distinguished` must stay False.
+
+        The witness is `distinguished` still False AFTER a successful edit, so
+        the body assertion is what proves the call was not refused outright.
+
+        `_burn_a_seed()` runs first for the same reason as the API-arm
+        refusal test above: `author` landing on id 1 would make
+        `user.is_admin_or_staff()` True at `:239`, applying `distinguished`
+        instead of silently dropping it, and this test would pass for the
+        wrong reason (or fail outright) depending on accidental run order.
+        """
+        _burn_a_seed()
+        s = _seed_for_reply()
+        s.reply.distinguished = False
+        db.session.commit()
+        form = SimpleNamespace(
+            body=SimpleNamespace(data='edited anyway'),
+            notify_author=SimpleNamespace(data=False),
+            language_id=SimpleNamespace(data=None),
+            distinguished=SimpleNamespace(data=True),
+        )
+
+        with web_ctx(app, s.author):
+            edit_reply(form, s.reply, s.post, SRC_WEB, auth=None)
+
+        db.session.refresh(s.reply)
+        assert 'edited anyway' in s.reply.body
+        assert s.reply.distinguished is False
