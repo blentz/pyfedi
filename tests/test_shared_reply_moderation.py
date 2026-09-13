@@ -869,6 +869,17 @@ class TestSetCollapsePostReply:
     it moved by two when `lock_post_reply` grew; all citations below were
     re-derived at Task 7's commit.
 
+    THAT REFUSAL IS CORRECT BUT UNREACHABLE FROM PRODUCTION TODAY, AND THAT
+    DISTINGUISHES IT FROM `lock_post_reply`'s. `/usr/bin/grep -rn
+    set_collapse_post_reply app/` finds exactly one caller,
+    app/post/routes.py:1678, and it passes `SRC_WEB`; there is no `SRC_API`
+    caller anywhere in `app/`. `lock_post_reply` by contrast IS reached with
+    `SRC_API`, from app/api/alpha/utils/reply.py:755, so its refusal changes
+    live behaviour and this one does not -- yet. It was propagated anyway,
+    because the divergence between the twins is the defect, and a guard that
+    is right only until someone adds the endpoint is not a guard. The tests
+    below reach it directly, which is the only way it is reachable at all.
+
     ITS GUARD STILL DIFFERS FROM `lock_post_reply`'s BY ONE DISJUNCT, which is
     a separate finding and is NOT fixed: `:533` is
     `is_moderator or is_instance_admin or user.is_admin_or_staff()` where
@@ -1152,9 +1163,16 @@ class TestChooseAnswer:
         must still be False, which is what catches a mutant that marked the
         answer and then refused. The return value would witness nothing:
         `:579`-`:580` return the same shape whoever calls.
+
+        `answer` IS SEEDED False EXPLICITLY rather than left to
+        `PostReply.answer`'s column default (app/models.py:2929,
+        `default=False`), so the assertion below witnesses the refusal and not
+        a default nobody wrote. The two positive controls beneath this test
+        seed it the same way.
         """
         s = _seed_moderated_reply()
         stranger = make_user(s.instance, 'stranger', local=True)
+        s.reply.answer = False
         db.session.commit()
 
         with pytest.raises(Exception, match='Does not have permission'):
@@ -1164,6 +1182,85 @@ class TestChooseAnswer:
 
         db.session.refresh(s.reply)
         assert s.reply.answer is False
+
+    def test_a_moderator_may_mark_a_comment_as_the_answer(self, db_session):
+        """THE POSITIVE CONTROL FOR `reply.community.is_moderator(user)`, the
+        third disjunct of app/api/alpha/utils/reply.py:696-697.
+
+        WITHOUT A POSITIVE CONTROL THE GUARD ABOVE IS UNPINNED IN THE
+        REGRESSION DIRECTION. Task 7's review rewrote the whole guard as
+        `if True: raise` -- refusing every caller and breaking the feature
+        outright -- and 168 tests passed, because the refusal test was the
+        only caller of `post_reply_mark_as_answer` in the suite and exercises
+        all three disjuncts in lockstep, all false. That is false-witness
+        mechanism (c): emptiness with no same-mechanism positive control. This
+        test and the one below close it, and the mutation was re-run against
+        them; see task-7-report.md.
+
+        ONLY THE THIRD DISJUNCT HOLDS HERE, which is what makes it a witness
+        for that disjunct rather than for the guard as a lump. `s.actor` is
+        user id 2, so `is_admin()`'s `self.id == 1` short-circuit
+        (app/models.py:1260) does NOT fire for it and no role is granted, so
+        disjunct 1 is false; the reply is authored by `s.author`, not
+        `s.actor`, so disjunct 2 is false. `seed_moderator` supplies the
+        third. It goes through the WRAPPER, not `choose_answer`, because the
+        wrapper is where the guard lives.
+
+        `g.admin_ids` IS SET BECAUSE THE WRAPPER RENDERS A VIEW after it
+        dispatches, and `reply_view` reads `g.admin_ids` unconditionally. A
+        real request gets that from a `before_request` hook; calling the util
+        directly skips it, exactly as `tests/test_api_post_bookmarks.py:13-18`
+        records for `post_view`. Empty, because no seeded user here is an
+        admin. The refusal test above needs no such setup -- it raises before
+        reaching any view.
+        """
+        from flask import g
+        s = _seed_moderated_reply()
+        seed_moderator(s)
+        s.reply.answer = False
+        db.session.commit()
+        g.admin_ids = []
+
+        post_reply_mark_as_answer(bearer(s.actor),
+                                  {'comment_reply_id': s.reply.id,
+                                   'answer': True})
+
+        db.session.refresh(s.reply)
+        assert s.reply.answer is True
+
+    def test_the_replys_own_author_may_mark_it_as_the_answer(self, db_session):
+        """THE POSITIVE CONTROL FOR `reply.user_id == user.id`, the second
+        disjunct of app/api/alpha/utils/reply.py:696.
+
+        A SECOND DISJUNCT IS EXERCISED SEPARATELY so that a later change
+        dropping either one is visible. With only one positive control, a
+        guard narrowed from three disjuncts to one would still pass.
+
+        THE REPLY IS AUTHORED BY `s.actor`, NOT BY `s.author`, and that is
+        load-bearing rather than incidental: `_seed_moderated_reply` mints
+        `author` first, so `s.author.id == 1` and `is_admin()` returns True
+        from its `self.id == 1` short-circuit (app/models.py:1260, the
+        module docstring's Probe C). Marking `s.reply` as its own author
+        would therefore satisfy disjunct 1 as well and witness neither
+        cleanly. `s.actor` is id 2, is not a moderator here (no
+        `seed_moderator` call) and holds no role, so ONLY disjunct 2 holds.
+
+        `g.admin_ids` is set for the reason the test above gives.
+        """
+        from flask import g
+        s = _seed_moderated_reply()
+        own_reply = make_post_reply(s.post, s.actor)
+        db.session.commit()
+        own_reply.answer = False
+        db.session.commit()
+        g.admin_ids = []
+
+        post_reply_mark_as_answer(bearer(s.actor),
+                                  {'comment_reply_id': own_reply.id,
+                                   'answer': True})
+
+        db.session.refresh(own_reply)
+        assert own_reply.answer is True
 
     def test_the_web_arm_reads_current_user(self, db_session, app):
         """`:553`'s false arm and `:556`, for both functions.
