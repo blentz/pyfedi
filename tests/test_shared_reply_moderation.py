@@ -577,3 +577,219 @@ class TestModRestoreReply:
             mod_restore_reply(s.reply.id, 'ok', SRC_API, auth=bearer(s.actor))
 
         assert 'restore_reply' in calls
+
+
+class TestLockPostReply:
+    """`lock_post_reply` (app/shared/reply.py:486-520).
+
+    THIS FUNCTION FAILS SILENTLY AND ITS TWIN DOES NOT. `:501`'s guard has no
+    `else`, so an unauthorized SRC_API caller falls through to `:519-520` and
+    receives `user.id, post_reply` with nothing changed -- a 200 carrying the
+    unchanged object. `app/shared/post.py:968-969` is the same guard WITH
+    `elif src == SRC_API: raise Exception('Does not have permission')`, and
+    `move_post:999-1000` carries it too; both came from PC2 in sub-project 36.
+    These two reply functions were left behind.
+
+    That makes false-witness mechanism (a) acute here: THE RETURN VALUE IS THE
+    SAME ON BOTH ARMS, so every test below asserts on state and never on the
+    return.
+
+    NO `make_site()` ANYWHERE IN THIS CLASS. The module docstring's rule only
+    requires a `Site` row where a template renders or `can_downvote` runs, and
+    this function does neither: its only two branches either flash-and-return
+    or fall through untouched. `render_template` in this module appears only
+    at `:65` and `:145` (Group A), both outside this function, and `web_ctx`
+    opens its request context with `app.test_request_context`, which never
+    fires `before_request` and so never populates `g.site` regardless.
+    """
+
+    def test_a_moderator_locks_a_reply_through_the_api(self, db_session):
+        """`:494`'s true arm, `:501`'s true arm, `:502`'s assignment.
+
+        Asserts `replies_enabled` rather than the return, because `:519-520`
+        returns the same shape on the refused path.
+        """
+        s = _seed_moderated_reply()
+        seed_moderator(s)
+        s.reply.replies_enabled = True
+        db.session.commit()
+
+        user_id, reply = lock_post_reply(s.reply.id, True, SRC_API,
+                                         auth=bearer(s.actor))
+
+        assert user_id == s.actor.id
+        db.session.refresh(s.reply)
+        assert s.reply.replies_enabled is False
+
+    def test_unlocking_sets_replies_enabled_back_to_true(self, db_session):
+        """`:494`'s false arm, `:498`'s assignment and `:499`'s modlog_type."""
+        s = _seed_moderated_reply()
+        seed_moderator(s)
+        s.reply.replies_enabled = False
+        db.session.commit()
+
+        lock_post_reply(s.reply.id, False, SRC_API, auth=bearer(s.actor))
+
+        db.session.refresh(s.reply)
+        assert s.reply.replies_enabled is True
+
+    def test_locking_cascades_to_a_descendant(self, db_session):
+        """`:503-504`'s containment query, the module's only `@>`.
+
+        `where path @> ARRAY[:parent_id]` matches every reply whose `path`
+        CONTAINS the locked reply's id, which is how a lock reaches a whole
+        subtree. The descendant's path is production's shape --
+        app/models.py:3053-3060, `[0, parent.id, child.id]` -- because
+        `make_post_reply` does not set `path` at all.
+
+        THE BYSTANDER IS THE WITNESS FOR THE `where` CLAUSE. A mutant dropping
+        it would flip every reply in the table, and only a row that should NOT
+        have changed catches that.
+        """
+        s = _seed_moderated_reply()
+        seed_moderator(s)
+        child = make_post_reply(s.post, s.author)
+        bystander = make_post_reply(s.post, s.author)
+        db.session.commit()
+        child.path = [0, s.reply.id, child.id]
+        bystander.path = [0, bystander.id]
+        child.replies_enabled = True
+        bystander.replies_enabled = True
+        db.session.commit()
+
+        lock_post_reply(s.reply.id, True, SRC_API, auth=bearer(s.actor))
+
+        db.session.refresh(child)
+        db.session.refresh(bystander)
+        assert child.replies_enabled is False
+        assert bystander.replies_enabled is True
+
+    def test_an_instance_admin_may_lock(self, db_session):
+        """`:501`'s SECOND disjunct alone, with the first false."""
+        s = _seed_moderated_reply()
+        make_instance_admin(s.actor, s.instance)
+        s.reply.replies_enabled = True
+        db.session.commit()
+
+        lock_post_reply(s.reply.id, True, SRC_API, auth=bearer(s.actor))
+
+        db.session.refresh(s.reply)
+        assert s.reply.replies_enabled is False
+
+    def test_an_unprivileged_api_caller_is_not_refused(self, db_session):
+        """`:501`'s false arm -- AND IT ASSERTS THE DEFECT ON PURPOSE.
+
+        Neither disjunct holds, so the whole body is skipped and control
+        reaches `:519`. The call returns `user.id, post_reply` normally: no
+        exception, no flash, nothing changed. The caller cannot tell this
+        apart from a success.
+
+        THE TWIN RAISES. `app/shared/post.py:968-969` is
+        `elif src == SRC_API: raise Exception('Does not have permission')`,
+        and `tests/test_shared_post_moderation.py`'s
+        `test_an_unprivileged_user_changes_nothing` pins that shape with
+        `pytest.raises`.
+
+        WHOEVER PROPAGATES THAT FIX MUST EDIT THIS TEST. The edit owed is to
+        INVERT it: wrap the call in
+        `pytest.raises(Exception, match='Does not have permission')` and keep
+        both state assertions. Its failure at that point is the fix landing,
+        not a regression. Registered as finding 3 in the round's spec.
+
+        THE STATE ASSERTIONS CARRY THE TEST, not the returned tuple. A mutant
+        that ran the body and then returned the same tuple would pass a
+        return-value assertion and is caught only by `replies_enabled` and the
+        empty ModLog.
+        """
+        s = _seed_moderated_reply()
+        s.reply.replies_enabled = True
+        db.session.commit()
+
+        user_id, reply = lock_post_reply(s.reply.id, True, SRC_API,
+                                         auth=bearer(s.actor))
+
+        assert user_id == s.actor.id
+        db.session.refresh(s.reply)
+        assert s.reply.replies_enabled is True
+        assert db.session.query(ModLog).count() == 0
+
+    def test_locking_writes_the_lock_action(self, db_session):
+        """`:506-508`'s add_to_modlog with `:496`'s modlog_type."""
+        s = _seed_moderated_reply()
+        seed_moderator(s)
+
+        lock_post_reply(s.reply.id, True, SRC_API, auth=bearer(s.actor))
+
+        actions = {row.action for row in db.session.query(ModLog).all()}
+        assert actions == {'lock_post_reply'}
+
+    def test_unlocking_writes_the_unlock_action(self, db_session):
+        """`:499`'s modlog_type on the false arm of `:494`.
+
+        The counterpart of the test above. Together they prove `:506`'s
+        argument is driven by `:494` rather than fixed.
+        """
+        s = _seed_moderated_reply()
+        seed_moderator(s)
+
+        lock_post_reply(s.reply.id, False, SRC_API, auth=bearer(s.actor))
+
+        actions = {row.action for row in db.session.query(ModLog).all()}
+        assert actions == {'unlock_post_reply'}
+
+    def test_the_web_arm_flashes_when_locking(self, db_session, app):
+        """`:487`'s false arm, `:510`'s true arm, `:511`-`:512`.
+
+        NO `make_site()` HERE -- see the class docstring. This arm only
+        flashes; it neither renders a template nor calls `can_downvote`.
+        """
+        from flask import get_flashed_messages
+        s = _seed_moderated_reply()
+        seed_moderator(s)
+
+        with web_ctx(app, s.actor):
+            lock_post_reply(s.reply.id, True, SRC_WEB, auth=None)
+            messages = get_flashed_messages()
+
+        assert 'Comment has been locked.' in messages
+
+    def test_the_web_arm_flashes_a_different_message_when_unlocking(self, db_session, app):
+        """`:510`'s false arm, `:515`-`:516`.
+
+        Paired with the test above so `:510`'s two arms are witnessed by
+        different message text rather than by the same assertion twice.
+        """
+        from flask import get_flashed_messages
+        s = _seed_moderated_reply()
+        seed_moderator(s)
+
+        with web_ctx(app, s.actor):
+            lock_post_reply(s.reply.id, False, SRC_WEB, auth=None)
+            messages = get_flashed_messages()
+
+        assert 'Comment has been unlocked.' in messages
+
+    def test_the_api_arm_selects_the_lock_task_without_flashing(self, db_session):
+        """`:511`'s false arm and `:513`'s task_selector.
+
+        `:511` guards only the flash; `:513` runs on both arms of it. The
+        API call reaches `:513` with `:511` false, which is the arc no web
+        test can take.
+        """
+        s = _seed_moderated_reply()
+        seed_moderator(s)
+
+        with recording_task_selector() as calls:
+            lock_post_reply(s.reply.id, True, SRC_API, auth=bearer(s.actor))
+
+        assert 'lock_post_reply' in calls
+
+    def test_the_api_arm_selects_the_unlock_task(self, db_session):
+        """`:515`'s false arm and `:517`'s task_selector."""
+        s = _seed_moderated_reply()
+        seed_moderator(s)
+
+        with recording_task_selector() as calls:
+            lock_post_reply(s.reply.id, False, SRC_API, auth=bearer(s.actor))
+
+        assert 'unlock_post_reply' in calls
