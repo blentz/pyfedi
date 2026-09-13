@@ -1554,3 +1554,367 @@ class TestDeleteReply:
         db.session.refresh(bystander)
         assert parent.child_count == 0
         assert bystander.child_count == 1
+
+
+class TestRestoreReply:
+    """`restore_reply` (app/shared/reply.py:269-294) -- the author's own undelete.
+
+    THE EXTENT IS THE AST'S, NOT THE BRIEF'S. The brief named `:269-296`;
+    `ast.parse` puts the `def` at 269 and its last statement's `end_lineno` at
+    294, and `:295-296` are the blank lines before `report_reply` at `:297`.
+
+    `:275` filters `id`, `user_id` AND `deleted=True` and calls `.one()`, so a
+    reply must already be deleted and only its author can restore it. A miss
+    raises rather than returning None, which is a later task's target.
+
+    `:276-277` SET `deleted` AND `deleted_by` ON EVERY PATH, so `deleted is
+    False` witnesses that the function ran and nothing about which source arm
+    ran or what the counters did -- false-witness mechanism 1. `deleted_by` is
+    WEAKER STILL here than it was in `delete_reply`: `:277` assigns the constant
+    None, so it cannot differ between arms even in principle. (In
+    `delete_reply:249` it at least assigns `user_id`, and was still not an arm
+    discriminator, because `:247` filters `user_id=user_id` and both arms
+    therefore name the same user -- the correction `TestDeleteReply`'s web test
+    carries. Neither trap is repeated below.) The arm discrimination here is the
+    return SHAPE, the flash, and the counters.
+
+    THIS FUNCTION DOES NOT MIRROR `delete_reply`, AND THE LAST TEST PINS THAT.
+    `delete_reply:252`-`:254` decrement three counters inside the bot guard;
+    `restore_reply:280` increments ONE. `post.reply_count_cross_posted` and
+    `community.post_reply_count` are never restored, so a delete-then-restore
+    cycle leaves both permanently one low. That is a rollback that does not undo
+    what it did, and it is REGISTERED, NOT FIXED: a coverage round has no
+    standing to change a counter, and the divergence is better witnessed by an
+    executing test than asserted in a document.
+
+    THE ASYMMETRY IS `:279`-`:280` AND STOPS THERE, re-derived from the AST
+    rather than from indentation. The `If` node whose test unparses to `not
+    reply.author.bot` opens at `:279`, its `body` has EXACTLY ONE element --
+    `reply.post.reply_count += 1` at `:280` -- and its `orelse` is empty.
+    `:281`, `reply.author.post_reply_count += 1`, is a top-level statement of
+    the function body, so it runs on both legs of the guard and mirrors
+    `delete_reply:255` exactly. A test pinning the divergence must therefore
+    read `post.reply_count_cross_posted` and `community.post_reply_count`, and
+    must NOT lean on `author.post_reply_count`, which is symmetric and witnesses
+    nothing. The last test obeys that; the bot test does not pretend to.
+
+    NO `Site` ROW IS SEEDED BY ANY TEST HERE, and the premise was RE-DERIVED BY
+    A METHOD THAT FAILS DIFFERENTLY from `TestDeleteReply`'s. That class used
+    three file-wide textual greps; this used an `ast.walk` over the
+    `restore_reply` FunctionDef node ALONE, collecting every `Call` target and
+    every `Name`/`Attribute` identifier in the subtree. The call set is exactly
+    `authorise_api_user`, `query`, `filter_by`, `one`, `tuple`, `execute`,
+    `text`, `commit`, `flash`, `_` and `task_selector`, and `render_template`,
+    `can_upvote`, `can_downvote` and `Site` appear nowhere in the subtree under
+    any spelling. The two methods fail in opposite directions -- a grep cannot
+    tell which function a matching line is in, and an AST walk cannot see a call
+    made through a string name -- and both say the row is unnecessary. The five
+    tests below call `make_site()` nowhere and pass, which is the third check.
+
+    NO `_clear_votes_cast` IS NEEDED: `restore_reply` completes no vote, so it
+    never writes the `votes_cast_{today}_{user_id}` key the module docstring's
+    REAL REDIS note governs.
+
+    THE EAGER CELERY TASK AT `:289` SENDS NOTHING, for the same reason
+    `TestDeleteReply` records for `:261` and through the same code.
+    `task_selector` (app/shared/tasks/__init__.py:4) runs the body inline under
+    `current_app.debug`; `app/shared/tasks/deletes.py:44`'s `restore_reply`
+    calls the SAME `delete_object` (`:118`) the delete task calls, only with
+    `is_restore=True`, and that returns at `:133` on `if community.private or
+    not community.instance.online():`. `_seed_reply` defaults `private=True`,
+    register entry D393(d)'s federation lever. The task opens its own session
+    and re-queries the reply by id, which is safe because `:285` commits before
+    `:289` runs.
+
+    THE `path` QUESTION IS `TestDeleteReply`'S, ONE LINE OVER. `:283` is
+    `delete_reply:257`'s statement with `-` changed to `+`, keyed on the same
+    `tuple(reply.path[:-1])`, so the empty-tuple `ProgrammingError` probed there
+    is `restore_reply`'s too: the cli-imported one-element path the module
+    docstring's defect 3 describes makes a reply its author can neither delete
+    NOR restore. Registered, not fixed, with `flask populate_post_reply_for_api`
+    as the existing remedy; not tested here, because reaching it needs a row
+    only `lemmy-import` builds.
+
+    `path` IS NULLABLE WITH NO DEFAULT AND `child_count` DEFAULTS TO 0 -- also
+    re-derived by a second method, runtime introspection of the mapped table
+    rather than reading app/models.py:2898-2899. `PostReply.__table__.c['path']`
+    reports `ARRAY(Integer())`, `nullable=True`, `default=None`,
+    `server_default=None`; `c['child_count']` reports `default=0`. Reading the
+    source cannot see a later override of a mapped column; introspection cannot
+    see a value assigned at insert time by other code. Both agree, so `:282` is
+    FALSE for a `make_post_reply` reply and its true arm needs a hand-seeded
+    path.
+    """
+
+    def _deleted(self, *, bot=False):
+        """A seeded reply already deleted through `delete_reply`.
+
+        `:275` filters `deleted=True`, so every test here needs one. The four
+        counters are put at distinct non-zero values FIRST, by
+        `_seed_distinct_reply_counters`, so they are still pairwise distinct
+        after the delete has moved them -- 31/17/8/3 becomes 30/16/7/2, and for
+        a bot author 31/17/8/2. That distinctness is load-bearing; the tests
+        that depend on it say so individually.
+
+        THREE OF THE FIVE TESTS BELOW get their deleted reply from here, which
+        is how production reaches this function. The other two do not:
+        `..._restores_their_child_counts` marks the reply deleted through the
+        ORM instead, for the reason its docstring gives, and
+        `..._leaves_two_counters_permanently_low` needs the delete INSIDE the
+        span it measures rather than in a fixture.
+        """
+        s = _seed_reply()
+        if bot:
+            s.user.bot = True
+        _seed_distinct_reply_counters(s)
+        delete_reply(s.reply.id, SRC_API, auth=bearer(s.user))
+        return s
+
+    def test_an_api_restore_returns_the_user_and_the_reply(self, db_session):
+        """`:270` true -> `:271`; `:279` true -> `:280`; `:282` false -> `:285`;
+        `:286` false -> `:289`; `:291` true -> `:292`.
+        Arcs 270->271, 279->280, 282->285, 286->289, 291->292; statements 270,
+        271, 275, 276, 277, 279, 280, 281, 282, 285, 286, 289, 291, 292.
+
+        THE RETURN IS THE ARM DISCRIMINATOR, BY SHAPE. `:292` returns
+        `(user_id, reply)` and `:294` returns None, so unpacking into two names
+        is itself the witness that `:294` was not taken, and `reply.id` pins
+        which row came back. Neither `deleted` nor `deleted_by` is the witness,
+        for the reasons the class docstring gives.
+
+        THIS TEST OWNS THE TWO COUNTERS `restore_reply` MOVES -- `:280`'s
+        `post.reply_count` and `:281`'s `author.post_reply_count` -- and the
+        last test owns the two it never moves. The split is deliberate: the two
+        tests would otherwise assert the same four-tuple twice, and the campaign
+        rule is that a test earns its place by closing something or by a unique
+        kill, not by restating a sibling.
+
+        `:282`'s FALSE ARM IS WITNESSED POSITIVELY, not by absence:
+        `_seed_reply`'s reply has `path is None`, so mutating `:282` to `if not
+        reply.path:` does not merely stop asserting something, it ERRORS on
+        `None[:-1]` before any SQL is built.
+
+        DISTINCT SEEDS ARE NECESSARY HERE, MEASURED. Rewriting `:281` as
+        `reply.author.post_reply_count = reply.post.reply_count` -- an exact-copy
+        assignment of the value `:280` has just written -- is invisible at the
+        columns' shared default 0, because after the delete both slots hold -1
+        and `:280` makes `post.reply_count` 0, which is exactly what
+        `author.post_reply_count` was going to read. Against `_deleted()`'s
+        30/16/7/2 the mutant writes 31 where 3 is expected. Both runs are in the
+        task report. This is the same single class of mutant
+        `_seed_distinct_reply_counters`'s docstring isolates, and no more:
+        permuting `:280` and `:281` is still an equivalent mutant, because two
+        in-place `+= 1` on independent columns are permutation-invariant.
+        """
+        s = self._deleted()
+        before = (s.post.reply_count, s.user.post_reply_count)
+
+        user_id, reply = restore_reply(s.reply.id, SRC_API, auth=bearer(s.user))
+
+        assert (user_id, reply.id) == (s.user.id, s.reply.id)
+        db.session.refresh(s.post)
+        db.session.refresh(s.user)
+        assert (s.post.reply_count, s.user.post_reply_count) == (before[0] + 1, before[1] + 1)
+
+    def test_a_web_restore_flashes_and_returns_none(self, db_session, app):
+        """`:270` false -> `:273`; `:286` true -> `:287`'s flash; `:291` false
+        -> `:294`. Arcs 270->273, 286->287, 291->294; statements 273, 287, 294.
+
+        THREE ARCS IN ONE TEST, and `:286` is the only place in this mirrored
+        pair of functions where the source decides whether to flash --
+        `delete_reply` has no flash at all, on either arm (`grep -c flash` over
+        `:241`-`:266` is 0, and `flash` and `_` are both in the AST call set for
+        `restore_reply` recorded on the class).
+
+        THE FLASH IS ASSERTED ON ITS CONTENT, NOT INFERRED FROM THE RETURN, and
+        that is load-bearing. `:287` is a bare statement between `:285`'s commit
+        and `:289`'s task, so DELETING IT OUTRIGHT still falls through to
+        `:294`'s bare `return` and would pass a return-only assertion silently.
+        The precedent is `..._a_third_source_reaches_the_flash_branches...`
+        above, which makes the identical argument about `:111`/`:119`.
+
+        `is None` IS THE ONLY DISCRIMINATOR THE RETURN CARRIES, and this
+        docstring claims no second one -- see the class docstring on `:276`-`:277`.
+
+        THAT `:273` READ `current_user` is witnessed by `:275` instead: it
+        filters `user_id=user_id` and calls `.one()`, so an id from anywhere
+        else raises `NoResultFound` rather than restoring.
+
+        `auth=None` is passed explicitly because `restore_reply`'s signature at
+        `:269` is `(reply_id, src, auth)` with no default; the web arm never
+        reads it. A counter is asserted as well, so a mutant that gutted the
+        body but kept the flash and the bare `return` cannot pass on the None
+        and the message alone.
+        """
+        s = self._deleted()
+        before = s.user.post_reply_count
+
+        with web_ctx(app, s.user):
+            assert restore_reply(s.reply.id, SRC_WEB, auth=None) is None
+            flashed = get_flashed_messages()
+
+        assert len(flashed) == 1
+        assert 'restored' in flashed[0]
+        db.session.refresh(s.reply)
+        db.session.refresh(s.user)
+        assert s.reply.deleted is False
+        assert s.user.post_reply_count == before + 1
+
+    def test_a_bot_authors_reply_skips_the_post_counter_on_restore(self, db_session):
+        """`:279` false -> `:281`. Arc 279->281.
+
+        `:279` is `if not reply.author.bot:`, so a bot author skips `:280` --
+        but `:281`, the AUTHOR's own counter, is a top-level statement of the
+        function body and increments anyway. THAT ASYMMETRY IS THE WITNESS:
+        asserting only that `post.reply_count` held would not distinguish this
+        run from the function never having been called, which is false-witness
+        mechanism 3. `:281` is the same-mechanism positive control and it moves
+        through the same commit as the counter that did not.
+
+        THE BASELINE IS TAKEN AFTER THE DELETE, NOT BEFORE IT, and that matters.
+        Measured from before the delete, this bot's `author.post_reply_count`
+        goes 3 -> 2 -> 3 and lands back where it started, so `== before` would
+        be exactly what a no-op function produced -- mechanism 3 reintroduced by
+        the arithmetic. Read from immediately after the delete, the restore's
+        own effect is a clean `+1` against a `+0`.
+
+        ONLY THE ONE GUARDED COUNTER IS READ. `delete_reply`'s bot test reads
+        three because `:252`-`:254` are three guarded statements; `restore_reply`
+        has exactly one. `post.reply_count_cross_posted` and
+        `community.post_reply_count` are untouched by this function on BOTH legs
+        of `:279`, so asserting they held would witness nothing about the guard.
+        THIS TEST THEREFORE DOES NOT PIN THE DELETE/RESTORE ASYMMETRY -- the
+        last test does, and it reads those two columns precisely because this
+        one cannot.
+
+        DISTINCT SEEDS ARE NECESSARY HERE TOO, and for the same mutant as the
+        API test: with the columns at 0 the post-delete pair is (0, -1), `:281`
+        rewritten as `= reply.post.reply_count` writes 0 where 0 is expected and
+        SURVIVES; against `_deleted(bot=True)`'s (31, 2) it writes 31 where 3 is
+        expected and fails.
+
+        `User.bot` (app/models.py:1016, in `class User` which opens at
+        app/models.py:973) defaults False, so every other test here takes the
+        true arm. `authorise_api_user` (app/utils.py:3628) rejects on `ap_id`,
+        `verified`, `banned` and `deleted` and says nothing about `bot`, so the
+        bearer token still authorises.
+        """
+        s = self._deleted(bot=True)
+        before = (s.post.reply_count, s.user.post_reply_count)
+
+        restore_reply(s.reply.id, SRC_API, auth=bearer(s.user))
+
+        db.session.refresh(s.post)
+        db.session.refresh(s.user)
+        assert (s.post.reply_count, s.user.post_reply_count) == (before[0], before[1] + 1)
+
+    def test_a_reply_with_ancestors_restores_their_child_counts(self, db_session):
+        """`:282` true -> `:283`. Arc 282->283; statements 282, 283.
+
+        THIS TEST DOES NOT CALL `delete_reply`, AND THAT IS THE POINT. The
+        obvious construction -- delete, restore, then assert the ancestor's
+        `child_count` came back -- CANNOT CARRY A WORKING NEGATIVE CONTROL
+        AGAINST THE ONE MUTANT SHAPE THAT MATTERS MOST HERE. `:283` and
+        `delete_reply:257` are the same statement with one character changed, so
+        the realistic defect is the MIRRORED PAIR losing its `where` clause
+        together, not one half of it. Under that mutant a round trip increments
+        every row in `post_reply` after having decremented every row, and a
+        bystander seeded at N reads N - 1 + 1 == N at the end: THE ROUND TRIP
+        LAUNDERS EXACTLY THE DEFECT THE CONTROL EXISTS TO CATCH. Marking the
+        reply `deleted` directly through the ORM is all `:275`'s filter
+        requires, and it leaves `:283` as the only statement in the whole test
+        that touches `child_count`, so nothing can launder anything.
+
+        MEASURED, NOT ARGUED. ` where id in :parents` was deleted from BOTH
+        `:257` and `:283` in a scratch mutant -- `app/` restored afterwards and
+        the restore confirmed with `git diff --quiet -- app/` and `wc -l`. This
+        test FAILED, `assert 10 == 9` on the bystander. A delete-then-restore
+        version run alongside it PASSED, and that version was STRENGTHENED
+        rather than copied: it carried a bystander of its own AND an
+        intermediate assertion on the parent between the two calls, so it was a
+        better test than the one this replaces and the round trip defeated it
+        anyway. `TestDeleteReply`'s ancestor test also failed, on the delete
+        half. A `:283`-ONLY mutant is the weaker case and both shapes catch it;
+        it is the pair mutant that separates them. The runs are in the task
+        report.
+
+        THE PATH IS SEEDED IN THE SHAPE PRODUCTION BUILDS, `[0, parent.id,
+        reply.id]` -- app/models.py:3054-3055 for the nested case and `:3059`
+        for the root, in `class PostReply` which opens at app/models.py:2887.
+        `path[:-1]` is then `(0, parent.id)`: multi-element, so the empty-tuple
+        syntax error the class docstring records cannot arise, and id 0 matches
+        no row so only `parent` is hit.
+
+        `parent` and `bystander` are refreshed rather than read from the session
+        because the raw `UPDATE` bypasses the identity map. Their seeded counts
+        are different from each other and from both 0 and 1, so a mutant
+        assigning a literal instead of incrementing is visible as well.
+        """
+        s = _seed_reply()
+        parent = make_post_reply(s.post, s.user, body='parent')
+        bystander = make_post_reply(s.post, s.user, body='bystander')
+        parent.child_count = 4
+        bystander.child_count = 9
+        s.reply.path = [0, parent.id, s.reply.id]
+        s.reply.deleted = True
+        db.session.commit()
+
+        restore_reply(s.reply.id, SRC_API, auth=bearer(s.user))
+
+        db.session.refresh(parent)
+        db.session.refresh(bystander)
+        assert parent.child_count == 5
+        assert bystander.child_count == 9
+
+    def test_a_delete_restore_cycle_leaves_two_counters_permanently_low(self, db_session):
+        """PINS A REGISTERED DEFECT, AND CLOSES NO NEW STATEMENT OR ARC. Every
+        line it executes is already closed by the API test above; it earns its
+        place by a UNIQUE KILL, which is the campaign's standing rule for such a
+        test, and the kill is the interesting one: A FUTURE FIX.
+
+        It asserts the CURRENT behaviour, which is WRONG, so that repairing
+        `restore_reply` has to change a test rather than silently alter a number
+        nobody was watching. `delete_reply:252`-`:254` decrement three counters;
+        `restore_reply:280` increments one. After a full cycle `post.reply_count`
+        is level and `post.reply_count_cross_posted` and
+        `community.post_reply_count` are each one LOW.
+
+        THE UNIQUE KILL, MEASURED. `:280` was rewritten in a line-scoped scratch
+        mutant as the three-counter increment a fix would make -- `reply.post
+        .reply_count += 1; reply.post.reply_count_cross_posted += 1;
+        reply.community.post_reply_count += 1` -- with `app/` restored afterwards
+        and the restore confirmed by `git diff --quiet -- app/`. THIS TEST WAS
+        THE ONLY ONE IN THE FILE THAT FAILED. The API test above passes against
+        it, because `post.reply_count` and `author.post_reply_count` still move
+        by exactly +1; the bot test passes because the guard skips the whole
+        statement; `TestDeleteReply`'s four pass because they never restore. The
+        run is in the task report.
+
+        `post.reply_count` RETURNING LEVEL IS THE SAME-MECHANISM POSITIVE
+        CONTROL. It proves the cycle ran and that this harness can observe a
+        counter coming back to its starting value, so the other two being low is
+        a real asymmetry and not a fixture artefact or a refresh that read a
+        stale row.
+
+        `author.post_reply_count` IS DELIBERATELY NOT READ. `delete_reply:255`
+        and `restore_reply:281` sit outside their respective bot guards and
+        mirror each other exactly, so it returns level like `post.reply_count`
+        and would be a second control rather than a second witness -- and
+        including it would blur which columns the divergence actually covers.
+        The class docstring derives the boundary from the AST.
+
+        The three columns are seeded to distinct non-zero values so that a
+        failure message names which one moved; they stay positive throughout,
+        which keeps that message readable.
+        """
+        s = _seed_reply()
+        before = _seed_distinct_reply_counters(s)
+
+        delete_reply(s.reply.id, SRC_API, auth=bearer(s.user))
+        restore_reply(s.reply.id, SRC_API, auth=bearer(s.user))
+
+        db.session.refresh(s.post)
+        db.session.refresh(s.community)
+        assert s.post.reply_count == before[0]
+        assert s.post.reply_count_cross_posted == before[1] - 1
+        assert s.community.post_reply_count == before[2] - 1
