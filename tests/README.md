@@ -6643,21 +6643,43 @@ forward:
    a genuine format-mismatch at `:515` for those formats, or any real
    video-content behaviour. A test needing that needs a different helper.
 
-3. **The `http_mock` `url__regex` requirement, with NO GET route, and why.**
-   Calling `edit_post` at all with `uploaded_file=` set reaches `:601`'s
+3. **The `http_mock` `url__regex` requirement -- and the GET route rule,
+   WHICH HAS TWO HALVES. CORRECTED 2026-09-12 (sub-project 39): the
+   original text below stated only the first half as an absolute, and a
+   round that reads only that form cannot reach `:619`, `:630` or `:641`
+   at all.** Calling `edit_post` with `uploaded_file=` set reaches `:601`'s
    `is_image_url(url)` on the NEWLY BUILT url (`:535`, which embeds
    `gibberish(15)`) regardless of how narrow a test's intent is -- this is
    downstream of the upload block entirely, in the function's shared tail.
-   A plain `http_mock.head('https://...')` (exact URL) cannot be used here,
-   since the filename is random; every full `edit_post()` call in this file
-   needs `http_mock.head(url__regex=r'.*')` instead. Registering a GET route
-   for the same pattern is a MISTAKE, not a safety margin: `:601`/`:619`/
-   `:630`/`:641` form one mutually exclusive `if`/`elif`/`elif`/`else` chain,
-   and the HEAD mock's `Content-Type: image/png` makes `is_image_url` return
-   `True`, taking `:601`'s branch -- the only one of the four that does NOT
-   call `opengraph_parse` (which is what would issue a GET). A registered
-   but unreached GET route fails `http_mock`'s `assert_all_called=True` at
-   teardown.
+   A plain `http_mock.head('https://...')` (exact URL) cannot be used there,
+   since the filename is random; every full `edit_post()` call in
+   `tests/test_shared_post_upload.py` needs `http_mock.head(url__regex=r'.*')`
+   instead. **What decides the GET route is which of `:601`/`:619`/`:630`/
+   `:641` the HEAD's content type selects.** Those four are one mutually
+   exclusive `if`/`elif`/`elif`/`else` chain, and only `:601` skips
+   `opengraph_parse` -- which is the call that issues the GET.
+
+   - **HEAD says an IMAGE type -> NO GET route.** `Content-Type: image/png`
+     makes `is_image_url` return `True` (`app/utils.py:271-273` computes
+     `'.png' in common_image_extensions`), `:601`'s arm is taken, nothing
+     calls `opengraph_parse`, and a registered-but-unreached GET route fails
+     `http_mock`'s `assert_all_called=True` at teardown. This serves the
+     **upload arm** and is the convention throughout
+     `tests/test_shared_post_upload.py`.
+   - **HEAD says a NON-image type -> A GET ROUTE IS REQUIRED.** The inverse,
+     and it is what the `:619` (pixelfed), `:630` (loops.video) and `:641`
+     (generic opengraph) arms need: `Content-Type: text/html` makes
+     `is_image_url` return `False` (`'.html' in common_image_extensions` is
+     False -- it does NOT fall through to extension sniffing), `:601` is
+     skipped, the chain reaches the url arms, `opengraph_parse` runs and
+     issues a GET, and omitting the route leaves respx with an unmatched
+     request. `video/mp4` behaves the same way. This serves the **url arms**
+     and is the convention throughout `tests/test_shared_post_url.py`.
+     Both directions were measured under the real `http_mock` router rather
+     than reasoned about: `text/html -> False`, `image/png -> True`.
+
+   The two conventions coexist in the same suite and are chosen PER TEST by
+   what the test needs to reach. Neither is "the" rule.
 
 4. **The AVIF trap.** This container's Pillow (12.3.0) registers AVIF
    natively -- `features.check('avif')` is `True`, and an AVIF save
@@ -6682,6 +6704,83 @@ forward:
    uploaded file EXISTS afterward, not just match the exception message --
    otherwise a mutant that made the wrong one of the two fire would still
    pass.
+
+**230. `edit_post`'S URL HALF (`:565-703`) AND ITS PERMISSION/TEARDOWN
+HEAD (`:387-460`): SEVEN FACTS THAT DECIDE WHETHER A TEST THERE WITNESSES
+ANYTHING.** These closed the module (sub-project 39,
+`tests/test_shared_post_url.py`); every one was measured, not reasoned about.
+
+1. **The HEAD content type selects the arm, and therefore whether a GET
+   route is required.** This is the INVERSE of the convention
+   `tests/test_shared_post_upload.py` uses, and it is a fact in its own
+   right: to reach `:619`/`:630`/`:641` at all, `is_image_url(url)` must be
+   FALSE, which means the HEAD must report a NON-image content type
+   (`text/html`, `video/mp4`), and `opengraph_parse` then issues a GET that
+   the router must have a route for. An `image/png` HEAD takes `:601` and
+   forbids a GET route. Both directions measured: `text/html -> False`,
+   `image/png -> True`. See fact 229 point 3 for the full statement of both
+   halves and which test file follows which.
+
+2. **`fixup_url` returns `(url, url)` for an ordinary url, so `post.url`
+   CANNOT distinguish `:640` from `:652`.** `app/utils.py:3311-3312` is
+   `thumbnail_url = embed_url = url`, and the two rewrite paths below it fire
+   only for peertube `/w/` urls and for `youtube_domains` hosts; everything
+   else falls through with `embed_url is url`. `:640` (`post.url = url`, the
+   loops.video arm) and `:652` (`post.url = embed_url`, the generic
+   opengraph arm) therefore write the SAME STRING for any ordinary test url.
+   A test asserting `post.url == '...'` witnesses neither line. What
+   discriminates the two arms is `post.type`, the `File` rows created, and
+   the `og:` fetches issued -- not the url.
+
+3. **`url_to_thumbnail_file` writes to a WORKING-DIRECTORY-RELATIVE path, so
+   `chdir_upload` is needed by tests that upload nothing.** `app/utils.py:3065`
+   builds `directory = 'app/static/media/posts/' + ...` and `:3069` opens it
+   for writing -- relative to the process's cwd, the bind-mounted repo root
+   in the container. This is reached from `edit_post:646`, inside the GENERIC
+   OPENGRAPH arm, on a path where no `uploaded_file` was ever passed. The
+   `chdir_upload` fixture (fact 229 point 1) was written for the upload block
+   and is required here too; without it a thumbnail-download test leaves a
+   real `gibberish(15)` file in the source tree that `.gitignore` hides.
+
+4. **`S3_PUBLIC_URL` defaults to `''`, which makes `:446`'s third conjunct
+   trivially true.** `config.py:108` is
+   `S3_PUBLIC_URL = os.environ.get('S3_PUBLIC_URL') or ''`, so
+   `post.url.startswith(f'https://{...S3_PUBLIC_URL...}')` at `:446` reduces
+   to `post.url.startswith('https://')` under the default -- true of every
+   https url a test seeds. The conjunct IS falsifiable (an `http://` url
+   falsifies it), but a test that only sets `store_files_in_s3()` and a
+   `POST_TYPE_VIDEO` post is not witnessing it. Pin `S3_PUBLIC_URL` to a real
+   host if the third conjunct is the thing under test.
+
+5. **`scheduled_for` is UNREACHABLE from the API branch.** `:281` is a hard
+   `scheduled_for = None` in the `SRC_API` arm; only the form arm (`:337`,
+   `input.scheduled_for.data`) can supply a value. So `:399`'s write and
+   `:413`'s true arm can be witnessed only through `SRC_WEB`. An API test
+   that "sets a scheduled_for" is setting a key nothing reads.
+
+6. **`mime_type_using_head`'s `@cache.memoize` is inert ONLY because the test
+   config disables caching.** `app/utils.py:332` decorates it with
+   `@cache.memoize(timeout=10)`; `tests/conftest.py:68` sets
+   `CACHE_TYPE = 'NullCache'` where `config.py:38` would otherwise give
+   `FileSystemCache`. Two tests in the same process may therefore feed the
+   same url different HEAD responses and each get its own. That is a property
+   of the harness, not of the function -- do not carry the assumption into
+   any runner that does not set `NullCache`. The same applies to
+   `User.is_admin()`'s `@cache.memoize(timeout=30)` (fact 216) and to
+   `Community.moderators()`'s `@cache.memoize(timeout=300)`
+   (`app/models.py:715`).
+
+7. **`:387`'s SECOND DISJUNCT CANNOT BE WITNESSED ALONE -- it is subsumed by
+   the first.** `:387` is
+   `if post.community.is_moderator(user) or post.community.is_owner(user) or user.is_admin():`.
+   `Community.moderators()` (`app/models.py:716-722`) admits a row on
+   `is_owner OR is_moderator`; `Community.is_moderator()` (`:736-740`) tests
+   only `moderator.user_id == user.id` over that same list, while
+   `is_owner()` (`:742-745`) tests `user_id` AND `is_owner`. So any row that
+   makes `is_owner(user)` true makes `is_moderator(user)` true first, and the
+   first disjunct short-circuits. No fixture can make disjunct 2 decide the
+   compound. A test claiming to witness "the owner arm" of `:387` is
+   witnessing the moderator arm. Registered as D479.
 
 ## Known noise
 
