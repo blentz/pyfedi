@@ -144,7 +144,7 @@ def _unreadable_page(http_mock, url):
 def _make_is_admin(user):
     """Make `user` satisfy `User.is_admin()` (app/models.py:1259-1265).
 
-    `_make_admin` (tests/test_shared_post_edit.py:219-241) IS NOT ENOUGH ON ITS
+    `_make_admin` (tests/test_shared_post_edit.py:219-243) IS NOT ENOUGH ON ITS
     OWN, and finding that out is part of Task 2's job. That helper exists for
     `Site.admins()`, whose filter is `user_role.c.role_id == ROLE_ADMIN`
     (app/models.py:3999-4000), so all it has to get right is the Role row's
@@ -2564,7 +2564,7 @@ class TestGenericOpengraphArm:
         so in prose. A statement covered by another FILE is not missing from
         the module, however it looks when that file is measured alone.
 
-        What already covers it is `tests/test_shared_post_edit.py:815-825`
+        What already covers it is `tests/test_shared_post_edit.py:838-848`
         (`test_web_branch_takes_the_video_url_for_a_video_post`): its HEAD
         answers `video/mp4`, which is not an image type, so `:601` is false and
         the `:641` else arm is taken; its GET answers `html=''`, so `:643` is
@@ -2593,11 +2593,11 @@ class TestGenericOpengraphArm:
             self, db_session, http_mock, chdir_upload):
         """`:654`'s SECOND disjunct alone -> `:655`.
 
-        CLOSES NO ARC AND NO STATEMENT. NEITHER DOES THE TEST ABOVE: an earlier
-        revision of this sentence read "the test above closes 654->655", which
-        is the very claim that test's own docstring retracts three tests up.
+        CLOSES NO ARC AND NO STATEMENT. NEITHER DOES THE TEST ABOVE, the method
+        immediately preceding this one: an earlier revision here read "the test
+        above closes 654->655", the very claim that test's docstring retracts.
         `655` and `654->655` are covered suite-scoped by
-        `tests/test_shared_post_edit.py:815-825`, not by anything in this class.
+        `tests/test_shared_post_edit.py:838-848`, not by anything in this class.
         This test earns its place by a UNIQUE MUTANT KILL, verified by running
         the mutant. Deleting `url.endswith('.mp4') or` from `:654` fails THIS test
         and no other in the suite; the uppercase test is untouched because its

@@ -1228,7 +1228,7 @@ def web_ctx(app, user, query_string=''):
 def bearer(user):
     """The Authorization header value the SRC_API arms authorise from.
 
-    The precedent is tests/test_shared_post_edit.py:300, which passes
+    The precedent is tests/test_shared_post_edit.py:302, which passes
     `auth=f'Bearer {s.user.encode_jwt_token()}'` into edit_post's API branch.
     """
     return f'Bearer {user.encode_jwt_token()}'
