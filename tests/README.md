@@ -6802,6 +6802,137 @@ ANYTHING.** These closed the module (sub-project 39,
    `.coveragerc` sets no `partial_branches`, so this pragma is the module's
    only such exclusion.
 
+**231. `app/shared/reply.py`'S HARNESS: THREE SUB-PROJECT 34 FACTS TRANSFER
+UNCHANGED, AND FOUR THINGS DO NOT.** Sub-project 40 took Groups A and C
+(`vote_for_reply`, `bookmark_reply`, `remove_bookmark_reply`,
+`subscribe_reply`, `extra_rate_limit_check`, `delete_reply`, `restore_reply`)
+in `tests/test_shared_reply_interactions.py`. `reply.py` is `post.py`'s twin,
+so most of the harness is inherited; what follows is the difference, measured
+rather than reasoned about.
+
+1. **What transfers from `tests/test_shared_post_interactions.py` unchanged.**
+   (a) **No `user=` escape hatch.** `edit_reply` takes one; no Group A
+   function does — `vote_for_reply:21`/`:28`, `bookmark_reply:58`,
+   `remove_bookmark_reply:76` and `subscribe_reply:95` read `current_user` or
+   call `authorise_api_user` with no way around it, so every test supplies a
+   real user. (b) **The `SRC_API` arm needs no request context.**
+   `get_ip_address` (`app/__init__.py:68-78`) wraps its `request` read in
+   `try/except RuntimeError` — its own comment at `:76` names the case, "no
+   application or request context (e.g. a CLI command)" — and returns `''`, so
+   `user_ip_banned()` sees a falsy IP and `vote_for_reply:30`'s guard lets a
+   context-free call through. `web_ctx` is for the `SRC_WEB` arms, which need
+   `flash` and rendering. (c) **What blocks an API test is an `ap_id`, not
+   context.** `authorise_api_user` requires `ap_id is None`, `verified` true,
+   `banned` false and `deleted` false — one compound condition at
+   `app/utils.py:3628` — and `tests/factories.py:41`'s `make_user` defaults
+   `local=False`, which mints a non-None `ap_id`. Pass `local=True`.
+
+2. **`make_post_reply` DOES NOT SET `path`, so `delete_reply:256`'s
+   `if reply.path:` and `restore_reply:282`'s are FALSE by default — and a
+   ONE-element path does not merely take a different branch, it RAISES.**
+   `tests/factories.py:463-471` sets exactly `user_id`, `post_id`,
+   `community_id`, `instance_id`, `body`, `posted_at` and `deleted`; `path` is
+   a nullable ARRAY column with no default, so a factory reply has
+   `path is None` and the two raw-SQL arcs (`delete_reply:257-258`,
+   `restore_reply:283-284`) are unreachable until a test seeds one. Seed the
+   three-element shape `app/models.py:3054-3059` builds
+   (`[0, parent_id, reply_id]`), not a one-element one: `reply.path[:-1]` is
+   then `()`, psycopg2 renders `where id in ()` and raises
+   `ProgrammingError: (psycopg2.errors.SyntaxError) syntax error at or near
+   ")"`. That was measured in the container against the live test database
+   with `delete_reply:257`'s own statement text — `(1, 2)` and `(1,)` run and
+   return no rows, `()` raises. It is **not** a test-only curiosity: see
+   register entry D497 for the production path that produces a one-element
+   `path`. `child_count` (`app/models.py:2899`) is likewise unset by the
+   factory but has a column default of 0 rather than None. Both column facts
+   were re-derived by runtime introspection of the mapped table as well as by
+   reading the `db.Column(...)` line, because reading the source line cannot
+   see a later override of the mapped attribute.
+
+3. **`subscribe_reply:94` JOINS `Post` and filters `deleted=False` on BOTH the
+   reply and its parent post; `subscribe_post` had no join.** A seeded reply
+   needs a live parent post, and the lookup ends in `.one()`, which raises
+   `NoResultFound` rather than returning None or 404ing. A test that seeds a
+   reply without a post, or that soft-deletes either row, gets an exception
+   from the first line of the function rather than the behaviour it meant to
+   drive.
+
+4. **A `Site` row with id 1 is needed for TWO unrelated reasons, and they are
+   not always separate.** The first is rendering: `subscribe_reply:131` and
+   `vote_for_reply:51` are the module's only two `render_template` calls, and
+   without the row `current_theme()` (`app/utils.py:3228-3240`) falls to
+   `Site.query.get(1)` at `:3233` and dereferences None at `:3238` —
+   `AttributeError: 'NoneType' object has no attribute 'default_theme'`, not a
+   skipped lookup. The second is `can_downvote`, which reads
+   `Site.query.get(1)` at `app/utils.py:2443` and dereferences it at `:2445`;
+   that binds `SRC_API` tests that never render. They combine because a
+   TEMPLATE can be what reaches `can_downvote`:
+   `post/_comment_voting_buttons.html` line 10 calls it as a Jinja global
+   (registered at `app/request_hooks.py:54`) and `vote_for_reply:51` passes no
+   `can_downvote_here` to short-circuit it. `make_site()`'s own docstring
+   (`tests/factories.py:353-358`) names only the `blocked_phrases` reason and
+   understates this — register entry D504. Note also that
+   `Site.default_theme` defaults to `''`, so `make_site()` alone gives a
+   theme-less render; a themed render needs `default_theme` set explicitly.
+   `delete_reply` and `restore_reply` need no `Site` row at all: neither
+   renders and neither reaches `can_downvote`, executed for both halves of the
+   pair rather than merely read.
+
+5. **Fact 209's Redis vote-key rule applies to `reply.vote()`, and the key is
+   NOT namespaced by entity type.** `PostReply.vote` (`app/models.py:3311-3402`)
+   writes `votes_cast_{date.today()}_{user_id}` at `:3384` (`set`) and `:3386`
+   (`incr`) — byte-identical to what `Post.vote` writes at `:2827`/`:2829`. So
+   a leaked key from a post-voting test raises the quota for a reply-voting
+   test whose user lands on the same id, across test files, and vice versa.
+   Every test completing a real vote must clear the key in a `finally`;
+   `tests/test_shared_reply_interactions.py` uses a local
+   `_clear_votes_cast(user_id)` helper for exactly this, and its module
+   docstring keeps a live count of which tests do and do not, because nothing
+   else enforces the rule. Fact 210's prohibition transfers too:
+   `PostReply.vote` takes `redis_client.lock(...)` at `:3333` and `:3396`, so
+   `redis_double` cannot be used against any path that completes a vote.
+   **For the quota boundary itself there is a cheaper method than fact 209's,
+   and this round used it: move the BOUNDARY, not the COUNT.**
+   `monkeypatch.setitem(app.config, 'VOTE_QUOTA', 0)` against a
+   `votes_cast_today` of 0 puts a user exactly at the boundary with no Redis
+   write and therefore no Redis teardown, and `-1` puts them over it. It is
+   safe on the session-scoped `app` fixture (`tests/conftest.py:72-113`)
+   because monkeypatch restores the key at teardown. Fact 209's key-writing
+   method is still what you need when the COUNT is the thing under test.
+
+**232. GROUP A OF `app/shared/reply.py` IS NOT AT ZERO OVER
+`tests/test_shared_*.py` ALONE — SEVEN STATEMENTS AND FIVE ARCS COME FROM
+`tests/test_api_reply_bookmarks.py`.** Sub-project 40's plan measured the
+module over `tests/test_shared_reply*.py tests/test_shared_post*.py`, and that
+file list is incomplete: it reports `bookmark_reply:62`, `:63`, `:72` and
+`remove_bookmark_reply:80`, `:81`, `:85`, `:90` missing, plus the five arcs
+`(61,62)`, `(71,72)`, `(79,80)`, `(84,85)`, `(89,90)`. Every `bookmark_reply`
+test in `tests/test_shared_reply_interactions.py` seeds a bookmark first, so
+`:61`'s true arm never runs; no `remove_bookmark_reply` test there seeds one,
+so `:79`'s true arm never runs either — the two dead arms are opposite ends of
+the same single-row fixture habit. The closer is the one-test file
+`tests/test_api_reply_bookmarks.py`, which drives both functions from the
+opposite fixture state — `tests/test_shared_reply_interactions.py`'s module
+docstring says so under `WHAT TASK 7'S MUTATION PASS LEFT OPEN`, and all seven
+differing statements are in `bookmark_reply`/`remove_bookmark_reply`. Three
+measurements, same commit,
+`--cov=app.shared.reply --cov-branch`:
+
+| scope | tests | missing stmts | missing arcs | `percent_covered` |
+|---|---|---|---|---|
+| the plan's 8 `test_shared_*` files | 398 | 238 | 131 | 32.909 |
+| those 8 plus the 2 `test_api_reply_*` files plus `test_ap_moderation.py`, `test_shared_tasks_send_reply.py` | 482 | 231 | 126 | 35.091 |
+| `test_shared_reply_interactions.py` + the 2 `test_api_reply_*` files ONLY | 36 | 231 | 126 | 35.091 |
+
+The third row is the useful one twice over. It proves the seven statements and
+five arcs are the whole difference, and it proves the seven
+`tests/test_shared_post_*.py` files contribute **nothing** to
+`app/shared/reply.py` — 36 tests reach exactly what 482 do. **Measure this
+module over the three reply files; adding the post files costs 45 seconds and
+buys zero coverage.** The general rule: a module-scoped floor taken over a
+glob chosen for its NAME can under-report, and the under-report is invisible
+because the run still exits 0.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
