@@ -45,9 +45,12 @@ sets or increments `votes_cast_{today}_{user_id}` on the real redis the
 compose stack shares, and tests/conftest.py:131 resets id sequences after
 every test -- so a later test whose user reuses that id inherits a stale
 count. THE RULE FOR THIS FILE IS THAT EVERY TEST COMPLETING A REAL VOTE
-CLEARS THE KEY IN A `finally`. Five tests now do -- the three in
-`TestVoteForReplySourceAndPermission` that reach `:36` and the two web tests in
-`TestVoteForReplyGuardsAndReturns` that do. The four that refuse earlier
+CLEARS THE KEY IN A `finally`. Nine tests now do -- the five in
+`TestVoteForReplySourceAndPermission` that reach `:36` and the four in
+`TestVoteForReplyGuardsAndReturns` that do. It was five before task 7's
+mutation pass added four vote-completing tests, and the count is kept current
+here rather than left to drift, because the rule this paragraph states is
+enforced by nothing but the count. The four that refuse earlier
 deliberately do not, because no vote completed and the absence is part of what
 they assert: `:23`/`:25`'s permission returns, `:31`'s abort and `:34`'s. The
 undo test clears the key ONCE for its two calls, which is correct rather than an
@@ -142,7 +145,7 @@ WHAT IS NEW, AND HAS NO POST TWIN:
     `vote_for_reply`, nothing else), so BOTH reasons are absent and the
     delete/restore lifecycle tests need no `Site` row -- a prediction that is
     now EXECUTED FOR BOTH HALVES OF THE PAIR rather than merely read:
-    `TestDeleteReply`'s four tests and `TestRestoreReply`'s five call
+    `TestDeleteReply`'s five tests and `TestRestoreReply`'s six call
     `make_site()` nowhere and pass. THE GREP ABOVE IS ALSO NO LONGER THE ONLY
     EVIDENCE FOR `restore_reply`. A grep is file-wide and textual and cannot
     tell which function a matching line falls in; `TestRestoreReply` re-derived
@@ -156,9 +159,10 @@ WHAT IS NEW, AND HAS NO POST TWIN:
     value can reach -- see `TestSubscribeReply`'s docstring for what `:98` does
     to the web arm.
 
-FOUR DEFECTS ARE RECORDED HERE AND DELIBERATELY NOT FIXED. TWO OF THEM ARE
+FIVE DEFECTS ARE RECORDED HERE AND DELIBERATELY NOT FIXED. THREE OF THEM ARE
 PINNED BY TESTS IN THIS FILE; THE OTHER TWO ARE NOT, AND CANNOT BE FROM A
-FACTORY REPLY. Taking the unpinned pair first, because a later reader of the
+FACTORY REPLY. The fifth, DEFECT 5, was found by task 7's mutation pass and is
+stated at the end of this section. Taking the unpinned pair first, because a later reader of the
 `path` bullet above is sent here for them.
 
 DEFECT 3 -- `flask lemmy-import` WRITES ONE-ELEMENT PATHS, AND
@@ -273,7 +277,7 @@ which is symmetric and would witness nothing. Separately,
 `if src == SRC_API:` arm, the `else` at `:26-28` having no equivalent -- and
 the twin `vote_for_post` DOES gate its web arm (app/shared/post.py:43-48), so
 this is a divergence between mirrored functions rather than a uniform policy.
-NONE OF THE FOUR IS IN THE CAMPAIGN REGISTER
+NONE OF THE FIVE IS IN THE CAMPAIGN REGISTER
 YET -- all are slated for it at this round's end. Until then the argument for
 leaving the two pinned ones unfixed lives in
 `docs/superpowers/specs/2026-09-12-coverage-reply-ac-40-design.md`, under the
@@ -290,6 +294,67 @@ construction that would -- a web downvote against a `Site` with
 `voted_down` markup that `TestVoteForReplyGuardsAndReturns`'s downvote test
 needs as its witness for `:49`. The two cannot be had in one test, and `:49`'s
 witness won.
+
+DEFECT 5 -- A 'reversal' VOTE SKIPS BOTH API PERMISSION GATES. `:22` and `:24`
+are each conjoined with a direction LITERAL, and the API arm passes a third
+value: app/api/alpha/utils/reply.py:435-441 maps `score` 1 to 'upvote', -1 to
+'downvote' and EVERYTHING ELSE to 'reversal', and `:444` hands that to
+`vote_for_reply`. Under 'reversal' both first conjuncts are false, so neither
+`can_upvote` nor `can_downvote` is consulted at all and control reaches `:30`.
+A bot -- refused by `can_upvote` at app/utils.py:2481 and by `can_downvote` at
+`:2437` -- can therefore still remove its vote through the API. THIS IS A
+NARROWER HOLE THAN IT SOUNDS and the narrowing is part of the finding: a
+'reversal' only reaches a vote at all when a vote already exists, because
+`PostReply.vote` remaps it at app/models.py:3316 only `if existing_vote` and
+`:3321` then asserts the direction is 'upvote' or 'downvote'. So the gates are
+bypassed for UNDOING a vote, not for casting one. It is PINNED, not fixed, by
+`TestVoteForReplySourceAndPermission`'s
+`..._a_reversal_reaches_the_vote_past_both_api_permission_gates`, on the same
+reasoning as the asymmetry above: changing a permission check is a product
+decision a coverage round has no standing to take. It was found by neutralising
+`:22`'s first conjunct, which nothing in the file had killed.
+
+WHAT TASK 7'S MUTATION PASS LEFT OPEN, listed because a survivor that is merely
+reported dies with the report. Each of these is a mutation of a line in Groups A
+or C that all 33 tests here pass against, measured after the strengthening, and
+NONE of them is claimed to be an equivalent mutant -- they are unclosed:
+
+  - `30s/ or user_ip_banned()//`. No test makes `user_ip_banned()` true.
+    Closing it needs a request IP plus a `banned_ip_addresses()` row, and that
+    helper is `@cache.memoize`d, which is a cross-test hazard this task did not
+    take on.
+  - `36s/.../reply.vote(user, vote_direction, None)/`. Every test passes
+    `emoji=None`, so the argument is threaded but never witnessed.
+  - `60s/, user_id=user_id//`, `60s/post_reply_id=reply_id, //`,
+    `78s/, user_id=user_id//`, `100s/entity_id=reply_id, user_id=user_id,/
+    entity_id=reply_id,/` and its entity-side twin. Single-row fixtures: one
+    bookmark, one subscription, one user, so "scoped to this user and this row"
+    and "the only row" are the same lookup.
+  - all four `:94` variants -- dropping `deleted=False` from the reply, dropping
+    the `Post` join entirely, joining on the wrong column, and dropping the
+    reply identity. No test seeds a deleted reply or a deleted post, so the
+    guard this line exists for has never been executed against a row it should
+    refuse.
+  - `121`/`122`, the new subscription's `name`. Nothing reads the column.
+  - `261s/task_selector('delete_reply'/task_selector('restore_reply'/` and the
+    same swap at `289`. Both task bodies take the same kwargs and both return
+    early on `community.private`, so the wrong name is silent here. The twin
+    mutant at `38` inside `vote_for_reply` DOES die, because
+    `task_selector('vote_for_post', reply_id=...)` is a TypeError -- so this is
+    a property of the argument lists, not of the dispatcher being covered.
+  - `61s/if not existing_bookmark:/if False:/` and
+    `79s/if existing_bookmark:/if False:/`. These are different in kind: `:62`,
+    `:63`, `:72`, `:80`, `:81`, `:85` and `:90` are NOT EXECUTED by any
+    `tests/test_shared_*.py` file, so no mutation of them can be killed at this
+    scope. `tests/test_api_reply_bookmarks.py` covers them at full-suite scope.
+
+  `48s/vote_direction == 'downvote' and //` is the ONE survivor here argued to
+  be EQUIVALENT rather than open, and the argument is domain-restricted: `:48`
+  is reached only when `:46` is false, `PostReply.vote` asserts the direction is
+  'upvote' or 'downvote' at app/models.py:3321 so nothing else survives `:36`,
+  and a 'reversal' that does survive it always produces a non-None `undo`
+  (`:3338`/`:3352` delete the row). Over those inputs the deletion changes no
+  outcome. The argument depends on an `assert`, so `python -O` would void it.
 """
 
 from datetime import date
@@ -493,13 +558,25 @@ def test_bookmarking_an_already_bookmarked_reply_flashes_on_the_web(db_session, 
     the half of the behaviour the exception path shares -- the discriminator
     against the API arm is that NO exception escaped, and that the return is
     None rather than the `user_id` `:72` returns.
+
+    THE FLASH IS ASSERTED ON ITS CONTENT, AND THE TASK-7 MUTATION PASS IS WHY.
+    This test previously asserted only the return and the row count, and
+    `69s/flash(_(msg))/flash(_('unrelated text'))/` left all 27 tests green --
+    so nothing here witnessed WHAT was flashed, only that the web arm did not
+    raise. `:65`'s message text was pinned by the API test above, through the
+    exception it raises, and this arm had no equivalent. The precedent for the
+    construction is `..._a_third_source_reaches_the_flash_branches...` below,
+    which makes the same argument about `:111`/`:119`.
     """
     s = _seed_reply()
     make_post_reply_bookmark(s.user, s.reply)
 
     with web_ctx(app, s.user):
         assert bookmark_reply(s.reply.id, SRC_WEB) is None
+        flashed = get_flashed_messages()
 
+    assert len(flashed) == 1
+    assert 'already been bookmarked' in flashed[0]
     assert PostReplyBookmark.query.filter_by(post_reply_id=s.reply.id).count() == 1
 
 
@@ -515,13 +592,25 @@ def test_removing_a_bookmark_that_does_not_exist_flashes_on_the_web(db_session, 
     `:83`-`:85` are already covered and `:87` is this function's only missing
     statement. A bare count of zero here would otherwise be produced by a
     correct refusal, a broken fixture and a no-op alike.
+
+    THE FLASH IS ASSERTED ON ITS CONTENT, AND IT PINS `:83` AS WELL AS `:87`.
+    Both `83s/was not bookmarked/was not flagged/` and
+    `87s/flash(_(msg))/flash(_('unrelated text'))/` left all 27 tests green in
+    the task-7 mutation pass. The out-of-file positive control cited above
+    pins `:83` only at FULL-suite scope: at the scope this file is measured
+    and mutated at -- `tests/test_shared_*.py` -- `:85` is not executed at all,
+    so `:83`'s text had no witness here of any kind. That is a narrower and
+    truer statement than the one this docstring made before.
     """
     s = _seed_reply()
     assert PostReplyBookmark.query.count() == 0
 
     with web_ctx(app, s.user):
         assert remove_bookmark_reply(s.reply.id, SRC_WEB) is None
+        flashed = get_flashed_messages()
 
+    assert len(flashed) == 1
+    assert 'was not bookmarked' in flashed[0]
     assert PostReplyBookmark.query.count() == 0
 
 
@@ -697,9 +786,18 @@ class TestSubscribeReply:
 
         The row count of 1 after the raise separates "refused" from "created a
         duplicate and then complained".
+
+        THE FIRST CALL'S RETURN IS ASSERTED, AND THAT IS WHAT PINS `:129`.
+        `:129` is executed by this file -- coverage reports it as covered --
+        but ONLY by setup calls like this one and by
+        `..._a_third_source_reaches_the_flash_branches...:763`, and both threw
+        the value away. `129s/return user_id/return None/` accordingly left all
+        27 tests green in the task-7 mutation pass. A covered statement whose
+        every execution is an unread setup call is not a guarded one, and this
+        assertion is the cheapest thing that makes it guarded.
         """
         s = _seed_reply()
-        subscribe_reply(s.reply.id, True, SRC_API, auth=bearer(s.user))
+        assert subscribe_reply(s.reply.id, True, SRC_API, auth=bearer(s.user)) == s.user.id
 
         with pytest.raises(Exception, match='already existed'):
             subscribe_reply(s.reply.id, True, SRC_API, auth=bearer(s.user))
@@ -818,6 +916,20 @@ class TestVoteForReplySourceAndPermission:
         `TestVoteForReplyGuardsAndReturns` below derives that and its downvote
         test witnesses it. Removing the row would therefore break this test
         twice over, and "because it renders" names only the first break.
+      - the two TASK-7 tests need none, and for the two different reasons
+        already on this list. `..._lands_on_the_named_reply_...` is an SRC_API
+        upvote: `can_upvote` reads no row and `:24`'s first conjunct is false,
+        so it is the `..._passes_both_gates` case exactly.
+        `..._a_reversal_reaches_the_vote_past_both_api_permission_gates` is the
+        stronger case -- under 'reversal' BOTH `:22` and `:24` are false at
+        their first conjunct, so NEITHER permission function is called at all,
+        which is the very thing that test exists to record.
+
+    THE WEB TEST'S VOTER IS NO LONGER `_seed_reply`'s SINGLE USER, and that
+    changes nothing on this list: `Site` is read by `can_downvote` and by the
+    theme lookup, neither of which depends on which user votes. It is recorded
+    here because the entry above says "the web test" as though its fixture were
+    the class's default, and since task 7 it is not.
     """
 
     def test_an_api_upvote_from_a_bot_returns_early_without_voting(self, db_session):
@@ -956,6 +1068,121 @@ class TestVoteForReplySourceAndPermission:
         finally:
             _clear_votes_cast(s.user.id)
 
+    def test_an_api_vote_lands_on_the_named_reply_as_the_bearers_user(self, db_session):
+        """CLOSES NO STATEMENT AND NO ARC. It earns its place by unique kills
+        against two FAULT-DIRECTION mutants on `:20` and `:21`, both of which
+        survived the whole file in the task-7 pass:
+
+          `20s/filter_by(id=reply_id).one()/first()/`      -> 27 passed
+          `21s/authorise_api_user(auth, return_type='model')/reply.author/`
+                                                           -> 27 passed
+
+        Neither is a `.one()` crash mutant, which is what makes them worth
+        running: each returns a PostReply or a User of the right type and the
+        function completes normally, just against the wrong row. They survived
+        because `_seed_reply` mints exactly one reply and exactly one user, so
+        "the reply named by `reply_id`", "the first reply in the table", "the
+        bearer's user" and "the reply's author" were four names for two objects.
+
+        THE FIXTURE IS THE WHOLE TEST. `voter` is not the author, so `:21`'s
+        mutant writes a `PostReplyVote` owned by `s.user` and the
+        `user_id=voter.id` count reads 0. `decoy` is minted AFTER `s.reply` and
+        is the row voted on, so `:20`'s unfiltered `.first()` cannot reach it by
+        insertion order and `s.reply` takes the vote instead. `PostReplyVote
+        .query.count() == 1` rules out a mutant that voted on both.
+
+        THIS IS THE API ARM'S HALF OF THE PAIR;
+        `..._the_web_arm_loads_the_reply_and_reads_current_user` below carries
+        the same construction against `:27`/`:28`, which had the identical
+        weakness. It deliberately does NOT touch `..._passes_both_gates` above,
+        whose value is that it is the bot test's same-mechanism control and
+        differs from it in `user.bot` alone; giving that test a second user
+        would have destroyed the property it exists for.
+
+        No `make_site()`: this is an upvote, so `:22`'s `can_upvote` runs and
+        reads no `Site`, and `:24`'s first conjunct is false so `can_downvote`
+        is never called. `:41` is true, so nothing renders.
+        `_clear_votes_cast` is mandatory because a real vote completes.
+        """
+        s = _seed_reply()
+        voter = make_user(s.instance, 'voter', local=True)
+        decoy = make_post_reply(s.post, s.user, body='decoy')
+        db.session.commit()
+        try:
+            assert vote_for_reply(decoy.id, 'upvote', True, None, SRC_API,
+                                  auth=bearer(voter)) == voter.id
+
+            db.session.refresh(s.reply)
+            db.session.refresh(decoy)
+            assert decoy.up_votes == 1
+            assert s.reply.up_votes == 0
+            assert PostReplyVote.query.filter_by(
+                post_reply_id=decoy.id, user_id=voter.id).count() == 1
+            assert PostReplyVote.query.count() == 1
+        finally:
+            _clear_votes_cast(voter.id)
+
+    def test_a_reversal_reaches_the_vote_past_both_api_permission_gates(self, db_session):
+        """CLOSES NO STATEMENT AND NO ARC, and it pins a THIRD source value that
+        the class docstring's asymmetry did not account for.
+
+        `:22` and `:24` are each gated on a direction LITERAL, and 'upvote' and
+        'downvote' are not the only values the API arm passes.
+        `app/api/alpha/utils/reply.py:435-441` maps `score` to three directions
+        -- 1 to 'upvote', -1 to 'downvote', and anything else to 'reversal' --
+        and hands the result to `vote_for_reply` at `:444`. Under 'reversal'
+        BOTH conjuncts at `:22` and `:24` are false, so neither `can_upvote` nor
+        `can_downvote` is consulted and the vote proceeds to `:30`. A bot, whom
+        `can_upvote` (app/utils.py:2481) and `can_downvote` (`:2437`) both
+        refuse, can therefore still undo its vote through the API. THIS TEST
+        RECORDS THAT AND DOES NOT CHANGE IT, on the same reasoning the class
+        docstring gives for the web-arm asymmetry: altering a permission check
+        is a product decision a coverage round has no standing to make.
+
+        THE UNIQUE KILL IS `22s/vote_direction == 'upvote' and //`, which left
+        all 27 tests green in the task-7 pass. That mutant is not equivalent and
+        THIS is where it shows: it makes `:22` consult `can_upvote` for EVERY
+        direction, so the reversal below is refused at `:23` and the existing
+        vote survives. For 'upvote' and 'downvote' the mutant IS equivalent, and
+        the argument is worth stating because it is why nothing else catches it
+        -- `can_downvote`'s refusal set contains `can_upvote`'s (compare
+        app/utils.py:2437 and `:2481`, and `:2470-2475` against `:2484-2489`),
+        so `can_downvote` true implies `can_upvote` true and the mutant's extra
+        conjunct changes no downvote's outcome.
+
+        'reversal' REACHES `reply.vote` ONLY WITH AN EXISTING VOTE, which is why
+        the first call is here. `PostReply.vote` (app/models.py:3311, in
+        `class PostReply` at app/models.py:2887) remaps 'reversal' at `:3316`
+        only `if existing_vote`, and `:3321` then asserts the direction is
+        'upvote' or 'downvote' -- so a bare reversal raises AssertionError. With
+        the existing upvote's `effect` of exactly 1 (`:3366`) the remap gives
+        'upvote', and `:3338` deletes the row. The zero counts below are that
+        deletion, and they are the witness, not the returned id: `:23` and `:42`
+        both return `user.id`.
+
+        `s.user.bot` is set BETWEEN the two calls, because the first call must
+        pass `:22` to create the row the second one reverses.
+        """
+        s = _seed_reply()
+        try:
+            vote_for_reply(s.reply.id, 'upvote', True, None, SRC_API,
+                           auth=bearer(s.user))
+            db.session.refresh(s.reply)
+            assert s.reply.up_votes == 1
+
+            s.user.bot = True
+            db.session.commit()
+
+            assert vote_for_reply(s.reply.id, 'reversal', True, None, SRC_API,
+                                  auth=bearer(s.user)) == s.user.id
+
+            db.session.refresh(s.reply)
+            assert s.reply.up_votes == 0
+            assert PostReplyVote.query.filter_by(
+                post_reply_id=s.reply.id, user_id=s.user.id).count() == 0
+        finally:
+            _clear_votes_cast(s.user.id)
+
     def test_the_web_arm_loads_the_reply_and_reads_current_user(self, db_session, app):
         """`:19` false -> `:27`, `:28`. Arc 19->27; statements 27, 28.
 
@@ -968,46 +1195,70 @@ class TestVoteForReplySourceAndPermission:
         ends in `AttributeError: 'NoneType' object has no attribute
         'default_theme'` without the row.
 
-        THE RENDERED BODY IS THE WITNESS THAT `:28` TOOK `current_user`, not the
-        bare fact that something was returned. `_comment_voting_buttons.html`
+        THE RENDERED BODY IS NOT ON ITS OWN A WITNESS THAT `:28` TOOK
+        `current_user`, AND THIS DOCSTRING USED TO SAY IT WAS. The markup
+        argument is sound as far as it goes -- `_comment_voting_buttons.html`
         opens with `{% if current_user.is_authenticated and
-        current_user.verified %}`, so the `voted_up`/`fe-arrow-up-circle`
-        markup exists only on the authenticated branch -- if `:28` had bound
-        anything but the logged-in user the template would fall to its `else`
-        and emit the `redirect_login` markup instead. `voted_up` additionally
-        requires `:47` to have put this reply id into `recently_upvoted_replies`,
-        which only happens after `:36` actually voted.
+        current_user.verified %}`, so `voted_up`/`fe-arrow-up-circle` exist only
+        on the authenticated branch, and `voted_up` additionally requires `:47`
+        to have put this reply id into `recently_upvoted_replies`, which only
+        happens after `:36` actually voted. What it could not see is that the
+        FIXTURE made the claim vacuous: `_seed_reply` mints ONE user who is both
+        the reply's author and the logged-in voter, so every user-valued
+        expression in scope had the same value. Measured in the task-7 pass
+        against the old fixture, `28s/user = current_user/user = reply.author/`
+        left all 27 tests green -- the markup was identical because the vote was
+        identical.
+
+        THE VOTER IS THEREFORE NOT THE AUTHOR, AND THE REPLY IS NOT THE ONLY
+        ROW. `voter` closes `:28`: under `user = reply.author` the
+        `PostReplyVote` row carries the author's id and the `user_id=voter.id`
+        count reads 0. `decoy` closes `:27`, which had the same shape --
+        `27s/query(PostReply).get_or_404(reply_id)/query(PostReply).first()/`
+        also left all 27 tests green, because with one reply in the table "the
+        first reply" and "the reply named by `reply_id`" are the same row. The
+        vote is cast on `decoy`, the LATER of the two rows, so an unordered
+        `.first()` cannot land on it by insertion order; `PostReplyVote.query
+        .count() == 1` is there so that a mutant voting on both would not pass
+        on the two per-row assertions.
 
         NO PERMISSION GATE IS CROSSED HERE, because there is none on this arm.
         That is the asymmetry the class docstring registers, and this test is
-        the evidence for it. A test showing a BOT voting successfully through
-        this path would make the asymmetry executable rather than documentary;
-        that is a scope decision and it was referred to the controller rather
-        than taken here.
+        the evidence for it -- and the non-author voter sharpens it rather than
+        blurring it: `voter` has no relationship to this reply at all. A test
+        showing a BOT voting successfully through this path would make the
+        asymmetry executable rather than documentary; that is a scope decision
+        and it was referred to the controller rather than taken here.
         """
         make_site()
         s = _seed_reply()
+        voter = make_user(s.instance, 'voter', local=True)
+        decoy = make_post_reply(s.post, s.user, body='decoy')
+        db.session.commit()
         try:
-            with web_ctx(app, s.user):
-                result = vote_for_reply(s.reply.id, 'upvote', True, None, SRC_WEB)
+            with web_ctx(app, voter):
+                result = vote_for_reply(decoy.id, 'upvote', True, None, SRC_WEB)
                 body = result.get_data(as_text=True)
 
             db.session.refresh(s.reply)
-            assert s.reply.up_votes == 1
+            db.session.refresh(decoy)
+            assert decoy.up_votes == 1
+            assert s.reply.up_votes == 0
             assert PostReplyVote.query.filter_by(
-                post_reply_id=s.reply.id, user_id=s.user.id).count() == 1
+                post_reply_id=decoy.id, user_id=voter.id).count() == 1
+            assert PostReplyVote.query.count() == 1
             assert 'redirect_login' not in body
             assert 'voted_up' in body
             assert 'fe-arrow-up-circle' in body
         finally:
-            _clear_votes_cast(s.user.id)
+            _clear_votes_cast(voter.id)
 
 
 class TestVoteForReplyGuardsAndReturns:
     """`:30-34` and `:44-51` -- the ban and quota guards, and the web arm's
     three-way recently-voted fork.
 
-    FOUR TESTS, NOT THE SIX THE BRIEF DRAFTED, because
+    FOUR COVERAGE-CLOSING TESTS, NOT THE SIX THE BRIEF DRAFTED, because
     `TestVoteForReplySourceAndPermission` above had already closed two of them
     and this was MEASURED before anything was written. Against the class above
     alone, suite-scoped over this file plus
@@ -1015,25 +1266,43 @@ class TestVoteForReplyGuardsAndReturns:
     --cov-branch`, statements 30, 33, 36, 38, 41, 42, 44, 45, 46, 47 and 51 are
     already not-missing and so are arcs 30->33, 33->36, 41->42, 41->44 and
     46->47. What was still missing was statements 31, 34, 48 and 49 and arcs
-    30->31, 33->34, 46->48, 48->49 and 48->51 -- exactly what the four tests
-    here take. The brief's `..._a_completed_api_vote_returns_the_user_id` and
-    `..._a_web_upvote_renders_with_the_reply_marked_recently_upvoted` would have
-    duplicated `..._passes_both_gates` and
+    30->31, 33->34, 46->48, 48->49 and 48->51 -- exactly what the first four
+    tests here take. The brief's `..._a_completed_api_vote_returns_the_user_id`
+    and `..._a_web_upvote_renders_with_the_reply_marked_recently_upvoted` would
+    have duplicated `..._passes_both_gates` and
     `..._the_web_arm_loads_the_reply_and_reads_current_user` call for call while
     asserting strictly less (`result is not None` against that test's markup
     discrimination), so they are deliberately absent rather than overlooked.
 
-    WHY `:46`/`:48` NEED THREE INPUTS AND NOT TWO. `:46` is an `if` and `:48`
+    TWO MORE TESTS WERE ADDED BY TASK 7 AND CLOSE NOTHING, which is why the
+    count above is qualified rather than plain. Each earns its place by a unique
+    kill against a mutant the other four left alive -- the downvote-undo test
+    against `:48`'s second conjunct, the quota-boundary test against `:33`'s
+    comparison operator. Their docstrings carry the measurements.
+
+    WHY `:46`/`:48` NEED FOUR INPUTS AND NOT THREE. `:46` is an `if` and `:48`
     its `elif`, so `:48` is not evaluated at all when `:46` is true, and BOTH
     lines carry `undo is None` as their second conjunct:
 
-      - upvote, `undo` None    -> `:46` true  -> `:47`, then `:51`
-      - downvote, `undo` None  -> `46->48`, `:48` true  -> `:49`, then `:51`
-      - either direction, `undo` NOT None -> `46->48`, `:48` false -> `:51`
-        with both lists left empty
+      - upvote, `undo` None      -> `:46` true  -> `:47`, then `:51`
+      - downvote, `undo` None    -> `46->48`, `:48` true  -> `:49`, then `:51`
+      - upvote, `undo` NOT None  -> `46->48`, `:48` false on its FIRST conjunct
+        -> `:51` with both lists left empty
+      - downvote, `undo` NOT None -> `46->48`, `:48` false on its SECOND
+        conjunct -> `:51` with both lists left empty
 
-    The upvote case is the class above's web test. The other two are the third
-    and fourth tests here.
+    THE LAST TWO ROWS USED TO BE ONE ROW READING "either direction", AND THAT
+    COLLAPSE COST A GUARD. Both reach `48->51`, so coverage cannot tell them
+    apart and the arc table said three inputs sufficed -- but they falsify
+    `:48` at different conjuncts, and only the downvote row exercises the
+    second one. Deleting ` and undo is None` from `:48` accordingly survived
+    the whole file until task 7 added the fourth input. This is the arc table
+    being a weaker instrument than the statement-and-operand list, recorded
+    where it actually bit.
+
+    The upvote-undo case is the third test here, the downvote-undo case the
+    fifth; the first row is the class above's web test and the second the
+    fourth test here.
 
     `undo` IS NON-None ONLY WHEN A VOTE IS REMOVED, and that was read at source
     rather than assumed: `PostReply.vote` (app/models.py:3311, in `class
@@ -1056,7 +1325,13 @@ class TestVoteForReplyGuardsAndReturns:
         although it IS an SRC_API call, `:24`'s first conjunct is false for an
         upvote so `can_downvote` is never called; `can_upvote`
         (app/utils.py:2480-2491) reads no `Site` at all.
-      - BOTH web tests need one FOR BOTH REASONS AT ONCE. The first is the
+      - the quota-BOUNDARY test added by task 7 needs none either, and for the
+        same two reasons as the quota test above minus the abort: it is an
+        SRC_API upvote, so `can_downvote` is never called and `:41` returns at
+        `:42` without rendering. The only thing it changes about `:33` is which
+        side of the comparison it lands on.
+      - ALL THREE web tests need one FOR BOTH REASONS AT ONCE -- the two
+        original ones and the downvote-undo test task 7 added. The first is the
         theme chain the module docstring records. The second is the template's
         own: `post/_comment_voting_buttons.html` line 10 reads
         `{% if (can_downvote_here or can_downvote(current_user, community,
@@ -1263,10 +1538,12 @@ class TestVoteForReplyGuardsAndReturns:
     def test_a_web_vote_that_undoes_an_existing_one_marks_neither(self, db_session, app):
         """`:46` false -> `:48`, `:48` false -> `:51`. Arcs 46->48 and 48->51.
 
-        THE THIRD INPUT, and the one neither direction alone can produce. Both
-        `:46` and `:48` test `undo is None` as their second conjunct, so a vote
-        that UNDOES an existing one fails both and falls to `:51` with both
-        lists still at the `[]` `:44`/`:45` gave them.
+        THE THIRD INPUT. Both `:46` and `:48` test `undo is None` as their
+        second conjunct, so a vote that UNDOES an existing one fails both and
+        falls to `:51` with both lists still at the `[]` `:44`/`:45` gave them.
+        This test takes the UPVOTE half of that, which is the half that falsifies
+        `:48` at its FIRST conjunct; the downvote half is a separate test below,
+        for the reason the class docstring now records.
 
         VOTING UP TWICE IS WHAT MAKES `undo` NON-None, and that was read at
         source before it was relied on: `PostReply.vote` deletes the existing
@@ -1288,12 +1565,20 @@ class TestVoteForReplyGuardsAndReturns:
         guard: it pins the render to line 1's authenticated branch, so the two
         absences are the empty lists and not the wrong half of the template.
 
-        THIS IS THE ONLY TEST IN THE FILE THAT WITNESSES `undo is None` AT ALL,
+        THIS IS THE ONLY TEST IN THE FILE THAT WITNESSES `:46`'s `undo is None`,
         and that was measured rather than claimed: deleting `and undo is None`
         from `:46` in a line-scoped scratch mutant (`app/` restored afterwards
         and the restore confirmed with `git diff --quiet -- app/`) failed this
         test alone -- the other seventeen passed, because every one of them has
         `undo` None anyway and cannot tell the conjunct from its absence.
+
+        THE CLAIM USED TO READ "`undo is None` AT ALL", WITHOUT THE `:46`, AND
+        THAT WAS FALSE. `:48` carries the same conjunct and this test cannot
+        reach it: an UPVOTE undo falsifies `:48` at its first conjunct, so the
+        second is never evaluated here. Task 7 measured the gap --
+        `48s/ and undo is None//` left all 27 tests green -- and the downvote-undo
+        test below is what closes it. The sentence is narrowed rather than
+        deleted because the `:46` half of it is still true and still measured.
 
         ONE `_clear_votes_cast` FOR TWO CALLS, and that is correct rather than
         an oversight: the key is per user and per day, and the undo path at
@@ -1320,19 +1605,112 @@ class TestVoteForReplyGuardsAndReturns:
         finally:
             _clear_votes_cast(s.user.id)
 
+    def test_a_web_downvote_that_undoes_an_existing_one_marks_neither(self, db_session, app):
+        """CLOSES NO STATEMENT AND NO ARC -- it walks `46->48` and `48->51`, both
+        of which the two tests above already take. It earns its place by a
+        unique kill against `48s/ and undo is None//`, which left all 27 tests
+        green in the task-7 pass.
+
+        THE MIRROR IMAGE OF THE TEST ABOVE, AND THAT IS THE POINT. `:46` and
+        `:48` carry the SAME second conjunct, and the class docstring's third
+        input -- "either direction, `undo` NOT None" -- was taken in ONE
+        direction only. Deleting the conjunct from `:46` fails the upvote-undo
+        test above, measured; deleting it from `:48` failed nothing, because
+        `:48`'s first conjunct is false for the upvote that test uses and the
+        line never gets as far as its second. So the file pinned `:46`'s
+        `undo is None` and not `:48`'s, and an implementation that marked a
+        removed DOWNVOTE as recently-downvoted would have shipped.
+
+        VOTING DOWN TWICE IS WHAT MAKES `undo` NON-None on this arm, the mirror
+        of the test above's mechanism: `PostReply.vote` sets `undo = 'Dislike'`
+        at app/models.py:3357 when `existing_vote.effect < 0` and the new
+        direction is 'downvote', and deletes the row. `down_votes` back at 0
+        with no `PostReplyVote` row is the positive control that the second call
+        really was an undo rather than a silently refused duplicate.
+
+        THE SAME THREE MARKUP GUARDS as the test above, and `voted_down` absent
+        is the one that matters: `post/_comment_voting_buttons.html` line 11
+        emits it only when `in_sorted_list(recently_downvoted_replies,
+        comment.id)`, so the mutant's `:49` would put it there.
+        `make_site()` is needed twice over for the reasons the class docstring
+        gives, and `enable_downvotes` is left at `make_site()`'s True so
+        line 10 renders the downvote block at all.
+        """
+        make_site()
+        s = _seed_reply()
+        try:
+            with web_ctx(app, s.user):
+                vote_for_reply(s.reply.id, 'downvote', True, None, SRC_WEB)
+                result = vote_for_reply(s.reply.id, 'downvote', True, None, SRC_WEB)
+                body = result.get_data(as_text=True)
+
+            db.session.refresh(s.reply)
+            assert s.reply.down_votes == 0
+            assert PostReplyVote.query.filter_by(
+                post_reply_id=s.reply.id, user_id=s.user.id).count() == 0
+            assert 'redirect_login' not in body
+            assert 'upvote_button' in body
+            assert 'voted_down' not in body
+            assert 'voted_up' not in body
+        finally:
+            _clear_votes_cast(s.user.id)
+
+    def test_a_voter_exactly_at_the_vote_quota_is_still_allowed_through(self, db_session, app, monkeypatch):
+        """CLOSES NO STATEMENT AND NO ARC -- `33->36` is taken by four tests
+        already. It earns its place by a unique kill against
+        `33s/user.id) > current/user.id) >= current/`, which left all 27 tests
+        green in the task-7 pass.
+
+        THE QUOTA TEST ABOVE CANNOT PIN THE BOUNDARY, and that is a property of
+        its fixture rather than an oversight. It sets `VOTE_QUOTA` to -1 against
+        a `votes_cast_today` of 0, and 0 is strictly greater than -1 AND greater
+        than or equal to it, so `>` and `>=` agree on that input. The single
+        input on which they disagree is equality, and this test is that input:
+        `VOTE_QUOTA` 0 against 0 votes cast means `:33` is false under `>` and
+        the vote lands, and true under `>=` and the call aborts 429.
+
+        THE ASSERTION IS THE COMPLETED VOTE, not the absence of an exception. An
+        `abort(429)` would fail this test on the raise, but so would any other
+        failure, so `up_votes` and the `PostReplyVote` row are what say the call
+        got past `:33` rather than merely got past it in some other year.
+
+        `monkeypatch.setitem` on the session-scoped `app` fixture is safe for
+        the reason the quota test above records: monkeypatch restores it at
+        teardown. `_clear_votes_cast` is mandatory here and was NOT mandatory
+        there, and the difference is the whole point -- that test aborts before
+        `:36` and writes no redis key, this one votes and writes one.
+        """
+        s = _seed_reply()
+        monkeypatch.setitem(app.config, 'VOTE_QUOTA', 0)
+        try:
+            assert vote_for_reply(s.reply.id, 'upvote', True, None, SRC_API,
+                                  auth=bearer(s.user)) == s.user.id
+
+            db.session.refresh(s.reply)
+            assert s.reply.up_votes == 1
+            assert PostReplyVote.query.filter_by(
+                post_reply_id=s.reply.id, user_id=s.user.id).count() == 1
+        finally:
+            _clear_votes_cast(s.user.id)
+
 
 class TestDeleteReply:
     """`delete_reply` (app/shared/reply.py:241-266) -- the author's own soft delete.
 
     `:247` filters on `id`, `user_id` AND `deleted=False` and calls `.one()`, so
     only the author can delete, only once, and a miss raises rather than
-    returning None. That is why no test here asserts "the wrong user got
-    nothing": the `.one()` would raise. THE RAISE IS NOT A LATER TASK'S TARGET,
-    and this sentence used to say it was. No brief in this round schedules a
-    test for it -- task 7 is the mutation pass and names `:247`'s `.one()` only
-    as a crash-kill hazard, task 8 is the ratchet -- so it is ROUTED TO THE
-    REGISTER as an untested miss-path instead. Nothing is lost from the target
-    set either way: a `.one()` miss adds no statement and no arc.
+    returning None. THIS CLASS USED TO ARGUE THAT NO TEST NEED ASSERT "the wrong
+    user got nothing" BECAUSE THE `.one()` WOULD RAISE, and route the miss-path
+    to the register. TASK 7 REFUTED THAT BY MEASUREMENT and the last test here
+    is the correction. The argument was about the unmutated function: whether
+    the raise happens is exactly what a mutant decides, and
+    `247s/, user_id=user_id,/, /` -- neutralising the author conjunct, which
+    task 7's brief made a mandatory probe -- left all 27 tests of the day green
+    while letting any bearer soft-delete any reply. A conjunct no test ever
+    executes against a mismatch is unguarded whatever the surrounding call
+    raises on other inputs. Nothing about the TARGET SET changes: a `.one()`
+    miss still adds no statement and no arc, and the new test closes none --
+    it is there for the unique kill.
 
     `:248-249` set `deleted` and `deleted_by` on EVERY path through this
     function, so asserting `deleted` alone witnesses nothing about the counter
@@ -1565,12 +1943,22 @@ class TestDeleteReply:
         clause and decremented every row in the table would pass -- false
         witness mechanism 1, asserting on state something else could have set
         unconditionally.
+
+        THE REPLY'S OWN `child_count` IS ASSERTED TOO, AND THE BYSTANDER DOES
+        NOT COVER THAT CASE. `:258`'s operand is `tuple(reply.path[:-1])`; the
+        `[:-1]` is what excludes the reply itself, and `bystander` is not in
+        `path` at all, so a mutant that merely widened the slice would leave
+        the bystander untouched and pass. Measured in the task-7 pass:
+        `258s/tuple(reply.path\\[:-1\\])/tuple(reply.path)/` left all 27 tests
+        green. The seed of 6 is distinct from both ancestors' and from 0 and 1,
+        so a mutant assigning a literal is visible as well.
         """
         s = _seed_reply()
         parent = make_post_reply(s.post, s.user, body='parent')
         bystander = make_post_reply(s.post, s.user, body='bystander')
         parent.child_count = 1
         bystander.child_count = 1
+        s.reply.child_count = 6
         s.reply.path = [0, parent.id, s.reply.id]
         db.session.commit()
 
@@ -1578,8 +1966,49 @@ class TestDeleteReply:
 
         db.session.refresh(parent)
         db.session.refresh(bystander)
+        db.session.refresh(s.reply)
         assert parent.child_count == 0
         assert bystander.child_count == 1
+        assert s.reply.child_count == 6
+
+    def test_a_non_author_cannot_delete_another_users_reply(self, db_session):
+        """CLOSES NO STATEMENT AND NO ARC -- a `.one()` miss adds neither. It
+        earns its place by a unique kill against the mutant task 7's brief made
+        MANDATORY, `247s/, user_id=user_id,/, /`, which left all 27 tests green.
+
+        THIS OVERTURNS THE CLASS DOCSTRING'S ROUTING DECISION, AND THE
+        MEASUREMENT IS WHY. That paragraph reasoned that no test need assert
+        "the wrong user got nothing" because `.one()` would raise, and routed
+        the miss-path to the register. The reasoning describes the UNMUTATED
+        function: with `user_id=user_id` deleted from the filter there is no
+        miss and no raise, the interloper's call finds the author's reply and
+        soft-deletes it, and every assertion in this class still passes because
+        no test in it ever calls `delete_reply` as anybody but the author. An
+        unexecuted guard is not a guarded one.
+
+        THE WITNESS IS NOT THE RAISE. A crash is a weak kill, so the assertions
+        that carry this test are the ones about state: after the refusal the
+        reply is still undeleted and `deleted_by` is still None. Under the
+        mutant both are false -- `:248`-`:249` have run -- and they would remain
+        the discriminator even against a variant that swallowed the exception.
+        `pytest.raises` is kept as the outer frame only because the unmutated
+        function does raise and a test that let a `NoResultFound` escape would
+        error rather than fail.
+
+        `interloper` is minted local and verified so that `authorise_api_user`
+        (app/utils.py:3628) accepts its bearer token -- the refusal under test
+        must come from `:247`, not from the token check at `:243`.
+        """
+        s = _seed_reply()
+        interloper = make_user(s.instance, 'interloper', local=True)
+        db.session.commit()
+
+        with pytest.raises(Exception):
+            delete_reply(s.reply.id, SRC_API, auth=bearer(interloper))
+
+        db.session.refresh(s.reply)
+        assert s.reply.deleted is False
+        assert s.reply.deleted_by is None
 
 
 class TestRestoreReply:
@@ -1590,13 +2019,15 @@ class TestRestoreReply:
     294, and `:295-296` are the blank lines before `report_reply` at `:297`.
 
     `:275` filters `id`, `user_id` AND `deleted=True` and calls `.one()`, so a
-    reply must already be deleted and only its author can restore it. A miss
-    raises rather than returning None -- and that raise, like `delete_reply
-    :247`'s, is UNTESTED AND UNSCHEDULED rather than "a later task's target",
-    which is what this sentence inherited and what `TestDeleteReply`'s docstring
-    now corrects as well. It goes to the register. It costs this task nothing:
-    a `.one()` miss adds no statement and no arc, so the target set is
-    complete without it.
+    reply must already be deleted and only its author can restore it. THAT MISS
+    IS NOW TESTED, by the last test in this class, and the reasoning that
+    routed it to the register instead -- inherited here from `TestDeleteReply`
+    and corrected there in the same sweep -- was refuted by task 7's mutation
+    pass: `275s/, user_id=user_id,/, /` left all 27 tests of the day green,
+    because no test in this class had ever called `restore_reply` as anybody but
+    the author. The register entry remains accurate about the TARGET SET, which
+    is unchanged: a `.one()` miss adds no statement and no arc, and the new test
+    closes neither.
 
     `:276-277` SET `deleted` AND `deleted_by` ON EVERY PATH, so `deleted is
     False` witnesses that the function ran and nothing about which source arm
@@ -1639,7 +2070,7 @@ class TestRestoreReply:
     `can_upvote`, `can_downvote` and `Site` appear nowhere in the subtree under
     any spelling. The two methods fail in opposite directions -- a grep cannot
     tell which function a matching line is in, and an AST walk cannot see a call
-    made through a string name -- and both say the row is unnecessary. The five
+    made through a string name -- and both say the row is unnecessary. The six
     tests below call `make_site()` nowhere and pass, which is the third check.
 
     NO `_clear_votes_cast` IS NEEDED: `restore_reply` completes no vote, so it
@@ -1687,10 +2118,12 @@ class TestRestoreReply:
         a bot author 31/17/8/2. That distinctness is load-bearing; the tests
         that depend on it say so individually.
 
-        THREE OF THE FIVE TESTS BELOW get their deleted reply from here, which
-        is how production reaches this function. The other two do not:
-        `..._restores_their_child_counts` marks the reply deleted through the
-        ORM instead, for the reason its docstring gives, and
+        FOUR OF THE SIX TESTS BELOW get their deleted reply from here, which
+        is how production reaches this function -- three originally, plus
+        `..._cannot_restore_another_users_reply`, which needs the column to
+        arrive holding `s.user.id` so that a mutant clearing it is visible. The
+        other two do not: `..._restores_their_child_counts` marks the reply
+        deleted through the ORM instead, for the reason its docstring gives, and
         `..._leaves_two_counters_permanently_low` needs the delete INSIDE the
         span it measures rather than in a fixture.
         """
@@ -1736,16 +2169,31 @@ class TestRestoreReply:
         `_seed_distinct_reply_counters`'s docstring isolates, and no more:
         permuting `:280` and `:281` is still an equivalent mutant, because two
         in-place `+= 1` on independent columns are permutation-invariant.
+
+        `deleted_by` IS ASSERTED, AS A STATEMENT WITNESS AND NOT AS AN ARM
+        DISCRIMINATOR. The class docstring's ruling stands unchanged -- `:277`
+        assigns the constant None, so it cannot tell the two source arms apart
+        even in principle -- but that ruling is about DISCRIMINATION, and this
+        docstring's statement list claims `:277` itself. It did not guard it:
+        `277s/reply.deleted_by = None/reply.deleted_by = 1/` left all 27 tests
+        green in the task-7 mutation pass, while the mirror
+        `249s/reply.deleted_by = user_id/reply.deleted_by = None/` failed the
+        web delete test. The assertion is meaningful only because `_deleted()`
+        reaches this test through `delete_reply`, so the column arrives holding
+        `s.user.id` and None is a value `:277` had to write.
         """
         s = self._deleted()
         before = (s.post.reply_count, s.user.post_reply_count)
+        assert s.reply.deleted_by == s.user.id
 
         user_id, reply = restore_reply(s.reply.id, SRC_API, auth=bearer(s.user))
 
         assert (user_id, reply.id) == (s.user.id, s.reply.id)
         db.session.refresh(s.post)
         db.session.refresh(s.user)
+        db.session.refresh(s.reply)
         assert (s.post.reply_count, s.user.post_reply_count) == (before[0] + 1, before[1] + 1)
+        assert s.reply.deleted_by is None
 
     def test_a_web_restore_flashes_and_returns_none(self, db_session, app):
         """`:270` false -> `:273`; `:286` true -> `:287`'s flash; `:291` false
@@ -1890,12 +2338,19 @@ class TestRestoreReply:
         because the raw `UPDATE` bypasses the identity map. Their seeded counts
         are different from each other and from both 0 and 1, so a mutant
         assigning a literal instead of incrementing is visible as well.
+
+        THE REPLY'S OWN `child_count` IS ASSERTED TOO, for the reason
+        `TestDeleteReply`'s ancestor test now records against `:258`: the
+        bystander is not in `path` at all, so it cannot witness the `[:-1]`.
+        `284s/tuple(reply.path\\[:-1\\])/tuple(reply.path)/` left all 27 tests
+        green in the task-7 pass, and 6 is distinct from 4, 9, 0 and 1.
         """
         s = _seed_reply()
         parent = make_post_reply(s.post, s.user, body='parent')
         bystander = make_post_reply(s.post, s.user, body='bystander')
         parent.child_count = 4
         bystander.child_count = 9
+        s.reply.child_count = 6
         s.reply.path = [0, parent.id, s.reply.id]
         s.reply.deleted = True
         db.session.commit()
@@ -1904,8 +2359,10 @@ class TestRestoreReply:
 
         db.session.refresh(parent)
         db.session.refresh(bystander)
+        db.session.refresh(s.reply)
         assert parent.child_count == 5
         assert bystander.child_count == 9
+        assert s.reply.child_count == 6
 
     def test_a_delete_restore_cycle_leaves_two_counters_permanently_low(self, db_session):
         """PINS A REGISTERED DEFECT, AND CLOSES NO NEW STATEMENT OR ARC. Its
@@ -1973,3 +2430,36 @@ class TestRestoreReply:
         assert s.post.reply_count == before[0]
         assert s.post.reply_count_cross_posted == before[1] - 1
         assert s.community.post_reply_count == before[2] - 1
+
+    def test_a_non_author_cannot_restore_another_users_reply(self, db_session):
+        """CLOSES NO STATEMENT AND NO ARC. It earns its place by a unique kill
+        against `275s/, user_id=user_id,/, /`, which left all 27 tests green in
+        the task-7 pass -- the mirror of the mutant task 7's brief made
+        mandatory against `delete_reply:247`, and it survived for the mirror
+        reason: no test in this class ever calls `restore_reply` as anybody but
+        the author, so the `user_id` conjunct was never executed against a
+        mismatch.
+
+        THE CLASS DOCSTRING'S ROUTING OF THIS MISS-PATH TO THE REGISTER IS
+        OVERTURNED HERE, exactly as `TestDeleteReply`'s is by its own
+        non-author test, and for the same reason: "the `.one()` would raise"
+        describes the unmutated function and says nothing about whether any
+        test would notice if it stopped raising.
+
+        THE WITNESS IS `deleted` STILL TRUE, not the raise. Under the mutant the
+        interloper's call finds the author's deleted reply, `:276`-`:277` clear
+        the flags and `:280`-`:281` move two counters, so `deleted is True` is
+        false and the test fails on state rather than on a missing exception.
+        `_deleted()` is used so the reply arrives deleted through the production
+        path, which is also what makes `deleted_by` non-None going in.
+        """
+        s = self._deleted()
+        interloper = make_user(s.instance, 'interloper', local=True)
+        db.session.commit()
+
+        with pytest.raises(Exception):
+            restore_reply(s.reply.id, SRC_API, auth=bearer(interloper))
+
+        db.session.refresh(s.reply)
+        assert s.reply.deleted is True
+        assert s.reply.deleted_by == s.user.id
