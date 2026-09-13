@@ -1908,10 +1908,13 @@ class TestRestoreReply:
         assert bystander.child_count == 9
 
     def test_a_delete_restore_cycle_leaves_two_counters_permanently_low(self, db_session):
-        """PINS A REGISTERED DEFECT, AND CLOSES NO NEW STATEMENT OR ARC. Every
-        line it executes is already closed by the API test above; it earns its
-        place by a UNIQUE KILL, which is the campaign's standing rule for such a
-        test, and the kill is the interesting one: A FUTURE FIX.
+        """PINS A REGISTERED DEFECT, AND CLOSES NO NEW STATEMENT OR ARC. Its
+        covered set is not merely contained in the API test's above, it is
+        IDENTICAL to it -- measured per-test with `--cov-branch`, statements
+        `[270, 271, 275, 276, 277, 279, 280, 281, 282, 285, 286, 289, 291, 292]`
+        and arcs `[(270,271), (279,280), (282,285), (286,289), (291,292)]` for
+        both, with `set(cycle) < set(api)` returning False. So it earns its place
+        by a UNIQUE KILL and by nothing else.
 
         It asserts the CURRENT behaviour, which is WRONG, so that repairing
         `restore_reply` has to change a test rather than silently alter a number
@@ -1920,16 +1923,27 @@ class TestRestoreReply:
         is level and `post.reply_count_cross_posted` and
         `community.post_reply_count` are each one LOW.
 
-        THE UNIQUE KILL, MEASURED. `:280` was rewritten in a line-scoped scratch
-        mutant as the three-counter increment a fix would make -- `reply.post
-        .reply_count += 1; reply.post.reply_count_cross_posted += 1;
-        reply.community.post_reply_count += 1` -- with `app/` restored afterwards
-        and the restore confirmed by `git diff --quiet -- app/`. THIS TEST WAS
-        THE ONLY ONE IN THE FILE THAT FAILED. The API test above passes against
-        it, because `post.reply_count` and `author.post_reply_count` still move
-        by exactly +1; the bot test passes because the guard skips the whole
-        statement; `TestDeleteReply`'s four pass because they never restore. The
-        run is in the task report.
+        THE UNIQUE KILL IS A FAULT-DIRECTION MUTANT, MEASURED. `:280` was
+        rewritten in line-scoped scratch mutants so that restore makes a counter
+        WORSE instead of leaving it alone -- `reply.post.reply_count += 1;
+        reply.post.reply_count_cross_posted -= 1`, and separately the same with
+        `reply.community.post_reply_count -= 1` -- with `app/` restored
+        afterwards and each restore confirmed by `git diff --quiet -- app/` and
+        `wc -l` reporting 577. Each run: THIS TEST WAS THE ONLY ONE IN THE FILE
+        THAT FAILED, `assert 15 == (17 - 1)` and `assert 6 == (8 - 1)`
+        respectively, 26 others passing. No other test in this file reads either
+        column on a path that runs `restore_reply`; `TestDeleteReply`'s four read
+        both but never restore.
+
+        A SEMANTICALLY-BETTER MUTANT IS NOT A UNIQUE KILL, and an earlier version
+        of this docstring offered one as if it were. Rewriting `:280` as the
+        three-counter increment a FIX would make also fails this test alone --
+        that run stands, and it is the evidence for the fix-edit obligation in
+        the paragraph above. But a mutant better than production measures
+        change-detection rather than defect-detection, so it cannot discharge the
+        campaign's unique-kill rule; admitting it would empty the rule. The
+        fault-direction mutants above are what discharge it. Both runs are in the
+        task report.
 
         `post.reply_count` RETURNING LEVEL IS THE SAME-MECHANISM POSITIVE
         CONTROL. It proves the cycle ran and that this harness can observe a
