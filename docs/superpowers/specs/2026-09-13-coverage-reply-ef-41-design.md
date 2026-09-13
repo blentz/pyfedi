@@ -95,13 +95,33 @@ This is D500's family with the arms swapped: there the *web* arm lacked the chec
 
 Staff who are not moderators can remove a comment but not restore it, and can set a comment collapsible but not lock it. The same missing disjunct, twice, in the same file.
 
+**And a third divergence, against the twin module rather than within this one:** `lock_post:953` calls `post.community.is_admin_or_staff(user)` — a `Community` method — while `lock_post_reply:501` calls `post_reply.community.is_instance_admin(user)`. Not merely a missing disjunct: a different method. Whether the two should agree is the product question, so this stays registered with the other two.
+
 **Registered, not fixed.** Which set is correct is a product decision, both arms are live behaviour rather than dead code, and this round already carries one production change. The round pins all four guards as they behave.
 
-### 3. `lock_post_reply` and `set_collapse_post_reply` fail silently — REGISTER
+### 3. `lock_post_reply` and `set_collapse_post_reply` fail silently — PIN, THEN FIX
+
+> **AMENDED 2026-09-13, after the spec was committed at `68622d12` and while the plan was being written.** This finding was first written as REGISTER, on the reading that the silent failure was the module's own design. Reading the post twins to source the plan's test code falsified that: **the repair already exists in this codebase, twice, and these two functions were left behind when it landed.** The disposition is changed to PIN-THEN-FIX and the round's production budget goes from one change to two. Corrected in place with this block rather than rewritten, because a spec that quietly changes its mind is indistinguishable from one that was always right (D394).
 
 Neither has an `else`. A caller without permission gets no exception, no flash, and for `SRC_API` a 200 carrying the unchanged object at `:519-520` and `:544-545`. The return value cannot distinguish a refusal from a success.
 
-This makes false-witness mechanism (a) acute for both functions: **the return value is the same on both arms, so every test must assert on state.** It also means the mandatory permission mutation will not crash — it will silently pass — which is exactly the shape that has hidden a real hole in four consecutive rounds.
+**This is an UNPROPAGATED FIX, not a design.** `app/shared/post.py` carries the repair at two sites, both from PC2 in sub-project 36:
+
+```
+939  def lock_post(...)                      486  def lock_post_reply(...)
+953      if is_moderator or is_admin_or_staff:    501      if is_moderator or is_instance_admin:
+...          (body)                           ...          (body)
+968      elif src == SRC_API:                     (no elif -- falls through)
+969          raise Exception('Does not have permission')
+```
+
+`move_post:999-1000` carries the identical two lines. So the same unauthorized call raises on a post and returns a quiet 200 on a comment. `tests/test_shared_post_moderation.py`'s `test_an_unprivileged_user_changes_nothing` already pins the repaired shape with `pytest.raises(Exception, match='Does not have permission')`.
+
+**Disposition: pin the silent behaviour, then add the two lines to `lock_post_reply` and `set_collapse_post_reply`, then invert the pins.** The edit is transcription — it exists verbatim twice in the twin module — not a design decision.
+
+**ORDERING MATTERS FOR THE MUTATION PASS.** Before the propagation, the mandatory mutation neutralising `lock_post_reply:501` cannot crash: it silently passes, so only a state assertion kills it. After the propagation, the same mutant is killable by the raise as well. The pass must run **after** the fix, and the plan must say which of the two regimes each kill was measured in.
+
+This also makes false-witness mechanism (a) acute for both functions while the pins are being written: **the return value is the same on both arms, so every pinning test must assert on state.**
 
 ### 4. `mod_remove_reply` and `delete_reply` disagree about which counters a removal moves — REGISTER
 
@@ -144,7 +164,7 @@ A mutation pass **scoped by the statement list, not the arc table** (D470), with
 
 **Two mandatory mutations beyond the statement list:**
 
-- Neutralise `lock_post_reply:501`'s permission guard so it never refuses. Finding 3 means this mutant does not crash, so only a state assertion can kill it.
+- Neutralise `lock_post_reply:501`'s permission guard so it never refuses. **Run this after finding 3's propagation lands**, and say so: before the propagation the mutant cannot crash and only a state assertion kills it; after, the raise kills it too, and a pass that does not name which regime it measured has not measured anything.
 - Neutralise `mod_restore_reply:457`'s guard likewise.
 
 Four consecutive rounds have found a real hole this way, because every test supplied a permitted input.
@@ -153,9 +173,12 @@ Standing rules: a crash kill is not a kill unless a viable non-crashing variant 
 
 ## Production changes
 
-**One, and it is the subject of finding 1:** an authorization guard at `app/api/alpha/utils/reply.py:687`, mirroring `app/post/routes.py:2443`. It lands **after** the coverage tests pin today's behaviour, with the failing observation pasted before the change, and the pinning test inverted in the same commit.
+**Two, named exactly.** Both land **after** the coverage tests pin today's behaviour, each with the failing observation pasted before the change and its pinning test inverted in the same commit.
 
-No other production change is planned. Findings 2, 3 and 4 are registered. **No defect will be manufactured to justify the round**, and if a further genuine one surfaces it is registered rather than folded in — this round has one production change and its scope is named above.
+1. **Finding 1** — an authorization guard at `app/api/alpha/utils/reply.py:687`, mirroring `app/post/routes.py:2443`.
+2. **Finding 3** — `elif src == SRC_API: raise Exception('Does not have permission')` appended to `lock_post_reply` and `set_collapse_post_reply`, transcribed from `app/shared/post.py:968-969`.
+
+No other production change is planned. Findings 2 and 4 are registered. **No defect will be manufactured to justify the round**, and if a further genuine one surfaces it is registered rather than folded in — this round has two production changes and their scope is named above.
 
 ## The documentation rule this round inherits
 
@@ -170,6 +193,7 @@ Sub-project 39 hit one defect seventeen times and sub-project 40 hit it at least
 - Groups E and F at zero missing statements and zero missing arcs, confirmed by re-measurement with **every arc checked as a pair**, and both lists checked **as lists** rather than by inspecting a global minimum and maximum (D475).
 - The `app/shared/reply.py` floor raised to the measured `percent_covered`, rounded down.
 - The `choose_answer`/`unchoose_answer` API authorization hole **closed**, with its pinning test inverted and its register entry marked fixed.
+- PC2's refusal propagated to `lock_post_reply` and `set_collapse_post_reply`, with their pinning tests inverted, so an unauthorized API caller is refused rather than handed a 200 carrying the unchanged object.
 - Full suite green, run by the controller in the foreground, unpiped, with the floors check chained by `&&` and given **both** arguments.
 - Findings registered from **D519**, marker updated.
 - `tests/README.md` facts from **232**, recording at minimum: what `force_locale(get_recipient_language(...))` needs from a factory user; how to witness `lock_post_reply`'s `@>` cascade; and the silent-failure shape of the two Group F permission guards.
