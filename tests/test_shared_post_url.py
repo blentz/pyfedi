@@ -3125,10 +3125,24 @@ class TestPollAndEventTail:
     # ALL THREE KILL BY VALUE, NOT BY EXCEPTION. The two below feed an EMPTY
     # DICT rather than omitting the key, and that is a deliberate revision:
     # `{}` is falsy, so the conjunct under test still decides, but nothing
-    # downstream of the mutant's entry subscripts a `None`. `:673`'s
-    # `'choices' in poll_data` and `:703`/`:705`'s `'start'`/`'end' in
-    # event_data` are membership tests, and `:686`/`:689`/`:708`-`:710` are
-    # `.get()` calls -- all of them total on `{}`. So the mutant runs to
+    # downstream of the mutant's entry subscripts a `None`.
+    #
+    # THE ENUMERATION BELOW IS EXHAUSTIVE, AND AN EARLIER REVISION OF IT WAS
+    # NOT: it stopped the `.get()` run at `:710` when it reaches `:719`, and it
+    # left out two membership tests. The conclusion was right and the list was
+    # not, which is the weaker of the two things to get wrong and still worth
+    # fixing. Every line either mutant reaches that touches the dict at all:
+    #
+    #   membership tests  `:673` 'choices' and `:687` 'end_poll' (poll block);
+    #                     `:703` 'start', `:705` 'end' and `:720` 'location'
+    #                     (event block)
+    #   `.get()` calls    `:686` and `:689` (poll block); `:708` THROUGH `:719`
+    #                     -- twelve consecutive ones (event block)
+    #   subscripts        `:674`, `:688`, `:704`, `:706`, `:721` -- each one
+    #                     guarded by a membership test in the list above, so
+    #                     none of them runs on `{}`
+    #
+    # `k in {}` and `{}.get(k, default)` are both total, so the mutant runs to
     # completion, builds the row the original does not, and dies on a count.
     #
     # An earlier revision omitted the keys entirely, which makes `poll_data`
@@ -3212,9 +3226,21 @@ class TestPollAndEventTail:
         form of the same fault to look for". That is false, by exactly the
         reasoning accepted for `:431` one round earlier: everything the mutant
         touches after entering is total on `{}` -- `:673`'s `'choices' in
-        poll_data` is a membership test, and `:686`/`:689` are `.get()` calls
+        poll_data` and `:687`'s `'end_poll' in poll_data` are membership tests,
+        and `:686`/`:689` are `.get()` calls; the only subscripts in the block,
+        `:674` and `:688`, are each guarded by one of those membership tests
         -- so the mutant runs to completion, `:684` builds a `Poll`, and the
         assertion below reads 1 instead of 0. No exception anywhere.
+
+        THE TYPE ASSERTION BELOW DOES NOT DISCRIMINATE THIS MUTANT, AND THAT IS
+        SAID HERE RATHER THAN LEFT TO BE INFERRED. `:669`'s first conjunct is
+        TRUE here, so the mutant enters the block and `:670` writes
+        `POST_TYPE_POLL` -- the same value `:398` already wrote. `assert
+        s.post.type == POST_TYPE_POLL` therefore holds on both paths. It is
+        kept as a PROVENANCE note for the original path (POLL is neither
+        `Post.type`'s column default, which is ARTICLE at app/models.py:1715,
+        nor anything `:403` writes here, since `_seed` leaves `post.url` None),
+        not as this mutant's witness. **The `Poll` COUNT is the discriminator.**
 
         The `None` form (omitting the key entirely) is the CRASHING variant of
         the same fault; it was measured killing this mutant in fix round 2. The
@@ -3244,14 +3270,25 @@ class TestPollAndEventTail:
         `if event_data:` is false and `event_data` stays `{}` -- falsy, so
         `:696`'s second conjunct is what refuses.
 
-        A VALUE KILL, for the same reason: `:703`'s `'start' in event_data` and
-        `:705`'s `'end' in event_data` are membership tests and
-        `:708`-`:710` are `.get()` calls, all total on `{}`, so the mutant runs
-        to completion, `:700` builds an `Event`, and the count below reads 1
-        instead of 0. The earlier claim that "there is no wrong-value form of
-        the same fault to look for" was wrong here too. The `None` form
-        (omitting the key) is the crashing variant and was measured killing
-        this mutant in fix round 2.
+        A VALUE KILL, for the same reason: `:703`'s `'start' in event_data`,
+        `:705`'s `'end' in event_data` and `:720`'s `'location' in event_data`
+        are membership tests and `:708` THROUGH `:719` are `.get()` calls --
+        twelve of them, not the three an earlier revision of this docstring
+        listed -- all total on `{}`; the only subscripts, `:704`, `:706` and
+        `:721`, are each guarded by one of those membership tests. So the
+        mutant runs to completion, `:700` builds an `Event`, and the count
+        below reads 1 instead of 0. The earlier claim that "there is no
+        wrong-value form of the same fault to look for" was wrong here too. The
+        `None` form (omitting the key) is the crashing variant and was measured
+        killing this mutant in fix round 2.
+
+        THE TYPE ASSERTION BELOW DOES NOT DISCRIMINATE THIS MUTANT EITHER, for
+        the same reason as its poll twin: `:696`'s first conjunct is true here,
+        the mutant enters, and `:697` writes `POST_TYPE_EVENT` over the value
+        `:398` already wrote. It is a PROVENANCE note for the original path --
+        EVENT is neither `Post.type`'s column default (ARTICLE,
+        app/models.py:1715) nor anything `:403` writes here -- and **the
+        `Event` COUNT is the discriminator.**
 
         `:696`'s FIRST conjunct is already killed by
         `TestImageArmEventBanner`'s pair, which holds `event_data` fixed and
