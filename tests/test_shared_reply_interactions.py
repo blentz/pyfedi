@@ -1968,7 +1968,7 @@ class TestVoteForReplyGuardsAndReturns:
         raising `ValueError` at `:3333`)
         narrows the caller's direction to those two literals. It does not:
         `:3323`/`:3325` remap 'reversal' by ASSIGNING TO `vote()`'s OWN LOCAL,
-        which is what the assert then sees. The caller's `vote_direction` is
+        which is what that check then sees. The caller's `vote_direction` is
         untouched and is still 'reversal' at `:46` and `:48`.
 
         THE REMAINING HALF OF THE FALSE ARGUMENT was that a 'reversal' which
