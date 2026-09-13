@@ -903,9 +903,17 @@ class TestImageArmEventBanner:
     three), so a GET route here would go unreached and fail `http_mock`'s
     `assert_all_called=True` at teardown.
 
-    Exactly ONE HEAD is issued per test: `_seed()` leaves `post.url` None, so
-    `:403` is false and `:410`'s `is_image_url(post.url)` never runs; `:601`'s
-    `is_image_url(url)` is the only caller.
+    Exactly ONE HEAD is issued per test, but THE REASON CHANGED when the pair
+    was reseeded and this paragraph is the amended one. It used to read
+    "`_seed()` leaves `post.url` None, so `:403` is false". That is no longer
+    true: the first two tests pass `_seed(url=SEEDED_OLD_URL)` and `:403` IS
+    entered. The conclusion survives for a different reason -- `SEEDED_OLD_URL`
+    is a loops.video url, so the chain stops at `:406`/`:407`, and `:410`'s
+    `is_image_url(post.url)` is an `elif` below that which never runs. The
+    third and fourth tests still use a bare `_seed()` and reach the same place
+    via the original route. Either way `:601`'s `is_image_url(url)` is the only
+    caller that issues one. See the reseeding paragraph below for why the url
+    has to be a loops.video one rather than a pixelfed one.
 
     THE FIRST TWO TESTS DIFFER IN THE `type` ARGUMENT AND IN NOTHING ELSE.
     (The class now holds FOUR; the third and fourth are deliberately outside
@@ -3034,16 +3042,31 @@ class TestPollAndEventTail:
         alongside the new one, so the text set comes back as
         `{'stale', 'fresh'}` rather than `{'fresh'}`.
 
-        `:431` IS KILLED BY THE EXCEPTION, AND THAT IS THE FAULT'S WHOLE
-        MEANING HERE rather than a weaker substitute for a value assertion.
-        `PollChoiceVote.choice_id` is a foreign key onto `poll_choice.id`
-        (app/models.py:3832-3835), and `:432` deletes EVERY choice for the
-        post, so there is no input under which a surviving vote could be
-        observed as a value -- with `:431` gone, `:432` violates the
-        constraint. The statement's only job is to clear the dependent rows
-        before the parent delete, and the violation is that job not being done.
-        The vote count is asserted anyway, so the test still reads as a
-        behavioural claim rather than as a crash probe.
+        `:431` IS KILLED BY THE EXCEPTION, AND THE CAMPAIGN'S CRASH-KILL RULE
+        IS SATISFIED RATHER THAN SET ASIDE. A crash kill counts only when a
+        viable NON-CRASHING variant of the same fault also dies, and one
+        exists. Read out of the file rather than recalled::
+
+            3832	class PollChoiceVote(db.Model):
+            3833	    choice_id = db.Column(db.Integer, db.ForeignKey('poll_choice.id'), primary_key=True)
+            3834	    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), primary_key=True)
+            3835	    post_id = db.Column(db.Integer, db.ForeignKey('post.id'), index=True)
+
+        `post_id` at `:3835` is an INDEPENDENT foreign key onto `post.id`, not
+        something derived from `choice_id`. `:431` deletes votes by `post_id`
+        and `:432` deletes choices by `post_id`, so a vote carrying THIS post's
+        `post_id` while its `choice_id` points at a choice owned by a DIFFERENT
+        post survives `:432` without violating anything -- and with `:431`
+        deleted it would make this test's `count() == 0` read 1, a plain value
+        failure with no exception involved. An earlier revision of this
+        docstring claimed no such input existed; it was wrong, and the
+        correction strengthens the closure rather than weakening it.
+
+        The vote this test actually seeds points at THIS post's own choice,
+        which is the shape production produces, so here the surviving vote
+        meets `:432`'s delete and the constraint fires first. The assertion is
+        a value assertion either way, with `count() == 1` before the edit as
+        its positive control, so the test does not read as a bare crash probe.
 
         NO `http_mock`: the input's `url` is None and `_seed` leaves
         `post.url` None, so `:435`'s `url != post.url or uploaded_file` is
@@ -3068,3 +3091,147 @@ class TestPollAndEventTail:
                  PollChoice.query.filter_by(post_id=s.post.id).all()}
         assert texts == {'fresh'}                                    # `:432`
         assert PollChoiceVote.query.filter_by(post_id=s.post.id).count() == 0
+
+    # ------------------------------------------------------------------
+    # `:669` and `:696` are two-conjunct gates whose operands MOVED IN LOCKSTEP
+    # in every test written before fix round 2: the `type` argument and the
+    # data dict were always supplied together, so neither conjunct ever decided
+    # anything on its own and replacing either with `True` changed nothing
+    # observable. The three tests below break the lockstep in all three
+    # available directions. This is false-witness mechanism 5, the same one
+    # TestImageArmEventBanner's docstring describes for `:612`.
+    #
+    # TWO OF THE THREE NEED FEDERATION SUPPRESSED, and the suppressor is an
+    # in-production one rather than a test-only contrivance. Read out of the
+    # file rather than recalled::
+    #
+    #     736	    if post.status < POST_STATUS_PUBLISHED or post.community.local_only or post.community.private:
+    #     737	        federate = False
+    #
+    # `Community.local_only` is app/models.py:610 ("only users on this
+    # instance can post. no federation."), default False. Without it, a post
+    # typed POLL or EVENT that carries NO matching row reaches
+    # app/shared/tasks/pages.py under eager Celery, where `:222`'s
+    # `Poll.query...first()` and `:231`'s `Event.query...first()` both come
+    # back None and are dereferenced at `:224`/`:233` -- an AttributeError
+    # downstream of everything these tests witness, and exactly the crash
+    # TestImageArmEventBanner's docstring records. Suppressing federation
+    # removes it without touching anything in the three regions under test.
+    #
+    # THE FIRST TEST NEEDS NO SUPPRESSOR AT ALL, and that asymmetry is the
+    # point: it leaves `post.type` at ARTICLE, so `pages.py:222` and `:231` are
+    # both false and neither dereference happens.
+
+    def test_poll_data_without_the_poll_type_builds_no_poll(self, db_session):
+        """`:669`'s FIRST conjunct is the only thing that decides here.
+
+        `type` is ARTICLE while `poll` IS supplied, so `type == POST_TYPE_POLL`
+        is false and `poll_data` is truthy. Replacing the first conjunct with
+        `True` makes the mutant build a `Poll` and a `PollChoice` that the
+        original does not, and `:670` then retypes the post -- so all three
+        assertions below move together under the mutant and none is a bare
+        absence.
+
+        NO FEDERATION SUPPRESSOR IS NEEDED, unlike its two siblings below.
+        `post.type` stays ARTICLE on the original path, so
+        `app/shared/tasks/pages.py:222`'s `if post.type == POST_TYPE_POLL:` and
+        `:231`'s `elif post.type == POST_TYPE_EVENT:` are both false and
+        nothing is dereferenced. Under the mutant `:670` writes POLL, but by
+        then `:684` has created the `Poll` row `:223` looks for, so the mutant
+        dies on the assertion rather than on an exception.
+
+        ARTICLE RATHER THAN LINK, AND THAT WAS MEASURED. A first revision of
+        this test submitted `POST_TYPE_LINK` and failed -- not on its
+        assertions but inside federation, at a line neither conjunct of `:669`
+        has anything to do with::
+
+            318	    if post.type == POST_TYPE_LINK or post.type == POST_TYPE_VIDEO:
+            319	        note['content'] += '<p><a href=' + post.url + '>' + post.title + '</a></p>'
+
+        `TypeError: can only concatenate str (not "NoneType") to str`, because
+        a LINK post with no url reaches `:319`. ARTICLE takes `:320`'s
+        `elif post.type != POST_TYPE_POLL:` instead, which reads only the
+        title. Registered here as a third in-production dereference of the same
+        family as `:224` and `:233`; it is not this round's to fix.
+
+        `post.type == POST_TYPE_ARTICLE` is BOTH the submitted value and
+        `Post.type`'s column default (app/models.py:1715), so it is not a
+        witness that `:398` ran -- but it IS a discriminator for this mutant,
+        which writes POLL over it at `:670`. The `Poll` and `PollChoice` counts
+        are the primary witnesses.
+
+        No `http_mock`: the input's `url` is None and `_seed` leaves `post.url`
+        None, so `:403`, `:565`, `:660` and `:663` are all false and the call
+        makes no outbound request.
+        """
+        s = _seed()
+
+        edit_post(_api_input(poll={'mode': 'single', 'choices': [
+            {'choice_text': 'a', 'sort_order': 1}]}),
+            s.post, POST_TYPE_ARTICLE, SRC_API, user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.type == POST_TYPE_ARTICLE    # `:670` never ran
+        assert Poll.query.filter_by(post_id=s.post.id).count() == 0
+        assert PollChoice.query.filter_by(post_id=s.post.id).count() == 0
+
+    def test_the_poll_type_without_poll_data_builds_no_poll(self, db_session):
+        """`:669`'s SECOND conjunct is the only thing that decides here.
+
+        The mirror of the test above: `type` IS POLL while no `poll` key is
+        submitted, so `:300`'s `input.get('poll', None)` leaves `poll_data`
+        None. Replacing the second conjunct with `True` sends control into the
+        block with `poll_data` None and `:673`'s `'choices' in poll_data`
+        raises `TypeError`.
+
+        THAT CRASH IS THE FAULT'S MEANING, and the rule is satisfied rather
+        than waived: the conjunct's only job is to keep a `None` out of the
+        subscripting that follows, so there is no wrong-value form of the same
+        fault to look for. The assertion below is still a value assertion about
+        the ORIGINAL path -- POLL type, no poll data, no `Poll` row -- rather
+        than a crash probe, and `test_a_blank_choice_is_skipped...` is the
+        positive control showing a `Poll` can be built here at all.
+
+        `local_only` suppresses federation; see the comment block above for why
+        that is required here and not in the test above.
+        """
+        s = _seed()
+        s.community.local_only = True
+        db.session.commit()
+
+        edit_post(_api_input(), s.post, POST_TYPE_POLL, SRC_API,
+                  user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.type == POST_TYPE_POLL       # `:398` wrote this, not `:670`
+        assert Poll.query.filter_by(post_id=s.post.id).count() == 0
+
+    def test_the_event_type_without_event_data_builds_no_event(self, db_session):
+        """`:696`'s SECOND conjunct is the only thing that decides here.
+
+        The event twin of the test above. `type` IS EVENT while no `event` key
+        is submitted, so `:285`'s `input.get('event', None)` leaves
+        `event_data` None; replacing the second conjunct with `True` reaches
+        `:703`'s `'start' in event_data` and raises `TypeError`, for the same
+        reason and with the same justification.
+
+        `:696`'s FIRST conjunct is already killed by
+        `TestImageArmEventBanner`'s pair, which holds `event_data` fixed and
+        moves `type` -- so between that pair and this test both operands of
+        `:696` now decide something on their own.
+
+        `local_only` suppresses federation, which here is not an optimisation
+        but a requirement: this is precisely the input
+        `TestImageArmEventBanner`'s docstring records as dereferencing None at
+        `app/shared/tasks/pages.py:231-233`.
+        """
+        s = _seed()
+        s.community.local_only = True
+        db.session.commit()
+
+        edit_post(_api_input(), s.post, POST_TYPE_EVENT, SRC_API,
+                  user=s.user, from_scratch=True)
+
+        db.session.refresh(s.post)
+        assert s.post.type == POST_TYPE_EVENT      # `:398` wrote this, not `:697`
+        assert Event.query.filter_by(post_id=s.post.id).count() == 0
