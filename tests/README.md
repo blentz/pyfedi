@@ -4223,7 +4223,7 @@ expire/reload mechanics, so reauthor **before** the call under test, not after.
 SETTLE REACHABILITY OVER THE DISPATCHERS, NOT OVER THE COLUMN.** Sub-project 20
 opened on a real asymmetry: `app/shared/tasks/pages.py:97` guards its mention
 scan with `if post.body:` and its twin `app/shared/tasks/notes.py:92` does not,
-and `PostReply.body` is `db.Column(db.Text)` (`app/models.py:2901`), nullable.
+and `PostReply.body` is `db.Column(db.Text)` (`app/models.py:2906`), nullable.
 The column's nullability makes the crash **storable**; it says nothing about
 whether anything can dispatch that row into the function. Enumerating the
 dispatchers settled it in the other direction: `send_reply` is called only from
@@ -4250,6 +4250,21 @@ onward by +14. The marker is here rather than only in fact 232, because a reader
 arriving at THIS fact has no way to learn from 2,700 lines away that it was
 touched. `app/post/routes.py:928` and `app/utils.py:1233-1237` were re-derived
 at the same time and are unchanged.
+**CORRECTED AGAIN 2026-09-13 (sub-project 41, FINAL FIX WAVE): the
+`app/models.py` citation for `PostReply.body` read `:2901` and is now `:2906`
+(+5), verified by content — `git show 903dab20^:app/models.py | sed -n '2901p'`
+and `sed -n '2906p' app/models.py` both return `    body = db.Column(db.Text)`.
+**IT WAS STALE FOR THE SAME REASON AND BY THE SAME COMMIT AS THE TWO CORRECTED
+BY THE BLOCK IMMEDIATELY ABOVE, AND THAT BLOCK WALKED PAST IT.** Counted at
+`fa4978c3`: the `models.py` citation was this fact's line 5, the two
+`app/shared/reply.py` citations the block corrected were five lines further
+down, and the block itself nineteen lines below the `models.py` one — all three
+inside one fact, all three invalidated by one commit. The sweep that wrote the
+block was scoped to `app/shared/reply.py` citations, so the `app/models.py`
+citation a few lines away survived it, which is D532's own "scope by the COMMIT,
+not by the cited filename" rule failing inside a correction written to record
+that rule. **When you correct one citation in a paragraph, re-derive EVERY
+citation in that paragraph**, whatever file it names.
 
 **117. A WRONG `--cov` TARGET COLLECTS NOTHING, WRITES NO JSON, AND EXITS 0.**
 `pytest-cov`'s `--cov` takes a **module** path, not a file path.
@@ -6843,7 +6858,7 @@ rather than reasoned about.
    a nullable ARRAY column with no default, so a factory reply has
    `path is None` and the two raw-SQL arcs (`delete_reply:257-258`,
    `restore_reply:283-284`) are unreachable until a test seeds one. Seed the
-   three-element shape `app/models.py:3054-3059` builds
+   three-element shape `app/models.py:3058-3065` builds
    (`[0, parent_id, reply_id]`), not a one-element one: `reply.path[:-1]` is
    then `()`, psycopg2 renders `where id in ()` and raises
    `ProgrammingError: (psycopg2.errors.SyntaxError) syntax error at or near
@@ -6851,7 +6866,7 @@ rather than reasoned about.
    with `delete_reply:257`'s own statement text — `(1, 2)` and `(1,)` run and
    return no rows, `()` raises. It is **not** a test-only curiosity: see
    register entry D497 for the production path that produces a one-element
-   `path`. `child_count` (`app/models.py:2899`) is likewise unset by the
+   `path`. `child_count` (`app/models.py:2904`) is likewise unset by the
    factory but has a column default of 0 rather than None. Both column facts
    were re-derived by runtime introspection of the mapped table as well as by
    reading the `db.Column(...)` line, because reading the source line cannot
@@ -6887,9 +6902,9 @@ rather than reasoned about.
    pair rather than merely read.
 
 5. **Fact 209's Redis vote-key rule applies to `reply.vote()`, and the key is
-   NOT namespaced by entity type.** `PostReply.vote` (`app/models.py:3311-3402`)
-   writes `votes_cast_{date.today()}_{user_id}` at `:3384` (`set`) and `:3386`
-   (`incr`) — byte-identical to what `Post.vote` writes at `:2827`/`:2829`. So
+   NOT namespaced by entity type.** `PostReply.vote` (`app/models.py:3316-3414`)
+   writes `votes_cast_{date.today()}_{user_id}` at `:3396` (`set`) and `:3398`
+   (`incr`) — byte-identical to what `Post.vote` writes at `:2832`/`:2834`. So
    a leaked key from a post-voting test raises the quota for a reply-voting
    test whose user lands on the same id, across test files, and vice versa.
    Every test completing a real vote must clear the key in a `finally`;
@@ -6897,15 +6912,15 @@ rather than reasoned about.
    `_clear_votes_cast(user_id)` helper for exactly this, and its module
    docstring keeps a live count of which tests do and do not, because nothing
    else enforces the rule. Fact 210's prohibition transfers too, and it
-   transfers on FOUR locks, not two: `awk 'NR>=3311 && NR<=3405 &&
-   /redis_client.lock/' app/models.py` returns `:3314`, `:3333`, `:3375` and
-   `:3396`, so `redis_double` cannot be used against any path that completes a
-   vote. **The load-bearing one is `:3314`, and an earlier wording of this fact
-   omitted it.** `:3314` is the OUTERMOST lock, `lock:post_reply:{self.id}`,
+   transfers on FOUR locks, not two: `awk 'NR>=3316 && NR<=3414 &&
+   /redis_client.lock/' app/models.py` returns `:3319`, `:3345`, `:3387` and
+   `:3408`, so `redis_double` cannot be used against any path that completes a
+   vote. **The load-bearing one is `:3319`, and an earlier wording of this fact
+   omitted it.** `:3319` is the OUTERMOST lock, `lock:post_reply:{self.id}`,
    taken on entry before any branch is chosen; the other three are per-user
    locks (`lock:user:{...}`) inside branches. Cite only the inner three and the
    prohibition reads as path-dependent — avoidable by driving a path that
-   misses them. `:3314` is what makes it UNCONDITIONAL: every call to
+   misses them. `:3319` is what makes it UNCONDITIONAL: every call to
    `PostReply.vote` takes a real redis lock, so there is no vote-completing
    path a fake redis can be substituted under.
    **For the quota boundary itself there is a cheaper method than fact 209's,
@@ -6916,6 +6931,27 @@ rather than reasoned about.
    safe on the session-scoped `app` fixture (`tests/conftest.py:72-113`)
    because monkeypatch restores the key at teardown. Fact 209's key-writing
    method is still what you need when the COUNT is the thing under test.
+
+**CORRECTED 2026-09-13 (sub-project 41, FINAL FIX WAVE; register D532). Every
+`app/models.py` line number in items 2 and 5 above was stale by `903dab20` and
+is re-derived here by content, not by adding an offset.** Item 2: path
+construction `:3054-3059` -> **`:3058-3065`** (and the range was one line short
+at both ends before the shift — it began on a `session.commit()` and stopped
+before the `else:` that produces the `[0, reply.id]` shape it is cited FOR, so
+this is Ruling 7's correction and the +5 in one edit); `child_count`
+`:2899` -> **`:2904`**. Item 5: `PostReply.vote` `:3311-3402` -> **`:3316-3414`**
+(note the two ends move by DIFFERENT amounts, +5 and +12, because the range
+straddles D517's second hunk — no single offset maps it); the quota writes
+`:3384`/`:3386` -> **`:3396`/`:3398`**; `Post.vote`'s twin writes
+`:2827`/`:2829` -> **`:2832`/`:2834`**; the four locks `:3314`, `:3333`,
+`:3375`, `:3396` -> **`:3319`, `:3345`, `:3387`, `:3408`**.
+**THE LOCK LIST IS THE WARNING THIS WHOLE CLASS DESERVES:** old `:3396` was a
+`redis_client.lock`, and HEAD `:3396` is the `redis_client.set` of the quota
+key. A stale citation does not merely point at nothing — **it can point at real,
+plausible, WRONG code in the same function**, and a reader checking it finds a
+line that looks close enough to believe. That is why the remedy is content
+comparison (`git show 903dab20^:app/models.py | sed -n 'Np'` against
+`sed -n 'Mp' app/models.py` returning byte-identical lines) and never arithmetic.
 
 **232. GROUP A OF `app/shared/reply.py` IS NOT AT ZERO OVER
 `tests/test_shared_*.py` ALONE — SEVEN STATEMENTS AND FIVE ARCS COME FROM
@@ -6986,6 +7022,47 @@ this file as unverified until checked**, and check by content —
 `sed -n '(N+12)p' app/shared/post.py` — rather than by adding 12, because a
 citation already stale from an earlier generation will not move by 12. The
 sweep is registered as D532 and owed to sub-project 42.
+
+**AND SO ARE THIS FILE'S `app/models.py` CITATIONS — THE SAME COMMIT, +5 OR
++12, AND THIS PARAGRAPH IS THE ONLY WARNING THEY HAVE.** Until sub-project 41's
+final fix wave this fact warned about `app/shared/post.py` and said nothing
+about `app/models.py`, which is the largest class of the four and the one D532
+has been chasing since it was opened. Measured at `fa4978c3`, i.e. before this
+wave touched anything: `git show fa4978c3:tests/README.md | /usr/bin/grep -oE
+'models\.py:[0-9]+'` returns **59** citations, **18** of which name a line at or
+after old `:2743` and are therefore inside the shifted region. Exactly one of
+the 18 — fact 234's `app/models.py:3058-3065`, written after the shift — was
+correct, leaving **17 stale candidates**; **four are corrected in this wave**
+(fact 116's `:2901`, and fact 231's `:3054-3059`, `:2899` and `:3311-3402`) and
+**about thirteen remain**. The offsets are `app/models.py`'s, from the table
+above: **+5** from old `:2743`, **+12** from old `:3322`, nothing below old
+`:2743`. **TREAT EVERY `app/models.py:N` IN THIS FILE WITH `N >= 2743` AS
+UNVERIFIED UNTIL CHECKED BY CONTENT.** Re-running that grep against the working
+tree now over-counts, because the correction markers quote the old numbers
+alongside the new ones; scope any recount to a revision.
+
+Two worked examples, both corrected in the fix wave, both chosen because they
+show the class surviving its own remedy:
+
+- **`PostReply.body` in fact 116** read `app/models.py:2901` and is now
+  `:2906`. It sat **nineteen lines above fact 116's own D532 correction block**
+  — a block added in this very round, by a sweep scoped to `app/shared/reply.py`
+  citations, which corrected the two `reply.py` numbers five lines below it and
+  walked past the `models.py` number. The named defect class, occurring inside a
+  correction written for the named defect class.
+- **The path construction in fact 231** read `app/models.py:3054-3059` and is
+  now `:3058-3065`. That is the SAME construct, and the same correction, that
+  Ruling 7 applied to three sites in `tests/test_shared_reply_moderation.py`
+  and two in `tests/test_shared_reply_interactions.py`, and then wrote
+  **correctly** into new fact 234 about 200 lines below. **This file carried
+  the right citation and the wrong citation for one construct at the same
+  time** — because the sweep was scoped to the two test files, not to the
+  document that is supposed to be their durable store.
+
+The remaining ~13 are owed to D532's sweep and are NOT corrected here; that is
+round-sized work with a non-uniform offset, and doing it under time pressure is
+how fresh errors get introduced. **What is fixed here is the completeness this
+fact was claiming and did not have.**
 
 **`app/shared/reply.py` citations can be stale by three different amounts.**
 This round's own `87f3027f` inserted two lines twice more, so from `903dab20^`

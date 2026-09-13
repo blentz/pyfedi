@@ -54,7 +54,14 @@ THE `make_site()` RULE, in the form sub-project 40 corrected it to: a `Site`
 row is needed for `render_template` OR for `can_downvote`, which reads
 `Site.query.get(1)` at app/utils.py:2443 and dereferences it at `:2445` before
 any source fork. Neither group here calls `can_downvote`, so a `Site` row is
-needed only where a template renders.
+needed only where a template renders. NO FUNCTION IN GROUPS E OR F RENDERS ONE
+-- `render_template` appears in this module only at `:65` and `:145`, both in
+Group A -- SO NO TEST IN THIS FILE CALLS `make_site()` AND THE NAME IS NOT
+IMPORTED. One test did, justified by a rule this docstring does not contain
+("a template or A PERMISSION READ"), while its sibling in the next class said
+the opposite for the same code shape; the call and the justification were both
+dropped in the final fix wave. If a later test here seems to need a `Site` row,
+the question to answer first is which of the two real reasons it hits.
 
 THREE PROBES WERE RUN BEFORE ANY TEST WAS WRITTEN (task-1-report.md carries
 the raw output). Two held; one falsified the plan's own prediction:
@@ -104,11 +111,23 @@ so this file is the whole jury. Six other files under `tests/` match one of the
 names, and none of them is a second juror: `test_shared_tasks_locks.py` and
 `test_shared_tasks_send_answer.py` call the same-named functions in
 `app.shared.tasks`, and the four `test_inbox_dispatch_*.py` files carry the
-names only as string literals. The check that settles it is a grep for the
-IMPORT, not for the name. It is 115 statement lines, 20 continuation
-lines inside multi-line statements, both directions of neutralisation on each
-of the four permission guards, and 20 operand-drops and operator-swaps over the
-six `BoolOp` nodes. Both line lists were derived with `ast.walk` over each
+names as string literals and, in two of them, in test FUNCTION names --
+`test_inbox_dispatch_undo_content.py:418`, `:451`, `:487` and
+`test_inbox_dispatch_votes.py:256`. Neither form is a call, but neither is a
+string literal either, so "only as string literals" was the wrong reason and is
+retracted here. THE CHECK THAT SETTLES IT IS A GREP FOR THE IMPORT, NOT FOR THE
+NAME, and it settles it outright: `/usr/bin/grep -rn 'app[.]shared[.]reply'
+tests/ --include=*.py` returns this file and
+`tests/test_shared_reply_interactions.py` and nothing else, so not one of the
+six can reach these functions however its own tests are spelled.
+THE 159 BREAKS DOWN AS 115 statement lines, 20 continuation
+lines inside multi-line statements, one neutralisation on each of the four
+permission guards -- FOUR mutants, not eight; the two mandatory ones ran in
+opposite directions across the set (`:501` forced true, `:457` forced false),
+which is what "both directions" was ever meant to mean, and an earlier wording
+of this sentence said "both directions on each of the four" and so implied a
+bucket of 8 that the 159 total does not admit -- and 20 operand-drops and
+operator-swaps over the six `BoolOp` nodes. Both line lists were derived with `ast.walk` over each
 `FunctionDef`: the statement list counts the `def` line and so runs one longer
 per function than the table above (115, not 109), and the continuation list is
 every non-first physical line of a NON-COMPOUND statement, which is the only
@@ -119,12 +138,25 @@ directory that does not outlive the round; each is a single-line literal
 substitution, so apply it, run this file, and observe green.
 
 THE FIRST PASS UNDERSTATED THE SPACE AND THIS PARAGRAPH SAYS HOW. It reported
-151 mutants over 12 continuation lines, and the 12 were the 20 minus the 8
-inside the three `add_to_modlog(...)` calls -- `:438`, `:439`, `:440`, `:474`,
-`:475`, `:476`, `:507`, `:508`. There was no reason for the exclusion; it was
+151 mutants over 12 continuation lines. BOTH OF THOSE FIGURES ARE WRONG, and
+the corrections run in opposite directions, which is why the totals still
+reconcile. The 151 was **150 of the 159 plus one supernumerary** -- `A426b`, a
+SECOND mutant on statement line `:426` (`else -1` -> `else 1`), which is not a
+member of the 159 at all. And the "12 continuation lines" were **11**, so
+**nine** of the 20 went unmutated, not eight: `:438`, `:439`, `:440`, `:474`,
+`:475`, `:476`, `:507`, `:508` inside the three `add_to_modlog(...)` calls, and
+`:572`, `targets=targets_data)`, the last line of the `Notification(...)` call
+in `choose_answer`. `:572` is not an `add_to_modlog` line, which is why the
+pattern that found the other eight walked past it.
+There was no reason for the exclusion; it was
 not a judgement that those lines were cosmetic, it was an unexamined narrowing,
-and it was disclosed nowhere. Review mutated all eight and all eight lived,
-because the only thing any test here read off a `ModLog` row was `action`. They
+and it was disclosed nowhere. Mutating the nine gives **8 survivors and 1 kill**:
+the eight `add_to_modlog` lines all lived, because the only thing any test here
+read off a `ModLog` row was `action`, while `:572` died at once against the
+notification test. An earlier wording of this paragraph carried the superseded
+framing "the 12 were the 20 minus the 8", which is the round's own named defect
+class -- a claim left standing after its premise was withdrawn -- surviving
+inside the correction written for that class. The eight
 are closed now, together with six more mutants on the `target_user` and
 `reason` arguments that share `:437`, `:473` and `:506` with the action literal
 and were equally unread; the three `..._action` tests now assert every field
@@ -224,8 +256,12 @@ from app.shared.reply import (
 )
 from tests.factories import (
     bearer, make_community, make_community_member, make_instance, make_post,
-    make_post_reply, make_site, make_user, web_ctx,
+    make_post_reply, make_user, web_ctx,
 )
+# `make_site` is deliberately NOT imported: no test in this file needs a `Site`
+# row -- see THE `make_site()` RULE in the module docstring. The import was
+# dropped with the last call site in sub-project 41's final fix wave, so that an
+# unused name cannot suggest the rule was merely overlooked somewhere.
 
 
 def _seed_moderated_reply(*, private=True, community_name='moderation'):
@@ -510,12 +546,25 @@ class TestModRemoveReply:
     def test_the_web_arm_flashes_and_returns_none(self, db_session, app):
         """`:415`'s false arm, `:434`'s true arm, `:435`'s flash, `:447`.
 
-        `make_site()` is required: the web arm reaches a flash, and the module
-        docstring's rule says a Site row is needed wherever a template or a
-        permission read touches it.
+        NO `make_site()` HERE, and the reason is the sibling's:
+        `TestModRestoreReply::test_the_web_arm_flashes_and_returns_none_on_restore`
+        drives the structurally identical arm without one. This arm neither
+        renders a template nor calls `can_downvote` -- the only two reasons the
+        module docstring's rule requires a `Site` row -- it only flashes and
+        returns. `web_ctx` opens the request context with
+        `app.test_request_context`, which does not fire `before_request` and so
+        never populates `g.site` anyway; `flash()` writes to the session and
+        flask_babel's `_()` does not touch the database. Nothing on this path
+        reads `Site.query.get(1)`.
+
+        THIS TEST DID CALL `make_site()`, justified by a rule the module
+        docstring does not contain -- "a Site row is needed wherever a template
+        or A PERMISSION READ touches it". The real rule names `render_template`
+        or `can_downvote`, and the sibling above said the opposite for the same
+        code shape. Two docstrings in one file gave contradictory answers, so
+        the call is dropped and the sibling's reason is stated instead.
         """
         from flask import get_flashed_messages
-        make_site()
         s = _seed_moderated_reply()
         seed_moderator(s)
 
@@ -530,7 +579,13 @@ class TestModRemoveReply:
         """`:437-440`'s add_to_modlog with the literal 'delete_post_reply'.
 
         Compared as a SET, never as an ordered list -- the campaign's rule
-        about rows a query planner returned.
+        about rows a query planner returned. THAT RULE WAS STATED HERE AND
+        BROKEN THREE LINES LATER: the row this test then asserts on was picked
+        with `rows[0]`, an ordered access, and the set assertion above does not
+        constrain `len(rows)` so nothing made it safe except that exactly one
+        row can be written today. It now selects by ACTION, the idiom
+        `TestModRestoreReply::test_the_modlog_row_names_the_restore_action`
+        already used, so no assertion in this test depends on planner order.
 
         This is also the positive control that
         `test_an_unprivileged_user_is_refused_and_changes_nothing`'s
@@ -570,7 +625,7 @@ class TestModRemoveReply:
 
         rows = db.session.query(ModLog).all()
         assert {row.action for row in rows} == {'delete_post_reply'}
-        row = rows[0]
+        row = next(r for r in rows if r.action == 'delete_post_reply')
         assert row.user_id == s.actor.id
         assert row.type == 'mod'
         assert row.target_user_id == s.author.id
@@ -746,7 +801,10 @@ class TestModRestoreReply:
     def test_the_web_arm_flashes_and_returns_none_on_restore(self, db_session, app):
         """`:451`'s false arm, `:470`'s true arm, `:471`'s flash, `:483`.
 
-        NO `make_site()` HERE, unlike the sibling test in `TestModRemoveReply`.
+        NO `make_site()` HERE. It once said "unlike the sibling test in
+        `TestModRemoveReply`", which was true until the final fix wave dropped
+        that sibling's unnecessary call; NO TEST IN THIS FILE CALLS
+        `make_site()` now, and the two docstrings agree.
         This arm neither renders a template nor calls `can_downvote` -- the
         only two reasons the module docstring's rule requires a `Site` row --
         it only flashes and returns. `web_ctx` opens the request context with
@@ -827,10 +885,52 @@ class TestLockPostReply:
     The line numbers in this class shifted by two at or after `:518` as a
     result; every one below was re-derived at Task 7's commit.
 
-    THE WEB ARM STILL FALLS THROUGH SILENTLY, and deliberately so: the `elif`
-    is guarded on `src == SRC_API`, matching the twin exactly. A SRC_WEB
-    caller who fails `:501` still reaches `:521` with nothing changed and no
-    flash, because the web routes do their own authorization before calling.
+    THE WEB ARM STILL FALLS THROUGH SILENTLY. The `elif` is guarded on
+    `src == SRC_API`, matching the twin exactly, and that faithfulness is the
+    whole reason it was left: a coverage round widening a guard beyond its twin
+    manufactures a fresh divergence to sit beside D521's. A SRC_WEB caller who
+    fails `:501` still reaches `:521` with nothing changed and no flash.
+
+    AN EARLIER WORDING OF THIS PARAGRAPH ADDED "because the web routes do their
+    own authorization before calling". THAT IS FALSE AT SOURCE. It is retracted
+    here rather than quietly deleted, because believed it closes a live
+    registered defect as a non-defect, and a later round reading this file
+    would have had no reason to doubt it. Re-derived with numbered output in
+    sub-project 41's final fix wave, from `app/post/routes.py` lines 1666-1680
+    printed by an awk that emits `NR` beside an unmodified `$0` (D536 -- an awk
+    that assigns to a field would have collapsed the indentation that shows
+    these bodies are one line each):
+
+      1668  @bp.route('/post/<int:post_id>/<int:post_reply_id>/lock/<mode>', methods=['POST'])
+      1669  @login_required
+      1670  def post_reply_lock(post_id: int, post_reply_id: int, mode):
+      1671      lock_post_reply(post_reply_id, mode == 'yes', SRC_WEB)
+      1675  @bp.route('/post/<int:post_id>/<int:post_reply_id>/collapse/<mode>', methods=['POST'])
+      1676  @login_required
+      1677  def post_reply_collapse(post_id: int, post_reply_id: int, mode):
+      1678      set_collapse_post_reply(post_reply_id, mode == 'yes', SRC_WEB)
+
+    `@login_required` IS THE ONLY DECORATOR AND NEITHER BODY GUARDS. So the
+    fall-through is not a redundant belt behind a web guard -- IT IS THE ONLY
+    AUTHORIZATION EITHER ROUTE HAS, and it refuses by doing nothing. The
+    consequence, stated plainly because the wrong sentence hid it: ANY LOGGED-IN
+    USER CAN LOCK OR COLLAPSE ANY COMMENT THROUGH THE WEB, and gets a 302 back
+    to the post with no flash and no sign that nothing happened. That is
+    register entry D524, and D524 is OPEN.
+
+    `app/post/routes.py` IS MIXED, WHICH IS HOW THE WRONG CLAIM SURVIVED READING:
+    `post_reply_choose_answer` at `:2440-2447` DOES guard -- on
+    `is_admin_or_staff()` OR authorship OR `community.is_moderator()`, with
+    `abort(403)` on the else -- and so does `post_reply_unchoose_answer` at
+    `:2450-2457`. A blanket sentence about "the web routes" is therefore unsafe
+    in this file whichever way it points. Check the route you actually mean.
+
+    AND THE API HALF DOES NOT ANSWER 403. A bare `Exception` out of an API
+    handler reaches `shared_error_handler` (`app/api/alpha/__init__.py:108-114`),
+    which returns HTTP **400**, and logs the exception plus a Sentry event on the
+    way. So the same denial is 400 through the API and 403 through the web. That
+    is faithful to the twin and it is register entry D537; no test here asserts a
+    status code, because these tests call the shared function directly.
 
     False-witness mechanism (a) is still why every test below asserts on state
     rather than on the return: THE RETURN VALUE IS IDENTICAL ON EVERY ARM THAT
@@ -1018,16 +1118,38 @@ class TestLockPostReply:
         `missing_branches` `[[518, 521], [545, 548]]` for this module, the
         only two arcs left anywhere in these six functions.
 
-        WHAT THE ARC IS, AND WHY IT IS NOT A SECOND DEFECT. The caller here is
-        neither a moderator nor an instance admin AND is on the web path, so
-        `:501` is false and `:518` is false too, and control falls to `:521`,
-        which is also false: the call returns None having done nothing, with
-        no flash and no exception. That is deliberate rather than the silent
-        fall-through Task 7 fixed -- the web routes guard before they dispatch,
-        whereas the API path reaches this function as its first check -- but it
-        is a real behaviour of this function, and asserting `None` plus an
-        unchanged row plus an empty flash queue is what distinguishes "did
-        nothing" from "did something and said nothing".
+        WHAT THE ARC IS. The caller here is neither a moderator nor an instance
+        admin AND is on the web path, so `:501` is false and `:518` is false
+        too, and control falls to `:521`, which is also false: the call returns
+        None having done nothing, with no flash and no exception.
+
+        IT IS NOT A SECOND DEFECT BECAUSE IT IS THE REGISTERED ONE -- NOT
+        BECAUSE IT IS SAFE. An earlier wording of this docstring said the
+        silence was "deliberate rather than the silent fall-through Task 7
+        fixed -- the web routes guard before they dispatch, whereas the API
+        path reaches this function as its first check". THE "web routes guard
+        before they dispatch" CLAUSE IS FALSE, and the "deliberate rather than"
+        framing rested entirely on it; both are retracted. (The clause about the
+        API path is true and stands.) `post_reply_lock`
+        (`app/post/routes.py:1668-1671`)
+        carries `@login_required` and nothing else, and its body is one call to
+        `lock_post_reply` with `SRC_WEB`; `post_reply_collapse` (`:1675-1678`)
+        is the same shape. NO AUTHORIZATION RUNS BEFORE THIS FUNCTION ON THE WEB
+        PATH, so what this test drives is not a redundant no-op behind a guard
+        -- it is the route's only authorization, and it lets ANY LOGGED-IN USER
+        LOCK ANY COMMENT. It is the same defect Task 7 fixed for `SRC_API`, left
+        standing on the web half out of faithfulness to the twin
+        (`app/shared/post.py:968-969`), and it is registered OPEN as D524. The
+        class docstring above carries the full re-derivation and the contrast
+        with `post_reply_choose_answer`, which does guard.
+
+        WHAT THE TEST IS STILL FOR, unchanged by that retraction: asserting
+        `None` plus an unchanged row plus an empty flash queue is what
+        distinguishes "did nothing" from "did something and said nothing", and
+        it is what keeps D524 witnessed by a test rather than merely asserted in
+        a register. The test's NAME is the honest one --
+        `is_ignored_rather_than_refused` -- and it should stay that way until
+        the behaviour changes.
         """
         from flask import get_flashed_messages
         s = _seed_moderated_reply()
@@ -1055,6 +1177,11 @@ class TestLockPostReply:
         and `reason` is the LITERAL `''` rather than a parameter, because
         locking a comment takes no reason from the caller. `link_text` is the
         reply's own body through `shorten_string`, not the post's title.
+
+        The row is selected by ACTION rather than by `rows[0]`, for the reason
+        that test now gives: the set assertion above does not constrain
+        `len(rows)`, so an index is an ordered access over planner-returned
+        rows and this file's own rule forbids it.
         """
         s = _seed_moderated_reply()
         seed_moderator(s)
@@ -1066,7 +1193,7 @@ class TestLockPostReply:
 
         rows = db.session.query(ModLog).all()
         assert {row.action for row in rows} == {'lock_post_reply'}
-        row = rows[0]
+        row = next(r for r in rows if r.action == 'lock_post_reply')
         assert row.user_id == s.actor.id
         assert row.type == 'mod'
         assert row.target_user_id == s.author.id

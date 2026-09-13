@@ -12,11 +12,54 @@ Then, with the behaviour witnessed, **fix the authorization hole this scoping fo
 
 ## Measurement
 
-Read from `summary.percent_covered` in the full-suite JSON at `903dab20`, and from coverage.py's own per-function table rather than from any figure in a document:
+Read from `summary.percent_covered` in the full-suite JSON at `903dab20`, and from coverage.py's own per-function table rather than from any figure in a document — **except for the module row's two totals, which were in fact copied from a document and were wrong; see the CORRECTION under the table.**
 
 | | statements | missing | branches | missing | percent_covered |
 |---|---|---|---|---|---|
-| module | 364 | 231 | 186 | 126 | 36.8142 |
+| module | 371 | 231 | 194 | 126 | 36.8142 |
+
+> **CORRECTED 2026-09-13 (sub-project 41, final fix wave; register D532).**
+> **This row read `364 | 231 | 186 | 126 | 36.8142` from the day the spec was
+> written until the final whole-branch review caught it, and it could not be
+> true as written.** With 231 and 126 missing, 364 statements and 186 arcs give
+> `(364-231 + 186-126)/(364+186) = 193/550 = 35.0909%`, not 36.8142. The
+> percentage is the one figure in the row that was right: `36.8142% = 208/565 =
+> (371-231 + 194-126)/(371+194)`.
+>
+> **The totals were the PRE-`903dab20` figures, and the percentage was the
+> post-`903dab20` one** — the spec read the percentage from `903dab20`'s JSON
+> as it says, and took the totals from an older table (`tests/README.md` fact
+> 232's, where 364/186 *is* self-consistent with 32.909 and 35.091). Settled two
+> ways that fail differently: by the arithmetic above, and by parsing all three
+> revisions with `coverage.parser.PythonParser`, which returns **364/186 at
+> `903dab20^`, 371/194 at `903dab20`, and 375/198 at HEAD**. The gap,
+> **7 statements and 8 arcs**, is exactly D517's `'reversal'` arm in
+> `vote_for_reply` — one `elif`, one assignment, three `if`s and two `return`s,
+> and three branch points — added hours before this spec was written, by the
+> same author, in the commit this spec names as its measurement point. **The
+> binding authority's own headline measurement was an instance of the
+> citation-staleness class the round went on to register, and it survived
+> fifteen commits and nine task reviews because no instrument in this campaign
+> reads a spec.**
+>
+> **NOTHING DOWNSTREAM CHANGES, and that was verified rather than assumed.**
+> The per-group figures below (105/58 for E+F, 126/68 for B+D), the 231/126
+> module totals, the floor of 66 and every number derived from them were
+> re-checked by the final review and are unaffected: 21+21+24+15+15+9 = 105 and
+> 71+55 = 126 still hold, and the round's measured HEAD figure of 375/198 is
+> 371/194 plus exactly the four statements and four arcs this round's own
+> production fix added. **The damage was confined to one number, and it is the
+> number sub-project 42 will reach for first:** a round measuring
+> `app/shared/reply.py` at HEAD sees **375** statements and, comparing against
+> this row's old **364**, finds an unexplained gap of **11** where the true gap
+> is **4** — and would then go looking for seven statements that were never
+> missing. Against the corrected **371** the arithmetic closes on this round's
+> own `+4` and nothing else.
+>
+> **Recorded as a CORRECTION rather than rewritten in place**, because a spec
+> that quietly changes its mind is indistinguishable from one that was always
+> right, and the next round needs to know this file was a victim of D532's class
+> in order to distrust the rest of it appropriately.
 
 | Group | Function | Stmts | Missing | Arcs | Missing |
 |---|---|---|---|---|---|
