@@ -68,8 +68,12 @@ WHAT IS NEW, AND HAS NO POST TWIN:
     populated one. `child_count` (app/models.py:2899) is likewise unset by the
     factory, but has a column default of 0 rather than None.
 
-  - ANY WEB ARM THAT RENDERS A TEMPLATE NEEDS A `Site` ROW WITH id 1, and
-    `_seed_reply` does not seed one. `subscribe_reply:131` is the first
+  - A `Site` ROW WITH id 1 IS NEEDED FOR TWO UNRELATED REASONS, and
+    `_seed_reply` seeds one for neither. The render chain below is the first;
+    the second is `can_downvote`'s `Site` read (app/utils.py:2443-2445), which
+    binds SRC_API tests that never render -- see `_seed_reply`'s own docstring
+    and `TestVoteForReplySourceAndPermission`'s. THE RENDER CHAIN:
+    `subscribe_reply:131` is the first
     statement in this round to render, and it fails without the row --
     `AttributeError: 'NoneType' object has no attribute 'default_theme'`, not a
     skipped lookup. The chain is app/utils.py:75 (this codebase's own
@@ -92,13 +96,19 @@ WHAT IS NEW, AND HAS NO POST TWIN:
     wants a THEMED render must set `default_theme` explicitly; `make_site()`
     alone will not give it one. All of this was measured, not read.
 
-    Tests that render call `make_site()` (tests/factories.py:353) themselves;
+    Tests that render call `make_site()` (tests/factories.py:353) themselves --
+    as does any test reaching `can_downvote`, per the two-reasons note above;
     the bookmark tests above do not, because `bookmark_reply` and
     `remove_bookmark_reply` flash and fall off the end of the function without
     rendering anything. The OTHER renderer in this module is
     `vote_for_reply:51`, the only other `render_template` call in
-    app/shared/reply.py -- `delete_reply` and `restore_reply` never render, so
-    the delete/restore lifecycle tests need no `Site` row.
+    app/shared/reply.py -- `delete_reply` and `restore_reply` never render, and
+    neither reaches `can_downvote` (`grep -n "can_upvote\|can_downvote"
+    app/shared/reply.py` gives `:15`, the import, and `:22`/`:24` inside
+    `vote_for_reply`, nothing else), so BOTH reasons are absent and the
+    delete/restore lifecycle tests need no `Site` row. The module's one other
+    `Site` touch is `Site.admins()` at `:365`, inside `report_reply`, which is
+    a later sub-project's.
     `subscribe_reply` additionally has two statements no production source
     value can reach -- see `TestSubscribeReply`'s docstring for what `:98` does
     to the web arm.
@@ -189,13 +199,23 @@ def _seed_reply(*, private=True, community_name='replies'):
     module docstring's WHAT IS NEW. A test needing `delete_reply:256`'s or
     `restore_reply:282`'s true arm must seed a path itself.
 
-    NO `Site` ROW IS SEEDED HERE. That is fine for every SRC_API arm and for
-    the web arms that only flash, but any test whose call reaches a
-    `render_template` must call `make_site()` itself first -- the module
-    docstring's WHAT IS NEW gives the failure and the exact chain. It is left
-    out of this helper rather than folded in because a `Site` row is read by
-    more than the theme lookup (`blocked_phrases`, for one) and seeding it
-    unconditionally would change what the existing tests here exercise.
+    NO `Site` ROW IS SEEDED HERE, and A TEST NEEDS ONE FOR TWO INDEPENDENT
+    REASONS, not just the render. The first is the theme lookup any
+    `render_template` triggers -- the module docstring's WHAT IS NEW gives the
+    failure and the exact chain. The second is a PERMISSION read on a path that
+    never renders at all: `can_downvote` (app/utils.py:2436) does
+    `Site.query.get(1)` at `:2443` and dereferences it at `:2445`, and that sits
+    BEFORE any source fork, so an SRC_API downvote needs the row as much as a
+    web render does. `can_upvote` (app/utils.py:2480) has no such read, which is
+    why the API upvote tests here run without one. So "fine for every SRC_API
+    arm" would be wrong: it is fine for every SRC_API arm that does not reach
+    `can_downvote`.
+
+    It is left out of this helper rather than folded in because a `Site` row is
+    read by more than the theme lookup (`blocked_phrases`, for one) and seeding
+    it unconditionally would change what the existing tests here exercise -- and
+    because `TestVoteForReplySourceAndPermission` needs to set
+    `enable_downvotes` on the row it makes.
     """
     instance = make_instance('local.example', software='piefed')
     user = make_user(instance, 'reader', local=True)
@@ -624,9 +644,15 @@ class TestVoteForReplySourceAndPermission:
         BOTH bot tests -- the one above and the brief's bot downvote, restored
         verbatim for the probe -- passed against it.
 
-        The lever here is DIRECTION-SPECIFIC instead. `site.enable_downvotes`
-        is read only by `can_downvote` (app/utils.py:2445); `can_upvote` has no
-        equivalent. So under the direction swap this user's downvote reaches
+        The lever here is DIRECTION-SPECIFIC instead. `can_downvote` reads
+        `site.enable_downvotes` at app/utils.py:2445 and `can_upvote`
+        (app/utils.py:2480-2491) DOES NOT READ IT AT ALL -- that asymmetry
+        between the two gates is the whole witness, and it is a narrower claim
+        than "only `can_downvote` reads the column", which is false: the flag is
+        also read at app/api/alpha/views.py:1232, app/activitypub/util.py:4065
+        and app/admin/routes.py:337, and WRITTEN at app/admin/routes.py:291.
+        None of those is on this call path. So under the direction swap this
+        user's downvote reaches
         `:22`'s `can_upvote`, which returns True for a non-bot, falls past
         `:24`'s now-'upvote' test, and LANDS -- `down_votes` becomes 1 and this
         test fails. That is the discrimination the bot version could not give,
@@ -663,8 +689,12 @@ class TestVoteForReplySourceAndPermission:
         `class Community` which opens at app/models.py:555), `user.attitude`
         (app/models.py:1009) and `user.reputation` (app/models.py:1008, both in
         `class User` which opens at app/models.py:973) each independently gate
-        `can_downvote` at app/utils.py:2448-2468 and each would produce the
-        same empty result.
+        `can_downvote` -- attitude and reputation together at app/utils.py:2451,
+        `downvote_accept_mode` at app/utils.py:2454-2468 -- and each would
+        produce the same empty result. app/utils.py:2448, the line this
+        docstring previously gave as the start of that range, is
+        `community.local_only`, a FOURTH such gate and not one of the three
+        named here; `_seed_reply`'s docstring is where that one is recorded.
 
         `_clear_votes_cast` is mandatory here because this test completes a real
         vote against the session-wide redis.
