@@ -45,10 +45,11 @@ sets or increments `votes_cast_{today}_{user_id}` on the real redis the
 compose stack shares, and tests/conftest.py:131 resets id sequences after
 every test -- so a later test whose user reuses that id inherits a stale
 count. THE RULE FOR THIS FILE IS THAT EVERY TEST COMPLETING A REAL VOTE
-CLEARS THE KEY IN A `finally`. Nine tests now do -- the five in
-`TestVoteForReplySourceAndPermission` that reach `:36` and the four in
+CLEARS THE KEY IN A `finally`. Ten tests now do -- the five in
+`TestVoteForReplySourceAndPermission` that reach `:36` and the five in
 `TestVoteForReplyGuardsAndReturns` that do. It was five before task 7's
-mutation pass added four vote-completing tests, and the count is kept current
+mutation pass added four vote-completing tests and fix round 1 a fifth
+(the emoji-reversal test), and the count is kept current
 here rather than left to drift, because the rule this paragraph states is
 enforced by nothing but the count. The four that refuse earlier
 deliberately do not, because no vote completed and the absence is part of what
@@ -311,20 +312,47 @@ bypassed for UNDOING a vote, not for casting one. It is PINNED, not fixed, by
 `TestVoteForReplySourceAndPermission`'s
 `..._a_reversal_reaches_the_vote_past_both_api_permission_gates`, on the same
 reasoning as the asymmetry above: changing a permission check is a product
-decision a coverage round has no standing to take. It was found by neutralising
-`:22`'s first conjunct, which nothing in the file had killed.
+decision a coverage round has no standing to take. That test's docstring now
+carries the fix-edit obligation it owes -- it asserts the defect, so closing the
+bypass must invert it. It was found by neutralising `:22`'s first conjunct,
+which nothing in the file had killed.
+
+THREE EXTENSIONS TO DEFECT 5 ARE OWED TO THE REGISTER and are recorded here so
+they are not lost with a report. (i) The gate-free call also carries `emoji`:
+`post_reply_like` forwards `data['emoji']`, and the remapped reversal lands on
+app/models.py:3325-3331, so a refused user can also REWRITE THE EMOJI on the
+existing vote. Fix round 1's `..._a_web_reversal_that_only_rewrites_the_emoji_
+marks_neither` executes that path (through the web arm, for its own reasons).
+(ii) `vote_for_post` is the twin: app/shared/post.py:31-37 carries the identical
+two-literal gate and `post_like` the identical `score`->'reversal' mapping, so
+any fix must land in both or create exactly the mirrored-pair divergence this
+file registers as a defect class. (iii) Under `python -O` the character of the
+hole changes: app/models.py:3321's assert disappears, so `score: 0` with NO
+existing vote falls through to the else-branch, `effect` becomes -1 and a NEW
+DOWNVOTE is cast past both gates. Nothing in this repository runs `-O` or sets
+`PYTHONOPTIMIZE`, so it is hypothetical here -- but it converts a withdrawal
+hole into a vote-CASTING hole and belongs in the entry.
 
 WHAT TASK 7'S MUTATION PASS LEFT OPEN, listed because a survivor that is merely
 reported dies with the report. Each of these is a mutation of a line in Groups A
-or C that all 33 tests here pass against, measured after the strengthening, and
+or C that all 34 tests here pass against, measured after the strengthening, and
 NONE of them is claimed to be an equivalent mutant -- they are unclosed:
+
+THESE ARE OPEN AT `tests/test_shared_*.py` SCOPE, WHICH IS NOT THE SCOPE THE
+CAMPAIGN'S RATCHET USES, and the two halves of this file's evidence do not have
+the same unit. The COVERAGE claim -- 73 statements and 46 arcs closed, no
+coverage added by the mutation round -- is full-suite. The MUTATION evidence
+below, and every "N passed" in the docstrings here, is shared-suite: twelve
+`tests/test_shared_*.py` files, 520 tests. None of the mutants below was ever
+re-run at full-suite scope, so "open" means "open at the narrower scope". Some of
+them probably die at the wider one -- `60`, `78` and `83` are the obvious
+candidates, and `:83`'s message text is known to be pinned at full-suite scope --
+so the list is conservative in the direction of reporting too many, not too few.
 
   - `30s/ or user_ip_banned()//`. No test makes `user_ip_banned()` true.
     Closing it needs a request IP plus a `banned_ip_addresses()` row, and that
     helper is `@cache.memoize`d, which is a cross-test hazard this task did not
     take on.
-  - `36s/.../reply.vote(user, vote_direction, None)/`. Every test passes
-    `emoji=None`, so the argument is threaded but never witnessed.
   - `60s/, user_id=user_id//`, `60s/post_reply_id=reply_id, //`,
     `78s/, user_id=user_id//`, `100s/entity_id=reply_id, user_id=user_id,/
     entity_id=reply_id,/` and its entity-side twin. Single-row fixtures: one
@@ -343,18 +371,65 @@ NONE of them is claimed to be an equivalent mutant -- they are unclosed:
     `task_selector('vote_for_post', reply_id=...)` is a TypeError -- so this is
     a property of the argument lists, not of the dispatcher being covered.
   - `61s/if not existing_bookmark:/if False:/` and
-    `79s/if existing_bookmark:/if False:/`. These are different in kind: `:62`,
-    `:63`, `:72`, `:80`, `:81`, `:85` and `:90` are NOT EXECUTED by any
-    `tests/test_shared_*.py` file, so no mutation of them can be killed at this
-    scope. `tests/test_api_reply_bookmarks.py` covers them at full-suite scope.
+    `79s/if existing_bookmark:/if False:/`. These are different in kind, and the
+    LABEL THEY CARRIED IN TASK 7 -- "not executable at this scope" -- WAS WRONG,
+    contradicted by the same report's own coverage paste. The lines missing at
+    this scope are `62`, `63`, `72`, `80`, `81`, `85` and `90`; `:61` and `:79`
+    are NOT among them, so both lines ARE executed here. What is dead is the
+    branch: `:61`'s true arm is never taken (every bookmark test here seeds the
+    bookmark first) and `:79`'s false arm likewise, so forcing the condition to
+    `False` changes no outcome. That makes them equivalent-AT-THIS-SCOPE, not
+    unexecutable -- and `:61` is closable HERE, today, by one web
+    `bookmark_reply` call against a reply with no bookmark, which executes
+    `:62`/`:63` and kills the mutant. It is left open only because this round's
+    business was mutation, not new coverage.
+    `tests/test_api_reply_bookmarks.py` covers `62`-`63`/`72`/`80`-`81`/`85`/`90`
+    at full-suite scope; a mutation of THOSE SEVEN cannot be killed here.
 
-  `48s/vote_direction == 'downvote' and //` is the ONE survivor here argued to
-  be EQUIVALENT rather than open, and the argument is domain-restricted: `:48`
-  is reached only when `:46` is false, `PostReply.vote` asserts the direction is
-  'upvote' or 'downvote' at app/models.py:3321 so nothing else survives `:36`,
-  and a 'reversal' that does survive it always produces a non-None `undo`
-  (`:3338`/`:3352` delete the row). Over those inputs the deletion changes no
-  outcome. The argument depends on an `assert`, so `python -O` would void it.
+  `62s/db.session.add(PostReplyBookmark(...))/pass/` is NOT in the list above,
+  and task 7's report wrongly counted it there. It is the DELIBERATE LABELLED
+  CONTROL for the paragraph above: a mutation that deletes a `db.session.add`
+  outright and goes unnoticed, proving the seven dead lines are dead rather than
+  weakly guarded. A control that survives by construction is not an open hole,
+  and counting it as one inflates the inventory. IT IS ALSO THE ONLY ONE OF THE
+  SEVEN THAT WAS MUTATED: `63`, `72`, `80`, `81`, `85` and `90` received no
+  mutation at all in task 7's sweep, because all six are dead at this scope and
+  the result would have been "survives, dead line" for every one of them. That
+  residual is stated rather than left for a reader to difference out of the
+  statement list, where it would read as an oversight.
+
+RETRACTION -- THE ONE EQUIVALENCE CLAIM THIS FILE MADE WAS FALSE, AND IS NOW
+CLOSED BY A TEST. Task 7 argued that `48s/vote_direction == 'downvote' and //`
+is an EQUIVALENT mutant over the reachable domain, on two grounds: that
+app/models.py:3321's assert narrows `vote_direction` to 'upvote' or 'downvote'
+before `:46`, and that a 'reversal' surviving that assert always yields a
+non-None `undo`, making the one differing state ('reversal', None) unreachable.
+
+BOTH GROUNDS ARE WRONG.
+
+  - The assert narrows `vote()`'s OWN LOCAL, not the caller's. `:3317`/`:3319`
+    ASSIGN to `vote_direction` inside `vote`; `vote_for_reply`'s variable is
+    untouched and is still 'reversal' at `:46` and `:48`.
+  - A surviving 'reversal' does NOT always yield a non-None `undo`.
+    app/models.py:3325-3331 is an early `return None` -- with an existing vote,
+    a non-empty `emoji` and a remapped direction matching the existing vote's
+    effect, `vote` rewrites the emoji and returns before any removal branch
+    assigns `undo`.
+
+So ('reversal', None) IS reachable, and on it the original `:48` is False while
+the mutant is True -- the mutant renders the reply as recently-DOWNVOTED when
+nothing was downvoted. It is reachable from the web with no `python -O` and no
+API involvement: app/post/routes.py:564 routes
+`/comment/<int:comment_id>/<vote_direction>/<federate>/emoji` with the BARE
+string converter, no `any(...)` whitelist, and `:575` passes that direction plus
+`request.form.get('emoji')` into `vote_for_reply`. The `-O` caveat task 7
+attached to this claim was the right instinct aimed at the wrong mutant: the
+claim fails without invoking `-O` at all.
+
+`..._a_web_reversal_that_only_rewrites_the_emoji_marks_neither` in
+`TestVoteForReplyGuardsAndReturns` is that state, and kills the mutant alone.
+The same test also closes `36s/.../reply.vote(user, vote_direction, None)/`,
+which task 7 left open because every test then passed `emoji=None`.
 """
 
 from datetime import date
@@ -1139,6 +1214,26 @@ class TestVoteForReplySourceAndPermission:
         docstring gives for the web-arm asymmetry: altering a permission check
         is a product decision a coverage round has no standing to make.
 
+        THIS TEST ASSERTS THE DEFECT, NOT CORRECT BEHAVIOUR, AND WHOEVER FIXES
+        DEFECT 5 MUST EDIT IT. Read the assertions below as a specification and
+        they say a bot may undo its vote through the API; that is the bug, in
+        executable form, deliberately. The obligation is stated here rather than
+        left implicit because this test's own kill is a FIX-CATCHER: the mutant
+        it kills, `22s/vote_direction == 'upvote' and //`, makes `:22` consult
+        `can_upvote` for every direction and so CLOSES DEFECT 5. It is a
+        candidate fix, not a fault, and this test earns its place by pinning a
+        registered defect rather than by catching a regression. So: WHEN THE
+        BYPASS IS CLOSED -- at the API boundary, or by gating 'reversal' on a
+        permission function, and in `vote_for_post` in the same change, because
+        app/shared/post.py:31-37 carries the identical two-literal gate -- THE
+        EDIT OWED HERE IS TO INVERT THIS TEST: the second `vote_for_reply` call
+        must then be expected to return early without voting, `up_votes` must
+        stay 1, and the `PostReplyVote` count must stay 1. ITS FAILURE AT THAT
+        POINT IS THE FIX LANDING, NOT A REGRESSION. The precedent for asserting
+        wrong-on-purpose numbers so that a fix must edit a test is
+        `TestRestoreReply`'s
+        `..._a_delete_restore_cycle_leaves_two_counters_permanently_low`.
+
         THE UNIQUE KILL IS `22s/vote_direction == 'upvote' and //`, which left
         all 27 tests green in the task-7 pass. That mutant is not equivalent and
         THIS is where it shows: it makes `:22` consult `can_upvote` for EVERY
@@ -1274,13 +1369,15 @@ class TestVoteForReplyGuardsAndReturns:
     asserting strictly less (`result is not None` against that test's markup
     discrimination), so they are deliberately absent rather than overlooked.
 
-    TWO MORE TESTS WERE ADDED BY TASK 7 AND CLOSE NOTHING, which is why the
-    count above is qualified rather than plain. Each earns its place by a unique
-    kill against a mutant the other four left alive -- the downvote-undo test
-    against `:48`'s second conjunct, the quota-boundary test against `:33`'s
-    comparison operator. Their docstrings carry the measurements.
+    THREE MORE TESTS CLOSE NOTHING, which is why the count above is qualified
+    rather than plain. Each earns its place by a unique kill against a mutant
+    the other four left alive -- the downvote-undo test against `:48`'s second
+    conjunct, the quota-boundary test against `:33`'s comparison operator (both
+    task 7), and the emoji-reversal test against `:48`'s FIRST conjunct (fix
+    round 1, closing a mutant task 7 had wrongly argued equivalent). Their
+    docstrings carry the measurements.
 
-    WHY `:46`/`:48` NEED FOUR INPUTS AND NOT THREE. `:46` is an `if` and `:48`
+    WHY `:46`/`:48` NEED FIVE INPUTS AND NOT THREE. `:46` is an `if` and `:48`
     its `elif`, so `:48` is not evaluated at all when `:46` is true, and BOTH
     lines carry `undo is None` as their second conjunct:
 
@@ -1290,6 +1387,16 @@ class TestVoteForReplyGuardsAndReturns:
         -> `:51` with both lists left empty
       - downvote, `undo` NOT None -> `46->48`, `:48` false on its SECOND
         conjunct -> `:51` with both lists left empty
+      - 'reversal', `undo` None  -> `46->48`, `:48` false on its FIRST conjunct
+        -> `:51` with both lists left empty. THE TABLE USED TO HAVE FOUR ROWS
+        AND STOP ABOVE THIS ONE, on the assumption that `vote_direction` here is
+        always one of the two literals. It is not: `PostReply.vote` remaps
+        'reversal' by assigning to ITS OWN local (app/models.py:3317/:3319), so
+        the caller's value survives unchanged, and the emoji early return at
+        `:3325-3331` reaches `:46` with `undo` None. Falsifying `:48`'s first
+        conjunct with `undo` None is what the fourth row cannot do -- there
+        `undo` is non-None, so deleting the first conjunct leaves `:48` false
+        either way. The fifth test below is this row.
 
     THE LAST TWO ROWS USED TO BE ONE ROW READING "either direction", AND THAT
     COLLAPSE COST A GUARD. Both reach `48->51`, so coverage cannot tell them
@@ -1301,8 +1408,8 @@ class TestVoteForReplyGuardsAndReturns:
     where it actually bit.
 
     The upvote-undo case is the third test here, the downvote-undo case the
-    fifth; the first row is the class above's web test and the second the
-    fourth test here.
+    fifth and the emoji-reversal case the sixth; the first row is the class
+    above's web test and the second the fourth test here.
 
     `undo` IS NON-None ONLY WHEN A VOTE IS REMOVED, and that was read at source
     rather than assumed: `PostReply.vote` (app/models.py:3311, in `class
@@ -1312,7 +1419,11 @@ class TestVoteForReplyGuardsAndReturns:
     `undo = 'Dislike'`, when an existing downvote is voted down again. A
     direction REVERSAL (`:3345`, `:3359`) edits the existing row and leaves
     `undo` None, so reversing is NOT an input that reaches `48->51`; repeating
-    the same direction is.
+    the same direction is. THE EMOJI EARLY RETURN AT `:3325-3331` IS A THIRD
+    PATH THAT LEAVES `undo` None, and it is the one the fifth row of the table
+    uses: it returns before the removal branches, so nothing is undone and
+    nothing is recorded, while the caller's direction may be a value neither
+    `:46` nor `:48` matches.
 
     WHICH TESTS NEED A `Site` ROW, decided against BOTH triggers -- the
     `render_template` theme chain and a `can_downvote` call -- rather than by
@@ -1330,8 +1441,9 @@ class TestVoteForReplyGuardsAndReturns:
         SRC_API upvote, so `can_downvote` is never called and `:41` returns at
         `:42` without rendering. The only thing it changes about `:33` is which
         side of the comparison it lands on.
-      - ALL THREE web tests need one FOR BOTH REASONS AT ONCE -- the two
-        original ones and the downvote-undo test task 7 added. The first is the
+      - ALL FOUR web tests need one FOR BOTH REASONS AT ONCE -- the two
+        original ones, the downvote-undo test task 7 added and the
+        emoji-reversal test fix round 1 added. The first is the
         theme chain the module docstring records. The second is the template's
         own: `post/_comment_voting_buttons.html` line 10 reads
         `{% if (can_downvote_here or can_downvote(current_user, community,
@@ -1655,6 +1767,97 @@ class TestVoteForReplyGuardsAndReturns:
         finally:
             _clear_votes_cast(s.user.id)
 
+    def test_a_web_reversal_that_only_rewrites_the_emoji_marks_neither(self, db_session, app):
+        """CLOSES NO STATEMENT AND NO ARC -- it walks `46->48` and `48->51`, both
+        of which the two tests above already take. It earns its place by a
+        unique kill against `48s/vote_direction == 'downvote' and //`, which
+        task 7's report argued was the round's ONE EQUIVALENT mutant. THAT
+        ARGUMENT WAS FALSE and is retracted in the module docstring; this test
+        is the retraction's executable half.
+
+        THE FIFTH INPUT TO `:46`/`:48`, and the one the class docstring's
+        four-row table could not see, because that table takes `vote_direction`
+        at `:46` to be 'upvote' or 'downvote' by the time control arrives. IT
+        NEED NOT BE. The false argument was that `app/models.py:3321`'s assert
+        narrows the caller's direction to those two literals. It does not:
+        `:3317`/`:3319` remap 'reversal' by ASSIGNING TO `vote()`'s OWN LOCAL,
+        which is what the assert then sees. The caller's `vote_direction` is
+        untouched and is still 'reversal' at `:46` and `:48`.
+
+        THE REMAINING HALF OF THE FALSE ARGUMENT was that a 'reversal' which
+        survives the assert always yields a NON-None `undo`, so the one state
+        where mutant and original differ is unreachable. app/models.py:3325-3331
+        is the counterexample it walked past: with an existing vote, a non-empty
+        `emoji`, and a remapped direction MATCHING the existing vote's effect,
+        `vote` rewrites the emoji and `return None` -- before any of the removal
+        branches that assign `undo`. So `undo is None` while nothing was undone,
+        and the state ('reversal', None) is reached.
+
+        ON THAT STATE THE MUTANT IS NOT EQUIVALENT. Original `:48`:
+        `'reversal' == 'downvote'` is False, so both lists stay empty. Mutant
+        `:48`: `undo is None` alone is True, so `:49` marks the reply
+        recently-DOWNVOTED in a render where nothing was downvoted at all.
+
+        REACHABLE FROM THE WEB, AND WITHOUT `python -O`. app/post/routes.py:564
+        routes `/comment/<int:comment_id>/<vote_direction>/<federate>/emoji`
+        with the BARE string converter -- there is no `any(...)` whitelist on
+        the direction -- and `:575` hands that value together with
+        `request.form.get('emoji')` to `vote_for_reply`. A POST to
+        `/comment/<id>/reversal/default/emoji` by a user who has already
+        upvoted that reply is exactly the second call below.
+
+        THE WITNESS IS THE MARKUP, under the same three guards the two tests
+        above use: `redirect_login` absent and `upvote_button` present pin the
+        render to line 1's authenticated branch, so `voted_down` absent is the
+        empty list rather than the wrong half of the template.
+        `post/_comment_voting_buttons.html` line 11 emits `voted_down` only when
+        `in_sorted_list(recently_downvoted_replies, comment.id)`, and `:49` is
+        the only statement that can put this id there.
+
+        `voted_up` IS ASSERTED ABSENT TOO, and it is NOT this test's unique
+        kill: it is the same-input witness for `46s/vote_direction == 'upvote'
+        and //`, which the downvote test above already kills. Re-running that
+        mutation after this test fails both, and the fix-round report records
+        why the two lines are not in the same position -- `:46` is the `if`
+        head, evaluated on every web call, so a plain downvote with `undo` None
+        already falsifies its first conjunct while leaving its second true;
+        `:48` is reached only when `:46` is false, and for a downvote its own
+        first conjunct is TRUE, which masks the deletion. Only a direction that
+        is neither literal, arriving with `undo` None, separates `:48`'s mutant
+        from the original.
+
+        THE POSITIVE CONTROL THAT NOTHING WAS UNDONE is `up_votes == 1` with the
+        `PostReplyVote` row still present and its `emoji` now set. Without it,
+        both markup absences are also what a REMOVAL would produce -- and a
+        removal sets `undo`, which would move this input back onto the table's
+        fourth row and kill nothing.
+
+        `make_site()` is needed twice over for the reasons the class docstring
+        gives. ONE `_clear_votes_cast` FOR TWO CALLS, for the same reason the
+        upvote-undo test gives: the emoji early return at app/models.py:3331
+        never reaches the `votes_cast` bookkeeping at `:3382-3386`, so only the
+        first call wrote the key.
+        """
+        make_site()
+        s = _seed_reply()
+        try:
+            with web_ctx(app, s.user):
+                vote_for_reply(s.reply.id, 'upvote', True, None, SRC_WEB)
+                result = vote_for_reply(s.reply.id, 'reversal', True, '👍', SRC_WEB)
+                body = result.get_data(as_text=True)
+
+            db.session.refresh(s.reply)
+            assert s.reply.up_votes == 1
+            vote = PostReplyVote.query.filter_by(
+                post_reply_id=s.reply.id, user_id=s.user.id).one()
+            assert vote.emoji == '👍'
+            assert 'redirect_login' not in body
+            assert 'upvote_button' in body
+            assert 'voted_down' not in body
+            assert 'voted_up' not in body
+        finally:
+            _clear_votes_cast(s.user.id)
+
     def test_a_voter_exactly_at_the_vote_quota_is_still_allowed_through(self, db_session, app, monkeypatch):
         """CLOSES NO STATEMENT AND NO ARC -- `33->36` is taken by four tests
         already. It earns its place by a unique kill against
@@ -1668,6 +1871,15 @@ class TestVoteForReplyGuardsAndReturns:
         input on which they disagree is equality, and this test is that input:
         `VOTE_QUOTA` 0 against 0 votes cast means `:33` is false under `>` and
         the vote lands, and true under `>=` and the call aborts 429.
+
+        WHAT THIS TEST ALSO PINS, SAID OUT LOUD BECAUSE A BOUNDARY TEST IS WHERE
+        IT MUST BE: `:33` is evaluated BEFORE the vote is cast, so `VOTE_QUOTA =
+        N` permits N + 1 votes. The assertion below -- `VOTE_QUOTA` 0 and a vote
+        LANDS -- is that off-by-one in executable form. It is recorded, not
+        fixed: the default is 240 (config.py:203) so nothing is burning, and
+        `vote_for_post:33` carries the identical comparison, which makes it a
+        consistent product decision rather than a divergence between the
+        mirrored pair. It is owed to the campaign register.
 
         THE ASSERTION IS THE COMPLETED VOTE, not the absence of an exception. An
         `abort(429)` would fail this test on the raise, but so would any other
