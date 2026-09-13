@@ -661,15 +661,25 @@ def register(app):
                     parent_piefed_id = lemmy_to_piefed_comment.get(parent_lemmy_id) if parent_lemmy_id else None
                     
                     # Build PieFed path array
-                    piefed_path = []
+                    piefed_ancestors = []
                     if len(path_parts) > 1:
                         for lemmy_ancestor_id in path_parts[1:-1]:
                             if lemmy_ancestor_id != '0':
                                 piefed_ancestor_id = lemmy_to_piefed_comment.get(int(lemmy_ancestor_id))
                                 if piefed_ancestor_id:
-                                    piefed_path.append(piefed_ancestor_id)
-                    
-                    depth = len(piefed_path)
+                                    piefed_ancestors.append(piefed_ancestor_id)
+
+                    depth = len(piefed_ancestors)
+
+                    # app/models.py:3053-3060 is the convention every reader of this
+                    # column assumes: a leading 0 sentinel, then each ancestor, then
+                    # the reply's own id last, so root_id is path[1] and the ancestor
+                    # list is path[:-1]. Storing only the ancestors gave a first-level
+                    # nested comment a one-element path, which makes tuple(path[:-1])
+                    # the empty tuple -- rendered by psycopg2 as `where id in ()` and
+                    # rejected by Postgres -- turning delete_reply and restore_reply
+                    # into a 500 for the comment's own author.
+                    piefed_path = [0] + piefed_ancestors + [row.id]
                     
                     # Set root_id
                     if depth == 0 and parent_lemmy_id:

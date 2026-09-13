@@ -2748,7 +2748,12 @@ class Post(db.Model):
                         return None  # no point reversing a vote with no effect. There shouldn't be any more of these anyway, now that the vote manipulation bot detection code is removed.
                 else:
                     return None      # cannot reverse non-existent vote
-            assert vote_direction == 'upvote' or vote_direction == 'downvote'
+            if vote_direction != 'upvote' and vote_direction != 'downvote':
+                # Was an assert, and asserts vanish under `python -O`. Here every
+                # 'reversal' has already returned above, so this catches a direction
+                # that is none of the three -- but it is still a real check rather
+                # than one the interpreter can delete.
+                raise ValueError(f'unresolvable vote direction: {vote_direction!r}')
             undo = None
             if existing_vote:
                 # If emoji is provided and vote direction matches existing vote, just update the emoji
@@ -3327,7 +3332,14 @@ class PostReply(db.Model):
                     vote_direction = 'upvote'
                 elif existing_vote.effect == -1:
                     vote_direction = 'downvote'
-            assert vote_direction == 'upvote' or vote_direction == 'downvote'
+            if vote_direction != 'upvote' and vote_direction != 'downvote':
+                # Was an assert, and asserts vanish under `python -O`. This one is
+                # load-bearing: unlike Post.vote above, `:3321` remaps 'reversal' only
+                # when an existing vote is found, so a reversal with no existing vote
+                # arrives here still spelled 'reversal'. Under -O the assert vanished,
+                # it fell through to the else-branch below, and `effect` became -1 --
+                # a NEW downvote cast past the caller's permission gates.
+                raise ValueError(f'unresolvable vote direction: {vote_direction!r}')
             undo = None
             if existing_vote:
                 # If emoji is provided and vote direction matches existing vote, just update the emoji

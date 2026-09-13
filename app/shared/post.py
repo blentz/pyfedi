@@ -36,6 +36,18 @@ def vote_for_post(post_id: int, vote_direction, federate: bool, emoji: str, src,
             return user.id
         elif vote_direction == 'downvote' and not can_downvote(user, post.community):
             return user.id
+        elif vote_direction == 'reversal':
+            # The twin of app/shared/reply.py's gate, and it moves with it. 'reversal'
+            # names no permission of its own, so the gate is the permission that would
+            # have cast the vote being undone. app/api/alpha/utils/post.py maps any
+            # score that is not +/-1 to 'reversal' exactly as the reply API does.
+            existing_vote = db.session.query(PostVote).filter_by(
+                user_id=user.id, post_id=post_id).first()
+            if existing_vote:
+                if existing_vote.effect > 0 and not can_upvote(user, post.community):
+                    return user.id
+                if existing_vote.effect < 0 and not can_downvote(user, post.community):
+                    return user.id
     else:
         post = db.session.query(Post).get_or_404(post_id)
         user = current_user

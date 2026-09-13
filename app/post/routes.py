@@ -1992,7 +1992,7 @@ def post_reply_restore(post_id: int, comment_id: int):
         if not post_reply.author.bot:
             post.reply_count += 1
         post_reply.author.post_reply_count += 1
-        if post_reply.path:
+        if post_reply.path and len(post_reply.path) > 1:
             db.session.execute(text('update post_reply set child_count = child_count + 1 where id in :parents'),
                                {'parents': tuple(post_reply.path[:-1])})
         db.session.commit()

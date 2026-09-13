@@ -2259,7 +2259,7 @@ def delete_post_or_comment(deletor, to_delete, store_ap_json, request_json, reas
             with redis_client.lock(f"lock:post_reply:{to_delete.id}", timeout=10, blocking_timeout=6):
                 to_delete.deleted = True
                 to_delete.deleted_by = deletor.id
-                if to_delete.path:
+                if to_delete.path and len(to_delete.path) > 1:
                     db.session.execute(text('update post_reply set child_count = child_count - 1 where id in :parents'),
                                        {'parents': tuple(to_delete.path[:-1])})
                 db.session.commit()
@@ -2313,7 +2313,7 @@ def restore_post_or_comment(restorer, to_restore, store_ap_json, request_json, r
             if not to_restore.author.bot:
                 to_restore.post.reply_count += 1
             to_restore.author.post_reply_count += 1
-            if to_restore.path:
+            if to_restore.path and len(to_restore.path) > 1:
                 db.session.execute(text('update post_reply set child_count = child_count + 1 where id in :parents'),
                                    {'parents': tuple(to_restore.path[:-1])})
             db.session.commit()
@@ -2335,7 +2335,7 @@ def site_ban_remove_data(blocker_id, blocked):
         if not blocked.bot:
             reply.post.reply_count -= 1
         reply.community.post_reply_count -= 1
-        if reply.path:
+        if reply.path and len(reply.path) > 1:
             db.session.execute(text('update post_reply set child_count = child_count - 1 where id in :parents'),
                                {'parents': tuple(reply.path[:-1])})
     blocked.post_reply_count = 0
@@ -2376,7 +2376,7 @@ def community_ban_remove_data(blocker_id, community_id, blocked):
             reply.post.reply_count -= 1
         reply.community.post_reply_count -= 1
         blocked.post_reply_count -= 1
-        if reply.path:
+        if reply.path and len(reply.path) > 1:
             db.session.execute(text('update post_reply set child_count = child_count - 1 where id in :parents'),
                                {'parents': tuple(reply.path[:-1])})
     db.session.commit()

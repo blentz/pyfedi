@@ -7,8 +7,8 @@ from sqlalchemy import text
 
 from app import db, limiter
 from app.constants import *
-from app.models import Notification, NotificationSubscription, Post, PostReply, PostReplyBookmark, Report, Site, User, \
-    utcnow, Instance, votes_cast_today
+from app.models import Notification, NotificationSubscription, Post, PostReply, PostReplyBookmark, PostReplyVote, \
+    Report, Site, User, utcnow, Instance, votes_cast_today
 from app.shared.tasks import task_selector
 from app.utils import render_template, authorise_api_user, shorten_string, \
     piefed_markdown_to_lemmy_markdown, markdown_to_html, add_to_modlog, can_create_post_reply, \
@@ -23,6 +23,20 @@ def vote_for_reply(reply_id: int, vote_direction, federate: bool, emoji: str | N
             return user.id
         elif vote_direction == 'downvote' and not can_downvote(user, reply.community):
             return user.id
+        elif vote_direction == 'reversal':
+            # 'reversal' names no permission of its own -- it undoes whichever vote
+            # already exists -- so the gate is the permission that would have cast
+            # that vote. Without this arm both tests above are false for a reversal
+            # and the call reaches reply.vote() with no permission check at all, which
+            # let a user the community had banned from voting withdraw an existing
+            # vote (and, with an emoji, rewrite it) through the API.
+            existing_vote = db.session.query(PostReplyVote).filter_by(
+                user_id=user.id, post_reply_id=reply_id).first()
+            if existing_vote:
+                if existing_vote.effect > 0 and not can_upvote(user, reply.community):
+                    return user.id
+                if existing_vote.effect < 0 and not can_downvote(user, reply.community):
+                    return user.id
     else:
         reply = db.session.query(PostReply).get_or_404(reply_id)
         user = current_user
@@ -253,7 +267,7 @@ def delete_reply(reply_id, src, auth):
         reply.post.reply_count_cross_posted -= 1
         reply.community.post_reply_count -= 1
     reply.author.post_reply_count -= 1
-    if reply.path:
+    if reply.path and len(reply.path) > 1:
         db.session.execute(text('update post_reply set child_count = child_count - 1 where id in :parents'),
                            {'parents': tuple(reply.path[:-1])})
     db.session.commit()
@@ -279,7 +293,7 @@ def restore_reply(reply_id, src, auth):
     if not reply.author.bot:
         reply.post.reply_count += 1
     reply.author.post_reply_count += 1
-    if reply.path:
+    if reply.path and len(reply.path) > 1:
         db.session.execute(text('update post_reply set child_count = child_count + 1 where id in :parents'),
                            {'parents': tuple(reply.path[:-1])})
     db.session.commit()
@@ -413,7 +427,7 @@ def mod_remove_reply(reply_id, reason, src, auth):
     if not reply.author.bot:
         reply.post.reply_count -= 1
     reply.author.post_reply_count -= 1
-    if reply.path:
+    if reply.path and len(reply.path) > 1:
         db.session.execute(text('update post_reply set child_count = child_count - 1 where id in :parents'),
                            {'parents': tuple(reply.path[:-1])})
     db.session.commit()
@@ -448,7 +462,7 @@ def mod_restore_reply(reply_id, reason, src, auth):
     if not reply.author.bot:
         reply.post.reply_count += 1
     reply.author.post_reply_count += 1
-    if reply.path:
+    if reply.path and len(reply.path) > 1:
         db.session.execute(text('update post_reply set child_count = child_count + 1 where id in :parents'),
                            {'parents': tuple(reply.path[:-1])})
 
