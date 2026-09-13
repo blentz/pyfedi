@@ -11949,6 +11949,212 @@ the ratchet at 35** with Groups A and C at zero; **Groups B (71/34), D (55/34),
 E (42/24) and F (63/34) are the remaining 231 statements and 126 arcs**, and
 sub-project 41 inherits those figures measured rather than estimated.
 
+## Sub-project 41: `app/shared/reply.py` Groups E and F -- the moderator verbs, the two reply-only verbs, and two live authorization defects
+
+Groups E (`mod_remove_reply`, `mod_restore_reply`) and F (`lock_post_reply`,
+`set_collapse_post_reply`, `choose_answer`, `unchoose_answer`) -- **109
+statements and 62 branch arcs -- are now at ZERO, measured pairwise.**
+Sub-project 40 handed over 105 and 58; the extra 4 and 4 are D520's own fix,
+which added two statements and two arcs to each of the two Group F guards. The
+module is still NOT closed: Groups B (`make_reply`, `edit_reply`) and D
+(`report_reply`) are untouched and are sub-project 42's. The floor rises
+**36 -> 66**, taken from `summary.percent_covered` 66.14310645724258 rather
+than from any plan. **This round DID change `app/`, and it did so with six
+tasks still to run** -- two authorization defects were fixed at Task 7 (D519,
+D520). Sub-project 40's D517 fix wave landed after its measurement was
+complete; this one landed in the middle of one, and **D531 records what that
+cost**.
+
+Measured at `724312cb`, `--cov=app.shared.reply --cov-branch`, the module at
+375 statements and 198 arcs. **Three scopes, because sub-project 40's own
+Task 8 (D516) found a filename-shaped glob under-reporting this module by seven
+statements while exiting 0:**
+
+| scope | tests | missing stmts | missing arcs | `percent_covered` |
+|---|---|---|---|---|
+| `tests/test_shared_reply_moderation.py` + `tests/test_shared_reply_interactions.py` | 91 | 133 | 73 | 64.049 |
+| those 2 plus `tests/test_api_reply_bookmarks.py`, `tests/test_api_reply_subscriptions.py` | 93 | **126** | **68** | **66.143** |
+| all `test_api_*` + `test_shared_*` + `test_ap_*` + `test_inbox_*` + `test_post_*` + `test_backfill_reply_visibility.py` | 2426 | 126 | 68 | 66.143 |
+
+Rows two and three are identical in every field: **93 tests reach exactly what
+2426 do**, so the floor is safe against the full suite by monotonicity and not
+merely by hope. The structural reason is cheaper than the measurement --
+`/usr/bin/grep -rn 'app\.shared\.reply' app/ --include=*.py` returns exactly two
+importers, `app/api/alpha/utils/reply.py` and `app/post/routes.py`, and only
+four files under `tests/` reach either. Row one is the trap row: it is the
+namespace a reader would pick, and it under-reports by 2.1 points.
+
+Groups E and F, from the same JSON -- `missing_lines` and `missing_branches`
+restricted to `414-596` are both the empty list, and the module's entire
+126/68 residue lies in `156-251` and `311-410`:
+
+| group | function | span (`ast`, re-derived at `724312cb`) | stmts | missing | arcs | missing |
+|---|---|---|---|---|---|---|
+| **E** | `mod_remove_reply` | `:414-447` | 21 | **0** | 12 | **0** |
+| **E** | `mod_restore_reply` | `:450-483` | 21 | **0** | 12 | **0** |
+| **F** | `lock_post_reply` | `:486-522` | 26 | **0** | 16 | **0** |
+| **F** | `set_collapse_post_reply` | `:525-549` | 17 | **0** | 14 | **0** |
+| **F** | `choose_answer` | `:552-580` | 15 | **0** | 4 | **0** |
+| **F** | `unchoose_answer` | `:583-596` | 9 | **0** | 4 | **0** |
+
+**What sub-project 42 inherits, measured rather than estimated** -- coverage.py's
+own function table at the same commit, the whole of the module's residue:
+
+| group | function | span | stmts | missing | arcs | missing |
+|---|---|---|---|---|---|---|
+| **B** | `make_reply` | `:156-213` | 42 | **42** | 22 | **22** |
+| **B** | `edit_reply` | `:216-251` | 29 | **29** | 12 | **12** |
+| **D** | `report_reply` | `:311-410` | 55 | **55** | 34 | **34** |
+| | **total** | | **126** | **126** | **68** | **68** |
+
+All three are at 0.000%: not one statement and not one arc of them executes
+under any test in this repository. The six `def` lines themselves are already
+covered -- coverage.py counts them among the module's 26 module-level
+statements, which are at zero missing -- so the 126 is the body count and no
+allowance need be made for it.
+
+### 1. THE ANSWER VERBS WERE UNAUTHORIZED THROUGH THE API -- D519
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D519 | `app/api/alpha/utils/reply.py:687` and its new guard at `:696-698`, against `app/post/routes.py:2443` and `:2453` | **ANY AUTHENTICATED API USER COULD MARK ANY COMMENT ON ANY POST AS ITS ACCEPTED ANSWER.** `choose_answer` (`app/shared/reply.py:552-580`) and `unchoose_answer` (`:583-596`) contain no permission check of any kind -- they resolve the caller, set `post_reply.answer`, write a notification and dispatch. The gate was therefore entirely the caller's, and the two callers disagreed. The web routes `post_reply_choose_answer` and `post_reply_unchoose_answer` each guard on `current_user.is_authenticated and (current_user.is_admin_or_staff() or post_reply.user_id == current_user.id or post_reply.community.is_moderator())` and `abort(403)` otherwise. The API entry point `post_reply_mark_as_answer` called `authorise_api_user` -- **identity only, not authority** -- and dispatched straight through. **FIXED**: the web route's three-way guard is now mirrored at `:696-698` as `if not (user.is_admin_or_staff() or reply.user_id == user.id or reply.community.is_moderator(user)): raise Exception('Does not have permission')`. **`is_moderator` is passed `user` EXPLICITLY** because its default reads `current_user`, which does not exist on the API path -- the web spelling `is_moderator()` transcribed verbatim would have silently evaluated against an anonymous proxy. | **FIXED** | Both routes and the API entry re-read with numbered output at `724312cb`. The defect was pinned before it was fixed, by `TestChooseAnswer::test_any_authenticated_api_user_may_mark_any_comment_as_the_answer`, which PASSED against the hole; that test is now inverted as `test_an_unrelated_api_user_may_not_mark_a_comment_as_the_answer` (`:1565`). The guard's second and third disjuncts have independent witnesses -- `test_the_replys_own_author_may_mark_it_as_the_answer` (`:1664`) and `test_a_moderator_may_mark_a_comment_as_the_answer` (`:1619`) -- and its first does not, which is D526 |
+
+### 2. PC2's REFUSAL HAD NEVER BEEN PROPAGATED TO THE REPLY TWINS -- D520
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D520 | `app/shared/reply.py:518-519` and `:545-546`, against `app/shared/post.py:968-969` and `:999-1000` | **`lock_post_reply` and `set_collapse_post_reply` had permission guards with no `else`, so an unauthorized `SRC_API` caller fell out of the bottom of the function and was served a 200 carrying the unchanged object.** Refusal looked identical to success. The twin module has carried `elif src == SRC_API: raise Exception('Does not have permission')` on `lock_post` and `move_post` since sub-project 36. **FIXED by transcription**, four lines, both functions. **THE TRANSFERABLE FINDING IS THE SHAPE, NOT THE FIX, AND IT IS WHY THIS ENTRY IS LONG.** A repair applied to one twin and not the other is invisible to EVERY instrument this campaign runs. It creates no missing statement -- the code that should exist is absent, so nothing is uncovered. It creates no missing arc, for the same reason. It breaks no test, because the tests were written against the behaviour as found. And it produces no surviving mutant, because there is no line to mutate. **Only reading the twins side by side finds it**, and no tool in this campaign does that. Every twin finding in this register -- D200, D463, D496 before this round, D521, D522 and D523 in it -- was found the same way, which is now enough instances to call it the method rather than the anecdote: **when a module has a structural twin, diff the two functions before writing a single test.** | **FIXED** | `app/shared/post.py:953-972` and `:993-1003` re-read with numbered output at `724312cb`; both new raises pinned by `test_an_unprivileged_api_caller_is_refused` in each class, and Task 8's mandatory mutation `:501 -> if True:` is killed by that test |
+
+### 3. THREE-WAY DIVERGENCE ACROSS FOUR PERMISSION GUARDS OVER THE SAME OBJECTS -- D521
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D521 | `app/shared/reply.py:421`, `:457`, `:501`, `:533`; and `:501` against `app/shared/post.py:953` | **Four guards, same objects, three different membership rules.** `mod_remove_reply:421` refuses unless moderator OR instance admin OR `user.is_admin_or_staff()`. `mod_restore_reply:457` drops the third disjunct. `set_collapse_post_reply:533` admits it. `lock_post_reply:501` does not. So a site admin who moderates nothing may REMOVE a comment but not RESTORE it, and may COLLAPSE one but not LOCK one. **And against the twin module it is not merely a missing disjunct but a different method**: `lock_post:953` calls `post.community.is_admin_or_staff(user)` where `lock_post_reply:501` calls `post_reply.community.is_instance_admin(user)`. **LOUDER AFTER D520's FIX:** before this round the non-moderator site admin's lock was a silent no-op returning 200; it is now an exception. The divergence was promoted from invisible to user-visible behaviour by a fix that was correct in itself, which is the argument for registering it now rather than waiting. **Pinned in both directions on three of the four guards, so whichever way it is resolved a test says so -- and the fourth is an open hole in the pinning, named here rather than glossed.** | **open, registered, not fixed** -- which of the four rules is intended is a product decision | All four lines re-read with numbered output at `724312cb`. The pins, all in `tests/test_shared_reply_moderation.py`: `test_a_site_admin_who_is_neither_may_remove` (`:391`, admits), `test_a_site_admin_who_is_neither_is_refused` (`:658`, refuses -- this is the one carrying the inversion obligation), `test_a_site_admin_who_is_neither_may_collapse` (`:1247`, admits). **`lock_post_reply` has NO site-admin test**: `test_an_unprivileged_api_caller_is_refused` (`:966`) drives `s.actor`, a plain user, so the absence of the third disjunct at `:501` is asserted by nothing. One test closes that. Task 8 separately confirmed each disjunct PRESENT in each guard has an independent witness -- all 20 BoolOp mutants but the two equivalent ones died |
+
+### 4. `mod_remove_reply` AND `delete_reply` DISAGREE ABOUT WHICH COUNTERS A REMOVAL MOVES -- D522
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D522 | `app/shared/reply.py:265-269` against `:427-429` | **Inside the `if not reply.author.bot:` guard, `delete_reply` moves THREE counters and `mod_remove_reply` moves ONE.** `delete_reply:266-268` decrement `reply.post.reply_count`, `reply.post.reply_count_cross_posted` and `reply.community.post_reply_count`; `mod_remove_reply:428` decrements only `reply.post.reply_count`. (`reply.author.post_reply_count` at `:269` and `:429` is OUTSIDE the guard in both, and agrees.) So a moderator's removal and an author's own delete leave the database in different states for the same row. Cross-reference **D463** and sub-project 40's mirror-divergence finding: this is the same shape in a third place. **THE INDENTATION IS THE WHOLE FINDING AND IS EASY TO DESTROY WHILE READING** -- see D536. | **open, registered, not fixed** | `awk 'NR>=263 && NR<=272' app/shared/reply.py` and `NR>=426 && NR<=432`, indentation preserved, at `724312cb` |
+
+### 5. A COUNTER DRIFT NEITHER SIDE OF THE MIRROR EVER REPAIRS -- D523
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D523 | `app/shared/reply.py:265-269` against `:293-295` | **NEW, and louder than D522: `delete_reply` decrements two counters that `restore_reply` never increments back.** `delete_reply:267-268` move `reply.post.reply_count_cross_posted` and `reply.community.post_reply_count`; `restore_reply:293-295` moves `reply.post.reply_count` and `reply.author.post_reply_count` and nothing else. **A delete followed by the author's own restore therefore leaves both counters permanently one low**, and repeating the cycle drifts them further with no ceiling. The moderator pair is internally symmetric -- `mod_remove_reply:428` and `mod_restore_reply:463` both move exactly one counter inside the guard -- so **only the author's own pair drifts**, which is why D496's restore-asymmetry finding did not reach it. Found in Task 9 by reading all four functions side by side to check D522's arithmetic, which is D520's method applied within a module rather than across the pair. | **open, registered, not fixed** -- and it is a data-integrity defect, not a style divergence | All four bodies re-read with `awk`, indentation preserved, at `724312cb`; the four counter sites are the complete set returned by `/usr/bin/grep -n 'reply_count\|post_reply_count' app/shared/reply.py` |
+
+### 6. THE WEB ARM OF BOTH GROUP F VERBS STILL FAILS SILENTLY -- D524
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D524 | `app/shared/reply.py:518` and `:545` | D520's new refusal is guarded `elif src == SRC_API:`, **exactly as the twin is**, so an unauthorized `SRC_WEB` caller still falls through to a 200 with the object unchanged. Both web callers -- `app/post/routes.py:1671` and `:1678` -- pass `SRC_WEB`, so this is the reachable half, not the theoretical one. Faithful transcription of `lock_post:968` and `move_post:999` was chosen over a broader repair because a coverage round widening a guard beyond its twin manufactures a NEW divergence to sit beside D521's. Same shape as D499. | **open, registered, not fixed** | `:510-519` and `:537-546` re-read with numbered output; both false arms are now COVERED (the two arcs Task 8 found open, `[518,521]` and `[545,548]`, are closed) so the silence is witnessed by a test rather than merely asserted |
+
+### 7. ONE OF THE TWO NEW REFUSALS IS UNREACHABLE AND THE OTHER IS NOT -- D525
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D525 | `app/shared/reply.py:545-546` against `:518-519` | **`set_collapse_post_reply` has no `SRC_API` caller anywhere in `app/`.** Its only caller is `app/post/routes.py:1678`, `SRC_WEB`. Its new refusal is therefore correct-but-unreachable today. `lock_post_reply`'s is reachable: `app/api/alpha/utils/reply.py:755` calls it with `SRC_API`. **Record the distinction rather than deleting the unreachable one** -- it is the guard that will be right the day an API route is added, and a reader who measures its coverage will otherwise wonder why a test exists for a path production cannot take. The test that covers it drives `SRC_API` directly, which is legitimate precisely because the function's signature admits it. | **registered; no action** | `/usr/bin/grep -rn 'set_collapse_post_reply\|lock_post_reply' app/ --include=*.py` at `724312cb` |
+
+### 8. THE NEW API GUARD'S FIRST DISJUNCT IS UNPINNED -- D526
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D526 | `app/api/alpha/utils/reply.py:696` | Dropping `user.is_admin_or_staff()` from D519's new guard leaves every test in `tests/test_shared_reply_moderation.py` green. **Judged acceptable and the judgement is written down rather than left implicit**: the mutant is fail-CLOSED -- it denies site admins and grants no one anything -- so the untested direction is the safe one. But it diverges silently from the web twin at `app/post/routes.py:2443`, which does admit them, and that divergence is exactly D521's shape appearing in freshly-written code. **One test closes it**: a site admin who is neither the author nor a moderator, marking an answer through `post_reply_mark_as_answer`. Whoever writes API-level tests for this module should take it. | **open, registered, not fixed** | Stated as measured, not as believed: the disjunct was dropped and the file re-run |
+
+### 9. THE MUTATION PASS, AND ALL THIRTEEN OPEN SURVIVORS WITH THEIR RECIPES -- D527, D528
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D527 | `app/shared/reply.py:540` and `:544` | **`set_collapse_post_reply`'s two `task_selector` calls are commented out, and the commented text names the LOCK tasks.** The lines read `#task_selector('lock_post_reply', ...)` and `#task_selector('unlock_post_reply', ...)`. Two facts follow. Collapse federates nothing, so a `recording_task_selector` assertion here must assert the EMPTY list -- and its twin `lock_post_reply:513`/`:517` does dispatch, so the two Group F verbs are not symmetric on this axis however alike they read. And these are **not a dormant correct implementation waiting to be enabled**: no collapse task exists (`/usr/bin/grep -rn collapse app/shared/tasks/` is empty; `app/shared/tasks/__init__.py:39-40` registers only the two lock tasks), so uncommenting either line would federate a LOCK for a local display preference. | **open, registered, not fixed** | Both lines and the task registry re-read with numbered output at `724312cb`; recorded as `tests/README.md` fact 235 |
+| D528 | `app/shared/reply.py:414-596` | **159 mutants: 146 killed, 13 alive.** The space: 115 statement lines (`ast.walk`, which counts each `def`; the six `def`-line mutants are parameter-order swaps and are **six free kills that inflate the denominator's health and carry no information** -- swapping the first two parameters of a function every test calls positionally cannot survive any test that calls it) + 20 continuation lines (defined as every non-first physical line of a NON-COMPOUND statement, the only definition that does not sweep in blanks, comments and bare `else:`) + 4 guard neutralisations on `:421` `:457` `:501` `:533` + 20 BoolOp mutants (14 operand drops, 6 operator swaps). Stage by stage: 124 killed / 35 alive against the 46 tests as found; 138/21 after five tests added and two amended; **146/13** after three further amendments. **FIVE CATEGORIES SUMMING TO 13, THE FIFTH KEPT AT ZERO RATHER THAN DROPPED so a later reader can see those lines were measured. ALL THIRTEEN ARE CARRIED HERE WITH RECIPES, because `.superpowers/sdd/` is deleted at the round's end and a survivor recorded only there is indistinguishable later from work that was never done.** Each is a single-line literal substitution; apply it, run `./run_tests.sh tests/test_shared_reply_moderation.py`, observe 51 passed. **(a) Equivalent on every path production builds -- 4.** `:430` and `:465`, `len(reply.path) > 1` -> `len(reply.path) > 0`; and `:430` and `:465`, the whole guard -> `if reply.path:`. `app/models.py:3064` opens a root path as `[0, reply.id]` and `:3058-3060` appends to a parent's; `app/api/alpha/views.py:669`'s `calculate_path` starts every branch at `[0, ...]`. Every path production writes is empty, `None`, or at least two long, so the length test cannot change an outcome. The one writer that could emit something shorter is `app/post/util.py:79`, `post_reply.path = reply_data.get('path', [])`, taking whatever an import payload contains. NOT CLOSED DELIBERATELY. **(b) Unobservable within one session -- 6.** `:433`, `:469`, `:505`, `:535`, `:575`, `:591`, `db.session.commit()` -> `db.session.flush()`. `tests/conftest.py:140-142` deliberately does not roll back, but every assertion reads back through the same session that ran the call, where a flush is already visible. Separating them needs a second connection reading uncommitted data -- a test about SQLAlchemy. **This class is a property of the harness, not of these tests; if a later round wants them dead the change belongs in `db_session`.** **(c) Void over the inputs that exist -- 2.** `:489`, `:528`, `.one()` -> `.first()`. They differ only at zero rows or more than one; more than one is impossible on a primary key, and zero is the missing-reply case no test here supplies. Closable by a call with an unused id asserting `NoResultFound` rather than the `AttributeError` a `None` produces three lines later; the value is in a caller's failure mode these tests do not have. **(d) Masked by the fixture's own users -- 1.** `:560`, `get_recipient_language(post_reply.user_id)` -> `get_recipient_language(user.id)`. See `tests/README.md` fact 233: `make_user` sets neither `language_id` nor `interface_language`, so `app/utils.py:4799` returns `'en'` for every factory user and two users cannot be told apart through `force_locale`. Needs a second locale with a compiled catalogue. **(e) Moderation-log arguments -- 0**, all fourteen closed. 4+6+2+1+0 = 13. | **13 open, all recorded with recipes; also in the module docstring of `tests/test_shared_reply_moderation.py`** | Every cited line re-read at `724312cb`; `:503-504`, `:513`, `:517`, `:540`, `:544`, `:560`, `:564`, `app/models.py:3058-3065`, `app/utils.py:4782-4801`, `app/post/util.py:79` all verified with numbered output |
+
+### 10. A LINE CAN BE MUTATED, KILLED, AND STILL BE UNGUARDED IN EVERY OTHER RESPECT -- D529
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D529 | the round's own mutation pass | **THE NARROWING IS THE FINDING, NOT THE EIGHT MUTANTS.** The pass first reported 12 continuation lines where 20 exist, excluding the `add_to_modlog` argument lines silently -- not as a judgement that they were cosmetic, but as an unexamined narrowing, and the report then presented the narrowed figure AS the space. All 8 of the excluded lines survived. **Six more were hidden the same way and were not continuation lines at all**: `target_user` and `reason` share `:437`, `:473` and `:506` with the action literal, whose mutant died -- and a dead mutant on a line makes the whole line LOOK interrogated. It is not. Fourteen mutants in total lived behind the appearance of coverage, and they were found only because a reviewer **re-derived the denominator instead of reading it**. **THE RULE: any pass reporting a mutation space must publish the derivation command and its raw output beside the count**, so the space can be checked without being recomputed from scratch. The corollary is sharper than the rule: per-line kill counts are not evidence about a line's arguments, and a mutation report that aggregates by line hides exactly this. | **process finding, register-bound** | The 20 continuation lines and the 6 argument mutants are enumerated with their outcomes in the round's Task 8 record; all fourteen are now killed |
+
+### 11. A VACUITY CLAIM IS TESTABLE, AND THIS ONE WAS TESTED -- D530
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D530 | `app/shared/reply.py:430` and `:465` | Dropping `reply.path` from `if reply.path and len(reply.path) > 1:` kills 18 tests **for exactly one reason** -- `TypeError: object of type 'NoneType' has no len()`, the sole distinct reason after `sort -u`. The standing rule is that a crash-only kill is not evidence and wants a non-crashing variant. **There is none, and that was established by testing rather than by asserting it.** Over every path shape that reaches the line the original and the mutant agree except on `None`: `None` (original `False`, mutant `TypeError`), `[]` (False/False), `[0]` (False/False), `[0,7]` (True/True), `[0,7,9]` (True/True). `bool(path)` and `len(path) > 1` diverge on exactly one input and on that input the mutant raises. The closest non-crashing variant, `if len(reply.path or []) > 1:`, **SURVIVES** -- because the only way to drop the operand without crashing is to re-implement it. An operand whose entire contribution is crash prevention cannot be dropped non-fatally. **Record the method, not the conclusion: when a rule is satisfied vacuously, exhibit the enumeration that makes it vacuous.** | **process finding, register-bound** | The input enumeration and the surviving non-crashing variant are both in the round's record and in the committed module docstring |
+
+### 12. A PRODUCTION CHANGE MID-ROUND REOPENS COVERAGE -- D531
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D531 | this round's Task 7 | D520's fix added four lines to `app/shared/reply.py` -- `:518-519` and `:545-546` -- and **created two new uncovered arcs**, `[[518, 521], [545, 548]]` -- the false arm of each new `elif`, i.e. the unprivileged WEB caller who is neither served nor refused. The round had verified "Groups E and F at zero" after Task 6 and reported it as its headline. **The arcs were open at HEAD for two tasks**, and were caught only because the mutation pass happened to re-measure coverage before mutating. Nothing was looking. **Mutation could not see them**: mutants on `:518` and `:545` died cleanly in both directions while the false arm of each had never executed once -- a mutation pass is not a substitute for coverage after a production change. **THE RULE: after ANY production change inside a coverage round, re-measure before declaring zero. Coverage is a property of a tree, not of a task**, and a completed task's green result does not survive an edit to the file it measured. | **process finding, register-bound** | Both arcs are now closed; the re-measurement at `724312cb` returns `missing_branches` `[]` over `414-596` |
+
+### 13. A PRODUCTION FIX SILENTLY INVALIDATES EVERY LINE CITATION BELOW IT, IN EVERY FILE IT TOUCHES -- D532
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D532 | `903dab20`; `app/models.py`, `app/shared/reply.py`; `tests/README.md`, `tests/*.py` | **D517's fix moved line numbers in two production files, and the campaign swept only one of them.** `app/models.py` went 4505 -> 4517 in two hunks, `@@ -2739,7 +2739,12 @@` (+5) and `@@ -3318,7 +3323,14 @@` (+7), so citations written before 2026-09-13 are stale by a NON-UNIFORM offset: unaffected below `:2744`, +5 from `:2744` to `:3318`, +12 above `:3325`. In `tests/test_shared_reply_interactions.py` alone **29 of 48 sites were wrong**. **THE NEW HALF, FOUND IN TASK 9: the same commit also added `@@ -23,6 +23,20 @@` to `app/shared/reply.py`, moving everything below `:28` by a uniform +14 -- and NOBODY SWEPT THAT CLASS, because the sweep was scoped by the cited FILENAME (`models.py:`) rather than by the commit.** `tests/README.md`'s own facts 116 and 232 were both stale by +14 -- **the register's durable store carrying wrong citations in the very fact that warns about wrong measurements** -- and both are corrected in this round. **AND THE INTERVAL WAS HOURS, NOT WEEKS**: `61f32494`, which wrote fact 232, and `903dab20`, which invalidated it, are the same day on the same branch. "I wrote it recently" is not evidence that a line number is still right, and the `models.py` half's "written before 2026-09-13" rule of thumb does not transfer. **SCOPE A CITATION SWEEP BY THE COMMIT, NOT BY THE FILE THE STALE CITATIONS HAPPEN TO NAME:** `git show <commit> --stat` names every file whose numbers moved; grep for citations to each. **BLAST RADIUS, MEASURED AND HANDED OVER.** For `models.py`: `/usr/bin/grep -rlE "models\.py:(2[89][0-9][0-9]\|3[0-9][0-9][0-9])" tests/` names **27 files** carrying about **120** citations; two were swept, 25 remain. For `reply.py`: **10 sites remain in 3 files**, every one verified stale by exactly +14 and none swept -- `tests/test_shared_post_make.py:415`; `tests/test_shared_reply_interactions.py:657`, `:812`, `:2087`, `:2137`, `:2498`; `tests/test_shared_tasks_send_reply.py:643`, `:644`, `:650`, `:654` (plus the bare `:NNN` companions in the same paragraphs, which must be adjudicated individually). **A blanket offset is the wrong remedy even here**, where the offset happens to be uniform: several `models.py` citations were already stale by 12 from an earlier generation and one was already correct, so a blind sed manufactures fresh errors. **Verify by CONTENT, not by arithmetic** -- `git show <commit>^:<file> \| sed -n 'Np'` against `sed -n 'Mp' <file>` returning byte-identical lines is the check, and it is what settled both README facts. A stale citation creates no missing arc, no failing test and no surviving mutant; it is invisible to every instrument this campaign runs, which puts it in D520's class. | **open; 25 `models.py` files and 10 `reply.py` sites owed to sub-project 42** | `git show 903dab20 -- app/shared/reply.py \| grep '^@@'`; a `difflib.SequenceMatcher` line map from `903dab20^` to `724312cb` confirming +14 at every cited site; `git blame` dating all 11 sites before `903dab20` |
+
+### 14. THE FIXTURE'S ID COLLISION IS AN OPEN-ENDED BLIND SPOT, FOUR OF IT CONFIRMED -- D533
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D533 | `_seed_moderated_reply` in `tests/test_shared_reply_moderation.py` | The fixture leaves `community.id == post.id == author.id == reply.id == 1`, because `tests/conftest.py:131` resets every sequence between tests and the fixture seeds one of each. **`add_to_modlog` (`app/utils.py:3574-3581`) resolves each object to `x.id if x else None` before constructing the `ModLog`, so wrong-object-right-id is invisible even to a test that asserts every column of the row.** The collision hid four mutants across three functions, each found independently and the later ones AFTER the earlier had been diagnosed: `lock_post_reply:504`'s `'parent_id': post_reply.id` transposed with `post_reply.post_id`; `choose_answer:564`'s `'post_id'`; and the `link` argument of both `mod_remove_reply` and `mod_restore_reply`, whose `f'post/{reply.post_id}#comment_{reply.id}'` yields the identical string when the halves are swapped. Four guard-rail assertions (`assert target.id != s.post.id`) now pin the identified transpositions; **that is a guard rail and not a fix, and the class is not four items long.** Any object substitution that resolves to the same id stays invisible -- `post=reply.community` and `target_user=reply.community` in the `add_to_modlog` calls both survive even the new every-field-asserted tests, for the same reason, and nobody has enumerated the rest. Offsetting one sequence in the fixture removes the whole class, and **the task that does it must re-run all fourteen modlog mutants afterwards, because D528's category (e) zero is a property of the fixture rather than of the tests.** Until then, any assertion in this area that names an id should be read as unproven. | **open, registered, not fixed; worth a task of its own** | Recorded as `tests/README.md` fact 236; all four sites re-read with numbered output at `724312cb` |
+
+### 15. DURING A MUTATION WINDOW, HEAD IS THE ARTIFACT, NOT THE TREE -- D534, D535
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D534 | the campaign's security scanner | **Thirty-nine security-scanner false positives across the campaign, six in this round**, every one adjudicated against `git show HEAD:<file>` rather than against the finding text -- and HEAD was correct every time. **Two of this round's six reported the round's own MANDATORY mutations as production defects.** The scanner reads the working tree; a mutation pass deliberately makes the working tree wrong. D507 recorded 29 at sub-project 40; **the running total is carried forward from the controller's count and was NOT independently re-derived at Task 9** -- the adjudications themselves live in the per-round records, and saying so is cheaper than implying a recount that did not happen. | **process finding, register-bound** | Each adjudication done against `git show HEAD:` |
+| D535 | `git checkout -- app/` | **Unsafe as a mutation restore whenever a round holds uncommitted production changes**, because HEAD is then not the baseline -- it silently reverted a real fix in sub-project 40. **Banned for this round**, and the round complied: every mutation was undone by an exact reverse literal edit on the same line, the restored line re-read with `cat -n`, and `git diff --quiet -- app/` asserted before the next mutation. **This round is the case that proves the ban was necessary rather than cautious: it held four uncommitted production lines across Tasks 7 and 8**, so a single `checkout` would have destroyed D519's or D520's fix with no diagnostic. | **process finding, register-bound; treat the ban as standing** | `git diff --quiet -- app/` silent at every stopping point of Tasks 8 and 9 |
+
+### 16. INDENTATION IS LOAD-BEARING EVIDENCE, AND THE USUAL NUMBERED-OUTPUT PIPELINE DESTROYS IT -- D536
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D536 | the measurement-block checklist | **A near-miss in Task 9, recorded because it would have produced a confidently wrong register entry.** Re-deriving D522 meant counting which counter statements sit inside `if not reply.author.bot:`. The line-numbering idiom in use -- `sed -n 'A,Bp' file \| cat -n \| awk ...` -- **strips leading whitespace**, so all four counter statements rendered at the same apparent depth and `delete_reply` read as moving four counters inside the guard and `mod_remove_reply` two. The controller's inherited figure said three and one. On the stripped output the inherited figure looked wrong; on `awk 'NR>=A && NR<=B {printf "%d\|%s\n", NR, $0}'`, which preserves the line verbatim, it is exactly right -- `:269` and `:429` are dedented and outside the guard. **The near-miss is the finding: the checklist's question (c), "does any OTHER line in the same paste contradict it", cannot fire when the formatting has removed the contradicting evidence before you read it.** So: **add to the checklist a question (d) -- does this rendering preserve everything the claim depends on?** For any claim about control flow, scope, or block membership in an indentation-significant language, the answer is no unless the pipeline preserves columns. `awk '{printf "%d\|%s\n", NR, $0}'` does; `cat -n` after a `sed` range does not, and neither does any `awk` that re-prints fields. | **process finding, register-bound; proposed addition to the measurement-block checklist** | D522's and D523's figures were re-derived with the column-preserving form and are stated from it |
+
+**Next free number: D537.** D519-D536 were taken by this round -- **D519** the
+answer-verb API authorization hole, found by reading the web route beside the
+API entry and **FIXED**, with `is_moderator` passed its user explicitly because
+the web spelling would have evaluated against no one; **D520** PC2's refusal
+never having reached the reply twins, **FIXED by transcription**, carrying the
+transferable shape that a repair applied to one twin and not the other is
+invisible to every instrument this campaign runs -- no missing statement, no
+missing arc, no failing test, no surviving mutant -- so **diff the twins before
+writing a test**; **D521** three membership rules across four guards over the
+same objects, plus `is_admin_or_staff` against `is_instance_admin` as a method
+divergence and not merely a missing disjunct, made LOUDER by D520's fix;
+**D522** the counter divergence inside the bot guard, three against one;
+**D523** NEW -- two counters `delete_reply` decrements that `restore_reply`
+never restores, a permanent drift the moderator pair does not have; **D524**
+both new refusals still silent on the web arm, faithfully transcribed rather
+than widened; **D525** one of the two new refusals unreachable and the other
+not, recorded rather than deleted; **D526** the new API guard's first disjunct
+unpinned, fail-closed and judged acceptable in writing; **D527** collapse's two
+commented-out `task_selector` calls naming the LOCK tasks, which is not a
+dormant implementation; **D528** the mutation pass reconciled -- **159 mutants,
+146 killed, 13 alive, five categories summing to 13 with the fifth kept at
+zero** -- and **all thirteen survivors carried item by item with recipes**;
+**D529** the narrowing, and its sharper corollary that a line can be mutated,
+killed, and still be unguarded in every other respect; **D530** the crash-only
+kill argued by an enumeration and a surviving non-crashing variant rather than
+asserted; **D531** a production change mid-round reopening coverage, with the
+two arcs that were open at HEAD for two tasks and that mutation could not see;
+**D532** the citation-staleness class extended -- the SAME commit moved
+`app/shared/reply.py` by +14 and that half was never swept because the sweep
+was scoped by filename, with `tests/README.md`'s own facts 116 and 232 found
+stale and corrected, 10 further sites named, and the content-comparison check
+that settles such a question; **D533** the fixture id collision as an open-ended
+blind spot -- four hidden mutants confirmed and the class not enumerated --
+whose fix obliges a re-run of all fourteen modlog mutants; **D534**
+the scanner false-positive count at 39 and the mutation-window rule; **D535**
+the `git checkout -- app/` ban, vindicated by a round that held four
+uncommitted production lines; **D536** NEW -- indentation as load-bearing
+evidence and a fourth question for the measurement-block checklist.
+**`app/shared/reply.py`'s floor rises 36 -> 66** with Groups A, C, E and F at
+zero; **Groups B (`make_reply` 42/22, `edit_reply` 29/12) and D (`report_reply`
+55/34) are the remaining 126 statements and 68 arcs**, all three functions at
+0.000%, and sub-project 42 inherits those figures measured rather than
+estimated.
+
 ## Ratchet gotchas
 
 - `percent_covered` is a **blended statement+branch figure**. This matters for

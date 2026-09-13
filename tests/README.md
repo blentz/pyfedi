@@ -4228,7 +4228,7 @@ The column's nullability makes the crash **storable**; it says nothing about
 whether anything can dispatch that row into the function. Enumerating the
 dispatchers settled it in the other direction: `send_reply` is called only from
 `notes.py:59` and `:72`, `task_selector('make_reply'|'edit_reply')` appears at
-exactly three sites (`app/shared/reply.py:194`, `:232`, `app/post/routes.py:928`),
+exactly three sites (`app/shared/reply.py:208`, `:246`, `app/post/routes.py:928`),
 all three write `body` through `piefed_markdown_to_lemmy_markdown`
 (`app/utils.py:1233-1237`), and that function **raises the identical `TypeError`
 on `None` before any commit** -- so the bad state dies in the writer. The
@@ -6913,12 +6913,12 @@ rather than reasoned about.
 `tests/test_shared_*.py` ALONE — SEVEN STATEMENTS AND FIVE ARCS COME FROM
 `tests/test_api_reply_bookmarks.py`.** Sub-project 40's plan measured the
 module over `tests/test_shared_reply*.py tests/test_shared_post*.py`, and that
-file list is incomplete: it reports `bookmark_reply:62`, `:63`, `:72` and
-`remove_bookmark_reply:80`, `:81`, `:85`, `:90` missing, plus the five arcs
-`(61,62)`, `(71,72)`, `(79,80)`, `(84,85)`, `(89,90)`. Every `bookmark_reply`
+file list is incomplete: it reports `bookmark_reply:76`, `:77`, `:86` and
+`remove_bookmark_reply:94`, `:95`, `:99`, `:104` missing, plus the five arcs
+`(75,76)`, `(85,86)`, `(93,94)`, `(98,99)`, `(103,104)`. Every `bookmark_reply`
 test in `tests/test_shared_reply_interactions.py` seeds a bookmark first, so
-`:61`'s true arm never runs; no `remove_bookmark_reply` test there seeds one,
-so `:79`'s true arm never runs either — the two dead arms are opposite ends of
+`:75`'s true arm never runs; no `remove_bookmark_reply` test there seeds one,
+so `:93`'s true arm never runs either — the two dead arms are opposite ends of
 the same single-row fixture habit. The closer is the one-test file
 `tests/test_api_reply_bookmarks.py`, which drives both functions from the
 opposite fixture state — `tests/test_shared_reply_interactions.py`'s module
@@ -6941,6 +6941,131 @@ module over the three reply files; adding the post files costs 45 seconds and
 buys zero coverage.** The general rule: a module-scoped floor taken over a
 glob chosen for its NAME can under-report, and the under-report is invisible
 because the run still exits 0.
+
+**THE SEVEN LINE NUMBERS IN THIS FACT WERE CORRECTED ABOVE — +14, and they went
+wrong on the day they were written, not slowly.** They were written at
+`61f32494` (2026-09-13), where `bookmark_reply` began at `:57`. Commit
+`903dab20`, **the same day and on the same branch**, added a fourteen-line
+`'reversal'` arm to
+`vote_for_reply` — one hunk, `@@ -23,6 +23,20 @@` — and every line below it in
+`app/shared/reply.py` moved by exactly +14. Verified not by arithmetic but by
+content: `git show 903dab20^:app/shared/reply.py | sed -n '62p;63p;72p;80p;81p;85p;90p'`
+and `sed -n '76p;77p;86p;94p;95p;99p;104p' app/shared/reply.py` return
+byte-identical lines. **The same commit is already registered (D517) as having
+invalidated the campaign's `app/models.py` citations, and that sweep was scoped
+by the cited FILENAME, so this second class — its own module's citations, in
+this file — went unswept.** Scope a citation sweep by the COMMIT, not by the
+file the stale citations happen to name. Fact 116 above carried the same +14
+and is corrected too. **The interval between writing a citation and its going
+stale can be hours**, so "I wrote it recently" is not evidence that a line
+number is still right.
+
+**Re-measured at `724312cb`, after sub-project 41 closed Groups E and F.** The
+rule holds and the numbers moved; three scopes, `--cov=app.shared.reply
+--cov-branch`, 375 statements and 198 arcs:
+
+| scope | tests | missing stmts | missing arcs | `percent_covered` |
+|---|---|---|---|---|
+| the 2 `test_shared_reply_*.py` files | 91 | 133 | 73 | 64.049 |
+| those 2 plus the 2 `test_api_reply_*` files | 93 | 126 | 68 | 66.143 |
+| all `test_api_*` + `test_shared_*` + `test_ap_*` + `test_inbox_*` + `test_post_*` + `test_backfill_reply_visibility.py` | 2426 | 126 | 68 | 66.143 |
+
+Same seven statements and five arcs, at their new numbers. Rows two and three
+agree exactly, which is the useful part: **93 tests reach everything 2426 do.**
+The reason is structural and cheaper to check than to measure — only two
+modules in `app/` import from `app/shared/reply.py`
+(`/usr/bin/grep -rn 'app\.shared\.reply' app/ --include=*.py` returns
+`app/api/alpha/utils/reply.py` and `app/post/routes.py`), and only four files
+under `tests/` reach either. Enumerate the importers first; it turns a
+four-minute run into a one-second grep.
+
+**The "three reply files" instruction above is now FOUR.**
+`tests/test_shared_reply_moderation.py` did not exist when this fact was
+written; it is where Groups E and F live and it carries 51 of the 93 tests.
+
+**233. `force_locale(get_recipient_language(...))` NEEDS NOTHING FROM A FACTORY
+USER, AND THE REASON IS NOT THE ONE YOU WOULD GUARD AGAINST.** `choose_answer`
+(`app/shared/reply.py:560`) wraps its notification title in
+`with force_locale(get_recipient_language(post_reply.user_id)):`, and
+`get_recipient_language` (`app/utils.py:4782-4801`) queries the `Language`
+table at `:4790`. The obvious hazard is a factory user whose `language_id`
+points at a `Language` row no test seeded, which would die on `lang.code`.
+**That hazard does not exist, because `language_id` is never set at all.**
+`make_user` (`tests/factories.py:41-67`) passes `user_name`, `email`,
+`instance_id`, `verified`, `banned`, `private_key`, `public_key`, `ap_id`,
+`ap_profile_id`, `ap_public_url` and `ap_inbox_url` — neither `language_id` nor
+`interface_language` — and `app/models.py:1037-1038` declare both columns with
+no `default=`, so both are `None` on INSERT. `:4789` is False, `:4794` is
+False, and `:4799` returns `'en'` without the `Language` table ever being
+touched. **So: seed no `Language` row for any test that calls `choose_answer`,
+and do not add one "to be safe" — it would change the branch taken.** The
+conclusion is structural, not "it did not raise once": the `elif` and `else`
+arms reference `Language` nowhere.
+**THE PRICE IS A PERMANENT BLIND SPOT, AND IT IS REGISTERED (D528(d)) RATHER
+THAN HIDDEN.** Because every factory user resolves to English, two different
+users are indistinguishable through `force_locale`, and the mutant
+`get_recipient_language(post_reply.user_id)` -> `get_recipient_language(user.id)`
+survives the whole file. Closing it needs a second locale with a compiled
+catalogue, which is a translation-fixture project, not a test.
+
+**234. WITNESSING `lock_post_reply`'s `@>` CASCADE TAKES A HAND-BUILT `path`
+AND A BYSTANDER, AND NEITHER IS OPTIONAL.** `lock_post_reply:503-504` is the
+module's only containment query —
+`update post_reply set replies_enabled = :replies_enabled where path @> ARRAY[:parent_id]`
+bound with `{'parent_id': post_reply.id}` — and it is raw SQL, so nothing in
+the ORM layer will build the state for you. Two separate requirements:
+**(a) `make_post_reply` does not set `path` at all**, so a descendant must be
+given production's shape by hand, `[0, parent.id, child.id]`, per
+`app/models.py:3058-3065` (`[0, reply.id]` at the root, parent's path plus own
+id below it). **(b) A BYSTANDER ROW IS THE ONLY WITNESS FOR THE `where`
+CLAUSE.** Assert only on the descendant and a mutant that drops the `where`
+flips every reply in the table while the test stays green; only a row that
+should NOT have changed catches it. `:502` sets `replies_enabled` on the locked
+reply in Python, so **the locked reply itself witnesses nothing about the raw
+UPDATE** — assert on rows reached only through it. See
+`TestLockPostReply::test_locking_cascades_to_a_descendant` and
+`test_the_cascade_keys_on_the_replys_own_id_not_the_posts`.
+
+**235. `set_collapse_post_reply`'s TWO `task_selector` CALLS ARE COMMENTED OUT,
+AND THE COMMENTED TEXT NAMES THE WRONG TASKS.** `app/shared/reply.py:540` and
+`:544` read `#task_selector('lock_post_reply', ...)` and
+`#task_selector('unlock_post_reply', ...)`. Two consequences for anyone writing
+tests here. **First, collapse federates nothing**: a `recording_task_selector`
+assertion against this function must assert the EMPTY list, and a test that
+expects a dispatch is asserting a defect rather than the behaviour. Its twin
+`lock_post_reply:513`/`:517` does dispatch, so the two Group F verbs are not
+symmetric on this axis however similar they read. **Second, the comments are
+not a dormant correct implementation waiting to be switched on.** No collapse
+task exists anywhere — `/usr/bin/grep -rn collapse app/shared/tasks/` returns
+nothing, and `app/shared/tasks/__init__.py:39-40` registers only
+`lock_post_reply` and `unlock_post_reply`. Uncommenting either line would
+federate a LOCK for what is a local display preference. Registered as D527.
+
+**236. `_seed_moderated_reply` LEAVES `post.id == reply.id == author.id == 1`,
+AND THAT COLLISION HID FOUR MUTANTS ACROSS THREE FUNCTIONS.** The fixture in
+`tests/test_shared_reply_moderation.py` seeds one instance, one author, one
+actor, one community, one post and one reply into a database whose sequences
+`tests/conftest.py:131` resets to 1 between tests. Every id that should be
+distinguishable therefore is not, and the failure mode is silent: `add_to_modlog`
+(`app/utils.py:3574-3581`) resolves each object to `x.id if x else None` before
+building the `ModLog`, so **a wrong object with the right id is invisible even
+to a test that asserts every column of the row.** Four confirmed hiding places,
+all found by mutation and all now defended: `lock_post_reply:504`'s
+`'parent_id': post_reply.id` (transposable with `post_reply.post_id`),
+`choose_answer:564`'s `'post_id': post_reply.post_id`, and the `link` argument
+of both `add_to_modlog` calls in `mod_remove_reply`/`mod_restore_reply`, whose
+`f'post/{reply.post_id}#comment_{reply.id}'` yields the identical string when
+the halves are swapped. **The remedy in the tests is to act on a SECOND reply**
+so the acting reply's id and its `post_id` differ, with an explicit
+`assert target.id != s.post.id` in the test body so the guard fails loudly if
+the fixture ever changes. That is a guard rail, not a fix: offsetting one
+sequence in the fixture would remove the whole class, and until someone does,
+**any assertion in this area that names an id should be read as unproven.**
+**Four is the CONFIRMED count, not the size of the class** -- any object
+substitution resolving to the same id is invisible the same way, and
+`post=reply.community` / `target_user=reply.community` in the `add_to_modlog`
+calls both survive even the every-field-asserted tests. Nobody has enumerated
+the rest. Registered as D533.
 
 ## Known noise
 
