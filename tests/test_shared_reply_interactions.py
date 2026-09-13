@@ -1327,7 +1327,12 @@ class TestDeleteReply:
     `:247` filters on `id`, `user_id` AND `deleted=False` and calls `.one()`, so
     only the author can delete, only once, and a miss raises rather than
     returning None. That is why no test here asserts "the wrong user got
-    nothing": the `.one()` would raise, and the raise is a later task's target.
+    nothing": the `.one()` would raise. THE RAISE IS NOT A LATER TASK'S TARGET,
+    and this sentence used to say it was. No brief in this round schedules a
+    test for it -- task 7 is the mutation pass and names `:247`'s `.one()` only
+    as a crash-kill hazard, task 8 is the ratchet -- so it is ROUTED TO THE
+    REGISTER as an untested miss-path instead. Nothing is lost from the target
+    set either way: a `.one()` miss adds no statement and no arc.
 
     `:248-249` set `deleted` and `deleted_by` on EVERY path through this
     function, so asserting `deleted` alone witnesses nothing about the counter
@@ -1586,7 +1591,12 @@ class TestRestoreReply:
 
     `:275` filters `id`, `user_id` AND `deleted=True` and calls `.one()`, so a
     reply must already be deleted and only its author can restore it. A miss
-    raises rather than returning None, which is a later task's target.
+    raises rather than returning None -- and that raise, like `delete_reply
+    :247`'s, is UNTESTED AND UNSCHEDULED rather than "a later task's target",
+    which is what this sentence inherited and what `TestDeleteReply`'s docstring
+    now corrects as well. It goes to the register. It costs this task nothing:
+    a `.one()` miss adds no statement and no arc, so the target set is
+    complete without it.
 
     `:276-277` SET `deleted` AND `deleted_by` ON EVERY PATH, so `deleted is
     False` witnesses that the function ran and nothing about which source arm
@@ -1832,32 +1842,42 @@ class TestRestoreReply:
     def test_a_reply_with_ancestors_restores_their_child_counts(self, db_session):
         """`:282` true -> `:283`. Arc 282->283; statements 282, 283.
 
-        THIS TEST DOES NOT CALL `delete_reply`, AND THAT IS THE POINT. The
-        obvious construction -- delete, restore, then assert the ancestor's
-        `child_count` came back -- CANNOT CARRY A WORKING NEGATIVE CONTROL
-        AGAINST THE ONE MUTANT SHAPE THAT MATTERS MOST HERE. `:283` and
-        `delete_reply:257` are the same statement with one character changed, so
-        the realistic defect is the MIRRORED PAIR losing its `where` clause
-        together, not one half of it. Under that mutant a round trip increments
-        every row in `post_reply` after having decremented every row, and a
-        bystander seeded at N reads N - 1 + 1 == N at the end: THE ROUND TRIP
-        LAUNDERS EXACTLY THE DEFECT THE CONTROL EXISTS TO CATCH. Marking the
-        reply `deleted` directly through the ORM is all `:275`'s filter
-        requires, and it leaves `:283` as the only statement in the whole test
-        that touches `child_count`, so nothing can launder anything.
+        THIS TEST DOES NOT CALL `delete_reply`, AND WHAT THAT BUYS IS
+        LOCALIZATION, NOT DETECTION. The claim is deliberately narrow, because
+        the wider one is false and was measured to be false.
+
+        `:283` and `delete_reply:257` are the same statement with one character
+        changed, so the defect worth designing against is the MIRRORED PAIR
+        losing its `where` clause together. A delete-then-restore construction
+        has a real trap against it: the round trip decrements every row and then
+        increments every row, so a bystander seeded at N reads N - 1 + 1 == N
+        and a control asserted only AFTER the cycle is laundered by it. That
+        trap is ESCAPABLE, though, and saying otherwise would be false. Measured
+        under the pair mutant: a variant asserting the bystander BETWEEN the two
+        calls FAILS, `assert 8 == 9`, while the otherwise identical variant
+        asserting only the PARENT mid-cycle PASSES. So the round-trip shape can
+        carry a working control; it just has to be the bystander, inside the
+        cycle. An earlier version of this docstring said the shape "CANNOT CARRY
+        A WORKING NEGATIVE CONTROL", which is wrong -- the one placement that
+        does not work is the one that had been tried.
+
+        AND AT SUITE SCOPE THE PAIR MUTANT DIES ANYWAY, on
+        `TestDeleteReply`'s ancestor test, which carries its own bystander on
+        the delete half. So this rewrite adds no detection the file did not
+        already have. What it adds is that `:283` is THE ONLY STATEMENT IN THIS
+        TEST THAT TOUCHES `child_count`: a failure here names restore's own
+        `UPDATE` instead of the pair, and the test depends neither on
+        `delete_reply:257` being correct nor on a sibling test continuing to
+        exist. Marking the reply `deleted` through the ORM is all `:275`'s
+        filter requires, so the isolation is free.
 
         MEASURED, NOT ARGUED. ` where id in :parents` was deleted from BOTH
         `:257` and `:283` in a scratch mutant -- `app/` restored afterwards and
-        the restore confirmed with `git diff --quiet -- app/` and `wc -l`. This
-        test FAILED, `assert 10 == 9` on the bystander. A delete-then-restore
-        version run alongside it PASSED, and that version was STRENGTHENED
-        rather than copied: it carried a bystander of its own AND an
-        intermediate assertion on the parent between the two calls, so it was a
-        better test than the one this replaces and the round trip defeated it
-        anyway. `TestDeleteReply`'s ancestor test also failed, on the delete
-        half. A `:283`-ONLY mutant is the weaker case and both shapes catch it;
-        it is the pair mutant that separates them. The runs are in the task
-        report.
+        the restore confirmed with `git diff --quiet -- app/` and `wc -l`
+        reporting 577. This test FAILED, `assert 10 == 9` on the bystander;
+        `TestDeleteReply`'s ancestor test also failed, on the delete half. A
+        `:283`-ONLY mutant is the weaker case and every shape discussed here
+        catches it. The runs are in the task report.
 
         THE PATH IS SEEDED IN THE SHAPE PRODUCTION BUILDS, `[0, parent.id,
         reply.id]` -- app/models.py:3054-3055 for the nested case and `:3059`
