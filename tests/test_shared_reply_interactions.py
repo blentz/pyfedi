@@ -75,7 +75,7 @@ WHAT IS NEW, AND HAS NO POST TWIN:
     syntax error at or near ")"`, because psycopg2 renders it as `where id in
     ()`. AND A ONE-ELEMENT PATH IS REACHABLE IN PRODUCTION, so that raise is a
     live 500 rather than a curiosity -- see the DEFECTS section below, which
-    enumerates all four writers of the column. `TestDeleteReply` seeds the
+    enumerates all five writers of the column. `TestDeleteReply` seeds the
     three-element shape `app/models.py` builds and does NOT test the empty
     tuple, because the cli importer that can produce one cannot be simulated
     from a factory reply; its class docstring carries the full probe.
@@ -144,10 +144,28 @@ FACTORY REPLY. Taking the unpinned pair first, because a later reader of the
 `path` bullet above is sent here for them.
 
 DEFECT 3 -- `flask lemmy-import` WRITES ONE-ELEMENT PATHS, AND
-`delete_reply:257` AND `restore_reply:283` THEN RAISE. The column has exactly
-FOUR writers, and this claim is the enumeration, not a sample. The search was
-`grep -rn "\\.path\\b" --include=*.py app/` filtered to assignments and
-subscripts, which finds every one:
+`delete_reply:257` AND `restore_reply:283` THEN RAISE. The column has FIVE
+writers, listed below. THIS ENUMERATION IS THE PRODUCT OF TWO DIFFERENT
+METHODS, AND THE FIRST VERSION OF IT -- WHICH USED ONE -- MISSED WRITER 5 AND
+STILL CALLED ITSELF COMPLETE. That miss is the reason the method is spelled
+out here rather than the result alone:
+
+  METHOD A, an AST walk of every `.py` under `app/`, collecting every
+  assignment whose target is an attribute named `path` and every `path=`
+  keyword in any call. Finds writers 1-4 and, being attribute-based,
+  STRUCTURALLY CANNOT SEE A RAW-SQL WRITER.
+
+  METHOD B, an AST walk collecting every string CONSTANT containing both
+  `post_reply` and the word `path`, then filtered for `update`/`insert`.
+  Finds writer 5, which method A cannot reach by construction.
+
+  The first attempt used neither: it was `grep -rn "\\.path\\b" --include=*.py
+  app/` followed by a hand-written filter `grep -E "\\.path\\s*=|path=|\\.path
+  \\["`. app/cli.py:1929 DOES appear in that grep's output, because it contains
+  `reply_path.path` -- and the hand filter discarded it, because `SET path =`
+  has a space before the `=` and no dot before the `path`. A single filtered
+  grep is not an enumeration; two methods that fail differently are closer to
+  one.
 
   1. app/models.py:3053-3059, in `class PostReply` (opens at
      app/models.py:2887) -- the ActivityPub/web reply creator. Top-level gets
@@ -158,39 +176,69 @@ subscripts, which finds every one:
   2. app/cli.py:694 and `:715`, inside `@app.cli.command("lemmy-import")`
      (app/cli.py:275). `piefed_path` is built at `:664-670` from
      `path_parts[1:-1]` -- ANCESTORS ONLY, THE REPLY'S OWN ID EXCLUDED, and
-     `'0'` filtered out by `:667`. For an ordinary first-level nested comment
-     whose Lemmy ltree path is `0.<parent>.<self>`, `path_parts[1:-1]` is
-     `['<parent>']`, so `path == [parent_id]`, `tuple(path[:-1])` is `()`, and
-     both raw-SQL statements raise the `psycopg2.errors.SyntaxError` measured
-     above. A top-level comment (`0.<self>`) yields `[]`, which is falsy and
-     merely skips the update.
+     `'0'` filtered out by `:667` and unmapped ancestors by `:669`. For a
+     first-level nested comment whose Lemmy ltree path is `0.<parent>.<self>`
+     AND WHOSE PARENT WAS MAPPED, `path_parts[1:-1]` is `['<parent>']`, so
+     `path == [parent_id]`, `tuple(path[:-1])` is `()`, and both raw-SQL
+     statements raise the `psycopg2.errors.SyntaxError` measured above. THE
+     SCOPE MATTERS: a top-level comment (`0.<self>`) yields `[]`, and so does a
+     first-level one whose parent is NOT in `lemmy_to_piefed_comment`, because
+     `:669` skips it -- both are falsy and merely skip the update. Only the
+     mapped-parent first-level case raises.
   3. app/api/alpha/views.py:686, written by `calculate_path` (`:669`). Depth 0
      gives `[0, reply.id]`, depth 1 `[0, parent_id, reply.id]`, depth > 1 a
-     longer walk. ALWAYS >= 2. Cleared, no finding.
+     longer walk, committed at `:687`. ALWAYS >= 2. Cleared, no finding -- but
+     see the note on self-healing below, which is about WHEN it runs, not what
+     it writes.
   4. app/post/util.py:79, inside `create_real_reply` (`:53`). Its own comment
      at `:55` says "Create a PostReply instance (not persisted to DB)", and
      the file contains no `db.session.add`, `flush` or `commit` at all. A
-     display object that never reaches the column. Cleared, no finding.
+     display object that never reaches the column. Cleared, no finding. THE
+     ONLY NON-PERSISTING WRITER OF THE FIVE.
+  5. app/cli.py:1929, `UPDATE post_reply SET path = reply_path.path`, inside
+     `@app.cli.command("populate_post_reply_for_api")` (app/cli.py:1906),
+     committed at `:1934`. A recursive CTE whose base case is
+     `ARRAY[0, id]` for `parent_id IS NULL` and whose step is
+     `rp.path || pr.id`, so it emits the app/models.py convention and is
+     ALWAYS >= 2. Cleared, no finding -- and it is the REMEDY, see below.
+     THIS IS THE WRITER THE FIRST ENUMERATION MISSED.
 
 So on any instance that has run `flask lemmy-import`, the author of an
-imported first-level reply cannot delete or restore it. THIS IS REACHABLE,
-NOT LATENT.
+imported first-level reply with a mapped parent can neither delete nor restore
+it. THIS IS REACHABLE, NOT LATENT.
 
-DEFECT 4 -- THE TWO PERSISTING WRITERS USE DIFFERENT PATH CONVENTIONS, so
-`path[:-1]` means different things depending on who wrote the row.
-app/models.py appends the reply's own id; app/cli.py does not. Every
-`tuple(path[:-1])` site in the codebase -- app/shared/reply.py `:258`, `:284`,
-`:418`, `:453`, app/activitypub/util.py `:2264`, `:2318`, `:2340`, `:2381`,
-and app/post/routes.py:1997 -- assumes the app/models.py convention. Against a
-cli-imported row they drop the IMMEDIATE PARENT, a genuine ancestor: a path of
-`[grandparent, parent]` yields `(grandparent,)`, so the parent's `child_count`
-is never adjusted and the count under-reports by one level.
+AND IT DOES NOT SELF-HEAL. `calculate_path` (writer 3) would rewrite a broken
+row into the right convention, but its ONLY call site is
+app/api/alpha/views.py:735, guarded at `:734` by `if not reply.path:`. A
+ONE-ELEMENT PATH IS TRUTHY, so the repair never fires on exactly the rows that
+need it. `grep -rn "calculate_path(" --include=*.py app/` gives the definition
+at `:669` and that one call, nothing else.
+
+THE REMEDY EXISTS AND IS WRITER 5. `flask populate_post_reply_for_api` rebuilds
+EVERY path from the `parent_id` chain in the app/models.py convention,
+unconditionally, so running it repairs the rows both defects describe. Any
+register entry for defect 3 or 4 that names the 500 without naming this
+command is worth less than one that names both.
+
+DEFECT 4 -- THE PERSISTING WRITERS DISAGREE ON THE PATH CONVENTION, so
+`path[:-1]` means different things depending on who wrote the row. FOUR OF THE
+FIVE PERSIST -- 1, 2, 3 and 5; only writer 4 does not -- and three of those
+four terminate the array with the reply's own id. app/cli.py:664-670 (writer 2)
+does not. Every `tuple(path[:-1])` site in the codebase -- app/shared/reply.py
+`:258`, `:284`, `:418`, `:453`, app/activitypub/util.py `:2264`, `:2318`,
+`:2340`, `:2381`, and app/post/routes.py:1997 -- assumes the majority
+convention. Against a cli-imported row they drop the IMMEDIATE PARENT, a
+genuine ancestor: a path of `[grandparent, parent]` yields `(grandparent,)`, so
+the parent's `child_count` is never adjusted and the count under-reports by one
+level. (An earlier version of this paragraph said "the two persisting writers",
+which was the four-writer enumeration's arithmetic, not the five-writer one's.)
 
 NEITHER DEFECT 3 NOR DEFECT 4 IS PINNED BY A TEST HERE, and that is a decision
 rather than an oversight: reaching either needs a row shaped by the cli
 importer, which no factory in `tests/factories.py` produces and which a unit
 test of `delete_reply` has no business simulating. Both go to the campaign
-register as REACHABLE.
+register as REACHABLE, each naming `flask populate_post_reply_for_api` as the
+existing remedy.
 
 THE TWO THAT ARE PINNED. `restore_reply:279-280`
 increments one counter (`reply.post.reply_count`) where `delete_reply:251-254`
@@ -321,20 +369,45 @@ def _seed_distinct_reply_counters(s):
     All four default to 0 -- `Post.reply_count` app/models.py:1722,
     `Post.reply_count_cross_posted` `:1723`, `Community.post_reply_count`
     `:571`, `User.post_reply_count` `:1011` -- and the factories do not move
-    them. A delete test that left them there would read `(0, 0, 0, 0)` before
-    and `(-1, -1, -1, -1)` after, which catches a mutation that REMOVES one of
-    `delete_reply:252`-`:255` but is blind to every mutation that SUBSTITUTES
-    one for another: swap `:252` and `:253`, or rewrite `:253` as
-    `reply_count_cross_posted = reply_count - 1`, and an all-zero fixture
-    still reads `(-1, -1, -1, -1)`. That is false-witness mechanism 2, a
-    fixture coincidence making distinct arms produce the same value.
+    them. A delete test that left them there reads `(0, 0, 0, 0)` before and
+    `(-1, -1, -1, -1)` after, and cannot tell one column from another because
+    every slot holds the same number. That is false-witness mechanism 2, a
+    fixture coincidence making distinct things produce the same value.
 
-    PAIRWISE DISTINCTNESS IS THE WHOLE REQUIREMENT and 31/17/8/3 satisfy it.
-    A swap of positions i and j writes `value_j - 1` where `value_i - 1` is
-    expected, and those differ for every pair precisely because the values do.
-    (Distinct pairwise DIFFERENCES would be a stronger and unnecessary
-    property, and these four do not have it: 31-17 and 17-3 are both 14.
-    Nothing here needs it.) The values are also large enough that the
+    EXACTLY WHAT THIS BUYS, MEASURED ONE MUTANT AT A TIME. An earlier version of
+    this docstring asserted two illustrations and measured neither, and BOTH
+    WERE WRONG. The three cases that matter, each run against both fixtures:
+
+      COPY, `:253` -> `reply_count_cross_posted = reply_count`. All-zero
+      fixture: 4 passed, THE MUTANT SURVIVES, because `:252` has already made
+      `reply_count` equal -1 and -1 is what the slot was going to read anyway.
+      Distinct fixture: 1 failed, `assert (30, 30, 7, 2) == (30, 16, 7, 2)`.
+      THIS IS THE CLASS DISTINCTNESS IS FOR, and the only one where it is
+      necessary rather than merely sufficient.
+
+      OFFSET COPY, `:253` -> `reply_count_cross_posted = reply_count - 1`.
+      All-zero fixture: 1 failed, `assert (-1, -2, -1, -1) == (-1, -1, -1, -1)`
+      -- ALREADY CAUGHT without distinct seeds, because `:252` runs first and
+      the offset compounds. The earlier claim that this one survived an
+      all-zero fixture was simply false. Distinct fixture: also 1 failed,
+      `assert (30, 29, 7, 2) == (30, 16, 7, 2)`.
+
+      PERMUTATION, `:252` and `:253` swapped. BOTH fixtures: 4 passed.
+      Distinctness has ZERO power here and no seeding can give it any:
+      `:252`-`:255` are four in-place `-= 1` on four independent columns with
+      no reads between them, so ANY permutation of their targets still
+      decrements each column exactly once and produces a byte-identical tuple.
+      IT IS AN EQUIVALENT MUTANT. The earlier claim that "a swap of positions
+      i and j writes `value_j - 1` where `value_i - 1` is expected" described
+      assignment, not `-=`, and was the justification offered for the whole
+      helper.
+
+    So the honest statement is narrow: DISTINCT SEEDS ADD DETECTION POWER OVER
+    EXACT-COPY ASSIGNMENT MUTANTS, are redundant against offset copies, and are
+    powerless against permutations. Pairwise distinctness is what that needs,
+    and 31/17/8/3 have it. (Distinct pairwise DIFFERENCES would be a stronger
+    property and these four do not have it -- 31-17 and 17-3 are both 14 --
+    but nothing here needs it.) The values are also large enough that the
     post-delete counts stay positive, which keeps a failure message readable.
 
     Returns the before-tuple in `delete_reply:252`-`:255` order so a caller can
@@ -1281,7 +1354,7 @@ class TestDeleteReply:
     Postgres rejects outright -- it is not an empty result, it is a syntax
     error that would propagate out of `delete_reply`. PRODUCTION DOES BUILD
     SUCH A PATH, and this sentence formerly said the opposite. The column has
-    four writers, enumerated in the module docstring's DEFECTS section;
+    five writers, enumerated in the module docstring's DEFECTS section;
     app/cli.py:664-670, inside `@app.cli.command("lemmy-import")`
     (app/cli.py:275), builds the array from `path_parts[1:-1]` -- ancestors
     only, the reply's own id EXCLUDED -- so an ordinary first-level nested
@@ -1314,13 +1387,15 @@ class TestDeleteReply:
         FOUR counters move and all four are asserted, because `:252`-`:255` are
         four separate statements. An earlier version said only that a mutation
         can "remove one at a time", which is true for REMOVAL and was silently
-        untrue for SUBSTITUTION: with the columns at their default 0 the
-        before-tuple is `(0, 0, 0, 0)` and the after-tuple `(-1, -1, -1, -1)`,
-        so swapping `:252` and `:253`, or rewriting one as another, survives
-        undetected. `_seed_distinct_reply_counters` exists for exactly that and
-        its docstring carries the argument; with it the four counters are
-        pairwise distinct and no substitution among them can land on the
-        expected tuple.
+        untrue for an EXACT-COPY assignment such as rewriting `:253` as
+        `reply_count_cross_posted = reply_count`: with the columns at their
+        default 0 that mutant reads `(-1, -1, -1, -1)` like the original and
+        SURVIVES, measured. `_seed_distinct_reply_counters` exists for exactly
+        that one class of mutant; its docstring carries all three cases,
+        measured, INCLUDING the two that a later version of this sentence got
+        wrong. Note what distinctness does NOT buy: swapping `:252` and `:253`
+        is an equivalent mutant that passes under any seeding, because four
+        in-place `-= 1` on four independent columns are permutation-invariant.
 
         The before-values are still captured rather than hardcoded, so that the
         test states the delta it is testing rather than four magic numbers that
@@ -1413,9 +1488,11 @@ class TestDeleteReply:
         because `:252`-`:254` are separable statements and a guard that leaked
         only one of them would otherwise go unseen. They are seeded to distinct
         non-zero values by `_seed_distinct_reply_counters` for the reason that
-        helper's docstring gives, which matters here too: at the columns'
-        default 0 a leak of `:253` into `:252`'s slot would be invisible, since
-        both would read 0 either way.
+        helper's docstring gives, which applies here too: a mutant that made
+        one of the three guarded statements COPY another's value rather than
+        decrement its own would be invisible at the columns' shared default 0.
+        It is only the copy class -- not a permutation of the three, which is
+        an equivalent mutant under any seeding.
 
         `User.bot` is app/models.py:1016, in `class User` which opens at
         app/models.py:973; it defaults False, so `_seed_reply`'s user takes the
