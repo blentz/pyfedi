@@ -40,7 +40,7 @@ WHAT TRANSFERS FROM tests/test_shared_post_interactions.py UNCHANGED:
     `local=True`. Register entry D393(f).
 
 REAL REDIS IS SHARED ACROSS THE WHOLE TEST SESSION. `reply.vote()`
-(app/models.py:3311, in `class PostReply` which opens at app/models.py:2887)
+(app/models.py:3316, in `class PostReply` which opens at app/models.py:2892)
 sets or increments `votes_cast_{today}_{user_id}` on the real redis the
 compose stack shares, and tests/conftest.py:131 resets id sequences after
 every test -- so a later test whose user reuses that id inherits a stale
@@ -67,7 +67,7 @@ WHAT IS NEW, AND HAS NO POST TWIN:
   - `make_post_reply` (tests/factories.py:455-474) DOES NOT SET `path`. Its
     constructor sets exactly `user_id`, `post_id`, `community_id`,
     `instance_id`, `body`, `posted_at` and `deleted`; `path`
-    (app/models.py:2898) is a nullable ARRAY column with no default, so a
+    (app/models.py:2903) is a nullable ARRAY column with no default, so a
     factory reply has `path is None`. So `delete_reply:256`'s `if reply.path:`
     and `restore_reply:282`'s are FALSE by default and their true arms need a
     path seeded explicitly. A single-element path makes `reply.path[:-1]` an
@@ -85,7 +85,7 @@ WHAT IS NEW, AND HAS NO POST TWIN:
     one cannot be simulated from a factory reply; `TestDeleteReply`'s class
     docstring carries the full probe and `TestRestoreReply`'s points at it,
     `:283` being `:257` with one character changed. `child_count`
-    (app/models.py:2899) is likewise unset by the factory, but has a column
+    (app/models.py:2904) is likewise unset by the factory, but has a column
     default of 0 rather than None.
 
     BOTH COLUMN FACTS WERE LATER RE-DERIVED BY A SECOND METHOD THAT FAILS
@@ -117,8 +117,8 @@ WHAT IS NEW, AND HAS NO POST TWIN:
     `:3238`, which dereferences the None from `:3233`.
 
     WITH a `Site` row the same two steps still do not produce a theme:
-    `Site.default_theme` (app/models.py:3975, in `class Site` which opens at
-    app/models.py:3942) ALSO defaults to `''`, so `:3238`'s `is not None` guard
+    `Site.default_theme` (app/models.py:3987, in `class Site` which opens at
+    app/models.py:3954) ALSO defaults to `''`, so `:3238`'s `is not None` guard
     is satisfied and it returns `''` rather than its `'piefed'` literal --
     which makes app/utils.py:76's `if theme != ''` short-circuit before any
     filesystem check and `:79` render the base template. A later test that
@@ -323,8 +323,9 @@ A bot -- refused by `can_upvote` at app/utils.py:2481 and by `can_downvote` at
 `:2437` -- can therefore still remove its vote through the API. THIS IS A
 NARROWER HOLE THAN IT SOUNDS and the narrowing is part of the finding: a
 'reversal' only reaches a vote at all when a vote already exists, because
-`PostReply.vote` remaps it at app/models.py:3316 only `if existing_vote` and
-`:3321` then asserts the direction is 'upvote' or 'downvote'. So the gates are
+`PostReply.vote` remaps it at app/models.py:3321 only `if existing_vote` and
+`:3326`/`:3333` then REQUIRE the direction to be 'upvote' or 'downvote',
+raising `ValueError` if it is not. So the gates are
 bypassed for UNDOING a vote, not for casting one. It was found by neutralising
 `:22`'s first conjunct, which nothing in the file had killed.
 
@@ -342,18 +343,24 @@ THREE EXTENSIONS TO DEFECT 5 ARE RECORDED IN D500 -- in substance, not in
 these words -- and are repeated
 here so they are not lost with a report. (i) The gate-free call also carries `emoji`:
 `post_reply_like` forwards `data['emoji']`, and the remapped reversal lands on
-app/models.py:3325-3331, so a refused user can also REWRITE THE EMOJI on the
+app/models.py:3337-3343, so a refused user can also REWRITE THE EMOJI on the
 existing vote. Fix round 1's `..._a_web_reversal_that_only_rewrites_the_emoji_
 marks_neither` executes that path (through the web arm, for its own reasons).
 (ii) `vote_for_post` is the twin: app/shared/post.py:31-37 carries the identical
 two-literal gate and `post_like` the identical `score`->'reversal' mapping, so
 any fix must land in both or create exactly the mirrored-pair divergence this
-file registers as a defect class. (iii) Under `python -O` the character of the
-hole changes: app/models.py:3321's assert disappears, so `score: 0` with NO
-existing vote falls through to the else-branch, `effect` becomes -1 and a NEW
-DOWNVOTE is cast past both gates. Nothing in this repository runs `-O` or sets
-`PYTHONOPTIMIZE`, so it is hypothetical here -- but it converts a withdrawal
-hole into a vote-CASTING hole and belongs in the entry.
+file registers as a defect class. (iii) THIS EXTENSION IS RETRACTED AS OF TASK 7 OF SUB-PROJECT 41, AND IT WAS
+NOT A MIS-NUMBERING -- THE CONSTRUCT IT DESCRIBED NO LONGER EXISTS. It read:
+"Under `python -O` the character of the hole changes: app/models.py:3321's
+assert disappears, so `score: 0` with NO existing vote falls through to the
+else-branch, `effect` becomes -1 and a NEW DOWNVOTE is cast past both gates."
+That was true while `PostReply.vote` guarded the direction with a bare
+`assert`. D517's own fix replaced it, and the replacement is now
+app/models.py:3326's `if vote_direction != 'upvote' and vote_direction !=
+'downvote':` raising `ValueError` at `:3333` -- a statement `-O` does not
+remove. The source comment at `:3327-3332` records exactly this reasoning.
+So the `-O` escalation is CLOSED, not hypothetical, and no citation in this
+file should call `:3326` an assert any more.
 
 WHAT TASK 7'S MUTATION PASS LEFT OPEN, listed because a survivor that is merely
 reported dies with the report. Each of these is a mutation of a line in Groups A
@@ -456,17 +463,18 @@ strengthened flash test below, whose docstring pins it.)
 RETRACTION -- THE ONE EQUIVALENCE CLAIM THIS FILE MADE WAS FALSE, AND IS NOW
 CLOSED BY A TEST. Task 7 argued that `48s/vote_direction == 'downvote' and //`
 is an EQUIVALENT mutant over the reachable domain, on two grounds: that
-app/models.py:3321's assert narrows `vote_direction` to 'upvote' or 'downvote'
-before `:46`, and that a 'reversal' surviving that assert always yields a
+app/models.py:3326's direction check (an `assert` when this was written; now
+an `if` raising `ValueError` at `:3333`) narrows `vote_direction` to 'upvote'
+or 'downvote' before `:46`, and that a 'reversal' surviving that check always yields a
 non-None `undo`, making the one differing state ('reversal', None) unreachable.
 
 BOTH GROUNDS ARE WRONG.
 
-  - The assert narrows `vote()`'s OWN LOCAL, not the caller's. `:3317`/`:3319`
+  - The check narrows `vote()`'s OWN LOCAL, not the caller's. `:3323`/`:3325`
     ASSIGN to `vote_direction` inside `vote`; `vote_for_reply`'s variable is
     untouched and is still 'reversal' at `:46` and `:48`.
   - A surviving 'reversal' does NOT always yield a non-None `undo`.
-    app/models.py:3325-3331 is an early `return None` -- with an existing vote,
+    app/models.py:3337-3343 is an early `return None` -- with an existing vote,
     a non-empty `emoji` and a remapped direction matching the existing vote's
     effect, `vote` rewrites the emoji and returns before any removal branch
     assigns `undo`.
@@ -762,8 +770,8 @@ class TestSubscribeReply:
 
         subscribe = False if reply.notify_new_replies(user_id) else True
 
-    and `notify_new_replies` (app/models.py:3305-3309, in `class PostReply`
-    which opens at app/models.py:2887) runs the SAME query `:100` runs one line
+    and `notify_new_replies` (app/models.py:3310-3314, in `class PostReply`
+    which opens at app/models.py:2892) runs the SAME query `:100` runs one line
     later -- `NotificationSubscription` filtered on `entity_id == self.id`,
     `user_id == user_id`, `type == NOTIF_REPLY`, `.first()` -- with no write
     between them. So on the web arm `subscribe` is ALWAYS the negation of
@@ -1284,7 +1292,8 @@ class TestVoteForReplySourceAndPermission:
         names no permission of its own. `:25`-`:29` load the voter's existing
         `PostReplyVote` and require `can_upvote` for an `effect` above zero
         and `can_downvote` for one below. The existing vote here is an upvote
-        with `effect` exactly 1 (app/models.py:3366), so `can_upvote` is the
+        with `effect` exactly 1 (app/models.py:3378-3386, where a first-time
+        vote starts at `effect = 1` and builds the row with it), so `can_upvote` is the
         function consulted and the bot flag is what makes it refuse.
 
         THE WITNESS IS THE SURVIVING ROW, NOT THE RETURNED ID. `:26` and the
@@ -1292,7 +1301,7 @@ class TestVoteForReplySourceAndPermission:
         a refusal from a success -- exactly the false-witness mechanism (a)
         the module docstring names. What discriminates is state: under the
         unfixed code `:36` ran, `PostReply.vote` remapped 'reversal' to
-        'upvote' at app/models.py:3316 and deleted the row at `:3341`, and
+        'upvote' at app/models.py:3323 and deleted the row at `:3351`, and
         both counts below would read 0.
 
         `s.user.bot` is set BETWEEN the two calls, because the first call must
@@ -1393,7 +1402,8 @@ class TestVoteForReplySourceAndPermission:
         undoing" when no such vote exists, so it falls through rather than
         refusing. Control reaches `:44`, `:47` and then `reply.vote()`, where
         app/models.py:3321 remaps 'reversal' ONLY `if existing_vote` -- so the
-        direction arrives still spelled 'reversal' and `:3326` raises.
+        direction arrives still spelled 'reversal', `:3326` catches it and
+        `:3333` raises.
 
         THIS PINS A PRE-EXISTING 500, NOT A NEW ONE, and it is here because
         `:35`'s false arm needs a witness. `Post.vote` handles the same state
@@ -1566,9 +1576,9 @@ class TestVoteForReplyGuardsAndReturns:
         -> `:51` with both lists left empty. THE TABLE USED TO HAVE FOUR ROWS
         AND STOP ABOVE THIS ONE, on the assumption that `vote_direction` here is
         always one of the two literals. It is not: `PostReply.vote` remaps
-        'reversal' by assigning to ITS OWN local (app/models.py:3317/:3319), so
+        'reversal' by assigning to ITS OWN local (app/models.py:3323/:3325), so
         the caller's value survives unchanged, and the emoji early return at
-        `:3325-3331` reaches `:46` with `undo` None. Falsifying `:48`'s first
+        `:3337-3343` reaches `:46` with `undo` None. Falsifying `:48`'s first
         conjunct with `undo` None is what the fourth row cannot do -- there
         `undo` is non-None, so deleting the first conjunct leaves `:48` false
         either way. The sixth test below is this row.
@@ -1587,14 +1597,14 @@ class TestVoteForReplyGuardsAndReturns:
     above's web test and the second the third test here.
 
     `undo` IS NON-None ONLY WHEN A VOTE IS REMOVED, and that was read at source
-    rather than assumed: `PostReply.vote` (app/models.py:3311, in `class
-    PostReply` which opens at app/models.py:2887) initialises `undo = None` at
-    `:3322` and assigns it in exactly two places -- `:3343`'s `undo = 'Like'`,
-    when an existing upvote is voted up again and deleted, and `:3357`'s
+    rather than assumed: `PostReply.vote` (app/models.py:3316, in `class
+    PostReply` which opens at app/models.py:2892) initialises `undo = None` at
+    `:3334` and assigns it in exactly two places -- `:3355`'s `undo = 'Like'`,
+    when an existing upvote is voted up again and deleted, and `:3369`'s
     `undo = 'Dislike'`, when an existing downvote is voted down again. A
-    direction REVERSAL (`:3345`, `:3359`) edits the existing row and leaves
+    direction REVERSAL (`:3357`, `:3371`) edits the existing row and leaves
     `undo` None, so reversing is NOT an input that reaches `48->51`; repeating
-    the same direction is. THE EMOJI EARLY RETURN AT `:3325-3331` IS A THIRD
+    the same direction is. THE EMOJI EARLY RETURN AT `:3337-3343` IS A THIRD
     PATH THAT LEAVES `undo` None, and it is the one the fifth row of the table
     uses: it returns before the removal branches, so nothing is undone and
     nothing is recorded, while the caller's direction may be a value neither
@@ -1788,8 +1798,8 @@ class TestVoteForReplyGuardsAndReturns:
         triggers apply to this test -- the theme chain and that call -- and
         `make_site()` serves both. `enable_downvotes` is left exactly as
         `make_site()` (tests/factories.py:353) leaves it, which is the column
-        default True (app/models.py:3954, in `class Site` which opens at
-        app/models.py:3942).
+        default True (app/models.py:3966, in `class Site` which opens at
+        app/models.py:3954).
 
         NO PERMISSION GATE STOPS THIS DOWNVOTE INSIDE `vote_for_reply` ITSELF,
         because `:24`'s `can_downvote` is inside the SRC_API arm -- that is the
@@ -1834,7 +1844,7 @@ class TestVoteForReplyGuardsAndReturns:
 
         VOTING UP TWICE IS WHAT MAKES `undo` NON-None, and that was read at
         source before it was relied on: `PostReply.vote` deletes the existing
-        row and sets `undo = 'Like'` at app/models.py:3343 when
+        row and sets `undo = 'Like'` at app/models.py:3351-3355 when
         `existing_vote.effect > 0` and the new direction is 'upvote'. It is also
         why `up_votes` is back to 0 and the `PostReplyVote` row is gone -- that
         pair is the positive control that the second call really was an UNDO and
@@ -1869,8 +1879,8 @@ class TestVoteForReplyGuardsAndReturns:
 
         ONE `_clear_votes_cast` FOR TWO CALLS, and that is correct rather than
         an oversight: the key is per user and per day, and the undo path at
-        app/models.py:3337-3343 never reaches the `votes_cast` bookkeeping at
-        `:3382-3386`, which sits in the `else` for a first-time vote. So only
+        app/models.py:3349-3355 never reaches the `votes_cast` bookkeeping at
+        `:3393-3398`, which sits in the `else` for a first-time vote. So only
         the first call wrote it.
         """
         make_site()
@@ -1910,7 +1920,7 @@ class TestVoteForReplyGuardsAndReturns:
 
         VOTING DOWN TWICE IS WHAT MAKES `undo` NON-None on this arm, the mirror
         of the test above's mechanism: `PostReply.vote` sets `undo = 'Dislike'`
-        at app/models.py:3357 when `existing_vote.effect < 0` and the new
+        at app/models.py:3369 when `existing_vote.effect < 0` and the new
         direction is 'downvote', and deletes the row. `down_votes` back at 0
         with no `PostReplyVote` row is the positive control that the second call
         really was an undo rather than a silently refused duplicate.
@@ -1953,15 +1963,17 @@ class TestVoteForReplyGuardsAndReturns:
         THE FIFTH INPUT TO `:46`/`:48`, and the one the class docstring's
         four-row table could not see, because that table takes `vote_direction`
         at `:46` to be 'upvote' or 'downvote' by the time control arrives. IT
-        NEED NOT BE. The false argument was that `app/models.py:3321`'s assert
+        NEED NOT BE. The false argument was that `app/models.py:3326`'s
+        direction check (an `assert` when this was written; now an `if`
+        raising `ValueError` at `:3333`)
         narrows the caller's direction to those two literals. It does not:
-        `:3317`/`:3319` remap 'reversal' by ASSIGNING TO `vote()`'s OWN LOCAL,
+        `:3323`/`:3325` remap 'reversal' by ASSIGNING TO `vote()`'s OWN LOCAL,
         which is what the assert then sees. The caller's `vote_direction` is
         untouched and is still 'reversal' at `:46` and `:48`.
 
         THE REMAINING HALF OF THE FALSE ARGUMENT was that a 'reversal' which
-        survives the assert always yields a NON-None `undo`, so the one state
-        where mutant and original differ is unreachable. app/models.py:3325-3331
+        survives that check always yields a NON-None `undo`, so the one state
+        where mutant and original differ is unreachable. app/models.py:3337-3343
         is the counterexample it walked past: with an existing vote, a non-empty
         `emoji`, and a remapped direction MATCHING the existing vote's effect,
         `vote` rewrites the emoji and `return None` -- before any of the removal
@@ -2009,8 +2021,8 @@ class TestVoteForReplyGuardsAndReturns:
 
         `make_site()` is needed twice over for the reasons the class docstring
         gives. ONE `_clear_votes_cast` FOR TWO CALLS, for the same reason the
-        upvote-undo test gives: the emoji early return at app/models.py:3331
-        never reaches the `votes_cast` bookkeeping at `:3382-3386`, so only the
+        upvote-undo test gives: the emoji early return at app/models.py:3343
+        never reaches the `votes_cast` bookkeeping at `:3393-3398`, so only the
         first call wrote the key.
         """
         make_site()
@@ -2351,13 +2363,13 @@ class TestDeleteReply:
         """`:256` true -> `:257`. Arc 256->257; statements 256, 257.
 
         `:257-258` is raw SQL against `post_reply.child_count`
-        (app/models.py:2899, in `class PostReply` which opens at
-        app/models.py:2887), keyed on `tuple(reply.path[:-1])` -- the reply's
-        ancestors, excluding itself. `path` (app/models.py:2898) is a nullable
+        (app/models.py:2904, in `class PostReply` which opens at
+        app/models.py:2892), keyed on `tuple(reply.path[:-1])` -- the reply's
+        ancestors, excluding itself. `path` (app/models.py:2903) is a nullable
         ARRAY with no default and `make_post_reply` (tests/factories.py:455)
         does not set it, so the path is seeded here by hand in the shape
-        production builds: `[0, parent.id, reply.id]`, per app/models.py:3054
-        and `:3059`. `path[:-1]` is then `(0, parent.id)` -- multi-element, so
+        production builds: `[0, parent.id, reply.id]`, per app/models.py:3058-3060
+        and `:3063-3064`. `path[:-1]` is then `(0, parent.id)` -- multi-element, so
         the empty-tuple syntax error documented on the class does not arise,
         and id 0 matches no row so only `parent` is hit.
 
@@ -2573,7 +2585,7 @@ class TestRestoreReply:
 
     `path` IS NULLABLE WITH NO DEFAULT AND `child_count` DEFAULTS TO 0 -- also
     re-derived by a second method, runtime introspection of the mapped table
-    rather than reading app/models.py:2898-2899. `PostReply.__table__.c['path']`
+    rather than reading app/models.py:2903-2904. `PostReply.__table__.c['path']`
     reports `ARRAY(Integer())`, `nullable=True`, `default=None`,
     `server_default=None`; `c['child_count']` reports `default=0`. Reading the
     source cannot see a later override of a mapped column; introspection cannot
@@ -2802,8 +2814,11 @@ class TestRestoreReply:
         catches it. The runs are in the task report.
 
         THE PATH IS SEEDED IN THE SHAPE PRODUCTION BUILDS, `[0, parent.id,
-        reply.id]` -- app/models.py:3054-3055 for the nested case and `:3059`
-        for the root, in `class PostReply` which opens at app/models.py:2887.
+        reply.id]` -- app/models.py:3058-3060 for the nested case and
+        `:3063-3064` for the root, in `class PostReply` which opens at
+        app/models.py:2892. (This read `:3054-3055`/`:3059`/`:2887` until Task
+        7 of sub-project 41; `:3054-3055` is the `except IntegrityError:`
+        handler, not the path construction.)
         `path[:-1]` is then `(0, parent.id)`: multi-element, so the empty-tuple
         syntax error the class docstring records cannot arise, and id 0 matches
         no row so only `parent` is hit.
