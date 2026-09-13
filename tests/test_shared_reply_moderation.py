@@ -395,3 +395,185 @@ class TestModRemoveReply:
             mod_remove_reply(s.reply.id, 'spam', SRC_API, auth=bearer(s.actor))
 
         assert 'delete_reply' in calls
+
+
+class TestModRestoreReply:
+    """`mod_restore_reply` (app/shared/reply.py:450-483).
+
+    THE GUARD HAS TWO DISJUNCTS WHERE `mod_remove_reply`'S HAS THREE. `:457`
+    is `is_moderator or is_instance_admin`; `:421` adds
+    `user.is_admin_or_staff()`. So a site admin who is not a moderator can
+    remove a comment and then cannot restore it. That is finding 2 in the
+    spec, registered rather than fixed, and
+    `test_a_site_admin_who_is_neither_is_refused` below is its witness --
+    paired deliberately with `TestModRemoveReply`'s
+    `test_a_site_admin_who_is_neither_may_remove`, which shows the same user
+    permitted one line earlier in the file.
+    """
+
+    def _removed(self, *, bot=False):
+        """A seeded reply already removed through `mod_remove_reply`.
+
+        Routed through the production verb rather than set with the ORM, so
+        `deleted_by` arrives holding a real actor id and a mutant clearing it
+        is visible.
+        """
+        s = _seed_moderated_reply()
+        seed_moderator(s)
+        if bot:
+            s.author.bot = True
+        db.session.commit()
+        mod_remove_reply(s.reply.id, 'spam', SRC_API, auth=bearer(s.actor))
+        db.session.refresh(s.reply)
+        return s
+
+    def test_a_moderator_restores_a_removed_reply(self, db_session):
+        """`:457`'s false arm via `is_moderator`, `:460`-`:461`'s writes.
+
+        Asserts `deleted_by` back to None as well as `deleted` to False: `:460`
+        runs on every permitted path, so the flag alone cannot witness `:461`.
+        """
+        s = self._removed()
+
+        user_id, reply = mod_restore_reply(s.reply.id, 'ok', SRC_API,
+                                           auth=bearer(s.actor))
+
+        assert user_id == s.actor.id
+        db.session.refresh(s.reply)
+        assert s.reply.deleted is False
+        assert s.reply.deleted_by is None
+
+    def test_an_instance_admin_may_restore(self, db_session):
+        """`:457`'s SECOND disjunct alone, with the first false."""
+        s = self._removed()
+        other = make_user(s.instance, 'admin-user', local=True)
+        db.session.commit()
+        make_instance_admin(other, s.instance)
+
+        mod_restore_reply(s.reply.id, 'ok', SRC_API, auth=bearer(other))
+
+        db.session.refresh(s.reply)
+        assert s.reply.deleted is False
+
+    def test_a_site_admin_who_is_neither_is_refused(self, db_session):
+        """`:457`'s true arm for a user `mod_remove_reply:421` WOULD admit.
+
+        THIS TEST PINS FINDING 2 AND ASSERTS THE DIVERGENCE ON PURPOSE. The
+        same user, with the same role, is permitted by
+        `TestModRemoveReply::test_a_site_admin_who_is_neither_may_remove`. If
+        a later round makes the two guards agree, THE EDIT OWED HERE IS TO
+        INVERT THIS TEST: the restore must then succeed and `deleted` must
+        read False. Its failure at that point is the fix landing, not a
+        regression.
+        """
+        s = self._removed()
+        other = make_user(s.instance, 'staffer', local=True)
+        db.session.commit()
+        make_site_admin(other)
+
+        with pytest.raises(Exception, match='Does not have permission'):
+            mod_restore_reply(s.reply.id, 'ok', SRC_API, auth=bearer(other))
+
+        db.session.refresh(s.reply)
+        assert s.reply.deleted is True
+
+    def test_a_bot_authors_reply_does_not_move_the_post_counter_on_restore(self, db_session):
+        """`:462`'s false arm -- `:463` skipped, `:464` still runs.
+
+        Named distinctly from `TestModRemoveReply`'s test of the same name --
+        two module-level test methods sharing a name across classes still
+        collide in the duplicate-name check this campaign runs.
+        """
+        s = self._removed(bot=True)
+        s.post.reply_count = 7
+        s.author.post_reply_count = 3
+        db.session.commit()
+
+        mod_restore_reply(s.reply.id, 'ok', SRC_API, auth=bearer(s.actor))
+
+        db.session.refresh(s.post)
+        db.session.refresh(s.author)
+        assert s.post.reply_count == 7
+        assert s.author.post_reply_count == 4
+
+    def test_a_human_authors_reply_moves_both_counters_on_restore(self, db_session):
+        """`:462`'s true arm -- the same-mechanism positive control."""
+        s = self._removed()
+        s.post.reply_count = 7
+        s.author.post_reply_count = 3
+        db.session.commit()
+
+        mod_restore_reply(s.reply.id, 'ok', SRC_API, auth=bearer(s.actor))
+
+        db.session.refresh(s.post)
+        db.session.refresh(s.author)
+        assert s.post.reply_count == 8
+        assert s.author.post_reply_count == 4
+
+    def test_a_multi_element_path_increments_the_ancestors_child_count(self, db_session):
+        """`:465`'s true arm and `:466-467`'s raw SQL.
+
+        The mirror of `TestModRemoveReply`'s path test, with a BYSTANDER for
+        the same reason: a mutant dropping the `where` clause is caught only
+        by a row the statement should not have touched.
+        """
+        s = self._removed()
+        parent = make_post_reply(s.post, s.author)
+        bystander = make_post_reply(s.post, s.author)
+        db.session.commit()
+        parent.child_count = 5
+        bystander.child_count = 9
+        s.reply.path = [0, parent.id, s.reply.id]
+        db.session.commit()
+
+        mod_restore_reply(s.reply.id, 'ok', SRC_API, auth=bearer(s.actor))
+
+        db.session.refresh(parent)
+        db.session.refresh(bystander)
+        assert parent.child_count == 6
+        assert bystander.child_count == 9
+
+    def test_the_web_arm_flashes_and_returns_none_on_restore(self, db_session, app):
+        """`:451`'s false arm, `:470`'s true arm, `:471`'s flash, `:483`.
+
+        NO `make_site()` HERE, unlike the sibling test in `TestModRemoveReply`.
+        This arm neither renders a template nor calls `can_downvote` -- the
+        only two reasons the module docstring's rule requires a `Site` row --
+        it only flashes and returns. `web_ctx` opens the request context with
+        `app.test_request_context`, which does not fire `before_request` and
+        so never populates `g.site` anyway; `flash()` writes to the session
+        and flask_babel's `_()` does not touch the database. Nothing on this
+        path reads `Site.query.get(1)`.
+        """
+        from flask import get_flashed_messages
+        s = self._removed()
+
+        with web_ctx(app, s.actor):
+            result = mod_restore_reply(s.reply.id, 'ok', SRC_WEB, auth=None)
+            messages = get_flashed_messages()
+
+        assert result is None
+        assert 'Comment restored.' in messages
+
+    def test_the_modlog_row_names_the_restore_action(self, db_session):
+        """`:473-476`'s add_to_modlog with the literal 'restore_post_reply'.
+
+        The set here holds TWO actions, because `_removed` wrote the delete
+        row first. Asserting the set rather than a count is what makes the
+        restore action's presence the witness.
+        """
+        s = self._removed()
+
+        mod_restore_reply(s.reply.id, 'ok', SRC_API, auth=bearer(s.actor))
+
+        actions = {row.action for row in db.session.query(ModLog).all()}
+        assert actions == {'delete_post_reply', 'restore_post_reply'}
+
+    def test_the_federation_task_is_selected_for_restore(self, db_session):
+        """`:478`'s task_selector call."""
+        s = self._removed()
+
+        with recording_task_selector() as calls:
+            mod_restore_reply(s.reply.id, 'ok', SRC_API, auth=bearer(s.actor))
+
+        assert 'restore_reply' in calls
