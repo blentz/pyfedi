@@ -76,11 +76,12 @@ apart and asserts they differ.
 """
 
 import pytest
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 from app import db
 from app.constants import SRC_API, SRC_WEB
-from app.models import Language, Notification, PostReply, PostReplyValidationError
+from app.models import Language, PostReply, PostReplyValidationError
 from app.shared.reply import edit_reply, make_reply
 from tests.factories import (
     bearer, make_community, make_community_member, make_instance, make_post,
@@ -139,14 +140,28 @@ def _burn_a_seed():
     call's `author` id is never 1.
 
     `User.is_admin` (app/models.py:1259-1265) special-cases `self.id == 1`
-    as an admin regardless of roles or community membership. `db_session`
-    (tests/conftest.py) tears down with DELETE, not TRUNCATE, so id
-    sequences are NOT reset between tests -- whichever test happens to run
-    first against a fresh database hands `_seed_for_reply`'s `author` id 1
-    and silently turns it into an admin, bypassing `edit_reply:224`'s
-    moderator guard no matter what that test intends to prove. That is a
-    property of RUN ORDER, not of this test, so it cannot be fixed by
-    asserting an order.
+    as an admin regardless of roles or community membership, and
+    `_seed_for_reply` mints `author` first -- so WITHOUT this burn, `author`
+    is id 1 in EVERY test, deterministically, silently turning it into an
+    admin and bypassing `edit_reply:224`'s moderator guard for the wrong
+    reason no matter what a test intends to prove.
+
+    CORRECTION: an earlier version of this docstring (and of the two
+    call-site docstrings below) described this as order-dependent -- "a
+    coin flip" on which test happens to run first against a fresh database,
+    on the theory that `db_session`'s DELETE-based teardown (tests/
+    conftest.py) leaves id sequences to climb across tests. That is wrong.
+    tests/conftest.py:131's teardown SQL ends with
+    `SELECT setval(c.oid, 1, false) FROM pg_class c WHERE c.relkind = 'S'
+    AND c.relnamespace = 'public'::regnamespace`, which resets every
+    sequence in the schema back to 1 after EVERY test (tests/conftest.py:
+    189-190 states this is deliberate: fixtures hardcode `instance_id=1`).
+    So DELETE-not-TRUNCATE was right, but "sequences are not reset between
+    tests" was backwards -- they are reset, every time, and that is exactly
+    why `author` is id 1 unconditionally rather than occasionally. A
+    reviewer proved this by neutering this helper: the mutation killed
+    tests 6 and 8 of 8, not merely an early one, which is what an
+    order-dependent effect would have produced instead.
 
     THIS DOES NOT JUST CALL `_seed_for_reply()` AGAIN: that hardcodes the
     instance domain `'local.example'`, so a second call in the same test
@@ -233,11 +248,15 @@ class TestEditReply:
         remaining three, each of which would survive deletion of its own
         line if only the other five were checked.
 
-        `community.last_active` is captured BEFORE the call and the
-        assertion is that it MOVED, not merely that it is not `None` -- the
-        fixture's `make_community` already leaves it non-`None`, so a bare
-        `is not None` would pass against a mutant that deleted `:236`
-        outright.
+        `community.last_active` is pinned to a fixed sentinel FAR in the
+        past BEFORE the call (rather than merely captured), and the
+        assertion is that it MOVED well past that sentinel -- not merely
+        that it is not `None`, which the fixture's `make_community` already
+        leaves true regardless. A sentinel decades in the past, rather than
+        comparing two `utcnow()` calls a few lines apart, means the
+        assertion does not depend on clock resolution between the fixture's
+        timestamp and `:236`'s: it is a genuine identity change (sentinel ->
+        now), not a timing race.
 
         `language_id` starts `None` (no factory sets it) and is asserted to
         become a real `Language.id` after the edit -- a value round-trip,
@@ -250,8 +269,9 @@ class TestEditReply:
         s = _seed_for_reply()
         language = Language(code='en', name='English')
         db.session.add(language)
+        sentinel = datetime(2000, 1, 1)
+        s.community.last_active = sentinel
         db.session.commit()
-        original_last_active = s.community.last_active
         payload = {'body': 'zzyzx marks the six', 'notify_author': True,
                    'language_id': language.id, 'distinguished': False}
 
@@ -260,7 +280,7 @@ class TestEditReply:
         db.session.refresh(s.reply)
         db.session.refresh(s.community)
         assert 'zzyzx marks the six' in s.reply.body_html
-        assert s.community.last_active > original_last_active
+        assert s.community.last_active > sentinel + timedelta(days=365)
         assert s.reply.language_id == language.id
 
     def test_a_moderator_may_distinguish_through_the_api(self, db_session):
@@ -310,12 +330,13 @@ class TestEditReply:
         a mutant that performed the edit and then raised would pass a bare
         `pytest.raises`.
 
-        `_burn_a_seed()` runs first: `_seed_for_reply` hands `author`
-        whatever id the sequence is at, and `User.is_admin` special-cases
-        id 1 as an admin outright (app/models.py:1259-1261). Without the burn
-        this test is a coin flip on id 1 landing on `author` -- true the
-        first time any test in the whole run creates a user, in which case
-        `:224` is False (admin) and nothing raises.
+        `_burn_a_seed()` runs first: `_seed_for_reply` mints `author` first
+        every single test (tests/conftest.py's teardown resets every
+        sequence to 1 -- see `_burn_a_seed`'s docstring), and `User.is_admin`
+        special-cases id 1 as an admin outright (app/models.py:1259-1261).
+        Without the burn `author` is id 1 EVERY time this test runs, not
+        occasionally, so `:224` would deterministically be False (admin) and
+        nothing would ever raise.
         """
         _burn_a_seed()
         s = _seed_for_reply()
@@ -373,10 +394,12 @@ class TestEditReply:
         the body assertion is what proves the call was not refused outright.
 
         `_burn_a_seed()` runs first for the same reason as the API-arm
-        refusal test above: `author` landing on id 1 would make
-        `user.is_admin_or_staff()` True at `:239`, applying `distinguished`
-        instead of silently dropping it, and this test would pass for the
-        wrong reason (or fail outright) depending on accidental run order.
+        refusal test above: `author` is id 1 EVERY time this test runs
+        without the burn, deterministically (see `_burn_a_seed`'s
+        docstring), which would make `user.is_admin_or_staff()` True at
+        `:239`, applying `distinguished` instead of silently dropping it --
+        this test would pass for the wrong reason every single time, not
+        occasionally.
         """
         _burn_a_seed()
         s = _seed_for_reply()
