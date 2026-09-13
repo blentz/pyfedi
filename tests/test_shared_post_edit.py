@@ -376,7 +376,28 @@ def test_api_branch_parses_a_tag_string_when_the_key_is_present(db_session):
 
 def test_api_branch_leaves_tags_empty_when_the_key_is_absent(db_session):
     """:267-268, false arm. The post starts with a tag so an empty result is a
-    clearing rather than a no-op -- :454 `post.tags.clear()` runs first."""
+    clearing rather than a no-op.
+
+    A CORRECTION, MEASURED BY SUB-PROJECT 39 TASK 9's MUTATION PASS. An earlier
+    revision of this docstring credited `:454`'s `post.tags.clear()` with the
+    clearing. It does not perform it. `:725` assigns unconditionally::
+
+        454	        post.tags.clear()
+        455	        post.flair.clear()
+        ...
+        725	    post.tags = tags
+        726	    post.flair = flair
+
+    and there is NO `return` anywhere between `:420` and `:726` -- only five
+    `raise`s, at `:468`, `:501`, `:533`, `:540` and `:569`. So on every path
+    that returns normally, `:725` overwrites whatever `:454` left, and the
+    empty list this test sees is `:725` assigning an empty `tags`. Deleting
+    `:454` outright survives all 354 tests in tests/test_shared_post_*.py.
+
+    `:454`/`:455` are therefore reachable only as a pre-`raise` effect: a
+    `from_scratch=False` edit whose `:459` commits the clear and which then
+    raises before `:725`. This test does not exercise that, and must not be
+    read as covering it."""
     s = _seed()
     edit_post(_api_input(tags='pre'), s.post, POST_TYPE_ARTICLE, SRC_API, user=s.user)
     db.session.expire(s.post)
