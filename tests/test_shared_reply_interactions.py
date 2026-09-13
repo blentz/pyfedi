@@ -278,11 +278,11 @@ which is symmetric and would witness nothing. Separately,
 `if src == SRC_API:` arm, the `else` at `:26-28` having no equivalent -- and
 the twin `vote_for_post` DOES gate its web arm (app/shared/post.py:43-48), so
 this is a divergence between mirrored functions rather than a uniform policy.
-NONE OF THE FIVE IS IN THE CAMPAIGN REGISTER
-YET -- all are slated for it at this round's end. Until then the argument for
-leaving the two pinned ones unfixed lives in
-`docs/superpowers/specs/2026-09-12-coverage-reply-ac-40-design.md`, under the
-headings that name them. The tests that pin today's voting behaviour are
+ALL FIVE ARE NOW IN THE CAMPAIGN REGISTER, ADDED BY TASK 8:
+D496 the counter asymmetry, D497 defect 3, D498 defect 4, D499 the API-only
+permission check, D500 defect 5. D497 and D500 carry material this docstring
+does not. `docs/superpowers/specs/2026-09-12-coverage-reply-ac-40-design.md`
+still carries the arguments. The tests that pin today's voting behaviour are
 `TestVoteForReplySourceAndPermission` below; the delete/restore asymmetry is
 now pinned by `TestRestoreReply`'s
 `..._a_delete_restore_cycle_leaves_two_counters_permanently_low`, which asserts
@@ -367,6 +367,16 @@ strengthened flash test below, whose docstring pins it.)
     guard this line exists for has never been executed against a row it should
     refuse.
   - `121`/`122`, the new subscription's `name`. Nothing reads the column.
+  - `275s/filter_by(id=reply_id, user_id=user_id, deleted=True)/filter_by(
+    user_id=user_id, deleted=True)/` -- `restore_reply`'s REPLY-IDENTITY drop,
+    the restore twin of `:20`/`:27`. The AUTHOR-FILTER half of `:275` IS closed
+    (`test_a_non_author_cannot_restore_another_users_reply`); the identity half
+    is not, because every `TestRestoreReply` test seeds exactly one deleted
+    reply, so "this reply" and "the only deleted reply of this author" are the
+    same row. THIS BULLET WAS MISSING UNTIL TASK 8, which is why the list below
+    it enumerated sixteen survivors against a reconciled count of seventeen.
+    The register carries all seventeen as D513; this list is the copy, not the
+    original.
   - `261s/task_selector('delete_reply'/task_selector('restore_reply'/` and the
     same swap at `289`. Both task bodies take the same kwargs and both return
     early on `community.private`, so the wrong name is silent here. The twin
@@ -385,8 +395,12 @@ strengthened flash test below, whose docstring pins it.)
     bookmark first, so the condition is always False. `:79`'s true arm
     (`existing_bookmark`, i.e. a bookmark found) is never taken because no test
     here seeds a bookmark before calling `remove_bookmark_reply`, so ITS
-    condition is always False too -- see `:662`'s own docstring, which says so
-    directly. That makes them equivalent-AT-THIS-SCOPE, not unexecutable -- and
+    condition is always False too -- see
+    `test_removing_a_bookmark_that_does_not_exist_flashes_on_the_web`'s own
+    docstring, which says so directly. (That pointer read `:662` until task 8.
+    `:662` is a blank line; the reference had drifted and nothing noticed,
+    which is why it is by NAME now. A line-number self-reference inside a file
+    whose own docstrings keep growing rots silently.) That makes them equivalent-AT-THIS-SCOPE, not unexecutable -- and
     each is closable HERE, today, by a different call: `:61` by one web
     `bookmark_reply` call against a reply with NO bookmark seeded, which
     executes `:62`/`:63`; `:79` by seeding a bookmark first and THEN calling
