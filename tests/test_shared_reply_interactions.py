@@ -315,6 +315,40 @@ def _seed_reply(*, private=True, community_name='replies'):
                            post=post, reply=reply)
 
 
+def _seed_distinct_reply_counters(s):
+    """Give the four reply counters four DIFFERENT non-zero values.
+
+    All four default to 0 -- `Post.reply_count` app/models.py:1722,
+    `Post.reply_count_cross_posted` `:1723`, `Community.post_reply_count`
+    `:571`, `User.post_reply_count` `:1011` -- and the factories do not move
+    them. A delete test that left them there would read `(0, 0, 0, 0)` before
+    and `(-1, -1, -1, -1)` after, which catches a mutation that REMOVES one of
+    `delete_reply:252`-`:255` but is blind to every mutation that SUBSTITUTES
+    one for another: swap `:252` and `:253`, or rewrite `:253` as
+    `reply_count_cross_posted = reply_count - 1`, and an all-zero fixture
+    still reads `(-1, -1, -1, -1)`. That is false-witness mechanism 2, a
+    fixture coincidence making distinct arms produce the same value.
+
+    PAIRWISE DISTINCTNESS IS THE WHOLE REQUIREMENT and 31/17/8/3 satisfy it.
+    A swap of positions i and j writes `value_j - 1` where `value_i - 1` is
+    expected, and those differ for every pair precisely because the values do.
+    (Distinct pairwise DIFFERENCES would be a stronger and unnecessary
+    property, and these four do not have it: 31-17 and 17-3 are both 14.
+    Nothing here needs it.) The values are also large enough that the
+    post-delete counts stay positive, which keeps a failure message readable.
+
+    Returns the before-tuple in `delete_reply:252`-`:255` order so a caller can
+    assert against it without re-reading.
+    """
+    s.post.reply_count = 31
+    s.post.reply_count_cross_posted = 17
+    s.community.post_reply_count = 8
+    s.user.post_reply_count = 3
+    db.session.commit()
+    return (s.post.reply_count, s.post.reply_count_cross_posted,
+            s.community.post_reply_count, s.user.post_reply_count)
+
+
 def test_extra_rate_limit_check_returns_false_for_any_user(db_session):
     """`:139` -- the whole function body. It is a documented stub whose
     docstring describes a plan rather than behaviour, and it returns False
@@ -1278,12 +1312,19 @@ class TestDeleteReply:
         248, 249, 251, 252, 253, 254, 255, 259, 261, 263, 264.
 
         FOUR counters move and all four are asserted, because `:252`-`:255` are
-        four separate statements a mutation can remove one at a time. The
-        before-values are captured rather than assumed: the columns default to
-        0 (app/models.py:1722 `Post.reply_count`, `:1723`
-        `Post.reply_count_cross_posted`, `:571` `Community.post_reply_count`,
-        `:1011` `User.post_reply_count`) but a factory change could seed them,
-        and a test that hardcoded -1 would then fail for the wrong reason.
+        four separate statements. An earlier version said only that a mutation
+        can "remove one at a time", which is true for REMOVAL and was silently
+        untrue for SUBSTITUTION: with the columns at their default 0 the
+        before-tuple is `(0, 0, 0, 0)` and the after-tuple `(-1, -1, -1, -1)`,
+        so swapping `:252` and `:253`, or rewriting one as another, survives
+        undetected. `_seed_distinct_reply_counters` exists for exactly that and
+        its docstring carries the argument; with it the four counters are
+        pairwise distinct and no substitution among them can land on the
+        expected tuple.
+
+        The before-values are still captured rather than hardcoded, so that the
+        test states the delta it is testing rather than four magic numbers that
+        would have to be edited in two places at once.
 
         THE RETURN IS ASSERTED BY SHAPE AND IDENTITY, NOT BY `deleted`. `:264`
         returns `(user_id, reply)`; unpacking it into two names is itself the
@@ -1299,8 +1340,7 @@ class TestDeleteReply:
         the mutant, not reasoned about; see the task report.
         """
         s = _seed_reply()
-        before = (s.post.reply_count, s.post.reply_count_cross_posted,
-                  s.community.post_reply_count, s.user.post_reply_count)
+        before = _seed_distinct_reply_counters(s)
 
         user_id, reply = delete_reply(s.reply.id, SRC_API, auth=bearer(s.user))
 
@@ -1346,7 +1386,7 @@ class TestDeleteReply:
         keeping the `return` cannot pass on the None alone.
         """
         s = _seed_reply()
-        before = s.user.post_reply_count
+        before = _seed_distinct_reply_counters(s)[3]
 
         with web_ctx(app, s.user):
             assert delete_reply(s.reply.id, SRC_WEB, auth=None) is None
@@ -1371,7 +1411,11 @@ class TestDeleteReply:
 
         All three guarded counters are read, not just `post.reply_count`,
         because `:252`-`:254` are separable statements and a guard that leaked
-        only one of them would otherwise go unseen.
+        only one of them would otherwise go unseen. They are seeded to distinct
+        non-zero values by `_seed_distinct_reply_counters` for the reason that
+        helper's docstring gives, which matters here too: at the columns'
+        default 0 a leak of `:253` into `:252`'s slot would be invisible, since
+        both would read 0 either way.
 
         `User.bot` is app/models.py:1016, in `class User` which opens at
         app/models.py:973; it defaults False, so `_seed_reply`'s user takes the
@@ -1382,9 +1426,7 @@ class TestDeleteReply:
         """
         s = _seed_reply()
         s.user.bot = True
-        db.session.commit()
-        before = (s.post.reply_count, s.post.reply_count_cross_posted,
-                  s.community.post_reply_count, s.user.post_reply_count)
+        before = _seed_distinct_reply_counters(s)
 
         delete_reply(s.reply.id, SRC_API, auth=bearer(s.user))
 
