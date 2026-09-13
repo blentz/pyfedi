@@ -45,10 +45,10 @@ sets or increments `votes_cast_{today}_{user_id}` on the real redis the
 compose stack shares, and tests/conftest.py:131 resets id sequences after
 every test -- so a later test whose user reuses that id inherits a stale
 count. THE RULE FOR THIS FILE IS THAT EVERY TEST COMPLETING A REAL VOTE
-CLEARS THE KEY IN A `finally`. No test in this file does that yet -- nothing
-written so far reaches `vote_for_reply` -- so `_clear_votes_cast` below is
-placed for the later tasks of this round rather than used by any test
-currently here. The pattern and the reason are
+CLEARS THE KEY IN A `finally`. Three tests now do -- the three in
+`TestVoteForReplySourceAndPermission` that reach `:36`; the two that refuse at
+`:23`/`:25` deliberately do not, because no vote completed and the absence is
+part of what they assert. The pattern and the reason are
 tests/test_shared_post_interactions.py:153-173.
 
 WHAT IS NEW, AND HAS NO POST TWIN:
@@ -115,12 +115,16 @@ pinning it must read `post.reply_count`, `post.reply_count_cross_posted` and
 `community.post_reply_count` and must NOT read `author.post_reply_count`,
 which is symmetric and would witness nothing. Separately,
 `vote_for_reply:22`/`:24` apply `can_upvote`/`can_downvote` only inside the
-`if src == SRC_API:` arm, the `else` at `:26-28` having no equivalent. NEITHER IS IN THE CAMPAIGN REGISTER
+`if src == SRC_API:` arm, the `else` at `:26-28` having no equivalent -- and
+the twin `vote_for_post` DOES gate its web arm (app/shared/post.py:43-48), so
+this is a divergence between mirrored functions rather than a uniform policy.
+NEITHER IS IN THE CAMPAIGN REGISTER
 YET -- both are slated for it at this round's end. Until then the argument for
 leaving each unfixed lives in
 `docs/superpowers/specs/2026-09-12-coverage-reply-ac-40-design.md`, under the
-headings that name them, and the tests that pin today's behaviour arrive with
-the later tasks of this round rather than in this file.
+headings that name them. The tests that pin today's voting behaviour are
+`TestVoteForReplySourceAndPermission` below; the delete/restore asymmetry is
+still pinned by a later task of this round.
 """
 
 from datetime import date
@@ -131,7 +135,7 @@ from flask import get_flashed_messages
 
 from app import db
 from app.constants import SRC_API, SRC_PLD, SRC_WEB
-from app.models import NotificationSubscription, PostReplyBookmark
+from app.models import NotificationSubscription, PostReplyBookmark, PostReplyVote
 from app.shared.reply import (
     bookmark_reply, delete_reply, extra_rate_limit_check, remove_bookmark_reply,
     restore_reply, subscribe_reply, vote_for_reply,
@@ -532,3 +536,217 @@ class TestSubscribeReply:
         assert 'already existed' in flashed[0]
         assert NotificationSubscription.query.filter_by(
             entity_id=s.reply.id, user_id=s.user.id).count() == 1
+
+
+class TestVoteForReplySourceAndPermission:
+    """`:19-28` -- the source fork and the two API-only permission gates.
+
+    A REGISTERED ASYMMETRY IS PINNED HERE AND DELIBERATELY NOT FIXED. `:22` and
+    `:24` call `can_upvote`/`can_downvote` INSIDE the `if src == SRC_API:` arm.
+    The `else` at `:26-28` has no equivalent, and the web route that reaches it
+    -- `app/post/routes.py:552-561`, `comment_vote` -- carries `@login_required`
+    (`:553`), `@validation_required` (`:554`) and `@approval_required` (`:555`)
+    and no voting-permission check of its own. So a voter the community has
+    banned is refused through the API and not through the web UI.
+
+    THE TWIN DOES NOT SHARE THE ASYMMETRY, which the brief did not say and which
+    sharpens it: `app/shared/post.py:43-48` puts an `or`-joined
+    `can_upvote`/`can_downvote` pair inside `vote_for_post`'s web arm and
+    returns a re-rendered voting-buttons template instead of voting. So this is
+    a divergence between two functions written as mirrors, not a uniform policy
+    that the web UI gates voting elsewhere.
+
+    This round records that and changes neither arm, on the same reasoning that
+    registered the pixelfed divergence in sub-project 39: `:26-28` is live
+    behaviour rather than dead code, and altering a permission check is a
+    product decision a coverage round has no standing to make.
+
+    WHICH TESTS HERE NEED A `Site` ROW, decided per test rather than by reflex:
+
+      - `..._from_a_bot_...` needs none. `can_upvote` (app/utils.py:2480-2491)
+        reads no `Site` at all, and `can_downvote`'s `Site` lookup is at
+        `:2440-2443`, AFTER the `user.bot` refusal at `:2437`.
+      - the two downvote tests need one, because `can_downvote:2445` reads
+        `site.enable_downvotes` -- one with the flag off, one with the row as
+        `make_site()` leaves it.
+      - `..._passes_both_gates` needs none: `:22`'s `can_upvote` reads no
+        `Site`, and `:24`'s first conjunct is false for an upvote so
+        `can_downvote` is never called. It votes and renders nothing --
+        `:41` is true on the API arm, so it returns at `:42` and never reaches
+        `:51`.
+      - the web test needs one, because it is the only test in this class that
+        reaches `:51`'s `render_template`. That is the module docstring's chain
+        executing.
+    """
+
+    def test_an_api_upvote_from_a_bot_returns_early_without_voting(self, db_session):
+        """`:22` true -> `:23`. Arc 22->23, statement 23.
+
+        `can_upvote` (app/utils.py:2481) refuses a bot, so `:23` returns
+        `user.id` before `:36`'s `reply.vote()` ever runs.
+
+        THE WITNESS IS THE ABSENT VOTE, not the return value: `:23` and `:42`
+        both return `user.id`, so the returned value alone cannot tell an early
+        refusal from a completed vote. The `PostReplyVote` row count is what
+        separates them, and no `_clear_votes_cast` is needed precisely because
+        no vote completed -- which is itself part of the assertion. The
+        same-mechanism positive control is `..._passes_both_gates` below: the
+        identical call with `bot` left False, which votes.
+
+        No `web_ctx` and no `make_site()`: the module docstring's SRC_API
+        finding covers the first, and `can_upvote` reads no `Site` row.
+        """
+        s = _seed_reply()
+        s.user.bot = True
+        db.session.commit()
+
+        assert vote_for_reply(s.reply.id, 'upvote', True, None, SRC_API,
+                              auth=bearer(s.user)) == s.user.id
+
+        db.session.refresh(s.reply)
+        assert s.reply.up_votes == 0
+        assert PostReplyVote.query.filter_by(
+            post_reply_id=s.reply.id, user_id=s.user.id).count() == 0
+
+    def test_an_api_downvote_returns_early_when_downvotes_are_disabled(self, db_session):
+        """`:22` false -> `:24`, `:24` true -> `:25`. Arcs 22->24 and 24->25;
+        statements 24, 25.
+
+        THIS IS THE CORRECTION OF THE BRIEF'S SECOND TEST, which used a bot for
+        the downvote too. A bot is refused by `can_upvote:2481` and
+        `can_downvote:2437` for the identical reason, so a bot downvote cannot
+        tell `:22` from `:24`: a mutation swapping the two direction literals
+        leaves `:22` matching 'downvote', `can_upvote` refusing the bot anyway,
+        and the call still returning `user.id` with no vote. Two tests that pass
+        under a swap of the conditions they are supposed to separate are the
+        fifth false-witness mechanism exactly. THAT WAS MEASURED, NOT ARGUED:
+        the two literals at `:22`/`:24` were swapped in a scratch mutant and
+        BOTH bot tests -- the one above and the brief's bot downvote, restored
+        verbatim for the probe -- passed against it.
+
+        The lever here is DIRECTION-SPECIFIC instead. `site.enable_downvotes`
+        is read only by `can_downvote` (app/utils.py:2445); `can_upvote` has no
+        equivalent. So under the direction swap this user's downvote reaches
+        `:22`'s `can_upvote`, which returns True for a non-bot, falls past
+        `:24`'s now-'upvote' test, and LANDS -- `down_votes` becomes 1 and this
+        test fails. That is the discrimination the bot version could not give,
+        and the same scratch mutant confirmed it: this test was the one that
+        failed.
+
+        `make_site()` is required and is the point of the test: without a `Site`
+        row `can_downvote:2443` gets None and `:2445` raises AttributeError
+        rather than refusing. The same-mechanism positive control is
+        `..._lands_when_downvotes_are_enabled` below -- without it, a fixture in
+        which no downvote could ever land would produce this same zero.
+        """
+        site = make_site()
+        site.enable_downvotes = False
+        db.session.commit()
+        s = _seed_reply()
+
+        assert vote_for_reply(s.reply.id, 'downvote', True, None, SRC_API,
+                              auth=bearer(s.user)) == s.user.id
+
+        db.session.refresh(s.reply)
+        assert s.reply.down_votes == 0
+        assert PostReplyVote.query.filter_by(
+            post_reply_id=s.reply.id, user_id=s.user.id).count() == 0
+
+    def test_an_api_downvote_lands_when_downvotes_are_enabled(self, db_session):
+        """`:24` false -> `:30`. Arc 24->30, reached through the downvote arm.
+
+        THE SAME-MECHANISM POSITIVE CONTROL for the test above: identical
+        except that `enable_downvotes` is left as `make_site()` makes it. It
+        establishes that a downvote from this fixture's user CAN land, so the
+        zero above is `can_downvote` refusing and not some unrelated property
+        of the seed -- `downvote_accept_mode` (app/models.py:586, in
+        `class Community` which opens at app/models.py:555), `user.attitude`
+        (app/models.py:1009) and `user.reputation` (app/models.py:1008, both in
+        `class User` which opens at app/models.py:973) each independently gate
+        `can_downvote` at app/utils.py:2448-2468 and each would produce the
+        same empty result.
+
+        `_clear_votes_cast` is mandatory here because this test completes a real
+        vote against the session-wide redis.
+        """
+        make_site()
+        s = _seed_reply()
+        try:
+            assert vote_for_reply(s.reply.id, 'downvote', True, None, SRC_API,
+                                  auth=bearer(s.user)) == s.user.id
+
+            db.session.refresh(s.reply)
+            assert s.reply.down_votes == 1
+            assert PostReplyVote.query.filter_by(
+                post_reply_id=s.reply.id, user_id=s.user.id).count() == 1
+        finally:
+            _clear_votes_cast(s.user.id)
+
+    def test_a_permitted_api_voter_passes_both_gates(self, db_session):
+        """`:24` false -> `:30`. Arc 24->30.
+
+        THE POSITIVE CONTROL for the bot refusal, using the same mechanism:
+        identical except that the user is not a bot, and the vote lands. `:24`
+        is reached and its first conjunct is false for an upvote, so
+        `can_downvote` is never called and no `Site` row is needed.
+
+        `_clear_votes_cast` is mandatory here because this test completes a real
+        vote against the session-wide redis.
+        """
+        s = _seed_reply()
+        try:
+            assert vote_for_reply(s.reply.id, 'upvote', True, None, SRC_API,
+                                  auth=bearer(s.user)) == s.user.id
+
+            db.session.refresh(s.reply)
+            assert s.reply.up_votes == 1
+            assert PostReplyVote.query.filter_by(
+                post_reply_id=s.reply.id, user_id=s.user.id).count() == 1
+        finally:
+            _clear_votes_cast(s.user.id)
+
+    def test_the_web_arm_loads_the_reply_and_reads_current_user(self, db_session, app):
+        """`:19` false -> `:27`, `:28`. Arc 19->27; statements 27, 28.
+
+        The web arm uses `get_or_404` rather than `.one()` and takes its user
+        from `current_user`, so this needs `web_ctx`. It reaches `:36` and
+        completes a real vote -- hence the `finally`.
+
+        `make_site()` is required: this is the only test in this class that
+        reaches `:51`'s `render_template`, and the module docstring's chain
+        ends in `AttributeError: 'NoneType' object has no attribute
+        'default_theme'` without the row.
+
+        THE RENDERED BODY IS THE WITNESS THAT `:28` TOOK `current_user`, not the
+        bare fact that something was returned. `_comment_voting_buttons.html`
+        opens with `{% if current_user.is_authenticated and
+        current_user.verified %}`, so the `voted_up`/`fe-arrow-up-circle`
+        markup exists only on the authenticated branch -- if `:28` had bound
+        anything but the logged-in user the template would fall to its `else`
+        and emit the `redirect_login` markup instead. `voted_up` additionally
+        requires `:47` to have put this reply id into `recently_upvoted_replies`,
+        which only happens after `:36` actually voted.
+
+        NO PERMISSION GATE IS CROSSED HERE, because there is none on this arm.
+        That is the asymmetry the class docstring registers, and this test is
+        the evidence for it. A test showing a BOT voting successfully through
+        this path would make the asymmetry executable rather than documentary;
+        that is a scope decision and it was referred to the controller rather
+        than taken here.
+        """
+        make_site()
+        s = _seed_reply()
+        try:
+            with web_ctx(app, s.user):
+                result = vote_for_reply(s.reply.id, 'upvote', True, None, SRC_WEB)
+                body = result.get_data(as_text=True)
+
+            db.session.refresh(s.reply)
+            assert s.reply.up_votes == 1
+            assert PostReplyVote.query.filter_by(
+                post_reply_id=s.reply.id, user_id=s.user.id).count() == 1
+            assert 'redirect_login' not in body
+            assert 'voted_up' in body
+            assert 'fe-arrow-up-circle' in body
+        finally:
+            _clear_votes_cast(s.user.id)
