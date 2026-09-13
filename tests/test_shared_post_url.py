@@ -17,8 +17,16 @@ login, no token. Every test here does that.
 
 `from_scratch=True` SWITCHES OFF `:421-459`. That block holds the
 notification cleanup, the poll-vote deletes, the teardown at `:435-451`, the
-tag clear and `:459`'s commit. Every test here passes `from_scratch=True`
-EXCEPT the teardown tests, which are the ones aimed at that block.
+tag clear and `:459`'s commit. ELEVEN call sites here pass
+`from_scratch=False`, and they are NOT all teardown tests: eight are
+(`TestOldImageTeardown`, `TestS3VideoTeardown`), two are in
+`TestVideoHostingSiteArm`, where a false `from_scratch` is what makes `:565`'s
+second conjunct false and so closes that arc -- nothing to do with the
+teardown block -- and one is `TestPollAndEventTail`'s poll re-edit, the only
+caller that reaches `:431`/`:432` with poll rows to delete. Every other test
+here passes `from_scratch=True`. (An earlier revision of this paragraph said
+"every test here passes `from_scratch=True` EXCEPT the teardown tests". That
+is false for those three, and the eleven was re-derived by grep.)
 
 THE HEAD REQUEST, AND WHY THIS FILE INVERTS THE UPLOAD FILE'S RULE.
 `is_image_url` (app/utils.py:247) issues an httpx HEAD through
@@ -510,7 +518,8 @@ class TestOldImageTeardown:
     the source_url here is on example.com. Nothing outside `chdir_upload` is
     touched.
 
-    `flush_cdn_cache` (`:468`) is likewise a no-op: `CLOUDFLARE_ZONE_ID` and
+    `flush_cdn_cache` (called at app/models.py:469, guarded by `:468`) is
+    likewise a no-op: `CLOUDFLARE_ZONE_ID` and
     `CLOUDFLARE_API_TOKEN` default to `''` (config.py:78-79) and `.env.test`
     sets neither, so `:483`'s `if zone_id and token:` is false and no request
     is made -- which is why these tests need no `http_mock`.
@@ -2110,22 +2119,36 @@ class TestGenericOpengraphArm:
     leave NULL because their `File(...)` calls pass neither. `file_path` is
     asserted in the first test and is this class's signature.
 
-    MUTATION VERIFICATION, RUN RATHER THAN ARGUED. Four of the eight tests here
-    close no arc and no statement, and the standing rule is that such a test
-    earns its place only by a UNIQUE MUTANT KILL confirmed by running the
-    mutant. All five candidate mutants -- `:644`'s `or` fallback removed, and
-    each of `:654`'s four disjuncts removed in turn -- were applied to
+    MUTATION VERIFICATION, RUN RATHER THAN ARGUED. This class holds NINE tests
+    and SIX of them close no arc and no statement. The three that DO close
+    something are `test_a_generic_url_downloads_the_opengraph_thumbnail`
+    (statements 644-650 and arcs 643->644, 645->646, 647->648),
+    `test_a_site_relative_og_image_skips_the_download` (645->652) and
+    `test_a_thumbnail_that_is_not_an_image_yields_no_file` (647->652). The
+    standing rule is that a test closing nothing earns its place only by a
+    UNIQUE MUTANT KILL confirmed by running the mutant. FIVE of the six were
+    verified together in Task 7's sweep -- `:644`'s `or` fallback removed, and
+    each of `:654`'s four disjuncts removed in turn -- applied to
     `app/shared/post.py` one at a time and run against the whole of this file
-    (41 tests) and then against every other tests/test_shared_post_*.py file
-    (308 tests). Measured, for each of the five::
+    and then against every other tests/test_shared_post_*.py file. Measured AT
+    TASK 7's COMMIT, when this file held 41 tests and the other six held 308 --
+    those are historical figures, not the current counts::
 
         this file:      1 failed, 40 passed   (the failure being the test that claims it)
         the other six:  308 passed
 
-    So each of the five is killed by exactly one test in 349, and 'no other test
-    in the suite' below is a measurement rather than a hope. These five rows are
-    summaries without pasted pytest output, so the mutation pass should treat
-    them as LEADS TO VERIFY rather than as banked results.
+    So each of the five was killed by exactly one test in the 349 that existed
+    then, and 'no other test in the suite' below is a measurement rather than a
+    hope. These five rows are summaries without pasted pytest output, so the
+    mutation pass should treat them as LEADS TO VERIFY rather than as banked
+    results. THE SIXTH test that closes nothing --
+    `test_a_readable_generic_page_with_no_og_image_downloads_nothing` -- was
+    added LATER, by Task 9's mutation pass against `:643`'s second conjunct,
+    and carries its own verification in its own docstring; it is not one of the
+    five above. (An earlier revision of this paragraph said "four of the eight
+    tests here", a count that was correct before the uppercase-extension test's
+    coverage claim was retracted and before Task 9 added the ninth test. Both
+    the 4 and the 8 are now wrong; the figures above were re-derived.)
 
     THE RESTORE CHECK IS `git diff --quiet -- app/`, NOT `wc -l`. Every mutant
     here was a SINGLE-LINE REPLACEMENT, which leaves `wc -l app/shared/post.py`
@@ -2570,9 +2593,13 @@ class TestGenericOpengraphArm:
             self, db_session, http_mock, chdir_upload):
         """`:654`'s SECOND disjunct alone -> `:655`.
 
-        CLOSES NO ARC AND NO STATEMENT -- the test above closes 654->655 -- so
-        it earns its place by a UNIQUE MUTANT KILL, verified by running the
-        mutant. Deleting `url.endswith('.mp4') or` from `:654` fails THIS test
+        CLOSES NO ARC AND NO STATEMENT. NEITHER DOES THE TEST ABOVE: an earlier
+        revision of this sentence read "the test above closes 654->655", which
+        is the very claim that test's own docstring retracts three tests up.
+        `655` and `654->655` are covered suite-scoped by
+        `tests/test_shared_post_edit.py:815-825`, not by anything in this class.
+        This test earns its place by a UNIQUE MUTANT KILL, verified by running
+        the mutant. Deleting `url.endswith('.mp4') or` from `:654` fails THIS test
         and no other in the suite; the uppercase test is untouched because its
         d2 is already False.
 
@@ -3033,10 +3060,18 @@ class TestPollAndEventTail:
             432	        db.session.execute(text('DELETE FROM "poll_choice" WHERE post_id = :post_id'), {'post_id': post.id})
 
         -- so a silent regression here reintroduces exactly the alteration the
-        lines exist to prevent. This is the only test in the round's three
-        regions that passes `from_scratch=False`; every other one switches
-        `:421-459` off entirely, which is why the block's statements went
-        unwitnessed.
+        lines exist to prevent. ELEVEN call sites in this file pass
+        `from_scratch=False` -- eight in `TestOldImageTeardown` and
+        `TestS3VideoTeardown` (region A) and two in `TestVideoHostingSiteArm`
+        (region B, where a false `from_scratch` is what makes `:565`'s second
+        conjunct false) -- but this is the only one that ALSO submits poll
+        data, and `Poll`/`PollChoice` rows are constructed nowhere above
+        `class TestPollAndEventTail`. `:431`/`:432` need BOTH: `not
+        from_scratch` to run at all, and rows to delete to be observable. That
+        CONJUNCTION is why the block's statements went unwitnessed, not a
+        shortage of `from_scratch=False` callers. (An earlier revision of this
+        paragraph called this the only `from_scratch=False` test in the round's
+        three regions. False -- the count is eleven, re-derived by grep.)
 
         `:432` IS KILLED BY VALUE. With it deleted the old choice survives
         alongside the new one, so the text set comes back as

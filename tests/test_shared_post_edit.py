@@ -229,8 +229,10 @@ def _make_admin(user):
     D295, and it is why `grant_permission` (which creates a Role with an AUTO
     id) is not enough: the filter is on `user_role.c.role_id == ROLE_ADMIN`, so
     the role's id must BE ROLE_ADMIN. The get-or-create below is the same shape
-    as tests/test_ap_update_post_tails.py:3039 (`def _make_admin`), whose
-    get-or-create body is at :3071-3075.
+    as tests/test_ap_update_post_tails.py:3051 (`def _make_admin`), whose
+    get-or-create body is at :3083-3087. (Both numbers were wrong before:
+    `:3039` is inside a different helper's docstring and `:3071-3075` is still
+    docstring prose. Re-derived with numbered output.)
     """
     role = db.session.get(Role, ROLE_ADMIN)
     if role is None:
