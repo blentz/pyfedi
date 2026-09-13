@@ -94,7 +94,19 @@ This is D463's shape — a rollback that does not undo what it did. **Registered
 
 ### `vote_for_reply`'s permission check is API-only
 
-`:22` and `:24` call `can_upvote`/`can_downvote` inside the `if src == SRC_API:` arm. The `else` at `:26-28` has no equivalent, and the web route that reaches it — `app/post/routes.py:555-561`, `comment_vote` — carries `@login_required`, `@validation_required` and `@approval_required` but no voting-permission check.
+`:22` and `:24` call `can_upvote`/`can_downvote` inside the `if src == SRC_API:` arm. The `else` at `:26-28` has no equivalent, and the web route that reaches it — `app/post/routes.py:552-561`, `comment_vote` — carries `@login_required`, `@validation_required` and `@approval_required` but no voting-permission check.
+
+> **CORRECTION (sub-project 40's final fix wave, applied to this document in place).** This paragraph originally cited the route as `app/post/routes.py:555-561`. That span starts one line late — at `@approval_required` — and therefore omits the `@login_required` and `@validation_required` the same sentence names. The correct span is `:552-561`, re-derived with numbered output:
+>
+> ```
+> 552	@bp.route('/comment/<int:comment_id>/<vote_direction>/<federate>', methods=['POST'])
+> 553	@login_required
+> 554	@validation_required
+> 555	@approval_required
+> 556	def comment_vote(comment_id, vote_direction, federate):
+> ```
+>
+> The finding itself is unaffected: none of the three decorators is a voting-permission check either way. Register entry **D499** carries the correction and now names this document in its enumeration of where the wrong span was copied. It is marked here rather than rewritten silently because this document is the round's binding authority, and a spec that quietly changes its mind is indistinguishable from one that was always right.
 
 So the API arm refuses a voter the community has banned from voting and the web arm does not.
 
