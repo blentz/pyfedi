@@ -322,7 +322,8 @@ carries the fix-edit obligation it owes -- it asserts the defect, so closing the
 bypass must invert it. It was found by neutralising `:22`'s first conjunct,
 which nothing in the file had killed.
 
-THREE EXTENSIONS TO DEFECT 5 ARE RECORDED IN D500, verbatim, and are repeated
+THREE EXTENSIONS TO DEFECT 5 ARE RECORDED IN D500 -- in substance, not in
+these words -- and are repeated
 here so they are not lost with a report. (i) The gate-free call also carries `emoji`:
 `post_reply_like` forwards `data['emoji']`, and the remapped reversal lands on
 app/models.py:3325-3331, so a refused user can also REWRITE THE EMOJI on the
@@ -341,9 +342,10 @@ hole into a vote-CASTING hole and belongs in the entry.
 WHAT TASK 7'S MUTATION PASS LEFT OPEN, listed because a survivor that is merely
 reported dies with the report. Each of these is a mutation of a line in Groups A
 or C that all 34 tests here pass against. BE EXACT ABOUT WHEN THAT WAS MEASURED:
-the survivors were RE-RUN at 33 tests, after fix round 1's strengthening, and
-fix round 2 then added the 34th (the emoji-reversal test) and incremented this
-count WITHOUT re-running them. Nothing was re-executed at 34. What was done
+the survivors were RE-RUN at 33 tests, and FIX ROUND 1 -- commit `42106cbc`,
+the same one that strengthened them -- then added the 34th (the emoji-reversal
+test) and incremented this count in the same commit WITHOUT re-running them.
+Fix round 2 was documentation-only and added no test. Nothing was re-executed at 34. What was done
 instead is a hand check by the round's final whole-branch review, which read all
 seventeen against the 34th test's path and found that none of them touches it --
 it takes no bookmark, no subscription and no delete/restore path, and reaches
@@ -1927,21 +1929,41 @@ class TestVoteForReplyGuardsAndReturns:
         N` permits N + 1 votes. The assertion below -- `VOTE_QUOTA` 0 and a vote
         LANDS -- is that off-by-one in executable form. It is recorded, not
         fixed: the default is 240 (config.py:203) so nothing is burning, and
-        `app/shared/post.py:53` carries the identical comparison, which makes it
-        a consistent product decision rather than a divergence between the
-        mirrored pair. It is registered as D501, which names this test as its
-        pin.
+        `app/shared/post.py:53` carries the identical comparison -- as do
+        `app/activitypub/routes.py:2438` and `:2459`, written as `<=` on the
+        permitting side, which is the same boundary -- so this is a consistent
+        product decision across all four enforcement sites rather than a
+        divergence between the mirrored pair. It is registered as D501, which
+        names this test as its pin.
 
         THIS TEST ASSERTS THE DEFECT, NOT CORRECT BEHAVIOUR, AND WHOEVER FIXES
-        D501 MUST EDIT IT. The fix is one operator in two files that have to
-        move together -- `app/shared/reply.py:33`'s `>` and
-        `app/shared/post.py:53`'s, which `grep -n "VOTE_QUOTA"
-        app/shared/reply.py app/shared/post.py app/api/alpha/utils/*.py
-        app/post/routes.py` returns as the only two occurrences, both of them
-        `>` -- and when they become `>=` the edit owed here is to INVERT this
-        test: `VOTE_QUOTA` 0 against a `votes_cast_today` of 0 must then be
-        REFUSED with 429, so the assertions below failing at that point is the
-        fix landing, not a regression.
+        D501 MUST EDIT IT. **The fix is one boundary at FOUR enforcement sites,
+        not two, and this obligation said two until the round's last review
+        caught it.** A whole-repository `/usr/bin/grep -rn "VOTE_QUOTA"
+        --include=*.py app/` returns five occurrences:
+        `app/shared/reply.py:33` and `app/shared/post.py:53`, both spelled
+        `if votes_cast_today(user.id) > VOTE_QUOTA:` as a REFUSAL; and
+        `app/activitypub/routes.py:2438` and `:2459`, spelled
+        `votes_cast_today(user.id) <= VOTE_QUOTA:` as a PERMISSION inside the
+        federation inbox's `process_upvote`/`process_downvote`, each calling
+        `liked.vote()` directly. `> N` refusing and `<= N` permitting are the
+        SAME boundary written two ways, so all four already agree and all four
+        carry the same off-by-one. The fifth, `app/user/routes.py:127`, is a
+        division for a display percentage and enforces nothing. When the
+        boundary moves, the edit owed here is to INVERT this test:
+        `VOTE_QUOTA` 0 against a `votes_cast_today` of 0 must then be REFUSED
+        with 429, so the assertions below failing at that point is the fix
+        landing, not a regression.
+
+        THE METHOD NOTE, BECAUSE IT IS THE SAME ONE D497 CARRIES AND THIS
+        DOCSTRING QUOTED IT WHILE COMMITTING IT: the two-site claim came from a
+        grep hand-scoped to four path globs, which is a filtered search that
+        called itself an enumeration. Re-deriving it required a method that
+        fails differently -- a whole-tree search with no path filter -- and not
+        a second grep of the same shape. Note also that the interactive `grep`
+        in this environment is a `ugrep` wrapper carrying `--ignore-files`,
+        which silently skips paths a `.gitignore` excludes; `/usr/bin/grep`
+        does not.
 
         THE ASSERTION IS THE COMPLETED VOTE, not the absence of an exception. An
         `abort(429)` would fail this test on the raise, but so would any other
