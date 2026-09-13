@@ -97,20 +97,41 @@ the raw output). Two held; one falsified the plan's own prediction:
     must act through `s.actor` (id 2), not `s.author`, to avoid tripping this
     short-circuit by accident.
 
-THE TASK 8 MUTATION PASS, AND THE THIRTEEN MUTANTS STILL ALIVE. 151 mutants
-were applied one at a time to `app/shared/reply.py` and judged by this file
-alone -- no other test file in the tree calls any of these six functions, so
-this file is the whole jury. The statement list was derived with `ast.walk`
-over each `FunctionDef`, which counts the `def` line and so runs one longer per
-function than the table above (115 lines, not 109); every one of the 115 was
-mutated, plus 12 continuation lines inside multi-line statements, 4
-guard-neutralisations and 20 BoolOp operand-drops and operator-swaps. 125 died
-against the 46 tests that existed then; 13 of the 26 survivors are closed by
-the three kill-motivated tests added here and the two amended; 13 are still
-alive and are listed below so that they are findable from the repository rather
-than only from a planning directory that does not outlive the round. Each
-recipe is a single-line literal substitution; apply it, run this file, observe
-green.
+THE TASK 8 MUTATION PASS, AND THE THIRTEEN MUTANTS STILL ALIVE. The space is
+159 mutants, applied one at a time to `app/shared/reply.py` and judged by this
+file alone -- no other test file in the tree calls any of these six functions,
+so this file is the whole jury. Six other files under `tests/` match one of the
+names, and none of them is a second juror: `test_shared_tasks_locks.py` and
+`test_shared_tasks_send_answer.py` call the same-named functions in
+`app.shared.tasks`, and the four `test_inbox_dispatch_*.py` files carry the
+names only as string literals. The check that settles it is a grep for the
+IMPORT, not for the name. It is 115 statement lines, 20 continuation
+lines inside multi-line statements, both directions of neutralisation on each
+of the four permission guards, and 20 operand-drops and operator-swaps over the
+six `BoolOp` nodes. Both line lists were derived with `ast.walk` over each
+`FunctionDef`: the statement list counts the `def` line and so runs one longer
+per function than the table above (115, not 109), and the continuation list is
+every non-first physical line of a NON-COMPOUND statement, which is the only
+definition that does not sweep in blank lines, comments and bare `else:`.
+146 died, 13 live. Those 13 are listed below with reproduction recipes so that
+they are findable from the repository rather than only from a planning
+directory that does not outlive the round; each is a single-line literal
+substitution, so apply it, run this file, and observe green.
+
+THE FIRST PASS UNDERSTATED THE SPACE AND THIS PARAGRAPH SAYS HOW. It reported
+151 mutants over 12 continuation lines, and the 12 were the 20 minus the 8
+inside the three `add_to_modlog(...)` calls -- `:438`, `:439`, `:440`, `:474`,
+`:475`, `:476`, `:507`, `:508`. There was no reason for the exclusion; it was
+not a judgement that those lines were cosmetic, it was an unexamined narrowing,
+and it was disclosed nowhere. Review mutated all eight and all eight lived,
+because the only thing any test here read off a `ModLog` row was `action`. They
+are closed now, together with six more mutants on the `target_user` and
+`reason` arguments that share `:437`, `:473` and `:506` with the action literal
+and were equally unread; the three `..._action` tests now assert every field
+the call is handed. A fifth survivor category is therefore named and empty
+rather than absent, which is the point: a future round reading an inventory of
+four categories would otherwise conclude those lines had been mutated and found
+safe.
 
 THE SAME PASS ALSO RE-RAN COVERAGE AND FOUND TWO ARCS OPEN, which is why this
 file has five new tests rather than three. Tasks 1-6 drove these six functions
@@ -135,6 +156,19 @@ missing arcs are back to zero for all six functions.
   on a one-element path would assert something the ordinary flow cannot
   produce, and on every input it can produce the mutant computes what the
   original computes.
+
+  THE OTHER OPERAND OF THE SAME GUARD DIES, AND DIES ONLY BY CRASHING.
+  Dropping `reply.path` instead -- leaving `if len(reply.path) > 1:` -- fails
+  18 tests, and `sort -u` over the `E ` lines gives exactly one reason,
+  `TypeError: object of type 'NoneType' has no len()`. The standing rule is
+  that a crash kill counts only if a viable NON-crashing variant of the same
+  fault also dies, and here the rule is satisfied VACUOUSLY: there is no such
+  variant, because crash prevention is the operand's entire contribution. Over
+  the five path shapes that reach this line -- `None`, `[]`, `[0]`, `[0, p]`,
+  `[0, p, r]` -- the original and the mutant agree on four and differ only on
+  `None`, where the mutant raises. An operand whose only effect is to stop an
+  exception cannot be dropped non-fatally, so the argument is recorded here
+  rather than a non-crashing variant being manufactured.
 
   UNOBSERVABLE WITHIN ONE SESSION (6). `:433`, `:469`, `:505`, `:535`, `:575`
   and `:591` `db.session.commit()` -> `db.session.flush()`. tests/conftest.py's
@@ -165,6 +199,15 @@ missing arcs are back to zero for all six functions.
   needs a second locale with a compiled catalogue, so that
   `_('Your answer was chosen...')` actually renders differently -- a
   translation-infrastructure dependency this file has none of elsewhere.
+
+  THE MODERATION LOG'S ARGUMENTS (0, AND NAMED BECAUSE IT WAS ONCE 8).
+  `:438`-`:440`, `:474`-`:476` and `:507`-`:508`, plus `target_user` and
+  `reason` on `:437`, `:473` and `:506`. Every one of the fourteen lived
+  against the 51 tests that stood before this category was named, because the
+  only field any test read off a `ModLog` row was `action`. All fourteen die
+  now. The category is kept with a zero rather than dropped, so that the count
+  above reads 4 + 6 + 2 + 1 + 0 = 13 and the reader can see that these lines
+  were measured rather than never reached.
 """
 
 import pytest
@@ -494,14 +537,49 @@ class TestModRemoveReply:
         `ModLog.count() == 0` needed and did not have: that test's zero
         proves nothing about a mechanism that can never write a row at all,
         so this test is what makes that earlier zero mean something.
+
+        EVERY ARGUMENT IS ASSERTED, NOT JUST THE ACTION. The action was the
+        only field this test read until Task 8's fix round, and `:437`-`:440`
+        hand `add_to_modlog` eight more: `target_user`, `reason`, `community`,
+        `post`, `reply`, `link_text` and `link`. Mutants on all of them lived.
+        The two that matter most are `target_user` and `reason` -- a
+        moderation log that misattributes an action, or that loses the
+        moderator's stated reason, is worse than no log -- but the whole row
+        is cheap to assert once the row is in hand, so the whole row is
+        asserted. The fields are IDS: `add_to_modlog` (app/utils.py:3574-3581)
+        resolves each object to `x.id if x else None` before constructing the
+        `ModLog`, so `post=None` shows up as `post_id is None` and nothing
+        else.
+
+        A SECOND REPLY IS THE TARGET so that `target.id` is 2 while
+        `s.post.id` is 1. `:440`'s link is
+        `f'post/{reply.post_id}#comment_{reply.id}'`, and against
+        `_seed_moderated_reply`'s single post and single reply -- both id 1 --
+        transposing the two halves produces the identical string. This is the
+        same sequence-reset collision that hid `lock_post_reply:504` and
+        `choose_answer:564`; it is a property of the fixture, not of these
+        three tests, and it will hide the next one too.
         """
         s = _seed_moderated_reply()
         seed_moderator(s)
+        target = make_post_reply(s.post, s.author)
+        db.session.commit()
+        assert target.id != s.post.id
 
-        mod_remove_reply(s.reply.id, 'spam', SRC_API, auth=bearer(s.actor))
+        mod_remove_reply(target.id, 'spam', SRC_API, auth=bearer(s.actor))
 
-        actions = {row.action for row in db.session.query(ModLog).all()}
-        assert actions == {'delete_post_reply'}
+        rows = db.session.query(ModLog).all()
+        assert {row.action for row in rows} == {'delete_post_reply'}
+        row = rows[0]
+        assert row.user_id == s.actor.id
+        assert row.type == 'mod'
+        assert row.target_user_id == s.author.id
+        assert row.reason == 'spam'
+        assert row.community_id == s.community.id
+        assert row.post_id == s.post.id
+        assert row.reply_id == target.id
+        assert row.link == f'post/{s.post.id}#comment_{target.id}'
+        assert row.link_text == 'comment on a post'
 
     def test_the_federation_task_is_selected(self, db_session):
         """`:442`'s task_selector call, intercepted on the module.
@@ -690,16 +768,38 @@ class TestModRestoreReply:
     def test_the_modlog_row_names_the_restore_action(self, db_session):
         """`:473-476`'s add_to_modlog with the literal 'restore_post_reply'.
 
-        The set here holds TWO actions, because `_removed` wrote the delete
-        row first. Asserting the set rather than a count is what makes the
-        restore action's presence the witness.
+        The set here holds TWO actions, because the removal below wrote the
+        delete row first. Asserting the set rather than a count is what makes
+        the restore action's presence the witness.
+
+        EVERY ARGUMENT IS ASSERTED for the reason
+        `TestModRemoveReply::test_the_modlog_row_names_the_delete_action`
+        gives at length, and the seeding is done inline rather than through
+        `self._removed()` for the reason it gives too: the restore must act on
+        a reply whose id differs from its post's, or `:476`'s link cannot tell
+        `post_id` from `id`.
         """
-        s = self._removed()
+        s = _seed_moderated_reply()
+        seed_moderator(s)
+        target = make_post_reply(s.post, s.author)
+        db.session.commit()
+        assert target.id != s.post.id
+        mod_remove_reply(target.id, 'spam', SRC_API, auth=bearer(s.actor))
 
-        mod_restore_reply(s.reply.id, 'ok', SRC_API, auth=bearer(s.actor))
+        mod_restore_reply(target.id, 'ok', SRC_API, auth=bearer(s.actor))
 
-        actions = {row.action for row in db.session.query(ModLog).all()}
-        assert actions == {'delete_post_reply', 'restore_post_reply'}
+        rows = db.session.query(ModLog).all()
+        assert {row.action for row in rows} == {'delete_post_reply', 'restore_post_reply'}
+        row = next(r for r in rows if r.action == 'restore_post_reply')
+        assert row.user_id == s.actor.id
+        assert row.type == 'mod'
+        assert row.target_user_id == s.author.id
+        assert row.reason == 'ok'
+        assert row.community_id == s.community.id
+        assert row.post_id == s.post.id
+        assert row.reply_id == target.id
+        assert row.link == f'post/{s.post.id}#comment_{target.id}'
+        assert row.link_text == 'comment on a post'
 
     def test_the_federation_task_is_selected_for_restore(self, db_session):
         """`:478`'s task_selector call."""
@@ -945,14 +1045,37 @@ class TestLockPostReply:
         assert db.session.query(ModLog).count() == 0
 
     def test_locking_writes_the_lock_action(self, db_session):
-        """`:506-508`'s add_to_modlog with `:496`'s modlog_type."""
+        """`:506-508`'s add_to_modlog with `:496`'s modlog_type.
+
+        EVERY ARGUMENT IS ASSERTED, for the reason
+        `TestModRemoveReply::test_the_modlog_row_names_the_delete_action`
+        gives at length. `:506-508`'s argument list differs from the two
+        mod-delete calls in two ways worth pinning rather than glossing:
+        there is NO `post=`, so `post_id` is None rather than the post's id;
+        and `reason` is the LITERAL `''` rather than a parameter, because
+        locking a comment takes no reason from the caller. `link_text` is the
+        reply's own body through `shorten_string`, not the post's title.
+        """
         s = _seed_moderated_reply()
         seed_moderator(s)
+        target = make_post_reply(s.post, s.author)
+        db.session.commit()
+        assert target.id != s.post.id
 
-        lock_post_reply(s.reply.id, True, SRC_API, auth=bearer(s.actor))
+        lock_post_reply(target.id, True, SRC_API, auth=bearer(s.actor))
 
-        actions = {row.action for row in db.session.query(ModLog).all()}
-        assert actions == {'lock_post_reply'}
+        rows = db.session.query(ModLog).all()
+        assert {row.action for row in rows} == {'lock_post_reply'}
+        row = rows[0]
+        assert row.user_id == s.actor.id
+        assert row.type == 'mod'
+        assert row.target_user_id == s.author.id
+        assert row.reason == ''
+        assert row.community_id == s.community.id
+        assert row.post_id is None
+        assert row.reply_id == target.id
+        assert row.link == f'post/{s.post.id}#comment_{target.id}'
+        assert row.link_text == 'a reply'
 
     def test_unlocking_writes_the_unlock_action(self, db_session):
         """`:499`'s modlog_type on the false arm of `:494`.
