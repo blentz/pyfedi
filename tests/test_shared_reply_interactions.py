@@ -160,9 +160,13 @@ WHAT IS NEW, AND HAS NO POST TWIN:
     value can reach -- see `TestSubscribeReply`'s docstring for what `:98` does
     to the web arm.
 
-FIVE DEFECTS ARE RECORDED HERE AND DELIBERATELY NOT FIXED. THREE OF THEM ARE
-PINNED BY TESTS IN THIS FILE; THE OTHER TWO ARE NOT, AND CANNOT BE FROM A
-FACTORY REPLY. The fifth, DEFECT 5, was found by task 7's mutation pass and is
+FIVE DEFECTS ARE RECORDED HERE. **DEFECTS 3 AND 5 HAVE SINCE BEEN FIXED** --
+the repository's owner asked for both after the coverage round closed, and the
+work is register entry D517. This section is kept in the past tense for them
+rather than deleted, because the tests below were written against the broken
+behaviour and a reader needs to know what they were built to witness. The other
+three stand as recorded. THREE OF THE FIVE ARE PINNED BY TESTS IN THIS FILE;
+DEFECT 4 IS NOT, AND CANNOT BE FROM A FACTORY REPLY. The fifth, DEFECT 5, was found by task 7's mutation pass and is
 stated at the end of this section. Taking the unpinned pair first, because a later reader of the
 `path` bullet above is sent here for them.
 
@@ -313,14 +317,18 @@ NARROWER HOLE THAN IT SOUNDS and the narrowing is part of the finding: a
 'reversal' only reaches a vote at all when a vote already exists, because
 `PostReply.vote` remaps it at app/models.py:3316 only `if existing_vote` and
 `:3321` then asserts the direction is 'upvote' or 'downvote'. So the gates are
-bypassed for UNDOING a vote, not for casting one. It is PINNED, not fixed, by
-`TestVoteForReplySourceAndPermission`'s
-`..._a_reversal_reaches_the_vote_past_both_api_permission_gates`, on the same
-reasoning as the asymmetry above: changing a permission check is a product
-decision a coverage round has no standing to take. That test's docstring now
-carries the fix-edit obligation it owes -- it asserts the defect, so closing the
-bypass must invert it. It was found by neutralising `:22`'s first conjunct,
-which nothing in the file had killed.
+bypassed for UNDOING a vote, not for casting one. It was found by neutralising
+`:22`'s first conjunct, which nothing in the file had killed.
+
+**DEFECT 5 IS NOW FIXED, AND THE TEST THAT PINNED IT HAS BEEN INVERTED AS ITS
+OWN DOCSTRING REQUIRED.** `:26`-`:39` gate a 'reversal' on the permission that
+would have cast the vote being undone -- `can_upvote` for a positive `effect`,
+`can_downvote` for a negative one -- because 'reversal' names no permission of
+its own. `app/shared/post.py` took the identical arm in the same change, so the
+mirrored pair did not diverge. The pin is now
+`..._a_reversal_is_refused_when_the_permission_that_cast_the_vote_is_gone`, with
+`..._a_permitted_voter_can_still_reverse_their_own_vote` as its same-mechanism
+positive control. Register entry D517.
 
 THREE EXTENSIONS TO DEFECT 5 ARE RECORDED IN D500 -- in substance, not in
 these words -- and are repeated
@@ -1034,10 +1042,17 @@ class TestVoteForReplySourceAndPermission:
         already on this list. `..._lands_on_the_named_reply_...` is an SRC_API
         upvote: `can_upvote` reads no row and `:24`'s first conjunct is false,
         so it is the `..._passes_both_gates` case exactly.
-        `..._a_reversal_reaches_the_vote_past_both_api_permission_gates` is the
-        stronger case -- under 'reversal' BOTH `:22` and `:24` are false at
-        their first conjunct, so NEITHER permission function is called at all,
-        which is the very thing that test exists to record.
+        `..._a_reversal_is_refused_when_the_permission_that_cast_the_vote_is_gone`
+        -- the inverted form of the test that used to record DEFECT 5 -- still
+        needs none, but for a reason the fix CHANGED. It used to need none
+        because under 'reversal' both `:22` and `:24` were false at their first
+        conjunct and NEITHER permission function was called. Now `:26`'s arm
+        calls one of them, chosen by the existing vote's sign, and that test's
+        existing vote is an UPVOTE, so the function called is `can_upvote`,
+        which reads no `Site` row. Its downvote siblings below DO call
+        `can_downvote` and therefore DO call `make_site()`. Same conclusion,
+        different mechanism, and the difference is exactly the sort a fix
+        invalidates silently.
 
     THE WEB TEST'S VOTER IS NO LONGER `_seed_reply`'s SINGLE USER, and that
     changes nothing on this list: `Site` is read by `can_downvote` and by the
@@ -1236,66 +1251,44 @@ class TestVoteForReplySourceAndPermission:
         finally:
             _clear_votes_cast(voter.id)
 
-    def test_a_reversal_reaches_the_vote_past_both_api_permission_gates(self, db_session):
-        """CLOSES NO STATEMENT AND NO ARC, and it pins a THIRD source value that
-        the class docstring's asymmetry did not account for.
+    def test_a_reversal_is_refused_when_the_permission_that_cast_the_vote_is_gone(self, db_session):
+        """DEFECT 5 IS FIXED, AND THIS TEST WAS INVERTED TO SAY SO.
 
-        `:22` and `:24` are each gated on a direction LITERAL, and 'upvote' and
-        'downvote' are not the only values the API arm passes.
-        `app/api/alpha/utils/reply.py:435-441` maps `score` to three directions
-        -- 1 to 'upvote', -1 to 'downvote', and anything else to 'reversal' --
-        and hands the result to `vote_for_reply` at `:444`. Under 'reversal'
-        BOTH conjuncts at `:22` and `:24` are false, so neither `can_upvote` nor
-        `can_downvote` is consulted and the vote proceeds to `:30`. A bot, whom
-        `can_upvote` (app/utils.py:2481) and `can_downvote` (`:2437`) both
-        refuse, can therefore still undo its vote through the API. THIS TEST
-        RECORDS THAT AND DOES NOT CHANGE IT, on the same reasoning the class
-        docstring gives for the web-arm asymmetry: altering a permission check
-        is a product decision a coverage round has no standing to make.
+        Until the fix, `:22` and `:24` were each gated on a direction LITERAL,
+        and 'upvote'/'downvote' are not the only values the API arm passes:
+        `app/api/alpha/utils/reply.py:435-441` maps `score` to three
+        directions -- 1 to 'upvote', -1 to 'downvote', and ANYTHING ELSE to
+        'reversal' -- and hands the result to `vote_for_reply` at `:444`.
+        Under 'reversal' both conjuncts were false, neither `can_upvote` nor
+        `can_downvote` was consulted, and the vote proceeded to `:30`. A bot,
+        whom `can_upvote` (app/utils.py:2481) and `can_downvote` (`:2437`)
+        both refuse, could undo its vote through the API with no permission
+        check at all.
 
-        THIS TEST ASSERTS THE DEFECT, NOT CORRECT BEHAVIOUR, AND WHOEVER FIXES
-        DEFECT 5 MUST EDIT IT. Read the assertions below as a specification and
-        they say a bot may undo its vote through the API; that is the bug, in
-        executable form, deliberately. The obligation is stated here rather than
-        left implicit because this test's own kill is a FIX-CATCHER: the mutant
-        it kills, `22s/vote_direction == 'upvote' and //`, makes `:22` consult
-        `can_upvote` for every direction and so CLOSES DEFECT 5. It is a
-        candidate fix, not a fault, and this test earns its place by pinning a
-        registered defect rather than by catching a regression. So: WHEN THE
-        BYPASS IS CLOSED -- at the API boundary, or by gating 'reversal' on a
-        permission function, and in `vote_for_post` in the same change, because
-        app/shared/post.py:31-37 carries the identical two-literal gate -- THE
-        EDIT OWED HERE IS TO INVERT THIS TEST: the second `vote_for_reply` call
-        must then be expected to return early without voting, `up_votes` must
-        stay 1, and the `PostReplyVote` count must stay 1. ITS FAILURE AT THAT
-        POINT IS THE FIX LANDING, NOT A REGRESSION. The precedent for asserting
-        wrong-on-purpose numbers so that a fix must edit a test is
-        `TestRestoreReply`'s
-        `..._a_delete_restore_cycle_leaves_two_counters_permanently_low`.
+        THE EARLIER VERSION OF THIS TEST ASSERTED THAT BUG ON PURPOSE and
+        carried a fix-edit obligation naming this exact edit. This is that
+        obligation being collected: the assertions below are now the inverse
+        of what they were. The reversal must be REFUSED, `up_votes` must stay
+        1, and the `PostReplyVote` row must survive.
 
-        THE UNIQUE KILL IS `22s/vote_direction == 'upvote' and //`, which left
-        all 27 tests green in the task-7 pass. That mutant is not equivalent and
-        THIS is where it shows: it makes `:22` consult `can_upvote` for EVERY
-        direction, so the reversal below is refused at `:23` and the existing
-        vote survives. For 'upvote' and 'downvote' the mutant IS equivalent, and
-        the argument is worth stating because it is why nothing else catches it
-        -- `can_downvote`'s refusal set contains `can_upvote`'s (compare
-        app/utils.py:2437 and `:2481`, and `:2470-2475` against `:2484-2489`),
-        so `can_downvote` true implies `can_upvote` true and the mutant's extra
-        conjunct changes no downvote's outcome.
+        THE GATE RESOLVES THE EXISTING VOTE RATHER THAN THE DIRECTION
+        LITERAL, which is the only way to gate a reversal at all: 'reversal'
+        names no permission of its own. `:25`-`:29` load the voter's existing
+        `PostReplyVote` and require `can_upvote` for an `effect` above zero
+        and `can_downvote` for one below. The existing vote here is an upvote
+        with `effect` exactly 1 (app/models.py:3366), so `can_upvote` is the
+        function consulted and the bot flag is what makes it refuse.
 
-        'reversal' REACHES `reply.vote` ONLY WITH AN EXISTING VOTE, which is why
-        the first call is here. `PostReply.vote` (app/models.py:3311, in
-        `class PostReply` at app/models.py:2887) remaps 'reversal' at `:3316`
-        only `if existing_vote`, and `:3321` then asserts the direction is
-        'upvote' or 'downvote' -- so a bare reversal raises AssertionError. With
-        the existing upvote's `effect` of exactly 1 (`:3366`) the remap gives
-        'upvote', and `:3338` deletes the row. The zero counts below are that
-        deletion, and they are the witness, not the returned id: `:23` and `:42`
-        both return `user.id`.
+        THE WITNESS IS THE SURVIVING ROW, NOT THE RETURNED ID. `:26` and the
+        permitted path both return `user.id`, so the return value cannot tell
+        a refusal from a success -- exactly the false-witness mechanism (a)
+        the module docstring names. What discriminates is state: under the
+        unfixed code `:36` ran, `PostReply.vote` remapped 'reversal' to
+        'upvote' at app/models.py:3316 and deleted the row at `:3341`, and
+        both counts below would read 0.
 
         `s.user.bot` is set BETWEEN the two calls, because the first call must
-        pass `:22` to create the row the second one reverses.
+        pass `:22` to create the row the second one tries to reverse.
         """
         s = _seed_reply()
         try:
@@ -1306,6 +1299,136 @@ class TestVoteForReplySourceAndPermission:
 
             s.user.bot = True
             db.session.commit()
+
+            assert vote_for_reply(s.reply.id, 'reversal', True, None, SRC_API,
+                                  auth=bearer(s.user)) == s.user.id
+
+            db.session.refresh(s.reply)
+            assert s.reply.up_votes == 1
+            assert PostReplyVote.query.filter_by(
+                post_reply_id=s.reply.id, user_id=s.user.id).count() == 1
+        finally:
+            _clear_votes_cast(s.user.id)
+
+    def test_a_downvote_reversal_is_refused_when_downvotes_are_disabled(self, db_session):
+        """`:38`'s true arm -- the `effect < 0` half of the reversal gate.
+
+        The gate resolves the existing vote's SIGN and consults the matching
+        permission, so the two halves need separate witnesses. This is the
+        negative one.
+
+        `site.enable_downvotes` IS THE RIGHT LEVER AND THE BOT FLAG IS NOT.
+        `enable_downvotes` False makes `can_downvote` return at
+        app/utils.py:2445 while leaving `can_upvote` (app/utils.py:2480,
+        which never reads the Site row) TRUE. So a mutant that consulted
+        `can_upvote` for a negative effect -- swapping the two functions, or
+        collapsing `:38` into `:36` -- would permit this reversal and the row
+        below would be gone. The bot flag would refuse both and could not tell
+        the two functions apart: false-witness mechanism (e), two conditions
+        moved only in lockstep.
+
+        `make_site()` must exist BEFORE the downvote is cast, because
+        `can_downvote:2443` reads `Site.query.get(1)` and `:2445` dereferences
+        it. The flag is flipped between the two calls so the first one lands.
+        """
+        site = make_site()
+        s = _seed_reply()
+        try:
+            vote_for_reply(s.reply.id, 'downvote', True, None, SRC_API,
+                           auth=bearer(s.user))
+            db.session.refresh(s.reply)
+            assert s.reply.down_votes == 1
+
+            site.enable_downvotes = False
+            db.session.commit()
+
+            assert vote_for_reply(s.reply.id, 'reversal', True, None, SRC_API,
+                                  auth=bearer(s.user)) == s.user.id
+
+            db.session.refresh(s.reply)
+            assert s.reply.down_votes == 1
+            assert PostReplyVote.query.filter_by(
+                post_reply_id=s.reply.id, user_id=s.user.id).count() == 1
+        finally:
+            _clear_votes_cast(s.user.id)
+
+    def test_a_downvote_reversal_lands_when_downvotes_are_enabled(self, db_session):
+        """`:38`'s false arm, and the same-mechanism positive control.
+
+        Identical to the test above except that `enable_downvotes` is left as
+        `make_site()` makes it, so `can_downvote` permits and the reversal
+        must LAND. Without it, a fixture in which no downvote reversal could
+        ever succeed would produce the same surviving row and prove nothing.
+        """
+        make_site()
+        s = _seed_reply()
+        try:
+            vote_for_reply(s.reply.id, 'downvote', True, None, SRC_API,
+                           auth=bearer(s.user))
+            db.session.refresh(s.reply)
+            assert s.reply.down_votes == 1
+
+            assert vote_for_reply(s.reply.id, 'reversal', True, None, SRC_API,
+                                  auth=bearer(s.user)) == s.user.id
+
+            db.session.refresh(s.reply)
+            assert s.reply.down_votes == 0
+            assert PostReplyVote.query.filter_by(
+                post_reply_id=s.reply.id, user_id=s.user.id).count() == 0
+        finally:
+            _clear_votes_cast(s.user.id)
+
+    def test_a_reversal_with_no_existing_vote_is_not_refused_by_the_gate(self, db_session):
+        """`:35`'s false arm -- there is no vote to resolve a permission from.
+
+        The gate cannot ask "was this voter allowed to cast the vote they are
+        undoing" when no such vote exists, so it falls through rather than
+        refusing. Control reaches `:44`, `:47` and then `reply.vote()`, where
+        app/models.py:3321 remaps 'reversal' ONLY `if existing_vote` -- so the
+        direction arrives still spelled 'reversal' and `:3326` raises.
+
+        THIS PINS A PRE-EXISTING 500, NOT A NEW ONE, and it is here because
+        `:35`'s false arm needs a witness. `Post.vote` handles the same state
+        differently: app/models.py:2740-2741 returns None for a reversal with
+        no existing vote, where `PostReply.vote` has no such arm. That
+        divergence is registered, not repaired here.
+
+        THE WITNESS IS THE ABSENT ROW AS MUCH AS THE RAISE. A crash is a weak
+        kill on its own, so the assertion below is that no `PostReplyVote` was
+        written -- which is what distinguishes falling through the gate from a
+        mutant that let the else-branch cast a new downvote.
+        """
+        s = _seed_reply()
+        try:
+            with pytest.raises(ValueError):
+                vote_for_reply(s.reply.id, 'reversal', True, None, SRC_API,
+                               auth=bearer(s.user))
+
+            assert PostReplyVote.query.filter_by(
+                post_reply_id=s.reply.id, user_id=s.user.id).count() == 0
+        finally:
+            _clear_votes_cast(s.user.id)
+
+    def test_a_permitted_voter_can_still_reverse_their_own_vote(self, db_session):
+        """The positive control for the gate above, and it is mandatory.
+
+        A refusal test alone cannot distinguish a gate that refuses the right
+        voter from one that refuses every voter -- false-witness mechanism
+        (c), emptiness with no same-mechanism positive control. This test runs
+        the identical two-call sequence with the bot flag never set, so
+        `can_upvote` permits, and asserts the reversal LANDS: `up_votes` back
+        to 0 and the `PostReplyVote` row gone.
+
+        Same mechanism, same path, one lever moved. If the new gate at
+        `:25`-`:29` refused unconditionally, the test above would still pass
+        and this one would fail.
+        """
+        s = _seed_reply()
+        try:
+            vote_for_reply(s.reply.id, 'upvote', True, None, SRC_API,
+                           auth=bearer(s.user))
+            db.session.refresh(s.reply)
+            assert s.reply.up_votes == 1
 
             assert vote_for_reply(s.reply.id, 'reversal', True, None, SRC_API,
                                   auth=bearer(s.user)) == s.user.id
@@ -2306,6 +2429,48 @@ class TestDeleteReply:
         assert s.reply.deleted is False
         assert s.reply.deleted_by is None
 
+    def test_deleting_a_one_element_path_reply_does_not_reach_the_empty_in_operand(self, db_session):
+        """The cli-imported one-element path must not raise.
+
+        This is the executable pin the class docstring's `path` section said was
+        left untested. It seeds the shape `app/cli.py` produces for a
+        first-level nested comment -- ancestors only, the reply's own id
+        excluded, so a single element -- and calls `delete_reply`.
+
+        `:256`'s guard is `if reply.path and len(reply.path) > 1:`. Without the
+        length half, `tuple(reply.path[:-1])` is the EMPTY tuple, psycopg2
+        renders `where id in ()`, and Postgres raises
+        `(psycopg2.errors.SyntaxError) syntax error at or near ")"` out of
+        `delete_reply` -- a 500 for the reply's own author. The probe is in the
+        class docstring.
+
+        THE WITNESS IS NOT THE ABSENCE OF A RAISE. A test that only asserted
+        "no exception" would pass against a `delete_reply` whose body had been
+        deleted entirely. The assertions are that the delete actually HAPPENED
+        -- `deleted` true, `deleted_by` set -- and that the ancestor named by
+        the malformed path was NOT decremented, which is the correct outcome
+        for a path that does not identify its ancestors: `parent.child_count`
+        is seeded to 5 and must still read 5.
+
+        `parent` is a real second reply so the path holds a real id rather than
+        a synthetic one; the point is the LENGTH, and a real id makes the
+        child_count assertion meaningful rather than vacuous.
+        """
+        s = _seed_reply()
+        parent = make_post_reply(s.post, s.user)
+        db.session.commit()
+        parent.child_count = 5
+        s.reply.path = [parent.id]
+        db.session.commit()
+
+        delete_reply(s.reply.id, SRC_API, auth=bearer(s.user))
+
+        db.session.refresh(s.reply)
+        db.session.refresh(parent)
+        assert s.reply.deleted is True
+        assert s.reply.deleted_by == s.user.id
+        assert parent.child_count == 5
+
 
 class TestRestoreReply:
     """`restore_reply` (app/shared/reply.py:269-294) -- the author's own undelete.
@@ -2389,9 +2554,12 @@ class TestRestoreReply:
     `tuple(reply.path[:-1])`, so the empty-tuple `ProgrammingError` probed there
     is `restore_reply`'s too: the cli-imported one-element path the module
     docstring's defect 3 describes makes a reply its author can neither delete
-    NOR restore. Registered, not fixed, with `flask populate_post_reply_for_api`
-    as the existing remedy; not tested here, because reaching it needs a row
-    only `lemmy-import` builds.
+    NOR restore. **FIXED -- see D517.** `:296`'s guard is now
+    `if reply.path and len(reply.path) > 1:`, and the importer builds the
+    production shape, so neither half raises. It IS tested here now, by
+    `..._restoring_a_one_element_path_reply_does_not_reach_the_empty_in_operand`
+    in this class and `..._deleting_...` in `TestDeleteReply`; the row the test
+    needs is seeded directly rather than through `lemmy-import`.
 
     `path` IS NULLABLE WITH NO DEFAULT AND `child_count` DEFAULTS TO 0 -- also
     re-derived by a second method, runtime introspection of the mapped table
@@ -2759,3 +2927,41 @@ class TestRestoreReply:
         db.session.refresh(s.reply)
         assert s.reply.deleted is True
         assert s.reply.deleted_by == s.user.id
+
+    def test_restoring_a_one_element_path_reply_does_not_reach_the_empty_in_operand(self, db_session):
+        """`restore_reply`'s half of the cli-imported one-element path.
+
+        `:282` is `delete_reply:256`'s guard with `-` changed to `+` in the
+        statement below it, keyed on the same `tuple(reply.path[:-1])`, so the
+        empty-tuple `ProgrammingError` `TestDeleteReply` pins is this
+        function's too. Both halves are pinned because a fix applied to one
+        guard and not the other leaves the reply deletable but not restorable,
+        which is a worse state than the symmetric failure it replaces.
+
+        The reply is marked deleted THROUGH THE ORM rather than through
+        `delete_reply`, because `delete_reply` is the other half of this same
+        defect: routing the fixture through it would make this test depend on
+        the fix it is meant to witness, and it would pass vacuously if the
+        guard were fixed in `delete_reply` alone.
+
+        THE WITNESS IS THE RESTORE HAPPENING, not the absence of a raise --
+        `deleted` false and `deleted_by` None -- plus `parent.child_count`
+        unmoved at 5, which is correct for a path that does not identify its
+        ancestors.
+        """
+        s = _seed_reply()
+        parent = make_post_reply(s.post, s.user)
+        db.session.commit()
+        parent.child_count = 5
+        s.reply.path = [parent.id]
+        s.reply.deleted = True
+        s.reply.deleted_by = s.user.id
+        db.session.commit()
+
+        restore_reply(s.reply.id, SRC_API, auth=bearer(s.user))
+
+        db.session.refresh(s.reply)
+        db.session.refresh(parent)
+        assert s.reply.deleted is False
+        assert s.reply.deleted_by is None
+        assert parent.child_count == 5

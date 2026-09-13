@@ -705,6 +705,154 @@ def test_an_api_upvote_passes_both_gates_and_records_the_vote(db_session):
         _clear_votes_cast(s.voter.id)
 
 
+def test_an_api_reversal_is_refused_when_the_permission_that_cast_the_vote_is_gone(db_session):
+    """`vote_for_post`'s reversal gate -- the twin of `vote_for_reply`'s.
+
+    `app/api/alpha/utils/post.py` maps any score that is not +/-1 to
+    'reversal', exactly as the reply API does. Before the fix, `:35` and `:37`
+    were each gated on a direction LITERAL, so both were false for a reversal
+    and the call reached `post.vote()` with no permission check at all.
+
+    THE TWIN IS TESTED HERE AND NOT ONLY IN THE REPLY FILE BECAUSE AN UNTESTED
+    TWIN IS HOW THE MIRRORED PAIR DIVERGES. `app/shared/post.py` and
+    `app/shared/reply.py` carry the same gate; a later change that repairs or
+    breaks one and not the other is only visible if both are pinned.
+
+    The gate resolves the EXISTING vote rather than the direction literal,
+    because 'reversal' names no permission of its own. The seeded vote is an
+    upvote with `effect` 1, so `can_upvote` is the function consulted, and the
+    bot flag set between the calls is what makes it refuse.
+
+    THE WITNESS IS THE SURVIVING ROW, NOT THE RETURNED ID -- the refusal and
+    the success return the same value. Under the unfixed code the row count
+    below reads 0.
+    """
+    s = seed_post_context()
+    try:
+        vote_for_post(s.post.id, 'upvote', True, None, SRC_API,
+                      auth=bearer(s.voter))
+        assert db.session.query(PostVote).filter_by(
+            user_id=s.voter.id, post_id=s.post.id).count() == 1
+
+        s.voter.bot = True
+        db.session.commit()
+
+        result = vote_for_post(s.post.id, 'reversal', True, None, SRC_API,
+                               auth=bearer(s.voter))
+
+        assert result == s.voter.id
+        assert db.session.query(PostVote).filter_by(
+            user_id=s.voter.id, post_id=s.post.id).count() == 1
+    finally:
+        _clear_votes_cast(s.voter.id)
+
+
+def test_an_api_downvote_reversal_is_refused_when_downvotes_are_disabled(db_session):
+    """`vote_for_post`'s reversal gate, `effect < 0` half -- negative witness.
+
+    `site.enable_downvotes` IS THE RIGHT LEVER AND THE BOT FLAG IS NOT.
+    `enable_downvotes` False makes `can_downvote` return at app/utils.py:2445
+    while leaving `can_upvote` (app/utils.py:2480, which never reads the Site
+    row) TRUE. A mutant that consulted `can_upvote` for a negative effect --
+    swapping the two functions, or collapsing the second check into the first
+    -- would permit this reversal and the row below would be gone. The bot
+    flag refuses both and could not tell them apart.
+    """
+    s = seed_post_context()
+    try:
+        vote_for_post(s.post.id, 'downvote', True, None, SRC_API,
+                      auth=bearer(s.voter))
+        assert db.session.query(PostVote).filter_by(
+            user_id=s.voter.id, post_id=s.post.id).count() == 1
+
+        s.site.enable_downvotes = False
+        db.session.commit()
+
+        result = vote_for_post(s.post.id, 'reversal', True, None, SRC_API,
+                               auth=bearer(s.voter))
+
+        assert result == s.voter.id
+        assert db.session.query(PostVote).filter_by(
+            user_id=s.voter.id, post_id=s.post.id).count() == 1
+    finally:
+        _clear_votes_cast(s.voter.id)
+
+
+def test_an_api_downvote_reversal_lands_when_downvotes_are_enabled(db_session):
+    """The same-mechanism positive control for the test above.
+
+    Identical except that `enable_downvotes` is left alone, so `can_downvote`
+    permits and the reversal must LAND. Without it, a fixture in which no
+    downvote reversal could ever succeed would produce the same surviving row.
+    """
+    s = seed_post_context()
+    try:
+        vote_for_post(s.post.id, 'downvote', True, None, SRC_API,
+                      auth=bearer(s.voter))
+        assert db.session.query(PostVote).filter_by(
+            user_id=s.voter.id, post_id=s.post.id).count() == 1
+
+        result = vote_for_post(s.post.id, 'reversal', True, None, SRC_API,
+                               auth=bearer(s.voter))
+
+        assert result == s.voter.id
+        assert db.session.query(PostVote).filter_by(
+            user_id=s.voter.id, post_id=s.post.id).count() == 0
+    finally:
+        _clear_votes_cast(s.voter.id)
+
+
+def test_an_api_reversal_with_no_existing_vote_is_not_refused_by_the_gate(db_session):
+    """The gate's `if existing_vote:` false arm.
+
+    With no vote to resolve a permission from, the gate falls through rather
+    than refusing. Control reaches `post.vote()`, where app/models.py:2732-
+    2741 returns None for a reversal with no existing vote -- so this is a
+    quiet no-op, NOT the raise its `PostReply.vote` counterpart produces. That
+    divergence between the two models is registered, not repaired here.
+
+    THE WITNESS IS THE ABSENT ROW: no `PostVote` is written, which is what
+    distinguishes falling through the gate from a mutant that let the
+    else-branch cast a new downvote.
+    """
+    s = seed_post_context()
+    try:
+        result = vote_for_post(s.post.id, 'reversal', True, None, SRC_API,
+                               auth=bearer(s.voter))
+
+        assert result == s.voter.id
+        assert db.session.query(PostVote).filter_by(
+            user_id=s.voter.id, post_id=s.post.id).count() == 0
+    finally:
+        _clear_votes_cast(s.voter.id)
+
+
+def test_an_api_reversal_still_works_for_a_permitted_voter(db_session):
+    """The positive control for the gate above, and it is mandatory.
+
+    A refusal test alone cannot tell a gate that refuses the right voter from
+    one that refuses every voter. Same two-call sequence, bot flag never set,
+    so `can_upvote` permits and the reversal must LAND -- the `PostVote` row
+    is gone. If the new gate refused unconditionally, the test above would
+    still pass and this one would fail.
+    """
+    s = seed_post_context()
+    try:
+        vote_for_post(s.post.id, 'upvote', True, None, SRC_API,
+                      auth=bearer(s.voter))
+        assert db.session.query(PostVote).filter_by(
+            user_id=s.voter.id, post_id=s.post.id).count() == 1
+
+        result = vote_for_post(s.post.id, 'reversal', True, None, SRC_API,
+                               auth=bearer(s.voter))
+
+        assert result == s.voter.id
+        assert db.session.query(PostVote).filter_by(
+            user_id=s.voter.id, post_id=s.post.id).count() == 0
+    finally:
+        _clear_votes_cast(s.voter.id)
+
+
 def test_a_web_upvote_from_a_bot_renders_empty_voting_buttons(db_session, app):
     """`:43`'s FIRST conjunction taken true -- upvote and not can_upvote.
 
