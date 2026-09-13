@@ -96,6 +96,75 @@ the raw output). Two held; one falsified the plan's own prediction:
     Admin role granted. Every test in this file that cares about `ModLog.type`
     must act through `s.actor` (id 2), not `s.author`, to avoid tripping this
     short-circuit by accident.
+
+THE TASK 8 MUTATION PASS, AND THE THIRTEEN MUTANTS STILL ALIVE. 151 mutants
+were applied one at a time to `app/shared/reply.py` and judged by this file
+alone -- no other test file in the tree calls any of these six functions, so
+this file is the whole jury. The statement list was derived with `ast.walk`
+over each `FunctionDef`, which counts the `def` line and so runs one longer per
+function than the table above (115 lines, not 109); every one of the 115 was
+mutated, plus 12 continuation lines inside multi-line statements, 4
+guard-neutralisations and 20 BoolOp operand-drops and operator-swaps. 125 died
+against the 46 tests that existed then; 13 of the 26 survivors are closed by
+the three kill-motivated tests added here and the two amended; 13 are still
+alive and are listed below so that they are findable from the repository rather
+than only from a planning directory that does not outlive the round. Each
+recipe is a single-line literal substitution; apply it, run this file, observe
+green.
+
+THE SAME PASS ALSO RE-RAN COVERAGE AND FOUND TWO ARCS OPEN, which is why this
+file has five new tests rather than three. Tasks 1-6 drove these six functions
+to zero missing statements and zero missing arcs, and Task 7's authorization
+fix then added two statements and two arcs to each of `lock_post_reply` and
+`set_collapse_post_reply` and covered only the true arm of each: against the 46
+tests, `missing_branches` for this module was `[[518, 521], [545, 548]]` --
+the unprivileged caller who is on the WEB path rather than the API path, and so
+is neither served nor refused. Both are closed here. Missing statements and
+missing arcs are back to zero for all six functions.
+
+  EQUIVALENT ON EVERY PATH PRODUCTION BUILDS (4). `:430` and `:465`
+  `len(reply.path) > 1` -> `> 0`, and the same two lines with the whole guard
+  reduced to `if reply.path:`. The length test is unobservable because no
+  production writer emits a one-element path: app/models.py:3064 opens a root
+  path as `[0, reply.id]` and :3059-3060 appends to a parent's, so every path
+  is empty/None or at least two long, and app/api/alpha/views.py:669-686's
+  `calculate_path` starts every branch at `[0, ...]` too. The one writer that
+  could produce a shorter path is app/post/util.py:79,
+  `post_reply.path = reply_data.get('path', [])`, which takes whatever an
+  import payload contains. NOT CLOSED DELIBERATELY: a test pinning behaviour
+  on a one-element path would assert something the ordinary flow cannot
+  produce, and on every input it can produce the mutant computes what the
+  original computes.
+
+  UNOBSERVABLE WITHIN ONE SESSION (6). `:433`, `:469`, `:505`, `:535`, `:575`
+  and `:591` `db.session.commit()` -> `db.session.flush()`. tests/conftest.py's
+  `db_session` deliberately does NOT wrap tests in a rollback (it says so at
+  :140-142, because the code under test commits); but every assertion in this
+  file reads back through the same `db.session` that ran the call, and a flush
+  is already visible there. Distinguishing them needs a second connection
+  reading uncommitted data, which nothing here has and which would be a test
+  about SQLAlchemy rather than about these six functions.
+
+  VOID OVER THE INPUTS THAT EXIST (2). `:489` and `:528` `.one()` -> `.first()`
+  on `filter_by(id=post_reply_id)`. The two differ only at zero rows or more
+  than one; more than one is impossible on a primary key, and zero is the
+  missing-reply case no test in this file supplies. Closable in principle by a
+  call with an unused id asserting `NoResultFound` rather than the
+  `AttributeError` a `None` would raise three lines later -- recorded rather
+  than written, because the value is in the failure mode of a caller these
+  tests do not have.
+
+  MASKED BY THE FIXTURE'S OWN USERS (1). `:560`
+  `get_recipient_language(post_reply.user_id)` -> `get_recipient_language(
+  user.id)`, the recipient's locale replaced by the actor's. Probe A above
+  already established why nothing moves: `make_user` (tests/factories.py:41)
+  sets neither `language_id` nor `interface_language`, so
+  `get_recipient_language` reaches its `else: lang_to_use = 'en'` at
+  app/utils.py:4799 for EVERY user, and two users who both resolve to English
+  cannot be told apart by the title `force_locale` then produces. Closing it
+  needs a second locale with a compiled catalogue, so that
+  `_('Your answer was chosen...')` actually renders differently -- a
+  translation-infrastructure dependency this file has none of elsewhere.
 """
 
 import pytest
@@ -104,7 +173,7 @@ from types import SimpleNamespace
 
 from app import db
 from app.api.alpha.utils.reply import post_reply_mark_as_answer
-from app.constants import SRC_API, SRC_WEB
+from app.constants import NOTIF_ANSWER, SRC_API, SRC_WEB
 from app.models import ModLog, Notification, PostReply
 from app.shared.reply import (
     choose_answer, lock_post_reply, mod_remove_reply, mod_restore_reply,
@@ -357,11 +426,23 @@ class TestModRemoveReply:
         `[0, parent.id, reply.id]` -- so `tuple(reply.path[:-1])` is
         `(0, parent.id)`, a genuine multi-element IN operand.
 
-        THE ASSERTION IS ON THE ANCESTOR, NOT THE REPLY. The reply's own
+        THE BYSTANDER WITNESSES THE `where` CLAUSE: a mutant dropping it would
+        flip every reply in the table, and only a row the statement should NOT
+        have touched catches that.
+
+        THE REPLY'S OWN `child_count` IS ASSERTED TOO, AND THIS PARAGRAPH
+        RETRACTS THE CLAIM THAT IT NEED NOT BE. Until Task 8 the docstring here
+        read "THE ASSERTION IS ON THE ANCESTOR, NOT THE REPLY. The reply's own
         `child_count` is untouched by this statement, so asserting on it would
-        witness nothing; and a mutant dropping the `where` clause is caught
-        only by a row the statement should NOT have touched, which is why the
-        bystander below is seeded and asserted too.
+        witness nothing". The first sentence is true of the CORRECT code and
+        false of the code's neighbourhood, which is the distinction that
+        matters for a test: `:432` is `tuple(reply.path[:-1])`, and the whole
+        job of the `[:-1]` is to drop the reply's own id off the end of the
+        path so the reply is not counted as its own ancestor. Task 8's
+        mutation pass changed `:432` to `tuple(reply.path)` and all 46 tests
+        stayed green, because nothing looked at the one row that changes. The
+        seeded 3 below therefore witnesses the slice, not the UPDATE:
+        `parent.child_count == 4` cannot tell `[:-1]` from no slice at all.
         """
         s = _seed_moderated_reply()
         seed_moderator(s)
@@ -370,6 +451,7 @@ class TestModRemoveReply:
         db.session.commit()
         parent.child_count = 5
         bystander.child_count = 9
+        s.reply.child_count = 3
         s.reply.path = [0, parent.id, s.reply.id]
         db.session.commit()
 
@@ -377,8 +459,10 @@ class TestModRemoveReply:
 
         db.session.refresh(parent)
         db.session.refresh(bystander)
+        db.session.refresh(s.reply)
         assert parent.child_count == 4
         assert bystander.child_count == 9
+        assert s.reply.child_count == 3
 
     def test_the_web_arm_flashes_and_returns_none(self, db_session, app):
         """`:415`'s false arm, `:434`'s true arm, `:435`'s flash, `:447`.
@@ -554,6 +638,13 @@ class TestModRestoreReply:
         The mirror of `TestModRemoveReply`'s path test, with a BYSTANDER for
         the same reason: a mutant dropping the `where` clause is caught only
         by a row the statement should not have touched.
+
+        THE REPLY'S OWN `child_count` IS ASSERTED for the reason the twin's
+        docstring now gives at length: `:467`'s `tuple(reply.path[:-1])` drops
+        the reply's own id off the path, and Task 8's mutation pass changed it
+        to `tuple(reply.path)` with all 46 tests still green. `parent.
+        child_count == 6` cannot tell the slice from its absence; the seeded 3
+        can.
         """
         s = self._removed()
         parent = make_post_reply(s.post, s.author)
@@ -561,6 +652,7 @@ class TestModRestoreReply:
         db.session.commit()
         parent.child_count = 5
         bystander.child_count = 9
+        s.reply.child_count = 3
         s.reply.path = [0, parent.id, s.reply.id]
         db.session.commit()
 
@@ -568,8 +660,10 @@ class TestModRestoreReply:
 
         db.session.refresh(parent)
         db.session.refresh(bystander)
+        db.session.refresh(s.reply)
         assert parent.child_count == 6
         assert bystander.child_count == 9
+        assert s.reply.child_count == 3
 
     def test_the_web_arm_flashes_and_returns_none_on_restore(self, db_session, app):
         """`:451`'s false arm, `:470`'s true arm, `:471`'s flash, `:483`.
@@ -717,6 +811,46 @@ class TestLockPostReply:
         assert child.replies_enabled is False
         assert bystander.replies_enabled is True
 
+    def test_the_cascade_keys_on_the_replys_own_id_not_the_posts(self, db_session):
+        """`:504`'s `'parent_id': post_reply.id` -- the bound value, not `:503`.
+
+        WHY THE CASCADE TEST ABOVE CANNOT WITNESS THIS. It locks `s.reply`,
+        and `_seed_moderated_reply` seeds exactly one post and one reply into
+        a database whose sequences tests/conftest.py:131 resets between tests,
+        so `s.post.id` and `s.reply.id` are BOTH 1. `ARRAY[:parent_id]` selects
+        the same subtree whichever of the two is bound, and Task 8's mutation
+        pass confirmed it: changing `:504` to `'parent_id': post_reply.post_id`
+        left all 46 tests green.
+
+        WHAT THIS TEST DOES INSTEAD. It locks a SECOND reply, so the locked
+        reply's id (2) and its `post_id` (1) differ, and it seeds two
+        descendants that separate the two keys: `child`'s path contains 2 and
+        `decoy`'s contains 1. Under the correct binding `child` locks and
+        `decoy` does not; under the mutant exactly the reverse, so both
+        assertions flip rather than one. `:502` sets `replies_enabled` on the
+        locked reply in Python, so the target itself is no witness at all --
+        only a row reached through the raw UPDATE is.
+        """
+        s = _seed_moderated_reply()
+        seed_moderator(s)
+        target = make_post_reply(s.post, s.author)
+        child = make_post_reply(s.post, s.author)
+        decoy = make_post_reply(s.post, s.author)
+        db.session.commit()
+        assert target.id != target.post_id
+        child.path = [0, target.id, child.id]
+        decoy.path = [0, s.post.id, decoy.id]
+        child.replies_enabled = True
+        decoy.replies_enabled = True
+        db.session.commit()
+
+        lock_post_reply(target.id, True, SRC_API, auth=bearer(s.actor))
+
+        db.session.refresh(child)
+        db.session.refresh(decoy)
+        assert child.replies_enabled is False
+        assert decoy.replies_enabled is True
+
     def test_an_instance_admin_may_lock(self, db_session):
         """`:501`'s SECOND disjunct alone, with the first false."""
         s = _seed_moderated_reply()
@@ -769,6 +903,43 @@ class TestLockPostReply:
         with pytest.raises(Exception, match='Does not have permission'):
             lock_post_reply(s.reply.id, True, SRC_API, auth=bearer(s.actor))
 
+        db.session.refresh(s.reply)
+        assert s.reply.replies_enabled is True
+        assert db.session.query(ModLog).count() == 0
+
+    def test_an_unprivileged_web_caller_is_ignored_rather_than_refused(self, db_session, app):
+        """`:518`'s FALSE arm -- the one arc Task 7's fix left uncovered.
+
+        Task 7 turned `:501`'s bare `if` into an `if`/`elif` pair so an
+        unauthorized API caller is refused instead of receiving the unchanged
+        object. That added two statements and two arcs, and the test above
+        covers `:518`'s true arm. ITS FALSE ARM WAS NEVER REACHED: Task 8's
+        coverage re-run over the 46 tests that existed then reported
+        `missing_branches` `[[518, 521], [545, 548]]` for this module, the
+        only two arcs left anywhere in these six functions.
+
+        WHAT THE ARC IS, AND WHY IT IS NOT A SECOND DEFECT. The caller here is
+        neither a moderator nor an instance admin AND is on the web path, so
+        `:501` is false and `:518` is false too, and control falls to `:521`,
+        which is also false: the call returns None having done nothing, with
+        no flash and no exception. That is deliberate rather than the silent
+        fall-through Task 7 fixed -- the web routes guard before they dispatch,
+        whereas the API path reaches this function as its first check -- but it
+        is a real behaviour of this function, and asserting `None` plus an
+        unchanged row plus an empty flash queue is what distinguishes "did
+        nothing" from "did something and said nothing".
+        """
+        from flask import get_flashed_messages
+        s = _seed_moderated_reply()
+        s.reply.replies_enabled = True
+        db.session.commit()
+
+        with web_ctx(app, s.actor):
+            result = lock_post_reply(s.reply.id, True, SRC_WEB, auth=None)
+            messages = get_flashed_messages()
+
+        assert result is None
+        assert messages == []
         db.session.refresh(s.reply)
         assert s.reply.replies_enabled is True
         assert db.session.query(ModLog).count() == 0
@@ -1011,6 +1182,32 @@ class TestSetCollapsePostReply:
         db.session.refresh(s.reply)
         assert s.reply.collapsible is False
 
+    def test_an_unprivileged_web_caller_is_ignored_here_too(self, db_session, app):
+        """`:545`'s FALSE arm -- the second of the two arcs Task 7 left open.
+
+        The mirror of
+        `TestLockPostReply::test_an_unprivileged_web_caller_is_ignored_rather
+        _than_refused`, and uncovered for the same reason: `:545`'s true arm
+        has a test and its false arm had none, so Task 8's coverage run
+        reported `[[518, 521], [545, 548]]` as this module's only missing
+        arcs. `:533` is false for this caller and `src` is `SRC_WEB`, so
+        `:548` is false as well and the call returns None having written
+        nothing.
+        """
+        from flask import get_flashed_messages
+        s = _seed_moderated_reply()
+        s.reply.collapsible = False
+        db.session.commit()
+
+        with web_ctx(app, s.actor):
+            result = set_collapse_post_reply(s.reply.id, True, SRC_WEB, auth=None)
+            messages = get_flashed_messages()
+
+        assert result is None
+        assert messages == []
+        db.session.refresh(s.reply)
+        assert s.reply.collapsible is False
+
     def test_the_web_arm_flashes_the_collapsible_message(self, db_session, app):
         """`:526`'s false arm, `:537`'s true arm, `:538`-`:539`.
 
@@ -1027,6 +1224,60 @@ class TestSetCollapsePostReply:
             set_collapse_post_reply(s.reply.id, True, SRC_WEB, auth=None)
             messages = get_flashed_messages()
 
+        assert 'Comment is collapsible.' in messages
+
+    def test_the_web_arm_binds_the_user_it_then_tests_for_admin(self, db_session, app):
+        """`:530`'s `user = current_user`, witnessed through `:533`'s THIRD
+        disjunct rather than its first.
+
+        WHY THE OTHER WEB TESTS CANNOT WITNESS `:530`. Both of them make the
+        caller a MODERATOR, and `Community.is_moderator` (app/models.py:736-740)
+        falls back to `current_user.get_id()` when it is handed `None`. So on
+        those two tests `user = None` computes the same answer as
+        `user = current_user`, and `:530` is executed without being observed.
+        Task 8's mutation pass confirmed it: `user = None` at `:530` left all
+        46 tests green, while the identical mutation at `lock_post_reply:491`
+        died, because that function goes on to read `user.id` for
+        `task_selector`. This one never reads `user.id` on the web arm at all
+        -- `:549`'s `user.id` is the API arm -- so the binding is observable
+        only through the one disjunct that takes the user as a receiver rather
+        than an argument.
+
+        A SITE ADMIN IS THE ONLY CALLER THAT REACHES IT. `user.
+        is_admin_or_staff()` at `:533` is evaluated only when both community
+        checks are false, so the caller must be neither a moderator nor an
+        instance admin.
+
+        WHAT THIS TEST UNIQUELY KILLS, since it closes no statement and no arc
+        that another test does not. Restricting the third disjunct to the API
+        path -- `:533`'s tail rewritten as
+        `or (user.is_admin_or_staff() and src == SRC_API)` -- is a plausible
+        fault and a real change of behaviour, and it is invisible to every
+        other test in this file: with this one deselected, 50 pass against it.
+        It is the shape a careless narrowing of Task 7's API-side work would
+        take.
+
+        THE `user = None` KILL IS NOT THE UNIQUE ONE, and this paragraph says
+        so rather than letting the reader infer otherwise.
+        `test_an_unprivileged_web_caller_is_ignored_here_too` kills that mutant
+        as well, by crashing in `is_instance_admin`, and it also kills the
+        non-crashing variant that binds some other real user -- but only by
+        accident of Probe C above: `s.author` is user id 1, and
+        `User.is_admin()` short-circuits on `self.id == 1` at
+        app/models.py:1260, so binding the author accidentally binds an admin.
+        """
+        from flask import get_flashed_messages
+        s = _seed_moderated_reply()
+        make_site_admin(s.actor)
+        s.reply.collapsible = False
+        db.session.commit()
+
+        with web_ctx(app, s.actor):
+            set_collapse_post_reply(s.reply.id, True, SRC_WEB, auth=None)
+            messages = get_flashed_messages()
+
+        db.session.refresh(s.reply)
+        assert s.reply.collapsible is True
         assert 'Comment is collapsible.' in messages
 
     def test_the_web_arm_flashes_the_other_message_when_clearing(self, db_session, app):
@@ -1110,6 +1361,65 @@ class TestChooseAnswer:
         notifications = db.session.query(Notification).all()
         assert {n.user_id for n in notifications} == {s.author.id}
         assert {n.author_id for n in notifications} == {s.actor.id}
+
+    def test_the_notification_carries_the_title_url_subtype_and_targets(self, db_session):
+        """`:560`-`:572` -- everything the Notification is built OUT OF.
+
+        THE TEST ABOVE ASSERTS WHO IS NOTIFIED; THIS ONE ASSERTS WHAT THEY ARE
+        SENT, and the two were not the same claim. Task 8's mutation pass put
+        one mutation on each of `:561`, `:562`, `:563`, `:564`, `:565`, `:566`,
+        `:567`, `:568` and `:571` -- the message text, both `shorten_string`
+        limits, `'gen'`, `post_id`, `requestor_id`, `author_user_name`, the
+        notification `url` and the `subtype` -- and ALL NINE SURVIVED against
+        the 46 tests that existed then. `user_id` and `author_id` were the only
+        two fields any test looked at. Nine surviving mutants on one contiguous
+        block is what a hole looks like from the inside.
+
+        THE POST TITLE IS SEEDED LONG ON PURPOSE. `shorten_string`
+        (app/utils.py:1610-1617) returns its input unchanged when it is no
+        longer than the limit, so against `_seed_moderated_reply`'s six-
+        character `'a post'` the 100 at `:562` and `:567` is unobservable: 100
+        and 10 and 50 all produce `'a post'`. At 134 characters the limit is
+        load-bearing, and the expected value is spelled as the slice rather
+        than by calling `shorten_string` again, so that a mutant inside
+        `shorten_string` could not agree with the test by construction.
+
+        `slug` IS SEEDED because `make_post` does not set it
+        (tests/factories.py:331-345 lists the columns it does), and `url=None`
+        would let `:568` bind anything else nullable and still pass.
+
+        A SECOND REPLY IS THE ANSWER, not `s.reply`, for the reason
+        `TestLockPostReply.test_the_cascade_keys_on_the_replys_own_id_not_the
+        _posts` spells out: `_seed_moderated_reply` leaves `s.post.id` and
+        `s.reply.id` both 1, so `:564`'s `post_reply.post_id` and a mutant's
+        `post_reply.id` agree. That mutant survived the first version of this
+        test for exactly that reason. Marking reply 2 separates them, and the
+        assertion above the call refuses to let the separation regress
+        silently.
+        """
+        s = _seed_moderated_reply()
+        answer = make_post_reply(s.post, s.author)
+        title = 'an unusually long question title that must be shortened ' + 'q' * 78
+        assert len(title) == 134
+        s.post.title = title
+        s.post.slug = '/c/moderation@local.example/p/1/an-unusually-long'
+        db.session.commit()
+        assert answer.id != answer.post_id
+
+        choose_answer(answer.id, SRC_API, auth=bearer(s.actor))
+
+        notify = db.session.query(Notification).one()
+        assert notify.title == 'Your answer was chosen as an answer to ' + title[:97] + '…'
+        assert notify.url == '/c/moderation@local.example/p/1/an-unusually-long'
+        assert notify.notif_type == NOTIF_ANSWER
+        assert notify.subtype == 'answer_chosen'
+        assert notify.targets == {
+            'gen': '0',
+            'post_id': s.post.id,
+            'requestor_id': s.actor.id,
+            'author_user_name': s.author.display_name(),
+            'post_title': title[:97] + '…',
+        }
 
     def test_unchoosing_clears_the_flag_and_notifies_nobody(self, db_session):
         """`:589`-`:591`, and the absence of a notification.
