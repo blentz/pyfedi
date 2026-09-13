@@ -6888,9 +6888,18 @@ rather than reasoned about.
    `tests/test_shared_reply_interactions.py` uses a local
    `_clear_votes_cast(user_id)` helper for exactly this, and its module
    docstring keeps a live count of which tests do and do not, because nothing
-   else enforces the rule. Fact 210's prohibition transfers too:
-   `PostReply.vote` takes `redis_client.lock(...)` at `:3333` and `:3396`, so
-   `redis_double` cannot be used against any path that completes a vote.
+   else enforces the rule. Fact 210's prohibition transfers too, and it
+   transfers on FOUR locks, not two: `awk 'NR>=3311 && NR<=3405 &&
+   /redis_client.lock/' app/models.py` returns `:3314`, `:3333`, `:3375` and
+   `:3396`, so `redis_double` cannot be used against any path that completes a
+   vote. **The load-bearing one is `:3314`, and an earlier wording of this fact
+   omitted it.** `:3314` is the OUTERMOST lock, `lock:post_reply:{self.id}`,
+   taken on entry before any branch is chosen; the other three are per-user
+   locks (`lock:user:{...}`) inside branches. Cite only the inner three and the
+   prohibition reads as path-dependent — avoidable by driving a path that
+   misses them. `:3314` is what makes it UNCONDITIONAL: every call to
+   `PostReply.vote` takes a real redis lock, so there is no vote-completing
+   path a fake redis can be substituted under.
    **For the quota boundary itself there is a cheaper method than fact 209's,
    and this round used it: move the BOUNDARY, not the COUNT.**
    `monkeypatch.setitem(app.config, 'VOTE_QUOTA', 0)` against a

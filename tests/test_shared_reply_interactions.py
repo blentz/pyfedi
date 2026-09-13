@@ -206,15 +206,20 @@ out here rather than the result alone:
      statements raise the `psycopg2.errors.SyntaxError` measured above. THE
      SCOPE MATTERS: a top-level comment (`0.<self>`) yields `[]`, and so does a
      first-level one whose parent is NOT in `lemmy_to_piefed_comment`, because
-     `:669` skips it -- both are falsy and merely skip the update. Only the
-     mapped-parent first-level case raises.
+     `:669` skips it -- both are falsy and merely skip the update. WHAT RAISES
+     IS ANY IMPORTED REPLY WITH EXACTLY ONE MAPPED ANCESTOR, which is the
+     mapped-parent first-level case but is NOT only that case: for a deeper
+     comment `0.A.B.<self>`, `path_parts[1:-1]` is `['A', 'B']` and `:669`
+     drops whichever of the two is unmapped, leaving one element. An earlier
+     wording of this paragraph said the scope was "exactly" the first-level
+     case, which understates the reach; the same correction is carried in D497.
   3. app/api/alpha/views.py:686, written by `calculate_path` (`:669`). Depth 0
      gives `[0, reply.id]`, depth 1 `[0, parent_id, reply.id]`, depth > 1 a
      longer walk, committed at `:687`. ALWAYS >= 2. Cleared, no finding -- but
      see the note on self-healing below, which is about WHEN it runs, not what
      it writes.
   4. app/post/util.py:79, inside `create_real_reply` (`:53`). Its own comment
-     at `:55` says "Create a PostReply instance (not persisted to DB)", and
+     at `:54` says "Create a PostReply instance (not persisted to DB)", and
      the file contains no `db.session.add`, `flush` or `commit` at all. A
      display object that never reaches the column. Cleared, no finding. THE
      ONLY NON-PERSISTING WRITER OF THE FIVE.
@@ -317,8 +322,8 @@ carries the fix-edit obligation it owes -- it asserts the defect, so closing the
 bypass must invert it. It was found by neutralising `:22`'s first conjunct,
 which nothing in the file had killed.
 
-THREE EXTENSIONS TO DEFECT 5 ARE OWED TO THE REGISTER and are recorded here so
-they are not lost with a report. (i) The gate-free call also carries `emoji`:
+THREE EXTENSIONS TO DEFECT 5 ARE RECORDED IN D500, verbatim, and are repeated
+here so they are not lost with a report. (i) The gate-free call also carries `emoji`:
 `post_reply_like` forwards `data['emoji']`, and the remapped reversal lands on
 app/models.py:3325-3331, so a refused user can also REWRITE THE EMOJI on the
 existing vote. Fix round 1's `..._a_web_reversal_that_only_rewrites_the_emoji_
@@ -335,8 +340,16 @@ hole into a vote-CASTING hole and belongs in the entry.
 
 WHAT TASK 7'S MUTATION PASS LEFT OPEN, listed because a survivor that is merely
 reported dies with the report. Each of these is a mutation of a line in Groups A
-or C that all 34 tests here pass against, measured after the strengthening, and
-NONE of them is claimed to be an equivalent mutant -- they are unclosed:
+or C that all 34 tests here pass against. BE EXACT ABOUT WHEN THAT WAS MEASURED:
+the survivors were RE-RUN at 33 tests, after fix round 1's strengthening, and
+fix round 2 then added the 34th (the emoji-reversal test) and incremented this
+count WITHOUT re-running them. Nothing was re-executed at 34. What was done
+instead is a hand check by the round's final whole-branch review, which read all
+seventeen against the 34th test's path and found that none of them touches it --
+it takes no bookmark, no subscription and no delete/restore path, and reaches
+none of `:30`, `:94` or `:121`. So the list below stands on a 33-test
+measurement plus that argument, not on a 34-test measurement. NONE of them is
+claimed to be an equivalent mutant -- they are unclosed:
 
 THESE ARE OPEN AT `tests/test_shared_*.py` SCOPE, WHICH IS NOT THE SCOPE THE
 CAMPAIGN'S RATCHET USES, and the two halves of this file's evidence do not have
@@ -721,7 +734,7 @@ class TestSubscribeReply:
     `.one()` raises rather than returning None if either is deleted.
     `_seed_reply` supplies exactly that: both constructors set `deleted=False`
     explicitly rather than leaning on the column default -- tests/factories.py
-    :344 for the post, :469 for the reply -- so the join resolves and `.one()`
+    :344 for the post, :470 for the reply -- so the join resolves and `.one()`
     returns the `PostReply` (the query is `db.session.query(PostReply)`, so the
     join adds a filter and not a second entity to the result row).
 
@@ -1394,12 +1407,17 @@ class TestVoteForReplyGuardsAndReturns:
     discrimination), so they are deliberately absent rather than overlooked.
 
     THREE MORE TESTS CLOSE NOTHING, which is why the count above is qualified
-    rather than plain. Each earns its place by a unique kill against a mutant
-    the other four left alive -- the downvote-undo test against `:48`'s second
-    conjunct, the quota-boundary test against `:33`'s comparison operator (both
-    task 7), and the emoji-reversal test against `:48`'s FIRST conjunct (fix
-    round 1, closing a mutant task 7 had wrongly argued equivalent). Their
-    docstrings carry the measurements.
+    rather than plain, AND THEY DO NOT ALL EARN THEIR PLACE THE SAME WAY. Two
+    earn it by a unique kill against a fault-direction mutant the other four
+    left alive -- the downvote-undo test against `:48`'s second conjunct (task
+    7) and the emoji-reversal test against `:48`'s FIRST conjunct (fix round 1,
+    closing a mutant task 7 had wrongly argued equivalent). The third, the
+    quota-boundary test, earns it by PINNING A REGISTERED DEFECT, D501: its
+    unique kill against `:33`'s comparison operator is real, but `>=` is the
+    candidate FIX for the off-by-one D501 registers, so that kill is a
+    fix-catcher and cannot be the justification. Its docstring carries the
+    fix-edit obligation the pin-a-defect clause requires; all three carry the
+    measurements.
 
     WHY `:46`/`:48` NEED FIVE INPUTS AND NOT THREE. `:46` is an `if` and `:48`
     its `elif`, so `:48` is not evaluated at all when `:46` is true, and BOTH
@@ -1420,7 +1438,7 @@ class TestVoteForReplyGuardsAndReturns:
         `:3325-3331` reaches `:46` with `undo` None. Falsifying `:48`'s first
         conjunct with `undo` None is what the fourth row cannot do -- there
         `undo` is non-None, so deleting the first conjunct leaves `:48` false
-        either way. The fifth test below is this row.
+        either way. The sixth test below is this row.
 
     THE LAST TWO ROWS USED TO BE ONE ROW READING "either direction", AND THAT
     COLLAPSE COST A GUARD. Both reach `48->51`, so coverage cannot tell them
@@ -1431,9 +1449,9 @@ class TestVoteForReplyGuardsAndReturns:
     being a weaker instrument than the statement-and-operand list, recorded
     where it actually bit.
 
-    The upvote-undo case is the third test here, the downvote-undo case the
+    The upvote-undo case is the fourth test here, the downvote-undo case the
     fifth and the emoji-reversal case the sixth; the first row is the class
-    above's web test and the second the fourth test here.
+    above's web test and the second the third test here.
 
     `undo` IS NON-None ONLY WHEN A VOTE IS REMOVED, and that was read at source
     rather than assumed: `PostReply.vote` (app/models.py:3311, in `class
@@ -1884,9 +1902,17 @@ class TestVoteForReplyGuardsAndReturns:
 
     def test_a_voter_exactly_at_the_vote_quota_is_still_allowed_through(self, db_session, app, monkeypatch):
         """CLOSES NO STATEMENT AND NO ARC -- `33->36` is taken by four tests
-        already. It earns its place by a unique kill against
+        already. IT EARNS ITS PLACE BY PINNING A REGISTERED DEFECT, D501, AND
+        NOT BY CATCHING A REGRESSION. Its unique kill against
         `33s/user.id) > current/user.id) >= current/`, which left all 27 tests
-        green in the task-7 pass.
+        green in the task-7 pass, is a FIX-CATCHER rather than a
+        fault-direction kill, and saying otherwise would contradict this
+        round's own register: D501 records the `>` at `:33` AS the off-by-one,
+        which makes `>=` the candidate FIX, and killing a semantically better
+        mutant measures change-detection, not defect-detection. The clause this
+        test qualifies under is therefore the pin-a-defect one, which obliges
+        it to state the fix-edit it owes -- stated below, in the terms
+        `TestVoteForReplySourceAndPermission`'s reversal test states its own.
 
         THE QUOTA TEST ABOVE CANNOT PIN THE BOUNDARY, and that is a property of
         its fixture rather than an oversight. It sets `VOTE_QUOTA` to -1 against
@@ -1901,9 +1927,21 @@ class TestVoteForReplyGuardsAndReturns:
         N` permits N + 1 votes. The assertion below -- `VOTE_QUOTA` 0 and a vote
         LANDS -- is that off-by-one in executable form. It is recorded, not
         fixed: the default is 240 (config.py:203) so nothing is burning, and
-        `vote_for_post:33` carries the identical comparison, which makes it a
-        consistent product decision rather than a divergence between the
-        mirrored pair. It is owed to the campaign register.
+        `app/shared/post.py:53` carries the identical comparison, which makes it
+        a consistent product decision rather than a divergence between the
+        mirrored pair. It is registered as D501, which names this test as its
+        pin.
+
+        THIS TEST ASSERTS THE DEFECT, NOT CORRECT BEHAVIOUR, AND WHOEVER FIXES
+        D501 MUST EDIT IT. The fix is one operator in two files that have to
+        move together -- `app/shared/reply.py:33`'s `>` and
+        `app/shared/post.py:53`'s, which `grep -n "VOTE_QUOTA"
+        app/shared/reply.py app/shared/post.py app/api/alpha/utils/*.py
+        app/post/routes.py` returns as the only two occurrences, both of them
+        `>` -- and when they become `>=` the edit owed here is to INVERT this
+        test: `VOTE_QUOTA` 0 against a `votes_cast_today` of 0 must then be
+        REFUSED with 429, so the assertions below failing at that point is the
+        fix landing, not a regression.
 
         THE ASSERTION IS THE COMPLETED VOTE, not the absence of an exception. An
         `abort(429)` would fail this test on the raise, but so would any other
