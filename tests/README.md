@@ -6706,7 +6706,7 @@ forward:
    pass.
 
 **230. `edit_post`'S URL HALF (`:565-703`) AND ITS PERMISSION/TEARDOWN
-HEAD (`:387-460`): SEVEN FACTS THAT DECIDE WHETHER A TEST THERE WITNESSES
+HEAD (`:387-460`): EIGHT FACTS THAT DECIDE WHETHER A TEST THERE WITNESSES
 ANYTHING.** These closed the module (sub-project 39,
 `tests/test_shared_post_url.py`); every one was measured, not reasoned about.
 
@@ -6776,11 +6776,31 @@ ANYTHING.** These closed the module (sub-project 39,
    `Community.moderators()` (`app/models.py:716-722`) admits a row on
    `is_owner OR is_moderator`; `Community.is_moderator()` (`:736-740`) tests
    only `moderator.user_id == user.id` over that same list, while
-   `is_owner()` (`:742-745`) tests `user_id` AND `is_owner`. So any row that
+   `is_owner()` (`:742-747` -- the whole method; `:743-745` is the
+   `current_user` arm and `:747` is the `user=` arm this call takes) tests
+   `user_id` AND `is_owner`. So any row that
    makes `is_owner(user)` true makes `is_moderator(user)` true first, and the
    first disjunct short-circuits. No fixture can make disjunct 2 decide the
    compound. A test claiming to witness "the owner arm" of `:387` is
    witnessing the moderator arm. Registered as D479.
+
+8. **`app/shared/post.py`'s FLOOR OF 100 IS PARTLY HELD BY A
+   `# pragma: no branch`, AND DELETING IT LOOKS LIKE A TEST REGRESSION.**
+   `app/shared/post.py:673` (`if 'choices' in poll_data:`) carries
+   `# pragma: no branch -- see proof in test_shared_post_url.py`. Its false
+   arm is UNREACHABLE -- `poll_data` is assigned at exactly `:300`, `:314`,
+   `:349` and `:357`, `:306` and `:352` always set a `'choices'` key, `:315`
+   is a bare `else:` so those arms are exhaustive, and `:669`'s `and
+   poll_data` stops every falsy value -- so no test can close the arc and the
+   pragma is the only way to reach 100. **If someone removes that comment,
+   `coverage_floors.ini`'s entry of 100 fails and it will present as a test
+   regression.** It is not one: it is a proof expiring. The proof is an
+   ENUMERATION, so a FIFTH assignment to `poll_data`, or a `'choices'` key
+   dropped from either dict literal, genuinely invalidates it and the pragma
+   must then go. Registered as D480; the enumeration is repeated beside
+   `TestPollAndEventTail` in `tests/test_shared_post_url.py`. Note that
+   `.coveragerc` sets no `partial_branches`, so this pragma is the module's
+   only such exclusion.
 
 ## Known noise
 
