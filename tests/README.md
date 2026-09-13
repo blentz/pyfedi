@@ -4242,6 +4242,14 @@ two documents had been arguing about. The finding is registered as latent
 (D310), the probe test is kept as characterization, and no guard was written --
 a guard on a state no writer can produce has mutants no production-shaped test
 can kill.
+**CORRECTED 2026-09-13 (sub-project 41, register D532): the two
+`app/shared/reply.py` citations above read `:194` and `:232` when this fact was
+written and are now `:208` and `:246`.** Commit `903dab20` inserted fourteen
+lines into `vote_for_reply`, moving every line from old `app/shared/reply.py:26`
+onward by +14. The marker is here rather than only in fact 232, because a reader
+arriving at THIS fact has no way to learn from 2,700 lines away that it was
+touched. `app/post/routes.py:928` and `app/utils.py:1233-1237` were re-derived
+at the same time and are unchanged.
 
 **117. A WRONG `--cov` TARGET COLLECTS NOTHING, WRITES NO JSON, AND EXITS 0.**
 `pytest-cov`'s `--cov` takes a **module** path, not a file path.
@@ -6948,17 +6956,42 @@ wrong on the day they were written, not slowly.** They were written at
 `903dab20`, **the same day and on the same branch**, added a fourteen-line
 `'reversal'` arm to
 `vote_for_reply` — one hunk, `@@ -23,6 +23,20 @@` — and every line below it in
-`app/shared/reply.py` moved by exactly +14. Verified not by arithmetic but by
+`app/shared/reply.py` moved by exactly +14 **at that commit** (the composite
+offset to HEAD is larger in two places — see below). Verified not by arithmetic
+but by
 content: `git show 903dab20^:app/shared/reply.py | sed -n '62p;63p;72p;80p;81p;85p;90p'`
 and `sed -n '76p;77p;86p;94p;95p;99p;104p' app/shared/reply.py` return
 byte-identical lines. **The same commit is already registered (D517) as having
 invalidated the campaign's `app/models.py` citations, and that sweep was scoped
-by the cited FILENAME, so this second class — its own module's citations, in
-this file — went unswept.** Scope a citation sweep by the COMMIT, not by the
-file the stale citations happen to name. Fact 116 above carried the same +14
-and is corrected too. **The interval between writing a citation and its going
-stale can be hours**, so "I wrote it recently" is not evidence that a line
-number is still right.
+by the cited FILENAME, so this class — its own module's citations, in this
+file — went unswept. So did two more; see the next paragraph.** Scope a
+citation sweep by the COMMIT, not by the file the stale citations happen to
+name. Fact 116 above carried the same +14
+and is corrected too, with a marker at its own site. **The interval between
+writing a citation and its going stale can be hours**, so "I wrote it recently"
+is not evidence that a line number is still right.
+
+**AND THIS FILE'S `app/shared/post.py` CITATIONS ARE STALE TOO — THE SAME
+COMMIT, +12, AND THEY ARE NOT CORRECTED.** `903dab20` shifted four production
+files, not one: `app/models.py` (+5 from old `:2743`, +12 from old `:3322`),
+`app/shared/reply.py` (+14 from old `:26`), `app/shared/post.py` (+12 from old
+`:39`) and `app/cli.py` (+10 from old `:673`). Under `tests/`, **56
+`app/shared/post.py:NNN` citations across 16 files predate it and sit in the
+shifted region**, fifteen of them in this file. One is two words from a
+`reply.py` citation this round DID flag: `tests/test_shared_reply_interactions.py:2087`
+cites `app/shared/post.py:53` as the `VOTE_QUOTA` refusal, which is now `:65`
+(`:53` is `user = current_user`). **Treat every `app/shared/post.py:NNN` in
+this file as unverified until checked**, and check by content —
+`git show 903dab20^:app/shared/post.py | sed -n 'Np'` against
+`sed -n '(N+12)p' app/shared/post.py` — rather than by adding 12, because a
+citation already stale from an earlier generation will not move by 12. The
+sweep is registered as D532 and owed to sub-project 42.
+
+**`app/shared/reply.py` citations can be stale by three different amounts.**
+This round's own `87f3027f` inserted two lines twice more, so from `903dab20^`
+to HEAD the offset is **+14** below old `:504`, **+16** from old `:504` and
+**+18** from old `:529` — and a citation written BETWEEN the two commits is off
+by 0, +2 or +4 instead. There is no single number to add.
 
 **Re-measured at `724312cb`, after sub-project 41 closed Groups E and F.** The
 rule holds and the numbers moved; three scopes, `--cov=app.shared.reply
