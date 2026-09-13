@@ -793,3 +793,161 @@ class TestLockPostReply:
             lock_post_reply(s.reply.id, False, SRC_API, auth=bearer(s.actor))
 
         assert 'unlock_post_reply' in calls
+
+
+class TestSetCollapsePostReply:
+    """`set_collapse_post_reply` (app/shared/reply.py:523-545).
+
+    THE SECOND SILENT-FAILURE FUNCTION, and its guard differs from
+    `lock_post_reply`'s by one disjunct: `:531` is
+    `is_moderator or is_instance_admin or user.is_admin_or_staff()` where
+    `:501` has only the first two. So a site admin who is not a moderator can
+    make a comment collapsible but cannot lock it -- finding 2's second
+    instance, and `test_a_site_admin_who_is_neither_may_collapse` below is
+    paired with `TestLockPostReply.test_an_unprivileged_api_caller_is_not_refused`
+    to witness it: same role, opposite outcome, one line apart in the module.
+
+    `:538` and `:542` are COMMENTED-OUT `task_selector` calls, so this
+    function federates nothing. A test asserting an empty recorder would
+    witness the comment rather than the code; none is written here.
+
+    THE COLUMN DEFAULT IS A FALSE-WITNESS TRAP HERE AND EVERY TEST BELOW
+    SEEDS AROUND IT. `PostReply.collapsible` defaults to **True**
+    (app/models.py:2931) and `PostReply.new` sets it to
+    `user.id != post.user_id` (`:3006`), so a test that asserts
+    `collapsible is True` without seeding False first would pass with `:532`
+    deleted -- mechanism (a), asserting on state something else set
+    unconditionally. Every test here writes the opposite value before acting.
+
+    NO `make_site()` ANYWHERE IN THIS CLASS, and not by cargo-culting the
+    module docstring's rule -- verified directly for this function: it
+    flashes and returns, calling neither `render_template` nor
+    `can_downvote`. This module's only `render_template` calls are at `:65`
+    and `:145` and its only `can_downvote` calls at `:24` and `:38`, all in
+    Group A and none reachable from here.
+    """
+
+    def test_a_moderator_makes_a_reply_collapsible(self, db_session):
+        """`:531`'s true arm via `is_moderator`, `:532`'s assignment."""
+        s = _seed_moderated_reply()
+        seed_moderator(s)
+        s.reply.collapsible = False
+        db.session.commit()
+
+        user_id, reply = set_collapse_post_reply(s.reply.id, True, SRC_API,
+                                                 auth=bearer(s.actor))
+
+        assert user_id == s.actor.id
+        db.session.refresh(s.reply)
+        assert s.reply.collapsible is True
+
+    def test_clearing_collapsible_sets_it_back_to_false(self, db_session):
+        """`:532` with the other argument, and `:539`'s else arm."""
+        s = _seed_moderated_reply()
+        seed_moderator(s)
+        s.reply.collapsible = True
+        db.session.commit()
+
+        set_collapse_post_reply(s.reply.id, False, SRC_API, auth=bearer(s.actor))
+
+        db.session.refresh(s.reply)
+        assert s.reply.collapsible is False
+
+    def test_an_instance_admin_may_collapse(self, db_session):
+        """`:531`'s SECOND disjunct alone."""
+        s = _seed_moderated_reply()
+        make_instance_admin(s.actor, s.instance)
+        s.reply.collapsible = False
+        db.session.commit()
+
+        set_collapse_post_reply(s.reply.id, True, SRC_API, auth=bearer(s.actor))
+
+        db.session.refresh(s.reply)
+        assert s.reply.collapsible is True
+
+    def test_a_site_admin_who_is_neither_may_collapse(self, db_session):
+        """`:531`'s THIRD disjunct -- the one `lock_post_reply:501` lacks.
+
+        Paired with `TestLockPostReply.test_an_unprivileged_api_caller_is_not_refused`:
+        the same role that silently does nothing there succeeds here, which
+        is the divergence finding 2 registers.
+        """
+        s = _seed_moderated_reply()
+        make_site_admin(s.actor)
+        s.reply.collapsible = False
+        db.session.commit()
+
+        set_collapse_post_reply(s.reply.id, True, SRC_API, auth=bearer(s.actor))
+
+        db.session.refresh(s.reply)
+        assert s.reply.collapsible is True
+
+    def test_an_unprivileged_api_caller_is_not_refused_either(self, db_session):
+        """`:531`'s false arm -- ASSERTS THE DEFECT ON PURPOSE.
+
+        Neither disjunct holds, so the whole body is skipped and control
+        reaches `:544`. The call returns `user.id, post_reply` normally: no
+        exception, nothing changed. The caller cannot tell this apart from a
+        success -- the same silent failure as `lock_post_reply`'s, registered
+        as finding 3's other instance.
+
+        THE TWIN RAISES. `app/shared/post.py:968-969` is
+        `elif src == SRC_API: raise Exception('Does not have permission')`,
+        and `move_post:999-1000` carries it too.
+
+        WHOEVER PROPAGATES THAT FIX MUST EDIT THIS TEST. The fix turns
+        `:531`'s bare `if` into an `if`/`elif` pair -- adding
+        `elif src == SRC_API: raise Exception('Does not have permission')`
+        right after the guarded block and before `:544`. THE EDIT OWED HERE
+        IS TO INVERT THIS TEST: wrap the call in
+        `pytest.raises(Exception, match='Does not have permission')` and keep
+        the state assertion below it. Its failure at that point is the fix
+        landing, not a regression.
+
+        `collapsible` is seeded False and asserted False, and `:533`'s commit
+        is the only write in the body, so the state assertion is what
+        discriminates; the returned tuple is identical on both arms of
+        `:531` since `:544`-`:545` return the same shape either way.
+        """
+        s = _seed_moderated_reply()
+        s.reply.collapsible = False
+        db.session.commit()
+
+        user_id, reply = set_collapse_post_reply(s.reply.id, True, SRC_API,
+                                                 auth=bearer(s.actor))
+
+        assert user_id == s.actor.id
+        db.session.refresh(s.reply)
+        assert s.reply.collapsible is False
+
+    def test_the_web_arm_flashes_the_collapsible_message(self, db_session, app):
+        """`:524`'s false arm, `:535`'s true arm, `:536`-`:537`.
+
+        NO `make_site()` HERE -- see the class docstring. This arm only
+        flashes; it neither renders a template nor calls `can_downvote`.
+        """
+        from flask import get_flashed_messages
+        s = _seed_moderated_reply()
+        seed_moderator(s)
+        s.reply.collapsible = False
+        db.session.commit()
+
+        with web_ctx(app, s.actor):
+            set_collapse_post_reply(s.reply.id, True, SRC_WEB, auth=None)
+            messages = get_flashed_messages()
+
+        assert 'Comment is collapsible.' in messages
+
+    def test_the_web_arm_flashes_the_other_message_when_clearing(self, db_session, app):
+        """`:535`'s false arm, `:540`-`:541`."""
+        from flask import get_flashed_messages
+        s = _seed_moderated_reply()
+        seed_moderator(s)
+        s.reply.collapsible = True
+        db.session.commit()
+
+        with web_ctx(app, s.actor):
+            set_collapse_post_reply(s.reply.id, False, SRC_WEB, auth=None)
+            messages = get_flashed_messages()
+
+        assert 'Comment will not be collapsed when loading the post.' in messages
