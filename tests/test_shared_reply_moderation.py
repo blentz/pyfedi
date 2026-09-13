@@ -951,3 +951,150 @@ class TestSetCollapsePostReply:
             messages = get_flashed_messages()
 
         assert 'Comment will not be collapsed when loading the post.' in messages
+
+
+class TestChooseAnswer:
+    """`choose_answer` (app/shared/reply.py:548-576) and `unchoose_answer`
+    (`:579-592`).
+
+    NEITHER FUNCTION CONTAINS A PERMISSION CHECK. Both establish `user` from
+    the source fork and then act. The WEB route guards -- app/post/routes.py
+    `:2443` and `:2453` require `current_user.is_admin_or_staff() or
+    post_reply.user_id == current_user.id or
+    post_reply.community.is_moderator()` -- but the API path does not:
+    app/api/alpha/routes.py:983 calls `post_reply_mark_as_answer`
+    (app/api/alpha/utils/reply.py:687-697), which calls `authorise_api_user`
+    and dispatches straight through. `authorise_api_user` establishes WHO the
+    caller is and says nothing about what they may do.
+
+    `force_locale(get_recipient_language(post_reply.user_id))` wraps the
+    title at `:556`; no `Language` row is needed for that path -- Task 1's
+    Probe A (this file's module docstring) established that `make_user`
+    leaves `language_id` and `interface_language` unset, so
+    `get_recipient_language` takes the `'en'` default arm and never queries
+    `Language`.
+
+    NO `make_site()` HERE, for the same reason as the other classes in this
+    file: neither function calls `render_template` or `can_downvote` -- the
+    module's only such calls are Group A's, at `:65`/`:145` and `:24`/`:38`.
+    """
+
+    def test_choosing_an_answer_sets_the_flag_and_notifies_the_author(self, db_session):
+        """`:554`-`:571` -- the flag, the Notification and the unread counter.
+
+        THREE ASSERTIONS BECAUSE `:555` ALONE WITNESSES ALMOST NOTHING: a
+        mutant deleting `:564`-`:570` leaves `answer` true and the test
+        green. The notification's `user_id` is asserted to be the AUTHOR's
+        rather than the actor's, which is what `:565` claims and what a
+        mutant swapping the two operands would break.
+        """
+        s = _seed_moderated_reply()
+        s.author.unread_notifications = 4
+        db.session.commit()
+
+        user_id, reply = choose_answer(s.reply.id, SRC_API, auth=bearer(s.actor))
+
+        assert user_id == s.actor.id
+        db.session.refresh(s.reply)
+        db.session.refresh(s.author)
+        assert s.reply.answer is True
+        assert s.author.unread_notifications == 5
+        notifications = db.session.query(Notification).all()
+        assert {n.user_id for n in notifications} == {s.author.id}
+        assert {n.author_id for n in notifications} == {s.actor.id}
+
+    def test_unchoosing_clears_the_flag_and_notifies_nobody(self, db_session):
+        """`:585`-`:587`, and the absence of a notification.
+
+        The positive control for the emptiness is the test above: it proves
+        a Notification CAN be written by this fixture, so the zero here is
+        `unchoose_answer` not writing one rather than a broken seed.
+        """
+        s = _seed_moderated_reply()
+        s.reply.answer = True
+        db.session.commit()
+
+        user_id, reply = unchoose_answer(s.reply.id, SRC_API, auth=bearer(s.actor))
+
+        assert user_id == s.actor.id
+        db.session.refresh(s.reply)
+        assert s.reply.answer is False
+        assert db.session.query(Notification).count() == 0
+
+    def test_any_authenticated_api_user_may_mark_any_comment_as_the_answer(self, db_session):
+        """THIS TEST ASSERTS A LIVE AUTHORIZATION DEFECT ON PURPOSE.
+
+        `stranger` is not the reply's author, not a moderator of its
+        community, not an instance admin and not site staff. The web route
+        would refuse them at app/post/routes.py:2443. The API path does not
+        check at all, so the call succeeds and the comment is marked as the
+        accepted answer by someone with no relationship to it.
+
+        WHOEVER CLOSES THIS MUST EDIT THIS TEST. The fix belongs at
+        app/api/alpha/utils/reply.py:687, mirroring the web route's
+        three-way guard, so that `choose_answer` stays a plain verb and both
+        entry points agree. Once that guard lands, `choose_answer` itself
+        will no longer be the thing to call here -- `post_reply_mark_as_answer`
+        is where the refusal will live, so THE EDIT OWED HERE IS TO INVERT
+        THIS TEST **and switch it to calling `post_reply_mark_as_answer`
+        (app/api/alpha/utils/reply.py:687) instead of `choose_answer`
+        directly**: the call must then be refused and `answer` must stay
+        False. Its failure at that point is the fix landing, not a
+        regression.
+
+        THE WITNESS IS `answer` BEING TRUE, not the return value: `:575`-
+        `:576` return the same shape whoever calls.
+        """
+        s = _seed_moderated_reply()
+        stranger = make_user(s.instance, 'stranger', local=True)
+        db.session.commit()
+
+        user_id, reply = choose_answer(s.reply.id, SRC_API, auth=bearer(stranger))
+
+        assert user_id == stranger.id
+        db.session.refresh(s.reply)
+        assert s.reply.answer is True
+
+    def test_the_web_arm_reads_current_user(self, db_session, app):
+        """`:549`'s false arm and `:552`, for both functions.
+
+        Returns None on the web arm because `:575` guards the return. NO
+        `make_site()` HERE -- see the class docstring.
+        """
+        s = _seed_moderated_reply()
+
+        with web_ctx(app, s.actor):
+            result = choose_answer(s.reply.id, SRC_WEB, auth=None)
+
+        assert result is None
+        db.session.refresh(s.reply)
+        assert s.reply.answer is True
+
+    def test_the_web_arm_of_unchoose_reads_current_user(self, db_session, app):
+        """`:580`'s false arm and `:583`, and `:591`'s guarded return."""
+        s = _seed_moderated_reply()
+        s.reply.answer = True
+        db.session.commit()
+
+        with web_ctx(app, s.actor):
+            result = unchoose_answer(s.reply.id, SRC_WEB, auth=None)
+
+        assert result is None
+        db.session.refresh(s.reply)
+        assert s.reply.answer is False
+
+    def test_both_verbs_select_their_federation_task(self, db_session):
+        """`:573` and `:589`.
+
+        One test for both because the two calls are independent and neither
+        has a branch; splitting them would add a test without adding a
+        witness.
+        """
+        s = _seed_moderated_reply()
+
+        with recording_task_selector() as calls:
+            choose_answer(s.reply.id, SRC_API, auth=bearer(s.actor))
+            unchoose_answer(s.reply.id, SRC_API, auth=bearer(s.actor))
+
+        assert 'choose_answer' in calls
+        assert 'unchoose_answer' in calls
