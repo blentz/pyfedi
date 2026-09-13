@@ -75,12 +75,23 @@ WHAT IS NEW, AND HAS NO POST TWIN:
     syntax error at or near ")"`, because psycopg2 renders it as `where id in
     ()`. AND A ONE-ELEMENT PATH IS REACHABLE IN PRODUCTION, so that raise is a
     live 500 rather than a curiosity -- see the DEFECTS section below, which
-    enumerates all five writers of the column. `TestDeleteReply` seeds the
-    three-element shape `app/models.py` builds and does NOT test the empty
-    tuple, because the cli importer that can produce one cannot be simulated
-    from a factory reply; its class docstring carries the full probe.
-    `child_count` (app/models.py:2899) is likewise unset by the factory, but
-    has a column default of 0 rather than None.
+    enumerates all five writers of the column. `TestDeleteReply` AND
+    `TestRestoreReply` EACH seed the three-element shape `app/models.py` builds,
+    and NEITHER tests the empty tuple, because the cli importer that can produce
+    one cannot be simulated from a factory reply; `TestDeleteReply`'s class
+    docstring carries the full probe and `TestRestoreReply`'s points at it,
+    `:283` being `:257` with one character changed. `child_count`
+    (app/models.py:2899) is likewise unset by the factory, but has a column
+    default of 0 rather than None.
+
+    BOTH COLUMN FACTS WERE LATER RE-DERIVED BY A SECOND METHOD THAT FAILS
+    DIFFERENTLY, because reading a `db.Column(...)` line cannot see a later
+    override of the mapped attribute. Runtime introspection of the mapped table
+    inside the container reports `PostReply.__table__.c['path']` as
+    `ARRAY(Integer())` with `nullable=True`, `default=None` and
+    `server_default=None`, and `c['child_count']` with `default=0`. It agrees
+    with the source and is blind to a different thing: a value some other code
+    assigns at insert time. `TestRestoreReply`'s docstring records the run.
 
   - A `Site` ROW WITH id 1 IS NEEDED FOR TWO UNRELATED REASONS, and
     `_seed_reply` seeds one for neither. The render chain below is the first;
@@ -130,8 +141,15 @@ WHAT IS NEW, AND HAS NO POST TWIN:
     app/shared/reply.py` gives `:15`, the import, and `:22`/`:24` inside
     `vote_for_reply`, nothing else), so BOTH reasons are absent and the
     delete/restore lifecycle tests need no `Site` row -- a prediction that is
-    now EXECUTED for `delete_reply` rather than merely read: `TestDeleteReply`'s
-    four tests call `make_site()` nowhere and pass. The module's one other
+    now EXECUTED FOR BOTH HALVES OF THE PAIR rather than merely read:
+    `TestDeleteReply`'s four tests and `TestRestoreReply`'s five call
+    `make_site()` nowhere and pass. THE GREP ABOVE IS ALSO NO LONGER THE ONLY
+    EVIDENCE FOR `restore_reply`. A grep is file-wide and textual and cannot
+    tell which function a matching line falls in; `TestRestoreReply` re-derived
+    the same conclusion from an `ast.walk` over the `restore_reply` FunctionDef
+    node ALONE, which is scope-exact and structurally blind to a call made
+    through a string name. The two fail in opposite directions and agree. The
+    module's one other
     `Site` touch is `Site.admins()` at `:365`, inside `report_reply`, which is
     a later sub-project's.
     `subscribe_reply` additionally has two statements no production source
@@ -261,7 +279,10 @@ leaving the two pinned ones unfixed lives in
 `docs/superpowers/specs/2026-09-12-coverage-reply-ac-40-design.md`, under the
 headings that name them. The tests that pin today's voting behaviour are
 `TestVoteForReplySourceAndPermission` below; the delete/restore asymmetry is
-still pinned by a later task of this round. NO TEST IN THIS FILE MAKES THE
+now pinned by `TestRestoreReply`'s
+`..._a_delete_restore_cycle_leaves_two_counters_permanently_low`, which asserts
+the wrong numbers deliberately so that a fix must edit a test. NO TEST IN THIS
+FILE MAKES THE
 VOTING ASYMMETRY EXECUTABLE, and that is a decision rather than a gap: the
 construction that would -- a web downvote against a `Site` with
 `enable_downvotes` False, landing where the API arm refuses -- also makes
