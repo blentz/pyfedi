@@ -340,14 +340,17 @@ NONE of them is claimed to be an equivalent mutant -- they are unclosed:
 
 THESE ARE OPEN AT `tests/test_shared_*.py` SCOPE, WHICH IS NOT THE SCOPE THE
 CAMPAIGN'S RATCHET USES, and the two halves of this file's evidence do not have
-the same unit. The COVERAGE claim -- 73 statements and 46 arcs closed, no
-coverage added by the mutation round -- is full-suite. The MUTATION evidence
+the same unit. The COVERAGE claim is itself two measurements at two different
+units: `73` statements and `46` arcs closed IS full-suite; "no coverage added
+by the mutation round" is NOT -- it is a single-file measurement (`27` / `33` /
+`34 passed`, this file only). The MUTATION evidence
 below, and every "N passed" in the docstrings here, is shared-suite: twelve
 `tests/test_shared_*.py` files, 520 tests. None of the mutants below was ever
 re-run at full-suite scope, so "open" means "open at the narrower scope". Some of
-them probably die at the wider one -- `60`, `78` and `83` are the obvious
-candidates, and `:83`'s message text is known to be pinned at full-suite scope --
-so the list is conservative in the direction of reporting too many, not too few.
+them probably die at the wider one -- `60` and `78` are the obvious
+candidates -- so the list is conservative in the direction of reporting too
+many, not too few. (`83` is not a candidate: it is closed at this scope by the
+strengthened flash test below, whose docstring pins it.)
 
   - `30s/ or user_ip_banned()//`. No test makes `user_ip_banned()` true.
     Closing it needs a request IP plus a `banned_ip_addresses()` row, and that
@@ -376,13 +379,20 @@ so the list is conservative in the direction of reporting too many, not too few.
     contradicted by the same report's own coverage paste. The lines missing at
     this scope are `62`, `63`, `72`, `80`, `81`, `85` and `90`; `:61` and `:79`
     are NOT among them, so both lines ARE executed here. What is dead is the
-    branch: `:61`'s true arm is never taken (every bookmark test here seeds the
-    bookmark first) and `:79`'s false arm likewise, so forcing the condition to
-    `False` changes no outcome. That makes them equivalent-AT-THIS-SCOPE, not
-    unexecutable -- and `:61` is closable HERE, today, by one web
-    `bookmark_reply` call against a reply with no bookmark, which executes
-    `:62`/`:63` and kills the mutant. It is left open only because this round's
-    business was mutation, not new coverage.
+    branch, and in BOTH lines the dead arm is the TRUE arm -- but for OPPOSITE
+    fixture reasons. `:61`'s true arm (`not existing_bookmark`, i.e. no bookmark
+    found) is never taken because every `bookmark_reply` test here seeds a
+    bookmark first, so the condition is always False. `:79`'s true arm
+    (`existing_bookmark`, i.e. a bookmark found) is never taken because no test
+    here seeds a bookmark before calling `remove_bookmark_reply`, so ITS
+    condition is always False too -- see `:662`'s own docstring, which says so
+    directly. That makes them equivalent-AT-THIS-SCOPE, not unexecutable -- and
+    each is closable HERE, today, by a different call: `:61` by one web
+    `bookmark_reply` call against a reply with NO bookmark seeded, which
+    executes `:62`/`:63`; `:79` by seeding a bookmark first and THEN calling
+    `remove_bookmark_reply`, which executes `:80`/`:81`. Neither closure was
+    made here. It is left open only because this round's business was mutation,
+    not new coverage.
     `tests/test_api_reply_bookmarks.py` covers `62`-`63`/`72`/`80`-`81`/`85`/`90`
     at full-suite scope; a mutation of THOSE SEVEN cannot be killed here.
 
