@@ -45,10 +45,10 @@ sets or increments `votes_cast_{today}_{user_id}` on the real redis the
 compose stack shares, and tests/conftest.py:131 resets id sequences after
 every test -- so a later test whose user reuses that id inherits a stale
 count. THE RULE FOR THIS FILE IS THAT EVERY TEST COMPLETING A REAL VOTE
-CLEARS THE KEY IN A `finally`. No test in this file does that yet -- Task 1
-writes none that reach `vote_for_reply` -- so `_clear_votes_cast` below is
-placed for the later tasks of this round rather than used by the four tests
-here. The pattern and the reason are
+CLEARS THE KEY IN A `finally`. No test in this file does that yet -- nothing
+written so far reaches `vote_for_reply` -- so `_clear_votes_cast` below is
+placed for the later tasks of this round rather than used by any test
+currently here. The pattern and the reason are
 tests/test_shared_post_interactions.py:153-173.
 
 WHAT IS NEW, AND HAS NO POST TWIN:
@@ -67,6 +67,22 @@ WHAT IS NEW, AND HAS NO POST TWIN:
     EMPTY tuple, which is a different input to the raw SQL `IN` clause from a
     populated one. `child_count` (app/models.py:2899) is likewise unset by the
     factory, but has a column default of 0 rather than None.
+
+  - ANY WEB ARM THAT RENDERS A TEMPLATE NEEDS A `Site` ROW WITH id 1, and
+    `_seed_reply` does not seed one. `subscribe_reply:131` is the first
+    statement in this round to render, and it fails without the row --
+    `AttributeError: 'NoneType' object has no attribute 'default_theme'`, not a
+    skipped lookup. The chain is app/utils.py:75 (this codebase's own
+    `render_template`, which wraps Flask's) -> `current_theme()`
+    (app/utils.py:3228-3240). `:3230`'s `if hasattr(g, 'site')` is FALSE under
+    `web_ctx`, because `test_request_context` never runs `before_request`, so
+    `:3233` falls back to `Site.query.get(1)` and `:3238` dereferences the None
+    it gets. Tests that render call `make_site()` (tests/factories.py:353)
+    themselves; the bookmark tests above do not, because `bookmark_reply` and
+    `remove_bookmark_reply` flash and fall off the end of the function without
+    rendering anything. `subscribe_reply` additionally has two statements no
+    production source value can reach -- see `TestSubscribeReply`'s docstring
+    for what `:98` does to the web arm.
 
 TWO DEFECTS ARE PINNED HERE AND DELIBERATELY NOT FIXED. `restore_reply:279-280`
 increments one counter (`reply.post.reply_count`) where `delete_reply:251-254`
@@ -92,9 +108,10 @@ from datetime import date
 from types import SimpleNamespace
 
 import pytest
+from flask import get_flashed_messages
 
 from app import db
-from app.constants import SRC_API, SRC_WEB
+from app.constants import SRC_API, SRC_PLD, SRC_WEB
 from app.models import NotificationSubscription, PostReplyBookmark
 from app.shared.reply import (
     bookmark_reply, delete_reply, extra_rate_limit_check, remove_bookmark_reply,
@@ -102,7 +119,7 @@ from app.shared.reply import (
 )
 from tests.factories import (
     bearer, make_community, make_instance, make_post, make_post_reply,
-    make_post_reply_bookmark, make_user, web_ctx,
+    make_post_reply_bookmark, make_site, make_user, web_ctx,
 )
 
 
@@ -148,6 +165,14 @@ def _seed_reply(*, private=True, community_name='replies'):
     The reply is a plain `make_post_reply`, so `path` is None -- see the
     module docstring's WHAT IS NEW. A test needing `delete_reply:256`'s or
     `restore_reply:282`'s true arm must seed a path itself.
+
+    NO `Site` ROW IS SEEDED HERE. That is fine for every SRC_API arm and for
+    the web arms that only flash, but any test whose call reaches a
+    `render_template` must call `make_site()` itself first -- the module
+    docstring's WHAT IS NEW gives the failure and the exact chain. It is left
+    out of this helper rather than folded in because a `Site` row is read by
+    more than the theme lookup (`blocked_phrases`, for one) and seeding it
+    unconditionally would change what the existing tests here exercise.
     """
     instance = make_instance('local.example', software='piefed')
     user = make_user(instance, 'reader', local=True)
@@ -240,3 +265,237 @@ def test_removing_a_bookmark_that_does_not_exist_flashes_on_the_web(db_session, 
         assert remove_bookmark_reply(s.reply.id, SRC_WEB) is None
 
     assert PostReplyBookmark.query.count() == 0
+
+
+class TestSubscribeReply:
+    """`:93-133` -- subscribe and unsubscribe, both source arms.
+
+    `:94` JOINS `Post` and filters `deleted=False` on BOTH rows, which
+    `subscribe_post` did not, so every test here needs a live parent post and
+    `.one()` raises rather than returning None if either is deleted.
+    `_seed_reply` supplies exactly that: both constructors set `deleted=False`
+    explicitly rather than leaning on the column default -- tests/factories.py
+    :344 for the post, :469 for the reply -- so the join resolves and `.one()`
+    returns the `PostReply` (the query is `db.session.query(PostReply)`, so the
+    join adds a filter and not a second entity to the result row).
+
+    `:98` MAKES THE WEB ARM'S TWO FLASH BRANCHES UNREACHABLE, which is why the
+    fifth test here reaches them through a third source constant instead of
+    through SRC_WEB as the brief expected. `:98` reads
+
+        subscribe = False if reply.notify_new_replies(user_id) else True
+
+    and `notify_new_replies` (app/models.py:3305-3309, in `class PostReply`
+    which opens at app/models.py:2887) runs the SAME query `:100` runs one line
+    later -- `NotificationSubscription` filtered on `entity_id == self.id`,
+    `user_id == user_id`, `type == NOTIF_REPLY`, `.first()` -- with no write
+    between them. So on the web arm `subscribe` is ALWAYS the negation of
+    `bool(existing_notification)`:
+
+      - no subscription -> `subscribe` True -> `:113`'s else -> `:114` FALSE ->
+        `:121` creates. `:114` can never be true here, so `:116`, and with it
+        `:119`'s flash, is dead on this arm.
+      - a subscription  -> `subscribe` False -> `:102` true -> `:103` TRUE ->
+        `:104` deletes. `:103` can never be false here, so `:107`, and with it
+        `:111`'s flash, is dead on this arm.
+
+    Both flash branches additionally require `src != SRC_API`, so neither of
+    the two source values any production caller passes can reach `:111` or
+    `:119`. The two tests below that exhaust the web arm's state space --
+    `..._ignores_the_subscribe_argument...` for the empty state,
+    `..._deletes_an_existing_subscription...` for the occupied one -- are
+    jointly the evidence for that, and they are why the brief's third and fifth
+    tests are not here: both asserted an outcome the web arm cannot produce and
+    both were falsified by running. What DOES reach the two flash branches is a
+    third source constant, and the last test in this class uses one; the twin
+    function `subscribe_post` has the identical shape and the identical
+    resolution at tests/test_shared_post_interactions.py:577-639.
+
+    `:131`'s RENDER NEEDS A `Site` ROW WITH id 1, which is why the three tests
+    here that do not raise call `make_site()` and `_seed_reply` alone is not
+    enough. `:128` is false for every source but SRC_API, so the two SRC_WEB
+    tests and the SRC_PLD one all render; the two SRC_API tests raise before
+    reaching `:128` and need no row. The chain is
+    `app/shared/reply.py:131` -> `app/utils.py:75` (this codebase's own
+    `render_template`, which wraps Flask's) -> `current_theme()`
+    (app/utils.py:3228-3240), whose `:3230` `if hasattr(g, 'site')` is FALSE
+    under `web_ctx` -- `test_request_context` never runs `before_request` --
+    so `:3233` falls back to `Site.query.get(1)` and `:3238` dereferences it.
+    Without the row that is `AttributeError: 'NoneType' object has no attribute
+    'default_theme'`, not a skipped theme lookup. The module docstring's WHAT IS
+    NEW records this; it is the first thing in this round to render a template
+    and it will bind every later web arm that does.
+    """
+
+    def test_the_web_arm_ignores_the_subscribe_argument_it_was_given(self, db_session, app):
+        """`:97` true -> `:98`. Arcs 97->98 and 128->131; statements 98, 131.
+
+        THE WITNESS IS THE ARGUMENT BEING OVERRIDDEN. `:98` recomputes
+        `subscribe` from `reply.notify_new_replies(user_id)` regardless of what
+        the caller passed, so passing `subscribe=False` against a reply with NO
+        existing subscription must still CREATE one. Asserting on the row alone
+        would not witness the override -- passing True would produce the same
+        row -- so the deliberately wrong argument is the test.
+
+        The pre-call count of 0 is the positive control for the post-call count
+        of 1: without it a fixture that seeded a subscription of its own would
+        produce the same final number and the create at `:121` would witness
+        nothing.
+
+        The rendered body is read back, and `result.get_data(...)` is itself the
+        check that `:131` returned something -- a flash-only path that fell off
+        the end of the function returns None and raises AttributeError here
+        rather than passing. What the body then adds is discrimination: it is
+        `fe-bell` WITHOUT `fe-no-bell` that separates this `:131` from the
+        sibling test below, which reaches the same return statement and the same
+        template and gets `fe-no-bell`. `_reply_notification_toggle.html`
+        picks between the two by calling `notify_new_replies(current_user.id)`
+        itself, so the string read back is the subscription state as the
+        database now holds it and not as this function computed it.
+        """
+        make_site()
+        s = _seed_reply()
+        assert NotificationSubscription.query.count() == 0
+
+        with web_ctx(app, s.user):
+            result = subscribe_reply(s.reply.id, False, SRC_WEB)
+            body = result.get_data(as_text=True)
+
+        assert NotificationSubscription.query.filter_by(
+            entity_id=s.reply.id, user_id=s.user.id).count() == 1
+        assert 'fe-no-bell' not in body
+        assert 'fe-bell' in body
+
+    def test_the_web_arm_deletes_an_existing_subscription_it_was_told_to_create(self, db_session, app):
+        """`:98` again, in the OTHER direction, then `:102` true -> `:103` true
+        -> `:104`-`:105`, then `:128` false -> `:131`. Arcs 97->98 and 128->131;
+        statements 98, 131.
+
+        THIS IS THE CORRECTION OF THE BRIEF'S FIFTH TEST, which expected
+        `:116` false -> `:119`'s flash from this exact construction. It does not
+        reach it: `:98` recomputes `subscribe` to False because a subscription
+        exists, so control goes to `:102`'s delete arm and never to `:113`'s
+        else. See the class docstring. What the construction DOES witness is
+        `:98` overriding a `True` argument into a deletion, which is the mirror
+        of the sibling test above and the reason both are kept.
+
+        The subscription is created through the API arm so that `:98` cannot
+        touch its creation, and the count of 1 asserted BEFORE the web call is
+        the positive control for the count of 0 after it -- a deletion and a
+        creation that never happened are otherwise the same zero.
+        """
+        make_site()
+        s = _seed_reply()
+        subscribe_reply(s.reply.id, True, SRC_API, auth=bearer(s.user))
+        assert NotificationSubscription.query.filter_by(entity_id=s.reply.id).count() == 1
+
+        with web_ctx(app, s.user):
+            result = subscribe_reply(s.reply.id, True, SRC_WEB)
+            body = result.get_data(as_text=True)
+
+        assert NotificationSubscription.query.filter_by(entity_id=s.reply.id).count() == 0
+        assert 'fe-no-bell' in body
+
+    def test_unsubscribing_when_none_exists_raises_through_the_api(self, db_session):
+        """`:102` true, `:103` false -> `:107`-`:109`'s raise.
+
+        Of the two source values production uses, the API arm is the ONLY one
+        that reaches `:107`'s else, because `:98` keeps `subscribe` and
+        `existing_notification` in lockstep on the web arm -- see the class
+        docstring. `:110`-`:111`, the other half of this same else, is reached
+        only by the third-source test at the bottom of this class, which is this
+        test's same-mechanism counterpart: same `:107`, opposite arm of `:108`.
+
+        No `web_ctx`: this call runs entirely outside a request context, which
+        is the module docstring's SRC_API claim executing rather than being
+        asserted. The message is matched so that an unrelated failure -- a bad
+        bearer token, the `:94` join finding nothing -- cannot pass as this
+        branch.
+        """
+        s = _seed_reply()
+        assert NotificationSubscription.query.count() == 0
+
+        with pytest.raises(Exception, match='did not exist'):
+            subscribe_reply(s.reply.id, False, SRC_API, auth=bearer(s.user))
+
+    def test_subscribing_twice_raises_through_the_api(self, db_session):
+        """`:114` true -> `:115`, `:116` true -> `:117`'s raise.
+        Arcs 114->115 and 116->117; statements 115, 116, 117.
+
+        The first call creates the subscription and is the positive control for
+        the second: it proves the create path at `:121` works, so the second
+        call's refusal is `:114` finding that row and not a failure to make one.
+        Both go through the API arm, so `:97`'s override cannot interfere -- on
+        the web arm this construction takes the delete path instead, which is
+        what the second test in this class measures.
+
+        The row count of 1 after the raise separates "refused" from "created a
+        duplicate and then complained".
+        """
+        s = _seed_reply()
+        subscribe_reply(s.reply.id, True, SRC_API, auth=bearer(s.user))
+
+        with pytest.raises(Exception, match='already existed'):
+            subscribe_reply(s.reply.id, True, SRC_API, auth=bearer(s.user))
+
+        assert NotificationSubscription.query.filter_by(entity_id=s.reply.id).count() == 1
+
+    def test_a_third_source_reaches_the_flash_branches_the_web_arm_cannot(self, db_session, app):
+        """`:108`'s false arm and `:111`'s flash, then `:114`'s true arm,
+        `:116`'s false arm and `:119`'s flash. Arcs 108->111 and 116->119;
+        statements 111, 119.
+
+        NEITHER SRC_WEB NOR SRC_API CAN REACH `:111`/`:119`, which the class
+        docstring derives from `:98` and the two web tests above demonstrate:
+        SRC_WEB keeps `subscribe` and `existing_notification` in lockstep, so
+        `:103`'s false arm and `:114`'s true arm are jointly unreachable there,
+        and under SRC_API `:108`/`:116` always take the raise. A third source
+        value is the only way in -- it is (a) not SRC_WEB, so `:97` skips the
+        override and the caller's `subscribe` argument survives, and (b) not
+        SRC_API, so `:108`/`:116` take the else. SRC_PLD (app/constants.py:94,
+        the admin preload path) is used here purely as such a value. IT IS NOT
+        HOW THE CODE IS USED IN PRODUCTION -- app/api/alpha/utils/reply.py:462
+        passes SRC_API and app/post/routes.py:2098 passes SRC_WEB, and those are
+        the only two callers -- and this docstring says so rather than implying
+        otherwise. The precedent, down to the constant, is
+        tests/test_shared_post_interactions.py:577-639 against the twin
+        `subscribe_post`.
+
+        `web_ctx` is used even though this is not an SRC_WEB call, because
+        `:95`'s else-arm reads `current_user.id` for any non-SRC_API source and
+        `:131` renders for any non-SRC_API source; `make_site()` is there for
+        the render, per the module docstring's WHAT IS NEW.
+
+        THE ASSERTION IS ON `flashed`'s CONTENT, NOT ON `result`, and that is
+        load-bearing. Under SRC_PLD `:128` is False either way, so control
+        reaches `:131` whether or not the flash call is there -- deleting
+        `flash(_(msg))` outright would still return a normal 200 render and
+        pass a result-only assertion silently. The row counts are the second
+        half: 0 after the first call and 1 after the second separate "refused
+        and flashed" from "flashed and then also wrote", which is what reaching
+        `:111` or `:119` from the wrong outer arm would look like.
+        """
+        make_site()
+        s = _seed_reply()
+
+        with web_ctx(app, s.user):
+            result = subscribe_reply(s.reply.id, False, SRC_PLD)
+            flashed = get_flashed_messages()
+
+        assert result.status_code == 200
+        assert len(flashed) == 1
+        assert 'did not exist' in flashed[0]
+        assert NotificationSubscription.query.filter_by(
+            entity_id=s.reply.id, user_id=s.user.id).count() == 0
+
+        subscribe_reply(s.reply.id, True, SRC_API, auth=bearer(s.user))
+
+        with web_ctx(app, s.user):
+            result = subscribe_reply(s.reply.id, True, SRC_PLD)
+            flashed = get_flashed_messages()
+
+        assert result.status_code == 200
+        assert len(flashed) == 1
+        assert 'already existed' in flashed[0]
+        assert NotificationSubscription.query.filter_by(
+            entity_id=s.reply.id, user_id=s.user.id).count() == 1
