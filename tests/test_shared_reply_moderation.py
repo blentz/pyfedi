@@ -221,3 +221,177 @@ class TestModRemoveReply:
         db.session.refresh(s.reply)
         assert s.reply.deleted is False
         assert db.session.query(ModLog).count() == 0
+
+    def test_an_instance_admin_may_remove(self, db_session):
+        """`:421`'s SECOND disjunct alone -- `is_instance_admin` -- with the
+        first and third false.
+
+        `:421` is three disjuncts scored by coverage.py as one arc pair, so
+        each needs its own witness or mechanism (e) applies: two conditions
+        exercised only in lockstep cannot detect a swap between them.
+        """
+        s = _seed_moderated_reply()
+        make_instance_admin(s.actor, s.instance)
+
+        mod_remove_reply(s.reply.id, 'spam', SRC_API, auth=bearer(s.actor))
+
+        db.session.refresh(s.reply)
+        assert s.reply.deleted is True
+
+    def test_a_site_admin_who_is_neither_may_remove(self, db_session):
+        """`:421`'s THIRD disjunct alone -- `user.is_admin_or_staff()`.
+
+        This is the disjunct `mod_restore_reply:457` does NOT have, which is
+        finding 2 in the spec; the paired test in `TestModRestoreReply` shows
+        the same user refused there.
+        """
+        s = _seed_moderated_reply()
+        make_site_admin(s.actor)
+
+        mod_remove_reply(s.reply.id, 'spam', SRC_API, auth=bearer(s.actor))
+
+        db.session.refresh(s.reply)
+        assert s.reply.deleted is True
+
+    def test_a_moderator_removing_their_own_reply_records_minus_one(self, db_session):
+        """`:426`'s ELSE arm -- `user.id == reply.user_id` gives `-1`.
+
+        The comment at `:425` says this makes the UI show 'removed' rather
+        than 'deleted'. The sibling test above takes the other arm with a
+        distinct actor, so the two together pin the conditional rather than
+        the assignment.
+        """
+        s = _seed_moderated_reply()
+        seed_moderator(s, user=s.author)
+
+        mod_remove_reply(s.reply.id, 'spam', SRC_API, auth=bearer(s.author))
+
+        db.session.refresh(s.reply)
+        assert s.reply.deleted_by == -1
+
+    def test_a_bot_authors_reply_does_not_move_the_post_counter(self, db_session):
+        """`:427`'s false arm -- `reply.author.bot` true, so `:428` is skipped
+        while `:429` still runs.
+
+        THE TWO COUNTERS MUST BE SEEDED DISTINCT or this witnesses nothing: if
+        both start at the same value, a mutant moving the wrong one is
+        invisible. They are seeded 7 and 3 here and asserted separately.
+        """
+        s = _seed_moderated_reply()
+        seed_moderator(s)
+        s.author.bot = True
+        s.post.reply_count = 7
+        s.author.post_reply_count = 3
+        db.session.commit()
+
+        mod_remove_reply(s.reply.id, 'spam', SRC_API, auth=bearer(s.actor))
+
+        db.session.refresh(s.post)
+        db.session.refresh(s.author)
+        assert s.post.reply_count == 7
+        assert s.author.post_reply_count == 2
+
+    def test_a_human_authors_reply_moves_both_counters(self, db_session):
+        """`:427`'s true arm -- the same-mechanism positive control.
+
+        Without it, a fixture in which no counter could ever move would
+        produce the same untouched `reply_count` as the test above. Same
+        seed, same distinct values, one lever moved.
+        """
+        s = _seed_moderated_reply()
+        seed_moderator(s)
+        s.post.reply_count = 7
+        s.author.post_reply_count = 3
+        db.session.commit()
+
+        mod_remove_reply(s.reply.id, 'spam', SRC_API, auth=bearer(s.actor))
+
+        db.session.refresh(s.post)
+        db.session.refresh(s.author)
+        assert s.post.reply_count == 6
+        assert s.author.post_reply_count == 2
+
+    def test_a_multi_element_path_decrements_the_ancestors_child_count(self, db_session):
+        """`:430`'s true arm and the raw SQL at `:431-432`.
+
+        The guard is D517's shape, `if reply.path and len(reply.path) > 1:`.
+        The path seeded here is production's -- app/models.py:3053-3060 gives
+        `[0, parent.id, reply.id]` -- so `tuple(reply.path[:-1])` is
+        `(0, parent.id)`, a genuine multi-element IN operand.
+
+        THE ASSERTION IS ON THE ANCESTOR, NOT THE REPLY. The reply's own
+        `child_count` is untouched by this statement, so asserting on it would
+        witness nothing; and a mutant dropping the `where` clause is caught
+        only by a row the statement should NOT have touched, which is why the
+        bystander below is seeded and asserted too.
+        """
+        s = _seed_moderated_reply()
+        seed_moderator(s)
+        parent = make_post_reply(s.post, s.author)
+        bystander = make_post_reply(s.post, s.author)
+        db.session.commit()
+        parent.child_count = 5
+        bystander.child_count = 9
+        s.reply.path = [0, parent.id, s.reply.id]
+        db.session.commit()
+
+        mod_remove_reply(s.reply.id, 'spam', SRC_API, auth=bearer(s.actor))
+
+        db.session.refresh(parent)
+        db.session.refresh(bystander)
+        assert parent.child_count == 4
+        assert bystander.child_count == 9
+
+    def test_the_web_arm_flashes_and_returns_none(self, db_session, app):
+        """`:415`'s false arm, `:434`'s true arm, `:435`'s flash, `:447`.
+
+        `make_site()` is required: the web arm reaches a flash, and the module
+        docstring's rule says a Site row is needed wherever a template or a
+        permission read touches it.
+        """
+        from flask import get_flashed_messages
+        make_site()
+        s = _seed_moderated_reply()
+        seed_moderator(s)
+
+        with web_ctx(app, s.actor):
+            result = mod_remove_reply(s.reply.id, 'spam', SRC_WEB, auth=None)
+            messages = get_flashed_messages()
+
+        assert result is None
+        assert 'Comment deleted.' in messages
+
+    def test_the_modlog_row_names_the_delete_action(self, db_session):
+        """`:437-440`'s add_to_modlog with the literal 'delete_post_reply'.
+
+        Compared as a SET, never as an ordered list -- the campaign's rule
+        about rows a query planner returned.
+
+        This is also the positive control that
+        `test_an_unprivileged_user_is_refused_and_changes_nothing`'s
+        `ModLog.count() == 0` needed and did not have: that test's zero
+        proves nothing about a mechanism that can never write a row at all,
+        so this test is what makes that earlier zero mean something.
+        """
+        s = _seed_moderated_reply()
+        seed_moderator(s)
+
+        mod_remove_reply(s.reply.id, 'spam', SRC_API, auth=bearer(s.actor))
+
+        actions = {row.action for row in db.session.query(ModLog).all()}
+        assert actions == {'delete_post_reply'}
+
+    def test_the_federation_task_is_selected(self, db_session):
+        """`:442`'s task_selector call, intercepted on the module.
+
+        `recording_task_selector` calls through rather than stubbing, so this
+        also proves the call is reached on the permitted path rather than
+        merely that a name exists.
+        """
+        s = _seed_moderated_reply()
+        seed_moderator(s)
+
+        with recording_task_selector() as calls:
+            mod_remove_reply(s.reply.id, 'spam', SRC_API, auth=bearer(s.actor))
+
+        assert 'delete_reply' in calls
