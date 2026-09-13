@@ -73,14 +73,14 @@ WHAT IS NEW, AND HAS NO POST TWIN:
     `delete_reply:257`'s own statement text: `(1, 2)` and `(1,)` both run and
     return no rows, `()` raises `ProgrammingError: (psycopg2.errors.SyntaxError)
     syntax error at or near ")"`, because psycopg2 renders it as `where id in
-    ()`. No production path is that short: app/models.py:3053-3059 gives a
-    top-level reply `path = [0, reply.id]` and a nested one
-    `in_reply_to.path[:] + [reply.id]`, so `path[:-1]` is at worst the
-    one-element `(0,)`. `TestDeleteReply` therefore seeds the three-element
-    production shape and leaves the empty tuple untested as unreachable; its
-    class docstring carries the full probe. `child_count`
-    (app/models.py:2899) is likewise unset by the factory, but has a column
-    default of 0 rather than None.
+    ()`. AND A ONE-ELEMENT PATH IS REACHABLE IN PRODUCTION, so that raise is a
+    live 500 rather than a curiosity -- see the DEFECTS section below, which
+    enumerates all four writers of the column. `TestDeleteReply` seeds the
+    three-element shape `app/models.py` builds and does NOT test the empty
+    tuple, because the cli importer that can produce one cannot be simulated
+    from a factory reply; its class docstring carries the full probe.
+    `child_count` (app/models.py:2899) is likewise unset by the factory, but
+    has a column default of 0 rather than None.
 
   - A `Site` ROW WITH id 1 IS NEEDED FOR TWO UNRELATED REASONS, and
     `_seed_reply` seeds one for neither. The render chain below is the first;
@@ -138,7 +138,61 @@ WHAT IS NEW, AND HAS NO POST TWIN:
     value can reach -- see `TestSubscribeReply`'s docstring for what `:98` does
     to the web arm.
 
-TWO DEFECTS ARE PINNED HERE AND DELIBERATELY NOT FIXED. `restore_reply:279-280`
+FOUR DEFECTS ARE RECORDED HERE AND DELIBERATELY NOT FIXED. TWO OF THEM ARE
+PINNED BY TESTS IN THIS FILE; THE OTHER TWO ARE NOT, AND CANNOT BE FROM A
+FACTORY REPLY. Taking the unpinned pair first, because a later reader of the
+`path` bullet above is sent here for them.
+
+DEFECT 3 -- `flask lemmy-import` WRITES ONE-ELEMENT PATHS, AND
+`delete_reply:257` AND `restore_reply:283` THEN RAISE. The column has exactly
+FOUR writers, and this claim is the enumeration, not a sample. The search was
+`grep -rn "\\.path\\b" --include=*.py app/` filtered to assignments and
+subscripts, which finds every one:
+
+  1. app/models.py:3053-3059, in `class PostReply` (opens at
+     app/models.py:2887) -- the ActivityPub/web reply creator. Top-level gets
+     `[0, reply.id]`, nested gets `in_reply_to.path[:] + [reply.id]`. ALWAYS
+     >= 2 elements, and `:3060`'s `reply.root_id = reply.path[1]` would raise
+     IndexError if it were ever shorter, which corroborates the convention
+     independently. INCLUDES THE REPLY'S OWN ID as the last element.
+  2. app/cli.py:694 and `:715`, inside `@app.cli.command("lemmy-import")`
+     (app/cli.py:275). `piefed_path` is built at `:664-670` from
+     `path_parts[1:-1]` -- ANCESTORS ONLY, THE REPLY'S OWN ID EXCLUDED, and
+     `'0'` filtered out by `:667`. For an ordinary first-level nested comment
+     whose Lemmy ltree path is `0.<parent>.<self>`, `path_parts[1:-1]` is
+     `['<parent>']`, so `path == [parent_id]`, `tuple(path[:-1])` is `()`, and
+     both raw-SQL statements raise the `psycopg2.errors.SyntaxError` measured
+     above. A top-level comment (`0.<self>`) yields `[]`, which is falsy and
+     merely skips the update.
+  3. app/api/alpha/views.py:686, written by `calculate_path` (`:669`). Depth 0
+     gives `[0, reply.id]`, depth 1 `[0, parent_id, reply.id]`, depth > 1 a
+     longer walk. ALWAYS >= 2. Cleared, no finding.
+  4. app/post/util.py:79, inside `create_real_reply` (`:53`). Its own comment
+     at `:55` says "Create a PostReply instance (not persisted to DB)", and
+     the file contains no `db.session.add`, `flush` or `commit` at all. A
+     display object that never reaches the column. Cleared, no finding.
+
+So on any instance that has run `flask lemmy-import`, the author of an
+imported first-level reply cannot delete or restore it. THIS IS REACHABLE,
+NOT LATENT.
+
+DEFECT 4 -- THE TWO PERSISTING WRITERS USE DIFFERENT PATH CONVENTIONS, so
+`path[:-1]` means different things depending on who wrote the row.
+app/models.py appends the reply's own id; app/cli.py does not. Every
+`tuple(path[:-1])` site in the codebase -- app/shared/reply.py `:258`, `:284`,
+`:418`, `:453`, app/activitypub/util.py `:2264`, `:2318`, `:2340`, `:2381`,
+and app/post/routes.py:1997 -- assumes the app/models.py convention. Against a
+cli-imported row they drop the IMMEDIATE PARENT, a genuine ancestor: a path of
+`[grandparent, parent]` yields `(grandparent,)`, so the parent's `child_count`
+is never adjusted and the count under-reports by one level.
+
+NEITHER DEFECT 3 NOR DEFECT 4 IS PINNED BY A TEST HERE, and that is a decision
+rather than an oversight: reaching either needs a row shaped by the cli
+importer, which no factory in `tests/factories.py` produces and which a unit
+test of `delete_reply` has no business simulating. Both go to the campaign
+register as REACHABLE.
+
+THE TWO THAT ARE PINNED. `restore_reply:279-280`
 increments one counter (`reply.post.reply_count`) where `delete_reply:251-254`
 decrements three (`reply.post.reply_count`, `reply.post.reply_count_cross_posted`
 and `reply.community.post_reply_count`). THE RANGES STOP WHERE THEY DO ON
@@ -153,9 +207,9 @@ which is symmetric and would witness nothing. Separately,
 `if src == SRC_API:` arm, the `else` at `:26-28` having no equivalent -- and
 the twin `vote_for_post` DOES gate its web arm (app/shared/post.py:43-48), so
 this is a divergence between mirrored functions rather than a uniform policy.
-NEITHER IS IN THE CAMPAIGN REGISTER
-YET -- both are slated for it at this round's end. Until then the argument for
-leaving each unfixed lives in
+NONE OF THE FOUR IS IN THE CAMPAIGN REGISTER
+YET -- all are slated for it at this round's end. Until then the argument for
+leaving the two pinned ones unfixed lives in
 `docs/superpowers/specs/2026-09-12-coverage-reply-ac-40-design.md`, under the
 headings that name them. The tests that pin today's voting behaviour are
 `TestVoteForReplySourceAndPermission` below; the delete/restore asymmetry is
@@ -1191,17 +1245,30 @@ class TestDeleteReply:
 
     psycopg2 renders an empty tuple as `()`, giving `where id in ()`, which
     Postgres rejects outright -- it is not an empty result, it is a syntax
-    error that would propagate out of `delete_reply`. PRODUCTION NEVER BUILDS
-    SUCH A PATH: app/models.py:3053-3059 (in `class PostReply`, which opens at
-    app/models.py:2887) gives a top-level reply `path = [0, reply.id]` and a
-    nested one `in_reply_to.path[:] + [reply.id]`, so the shortest real path
-    has two elements and `path[:-1]` is at worst the one-element `(0,)`. The
-    ancestor test below therefore seeds the three-element production shape
-    `[0, parent.id, reply.id]` -- a genuinely multi-element `IN` operand, with
-    a real ancestor row so the decrement has a witness. The empty-tuple case is
-    left untested because it is unreachable from production code; it is
-    recorded here so a future path-building change does not rediscover it as a
-    500.
+    error that would propagate out of `delete_reply`. PRODUCTION DOES BUILD
+    SUCH A PATH, and this sentence formerly said the opposite. The column has
+    four writers, enumerated in the module docstring's DEFECTS section;
+    app/cli.py:664-670, inside `@app.cli.command("lemmy-import")`
+    (app/cli.py:275), builds the array from `path_parts[1:-1]` -- ancestors
+    only, the reply's own id EXCLUDED -- so an ordinary first-level nested
+    comment imported from Lemmy gets a ONE-ELEMENT path and its author can
+    neither delete nor restore it. That is defect 3 there, and it is reachable,
+    not latent.
+
+    app/models.py:3053-3059 (in `class PostReply`, which opens at
+    app/models.py:2887) is the writer whose convention the raw SQL assumes: a
+    top-level reply gets `[0, reply.id]` and a nested one
+    `in_reply_to.path[:] + [reply.id]`, always at least two elements with the
+    reply's own id last. The ancestor test below seeds THAT shape,
+    `[0, parent.id, reply.id]` -- a genuinely multi-element `IN` operand, with a
+    real ancestor row so the decrement has a witness.
+
+    THE EMPTY TUPLE IS STILL LEFT UNTESTED, but for a narrower reason than the
+    one first given. It is unreachable from any row `tests/factories.py` can
+    build, and the only writer that reaches it is a cli import command; making
+    it executable would mean simulating `lemmy-import` inside a unit test of
+    `delete_reply`, which is the wrong place for it. The probe above is the
+    record instead.
     """
 
     def test_an_api_delete_decrements_all_four_counters(self, db_session):
@@ -1255,13 +1322,21 @@ class TestDeleteReply:
         produced by this one, which is what makes the pair able to catch a swap
         between `:242` and `:263` even though both read the same `src`.
 
-        THAT `:245` READ `current_user` AND NOT SOMETHING ELSE is witnessed
-        twice over. `:247` filters `user_id=user_id` and calls `.one()`, so a
-        wrong id raises `NoResultFound` instead of deleting; and `deleted_by`
-        (`:249`) carries the id `:245` produced, which is asserted directly.
-        `deleted_by` is an arm-specific VALUE here, unlike `deleted`, which
-        `:248` sets to True on every path and which is therefore not this
-        test's witness.
+        `is None` IS THE ONLY ARM DISCRIMINATOR HERE, and an earlier version of
+        this docstring wrongly claimed a second one. It said `deleted_by` was
+        "an arm-specific VALUE". IT IS NOT: only the author can delete a reply
+        at all (`:247` filters `user_id=user_id`), so `bearer(s.user)` and
+        `web_ctx(app, s.user)` necessarily name THE SAME USER and both arms
+        write `s.user.id` at `:249`. That is false-witness mechanism 2 --
+        a fixture coincidence making two arms produce the same value -- asserted
+        inside a paragraph claiming to have defeated mechanism 1.
+
+        THAT `:245` READ `current_user` is witnessed by `:247` instead: it
+        filters `user_id=user_id` and calls `.one()`, so an id from anywhere
+        else raises `NoResultFound` rather than deleting. The `deleted_by`
+        assertion below is kept as a cheap cross-check that `:249` wrote that
+        id and not some other column's, and is NOT independent of the `.one()`;
+        it is not load-bearing and is not this test's witness for either arc.
 
         `auth=None` is passed explicitly because `delete_reply`'s signature at
         `:241` is `(reply_id, src, auth)` with no default for `auth`; the web
