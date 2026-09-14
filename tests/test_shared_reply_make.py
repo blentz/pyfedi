@@ -208,7 +208,7 @@ def _clear_creation_guards(user):
     FIFTH CORRECTION: `make_reply:192`'s `can_create_post_reply`
     (app/utils.py:2546-2578) refuses ANY local user whose `private_key` is
     `None` -- `tests/test_shared_post_make.py:15-19` and
-    `tests/test_shared_reply_interactions.py:544-550` already document the
+    `tests/test_shared_reply_interactions.py:604` already document the
     identical trap for `can_create_post`, but nothing in `edit_reply`'s chain
     trips it, since `edit_reply` never calls either function. Without this,
     every `TestMakeReply` test that reaches a real `PostReply.new` call dies
@@ -1648,3 +1648,49 @@ class TestMakeReply:
             make_reply(payload, s.post, None, SRC_API, auth=bearer(s.actor))
 
         assert db.session.query(PostReply).count() == after_first
+
+    def test_a_rate_limited_api_user_is_refused(self, db_session):
+        """`:159`'s TRUE arm and `:160`'s `raise Exception('rate_limited')`.
+
+        `extra_rate_limit_check` (app/shared/reply.py:148-153) is currently an
+        unconditional `return False` whose docstring says the real limiting is
+        still planned, so `:159` is never true and this arc CANNOT be reached
+        without replacing the function. THE MONKEYPATCH IS NOT A CONVENIENCE
+        HERE; IT IS THE ONLY WAY IN, AND THAT FACT IS REGISTERED RATHER THAN
+        HIDDEN -- see D406, which records that the same stub is duplicated
+        verbatim in `app/shared/post.py:167-172`, and D539, which is the
+        RETRACTED ruling that this line could not be covered at all. When the
+        function grows real logic this test keeps working; a fixture-based
+        version would have to be rewritten.
+
+        DIRECT TRANSCRIPTION OF `tests/test_shared_post_make.py:409-434`, the
+        twin that has closed the identical line in `app/shared/post.py` since
+        that module reached 100. The reply half went three sub-projects without
+        it because the round ruled the line unreachable before checking whether
+        its own twin had already reached it.
+
+        `_clear_creation_guards` IS DELIBERATELY NOT CALLED, and its absence is
+        the assertion's second witness: `:160` raises before `:174`, `:177`,
+        `:189` and `:192`, so a mutant that moved the check below any creation
+        guard would die here on a different message. `match='rate_limited'` is
+        the only such matcher in the suite.
+
+        `:159`'s FALSE arm is witnessed by
+        `test_the_api_arm_creates_a_reply_and_returns_the_pair`, an ordinary
+        API call that reaches `:161` with `extra_rate_limit_check` unpatched.
+        """
+        import app.shared.reply as reply_module
+        s = _seed_for_reply()
+        before = db.session.query(PostReply).count()
+        payload = {'body': 'too fast', 'notify_author': False,
+                   'language_id': None, 'distinguished': False}
+
+        original = reply_module.extra_rate_limit_check
+        reply_module.extra_rate_limit_check = lambda user: True
+        try:
+            with pytest.raises(Exception, match='rate_limited'):
+                make_reply(payload, s.post, None, SRC_API, auth=bearer(s.actor))
+        finally:
+            reply_module.extra_rate_limit_check = original
+
+        assert db.session.query(PostReply).count() == before

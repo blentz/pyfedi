@@ -7014,9 +7014,12 @@ files, not one: `app/models.py` (+5 from old `:2743`, +12 from old `:3322`),
 `:39`) and `app/cli.py` (+10 from old `:673`). Under `tests/`, **56
 `app/shared/post.py:NNN` citations across 16 files predate it and sit in the
 shifted region**, fifteen of them in this file. One is two words from a
-`reply.py` citation this round DID flag: `tests/test_shared_reply_interactions.py:2087`
-cites `app/shared/post.py:53` as the `VOTE_QUOTA` refusal, which is now `:65`
-(`:53` is `user = current_user`). **Treat every `app/shared/post.py:NNN` in
+`reply.py` citation this round DID flag: `tests/test_shared_reply_interactions.py:2135`
+and `:2147` cite `app/shared/post.py:53` as the `VOTE_QUOTA` refusal, which is
+now `:65` (`:53` is `user = current_user`). (**Those two locations read
+`:2087` -- a single number for two sites -- until sub-project 42 task 9's fix
+round re-derived them by content; `:2087` was already wrong when written and
+sub-project 42's own docstring edit then added 23 more. Registered as D545.**) **Treat every `app/shared/post.py:NNN` in
 this file as unverified until checked**, and check by content —
 `git show 903dab20^:app/shared/post.py | sed -n 'Np'` against
 `sed -n '(N+12)p' app/shared/post.py` — rather than by adding 12, because a
@@ -7234,11 +7237,20 @@ helper is deliberately **opt-in
 rather than folded into the seed**, so tests that want those guards live still
 exercise them.
 
-**239. `report_reply` NEEDS NEITHER A `Site` ROW NOR KEYED USERS, WHERE
-`make_reply` NEEDS BOTH -- PROBE IT, DO NOT COPY THE OTHER FIXTURE'S HELPER.**
-The two functions live in the same module and read as siblings, so the natural
-move is to reuse `_clear_creation_guards`; it is unnecessary here and would
-hide two guards. What `report_reply` DOES need is a community with **one local
+**239. ON ITS ORDINARY PATH `report_reply` NEEDS NEITHER A `Site` ROW NOR KEYED
+USERS, WHERE `make_reply` NEEDS BOTH -- PROBE IT, DO NOT COPY THE OTHER
+FIXTURE'S HELPER.** The two functions live in the same module and read as
+siblings, so the natural move is to reuse `_clear_creation_guards`; it is
+unnecessary on `report_reply`'s ordinary path and would hide two guards.
+**NARROWED AFTER REVIEW, BECAUSE THE FIRST VERSION OF THIS SENTENCE SAID
+"`report_reply` NEEDS NEITHER" FLATLY AND THE SAME FILE CONTRADICTS IT**: the
+admin-notification arm does need a `Site` row, which is why
+`tests/test_shared_reply_report.py:98`'s `make_site_admin` creates one -- the
+block at `:380-388` calls `Site.admins()`, and a user that method will actually
+return needs both a `Site` row and a `Role` row. So the claim is about the
+guards `make_reply` trips on the way to `PostReply.new` (`private_key`,
+`blocked_phrases`), not about every line `report_reply` can execute. **A
+"needs nothing" claim is a claim about a PATH, and it should name the path.** What `report_reply` DOES need is a community with **one local
 and one remote moderator, as four distinct users** (`tests/
 test_shared_reply_report.py:51`): `:361`'s loop branches per moderator and
 `:382`'s admin block skips anyone already notified, so a fixture reusing one
@@ -7280,18 +7292,43 @@ on `len({1, 2, 3}) == 5`, which is a fixture fact, not the property any mutant
 turned on. A burn without an assertion is a hope; the assertion is what fails
 loudly when a factory changes underneath it.
 
-**241. `app/shared/reply.py` CANNOT REACH 100% WITHOUT A PRODUCTION EDIT, AND
-THE ONE UNCOVERED LINE IS DEAD CODE RATHER THAN A GAP.** `extra_rate_limit_
-check` (`app/shared/reply.py:148-153`) is a docstring and `return False`, the
-docstring saying real limiting is "the plan for this function". So
-`make_reply:159`'s `if extra_rate_limit_check(user):` is never true and
-`:160`'s `raise Exception('rate_limited')` is unreachable, along with its entry
-arc `[159, 160]`. The module therefore measures **99.6545768566494%** with
-`missing_lines [160]` and `missing_branches [[159, 160]]`, and the floor is
-**99**, not 100. The repository's convention for a proven-unreachable arm is a
-`# pragma: no branch` carrying its proof -- **that is a production edit, and a
-coverage round whose production budget was spent elsewhere must say the module
-is not at 100 rather than round past it.** Registered as D539.
+**241. A LINE NO INPUT CAN REACH IS NOT A LINE NO TEST CAN REACH -- AND WHEN A
+MODULE HAS A TWIN, CHECK THE TWIN BEFORE RULING ANYTHING UNCOVERABLE.**
+**THIS FACT PREVIOUSLY CLAIMED THE OPPOSITE AND THE CLAIM WAS FALSE.** It read:
+*"`app/shared/reply.py` CANNOT REACH 100% WITHOUT A PRODUCTION EDIT... the
+module therefore measures 99.6545768566494%... and the floor is 99, not 100...
+a coverage round whose production budget was spent elsewhere must say the
+module is not at 100 rather than round past it."* The module is at **100.0%**
+with `missing_lines []` and `missing_branches []`, closed by an ordinary test,
+and the floor is **100**.
+
+What was true: `extra_rate_limit_check` (`app/shared/reply.py:148-153`) is a
+docstring and `return False`, so `make_reply:159` is never true on any input
+and `:160`'s `raise Exception('rate_limited')` is unreachable **while the stub
+returns a constant**. What did not follow: that no test could cover it. **The
+twin module had the answer the whole time.** `app/shared/post.py:167-172` is
+the same stub one word different, `coverage_floors.ini` has carried
+`app/shared/post.py = 100` since sub-project 39, and
+`tests/test_shared_post_make.py:409-434` closes the identical line by saving
+`post_module.extra_rate_limit_check`, replacing it with `lambda user: True`,
+asserting the raise and restoring it in a `finally`. Its docstring states the
+principle outright -- *"the monkeypatch is not a convenience here; it is the
+only way in, and that fact is registered rather than hidden"* -- and it
+cross-references the reply twin by name. The reply mirror is now
+`tests/test_shared_reply_make.py::TestMakeReply::test_a_rate_limited_api_user_is_refused`.
+
+**Three things to carry, none of them about rate limiting.** (1) **A surviving
+mutant is ambiguous evidence**: it means the mutant is equivalent OR that no
+test exists yet, and the mutation pass classed this one equivalent without
+asking whether the twin already had the test. (2) **The prescribed remedy would
+not have worked either**: `# pragma: no branch` suppresses the ARC but leaves
+the statement in `missing_lines`, because `.coveragerc` excludes only
+`pragma: no cover`. Check what your `exclude_lines` actually contains before
+recommending a pragma. (3) **Diff the twin first.** `app/shared/post.py` and
+`app/shared/reply.py` are this campaign's canonical mirrored pair and the
+duplication of this very stub is a registered finding (D406); the cheap check
+was one grep and it came after the ruling instead of before it. Registered as
+**D539**, which is a retraction rather than a finding.
 
 ## Known noise
 
