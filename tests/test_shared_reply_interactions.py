@@ -8,6 +8,24 @@ and the 73/46 split are the design document's measurement, not this file's:
 `docs/superpowers/specs/2026-09-12-coverage-reply-ac-40-design.md`, the
 six-row group table.
 
+THIS FILE'S app/shared/reply.py LINE CITATIONS ARE STALE, AND SAYING SO IS
+CHEAPER THAN LEAVING A READER TO DISCOVER IT. They were derived against the
+tree at `903dab20^`, where `delete_reply` opened at `:241` and `restore_reply`
+at `:269`. Commit `903dab20` then added a net fourteen lines above them --
+the `len(X.path) > 1` repair and the reversal permission arm -- without a
+sweep of this file, so every citation to `delete_reply`, `restore_reply` and
+everything below them has been FOURTEEN LOW since that commit. Sub-project 42
+task 7 added two more statements inside `restore_reply`, making it sixteen low
+from `restore_reply`'s guard onward. THIS IS A PRE-EXISTING CONDITION THAT TASK
+7 FOUND, NOT ONE IT CAUSED, and it is left standing rather than half-swept:
+re-deriving ~90 citations against a two-commit-old baseline is a task of its
+own, and a partial sweep would leave no way to tell a corrected citation from
+an uncorrected one. The docstrings task 7 REWROTE -- this paragraph, the D496
+retraction below, `TestRestoreReply`'s class docstring and three of its tests
+-- use CURRENT numbering and say so where they cite a line. Everything else in
+this file is fourteen (or sixteen) low. `tests/test_shared_reply_moderation.py`
+and `tests/test_shared_reply_report.py` were swept at task 7 and are current.
+
 THIS MODULE IS `app/shared/post.py`'S TWIN, and that is why this round is
 short. Twelve of its sixteen functions mirror functions the campaign closed in
 sub-projects 34 through 39, so the harness below is inherited rather than
@@ -280,17 +298,33 @@ test of `delete_reply` has no business simulating. Both go to the campaign
 register as REACHABLE, each naming `flask populate_post_reply_for_api` as the
 existing remedy.
 
-THE TWO THAT ARE PINNED. `restore_reply:279-280`
-increments one counter (`reply.post.reply_count`) where `delete_reply:251-254`
-decrements three (`reply.post.reply_count`, `reply.post.reply_count_cross_posted`
-and `reply.community.post_reply_count`). THE RANGES STOP WHERE THEY DO ON
-PURPOSE: `delete_reply:255` and `restore_reply:281` both adjust
-`reply.author.post_reply_count`, both sit at four-space indent OUTSIDE the
-`if not reply.author.bot:` guard that opens each block, and they mirror each
-other exactly. The asymmetry is confined to the bot-guarded block, so a test
-pinning it must read `post.reply_count`, `post.reply_count_cross_posted` and
-`community.post_reply_count` and must NOT read `author.post_reply_count`,
-which is symmetric and would witness nothing. Separately,
+THE COUNTER ASYMMETRY (D496) WAS FIXED AND THIS PARAGRAPH IS A RETRACTION.
+WHAT IT USED TO CLAIM, and what the tests below used to assert: `restore_reply`
+incremented ONE counter (`reply.post.reply_count`) inside its
+`if not reply.author.bot:` guard where `delete_reply` decremented THREE
+(`reply.post.reply_count`, `reply.post.reply_count_cross_posted` and
+`reply.community.post_reply_count`), so a delete-then-restore cycle left the
+latter two permanently one low and every cycle after it lowered them again.
+That was true of the tree this file was written against and is FALSE NOW:
+sub-project 42 task 7 added the two missing statements to `restore_reply`'s
+guard, and the same two to `mod_remove_reply` and `mod_restore_reply`, which
+had the identical hole.
+
+WHAT SETTLED THE DIRECTION was not that three functions agreed against one.
+`app/shared/tasks/maintenance.py` rebuilds `community.post_reply_count` from
+`SELECT COUNT(*) FROM post_reply WHERE deleted is false and community_id = ...`,
+so the column MEANS the number of non-deleted replies and a restore that does
+not increment it is simply wrong; `reply_count_cross_posted` is derived from
+`reply_count` by app/models.py:3099-3108 and moving the two together preserves
+that derivation. The majority was the defect, not the model.
+
+WHAT IS STILL TRUE about the shape: `delete_reply` and `restore_reply` both
+adjust `reply.author.post_reply_count` at four-space indent OUTSIDE the guard,
+and they still mirror each other exactly, so `author.post_reply_count` remains
+a control rather than a witness for anything guard-shaped. What changed is that
+`post.reply_count_cross_posted` and `community.post_reply_count` are now inside
+the guard on BOTH sides, so they are witnesses for the guard and no longer
+witnesses for an asymmetry -- there is none left to witness. Separately,
 `vote_for_reply:22`/`:24` apply `can_upvote`/`can_downvote` only inside the
 `if src == SRC_API:` arm, the `else` at `:26-28` having no equivalent -- and
 the twin `vote_for_post` DOES gate its web arm (app/shared/post.py:43-48), so
@@ -299,12 +333,15 @@ ALL FIVE ARE NOW IN THE CAMPAIGN REGISTER, ADDED BY TASK 8:
 D496 the counter asymmetry, D497 defect 3, D498 defect 4, D499 the API-only
 permission check, D500 defect 5. D497 and D500 carry material this docstring
 does not. `docs/superpowers/specs/2026-09-12-coverage-reply-ac-40-design.md`
-still carries the arguments. The tests that pin today's voting behaviour are
-`TestVoteForReplySourceAndPermission` below; the delete/restore asymmetry is
-now pinned by `TestRestoreReply`'s
+still carries the arguments. D496 IS NOW FIXED, not open, and the sentence that
+stood here is retracted: it said the delete/restore asymmetry "is now pinned by
+`TestRestoreReply`'s
 `..._a_delete_restore_cycle_leaves_two_counters_permanently_low`, which asserts
-the wrong numbers deliberately so that a fix must edit a test. NO TEST IN THIS
-FILE MAKES THE
+the wrong numbers deliberately so that a fix must edit a test." The fix landed
+and it did edit that test -- which is what the pin was for. The test is now
+`..._a_delete_restore_cycle_returns_all_three_counters_to_level` and asserts the
+right numbers. The tests that pin today's voting behaviour are
+`TestVoteForReplySourceAndPermission` below. NO TEST IN THIS FILE MAKES THE
 VOTING ASYMMETRY EXECUTABLE, and that is a decision rather than a gap: the
 construction that would -- a web downvote against a `Site` with
 `enable_downvotes` False, landing where the API arm refuses -- also makes
@@ -2523,25 +2560,37 @@ class TestRestoreReply:
     carries. Neither trap is repeated below.) The arm discrimination here is the
     return SHAPE, the flash, and the counters.
 
-    THIS FUNCTION DOES NOT MIRROR `delete_reply`, AND THE LAST TEST PINS THAT.
-    `delete_reply:252`-`:254` decrement three counters inside the bot guard;
-    `restore_reply:280` increments ONE. `post.reply_count_cross_posted` and
-    `community.post_reply_count` are never restored, so a delete-then-restore
-    cycle leaves both permanently one low. That is a rollback that does not undo
-    what it did, and it is REGISTERED, NOT FIXED: a coverage round has no
-    standing to change a counter, and the divergence is better witnessed by an
-    executing test than asserted in a document.
+    THIS FUNCTION NOW MIRRORS `delete_reply`, AND THE PARAGRAPH THAT STOOD HERE
+    IS RETRACTED. It claimed: "`delete_reply:252`-`:254` decrement three
+    counters inside the bot guard; `restore_reply:280` increments ONE.
+    `post.reply_count_cross_posted` and `community.post_reply_count` are never
+    restored, so a delete-then-restore cycle leaves both permanently one low...
+    it is REGISTERED, NOT FIXED: a coverage round has no standing to change a
+    counter." That was accurate when written and is STALE NOW. The register
+    carried it as D496 and sub-project 42 task 7 fixed it, on the repository
+    owner's instruction and outside a coverage round's own authority, by adding
+    `reply.post.reply_count_cross_posted += 1` and
+    `reply.community.post_reply_count += 1` to this function's bot guard.
 
-    THE ASYMMETRY IS `:279`-`:280` AND STOPS THERE, re-derived from the AST
-    rather than from indentation. The `If` node whose test unparses to `not
-    reply.author.bot` opens at `:279`, its `body` has EXACTLY ONE element --
-    `reply.post.reply_count += 1` at `:280` -- and its `orelse` is empty.
-    `:281`, `reply.author.post_reply_count += 1`, is a top-level statement of
-    the function body, so it runs on both legs of the guard and mirrors
-    `delete_reply:255` exactly. A test pinning the divergence must therefore
-    read `post.reply_count_cross_posted` and `community.post_reply_count`, and
-    must NOT lean on `author.post_reply_count`, which is symmetric and witnesses
-    nothing. The last test obeys that; the bot test does not pretend to.
+    WHY THE FIX WENT THIS WAY rather than stripping `delete_reply` down to one
+    counter, which was the other way to make three functions agree:
+    `app/shared/tasks/maintenance.py` recomputes `community.post_reply_count`
+    as `SELECT COUNT(*) FROM post_reply WHERE deleted is false and
+    community_id = ...`, so the column's meaning is the count of non-deleted
+    replies -- a delete MUST decrement it and a restore MUST increment it.
+    `reply_count_cross_posted` is derived from `reply_count` at
+    app/models.py:3099-3108, so moving the two by the same step preserves the
+    derivation. `delete_reply` was the one function already right.
+
+    THE BOT GUARD NOW HOLDS THREE STATEMENTS, NOT ONE, and the boundary claim
+    that used to follow from that is what changed. `reply.author.post_reply_count
+    += 1` is still a top-level statement of the function body, runs on both legs
+    and still mirrors `delete_reply`'s exactly, so it remains a control and not
+    a witness. But `post.reply_count_cross_posted` and
+    `community.post_reply_count` moved INSIDE the guard, so the bot test now
+    reads all three guarded columns -- as `TestDeleteReply`'s bot test always
+    did -- and the last test in this class asserts a full cycle returns every
+    column to level instead of pinning two of them low.
 
     NO `Site` ROW IS SEEDED BY ANY TEST HERE, and the premise was RE-DERIVED BY
     A METHOD THAT FAILS DIFFERENTLY from `TestDeleteReply`'s. That class used
@@ -2610,8 +2659,10 @@ class TestRestoreReply:
         arrive holding `s.user.id` so that a mutant clearing it is visible. The
         other two do not: `..._restores_their_child_counts` marks the reply
         deleted through the ORM instead, for the reason its docstring gives, and
-        `..._leaves_two_counters_permanently_low` needs the delete INSIDE the
-        span it measures rather than in a fixture.
+        `..._returns_all_three_counters_to_level` needs the delete INSIDE the
+        span it measures rather than in a fixture. (That last test was called
+        `..._leaves_two_counters_permanently_low` until D496 was fixed; the name
+        is recorded here because this sentence used to carry it.)
         """
         s = _seed_reply()
         if bot:
@@ -2632,12 +2683,18 @@ class TestRestoreReply:
         which row came back. Neither `deleted` nor `deleted_by` is the witness,
         for the reasons the class docstring gives.
 
-        THIS TEST OWNS THE TWO COUNTERS `restore_reply` MOVES -- `:280`'s
+        THE OWNERSHIP SPLIT THIS PARAGRAPH DESCRIBED NO LONGER EXISTS, and the
+        sentence is retracted rather than quietly dropped. It read: "THIS TEST
+        OWNS THE TWO COUNTERS `restore_reply` MOVES -- `:280`'s
         `post.reply_count` and `:281`'s `author.post_reply_count` -- and the
-        last test owns the two it never moves. The split is deliberate: the two
-        tests would otherwise assert the same four-tuple twice, and the campaign
-        rule is that a test earns its place by closing something or by a unique
-        kill, not by restating a sibling.
+        last test owns the two it never moves." After D496 was fixed
+        `restore_reply` moves all four, so there are no counters it never moves
+        and nothing left for the last test to own by that description. The split
+        still stands on its original reasoning, which is unchanged: this test
+        asserts the two columns above and the last test asserts a full
+        delete-restore CYCLE returning every column to level, so neither
+        restates the other and each earns its place by something the campaign
+        rule recognises.
 
         `:282`'s FALSE ARM IS WITNESSED POSITIVELY, not by absence:
         `_seed_reply`'s reply has `path is None`, so mutating `:282` to `if not
@@ -2743,14 +2800,19 @@ class TestRestoreReply:
         the arithmetic. Read from immediately after the delete, the restore's
         own effect is a clean `+1` against a `+0`.
 
-        ONLY THE ONE GUARDED COUNTER IS READ. `delete_reply`'s bot test reads
-        three because `:252`-`:254` are three guarded statements; `restore_reply`
-        has exactly one. `post.reply_count_cross_posted` and
-        `community.post_reply_count` are untouched by this function on BOTH legs
-        of `:279`, so asserting they held would witness nothing about the guard.
-        THIS TEST THEREFORE DOES NOT PIN THE DELETE/RESTORE ASYMMETRY -- the
-        last test does, and it reads those two columns precisely because this
-        one cannot.
+        ALL THREE GUARDED COUNTERS ARE READ, AND THE PARAGRAPH HERE IS A
+        RETRACTION. It said "ONLY THE ONE GUARDED COUNTER IS READ...
+        `post.reply_count_cross_posted` and `community.post_reply_count` are
+        untouched by this function on BOTH legs of `:279`, so asserting they held
+        would witness nothing about the guard." That was true of the one-counter
+        `restore_reply` and is FALSE NOW: sub-project 42 task 7 fixed D496 and
+        the guard holds three statements, the same three `delete_reply`'s does.
+        Holding those two columns level for a BOT is therefore a real assertion
+        about the false arm -- it is what distinguishes this run from the human
+        arm -- and this test reads them for the same reason `delete_reply`'s bot
+        test always read three. The old sentence that this test "DOES NOT PIN
+        THE DELETE/RESTORE ASYMMETRY" is now vacuous rather than wrong: there is
+        no asymmetry left to pin.
 
         DISTINCT SEEDS ARE NECESSARY HERE TOO, and for the same mutant as the
         API test: with the columns at 0 the post-delete pair is (0, -1), `:281`
@@ -2765,13 +2827,17 @@ class TestRestoreReply:
         bearer token still authorises.
         """
         s = self._deleted(bot=True)
-        before = (s.post.reply_count, s.user.post_reply_count)
+        before = (s.post.reply_count, s.post.reply_count_cross_posted,
+                  s.community.post_reply_count, s.user.post_reply_count)
 
         restore_reply(s.reply.id, SRC_API, auth=bearer(s.user))
 
         db.session.refresh(s.post)
+        db.session.refresh(s.community)
         db.session.refresh(s.user)
-        assert (s.post.reply_count, s.user.post_reply_count) == (before[0], before[1] + 1)
+        assert (s.post.reply_count, s.post.reply_count_cross_posted,
+                s.community.post_reply_count, s.user.post_reply_count) == \
+            (before[0], before[1], before[2], before[3] + 1)
 
     def test_a_reply_with_ancestors_restores_their_child_counts(self, db_session):
         """`:282` true -> `:283`. Arc 282->283; statements 282, 283.
@@ -2853,56 +2919,66 @@ class TestRestoreReply:
         assert bystander.child_count == 9
         assert s.reply.child_count == 6
 
-    def test_a_delete_restore_cycle_leaves_two_counters_permanently_low(self, db_session):
-        """PINS A REGISTERED DEFECT, AND CLOSES NO NEW STATEMENT OR ARC. Its
+    def test_a_delete_restore_cycle_returns_all_three_counters_to_level(self, db_session):
+        """PINS A FIXED DEFECT, AND CLOSES NO NEW STATEMENT OR ARC. Its
         covered set is not merely contained in the API test's above, it is
-        IDENTICAL to it -- measured per-test with `--cov-branch`, statements
-        `[270, 271, 275, 276, 277, 279, 280, 281, 282, 285, 286, 289, 291, 292]`
-        and arcs `[(270,271), (279,280), (282,285), (286,289), (291,292)]` for
-        both, with `set(cycle) < set(api)` returning False. So it earns its place
-        by a UNIQUE KILL and by nothing else.
+        IDENTICAL to it -- measured per-test with `--cov-branch` against the
+        fixed tree and reported in CURRENT line numbers (see the module
+        docstring's note on this file's stale citations), statements
+        `[284, 285, 289, 290, 291, 293, 294, 295, 296, 297, 298, 301, 302, 305,
+        307, 308]` and arcs
+        `[(284,285), (293,294), (298,301), (302,305), (307,308)]` for both, the
+        `def` line excluded by the convention the earlier figures used. So it
+        earns its place by a UNIQUE KILL and by nothing else.
 
-        It asserts the CURRENT behaviour, which is WRONG, so that repairing
-        `restore_reply` has to change a test rather than silently alter a number
-        nobody was watching. `delete_reply:252`-`:254` decrement three counters;
-        `restore_reply:280` increments one. After a full cycle `post.reply_count`
-        is level and `post.reply_count_cross_posted` and
-        `community.post_reply_count` are each one LOW.
+        THIS TEST WAS CALLED
+        `test_a_delete_restore_cycle_leaves_two_counters_permanently_low` AND
+        ASSERTED THE OPPOSITE. What it claimed, verbatim from the docstring it
+        replaces: "It asserts the CURRENT behaviour, which is WRONG, so that
+        repairing `restore_reply` has to change a test rather than silently alter
+        a number nobody was watching... After a full cycle `post.reply_count` is
+        level and `post.reply_count_cross_posted` and `community.post_reply_count`
+        are each one LOW." Those assertions were
+        `== before[1] - 1` and `== before[2] - 1`. THAT IS NOW STALE, because the
+        defect it pinned -- register entry D496 -- was fixed in sub-project 42
+        task 7, which added the two missing increments to `restore_reply`'s bot
+        guard. The pin did its job: the fix could not land without editing this
+        test, which is exactly why it was written to assert wrong numbers.
 
-        THE UNIQUE KILL IS A FAULT-DIRECTION MUTANT, MEASURED. `:280` was
-        rewritten in line-scoped scratch mutants so that restore makes a counter
-        WORSE instead of leaving it alone -- `reply.post.reply_count += 1;
-        reply.post.reply_count_cross_posted -= 1`, and separately the same with
-        `reply.community.post_reply_count -= 1` -- with `app/` restored
-        afterwards and each restore confirmed by `git diff --quiet -- app/` and
-        `wc -l` reporting 577. Each run: THIS TEST WAS THE ONLY ONE IN THE FILE
-        THAT FAILED, `assert 15 == (17 - 1)` and `assert 6 == (8 - 1)`
-        respectively, 26 others passing. No other test in this file reads either
-        column on a path that runs `restore_reply`; `TestDeleteReply`'s four read
-        both but never restore.
+        WHY THE FIX RAISED `restore_reply` RATHER THAN LOWERING `delete_reply`,
+        which would also have made the four functions agree:
+        `app/shared/tasks/maintenance.py` rebuilds `community.post_reply_count`
+        from `SELECT COUNT(*) FROM post_reply WHERE deleted is false and
+        community_id = ...`. A recomputation from scratch is the authority on
+        what a counter MEANS, and it means the number of non-deleted replies, so
+        a restore that does not increment it contradicts the periodic job that
+        will overwrite it. `reply_count_cross_posted` is derived from
+        `reply_count` at app/models.py:3099-3108, so stepping the two together
+        preserves the derivation whether or not the post has cross-posts.
 
-        A SEMANTICALLY-BETTER MUTANT IS NOT A UNIQUE KILL, and an earlier version
-        of this docstring offered one as if it were. Rewriting `:280` as the
-        three-counter increment a FIX would make also fails this test alone --
-        that run stands, and it is the evidence for the fix-edit obligation in
-        the paragraph above. But a mutant better than production measures
-        change-detection rather than defect-detection, so it cannot discharge the
-        campaign's unique-kill rule; admitting it would empty the rule. The
-        fault-direction mutants above are what discharge it. Both runs are in the
-        task report.
+        THE UNIQUE KILL IS NOW A FAULT-OF-OMISSION KILL, RE-MEASURED against the
+        fixed tree, and it replaces the fault-direction mutants the previous
+        docstring reported (`restore_reply`'s single increment rewritten to
+        decrement one of the other two columns; those runs are in sub-project
+        40's task report and are no longer reproducible, the production lines
+        they mutated having been replaced). Deleting
+        `reply.post.reply_count_cross_posted += 1` from the guard, and separately
+        `reply.community.post_reply_count += 1`, each makes THIS TEST THE ONLY
+        ONE IN THE FILE THAT FAILS. No other test in this file reads either
+        column on a path that runs `restore_reply`: `TestDeleteReply`'s four read
+        both but never restore, the API restore test reads neither, and the bot
+        restore test reads both but only on the guard's FALSE arm, where the two
+        deleted lines never ran. The runs are in the task 7 report.
 
-        `post.reply_count` RETURNING LEVEL IS THE SAME-MECHANISM POSITIVE
-        CONTROL. It proves the cycle ran and that this harness can observe a
-        counter coming back to its starting value, so the other two being low is
-        a real asymmetry and not a fixture artefact or a refresh that read a
-        stale row.
-
-        `author.post_reply_count` IS DELIBERATELY NOT READ. `delete_reply:255`
-        and `restore_reply:281` sit outside their respective bot guards and
-        mirror each other exactly, so it returns level like `post.reply_count`
-        and would be a second control rather than a second witness -- and
-        including it would blur which columns the divergence actually covers.
-        The class docstring derives the boundary from the AST.
+        `author.post_reply_count` IS STILL DELIBERATELY NOT READ, and the reason
+        survives the fix unchanged: `delete_reply` and `restore_reply` adjust it
+        at top level, outside their bot guards, and mirrored each other before
+        the fix as well as after, so it returned level then and returns level now.
+        It is a third control rather than a witness. `post.reply_count` remains
+        the SAME-MECHANISM POSITIVE CONTROL it always was -- it proves the cycle
+        ran and that this harness can observe a counter come back to its starting
+        value -- and the other two now joining it is the point of the test rather
+        than, as before, the defect it recorded.
 
         The three columns are seeded to distinct non-zero values so that a
         failure message names which one moved; they stay positive throughout,
@@ -2917,8 +2993,8 @@ class TestRestoreReply:
         db.session.refresh(s.post)
         db.session.refresh(s.community)
         assert s.post.reply_count == before[0]
-        assert s.post.reply_count_cross_posted == before[1] - 1
-        assert s.community.post_reply_count == before[2] - 1
+        assert s.post.reply_count_cross_posted == before[1]
+        assert s.community.post_reply_count == before[2]
 
     def test_a_non_author_cannot_restore_another_users_reply(self, db_session):
         """CLOSES NO STATEMENT AND NO ARC. It earns its place by a unique kill
@@ -2937,7 +3013,9 @@ class TestRestoreReply:
 
         THE WITNESS IS `deleted` STILL TRUE, not the raise. Under the mutant the
         interloper's call finds the author's deleted reply, `:276`-`:277` clear
-        the flags and `:280`-`:281` move two counters, so `deleted is True` is
+        the flags and the guarded block below them moves four counters (two
+        until D496 was fixed, which is what this sentence used to say), so
+        `deleted is True` is
         false and the test fails on state rather than on a missing exception.
         `_deleted()` is used so the reply arrives deleted through the production
         path, which is also what makes `deleted_by` non-None going in.

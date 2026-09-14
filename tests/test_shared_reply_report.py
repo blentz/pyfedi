@@ -1,22 +1,28 @@
 """Group D of app/shared/reply.py -- reporting a reply.
 
-    report_reply   :311   55 statements / 34 arcs
+    report_reply   :313   55 statements / 34 arcs
 
 The module's largest function, and at ZERO coverage when this file was
 created. `tests/test_shared_post_moderation.py` covers the twin
 `report_post` (app/shared/post.py:833).
 
+EVERY `:NNN` HERE POINTS INTO app/shared/reply.py AS IT IS NUMBERED NOW.
+Sub-project 42 task 7 added two statements to `restore_reply`'s bot guard,
+above this function, so every citation in this file moved down by two and all
+of them were re-derived in that task. `report_reply` itself did not change;
+only its address did. The row above read `:311  55 / 34` before that fix.
+
 THIS FUNCTION IS A LOOP, NOT A FORK, AND THAT SHAPES EVERY FIXTURE HERE.
-`:359`-`:376` iterates `reply.community.moderators()` and branches per
+`:361`-`:378` iterates `reply.community.moderators()` and branches per
 moderator on `moderator.is_local()`, with `report_remote` gating which remote
 instances are collected. Witnessing both arms needs at least one LOCAL and one
 REMOTE moderator on the same community, which is what `_seed_for_report`
 builds.
 
-`Site.admins()` AT `:379` IS REGISTER ENTRY D442, LIVE. Its behaviour differs
+`Site.admins()` AT `:381` IS REGISTER ENTRY D442, LIVE. Its behaviour differs
 where `g.admin_ids` is unset. Record what it does here; do not fix it.
 
-`notify_admins` AT `:318`-`:319` IS A SUBSTRING TEST over two lists, so 'dox'
+`notify_admins` AT `:320`-`:321` IS A SUBSTRING TEST over two lists, so 'dox'
 matches any word containing it. Recorded, not fixed.
 
 EVERY SEEDED ID IS OFFSET -- see register entry D533. Sub-project 41's fixture
@@ -46,8 +52,8 @@ def _seed_for_report(*, private=True):
     """A reply on a community with one LOCAL and one REMOTE moderator.
 
     `reporter` files the report, `author` wrote the reply, `local_mod` and
-    `remote_mod` moderate the community. Four distinct users, because `:359`'s
-    loop branches per moderator and `:380`'s admin block skips anyone already
+    `remote_mod` moderate the community. Four distinct users, because `:361`'s
+    loop branches per moderator and `:382`'s admin block skips anyone already
     notified -- a fixture that reused one user could not tell those apart.
 
     THE IDS ARE FORCED APART, per D533: spare rows advance the community and
@@ -83,7 +89,7 @@ def add_moderator(s, user):
     """Make `user` a moderator of `s.community`.
 
     `Community.moderators()` (app/models.py:716-722) returns CommunityMember
-    rows filtered on `is_banned == False`, and `:360` then loads each
+    rows filtered on `is_banned == False`, and `:362` then loads each
     `User` by `mod.user_id`.
     """
     return make_community_member(user, s.community, is_moderator=True)
@@ -120,14 +126,14 @@ def _recording_task_selector(capture_kwargs=False):
 
 
 class TestReportReply:
-    """`report_reply` (app/shared/reply.py:311-410)."""
+    """`report_reply` (app/shared/reply.py:313-412)."""
 
     def test_the_api_arm_creates_the_report_row(self, db_session):
-        """`:312` true, `:313`-`:320`, `:342`-`:353`, `:397`, `:408`.
+        """`:314` true, `:315`-`:322`, `:344`-`:355`, `:399`, `:410`.
 
-        Asserts the Report's OWN fields rather than a bare count: `:342`-`:352`
+        Asserts the Report's OWN fields rather than a bare count: `:344`-`:354`
         writes nine of them and a count would pass with eight deleted.
-        `reply.reports` at `:397` is asserted separately because nothing else
+        `reply.reports` at `:399` is asserted separately because nothing else
         writes it.
         """
         s = _seed_for_report()
@@ -146,7 +152,7 @@ class TestReportReply:
         assert {r.suspect_user_id for r in rows} == {s.author.id}
 
     def test_the_web_arm_reads_the_form_and_returns_none(self, db_session, app):
-        """`:312` false -> `:322`-`:328`, and `:410`'s bare return.
+        """`:314` false -> `:324`-`:330`, and `:412`'s bare return.
 
         The web arm builds `reason` from `input.reasons_to_string(...)` and
         `notify_admins` from membership of '5' or '6' in `reasons.data` --
@@ -169,7 +175,7 @@ class TestReportReply:
         assert {r.reporter_id for r in rows} == {s.reporter.id}
 
     def test_a_local_moderator_is_notified(self, db_session):
-        """`:359`'s loop, `:362`'s true arm, `:363`-`:370`.
+        """`:361`'s loop, `:364`'s true arm, `:365`-`:372`.
 
         The Notification's `user_id` must be the MODERATOR's and its
         `author_id` the REPORTER's -- a mutant swapping those two operands
@@ -186,7 +192,7 @@ class TestReportReply:
         assert {n.author_id for n in rows} == {s.reporter.id}
 
     def test_a_remote_moderator_is_not_notified_locally(self, db_session):
-        """`:362`'s false arm -> `:371`-`:376`.
+        """`:364`'s false arm -> `:373`-`:378`.
 
         THE POSITIVE CONTROL IS `test_a_local_moderator_is_notified` ABOVE,
         and it is required: "no Notification row" is both the correct outcome
@@ -202,12 +208,12 @@ class TestReportReply:
         assert db.session.query(Notification).count() == 0
 
     def test_report_remote_false_skips_a_mod_on_the_suspects_instance(self, db_session):
-        """`:372`'s true arm and `:373`'s three-way comparison.
+        """`:374`'s true arm and `:375`'s three-way comparison.
 
         With `report_remote` False, a remote moderator is collected ONLY if
         its instance differs from both the suspect's and the community's. Here
         the remote moderator shares the suspect's instance, so nothing is
-        collected and `:400`'s `len(remote_instance_ids)` is zero.
+        collected and `:402`'s `len(remote_instance_ids)` is zero.
         """
         s = _seed_for_report()
         s.author.instance_id = s.remote_instance.id
@@ -221,7 +227,7 @@ class TestReportReply:
         assert 'report_reply' not in calls
 
     def test_report_remote_true_collects_every_remote_moderator(self, db_session):
-        """`:375`-`:376` -- the else arm of `:372`.
+        """`:377`-`:378` -- the else arm of `:374`.
 
         The same fixture as the test above with one lever moved, so the
         difference in outcome is `report_remote` and nothing else.
@@ -238,9 +244,9 @@ class TestReportReply:
         assert 'report_reply' in calls
 
     def test_a_csam_reason_notifies_site_admins(self, db_session):
-        """`:318`-`:319`'s substring test, `:378`'s true arm, `:379`-`:386`.
+        """`:320`-`:321`'s substring test, `:380`'s true arm, `:381`-`:388`.
 
-        `Site.admins()` at `:379` IS REGISTER ENTRY D442, LIVE. Record what it
+        `Site.admins()` at `:381` IS REGISTER ENTRY D442, LIVE. Record what it
         returns here rather than assuming; the entry says its behaviour
         differs where `g.admin_ids` is unset.
 
@@ -265,7 +271,7 @@ class TestReportReply:
         as well would be caught.
 
         `unread_notifications` is asserted as well as the Notification row,
-        because `:386` is a separate statement a mutant can delete on its
+        because `:388` is a separate statement a mutant can delete on its
         own.
         """
         s = _seed_for_report()
@@ -290,7 +296,7 @@ class TestReportReply:
         assert {n.user_id for n in rows} == {admin.id}
 
     def test_an_ordinary_reason_does_not_notify_admins(self, db_session):
-        """`:378`'s false arm -- the same-mechanism positive control.
+        """`:380`'s false arm -- the same-mechanism positive control.
 
         Identical to the test above with `reason` changed, so the zero here is
         `notify_admins` being False rather than an absent admin.
@@ -315,7 +321,7 @@ class TestReportReply:
         assert admin.unread_notifications == 3
 
     def test_a_remote_suspect_instance_is_added_when_reporting_remotely(self, db_session):
-        """`:393`'s true arm and `:394`-`:395`.
+        """`:395`'s true arm and `:396`-`:397`.
 
         The suspect-user half of the `report_remote` block, which is the half
         written CORRECTLY -- it guards on `suspect_user.instance_id` and adds
@@ -326,11 +332,11 @@ class TestReportReply:
         `ap_id` `None` forever, so moving `instance_id` alone would not flip
         `is_local()`. `ap_id`/`ap_profile_id`/`ap_public_url` are set here to
         a URL on `remote.example` so `is_local()` is actually False and
-        `:393`'s guard fires.
+        `:395`'s guard fires.
 
         `capture_kwargs=True` and asserting the actual `instance_ids` set
         (not just `'report_reply' in calls`) is required: a mutant swapping
-        `:395`'s operand to add `reply.community.instance_id` instead of
+        `:397`'s operand to add `reply.community.instance_id` instead of
         `suspect_user.instance_id` still fires the task -- the community's
         instance_id is 1 (`make_community` hardcodes it, and this test never
         moves it) -- so a bare "some task fired" assertion cannot tell the
@@ -353,26 +359,26 @@ class TestReportReply:
         assert set(instance_ids) == {s.remote_instance.id}
 
     def test_the_community_guard_compares_the_wrong_id_space(self, db_session):
-        """`:390`-`:392` -- AND IT PINS A REGISTERED DEFECT ON PURPOSE.
+        """`:392`-`:394` -- AND IT PINS A REGISTERED DEFECT ON PURPOSE.
 
-        `:391` is `if reply.community_id not in remote_instance_ids:` and
-        `:392` adds `reply.community.instance_id`. Those are DIFFERENT ID
+        `:393` is `if reply.community_id not in remote_instance_ids:` and
+        `:394` adds `reply.community.instance_id`. Those are DIFFERENT ID
         SPACES: the guard tests a community id against a set of instance ids,
         so it cannot do what it is written to do. The `suspect_user` block at
-        `:393`-`:395` gets the identical pattern right, which is what makes
+        `:395`-`:397` gets the identical pattern right, which is what makes
         this a slip rather than a convention.
 
         `Community.is_local()` (app/models.py:795-796) is `ap_id is None or
         profile_id().startswith(SERVER_URL)` -- `make_community` never sets
         `ap_id`, so moving `instance_id` alone leaves `is_local()` True and
-        `:390`'s guard would never fire. `ap_id` and `ap_profile_id` are set
+        `:392`'s guard would never fire. `ap_id` and `ap_profile_id` are set
         here to a `remote.example` URL, alongside `instance_id`, so
         `is_local()` is actually False.
 
         THIS TEST RECORDS TODAY'S BEHAVIOUR AND THIS ROUND DOES NOT FIX IT --
         the production budget is the counter fix, and a duplicate Flag to one
         instance is a different blast radius from a permanently drifting
-        counter. IF A LATER ROUND REPAIRS `:391` TO GUARD ON
+        counter. IF A LATER ROUND REPAIRS `:393` TO GUARD ON
         `reply.community.instance_id`, THE EDIT OWED HERE IS TO ASSERT THE
         INSTANCE APPEARS EXACTLY ONCE rather than that the branch was taken.
 
@@ -391,11 +397,11 @@ class TestReportReply:
         assert 'report_reply' in calls
 
     def test_a_description_is_appended_to_the_summary(self, db_session):
-        """`:402`'s true arm and `:403`'s concatenation.
+        """`:404`'s true arm and `:405`'s concatenation.
 
-        The summary is only built when `:400` finds a remote instance, so this
+        The summary is only built when `:402` finds a remote instance, so this
         test needs the remote path as well. Assert the JOINED string, because
-        `:401` alone would pass with `:403` deleted.
+        `:403` alone would pass with `:405` deleted.
         """
         s = _seed_for_report()
         s.author.instance_id = s.remote_instance.id
@@ -413,9 +419,9 @@ class TestReportReply:
         assert 'spam - with detail' in summaries
 
     def test_an_empty_description_leaves_the_summary_bare(self, db_session):
-        """`:402`'s false arm -- the counterpart of the test above.
+        """`:404`'s false arm -- the counterpart of the test above.
 
-        Together they prove `:403` is driven by `description` rather than
+        Together they prove `:405` is driven by `description` rather than
         running unconditionally.
         """
         s = _seed_for_report()
@@ -433,7 +439,7 @@ class TestReportReply:
         assert 'spam' in summaries
 
     def test_a_moderator_row_with_no_matching_user_is_skipped(self, db_session):
-        """`:361`'s false arm -> back to `:359`'s loop head.
+        """`:363`'s false arm -> back to `:361`'s loop head.
 
         THIS STATE IS MANUFACTURED. No production path that reaches this test
         was found: every user-deletion path checked --
@@ -446,12 +452,12 @@ class TestReportReply:
         this specific row-without-a-user behind. The test forces the state
         directly with a raw SQL `DELETE` and FK enforcement dropped for that
         one statement (the identical technique tests/conftest.py's teardown
-        SQL uses), then `db.session.expire_all()` so `Session.get()` (`:360`)
+        SQL uses), then `db.session.expire_all()` so `Session.get()` (`:362`)
         -- which checks the identity map before the database -- doesn't hand
         back the stale `s.local_mod` object still cached from
         `_seed_for_report` instead of re-querying and finding nothing.
 
-        `:361` is therefore a DEFENSIVE arm, not one exercised by any known
+        `:363` is therefore a DEFENSIVE arm, not one exercised by any known
         caller -- the same shape as `:160`, which this round registers as
         dead code rather than quietly counting. The coverage line is real
         (the arm's own behaviour -- skip rather than crash on `None` -- is
@@ -476,11 +482,11 @@ class TestReportReply:
         assert db.session.query(Notification).count() == 0
 
     def test_an_admin_already_notified_as_moderator_is_not_notified_twice(self, db_session):
-        """`:380`'s false arm -> back to `:379`'s loop head.
+        """`:382`'s false arm -> back to `:381`'s loop head.
 
         An admin who is ALSO a local moderator of the community is added to
-        `already_notified` by the moderator loop (`:370`) before the admin
-        loop ever runs, so `:380` must skip the second Notification and the
+        `already_notified` by the moderator loop (`:372`) before the admin
+        loop ever runs, so `:382` must skip the second Notification and the
         `unread_notifications` increment -- both stay at their single,
         moderator-loop-caused value, not double it.
         """
@@ -507,7 +513,7 @@ class TestReportReply:
         assert len(rows) == 1
 
     def test_the_community_guard_false_arm_is_coincidence_not_correctness(self, db_session):
-        """`:391`'s false arm, reached only because two unrelated id spaces
+        """`:393`'s false arm, reached only because two unrelated id spaces
         happen to collide -- continues finding 1
         (`test_the_community_guard_compares_the_wrong_id_space`).
 
@@ -516,15 +522,15 @@ class TestReportReply:
         (the local and remote instances that fixture already made take 1 and
         2). A moderator on that third instance is collected into
         `remote_instance_ids` unconditionally (`report_remote=True`), so by
-        the time `:391` runs, `reply.community_id` (3) is already "in" a set
+        the time `:393` runs, `reply.community_id` (3) is already "in" a set
         that is really a set of instance ids, purely because the two
-        sequences happened to reach the same integer. `:391` being False here
+        sequences happened to reach the same integer. `:393` being False here
         is not the guard working -- it is the exact coincidence the pinned
-        finding says the guard is exposed to. This test does not fix `:391`.
+        finding says the guard is exposed to. This test does not fix `:393`.
 
         Asserts the FULL set of collected instance ids, not one element's
         count: a bare `.count(third_instance.id) == 1` cannot see an extra,
-        wrong id leaking in alongside it (e.g. from an inverted `:391`
+        wrong id leaking in alongside it (e.g. from an inverted `:393`
         guard that starts adding `reply.community.instance_id` when it
         should not) -- exactly the kind of confusion this pin exists to
         catch, so an assertion blind to it would defeat the pin's own
@@ -534,7 +540,7 @@ class TestReportReply:
         third_instance = make_instance('third.example', software='lemmy')
         assert third_instance.id == s.community.id, (
             'this test needs the coincidence: an unrelated instance id equal '
-            'to the community id, or :391 is never driven false'
+            'to the community id, or :393 is never driven false'
         )
         third_mod = make_user(third_instance, 'third-mod', local=False)
         add_moderator(s, third_mod)
@@ -552,13 +558,13 @@ class TestReportReply:
         assert set(instance_ids) == {third_instance.id}
 
     def test_the_suspect_guard_skips_an_instance_already_collected(self, db_session):
-        """`:394`'s false arm -> `:397` directly, skipping a redundant add.
+        """`:396`'s false arm -> `:399` directly, skipping a redundant add.
 
-        Unlike the community guard above, `:394` tests
+        Unlike the community guard above, `:396` tests
         `suspect_user.instance_id` against `remote_instance_ids` -- the SAME
         id space -- so a remote moderator on the suspect's own instance,
-        already collected unconditionally by `:376` (`report_remote=True`),
-        makes `:394` correctly skip adding the same instance a second time.
+        already collected unconditionally by `:378` (`report_remote=True`),
+        makes `:396` correctly skip adding the same instance a second time.
         """
         s = _seed_for_report()
         s.author.instance_id = s.remote_instance.id

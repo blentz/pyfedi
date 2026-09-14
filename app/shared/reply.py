@@ -292,6 +292,8 @@ def restore_reply(reply_id, src, auth):
 
     if not reply.author.bot:
         reply.post.reply_count += 1
+        reply.post.reply_count_cross_posted += 1
+        reply.community.post_reply_count += 1
     reply.author.post_reply_count += 1
     if reply.path and len(reply.path) > 1:
         db.session.execute(text('update post_reply set child_count = child_count + 1 where id in :parents'),
@@ -426,6 +428,8 @@ def mod_remove_reply(reply_id, reason, src, auth):
     reply.deleted_by = user.id if user.id != reply.user_id else -1
     if not reply.author.bot:
         reply.post.reply_count -= 1
+        reply.post.reply_count_cross_posted -= 1
+        reply.community.post_reply_count -= 1
     reply.author.post_reply_count -= 1
     if reply.path and len(reply.path) > 1:
         db.session.execute(text('update post_reply set child_count = child_count - 1 where id in :parents'),
@@ -461,6 +465,8 @@ def mod_restore_reply(reply_id, reason, src, auth):
     reply.deleted_by = None
     if not reply.author.bot:
         reply.post.reply_count += 1
+        reply.post.reply_count_cross_posted += 1
+        reply.community.post_reply_count += 1
     reply.author.post_reply_count += 1
     if reply.path and len(reply.path) > 1:
         db.session.execute(text('update post_reply set child_count = child_count + 1 where id in :parents'),
