@@ -188,10 +188,10 @@ class TestReportReply:
     def test_a_remote_moderator_is_not_notified_locally(self, db_session):
         """`:362`'s false arm -> `:371`-`:376`.
 
-        THE POSITIVE CONTROL IS THE TEST ABOVE, and it is required: "no
-        Notification row" is both the correct outcome here and the signature
-        of a fixture where no moderator exists at all. That test proves this
-        fixture CAN notify.
+        THE POSITIVE CONTROL IS `test_a_local_moderator_is_notified` ABOVE,
+        and it is required: "no Notification row" is both the correct outcome
+        here and the signature of a fixture where no moderator exists at all.
+        That test proves this fixture CAN notify.
         """
         s = _seed_for_report()
         add_moderator(s, s.remote_mod)
@@ -327,6 +327,14 @@ class TestReportReply:
         `is_local()`. `ap_id`/`ap_profile_id`/`ap_public_url` are set here to
         a URL on `remote.example` so `is_local()` is actually False and
         `:393`'s guard fires.
+
+        `capture_kwargs=True` and asserting the actual `instance_ids` set
+        (not just `'report_reply' in calls`) is required: a mutant swapping
+        `:395`'s operand to add `reply.community.instance_id` instead of
+        `suspect_user.instance_id` still fires the task -- the community's
+        instance_id is 1 (`make_community` hardcodes it, and this test never
+        moves it) -- so a bare "some task fired" assertion cannot tell the
+        suspect's instance (2) apart from the community's (1).
         """
         s = _seed_for_report()
         s.author.instance_id = s.remote_instance.id
@@ -336,10 +344,13 @@ class TestReportReply:
         db.session.commit()
         payload = {'reason': 'spam', 'description': 'd', 'report_remote': True}
 
-        with _recording_task_selector() as calls:
+        with _recording_task_selector(capture_kwargs=True) as calls:
             report_reply(s.reply, payload, SRC_API, auth=bearer(s.reporter))
 
-        assert 'report_reply' in calls
+        report_calls = [c for c in calls if c[0] == 'report_reply']
+        assert len(report_calls) == 1
+        instance_ids = report_calls[0][1]['instance_ids']
+        assert set(instance_ids) == {s.remote_instance.id}
 
     def test_the_community_guard_compares_the_wrong_id_space(self, db_session):
         """`:390`-`:392` -- AND IT PINS A REGISTERED DEFECT ON PURPOSE.
@@ -424,17 +435,28 @@ class TestReportReply:
     def test_a_moderator_row_with_no_matching_user_is_skipped(self, db_session):
         """`:361`'s false arm -> back to `:359`'s loop head.
 
-        `Community.moderators()` returns raw `CommunityMember` rows; `:360`
-        then resolves each to a `User` by primary key. A `CommunityMember`
-        whose user row has since been hard-deleted -- FK enforcement dropped
-        for the one DELETE statement, the identical technique
-        tests/conftest.py's teardown SQL uses -- leaves `moderator` None, and
-        `:361` must skip it rather than call `.is_local()` on `None`.
-        `expire_all()` is required first: `Session.get()` (`:360`) checks the
-        identity map before it checks the database, and the ORM still holds
-        `s.local_mod` cached from `_seed_for_report` -- without expiring it,
-        `:360` would hand back the stale cached object instead of re-querying
-        and finding nothing.
+        THIS STATE IS MANUFACTURED. No production path that reaches this test
+        was found: every user-deletion path checked --
+        `app/admin/routes.py:1785`, `app/user/utils.py`, and
+        `User.delete_dependencies()` (`app/models.py:1543`,
+        `db.session.query(CommunityMember).filter(CommunityMember.user_id ==
+        self.id).delete()`) -- deletes the matching `CommunityMember` rows
+        BEFORE the `User` row goes, and no migration puts `ondelete=CASCADE`
+        on `community_member.user_id` either, so a real delete cannot leave
+        this specific row-without-a-user behind. The test forces the state
+        directly with a raw SQL `DELETE` and FK enforcement dropped for that
+        one statement (the identical technique tests/conftest.py's teardown
+        SQL uses), then `db.session.expire_all()` so `Session.get()` (`:360`)
+        -- which checks the identity map before the database -- doesn't hand
+        back the stale `s.local_mod` object still cached from
+        `_seed_for_report` instead of re-querying and finding nothing.
+
+        `:361` is therefore a DEFENSIVE arm, not one exercised by any known
+        caller -- the same shape as `:160`, which this round registers as
+        dead code rather than quietly counting. The coverage line is real
+        (the arm's own behaviour -- skip rather than crash on `None` -- is
+        genuinely asserted below) but nothing reaches it through the
+        application; only this manufactured row does.
         """
         s = _seed_for_report()
         add_moderator(s, s.local_mod)
@@ -499,6 +521,14 @@ class TestReportReply:
         sequences happened to reach the same integer. `:391` being False here
         is not the guard working -- it is the exact coincidence the pinned
         finding says the guard is exposed to. This test does not fix `:391`.
+
+        Asserts the FULL set of collected instance ids, not one element's
+        count: a bare `.count(third_instance.id) == 1` cannot see an extra,
+        wrong id leaking in alongside it (e.g. from an inverted `:391`
+        guard that starts adding `reply.community.instance_id` when it
+        should not) -- exactly the kind of confusion this pin exists to
+        catch, so an assertion blind to it would defeat the pin's own
+        purpose.
         """
         s = _seed_for_report()
         third_instance = make_instance('third.example', software='lemmy')
@@ -519,7 +549,7 @@ class TestReportReply:
         report_calls = [c for c in calls if c[0] == 'report_reply']
         assert len(report_calls) == 1
         instance_ids = report_calls[0][1]['instance_ids']
-        assert instance_ids.count(third_instance.id) == 1
+        assert set(instance_ids) == {third_instance.id}
 
     def test_the_suspect_guard_skips_an_instance_already_collected(self, db_session):
         """`:394`'s false arm -> `:397` directly, skipping a redundant add.
@@ -545,4 +575,4 @@ class TestReportReply:
         report_calls = [c for c in calls if c[0] == 'report_reply']
         assert len(report_calls) == 1
         instance_ids = report_calls[0][1]['instance_ids']
-        assert instance_ids.count(s.remote_instance.id) == 1
+        assert set(instance_ids) == {s.remote_instance.id}
