@@ -88,6 +88,51 @@ From the full-suite JSON at `01845836`, per coverage.py's own function table:
 
 **The split is natural rather than arbitrary.** Five functions are at literally zero — `missing == total` — and account for 124 statements and 60 arcs. Three are nearly closed, contributing 7 statements and 6 arcs between them, presumably reached incidentally by API tests elsewhere.
 
+### CORRECTION, added after this spec was committed: `ban_user`'s source test
+
+Reading `ban_user` to write the plan turned up a live defect the scoping pass missed.
+
+```
+app/shared/user.py:161        if SRC_WEB:
+app/shared/user.py:171            if SRC_WEB:
+app/shared/user.py:183            if SRC_WEB:
+app/shared/user.py:192        if SRC_WEB:
+app/constants.py:91     SRC_WEB = 1
+```
+
+**Four sites test the constant, not the caller's `src`.** `SRC_WEB` is 1, so every one
+of them is unconditionally true. `subscribe_user:93` has the correct form,
+`if src == SRC_WEB:`, and the tree-wide sweep for `if SRC_WEB:` / `if SRC_API:` /
+`if SRC_PLD:` returns these four lines and nothing else — the fault is local to
+`ban_user`.
+
+I first counted five. The `else` at `:197` hangs off the role check at `:195`, not off
+the source test. **Four.**
+
+The consequence is live rather than theoretical: `app/api/alpha/utils/user.py:975`
+calls `ban_user(..., SRC_API, auth)` from an API handler, so all seven `flash()` calls
+at `:163`, `:165`, `:172`, `:184`, `:194`, `:196` and `:198` fire on an API ban and write
+interface messages into the API caller's session.
+
+It also bears directly on this round's success criterion. `SRC_WEB` is an imported
+name, so CPython cannot fold it; the branch survives into bytecode with its false arc
+unreachable. **Four arcs in the round's largest target function cannot be covered as
+written.** `app/shared/user.py` cannot reach zero missing arcs without this fix.
+
+**Disposition: pin, then fix in the same round** — the shape sub-projects 41 and 42 both
+used. Cover `ban_user` against today's behaviour first, so the bug is witnessed by a
+passing test; then change the four sites to `if src == SRC_WEB:` and invert the pins.
+This is transcription from the sibling at `:93`, not a design decision.
+
+**This makes two production changes, not one.** The "Production changes" section below
+is written against the pre-correction scope; read it with this paragraph.
+
+**A second, smaller oddity at the same site, registered and not fixed:** the `else` at
+`:197` attaches to `:195`, so a banned user who holds a role never gets the plain
+"%(actor)s has been banned." message — only the "with role permissions" warning. The
+instance-admin warning at `:193` has no such else and fires independently. Whether that
+suppression is intended is a product question; the coverage tests pin it either way.
+
 ### Grouping
 
 - **Group A — the block pair and the bot challenge**: `block_another_user`, `unblock_another_user`, `bot_challenge_user`. 63 statements, 32 arcs.
@@ -115,18 +160,43 @@ A mutation pass **scoped by the statement list, not the arc table**, with the st
 
 **An equivalence claim needs a proof of unkillability, never a failure to kill.** Sub-project 42 retracted D546 for exactly that error: a surviving mutant means either "no test *can* kill this" or "no test *does*", and resolving the ambiguity by assumption is how `:160` stayed uncovered for a whole round.
 
-**One mandatory mutation beyond the list:** neutralise `ban_user`'s permission guard so it never refuses. Six consecutive rounds have found a real hole this way.
+**RETRACTED, and replaced.** This section originally read "neutralise `ban_user`'s permission
+guard so it never refuses. Six consecutive rounds have found a real hole this way." **`ban_user`
+has no permission guard.** `:141-210` contains no authorization check of any kind:
+`authorise_api_user` at `:143` authenticates and does not authorize, and both callers gate
+before calling — `app/api/alpha/utils/user.py:971` and `app/user/routes.py:767` each test
+`user_access('ban users', ...) or user_access('manage users', ...)` and `abort(403)` or fall
+through otherwise. The spec asserted a structure it had not read, which is the defect class the
+register keeps recording. Re-derived by reading `:141-210` in full.
+
+**Two mandatory mutations beyond the list, in its place:**
+
+1. Revert one fixed `if src == SRC_WEB:` to the bare `if SRC_WEB:` it came from. A test that
+   bans through `SRC_API` must kill it. This is the pin, restated as a mutant.
+2. Invert `to_ban.is_local()` at `:168`. It selects between `purge_user_then_delete` and the
+   `delete_dependencies` / `purge_content` / redis-lock path — two materially different
+   deletions — and a test suite that cannot tell them apart has covered the arcs without
+   witnessing the behaviour.
+
+**And a finding to register rather than fix:** `ban_user` trusts its callers for authorization,
+where `app/shared/post.py` and `app/shared/reply.py` check in the shared layer (`can_upvote`,
+the moderator tests). Both of `ban_user`'s current callers do gate it, so nothing is reachable
+today; the divergence is what a third caller would walk into. Six consecutive rounds have found a real hole this way.
 
 Standing rules: a crash kill is not a kill unless a viable non-crashing variant of the same fault also dies; fix-catching is not a unique kill; **a count is a claim — re-derive it like a line number.**
 
 ## Production changes
 
-**One, and it is Part 1's migration.** No other production change is planned. If a genuine defect surfaces in Part 2 it is registered rather than folded in — sub-projects 40, 41 and 42 each ended up making production changes, and each one was named in its spec before the round began.
+**Two.** Part 1's migration, and `ban_user`'s four `if SRC_WEB:` sites — see the
+CORRECTION above, which was written after this section and supersedes its count.
+No other production change is planned. If a genuine defect surfaces in Part 2 it is registered rather than folded in — sub-projects 40, 41 and 42 each ended up making production changes, and each one was named in its spec before the round began.
 
 ## Success criteria
 
 - The backfill migration applied, with the `TypeError` pasted before it and the same row passing after.
 - `app/shared/user.py` at zero missing statements and zero missing arcs, checked **as lists**.
+  Unreachable until `ban_user`'s source test is fixed: four false arcs at `:161`, `:171`,
+  `:183`, `:192`.
 - A **new** `coverage_floors.ini` entry at `floor(percent_covered)` — the module has none.
 - Full suite green, run by the controller, floors check chained by `&&` with **both** arguments. It currently needs `-o session_timeout=1800` on a loaded machine; **`pytest.ini` is not to be edited.**
 - Findings registered from **D554**, marker updated.
