@@ -484,11 +484,23 @@ class TestMakeReply:
         `_clear_creation_guards(s.actor)` is required: `:192`'s `can_create_post_reply`
         refuses any local user whose `private_key` is `None` -- see
         `_clear_creation_guards`'s docstring.
+
+        A REAL `Language` ROW IS SEEDED AND ITS ID USED, NOT `None`, per a
+        fix-round-1 finding: `User.language_id` (app/models.py:1038) has no
+        default, so `None` is already every fresh user's value, and an
+        assertion of `is None` cannot tell whether `:200` ran at all or was
+        deleted outright. The reviewer mutated `:200` out and the `None`-based
+        version of this assertion still passed. Using a genuine, non-`None`
+        id makes the assertion a value round-trip -- confirmed by the same
+        mutate-and-restore cycle below.
         """
         s = _seed_for_reply()
         _clear_creation_guards(s.actor)
+        language = Language(code='en', name='English')
+        db.session.add(language)
+        db.session.commit()
         payload = {'body': 'a new reply', 'notify_author': True,
-                   'language_id': None, 'distinguished': False}
+                   'language_id': language.id, 'distinguished': False}
 
         user_id, reply = make_reply(payload, s.post, None, SRC_API,
                                     auth=bearer(s.actor))
@@ -496,7 +508,7 @@ class TestMakeReply:
         assert user_id == s.actor.id
         assert reply.id is not None
         db.session.refresh(s.actor)
-        assert s.actor.language_id is None
+        assert s.actor.language_id == language.id
 
     def test_the_web_arm_reads_the_form_clears_it_and_flashes(self, db_session, app):
         """`:157` false -> `:167`-`:172`, `:204`-`:206`, `:213`.
