@@ -18,13 +18,20 @@ actor.is_staff()` to pick 'admin' or 'mod' as the action type, and
 tests/conftest.py:131-132 resets every sequence between tests, so the first
 user minted is id 1 deterministically. _seed_ban_scenario burns that seat.
 
-FOUR TESTS IN THIS FILE PIN A DEFECT. app/shared/user.py:161, :171, :183 and
-:192 read `if SRC_WEB:` -- a bare imported name whose value is 1
-(app/constants.py:91) -- where :93 in the same module reads
-`if src == SRC_WEB:`. All four are unconditionally true, so ban_user's
-web-only flash messages fire on API calls too. Those tests assert today's
-behaviour and are INVERTED by the task that fixes the four lines. Each one
-says PINS A DEFECT in its docstring.
+FOUR LINES WERE FIXED IN THIS ROUND. app/shared/user.py:161, :171, :183 and
+:192 used to read `if SRC_WEB:` -- a bare imported name whose value is 1
+(app/constants.py:91) -- where :93 in the same module already read
+`if src == SRC_WEB:`. All four were therefore unconditionally true, so
+ban_user's web-only flash messages fired on API calls too. They now read
+`if src == SRC_WEB:`, matching :93. The four tests below --
+test_ban_user_api_does_not_flash, test_ban_user_purging_via_the_api_does_not_warn,
+test_ban_user_purging_a_local_target_via_the_api_does_not_flash and
+test_ban_user_purging_a_remote_target_via_the_api_does_not_flash -- are the
+inverted pins: they were written first, against the old behaviour, asserting
+the flash DID fire; the fix landed in the same commit as their inversion, and
+they now assert an empty flash list plus a same-mechanism assertion that the
+underlying ban/purge actually ran, so the empty list is evidence the block
+was skipped rather than an artefact of the harness.
 """
 import contextlib
 from types import SimpleNamespace
@@ -175,19 +182,27 @@ def test_ban_user_passes_remove_data_false_when_not_purging(app, db_session):
     assert kwargs['mod_id'] == s.admin.id
 
 
-def test_ban_user_api_flashes_anyway(app, db_session):
-    """PINS A DEFECT. :192 reads `if SRC_WEB:` -- the bare constant, value 1
-    (app/constants.py:91) -- where :93 in the same module reads
-    `if src == SRC_WEB:`. So this web-only block runs on an API ban as well,
-    and :198 writes an interface message into the API caller's session.
+def test_ban_user_api_does_not_flash(app, db_session):
+    """The inversion of a pin. Before the fix, :192 read `if SRC_WEB:` -- the
+    bare constant, value 1 -- so this web-only block ran on API bans and wrote
+    an interface message into the API caller's session. It now reads
+    `if src == SRC_WEB:`, matching :93.
 
-    A request context is pushed here ONLY so that flash() has somewhere to
-    write; the call itself is SRC_API and carries a bearer token. That is the
-    point: app/api/alpha/utils/user.py:975 calls ban_user with SRC_API from a
-    real API request handler, so a request context is exactly what production
-    has.
+    The request context is still pushed, and flash() would still succeed if
+    the block ran: the empty list below is therefore evidence that the block
+    was SKIPPED, not that flashing was impossible. That distinction is what
+    makes this an assertion rather than an artefact of the harness -- see the
+    web test above, which flashes under the same conditions.
 
-    THIS ASSERTION IS INVERTED by the task that fixes the four lines.
+    `banned is True` is kept but is not load-bearing for THIS guard: :156
+    sets it unconditionally, before the `purge_content` fork and long before
+    :192, so it witnesses only that ban_user's first two statements ran --
+    mechanism (a), asserting on state something else sets unconditionally.
+    The load-bearing check is the ModLog assertion: :189's
+    `add_to_modlog('ban_user', ...)` runs only inside the no-purge `else`
+    block that :192 itself lives in, immediately before the guard, so a
+    'ban_user' row proves control actually reached the statement the guard
+    is on.
     """
     s = _seed_ban_scenario()
 
@@ -199,7 +214,10 @@ def test_ban_user_api_flashes_anyway(app, db_session):
         flashed = [message for _category, message in
                    flask_session.get('_flashes', [])]
 
-    assert flashed == [f'{s.target.display_name()} has been banned.']
+    assert flashed == []
+    db.session.expire_all()
+    assert db.session.query(User).get(s.target.id).banned is True
+    assert db.session.query(ModLog).one().action == 'ban_user'
 
 
 def test_ban_user_web_flashes_the_plain_message(app, db_session):
@@ -572,12 +590,17 @@ def test_ban_user_purging_a_role_holder_warns_about_permissions(
     assert 'Purged user was a remote instance admin.' not in flashed
 
 
-def test_ban_user_purging_via_the_api_warns_anyway(
+def test_ban_user_purging_via_the_api_does_not_warn(
         app, db_session, no_real_purge, redis_lock_only_double):
-    """PINS A DEFECT. :161 reads `if SRC_WEB:` -- the bare constant, value 1
-    -- so the warning block runs on an API ban too.
+    """The inversion of a pin. Before the fix, :161 read `if SRC_WEB:` -- the
+    bare constant, value 1 -- so this warning block ran on an API ban too. It
+    now reads `if src == SRC_WEB:`, matching :93.
 
-    THIS ASSERTION IS INVERTED by the task that fixes the four lines.
+    The empty flash list alone would be mechanism (c) of the five false
+    witnesses -- emptiness with no same-mechanism positive control -- so the
+    ModLog assertion below proves the purge itself still ran; the surviving
+    web-arm test above is the positive control proving the warning is
+    reachable in this harness at all.
     """
     s = _seed_ban_scenario(target_local=False)
     db.session.add(InstanceRole(instance_id=s.target.instance_id,
@@ -592,14 +615,20 @@ def test_ban_user_purging_via_the_api_warns_anyway(
         flashed = [message for _category, message in
                    flask_session.get('_flashes', [])]
 
-    assert 'Purged user was a remote instance admin.' in flashed
+    assert flashed == []
+    assert db.session.query(ModLog).one().action == 'delete_user'
 
 
-def test_ban_user_purging_a_local_target_via_the_api_flashes_anyway(
+def test_ban_user_purging_a_local_target_via_the_api_does_not_flash(
         app, db_session, no_real_purge):
-    """PINS A DEFECT. :171, the same bare-constant fault as :161.
+    """The inversion of a pin. Before the fix, :171 read `if SRC_WEB:` -- the
+    same bare-constant fault as :161. It now reads `if src == SRC_WEB:`,
+    matching :93.
 
-    THIS ASSERTION IS INVERTED by the task that fixes the four lines.
+    `no_real_purge`'s recorded call is the same-mechanism positive control:
+    it proves purge_user_then_delete actually ran, so the empty flash list is
+    evidence the block was skipped rather than an artefact of the harness --
+    see the web test above, which flashes under the same conditions.
     """
     s = _seed_ban_scenario(target_local=True)
 
@@ -611,16 +640,20 @@ def test_ban_user_purging_a_local_target_via_the_api_flashes_anyway(
         flashed = [message for _category, message in
                    flask_session.get('_flashes', [])]
 
-    assert flashed == [
-        f'{s.target.display_name()} has been banned, deleted and all their '
-        f'content deleted. This might take a few minutes.']
+    assert flashed == []
+    assert no_real_purge == [(s.target.id, False)]
 
 
-def test_ban_user_purging_a_remote_target_via_the_api_flashes_anyway(
+def test_ban_user_purging_a_remote_target_via_the_api_does_not_flash(
         app, db_session, no_real_purge, redis_lock_only_double):
-    """PINS A DEFECT. :183, the same bare-constant fault.
+    """The inversion of a pin. Before the fix, :183 read `if SRC_WEB:` -- the
+    same bare-constant fault. It now reads `if src == SRC_WEB:`, matching
+    :93.
 
-    THIS ASSERTION IS INVERTED by the task that fixes the four lines.
+    The ModLog assertion is the same-mechanism positive control proving the
+    remote purge path actually ran, so the empty flash list is evidence the
+    block was skipped rather than an artefact of the harness -- see the web
+    test above, which flashes under the same conditions.
     """
     s = _seed_ban_scenario(target_local=False)
 
@@ -632,9 +665,8 @@ def test_ban_user_purging_a_remote_target_via_the_api_flashes_anyway(
         flashed = [message for _category, message in
                    flask_session.get('_flashes', [])]
 
-    assert flashed == [
-        f'{s.target.display_name()} has been banned, deleted and all their '
-        f'content deleted.']
+    assert flashed == []
+    assert db.session.query(ModLog).one().action == 'delete_user'
 
 
 def test_ban_user_without_purge_warns_about_an_instance_admin_too(
