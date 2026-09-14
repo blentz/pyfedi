@@ -281,7 +281,7 @@ from tests.factories import (
 def _seed_moderated_reply(*, private=True, community_name='moderation'):
     """One instance, one local user, one community, one post, one reply.
 
-    Modelled on `tests/test_shared_reply_interactions.py:507`'s `_seed_reply`
+    Modelled on `tests/test_shared_reply_interactions.py:591`'s `_seed_reply`
     and carrying its ordering constraints: `make_community` hardcodes
     `instance_id=1` and `user_id=1` (tests/factories.py:141-142) and
     tests/conftest.py:131 resets every sequence after each test, so the
