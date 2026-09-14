@@ -23,8 +23,9 @@ from sqlalchemy import text
 
 from app import db
 from app.constants import NOTIF_USER, ROLE_ADMIN, ROLE_STAFF, SRC_API, SRC_WEB
-from app.models import NotificationSubscription, Role, UserBlock, user_role
-from app.shared.user import block_another_user, unblock_another_user
+from app.models import (BotChallenge, ChatMessage, Conversation,
+                         NotificationSubscription, Role, UserBlock, user_role)
+from app.shared.user import block_another_user, bot_challenge_user, unblock_another_user
 from tests.factories import bearer, make_instance, make_user, web_ctx
 
 
@@ -288,3 +289,143 @@ def test_unblock_another_user_web_refuses_self_without_raising(app, db_session):
 
     assert returned is None
     assert flashed == ['You cannot unblock yourself.']
+
+
+def test_bot_challenge_user_web_sends_a_message_and_records_the_challenge(app, db_session):
+    """The first-challenge path: no existing BotChallenge, so :318 mints a
+    fresh uuid and :337-339 records it.
+
+    The uuid is asserted to appear IN the message body rather than merely to
+    exist, because :333 interpolates it into the link the recipient has to
+    visit -- a challenge row whose uuid never reached the message is useless.
+    """
+    s = _seed_blockers()
+
+    with web_ctx(app, s.blocker):
+        bot_challenge_user(s.target.id, SRC_WEB)
+
+    challenge = db.session.query(BotChallenge).filter_by(user_id=s.target.id).one()
+    assert challenge.sent_by == s.blocker.id
+    assert len(challenge.uuid) == 49
+
+    message = db.session.query(ChatMessage).one()
+    assert f'/bot_challenge/{challenge.uuid}' in message.body
+
+
+def test_bot_challenge_user_puts_the_recipient_in_the_conversation(app, db_session):
+    """:321's `members.append(recipient)`.
+
+    The membership is compared as a SET: `conversation.members` comes back
+    through a relationship whose row order no test may depend on.
+    """
+    s = _seed_blockers()
+
+    with web_ctx(app, s.blocker):
+        bot_challenge_user(s.target.id, SRC_WEB)
+
+    conversation = db.session.query(Conversation).one()
+    assert {m.id for m in conversation.members} == {s.blocker.id, s.target.id}
+    assert conversation.user_id == s.blocker.id
+
+
+def test_bot_challenge_user_reuses_the_uuid_of_an_unanswered_challenge(app, db_session):
+    """:313-316 -- an existing challenge with is_a_bot left NULL.
+
+    The second call must reuse the stored uuid and must NOT insert a second
+    BotChallenge row (:337's `is None` is false). The uuid is set to a
+    recognisable constant so that "reused" is distinguishable from "minted a
+    new one that happens to be 49 characters".
+    """
+    s = _seed_blockers()
+    db.session.add(BotChallenge(user_id=s.target.id, sent_by=s.blocker.id,
+                                uuid='reused-uuid-from-the-first-challenge-0000000000000'[:49]))
+    db.session.commit()
+
+    with web_ctx(app, s.blocker):
+        bot_challenge_user(s.target.id, SRC_WEB)
+
+    assert db.session.query(BotChallenge).filter_by(user_id=s.target.id).count() == 1
+    message = db.session.query(ChatMessage).one()
+    stored = db.session.query(BotChallenge).filter_by(user_id=s.target.id).one().uuid
+    assert f'/bot_challenge/{stored}' in message.body
+
+
+def test_bot_challenge_user_refuses_someone_who_already_answered(app, db_session):
+    """:314's `is_a_bot is False` -- identity, not truthiness.
+
+    is_a_bot is set to False explicitly. The previous test leaves it NULL and
+    proceeds, which is the positive control that distinguishes `is False`
+    from a plain falsiness check: NULL is falsy too, and a `not
+    existing_challenge.is_a_bot` would refuse both.
+    """
+    s = _seed_blockers()
+    db.session.add(BotChallenge(user_id=s.target.id, sent_by=s.blocker.id,
+                                uuid='x' * 49, is_a_bot=False))
+    db.session.commit()
+
+    with web_ctx(app, s.blocker):
+        with pytest.raises(Exception, match='already responded to the challenge'):
+            bot_challenge_user(s.target.id, SRC_WEB)
+
+    assert db.session.query(ChatMessage).count() == 0
+    assert db.session.query(Conversation).count() == 0
+
+
+def test_bot_challenge_user_continues_for_a_confirmed_bot(app, db_session):
+    """is_a_bot True reaches :316, not :315.
+
+    Without this arm, `is False` at :314 could be replaced by `is not None`
+    and every other test here would stay green.
+    """
+    s = _seed_blockers()
+    db.session.add(BotChallenge(user_id=s.target.id, sent_by=s.blocker.id,
+                                uuid='y' * 49, is_a_bot=True))
+    db.session.commit()
+
+    with web_ctx(app, s.blocker):
+        bot_challenge_user(s.target.id, SRC_WEB)
+
+    assert db.session.query(ChatMessage).count() == 1
+
+
+def test_bot_challenge_user_src_api_bare_call_crashes_on_none_current_user(app, db_session):
+    """PINS A DEFECT, under a condition this codebase never actually creates.
+
+    `:320` builds the Conversation from `user` -- the API-authorised caller
+    -- but `:322` appends `current_user` instead of the caller. That
+    disagreement is real regardless of caller: `grep -rn bot_challenge_user
+    app/` shows exactly one call site, `app/user/routes.py:2115`, and it
+    hardcodes `src=SRC_WEB`. Nothing in the current tree ever invokes this
+    function with `SRC_API`, so this test calls it bare -- directly, with no
+    Flask request context -- to exercise the branch at all. This round's
+    production budget is the backfill migration (Task 1) and ban_user's four
+    `if SRC_WEB:` lines (Task 6), so `:322` is registered rather than fixed
+    here.
+
+    OBSERVED, not predicted: outside a request context, flask_login's
+    `current_user` resolves to plain `None` here (not an anonymous-user
+    proxy), so `conversation.members.append(current_user)` at `:322` appends
+    None into the relationship, and the AttributeError below fires during the
+    `db.session.commit()` at `:324` -- before `send_message` (`:335`) is ever
+    reached. The brief's hypothesis was that the failure would surface inside
+    `send_message`'s `user: User = current_user` default; that is not what
+    happens: the flush at `:324` fails first. See this task's report for the
+    exact probe transcript.
+
+    What this test does NOT show: behaviour under a real request context. If
+    a future route wired `SRC_API` to this function, that call would run
+    inside an actual Flask request, where flask_login's `_load_user()` sets
+    `current_user` to an `AnonymousUserMixin` instance rather than `None` --
+    an object that plausibly satisfies `.id` access differently (or fails
+    differently) than this bare call's plain `None` does. This test pins the
+    bare-call crash it can actually produce; it does not establish what an
+    API caller with no session would experience in production, because no
+    such caller exists.
+    """
+    s = _seed_blockers()
+
+    with pytest.raises(AttributeError, match="'NoneType' object has no attribute '_sa_instance_state'"):
+        bot_challenge_user(s.target.id, SRC_API, bearer(s.blocker))
+
+    assert db.session.query(BotChallenge).count() == 0
+    assert db.session.query(ChatMessage).count() == 0
