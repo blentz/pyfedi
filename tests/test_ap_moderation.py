@@ -516,17 +516,42 @@ def test_restoring_a_post_clears_deleted_and_restores_counters(
     assert author.post_count == 5
 
 
-def test_restoring_a_reply_restores_only_the_counters_it_knows_about(
+def test_restoring_a_reply_restores_every_counter_the_delete_moved(
         app, db_session, monkeypatch, redis_lock_only_double):
-    """PINS A DEFECT. `restore_post_or_comment`'s PostReply branch increments
-    `post.reply_count` (when not a bot) and `author.post_reply_count` -- and
-    NOTHING ELSE. `delete_post_or_comment` decrements four counters for the
-    same row.
+    """PINS A FIXED DEFECT, AND THE PARAGRAPH THAT STOOD HERE IS RETRACTED.
 
+    THIS TEST WAS CALLED `test_restoring_a_reply_restores_only_the_counters_
+    it_knows_about` and it claimed, verbatim: "PINS A DEFECT.
+    `restore_post_or_comment`'s PostReply branch increments `post.reply_count`
+    (when not a bot) and `author.post_reply_count` -- and NOTHING ELSE...
     So `community.post_reply_count` and `post.reply_count_cross_posted` are
-    asserted UNCHANGED here, which is the defect: a restore does not undo
-    what the delete did. Task 5 proves this end to end with a round trip;
-    this test states it for the restore call in isolation.
+    asserted UNCHANGED here, which is the defect: a restore does not undo what
+    the delete did." Its last two assertions carried the comment
+    `# NOT restored -- the defect`. ALL OF THAT IS STALE. Sub-project 42
+    task 7's fix round added `to_restore.post.reply_count_cross_posted += 1`
+    and `community.post_reply_count += 1` to that branch, so it now restores
+    every counter the delete moved and the four assertions below are level.
+
+    WHY THE FIX REACHED THIS FUNCTION AT ALL. The same task had just repaired
+    the local pair in `app/shared/reply.py`, and shipping that alone would have
+    left the federated half broken -- a repair applied to one twin and not the
+    other, which is the shape register entries D200 and D520 exist to name. The
+    direction is settled by `app/shared/tasks/maintenance.py`, which recomputes
+    `community.post_reply_count` as `COUNT(*) FROM post_reply WHERE deleted is
+    false`: that count does not care which code path did the deleting, so both
+    halves owe it the same arithmetic.
+
+    THE TWO NEW STATEMENTS SIT WHERE THE DELETE'S DO, NOT WHERE THE LOCAL
+    `restore_reply`'S DO, and the difference is deliberate.
+    `delete_post_or_comment` decrements `post.reply_count` and
+    `reply_count_cross_posted` INSIDE `if not to_delete.author.bot:` and
+    `community.post_reply_count` OUTSIDE it -- a bot's reply still moves the
+    community counter, which `test_deleting_a_bots_reply_leaves_the_posts_
+    reply_count_alone` pins. So the restore's `reply_count_cross_posted`
+    increment went inside the guard and its `community.post_reply_count`
+    increment outside it. Putting the community increment inside the guard
+    would have made every bot round trip lose one, which is the drift being
+    repaired, reintroduced under a narrower condition.
     """
     site, instance, community, author, moderator = seed_moderation_scene()
     post = make_post(community, author, None, title='a post')
@@ -545,8 +570,57 @@ def test_restoring_a_reply_restores_only_the_counters_it_knows_about(
     assert reply.deleted is False
     assert post.reply_count == 5
     assert author.post_reply_count == 5
-    assert community.post_reply_count == 4      # NOT restored -- the defect
-    assert post.reply_count_cross_posted == 4   # NOT restored -- the defect
+    # These two read `== 4` with the comment `# NOT restored -- the defect`
+    # until the defect was fixed. The comment is quoted rather than deleted:
+    # a retraction that leaves no trace of what it retracts is a silent rewrite.
+    assert community.post_reply_count == 5
+    assert post.reply_count_cross_posted == 5
+
+
+def test_restoring_a_bots_reply_leaves_the_posts_counters_alone(
+        app, db_session, monkeypatch, redis_lock_only_double):
+    """The false arm of `if not to_restore.author.bot:`, and the mirror of
+    `test_deleting_a_bots_reply_leaves_the_posts_reply_count_alone`.
+
+    WITHOUT THIS TEST THE TWO STATEMENTS ADDED BY THE FIX HAVE NO PLACEMENT
+    WITNESS. The guard now holds `post.reply_count` and
+    `post.reply_count_cross_posted`, while `author.post_reply_count` and
+    `community.post_reply_count` sit outside it -- the exact arrangement
+    `delete_post_or_comment` uses, so that a bot's round trip is lossless on
+    all four columns. A mutant moving the community increment INSIDE the guard
+    passes every other test in this file, because every other one that reaches
+    this branch has a non-bot author and so runs both legs together. Here the
+    legs disagree, which is the only condition that can tell them apart.
+
+    `post.reply_count_cross_posted` IS SEEDED NON-ZERO ON PURPOSE, at a value
+    distinct from the other three. The delete side guards its decrement with
+    `if to_delete.post.reply_count_cross_posted:`, so a column left at its
+    default of 0 is one the delete would not have touched either, and holding
+    0 steady would witness nothing about the guard the restore was given.
+
+    `bot` is set True explicitly; `make_user` leaves it at the column default,
+    so a test resting on that default would assert the wrong side of the
+    branch.
+    """
+    site, instance, community, author, moderator = seed_moderation_scene()
+    post = make_post(community, author, None, title='a post')
+    reply = make_post_reply(post, author)
+    reply.deleted = True
+    post.reply_count = 4
+    post.reply_count_cross_posted = 7
+    author.post_reply_count = 3
+    community.post_reply_count = 6
+    author.bot = True
+    db.session.commit()
+
+    ap_util.restore_post_or_comment(moderator, reply, False,
+                                    {'id': 'https://peer.example/activities/undo/1'}, '')
+
+    assert reply.deleted is False
+    assert post.reply_count == 4
+    assert post.reply_count_cross_posted == 7
+    assert author.post_reply_count == 4
+    assert community.post_reply_count == 7
 
 
 def test_an_unrelated_user_cannot_restore_a_post(app, db_session, monkeypatch, redis_lock_only_double):
@@ -593,35 +667,49 @@ def test_restoring_another_users_post_writes_a_restore_modlog_entry(
     assert entries[0].action == 'restore_post'
 
 
-def test_a_delete_then_restore_cycle_loses_two_counters(
+def test_a_delete_then_restore_cycle_is_lossless_for_a_reply(
         app, db_session, monkeypatch, redis_lock_only_double):
-    """PINS A DEFECT, and it is this slice's most consequential.
+    """PINS A FIXED DEFECT, and it was this slice's most consequential.
 
-    `delete_post_or_comment` decrements four counters for a reply;
-    `restore_post_or_comment` increments two. So a delete followed by a
-    restore -- the exact sequence a moderator produces by removing a comment
-    and then reversing it on appeal -- leaves `community.post_reply_count`
-    and `post.reply_count_cross_posted` one lower, and every subsequent cycle
-    loses one more.
+    THIS TEST WAS CALLED `test_a_delete_then_restore_cycle_loses_two_counters`
+    AND ASSERTED THE LOSS. What it claimed: "`delete_post_or_comment`
+    decrements four counters for a reply; `restore_post_or_comment` increments
+    two. So a delete followed by a restore -- the exact sequence a moderator
+    produces by removing a comment and then reversing it on appeal -- leaves
+    `community.post_reply_count` and `post.reply_count_cross_posted` one lower,
+    and every subsequent cycle loses one more." Its two closing assertions read
+    `== 4` under the comment "The two only the delete side maintains do NOT".
+    THAT IS NOW STALE: sub-project 42 task 7's fix round added the two missing
+    increments, and the cycle returns all four counters to level.
 
-    NOTHING ON THIS PATH REPAIRS EITHER, but both are recomputed elsewhere and
-    an earlier draft of this docstring overstated the consequence as
-    permanent. `community.post_reply_count` is rebuilt from a COUNT by
-    `update_community_stats` (`app/shared/tasks/maintenance.py`), so its drift
-    is bounded by a maintenance cycle rather than forever;
-    `post.reply_count_cross_posted` is rebuilt for a whole cross-post set by
-    the reply-creation path (`app/models.py`). The defect is that the undo
-    does not undo what the do did -- not that the number can never recover.
-    See D200, which carries the corrected framing.
+    THE STANDING ORDER IN THIS DOCSTRING WAS REVERSED, AND BY THE REASON IT
+    GAVE. It read: "DO NOT FIX -- registered. Correcting a counter changes
+    numbers users already see, and the same asymmetry exists in the local
+    web-UI pair (`app/shared/reply.py`), so a fix here alone would leave the
+    two paths disagreeing." The local pair was repaired first, in the same
+    round; from that moment the sentence argued for fixing this half rather
+    than against it, since it is now a fix THERE alone that would leave the two
+    paths disagreeing. Both halves moved, which is what that clause asked for.
 
-    A single-direction test cannot show this. Asserting that restore leaves a
-    counter alone is only a defect if delete moved it, so the two calls have
-    to happen in one test with the starting values recorded.
+    WHAT SETTLED THE ARITHMETIC. `app/shared/tasks/maintenance.py` recomputes
+    `community.post_reply_count` as `COUNT(*) FROM post_reply WHERE deleted is
+    false`, so the column means the number of non-deleted replies on any path;
+    `post.reply_count_cross_posted` is derived from `reply_count` by
+    `app/models.py`. The paragraph below, which corrected an earlier draft's
+    claim that the drift was permanent, still stands and is why those two
+    recomputations are named: they bound the damage, they do not excuse it.
+    `community.post_reply_count` is rebuilt from a COUNT by
+    `update_community_stats`, so the drift was bounded by a maintenance cycle
+    rather than forever, and `post.reply_count_cross_posted` is rebuilt for a
+    whole cross-post set by the reply-creation path. The defect was that the
+    undo did not undo what the do did -- not that the number could never
+    recover. See D200, which carries that framing.
 
-    DO NOT FIX -- registered. Correcting a counter changes numbers users
-    already see, and the same asymmetry exists in the local web-UI pair
-    (`app/shared/reply.py`), so a fix here alone would leave the two paths
-    disagreeing.
+    A single-direction test could not have shown this, and still could not.
+    Asserting that restore MOVES a counter is only meaningful against what the
+    delete did to it, so the two calls happen in one test with the starting
+    values recorded. That is unchanged by the fix; only the expected end state
+    moved.
     """
     site, instance, community, author, moderator = seed_moderation_scene()
     post = make_post(community, author, None, title='a post')
@@ -639,12 +727,15 @@ def test_a_delete_then_restore_cycle_loses_two_counters(
                                     {'id': 'https://peer.example/activities/undo/1'}, '')
 
     assert reply.deleted is False
-    # The two counters both halves maintain come back:
+    # The two counters both halves always maintained:
     assert post.reply_count == 5
     assert author.post_reply_count == 5
-    # The two only the delete side maintains do NOT:
-    assert community.post_reply_count == 4
-    assert post.reply_count_cross_posted == 4
+    # The two only the delete side used to maintain. These read `== 4` under
+    # the comment "The two only the delete side maintains do NOT" until the
+    # restore branch was repaired; the old expectation is quoted here rather
+    # than dropped, because a retraction with no trace is a silent rewrite.
+    assert community.post_reply_count == 5
+    assert post.reply_count_cross_posted == 5
 
 
 def test_a_post_delete_then_restore_cycle_is_lossless(
