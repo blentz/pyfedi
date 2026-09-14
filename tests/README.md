@@ -7177,6 +7177,122 @@ substitution resolving to the same id is invisible the same way, and
 calls both survive even the every-field-asserted tests. Nobody has enumerated
 the rest. Registered as D533.
 
+**237. A USER WITH id 1 IS AN ADMIN OUTRIGHT, SO ANY MODERATOR-GUARD TEST WHOSE
+ACTOR IS THE FIRST USER THE FIXTURE MINTS PASSES FOR THE WRONG REASON -- AND
+KNOWING THAT IS NOT THE SAME AS CHECKING IT.** `User.is_admin`
+(`app/models.py:1259-1265`) opens `if self.id == 1: return True`, before any
+role lookup. `tests/conftest.py:131`'s teardown ends in
+`SELECT setval(c.oid, 1, false) FROM pg_class c WHERE c.relkind = 'S' AND
+c.relnamespace = 'public'::regnamespace`, which resets EVERY sequence to 1
+after EVERY test (`:189-190` says so, because fixtures hardcode
+`instance_id=1`). So the first user a fixture mints is id 1 in every test,
+**deterministically -- not a coin flip that depends on run order**, which is
+the harder case to notice because nothing ever fails. The remedy in
+`tests/test_shared_reply_make.py:247` is `_burn_a_seed()`: it advances the
+user, community and post sequences by one full `_seed_for_reply` unit before
+the real seed, so the acting user is never id 1. **THE PART WORTH CARRYING IS
+THE PROCESS FAILURE, NOT THE TRAP.** Sub-project 42 identified the trap in its
+Task 2, built `_burn_a_seed` for it, and had a reviewer prove the helper
+load-bearing by mutation -- and three `TestEditReply` tests then shipped
+WITHOUT the call, through two reviews. A probe at Task 8 replaced
+`reply.community.is_moderator(user)` with `False` at BOTH `edit_reply:224` and
+`:239` at once, and **all 38 tests passed**; one of the three claimed in its
+own docstring to prove `:223` gates `:224`, which it could not. The control
+that proves the fault was in the tests rather than the fixture or the probe:
+the same substitution against `make_reply:177`, whose actor is `s.actor` at id
+2, dies immediately. **A trap you have named and tooled for is still open until
+something CHECKS for the tool's absence** -- so when a fixture has an id-1
+hazard, write the mutation that makes the guard invisible and require it to
+die, per test, rather than trusting the helper to be remembered. Registered as
+D540.
+
+**238. `PostReply.new` HAS SEVEN `PostReplyValidationError` RAISES, NOT FIVE,
+AND ONLY THREE ARE REACHABLE FROM A PLAIN FACTORY SEED.** `/usr/bin/grep -n
+"raise PostReplyValidationError" app/models.py` returns `:2983` Comments are
+disabled, `:2986` Banned from commenting, `:3025` Blocked phrase, `:3036`
+Replier blocked, `:3039` Duplicate reply, `:3046` Gif comment ignored, `:3049`
+Low quality reply. **Three are witnessed** by `tests/test_shared_reply_make.py`
+-- `:2983`, `:3025` and `:3039`. **Four are not, each for a stated reason.**
+`:3046` and `:3049` are gated on `site.enable_gif_reply_rep_decrease` and
+`site.enable_this_comment_filter`, both `db.Column(db.Boolean, default=False)`
+at `app/models.py:3967` and `:3969`; `:3042`'s fallback `Site()` is unflushed,
+so both read falsy. **A test that merely posts gif-like content witnesses
+nothing** -- it needs a `Site` row with the flag explicitly `True`. `:2986` is
+shadowed: `make_reply:192`'s `can_create_post_reply` refuses the same user
+first, with a DIFFERENT message, which is what lets the two be told apart at
+all. **And reaching a real `PostReply.new` at all needs two prerequisites
+neither the module nor any plan states**, both in
+`tests/test_shared_reply_make.py:204`'s `_clear_creation_guards`: a non-None
+`private_key` on a local user (`app/utils.py:2554` returns False without one --
+a sentinel string is enough, `make_user(with_keys=True)` costs about a second
+per call for a real keypair that nothing here checks), and a `Site` row,
+because `PostReply.new` calls `blocked_phrases()` at `app/models.py:3023` for
+any reply with a non-empty body (`:3022` is the only gate, and every test here
+supplies one), and `app/utils.py:1751-1753` does
+`db.session.query(Site).get(1).blocked_phrases` with no None guard. The
+helper is deliberately **opt-in
+rather than folded into the seed**, so tests that want those guards live still
+exercise them.
+
+**239. `report_reply` NEEDS NEITHER A `Site` ROW NOR KEYED USERS, WHERE
+`make_reply` NEEDS BOTH -- PROBE IT, DO NOT COPY THE OTHER FIXTURE'S HELPER.**
+The two functions live in the same module and read as siblings, so the natural
+move is to reuse `_clear_creation_guards`; it is unnecessary here and would
+hide two guards. What `report_reply` DOES need is a community with **one local
+and one remote moderator, as four distinct users** (`tests/
+test_shared_reply_report.py:51`): `:361`'s loop branches per moderator and
+`:382`'s admin block skips anyone already notified, so a fixture reusing one
+user cannot tell those arms apart. Three further levers in this area are not
+what they look like. **(a) `is_local()` reads `ap_id`, not `instance_id`** --
+`app/models.py:1251-1252` is `return self.ap_id is None or
+self.ap_profile_id.startswith(current_app.config['SERVER_URL'])` -- so a
+"remote" user built by setting `instance_id` alone stays local and the test
+silently misses its branch. **(b) A `Role` must carry `id=ROLE_ADMIN`
+(`4`, `app/constants.py:81`), not merely `name='Admin'`**: `Site.admins()`
+filters on `user_role.c.role_id == ROLE_ADMIN` while `User.is_admin()` matches
+on the role NAME, so a wrongly-numbered row satisfies one predicate and not the
+other. **(c) `Site.admins()`'s else-branch INNER JOINs `user_role`**
+(`app/models.py:4011-4012`), so a role-less id-1 user is dropped before the
+`or_(..., User.id == 1)` disjunct is ever reached -- that user is an admin by
+`User.is_admin()` and not by `Site.admins()`. See fact 216 and register
+entries D295/D442: **a claim about "admin" that does not name its predicate is
+not a claim.**
+
+**240. TO FORCE SEEDED IDS APART, BURN SPARE ROWS AND THEN ASSERT THE RESULT --
+THE ASSERTION IS THE POINT, AND IT CAUGHT ITS OWN AUTHOR'S FIXTURE BUG THE
+FIRST TIME IT RAN.** D533's collision class (fact 236) is removed for a single
+fixture by minting throwaway rows so each table's sequence sits at a different
+offset when the real rows are created. `tests/test_shared_reply_report.py:69-78`
+is the worked pattern: **two** burner communities and **one** burner post give
+`community.id == 3`, `post.id == 2`, `reporter.id == 1`, followed by
+`assert len({community.id, post.id, reporter.id}) == 3`. **The plan this came
+from burned ONE community, which puts `community.id` and `post.id` both on 2**
+-- and the guard assertion failed on its own author's fixture, empirically,
+before anything else did. `tests/test_shared_reply_make.py:1547-1569` is the
+same pattern one table over: two burner **replies** so a newly created reply
+cannot land on `s.post.id`, guarded by `assert reply.id != s.post.id`; that one
+also failed first time, on `assert 2 != 2`. **Two rules follow.** First, the
+offsets are deterministic BECAUSE `conftest.py:131` resets every sequence
+between tests (fact 237) -- burning is reproducible, not a gamble. Second,
+**name the pairs the test actually depends on rather than asserting a blanket
+distinctness**: an early version asserted five ids pairwise distinct and failed
+on `len({1, 2, 3}) == 5`, which is a fixture fact, not the property any mutant
+turned on. A burn without an assertion is a hope; the assertion is what fails
+loudly when a factory changes underneath it.
+
+**241. `app/shared/reply.py` CANNOT REACH 100% WITHOUT A PRODUCTION EDIT, AND
+THE ONE UNCOVERED LINE IS DEAD CODE RATHER THAN A GAP.** `extra_rate_limit_
+check` (`app/shared/reply.py:148-153`) is a docstring and `return False`, the
+docstring saying real limiting is "the plan for this function". So
+`make_reply:159`'s `if extra_rate_limit_check(user):` is never true and
+`:160`'s `raise Exception('rate_limited')` is unreachable, along with its entry
+arc `[159, 160]`. The module therefore measures **99.6545768566494%** with
+`missing_lines [160]` and `missing_branches [[159, 160]]`, and the floor is
+**99**, not 100. The repository's convention for a proven-unreachable arm is a
+`# pragma: no branch` carrying its proof -- **that is a production edit, and a
+coverage round whose production budget was spent elsewhere must say the module
+is not at 100 rather than round past it.** Registered as D539.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
