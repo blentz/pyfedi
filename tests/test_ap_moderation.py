@@ -541,6 +541,24 @@ def test_restoring_a_reply_restores_every_counter_the_delete_moved(
     false`: that count does not care which code path did the deleting, so both
     halves owe it the same arithmetic.
 
+    CORRECTED AT SUB-PROJECT 42'S FINAL FIX WAVE: THE SENTENCE ABOVE IS RIGHT
+    ABOUT THE DIRECTION AND WRONG ABOUT THE ARITHMETIC, AND THE PARAGRAPH
+    BELOW IS WHY. The recompute settles that a restore must INCREMENT -- the
+    column means "the number of non-deleted replies" and no code path can own
+    a different meaning. It settles nothing about the bot guard, because
+    `maintenance.py:314-316` has NO bot predicate at all (the statement at
+    `:301` does carry `User.bot == False`, which is what makes the absence
+    meaningful rather than unread). A bot's non-deleted reply is counted by
+    the recompute, so on bot replies NEITHER half agrees with it: what both
+    halves actually agree with is CREATION (`app/models.py:3090-3092`, which
+    increments inside `if not user.bot:`), and that is the right thing to
+    agree with, because it is what makes a round trip lossless. Register entry
+    D552 states this in full; the design spec carries the same correction. The
+    sentence is left standing rather than rewritten because a docstring that
+    quietly changes its mind is indistinguishable from one that was always
+    right -- which is the same reason the `# NOT restored -- the defect`
+    comments below are quoted rather than deleted.
+
     THE TWO NEW STATEMENTS SIT WHERE THE DELETE'S DO, NOT WHERE THE LOCAL
     `restore_reply`'S DO, and the difference is deliberate.
     `delete_post_or_comment` decrements `post.reply_count` and
