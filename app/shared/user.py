@@ -158,7 +158,7 @@ def ban_user(input, src, auth=None):
 
     # Purge content
     if purge_content:
-        if SRC_WEB:
+        if src == SRC_WEB:
             if to_ban.is_instance_admin():
                 flash(_('Purged user was a remote instance admin.'), 'warning')
             if to_ban.is_admin() or to_ban.is_staff():
@@ -168,7 +168,7 @@ def ban_user(input, src, auth=None):
         if to_ban.is_local():
             to_ban.deleted_by = user.id
             purge_user_then_delete(to_ban.id, flush=flush_cdn)
-            if SRC_WEB:
+            if src == SRC_WEB:
                 flash(_('%(actor)s has been banned, deleted and all their content deleted. This might take a few minutes.',
                         actor=to_ban.display_name()))
         else:
@@ -180,7 +180,7 @@ def ban_user(input, src, auth=None):
                 to_ban.deleted = True
                 to_ban.deleted_by = user.id
                 db.session.commit()
-            if SRC_WEB:
+            if src == SRC_WEB:
                 flash(_('%(actor)s has been banned, deleted and all their content deleted.', actor=to_ban.display_name()))
 
         add_to_modlog('delete_user', actor=user, target_user=to_ban, reason=reason,
@@ -189,7 +189,7 @@ def ban_user(input, src, auth=None):
         add_to_modlog('ban_user', actor=user, target_user=to_ban, reason=reason,
                       link_text=to_ban.display_name(), link=to_ban.link())
 
-        if SRC_WEB:
+        if src == SRC_WEB:
             if to_ban.is_instance_admin():
                 flash(_('Banned user was a remote instance admin.'), 'warning')
             if to_ban.is_admin() or to_ban.is_staff():
