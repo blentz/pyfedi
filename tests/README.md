@@ -7488,14 +7488,65 @@ is evidence about nothing. Sub-project 43's dispatch prescribed three
 `app/shared/user.py`; those three cover the module at **78.18%** with
 `subscribe_user`'s `:90-138` entirely missing, so **34 mutants would have
 survived vacuously**, the kill rate would have read 63.3% instead of 76.5%, and
-the two genuinely-equivalent mutants in that function would have been buried
-among 34 identical-looking ones with recipes attached for tests that already
-exist. **The check costs one command and belongs BEFORE the first mutant:
+the two mutants in that function the round called genuinely equivalent would
+have been buried among 34 identical-looking ones with recipes attached for
+tests that already exist. (**Those two were not equivalent either** -- see fact
+250 and the retracted D564; the point this fact makes about vacuous survivors
+is unaffected.) **The check costs one command and belongs BEFORE the first mutant:
 measure the proposed oracle against the module and read `missing_lines`.** If a
 region is missing, either widen the oracle or label the region's mutants with
 the oracle that judged them and report both count sets -- which is what was
 done, and why register entry D574 records the correction rather than a bad
 number.
+
+**250. FACT 241 WAS CITED FOR ITS FIRST HALF AND IGNORED FOR ITS SECOND, IN THE
+NEXT ROUND, ON THE SAME CANONICAL MIRRORED TRIO -- WITH THE REMEDY ALREADY
+COMMITTED.** Fact 241's headline is two clauses: *"A LINE NO INPUT CAN REACH IS
+NOT A LINE NO TEST CAN REACH -- AND WHEN A MODULE HAS A TWIN, CHECK THE TWIN
+BEFORE RULING ANYTHING UNCOVERABLE."* Sub-project 43 quoted the first clause in
+register entry D564, correctly, as the reason a surviving mutant is ambiguous
+evidence -- and then ruled `app/shared/user.py:107` and `:115` unkillable
+anyway, set the module's floor to 98, and wrote "this module is finished" into
+the register, a test file's module docstring and the round summary. It never
+ran the second clause.
+
+**The twin check was one grep and it would have ended the question.**
+`subscribe_user` (`app/shared/user.py:89-138`) is a line-for-line twin of
+`subscribe_post` (`app/shared/post.py:127-164`) and of `subscribe_reply`, the
+campaign's own canonical mirrored trio. Both twins had the IDENTICAL two
+statements closed already, by the identical technique, down to the constant:
+`tests/test_shared_post_interactions.py:577` and
+`tests/test_shared_reply_interactions.py:1018`, both named
+`test_a_third_source_reaches_the_flash_branches_the_web_arm_cannot`, both
+passing `SRC_PLD`, and both modules already at floor 100 in
+`coverage_floors.ini`. The remedy was not merely possible; it was committed,
+passing, and two files away.
+
+**The mechanism, stated so it is checkable rather than memorable.** The proof
+D564 gave was real and it proved the WRONG PROPOSITION. It established that
+`:107`/`:115` cannot be reached **from either production caller** -- under
+`SRC_WEB`, `:93-94` recompute `subscribe` from the same query `:96-97` uses, so
+the two move in lockstep; under `SRC_API`, `:104`/`:112` always take the raise.
+None of that constrains a test. `src` is an ordinary parameter of a
+module-level function, and `app/constants.py:94-95` defines `SRC_PLD = 4` and
+`SRC_PLG = 5`. Pass a third value: `:93` is skipped so the caller's `subscribe`
+argument survives, `:104`/`:112` take their `else` arms, and both statements
+execute. **PRODUCTION-UNREACHABILITY IS NOT UNKILLABILITY**, and that sentence
+is the whole of what separates D539 and D564 from being right.
+
+**What to do about it, in order.** (1) Before writing "unreachable",
+"equivalent" or "the floor is not 100" about any line, `grep` the function's
+name for callers AND `diff` its twin's test file for the same function name.
+(2) If the line is behind a `src ==` fork, list every constant in
+`app/constants.py` that the fork's `else` admits before concluding anything --
+the `else` is the contract, and it admits every source the `if` does not name.
+(3) A floor below 100 is a claim about the whole campaign, not just the module;
+it should be the hardest thing in a round to get past review, not the
+conclusion a round reaches on its own proof. `app/shared/user.py` is at
+**100.0** with `missing_lines []` and `missing_branches []`, and the campaign
+has still never closed a module below 100. Registered as the rewritten
+**D564**, which -- like **D539** before it -- is a retraction rather than a
+finding.
 
 ## Known noise
 

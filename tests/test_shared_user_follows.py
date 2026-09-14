@@ -1,29 +1,49 @@
-"""`follow_user` and `unfollow_user` (app/shared/user.py:231-300).
+"""`follow_user` and `unfollow_user` (app/shared/user.py:231-300), plus
+`subscribe_user`'s two flash statements at :107 and :115.
 
-Both were nearly closed already -- reached incidentally by
-tests/test_api_user_subscriptions.py and tests/test_ap_notify_post.py -- so
-this file targets only the residual arcs a full-suite measurement showed
-still missing at commit fd5b9bcd:
+follow_user and unfollow_user were nearly closed already -- reached
+incidentally by tests/test_api_user_subscriptions.py and
+tests/test_ap_notify_post.py -- so this file targets only the residual arcs
+a full-suite measurement showed still missing at commit fd5b9bcd:
 
     follow_user     lines 242, 253, 256   arcs [241,242] [252,253]
     unfollow_user   lines 280, 295        arcs [279,280] [294,295]
 
-That measurement also listed `subscribe_user` lines 107 and 115 as missing,
-but this file does NOT attempt them -- they are structurally unreachable.
-subscribe_user has exactly two callers (app/api/alpha/utils/user.py:315 on
-SRC_API, app/user/routes.py:758 on SRC_WEB). On SRC_WEB, :94 recomputes
-`subscribe` from `person.notify_new_posts(user_id)`
-(app/models.py:1601-1603, filtered on entity_id/user_id/type == NOTIF_USER),
-and :96's `existing_notification` is looked up with the IDENTICAL filter --
-the same row. So on SRC_WEB, `subscribe == False` if and only if
-`existing_notification is not None`: :98 true forces :99 true (reaching
-:100, never :102-107), and :98 false forces :110 false (reaching :116,
-never :111-115). On SRC_API, :104 and :112 both take their `raise` arm
-before reaching :107/:115. No third source exists to reach the surviving
-branches. (The brief's Step 3 worked example targets subscribe_user:93-94,
-`if src == SRC_WEB:` discriminating correctly against ban_user's four fixed
-`if SRC_WEB:` lines -- that pair is already covered by an earlier task and
-is not repeated here.)
+CORRECTED. That measurement also listed `subscribe_user` lines 107 and 115
+as missing, and an earlier version of this docstring said this file did not
+attempt them because they were "structurally unreachable". THAT WAS WRONG,
+and the paragraph is retracted here rather than quietly deleted.
+
+What the original derivation actually established is narrower than what it
+claimed, and the narrow half is true: subscribe_user has exactly two
+PRODUCTION callers (app/api/alpha/utils/user.py:315 on SRC_API,
+app/user/routes.py:758 on SRC_WEB), and NEITHER of them can reach :107 or
+:115. On SRC_WEB, :94 recomputes `subscribe` from
+`person.notify_new_posts(user_id)` (app/models.py:1601-1603, filtered on
+entity_id/user_id/type == NOTIF_USER), and :96's `existing_notification` is
+looked up with the IDENTICAL filter -- the same row. So on SRC_WEB,
+`subscribe == False` if and only if `existing_notification is not None`:
+:98 true forces :99 true (reaching :100, never :102-107), and :98 false
+forces :110 false (reaching :116, never :111-115). On SRC_API, :104 and
+:112 both take their `raise` arm before reaching :107/:115.
+
+WHAT DOES NOT FOLLOW is "no test can reach them". `src` is an ordinary
+parameter of a module-level function, not a value the two callers get to
+constrain, and app/constants.py:94-95 defines SRC_PLD = 4 and SRC_PLG = 5.
+Pass a third source value and :93's `if src == SRC_WEB:` is skipped, so the
+caller's `subscribe` argument survives; :104 and :112's `if src == SRC_API:`
+then take their ELSE arms, and :107/:115 execute. A LINE NO INPUT CAN REACH
+IS NOT A LINE NO TEST CAN REACH (tests/README.md fact 241, and fact 250 for
+this recurrence).
+
+The remedy was already in the tree when the original claim was written:
+subscribe_user is a line-for-line twin of subscribe_post
+(app/shared/post.py:127-164) and subscribe_reply, and BOTH twins had these
+same two statements closed by exactly this technique --
+tests/test_shared_post_interactions.py:577 and
+tests/test_shared_reply_interactions.py:1018. Both modules sit at floor 100.
+test_a_third_source_reaches_the_flash_branches_the_web_arm_cannot below is
+modelled on the post twin.
 
 THE id-1 ADMIN TRAP applies here too, though neither function under test
 reads is_admin(). _seed_followers still burns the seat as a matter of this
@@ -60,14 +80,20 @@ What each test below closes:
   dispatch) -- the positive control the negative control above needs to be
   meaningful; together the two rule out a mutant that deletes or inverts
   the :294 is_local() guard so task_selector fires unconditionally.
+- test_a_third_source_reaches_the_flash_branches_the_web_arm_cannot
+  subscribe_user lines 107 and 115 and arcs [104,107], [112,115] -- the two
+  flash statements no production caller reaches, retracting this file's
+  original "structurally unreachable" claim above.
 """
 import contextlib
 from types import SimpleNamespace
 
-from app.constants import SRC_API
-from app.models import Notification, User
-from app.shared.user import follow_user, unfollow_user
-from tests.factories import bearer, make_instance, make_user, web_ctx
+from flask import get_flashed_messages
+
+from app.constants import SRC_API, SRC_PLD
+from app.models import Notification, NotificationSubscription, User
+from app.shared.user import follow_user, subscribe_user, unfollow_user
+from tests.factories import bearer, make_instance, make_site, make_user, web_ctx
 
 
 def _seed_followers(target_local=True):
@@ -217,3 +243,93 @@ def test_unfollow_user_dispatches_a_task_for_a_remote_target(app, db_session):
     with _recording_task_selector() as unfollow_calls:
         unfollow_user(s.target.id, SRC_API, bearer(s.follower))
     assert ('unfollow_user', {'to_follow_id': s.target.id, 'user_id': s.follower.id}) in unfollow_calls
+
+
+# --- subscribe_user, :98-115's two flash statements ---
+
+def test_a_third_source_reaches_the_flash_branches_the_web_arm_cannot(app, db_session):
+    """Closes subscribe_user :107 and :115 -- `:98`'s true arm with `:99`
+    false, then `:98`'s false arm with `:110` true -- and with them the arcs
+    [104,107] and [112,115].
+
+    NEITHER SRC_WEB NOR SRC_API CAN REACH `:107`/`:115`, and that much of the
+    module docstring's original derivation is correct and kept. Under
+    SRC_WEB, `:93-94` overwrites `subscribe` from
+    `person.notify_new_posts(user_id)`, which runs the SAME query as `:96`'s
+    `existing_notification` lookup (entity_id, user_id, type=NOTIF_USER,
+    identical on both), so `subscribe == False` if and only if
+    `existing_notification` is truthy -- `:98`/`:99` and `:98`/`:110` can
+    only ever land in lockstep, never on the "mismatched" arms that lead to
+    `:102-107` or `:111-115`. Under SRC_API, `:104`/`:112`'s
+    `if src == SRC_API:` always takes the raise at `:105`/`:113` instead of
+    the else.
+
+    WHAT THAT DOES NOT ESTABLISH is that no test can reach them, and the
+    module docstring records the retraction. `src` is an ordinary parameter,
+    so a third source value is the way in: it is (a) not SRC_WEB, so `:93`
+    skips the override and this test's `subscribe` argument survives, and
+    (b) not SRC_API, so `:104`/`:112` take the else. SRC_PLD
+    (app/constants.py:94, the admin preload path) IS USED HERE PURELY AS SUCH
+    A VALUE. IT IS NOT HOW THIS FUNCTION IS CALLED IN PRODUCTION --
+    app/api/alpha/utils/user.py:315 passes SRC_API and app/user/routes.py:758
+    passes SRC_WEB, and those are the only two callers -- and this docstring
+    says so rather than implying otherwise. It is not a made-up value either:
+    SRC_PLD is a real constant the shared layer branches on elsewhere
+    (app/shared/community.py:50, app/shared/tasks/follows.py:53, :67, :99),
+    and `:104`/`:112` are written as `if src == SRC_API:` with an `else` over
+    every other source, so the contract those two lines declare admits it.
+    The precedent, down to the constant, is
+    tests/test_shared_post_interactions.py:577 against the line-for-line twin
+    `subscribe_post`, and tests/test_shared_reply_interactions.py:1018
+    against `subscribe_reply`.
+
+    `web_ctx` is used even though this is not an SRC_WEB call, because `:90`'s
+    else-arm reads `current_user.id` for any non-SRC_API source and `:138`
+    renders `user/_notification_toggle.html` -- which itself reads
+    `current_user.id` -- for any non-SRC_API source. `make_site()` is there
+    for the same render: app/utils.py:75's `render_template` calls
+    `current_theme()`, which at app/utils.py:3233-3238 falls back to
+    `Site.query.get(1)` and then reads `site.default_theme`, so with no Site
+    row the call raises AttributeError before it can return. This is the
+    reply twin's arrangement (tests/test_shared_reply_interactions.py:1046),
+    and it is why this is the only test in this file that needs a Site --
+    follow_user and unfollow_user render nothing.
+
+    THE ASSERTIONS ARE ON `flashed`'s CONTENT, NOT ON `result`, and that is
+    load-bearing. Under SRC_PLD `:135` is False either way, so control
+    reaches `:138`'s render whether or not the flash call is there --
+    deleting `flash(_(msg))` outright would still return a normal 200 and
+    pass a result-only assertion silently. The row counts are the second
+    half: 0 after the first call and 1 after the second separate "refused and
+    flashed" from "flashed and then also wrote", which is what reaching
+    `:107` or `:115` from the wrong outer arm would look like.
+
+    The seeding call for the second half goes through SRC_API rather than
+    inserting a NotificationSubscription by hand, so the row under test is
+    the one subscribe_user itself writes at `:130-133` -- a hand-built row
+    with a wrong `type` would silently miss `:96`'s filter and send the
+    second call down `:116` instead, and the test would then pass its first
+    half and fail its second for a reason having nothing to do with `:115`.
+    """
+    make_site()
+    s = _seed_followers(target_local=True)
+
+    with web_ctx(app, s.follower):
+        result = subscribe_user(s.target.id, False, SRC_PLD)
+        flashed = get_flashed_messages()
+
+    assert result.status_code == 200
+    assert flashed == ['A subscription for this user did not exist.']
+    assert db_session.query(NotificationSubscription).filter_by(
+        entity_id=s.target.id, user_id=s.follower.id).count() == 0
+
+    subscribe_user(s.target.id, True, SRC_API, auth=bearer(s.follower))
+
+    with web_ctx(app, s.follower):
+        result = subscribe_user(s.target.id, True, SRC_PLD)
+        flashed = get_flashed_messages()
+
+    assert result.status_code == 200
+    assert flashed == ['A subscription for this user already existed.']
+    assert db_session.query(NotificationSubscription).filter_by(
+        entity_id=s.target.id, user_id=s.follower.id).count() == 1

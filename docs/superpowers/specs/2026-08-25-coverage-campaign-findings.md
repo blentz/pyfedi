@@ -12408,11 +12408,18 @@ and every other finding -- eleven in the code, three about process -- is
 REGISTERED HERE RATHER THAN FIXED.** The round's production budget was exactly
 two changes and it spent exactly two.
 
-**This is the first round in the campaign to close a module deliberately BELOW
-100.** Two statements in `subscribe_user` are unreachable from either of the
-function's two callers, the unreachability is proven rather than assumed, and
-the floor is `floor(98.697) = 98` in consequence. D564 is that proof, and it is
-the entry to read before anyone tries to "finish" this module.
+**RETRACTED. This paragraph used to read "This is the first round in the
+campaign to close a module deliberately BELOW 100", and that claim was FALSE.**
+It rested on D564, which proved that `subscribe_user:107` and `:115` are
+unreachable from either of the function's two PRODUCTION callers and then
+concluded, without warrant, that no test could reach them either. `src` is an
+ordinary parameter, `app/constants.py:94-95` defines `SRC_PLD = 4` and
+`SRC_PLG = 5`, and passing a third source value reaches both statements
+directly. The module closed at **100** in the fix wave that followed this
+round, `coverage_floors.ini:16` reads `app/shared/user.py = 100`, and this
+campaign has still never closed a module below 100. Read the rewritten D564
+for the full retraction and for the half of the original proof that survives
+it.
 
 ### 0. THE MEASUREMENT, AND WHY IT WAS TAKEN TWICE
 
@@ -12449,7 +12456,7 @@ run 2's JSON: `All 22 module floors met.`, `FLOORS_EXIT=0`.
 
 | ID | Where | What | Status | Evidence |
 |---|---|---|---|---|
-| D554 | `app/shared/user.py`; `coverage_floors.ini:16`; `tests/check_coverage_floors.py:65-78` | **Not a defect -- the campaign's state.** `app/shared/user.py` moves **35.831% -> 98.6970684039088** in one round, from 131 statements and 66 arcs to `num_statements 211`, `num_branches 96`, `missing_lines [107, 115]`, `missing_branches [[104,107],[112,115]]`, `num_partial_branches 2`. **The two missing lines are the proven-unreachable pair of D564, so the module is closed as far as any input can take it and the floor is `floor(98.697) = 98` rather than 100** -- a NEW entry at `coverage_floors.ini:16`, the file's twenty-second. Full suite on the delivered tree, twice: **4931 passed, 3 skipped, 6 subtests, `PYTEST_EXIT=0`** under `--cov=app.shared.user` (363.52s) and again under `--cov=app` (443.07s), with the module's figures byte-identical between them. Floors checked against the WIDE json only -- `All 22 module floors met.`, `FLOORS_EXIT=0` -- because `violations()` scores a floored module absent from the report as `0.0`, so the narrow json would have produced **21 false violations**. The 22 is derived (`/usr/bin/grep -c "^app/" coverage_floors.ini`), not recalled. | **state, registered** | Two controller-only full-suite runs plus the checker's source |
+| D554 | `app/shared/user.py`; `coverage_floors.ini:16`; `tests/check_coverage_floors.py:65-78` | **Not a defect -- the campaign's state.** `app/shared/user.py` moves **35.831% -> 98.6970684039088** in one round, from 131 statements and 66 arcs to `num_statements 211`, `num_branches 96`, `missing_lines [107, 115]`, `missing_branches [[104,107],[112,115]]`, `num_partial_branches 2`. **CORRECTED: this row used to read "The two missing lines are the proven-unreachable pair of D564, so the module is closed as far as any input can take it and the floor is `floor(98.697) = 98` rather than 100". That was wrong.** `:107` and `:115` are unreachable from either PRODUCTION caller and reachable by a test that passes a third source value; the fix wave that followed this round added `tests/test_shared_user_follows.py::test_a_third_source_reaches_the_flash_branches_the_web_arm_cannot`, measured the module at **100.0 with `missing_lines []` and `missing_branches []`**, and raised `coverage_floors.ini:16` to `app/shared/user.py = 100`. The 98.697 / `[107, 115]` figures below are the round's own measurement and are left standing as such. The floor entry was NEW at `coverage_floors.ini:16`, the file's twenty-second. Full suite on the delivered tree, twice: **4931 passed, 3 skipped, 6 subtests, `PYTEST_EXIT=0`** under `--cov=app.shared.user` (363.52s) and again under `--cov=app` (443.07s), with the module's figures byte-identical between them. Floors checked against the WIDE json only -- `All 22 module floors met.`, `FLOORS_EXIT=0` -- because `violations()` scores a floored module absent from the report as `0.0`, so the narrow json would have produced **21 false violations**. The 22 is derived (`/usr/bin/grep -c "^app/" coverage_floors.ini`), not recalled. | **state, registered** | Two controller-only full-suite runs plus the checker's source |
 
 ### 2. `bot_challenge_user` APPENDS THE WRONG USER, AND THE PLAN'S ACCOUNT OF IT WAS WRONG TWICE OVER -- D555, D556
 
@@ -12495,11 +12502,11 @@ run 2's JSON: `All 22 module floors met.`, `FLOORS_EXIT=0`.
 |---|---|---|---|---|
 | D563 | `migrations/versions/9e99070afe06_backfill_reply_count_cross_posted.py` (revision `9e99070afe06`, down_revision `7b8bf43fa079`); against `app/shared/reply.py:267`, `:295`, `:431`, `:468` and `app/activitypub/util.py:2315`; `app/models.py:1723` | **D543'S DATA HALF IS CLOSED AND ITS CODE HALF IS STILL OPEN, AND CONFLATING THE TWO IS THE MISTAKE THIS ENTRY EXISTS TO PREVENT.** The revision does two things: `UPDATE post SET reply_count_cross_posted = reply_count WHERE reply_count_cross_posted IS NULL` (the value is `reply_count` and not `0` because `app/models.py:3108` DEFINES the column as the post's own `reply_count` when it has no cross-post set, and the `WHERE` keeps correctly-maintained counts from being flattened), and `ALTER COLUMN ... SET DEFAULT 0` so rows inserted outside the ORM stop arriving NULL. **What it does NOT do: change a single line of application code.** The five arithmetic sites remain exactly as unguarded as they were, `None - 1` still raises `TypeError`, and **a row explicitly set to NULL after this migration still crashes every one of them** -- a server default is applied on INSERT when the column is omitted and is not a constraint. So the population of NULL rows is drained and the hole they fell into is not filled. `downgrade()` drops only the default and deliberately does NOT re-NULL the backfilled rows: a downgrade that destroys data is worse than the defect it reverses. **Read D543 with this entry; neither is complete alone.** | **D543's data half FIXED at `2aa65043`; D543's code half OPEN, unchanged** | Migration read at source; round-trip upgrade/downgrade/upgrade verified in Task 1 |
 
-### 9. TWO UNREACHABLE STATEMENTS, PROVEN RATHER THAN ASSUMED -- AND THE TWO GUARDS ABOVE THEM ARE NOT -- D564
+### 9. RETRACTED: TWO STATEMENTS RULED UNREACHABLE THAT A TEST COULD REACH ALL ALONG -- D564
 
 | ID | Where | What | Status | Evidence |
 |---|---|---|---|---|
-| D564 | `app/shared/user.py:107` and `:115`; the proof chain `:91`, `:93-94`, `:96-97`, `app/models.py:1600-1604`; callers `app/api/alpha/utils/user.py:315` and `app/user/routes.py:758`; `coverage_floors.ini:16` | **`:107` AND `:115` ARE UNREACHABLE FROM EITHER CALLER, WITH A STRUCTURAL PROOF, AND THAT IS WHY THE FLOOR IS 98.** Each link re-verified in Task 9 rather than inherited. (1) `:91` loads `person` by `id=person_id`, so `person.id == person_id` for the rest of the function. (2) `:93-94` set `subscribe = False if person.notify_new_posts(user_id) else True`, **on `SRC_WEB` only**. (3) `app/models.py:1600-1604` shows `notify_new_posts` filtering `NotificationSubscription` on the triple `(entity_id == self.id, user_id == user_id, type == NOTIF_USER)`. (4) `:96-97` filter on `(entity_id=person_id, user_id=user_id, type=NOTIF_USER)` -- **the identical triple**, by (1). So under `SRC_WEB`, `subscribe == False` and `existing_notification is not None` move in lockstep, and each `else` arm asks for one of them without the other. (5) `/usr/bin/grep -rn "subscribe_user" app/ --include=*.py` returns **exactly two callers**, one `SRC_API` and one `SRC_WEB`, so `src` has no third value. `:107` needs `subscribe == False`, no row, and `src != SRC_API`; `:115` needs the mirror. Both are contradictory. **N23 (`:107` -> `pass`) and N26 (`:115` -> `pass`) survived, and the equivalence is claimed on the proof, never on the survival** -- per this file's standing rule that a surviving mutant is ambiguous evidence (**D539**, README fact 241). **DO NOT OVERSTATE THIS.** The GUARDS at `:104` and `:112` are NOT equivalent: inverting either diverts the REACHABLE `SRC_API` arm into the else, and M32 and M34 were both KILLED. The kill mechanism was checked rather than assumed -- re-running M32 with `--tb=line` showed the discriminator is the message equality at `tests/test_api_user_subscriptions.py:51`, not the bare `RuntimeError` from `flash()` outside a request context, which a `pytest.raises(Exception)` would have swallowed (see N28 in D572, the same shape with no message assert, which survives). **The consequence for the ratchet: this module is finished, and its floor is 98.** | **equivalent, proven; registered as the reason the floor is not 100** | Every link re-read at source in Task 9; M32 re-run with `--tb=line` |
+| D564 | `app/shared/user.py:107` and `:115`; the proof chain `:91`, `:93-94`, `:96-97`, `app/models.py:1600-1604`; callers `app/api/alpha/utils/user.py:315` and `app/user/routes.py:758`; `app/constants.py:94-95`; `coverage_floors.ini:16`; the twins `app/shared/post.py:127-164` and `subscribe_reply`; `tests/test_shared_post_interactions.py:577`, `tests/test_shared_reply_interactions.py:1018` | **RETRACTED IN FULL AS A RULING, AND THE RETRACTION IS THE ENTRY.** **WHAT THIS ROW CLAIMED:** that `:107` and `:115` are *equivalent* and unkillable, that `src` "has no third value", that `N23` (`:107` -> `pass`) and `N26` (`:115` -> `pass`) were vacuous survivors, and -- the operative sentence -- "**the consequence for the ratchet: this module is finished, and its floor is 98.**" **WHY IT WAS FALSE.** The proof it rests on is sound but proves a DIFFERENT PROPOSITION than the one it was used for. It establishes that `:107`/`:115` are unreachable **from either production caller**; it does not establish that no test can reach them. `src` is an ordinary parameter of a module-level function, not a value the two callers get to constrain, and `app/constants.py:94-95` defines `SRC_PLD = 4` and `SRC_PLG = 5`. Pass a third source value and `:93`'s `if src == SRC_WEB:` is skipped, so `subscribe` keeps the caller's argument; `:104`/`:112`'s `if src == SRC_API:` then take their **else** arms, and `:107`/`:115` execute. **THE DISTINCTION, STATED ONCE:** production-unreachability is not unkillability, and a mutant surviving a suite that never calls the function with a third source is evidence about the suite, not about the line. **THE REMEDY WAS ALREADY IN THE TREE WHEN THIS ROW WAS WRITTEN.** `subscribe_user` is a line-for-line twin of `subscribe_post` (`app/shared/post.py:127-164`) and of `subscribe_reply`, and BOTH twins had these same two statements closed by exactly this technique, down to the constant -- `tests/test_shared_post_interactions.py:577` (`test_a_third_source_reaches_the_flash_branches_the_web_arm_cannot`) and `tests/test_shared_reply_interactions.py:1018`. Both twin modules already sat at floor 100. The round ruled the third member of its own canonical mirrored trio uncoverable without looking at the other two. **THIS IS A SECOND INSTANCE OF THE CLASS D539 RETRACTED**, and it cited D539/README fact 241 while committing it: the "ambiguous evidence" half of fact 241 was quoted here, and the "check the twin" half was ignored. README fact **250** records the recurrence. **WHAT SURVIVES THE RETRACTION, AND IS WORTH KEEPING:** the lockstep proof for the two PRODUCTION arms, each link of which was re-verified at source. (1) `:91` loads `person` by `id=person_id`, so `person.id == person_id` thereafter. (2) `:93-94` set `subscribe = False if person.notify_new_posts(user_id) else True`, **on `SRC_WEB` only**. (3) `app/models.py:1600-1604` shows `notify_new_posts` filtering `NotificationSubscription` on the triple `(entity_id == self.id, user_id == user_id, type == NOTIF_USER)`. (4) `:96-97` filter on `(entity_id=person_id, user_id=user_id, type=NOTIF_USER)` -- **the identical triple**, by (1). So under `SRC_WEB`, `subscribe == False` and `existing_notification is not None` move in lockstep and each `else` arm asks for one without the other. (5) Under `SRC_API`, `:104`/`:112` always take the `raise`. That is a correct and useful account of why neither *production* arm reaches `:107`/`:115` -- it just is not a licence to stop measuring. **ALSO STILL TRUE:** the GUARDS at `:104` and `:112` are NOT equivalent -- inverting either diverts the reachable `SRC_API` arm into the else, and M32 and M34 were both killed, the discriminator being the message equality at `tests/test_api_user_subscriptions.py:51` rather than a bare `RuntimeError` from `flash()`. **WHAT CHANGED IN THE TREE:** `tests/test_shared_user_follows.py::test_a_third_source_reaches_the_flash_branches_the_web_arm_cannot` now reaches both statements through `SRC_PLD` and asserts the two flash strings in full, `app/shared/user.py` measures **100.0 with `missing_lines []` and `missing_branches []`**, `coverage_floors.ini:16` reads **100**, and N23/N26 are no longer survivors: both mutate the flash call this test asserts on. | **RETRACTED -- the ruling is withdrawn; the production-arm lockstep proof is retained** | Re-derived against `app/constants.py:94-95` and the two twin tests, which predate this round; module re-measured at 100.0 in the fix wave |
 
 ### 10. THE MUTATION PASS'S SURVIVORS, RANKED AS THE PASS RANKED THEM, WITH RECIPES -- D565, D566, D567, D568, D569, D570, D571, D572
 
@@ -12509,9 +12516,13 @@ compound lines; 186 mutated, 25 skipped each named and justified). **150 KILLED
 prescribed, strictly, **124 / 72** -- both figures are reported because a count
 is a claim, and the reason there are two is D574.
 
-**The 46 partition exactly.** Seven are vacuous: the five in D573 and the two
-proven-equivalent in D564. **The remaining 39 are carried below, every one
-killable, every one with a recipe** -- 1 in D565, 2 in D566, 2 in D567, 1 in
+**The 46 partition exactly, AS RUN IN THIS ROUND.** Seven were called vacuous:
+the five in D573 and the two called proven-equivalent in D564. **That second
+pair is now retracted** -- N23 and N26 mutate `subscribe_user:107` and `:115`,
+which the fix wave's third-source test reaches and asserts on, so both are
+killable and killed and only D573's five are vacuous. The partition arithmetic
+below is left as the round computed it, with that correction noted. **The
+remaining 39 are carried below, every one killable, every one with a recipe** -- 1 in D565, 2 in D566, 2 in D567, 1 in
 D568, 6 in D569, and 27 in D572. 1+2+2+1+6+27 = 39, and 39+7 = 46. The
 partition is by MUTANT ID rather than by the source report's own sub-group
 headers, because two of those headers do not sum cleanly (its section 7.5 says
@@ -12566,10 +12577,12 @@ to four** because the fifth candidate was the `else` of a ROLE check one indent
 level in; **D563** the backfill migration, which **closes D543's DATA half and
 leaves its CODE half open** -- five unguarded arithmetic sites, and an
 explicitly-NULLed row still raises `TypeError`, because a server default is not
-a constraint; **D564** the proof that `subscribe_user:107` and `:115` are
-unreachable from either caller, **which is why the floor is 98 and not 100**,
-stated with the matching warning that `:104` and `:112` are NOT equivalent and
-were both killed; **D565** through **D572** the mutation pass's 39 carried
+a constraint; **D564** -- **RETRACTED**; it proved `subscribe_user:107` and `:115`
+unreachable from either PRODUCTION caller and then wrongly ruled them
+unkillable and the floor 98, when the twin modules had already closed the
+identical two statements with a third source value, and the module is now at
+100; its matching warning that `:104` and `:112` are NOT equivalent and were
+both killed still stands; **D565** through **D572** the mutation pass's 39 carried
 survivors, ranked, partitioned by mutant id and each with a recipe -- led by
 `:201`'s unpinned `ban_ip_address`, `:175-176`'s unpinned remote purge, the
 never-independently-exercised `is_staff()` disjunct, `subscribe_user:94`'s
@@ -12582,8 +12595,10 @@ answered by reporting BOTH count sets.
 **One module change and one migration shipped, and nothing else.** `ban_user`'s
 four lines at `fd5b9bcd` and revision `9e99070afe06` at `2aa65043`; every other
 finding above is registered rather than fixed, by ruling, with its recipe
-attached. **`app/shared/user.py`'s floor is NEW at 98** -- the first floor this
-campaign has set deliberately below 100, on a proof rather than on a shortfall.
+attached. **`app/shared/user.py`'s floor was NEW at 98 when this round shipped,
+and the following fix wave raised it to 100** -- the round's "first floor this
+campaign has set deliberately below 100" reading is retracted with D564, and
+the campaign has still never closed a module below 100.
 
 ## Ratchet gotchas
 

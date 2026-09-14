@@ -405,17 +405,29 @@ def test_ban_user_purging_a_local_target_deletes_it_through_the_purge_task(
     flush_cdn is False on the API path (:148 sets it unconditionally), which
     is what the second element of the recorded call asserts.
 
-    Wrapped in a request context: :171's `if SRC_WEB:` is the same
-    bare-constant fault documented at the top of this file, so the flash at
-    :172-173 fires on this API call too and needs somewhere to write to.
+    NO REQUEST CONTEXT, deliberately. This test used to push one, and its
+    docstring used to say why: before commit fd5b9bcd, :171 read
+    `if SRC_WEB:` -- the bare imported constant, value 1 -- so the flash at
+    :172-173 fired on this SRC_API call and needed somewhere to write to.
+    :171 now reads `if src == SRC_WEB:` and this call passes SRC_API, so
+    nothing flashes and the wrapper became vestigial; it is dropped rather
+    than left standing with a false explanation attached. Nothing else on
+    ban_user's SRC_API path reads the request: :143's authorise_api_user
+    decodes a JWT out of the `auth` argument alone (tests/test_shared_user_
+    follows.py:224 calls it with no context at all), add_to_modlog at :186
+    reads only the ORM and get_setting, and purge_user_then_delete at :170
+    is replaced by the no_real_purge fixture. If :171 were ever reverted to
+    the bare constant, this test would now fail with RuntimeError rather
+    than pass silently -- a crash-shaped signal, which is why the four
+    dedicated inverted pins below keep their contexts and assert on an empty
+    flash list instead.
     """
     s = _seed_ban_scenario(target_local=True)
 
-    with app.test_request_context('/'):
-        with _recording_task_selector():
-            ban_user({'person_id': s.target.id, 'purge_content': True,
-                      'ban_ip_address': False, 'reason': 'spam'},
-                     SRC_API, bearer(s.admin))
+    with _recording_task_selector():
+        ban_user({'person_id': s.target.id, 'purge_content': True,
+                  'ban_ip_address': False, 'reason': 'spam'},
+                 SRC_API, bearer(s.admin))
 
     db.session.expire_all()
     assert no_real_purge == [(s.target.id, False)]
@@ -428,16 +440,18 @@ def test_ban_user_purging_passes_remove_data_true_for_a_local_target(
     """:207's `remove_data=purge_content and to_ban.is_local()` -- the
     second operand, whose first operand Task 4 covered.
 
-    Wrapped in a request context for the same reason as the test above:
-    :171's always-true `if SRC_WEB:` flashes on this API call.
+    NO REQUEST CONTEXT, for the same reason as the test above: :171 reads
+    `if src == SRC_WEB:` since commit fd5b9bcd and this is an SRC_API call,
+    so nothing flashes. The wrapper this test used to carry was justified by
+    the pre-fix always-true `if SRC_WEB:`, and that justification no longer
+    holds.
     """
     s = _seed_ban_scenario(target_local=True)
 
-    with app.test_request_context('/'):
-        with _recording_task_selector() as calls:
-            ban_user({'person_id': s.target.id, 'purge_content': True,
-                      'ban_ip_address': False, 'reason': 'spam'},
-                     SRC_API, bearer(s.admin))
+    with _recording_task_selector() as calls:
+        ban_user({'person_id': s.target.id, 'purge_content': True,
+                  'ban_ip_address': False, 'reason': 'spam'},
+                 SRC_API, bearer(s.admin))
 
     _key, kwargs = calls[0]
     assert kwargs['remove_data'] is True
@@ -459,16 +473,20 @@ def test_ban_user_purging_a_remote_target_takes_the_local_deletion_path(
     `self.ap_id is None or self.ap_profile_id.startswith(SERVER_URL)` -- so a
     user built against remote.example is not local on either operand.
 
-    Wrapped in a request context: :183's `if SRC_WEB:` is the same
-    bare-constant fault, so the flash at :184 fires on this API call too.
+    NO REQUEST CONTEXT. This test used to push one because :183 read the
+    bare `if SRC_WEB:` before commit fd5b9bcd and its flash at :184 fired on
+    this SRC_API call. :183 now reads `if src == SRC_WEB:`, so nothing
+    flashes and the wrapper is dropped. The remote arm reaches no other
+    request-dependent code either: :175-176's delete_dependencies and
+    purge_content work through the ORM, and :178's redis lock is served by
+    the redis_lock_only_double fixture.
     """
     s = _seed_ban_scenario(target_local=False)
 
-    with app.test_request_context('/'):
-        with _recording_task_selector():
-            ban_user({'person_id': s.target.id, 'purge_content': True,
-                      'ban_ip_address': False, 'reason': 'spam'},
-                     SRC_API, bearer(s.admin))
+    with _recording_task_selector():
+        ban_user({'person_id': s.target.id, 'purge_content': True,
+                  'ban_ip_address': False, 'reason': 'spam'},
+                 SRC_API, bearer(s.admin))
 
     db.session.expire_all()
     assert no_real_purge == []
@@ -484,16 +502,17 @@ def test_ban_user_purging_passes_remove_data_false_for_a_remote_target(
     is remote, so remove_data is False. Paired with the local test above,
     this is what makes the `and` non-void.
 
-    Wrapped in a request context for the same reason as the test above:
-    :183's always-true `if SRC_WEB:` flashes on this API call.
+    NO REQUEST CONTEXT, for the same reason as the test above: :183 reads
+    `if src == SRC_WEB:` since commit fd5b9bcd and this is an SRC_API call,
+    so the flash at :184 does not fire and the wrapper this test used to
+    carry no longer has a reason to exist.
     """
     s = _seed_ban_scenario(target_local=False)
 
-    with app.test_request_context('/'):
-        with _recording_task_selector() as calls:
-            ban_user({'person_id': s.target.id, 'purge_content': True,
-                      'ban_ip_address': False, 'reason': 'spam'},
-                     SRC_API, bearer(s.admin))
+    with _recording_task_selector() as calls:
+        ban_user({'person_id': s.target.id, 'purge_content': True,
+                  'ban_ip_address': False, 'reason': 'spam'},
+                 SRC_API, bearer(s.admin))
 
     _key, kwargs = calls[0]
     assert kwargs['remove_data'] is False
@@ -548,6 +567,18 @@ def test_ban_user_purging_an_instance_admin_warns_first(
 
     The target is remote so that :174's arm is the one taken, keeping this
     test about the warning rather than about the purge task.
+
+    The flash list is compared in FULL rather than with `in`. The remote
+    purge path flashes exactly twice -- :163's warning, then :184's shorter
+    "banned, deleted" message -- and `is_admin()`/`is_staff()` are both false
+    for this target, so :165 does not fire. Full equality therefore states
+    the whole outcome and additionally catches a duplicated or extra warning
+    that an `in` check would pass. The pattern is
+    test_ban_user_purging_a_remote_target_flashes_the_shorter_message above,
+    including the `display_name()` evaluated after the call: :180 sets
+    `deleted = True` before :184 reads it, so both the flash and this
+    expectation resolve to User.display_name's '[deleted]' arm
+    (app/models.py:1183-1184).
     """
     s = _seed_ban_scenario(target_local=False)
     db.session.add(InstanceRole(instance_id=s.target.instance_id,
@@ -561,7 +592,10 @@ def test_ban_user_purging_an_instance_admin_warns_first(
         flashed = [message for _category, message in
                    flask_session.get('_flashes', [])]
 
-    assert 'Purged user was a remote instance admin.' in flashed
+    assert flashed == [
+        'Purged user was a remote instance admin.',
+        f'{s.target.display_name()} has been banned, deleted and all their '
+        f'content deleted.']
 
 
 def test_ban_user_purging_a_role_holder_warns_about_permissions(
