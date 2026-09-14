@@ -34,7 +34,7 @@ from flask import session as flask_session
 
 from app import db
 from app.constants import SRC_API, SRC_WEB
-from app.models import IpBan, ModLog, User
+from app.models import InstanceRole, IpBan, ModLog, User
 from app.shared.user import ban_user, unban_user
 from tests.factories import (bearer, grant_permission, make_instance,
                              make_user, web_ctx)
@@ -337,3 +337,342 @@ def test_unban_user_web_takes_the_same_dict_shaped_input(app, db_session):
     assert db.session.query(User).get(s.target.id).banned is False
     _key, kwargs = calls[0]
     assert kwargs['mod_id'] == s.admin.id
+
+
+@pytest.fixture
+def no_real_purge(monkeypatch):
+    """Record purge_user_then_delete instead of running it.
+
+    app/shared/user.py:11 does `from app.user.utils import
+    purge_user_then_delete`, which bound the original into this module's
+    globals at import time -- so patching app.user.utils would not intercept
+    :170's unqualified call. The real function dispatches a Celery task, and
+    tests/conftest.py:105-110 sets task_always_eager with eager_propagates,
+    so leaving it unpatched runs the entire purge inline against a separate
+    task session.
+    """
+    calls = []
+    monkeypatch.setattr('app.shared.user.purge_user_then_delete',
+                        lambda user_id, flush=True: calls.append((user_id, flush)))
+    return calls
+
+
+@pytest.fixture
+def redis_lock_only_double(monkeypatch):
+    """A `app.redis_client` double covering only `.lock(...)`.
+
+    This environment's fakeredis has no Lua scripting, and redis-py's
+    Lock.release() needs EVALSHA -- so the redis_double fixture raises
+    `redis.exceptions.ResponseError: unknown command 'evalsha'` on __exit__
+    of any `with redis_client.lock(...)` block, which app/shared/user.py:178
+    is. See tests/test_inbox_dispatch_votes.py:145-159 and "The fakeredis lock
+    limitation" in tests/README.md.
+
+    app/shared/user.py:177 imports redis_client INSIDE the function body, so
+    patching the single module attribute reaches it.
+    """
+    class _LockOnly:
+        def lock(self, *args, **kwargs):
+            return contextlib.nullcontext()
+
+    monkeypatch.setattr('app.redis_client', _LockOnly())
+
+
+def test_ban_user_purging_a_local_target_deletes_it_through_the_purge_task(
+        app, db_session, no_real_purge):
+    """:168's true arm. A local target reaches :169-170: deleted_by is
+    stamped and purge_user_then_delete is dispatched with the flush flag the
+    caller supplied.
+
+    flush_cdn is False on the API path (:148 sets it unconditionally), which
+    is what the second element of the recorded call asserts.
+
+    Wrapped in a request context: :171's `if SRC_WEB:` is the same
+    bare-constant fault documented at the top of this file, so the flash at
+    :172-173 fires on this API call too and needs somewhere to write to.
+    """
+    s = _seed_ban_scenario(target_local=True)
+
+    with app.test_request_context('/'):
+        with _recording_task_selector():
+            ban_user({'person_id': s.target.id, 'purge_content': True,
+                      'ban_ip_address': False, 'reason': 'spam'},
+                     SRC_API, bearer(s.admin))
+
+    db.session.expire_all()
+    assert no_real_purge == [(s.target.id, False)]
+    assert db.session.query(User).get(s.target.id).deleted_by == s.admin.id
+    assert db.session.query(ModLog).one().action == 'delete_user'
+
+
+def test_ban_user_purging_passes_remove_data_true_for_a_local_target(
+        app, db_session, no_real_purge):
+    """:207's `remove_data=purge_content and to_ban.is_local()` -- the
+    second operand, whose first operand Task 4 covered.
+
+    Wrapped in a request context for the same reason as the test above:
+    :171's always-true `if SRC_WEB:` flashes on this API call.
+    """
+    s = _seed_ban_scenario(target_local=True)
+
+    with app.test_request_context('/'):
+        with _recording_task_selector() as calls:
+            ban_user({'person_id': s.target.id, 'purge_content': True,
+                      'ban_ip_address': False, 'reason': 'spam'},
+                     SRC_API, bearer(s.admin))
+
+    _key, kwargs = calls[0]
+    assert kwargs['remove_data'] is True
+
+
+def test_ban_user_purging_a_remote_target_takes_the_local_deletion_path(
+        app, db_session, no_real_purge, redis_lock_only_double):
+    """:174-184's else arm. A remote target is NOT dispatched to the purge
+    task: its content is removed inline and the row is marked deleted under a
+    redis lock.
+
+    `no_real_purge` is requested even though nothing should reach it -- an
+    empty recorder is the assertion that :170 was not taken, and without the
+    patch a wrong branch would run the real Celery purge instead of failing
+    visibly.
+
+    make_user leaves a remote user's ap_id set (tests/factories.py:60), and
+    User.is_local() (app/models.py:1252) is
+    `self.ap_id is None or self.ap_profile_id.startswith(SERVER_URL)` -- so a
+    user built against remote.example is not local on either operand.
+
+    Wrapped in a request context: :183's `if SRC_WEB:` is the same
+    bare-constant fault, so the flash at :184 fires on this API call too.
+    """
+    s = _seed_ban_scenario(target_local=False)
+
+    with app.test_request_context('/'):
+        with _recording_task_selector():
+            ban_user({'person_id': s.target.id, 'purge_content': True,
+                      'ban_ip_address': False, 'reason': 'spam'},
+                     SRC_API, bearer(s.admin))
+
+    db.session.expire_all()
+    assert no_real_purge == []
+    target = db.session.query(User).get(s.target.id)
+    assert target.deleted is True
+    assert target.deleted_by == s.admin.id
+    assert db.session.query(ModLog).one().action == 'delete_user'
+
+
+def test_ban_user_purging_passes_remove_data_false_for_a_remote_target(
+        app, db_session, no_real_purge, redis_lock_only_double):
+    """The other half of :207's `and`: purge_content is True but the target
+    is remote, so remove_data is False. Paired with the local test above,
+    this is what makes the `and` non-void.
+
+    Wrapped in a request context for the same reason as the test above:
+    :183's always-true `if SRC_WEB:` flashes on this API call.
+    """
+    s = _seed_ban_scenario(target_local=False)
+
+    with app.test_request_context('/'):
+        with _recording_task_selector() as calls:
+            ban_user({'person_id': s.target.id, 'purge_content': True,
+                      'ban_ip_address': False, 'reason': 'spam'},
+                     SRC_API, bearer(s.admin))
+
+    _key, kwargs = calls[0]
+    assert kwargs['remove_data'] is False
+
+
+def test_ban_user_purging_a_local_target_flashes_on_the_web(
+        app, db_session, no_real_purge):
+    """:171-173. The web form path also carries flush_cdn from
+    `input.flush.data` (:155), which the API path hardcodes False -- so
+    _BanForm sets flush=True and the recorded call asserts it."""
+    s = _seed_ban_scenario(target_local=True)
+
+    with web_ctx(app, s.admin):
+        with _recording_task_selector():
+            ban_user(_BanForm(s.target.id, purge=True, reason='spam',
+                              flush=True), SRC_WEB, None)
+        flashed = [message for _category, message in
+                   flask_session.get('_flashes', [])]
+
+    assert no_real_purge == [(s.target.id, True)]
+    assert flashed == [
+        f'{s.target.display_name()} has been banned, deleted and all their '
+        f'content deleted. This might take a few minutes.']
+
+
+def test_ban_user_purging_a_remote_target_flashes_the_shorter_message(
+        app, db_session, no_real_purge, redis_lock_only_double):
+    """:183-184. The remote message omits "This might take a few minutes."
+    because nothing was queued -- the deletion already happened inline. The
+    two messages are compared in full so that a swapped pair fails."""
+    s = _seed_ban_scenario(target_local=False)
+
+    with web_ctx(app, s.admin):
+        with _recording_task_selector():
+            ban_user(_BanForm(s.target.id, purge=True, reason='spam'),
+                     SRC_WEB, None)
+        flashed = [message for _category, message in
+                   flask_session.get('_flashes', [])]
+
+    assert flashed == [
+        f'{s.target.display_name()} has been banned, deleted and all their '
+        f'content deleted.']
+
+
+def test_ban_user_purging_an_instance_admin_warns_first(
+        app, db_session, no_real_purge, redis_lock_only_double):
+    """:162-163. `is_instance_admin` (app/models.py:1277-1284) needs an
+    InstanceRole row with role 'admin' on the user's own instance -- it is
+    NOT the same thing as the 'Admin' Role that is_admin() matches by name,
+    and the two warnings at :163 and :165 are independent `if`s rather than a
+    chain.
+
+    The target is remote so that :174's arm is the one taken, keeping this
+    test about the warning rather than about the purge task.
+    """
+    s = _seed_ban_scenario(target_local=False)
+    db.session.add(InstanceRole(instance_id=s.target.instance_id,
+                                user_id=s.target.id, role='admin'))
+    db.session.commit()
+
+    with web_ctx(app, s.admin):
+        with _recording_task_selector():
+            ban_user(_BanForm(s.target.id, purge=True, reason='spam'),
+                     SRC_WEB, None)
+        flashed = [message for _category, message in
+                   flask_session.get('_flashes', [])]
+
+    assert 'Purged user was a remote instance admin.' in flashed
+
+
+def test_ban_user_purging_a_role_holder_warns_about_permissions(
+        app, db_session, no_real_purge, redis_lock_only_double):
+    """:164-165. Named 'Admin' because is_admin() matches the role NAME
+    (app/models.py:1263). Independent of the instance-admin warning above:
+    this target has no InstanceRole, so only one of the two warnings fires,
+    which is what separates :162 from :164."""
+    s = _seed_ban_scenario(target_local=False)
+    from app.models import Role, user_role
+    role = Role(name='Admin', weight=0)
+    db.session.add(role)
+    db.session.commit()
+    db.session.execute(user_role.insert().values(user_id=s.target.id,
+                                                 role_id=role.id))
+    db.session.commit()
+
+    with web_ctx(app, s.admin):
+        with _recording_task_selector():
+            ban_user(_BanForm(s.target.id, purge=True, reason='spam'),
+                     SRC_WEB, None)
+        flashed = [message for _category, message in
+                   flask_session.get('_flashes', [])]
+
+    assert 'Purged user with role permissions.' in flashed
+    assert 'Purged user was a remote instance admin.' not in flashed
+
+
+def test_ban_user_purging_via_the_api_warns_anyway(
+        app, db_session, no_real_purge, redis_lock_only_double):
+    """PINS A DEFECT. :161 reads `if SRC_WEB:` -- the bare constant, value 1
+    -- so the warning block runs on an API ban too.
+
+    THIS ASSERTION IS INVERTED by the task that fixes the four lines.
+    """
+    s = _seed_ban_scenario(target_local=False)
+    db.session.add(InstanceRole(instance_id=s.target.instance_id,
+                                user_id=s.target.id, role='admin'))
+    db.session.commit()
+
+    with app.test_request_context('/'):
+        with _recording_task_selector():
+            ban_user({'person_id': s.target.id, 'purge_content': True,
+                      'ban_ip_address': False, 'reason': 'spam'},
+                     SRC_API, bearer(s.admin))
+        flashed = [message for _category, message in
+                   flask_session.get('_flashes', [])]
+
+    assert 'Purged user was a remote instance admin.' in flashed
+
+
+def test_ban_user_purging_a_local_target_via_the_api_flashes_anyway(
+        app, db_session, no_real_purge):
+    """PINS A DEFECT. :171, the same bare-constant fault as :161.
+
+    THIS ASSERTION IS INVERTED by the task that fixes the four lines.
+    """
+    s = _seed_ban_scenario(target_local=True)
+
+    with app.test_request_context('/'):
+        with _recording_task_selector():
+            ban_user({'person_id': s.target.id, 'purge_content': True,
+                      'ban_ip_address': False, 'reason': 'spam'},
+                     SRC_API, bearer(s.admin))
+        flashed = [message for _category, message in
+                   flask_session.get('_flashes', [])]
+
+    assert flashed == [
+        f'{s.target.display_name()} has been banned, deleted and all their '
+        f'content deleted. This might take a few minutes.']
+
+
+def test_ban_user_purging_a_remote_target_via_the_api_flashes_anyway(
+        app, db_session, no_real_purge, redis_lock_only_double):
+    """PINS A DEFECT. :183, the same bare-constant fault.
+
+    THIS ASSERTION IS INVERTED by the task that fixes the four lines.
+    """
+    s = _seed_ban_scenario(target_local=False)
+
+    with app.test_request_context('/'):
+        with _recording_task_selector():
+            ban_user({'person_id': s.target.id, 'purge_content': True,
+                      'ban_ip_address': False, 'reason': 'spam'},
+                     SRC_API, bearer(s.admin))
+        flashed = [message for _category, message in
+                   flask_session.get('_flashes', [])]
+
+    assert flashed == [
+        f'{s.target.display_name()} has been banned, deleted and all their '
+        f'content deleted.']
+
+
+def test_ban_user_without_purge_warns_about_an_instance_admin_too(
+        app, db_session):
+    """:193-194 -- the no-purge sibling of
+    test_ban_user_purging_an_instance_admin_warns_first's :162-163. This gap
+    was left open by the plan's Task 4 brief, which wrote tests for
+    :195-198 (the role-holder warning and the plain-message else) but never
+    seeded an InstanceRole to exercise :193's true arm, so :194 was never
+    executed.
+
+    :193 and :195 are independent `if`s, not a chain: this target carries an
+    InstanceRole but no Role, so :195 is false and :197's else also fires.
+    Both messages are expected, and the full flash list is asserted rather
+    than membership of one string -- a membership-only assertion would still
+    pass if :197's else had stopped firing.
+
+    is_instance_admin (app/models.py:1277-1284) needs an InstanceRole row
+    with role='admin' matching the user's own instance_id, and is False
+    outright when instance_id is falsy -- it is NOT the same thing as the
+    'Admin'-named Role that is_admin() matches, which is why this target
+    holds an InstanceRole and no Role.
+
+    Driven through the web arm (web_ctx) rather than SRC_API: purge_content
+    is False here, so nothing needs app.test_request_context('/') beyond
+    what web_ctx already provides for flash()/session.
+    """
+    s = _seed_ban_scenario()
+    db.session.add(InstanceRole(instance_id=s.target.instance_id,
+                                user_id=s.target.id, role='admin'))
+    db.session.commit()
+
+    with web_ctx(app, s.admin):
+        with _recording_task_selector():
+            ban_user(_BanForm(s.target.id, reason='spam'), SRC_WEB, None)
+        flashed = [message for _category, message in
+                   flask_session.get('_flashes', [])]
+
+    assert flashed == [
+        'Banned user was a remote instance admin.',
+        f'{s.target.display_name()} has been banned.']
