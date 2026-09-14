@@ -1,7 +1,38 @@
-"""`block_another_user` and `unblock_another_user` (app/shared/user.py:20-87).
+"""`block_another_user` and `unblock_another_user` (app/shared/user.py:20-87),
+and `bot_challenge_user` (app/shared/user.py:303-339).
 
-Both functions were at literally zero coverage before this file: 24
-statements / 14 arcs and 16 / 10 respectively, every one missing.
+All three functions were at literally zero coverage before this file:
+`block_another_user` 24 statements / 14 arcs, `unblock_another_user` 16 / 10
+and `bot_challenge_user` 23 / 8, every one missing.
+
+WHY bot_challenge_user IS IN THIS FILE rather than one of its own. It is the
+third of the module's "one shared helper, two source arms" functions and it
+shares this file's harness exactly -- `_seed_blockers`, `web_ctx`, `bearer`
+and the SRC_WEB/SRC_API fork -- while having nothing to do with either the
+ban pair in tests/test_shared_user_bans.py or the follow pair in
+tests/test_shared_user_follows.py. Six tests cover it, at :324-461 (count
+re-derived with `/usr/bin/grep -cE "^ *def test_.*bot_challenge"`):
+
+- test_bot_challenge_user_web_sends_a_message_and_records_the_challenge
+  the first-challenge path -- :313's false arm, :318's fresh uuid and
+  :337-339's BotChallenge row, with the uuid asserted to appear in the
+  message body :333 interpolates it into.
+- test_bot_challenge_user_puts_the_recipient_in_the_conversation
+  :321's `members.append(recipient)`, compared as a SET because the
+  relationship's row order is a query-planner artefact.
+- test_bot_challenge_user_reuses_the_uuid_of_an_unanswered_challenge
+  :313's true arm with :314 false, reaching :316's uuid reuse and NOT
+  minting a second BotChallenge row at :337.
+- test_bot_challenge_user_refuses_someone_who_already_answered
+  :314's true arm and :315's raise.
+- test_bot_challenge_user_continues_for_a_confirmed_bot
+  the other half of :314 -- `is_a_bot is True` is not `is False`, so a
+  confirmed bot is re-challenged rather than refused. Paired with the test
+  above, this is what makes :314's `is False` non-void against a plain
+  truthiness test.
+- test_bot_challenge_user_src_api_bare_call_crashes_on_none_current_user
+  :306-307's SRC_API arm, and a PINNED DEFECT: :320 builds the Conversation
+  from `user` but :322 appends `current_user`. Registered, not fixed.
 
 THE ROLE TRAP. `block_another_user:33-35` reads
 `SELECT role_id FROM "user_role" WHERE user_id = :person_id` with `.scalar()`
