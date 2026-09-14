@@ -96,7 +96,8 @@ def add_moderator(s, user):
 
 
 def make_site_admin(s, name='site-admin'):
-    """A user `Site.admins()` will actually return, plus the `Site` row.
+    """A user `Site.admins()` will actually return. The `Role` row is the
+    mechanism; the `Site` row is not.
 
     ADDED BY TASK 8'S MUTATION PASS, which needed five more `notify_admins`
     tests and would otherwise have repeated this eight-line preamble in each
@@ -106,6 +107,16 @@ def make_site_admin(s, name='site-admin'):
     on `user_role.c.role_id == ROLE_ADMIN` BY VALUE, not by the role's name,
     and `g.admin_ids` is never set in these tests so that inner-join branch
     is always the one taken (register entry D442, live).
+
+    THIS DOCSTRING PREVIOUSLY OPENED "plus the `Site` row" AND THAT ADVERTISED
+    A DECORATION AS A MECHANISM. `Site.admins()` (app/models.py:4006-4012)
+    reads no `Site` row on either branch -- the name `Site` does not appear
+    inside the method body. Neutralising ALL FOUR `make_site()` calls in this
+    file (`:125` here, and `:655`, `:810`, `:1114` inline) leaves it at 28
+    passed. The call below stays because a whole-line deletion in a cited file
+    is never free (register entry D545) and `tests/README.md` facts 239 and
+    240 both cite lines in this file below it -- but it is doing nothing, and
+    tests/README.md fact 239 now records the correction and how it was made.
 
     `unread_notifications` is seeded at 3 so `:388`'s increment is a
     transition rather than a move off the column default.
@@ -1191,3 +1202,87 @@ class TestReportReply:
         assert len(report_calls) == 1
         instance_ids = report_calls[0][1]['instance_ids']
         assert set(instance_ids) == {s.remote_instance.id}
+
+    def test_the_two_arms_read_source_instance_from_different_columns(self, db_session, app):
+        """`:317` against `:326` -- AND IT PINS A REGISTERED DEFECT ON PURPOSE.
+
+        Register entry **D553**, the reply twin of **D440**. The API arm reads
+        `Instance.query.filter_by(id=reply.instance_id).one()` (`:317`); the
+        web arm reads `Instance.query.get(suspect_user.instance_id)` (`:326`).
+        Two different columns, and the value flows straight into
+        `targets_data['source_instance_id']` / `['source_instance_domain']`
+        (`:337`-`:338`) and out to remote instances in the Flag.
+
+        ADDED BY SUB-PROJECT 42'S FINAL FIX WAVE. Nine tasks and eleven
+        reviews walked past this, including the one that wrote D550 as
+        "`report_post`'s defect in the reply twin" -- the SAME pair of lines
+        carries a SECOND twin-transferred defect, which D440 has registered
+        for `report_post` since sub-project 34.
+
+        WHY NOTHING IN THIS FILE COULD SEE IT, AND WHY THE ANSWER WAS ALREADY
+        WRITTEN IN THIS FILE'S OWN DOCSTRINGS. `make_post_reply`
+        (tests/factories.py:467) copies the author's `instance_id` onto the
+        reply, so every other reply here satisfies
+        `reply.instance_id == suspect_user.instance_id` and the two arms are
+        indistinguishable -- false-witness mechanism (d), an input that takes
+        the same path under both readings. Mutating `:317` to the web arm's
+        operand left the final review's mutation jury at 191 passed, ZERO
+        failures, before this test existed.
+        `test_a_remote_suspect_is_named_by_its_ap_id` kills the REPORTER
+        substitution at `:353` and cannot see the SUSPECT one.
+
+        THE DIVERGENT STATE IS PRODUCTION-REACHABLE, NOT HYPOTHETICAL.
+        `Post.move_to` (app/models.py:2855-2860) rewrites every reply's
+        `instance_id` to the destination community's
+        (`UPDATE post_reply SET community_id = ..., instance_id = ...`),
+        leaving it different from the author's. The two hand-written
+        assignments below do exactly what that statement does.
+
+        PINNED IN BOTH DIRECTIONS, NOT FIXED. Which arm is correct is a
+        product question -- `Report.source_instance_id`'s own column comment
+        (app/models.py:3766) documents a THIRD meaning again, "the instance of
+        the reporter", which is what `:353` writes -- and this round's
+        production budget is spent. Whoever unifies the two arms must edit
+        this test, and that obligation is the point of it.
+        """
+        s = _seed_for_report()
+        third = make_instance('moved.example', software='lemmy')
+        remote_author = make_user(s.remote_instance, 'remote-author', local=False)
+        api_reply = make_post_reply(s.post, remote_author)
+        web_reply = make_post_reply(s.post, remote_author)
+        api_reply.instance_id = third.id
+        web_reply.instance_id = third.id
+        db.session.commit()
+        assert api_reply.instance_id != remote_author.instance_id, (
+            'the reply and its author must sit on different instances, or '
+            'both arms read the same number and this test witnesses nothing'
+        )
+
+        report_reply(api_reply, {'reason': 'spam', 'description': 'd',
+                                 'report_remote': False},
+                     SRC_API, auth=bearer(s.reporter))
+
+        form = SimpleNamespace(
+            reasons=SimpleNamespace(data=['1']),
+            description=SimpleNamespace(data='a web report'),
+            report_remote=SimpleNamespace(data=False),
+            reasons_to_string=lambda data: 'spam',
+        )
+        with web_ctx(app, s.reporter):
+            report_reply(web_reply, form, SRC_WEB, auth=None)
+
+        rows = {r.suspect_post_reply_id: r for r in db.session.query(Report).all()}
+        assert set(rows) == {api_reply.id, web_reply.id}
+        api_targets = rows[api_reply.id].targets
+        web_targets = rows[web_reply.id].targets
+
+        # `:317` -- the REPLY's instance.
+        assert api_targets['source_instance_id'] == third.id
+        assert api_targets['source_instance_domain'] == third.domain
+        # `:326` -- the SUSPECT USER's instance.
+        assert web_targets['source_instance_id'] == s.remote_instance.id
+        assert web_targets['source_instance_domain'] == s.remote_instance.domain
+        # The divergence itself, asserted rather than left implied by the two
+        # halves above: if a later round unifies the arms, this is the
+        # assertion that says so.
+        assert api_targets['source_instance_id'] != web_targets['source_instance_id']

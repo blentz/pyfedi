@@ -7242,15 +7242,43 @@ USERS, WHERE `make_reply` NEEDS BOTH -- PROBE IT, DO NOT COPY THE OTHER
 FIXTURE'S HELPER.** The two functions live in the same module and read as
 siblings, so the natural move is to reuse `_clear_creation_guards`; it is
 unnecessary on `report_reply`'s ordinary path and would hide two guards.
-**NARROWED AFTER REVIEW, BECAUSE THE FIRST VERSION OF THIS SENTENCE SAID
-"`report_reply` NEEDS NEITHER" FLATLY AND THE SAME FILE CONTRADICTS IT**: the
-admin-notification arm does need a `Site` row, which is why
-`tests/test_shared_reply_report.py:98`'s `make_site_admin` creates one -- the
-block at `:380-388` calls `Site.admins()`, and a user that method will actually
-return needs both a `Site` row and a `Role` row. So the claim is about the
-guards `make_reply` trips on the way to `PostReply.new` (`private_key`,
-`blocked_phrases`), not about every line `report_reply` can execute. **A
-"needs nothing" claim is a claim about a PATH, and it should name the path.** What `report_reply` DOES need is a community with **one local
+**CORRECTED AT SUB-PROJECT 42's FINAL FIX WAVE: THIS FACT WAS NARROWED AFTER
+REVIEW, AND THE NARROWING IS FALSE. THE FLAT CLAIM IT REPLACED WAS RIGHT, AND
+IT IS RIGHT ON THE ADMIN-NOTIFICATION PATH TOO -- SO THE HEADLINE'S "ON ITS
+ORDINARY PATH" IS CONSERVATIVE, NOT WRONG.** The sentence that stood here read,
+verbatim:
+
+> **NARROWED AFTER REVIEW, BECAUSE THE FIRST VERSION OF THIS SENTENCE SAID
+> "`report_reply` NEEDS NEITHER" FLATLY AND THE SAME FILE CONTRADICTS IT**: the
+> admin-notification arm does need a `Site` row, which is why
+> `tests/test_shared_reply_report.py:98`'s `make_site_admin` creates one -- the
+> block at `:380-388` calls `Site.admins()`, and a user that method will
+> actually return needs both a `Site` row and a `Role` row.
+
+**The `Site`-row half of that is false. `Site.admins()` reads no `Site` row at
+all** (`app/models.py:4006-4012`): its `g.admin_ids` branch queries `User` by
+id, and its else-branch queries `User` joined to `user_role` -- **the word
+`Site` does not appear inside the method body.** Established by execution, not
+by argument: **neutralising ALL FOUR `make_site()` calls in
+`tests/test_shared_reply_report.py` (`:125` in `make_site_admin`, and the
+inline ones at `:655`, `:810`, `:1114`) leaves the file at 28 passed**, the
+admin-notification tests included. The `Role` half IS true and load-bearing --
+see (b) and (c) below -- so what the admin arm needs is a `Role` row, not a
+`Site` row. **`make_site()` inside `make_site_admin` is decorative**, and that
+helper's docstring advertised the decoration as a mechanism until this was
+caught. The calls are left in place deliberately: a whole-line deletion in a
+cited file is never free (register entry D545), and this fact and fact 240 both
+cite line numbers below `:125`. **THE SHAPE IS THE LESSON, AND THIS ROUND HIT
+IT FOUR TIMES: A CORRECTION CAN INTRODUCE THE DEFECT IT WAS WRITTEN TO
+REMOVE.** A reviewer read `make_site_admin`, saw `make_site()`, and inferred a
+requirement from a call -- **a call is evidence that somebody wrote it, not
+evidence that anything needs it**; the only way to tell the two apart is to
+take it away and run. **WHAT SURVIVES FROM THE NARROWING, BECAUSE IT IS TRUE
+AND WORTH KEEPING**: the headline's claim is about the guards `make_reply`
+trips on the way to `PostReply.new` (`private_key`, `blocked_phrases`), not
+about every line `report_reply` can execute, and **a "needs nothing" claim is a
+claim about a PATH and should name the path.** That discipline is right; it was
+applied to the wrong dependency. What `report_reply` DOES need is a community with **one local
 and one remote moderator, as four distinct users** (`tests/
 test_shared_reply_report.py:51`): `:361`'s loop branches per moderator and
 `:382`'s admin block skips anyone already notified, so a fixture reusing one
