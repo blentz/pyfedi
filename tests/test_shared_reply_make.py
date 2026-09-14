@@ -73,6 +73,54 @@ Register entry D533 records that sub-project 41's fixture left
 several call sites resolve objects to ids, so a wrong-object-right-id mutation
 is invisible. `_seed_for_reply` below burns rows to force the three sequences
 apart and asserts they differ.
+
+TASK 4's PLAN NAMED THE WRONG LEVER FOR `:192`/`:193`. Its Step 2 draft set
+`s.actor.bot = True` to trip `can_create_post_reply`'s denial. `bot` is never
+read anywhere in that function's body (app/utils.py:2546-2578, confirmed by
+grep) -- that test would sail straight through `:192` into a real
+`PostReply.new` call and never raise. `user.ban_comments`
+(app/utils.py:2550) is the lever used instead: checked ahead of the
+`is_local()`/`private_key` branch (no `_clear_creation_guards` needed), and
+read by neither `authorise_api_user` (app/utils.py:3628-3629, which checks
+`ap_id`/`verified`/`banned`/`deleted`, never `ban_comments`) nor `:174`
+(`user.banned or user_ip_banned()`), so it cannot also trip the token check
+or `:174` the way `user.banned` did for Task 3.
+
+TASK 4's FINDING ON THE SEVEN `PostReplyValidationError` RAISES, via
+`make_reply` specifically (not `PostReply.new` in the abstract):
+
+    :2983  REACHABLE, covered here (`test_a_reply_is_rejected_when_the_
+           post_has_comments_disabled`).
+    :2986  STRUCTURALLY UNREACHABLE from `make_reply`. `can_create_post_
+           reply` (app/utils.py:2550) already returns `False` for
+           `user.ban_comments` -- by the time `PostReply.new` could run,
+           `:192` has already refused the same condition. Not a factory
+           limitation; no seed can reach this line through `make_reply`.
+    :3025  REACHABLE, covered here (`test_a_reply_containing_a_blocked_
+           phrase_is_rejected`).
+    :3039  REACHABLE, covered here (`test_an_identical_resubmission_is_
+           rejected_as_a_duplicate`).
+    :3036  Reachable in principle, but only through a THIRD reply level:
+           `notification_target` (app/models.py:3030-3033) is `post` when
+           `in_reply_to` is a top-level reply (already covered by `:189`)
+           or the immediate parent's OWN author when replying to a
+           second-level reply -- a shape `:182` does not check and `:189`
+           cannot either. Building that (4 users: post author, a
+           first-level reply author, a second-level reply author, and the
+           blocked actor) earns comparatively little here: it does not
+           change `make_reply`'s own missing set (Group B's target), and
+           `tests/README.md`'s fact 56 already documents this exact raise
+           reached through `create_post_reply` elsewhere in the suite.
+           Skipped.
+    :3046  UNREACHABLE from a plain factory seed -- see PROBE A above.
+    :3049  Same as `:3046`.
+
+`:2983`/`:3025`/`:3039` close the reachable-and-worth-it slice of
+`PostReply.new`'s surface for this task; `:3036` is left to whichever task
+next touches `PostReply.new` directly, and the two flag-gated ones remain
+PROBE A's territory. None of the seven statements are in `make_reply`'s own
+`:156-213` range, so covering or skipping them does not move this task's
+measured target either way.
 """
 
 import pytest
@@ -727,3 +775,192 @@ class TestMakeReply:
                        auth=bearer(s.actor))
 
         assert db.session.query(PostReply).count() == before
+
+    def test_a_blocked_replier_is_refused_by_the_posts_author(self, db_session):
+        """`:189`'s true arm and `:190`'s raise -- the POST author's block.
+
+        Distinct from the parent-reply block at `:182`-`:183`
+        (`test_a_blocked_replier_is_refused_by_the_parents_author`): this
+        test passes `parent_id=None`, so `:180` is false and `:187` sets
+        `parent_reply` to `None` -- `:182`-`:183` never runs at all here,
+        rather than merely not firing. `_seed_for_reply`'s `post` and its
+        lone top-level `reply` share ONE author (`s.author`), which is
+        exactly what made the OTHER test need `match='parent reply'` to
+        isolate itself from this line; here the situation is reversed, so
+        `match='parent post'` does the same job in the other direction --
+        `:183`'s message says 'parent reply', `:190`'s says 'parent post',
+        otherwise byte-identical text.
+        """
+        s = _seed_for_reply()
+        from app.models import UserBlock
+        db.session.add(UserBlock(blocker_id=s.author.id, blocked_id=s.actor.id))
+        db.session.commit()
+        before = db.session.query(PostReply).count()
+        payload = {'body': 'blocked at post level', 'notify_author': False,
+                   'language_id': None, 'distinguished': False}
+
+        with pytest.raises(Exception, match='parent post'):
+            make_reply(payload, s.post, None, SRC_API, auth=bearer(s.actor))
+
+        assert db.session.query(PostReply).count() == before
+
+    def test_a_user_without_permission_to_comment_is_refused(self, db_session):
+        """`:192`'s true arm and `:193`'s raise.
+
+        THE BRIEF NAMED `s.actor.bot = True` AS THE LEVER; THAT IS WRONG,
+        caught before writing this test rather than after. `can_create_
+        post_reply` (app/utils.py:2546-2578) never reads `.bot` anywhere in
+        its body (confirmed with `grep -n "\\.bot\\b"` across app/utils.py) --
+        a `bot=True` actor sails straight through `:192` into a real
+        `PostReply.new` call and this test would never raise, let alone at
+        `:193` specifically. See the module docstring's "TASK 4's PLAN
+        NAMED THE WRONG LEVER" note.
+
+        `user.ban_comments` (app/utils.py:2550) is the lever used instead.
+        It is checked ahead of the `is_local()`/`private_key` branch, so no
+        `_clear_creation_guards` call is needed here (nothing past `:192`
+        is ever reached). It is also read by neither `authorise_api_user`
+        (app/utils.py:3628-3629 checks `ap_id`/`verified`/`banned`/
+        `deleted`, never `ban_comments`) nor `make_reply:174`
+        (`user.banned or user_ip_banned()`) -- so, unlike `user.banned`
+        (Task 3's finding: it trips `authorise_api_user` before `make_reply`
+        even runs, AND trips `can_create_post_reply`'s own unconditional
+        `user.banned` check), `ban_comments` cannot fire either of those,
+        which is what makes `:192`-`:193` the ONLY guard this test's actor
+        can possibly hit. `:175` and `:193` share byte-identical message
+        text, so isolation here comes from the lever being structurally
+        incapable of reaching `:174`, not from the message.
+
+        PROVEN BY MUTATION (see this task's report): neutering `:192`
+        (`if not can_create_post_reply(...)` -> `if False:`) makes this
+        test fail, because the call then proceeds into a real
+        `PostReply.new` and returns a pair instead of raising.
+        """
+        s = _seed_for_reply()
+        s.actor.ban_comments = True
+        db.session.commit()
+        before = db.session.query(PostReply).count()
+        payload = {'body': 'not permitted', 'notify_author': False,
+                   'language_id': None, 'distinguished': False}
+
+        with pytest.raises(Exception, match='not permitted to comment'):
+            make_reply(payload, s.post, None, SRC_API, auth=bearer(s.actor))
+
+        assert db.session.query(PostReply).count() == before
+
+    def test_the_federation_task_is_selected_with_the_parent_id(self, db_session):
+        """`:208`'s task_selector call, including its `parent_id` argument.
+
+        `recording_task_selector` is defined in
+        `tests/test_shared_reply_moderation.py`; this file defines its own
+        rather than importing across test modules, because the two rebind
+        DIFFERENT module globals and sharing one would be a false witness.
+
+        `_clear_creation_guards(s.actor)` IS NEEDED, though the brief's
+        given code omitted it: `parent_id=s.reply.id` means this call must
+        reach a REAL `PostReply.new` to ever get to `:208` at all, and
+        `:192`'s `can_create_post_reply` guard refuses any local actor
+        whose `private_key` is `None` -- see `_clear_creation_guards`'s
+        docstring. Without it this test dies at `:193` before
+        `task_selector` is ever called.
+        """
+        s = _seed_for_reply()
+        _clear_creation_guards(s.actor)
+        import app.shared.reply as reply_module
+        calls = []
+        original = reply_module.task_selector
+
+        def recorder(task_key, **kwargs):
+            calls.append((task_key, kwargs.get('parent_id')))
+            return original(task_key, **kwargs)
+
+        reply_module.task_selector = recorder
+        try:
+            payload = {'body': 'federated', 'notify_author': False,
+                       'language_id': None, 'distinguished': False}
+            make_reply(payload, s.post, s.reply.id, SRC_API,
+                       auth=bearer(s.actor))
+        finally:
+            reply_module.task_selector = original
+
+        assert ('make_reply', s.reply.id) in calls
+
+    def test_a_reply_is_rejected_when_the_post_has_comments_disabled(self, db_session):
+        """`PostReply.new`'s FIRST guard, app/models.py:2982-2983
+        ('Comments are disabled on this post') -- a callee raise, not one
+        of `make_reply`'s own `:156-213` statements, but the reachable one
+        cheapest to witness. `_clear_creation_guards` is still required so
+        the call reaches `PostReply.new` at all (`:192`'s `can_create_post_
+        reply` guard); this guard itself runs before `blocked_phrases()`,
+        so the blank `Site` row `_clear_creation_guards` creates is never
+        even read on this path.
+        """
+        s = _seed_for_reply()
+        _clear_creation_guards(s.actor)
+        s.post.comments_enabled = False
+        db.session.commit()
+        before = db.session.query(PostReply).count()
+        payload = {'body': 'too late, comments are off', 'notify_author': False,
+                   'language_id': None, 'distinguished': False}
+
+        with pytest.raises(PostReplyValidationError, match='Comments are disabled'):
+            make_reply(payload, s.post, None, SRC_API, auth=bearer(s.actor))
+
+        assert db.session.query(PostReply).count() == before
+
+    def test_a_reply_containing_a_blocked_phrase_is_rejected(self, db_session):
+        """`PostReply.new`'s guard at app/models.py:3025 ('Blocked phrase
+        in comment'), reached through `make_reply:196` once `:192`'s
+        `can_create_post_reply` guard is cleared.
+
+        `_clear_creation_guards` creates a blank `Site` row
+        (`blocked_phrases=''`, tests/factories.py:359); this test
+        overwrites that column on the SAME row afterward rather than
+        constructing a second one -- `blocked_phrases()` (app/utils.py:
+        1751-1754) and `can_create_post_reply` both read Site id 1, and a
+        second row would just be dead data. `CACHE_TYPE = 'NullCache'`
+        under test (tests/conftest.py:68) means `blocked_phrases()`'s
+        `@cache.memoize` never serves a stale read back.
+        """
+        s = _seed_for_reply()
+        _clear_creation_guards(s.actor)
+        from app.models import Site
+        site = db.session.query(Site).get(1)
+        site.blocked_phrases = 'forbiddenword'
+        db.session.commit()
+        before = db.session.query(PostReply).count()
+        payload = {'body': 'this has a forbiddenword in it', 'notify_author': False,
+                   'language_id': None, 'distinguished': False}
+
+        with pytest.raises(PostReplyValidationError, match='Blocked phrase'):
+            make_reply(payload, s.post, None, SRC_API, auth=bearer(s.actor))
+
+        assert db.session.query(PostReply).count() == before
+
+    def test_an_identical_resubmission_is_rejected_as_a_duplicate(self, db_session):
+        """`PostReply.new`'s guard at app/models.py:3038-3039 ('Duplicate
+        reply'), reached on a SECOND `make_reply` call carrying the same
+        user, post, `parent_id` (`None`) and post-conversion body as an
+        already-successful first call.
+
+        `reply_already_exists` (app/utils.py:2599) compares the STORED
+        `body` column, not the raw payload, so the first call must
+        genuinely succeed and the second must send byte-identical `body`
+        text through the same `piefed_markdown_to_lemmy_markdown`
+        conversion -- a pure function of its input, so sending the same
+        payload twice is sufficient.
+        """
+        s = _seed_for_reply()
+        _clear_creation_guards(s.actor)
+        before = db.session.query(PostReply).count()
+        payload = {'body': 'say it once', 'notify_author': False,
+                   'language_id': None, 'distinguished': False}
+
+        make_reply(payload, s.post, None, SRC_API, auth=bearer(s.actor))
+        after_first = db.session.query(PostReply).count()
+        assert after_first == before + 1
+
+        with pytest.raises(PostReplyValidationError, match='Duplicate reply'):
+            make_reply(payload, s.post, None, SRC_API, auth=bearer(s.actor))
+
+        assert db.session.query(PostReply).count() == after_first
