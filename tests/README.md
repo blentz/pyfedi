@@ -7365,6 +7365,138 @@ duplication of this very stub is a registered finding (D406); the cheap check
 was one grep and it came after the ruling instead of before it. Registered as
 **D539**, which is a retraction rather than a finding.
 
+**242. `block_another_user` COMPARES RAW `role_id` INTEGERS, SO `grant_permission`
+CAN MAKE YOUR SUBJECT STAFF OR ADMIN BY ACCIDENT -- THIS IS FACT 103 RUNNING IN
+THE OPPOSITE DIRECTION.** `ROLE_STAFF` is **3** and `ROLE_ADMIN` is **4**
+(`app/constants.py:80-81`), and `app/shared/user.py:33-35` reads
+`SELECT role_id FROM "user_role" WHERE user_id = :person_id` with `.scalar()`
+and compares the result to those two **integers** -- it never touches
+`User.is_admin()` or `Site.admins()`, so neither fact 103 nor fact 217 governs
+it. `grant_permission` (`tests/factories.py:365`) mints a **fresh `Role` per
+call with an auto id**, and `tests/conftest.py:131-132` resets every sequence
+between tests, so the calls in a single test are numbered 1, 2, 3, 4, ... **The
+third `grant_permission` call in a test makes its subject STAFF by id and the
+fourth makes it ADMIN by id**, and `block_another_user` then refuses the block
+for a reason the test never intended. That lands in one of two ways and the
+first is the dangerous one: **a test asserting a REFUSAL passes for the wrong
+reason**, having witnessed the role guard at `:35` while claiming to witness
+whatever it meant to test, and a test asserting a SUCCESSFUL block fails with
+no `UserBlock` row and no obvious cause. Fact 103 warns that `grant_permission`
+gives you too little
+privilege for `Site.admins()`; this is the same auto-id mechanism giving you too
+much. **Two rules.** Create the role with an EXPLICIT id --
+`Role(id=ROLE_ADMIN, name='role-with-id-4', weight=0)` -- so the privilege is
+deliberate and the count of earlier `grant_permission` calls stops being
+load-bearing. And **name it something that is NOT `'Admin'` or `'Staff'`**, so
+the test proves the id comparison at `:35` rather than accidentally satisfying
+`User.is_admin()`'s role-NAME path at `app/models.py:1263`, which is a different
+predicate entirely (fact 217, fact 239).
+
+**243. `run_tests.sh:83` RUNS `flask db upgrade` BEFORE EVERY PYTEST
+INVOCATION, SO A NEW MIGRATION NEEDS NO MANUAL APPLICATION.** The line is
+`$COMPOSE exec -T test-runner flask db upgrade`, and `:85` is the
+`exec ... pytest "$@"` immediately after it. Add a revision under
+`migrations/versions/` and the very next `./run_tests.sh` applies it; there is
+no separate step to remember and no state to clear first. This is the practical
+half of the schema note earlier in this file (the schema comes from
+`flask db upgrade`, not `db.create_all()`): it is not only where the schema
+comes from, it is re-derived on every single run. The corollary is the part
+that bites in the other direction -- **a migration that fails to apply fails
+the run before pytest is ever reached**, so a traceback with no test output at
+all is a migration error, not a collection error.
+
+**244. THE REPOSITORY *IS* SHARED WITH THE CONTAINER; WHAT IS NOT SHARED IS
+`/tmp`.** `compose.test.yaml:67` is `- ./:/app:z` on the `test-runner` service,
+so a file written on the host with ordinary tools appears at `/app/<path>`
+inside the container immediately -- writing a probe test with `Write` and then
+running `./run_tests.sh tests/test_probe_thing.py` works, and the
+stdin-piping-into-`python -c` dance some plans prescribe for creating files is
+unnecessary complexity that can fail for its own reasons. The rule that DOES
+hold is narrower than "the host and container do not share a filesystem", which
+is simply false: **the container's `/tmp` is outside that one bind mount**, so a
+coverage json written to `/tmp` lands in the container and must be read back
+with an inlined container Python. Fact 154 is the same boundary seen from the
+other side, for a test that needs a real file on disk. State which of the two
+directions you mean; "the container cannot see my file" is ambiguous and is
+wrong for repo paths.
+
+**245. `ban_user`'s WEB ARM TAKES A WTForms OBJECT AND `unban_user`'s TAKES A
+DICT -- SIBLING FUNCTIONS, DIFFERENT INPUT SHAPES.** `app/shared/user.py:151`
+reads `input.person_id` as a **plain attribute**, which exists only because
+`app/user/routes.py:782` sets `form.person_id = user.id` on the form object
+before calling -- it is not a WTForms field and there is no `.data` on it, while
+the four lines under it (`:152-155`) DO read `.data` off real fields
+(`input.purge.data`, `input.ip_address.data`, `input.reason.data`,
+`input.flush.data`). `unban_user:219`, four lines further down the same file,
+reads `input['person_id']` off a dict on its web arm, identically to its own API
+arm at `:216`. So a `SimpleNamespace` double works for `ban_user`'s web arm and
+a plain dict does not, and the reverse holds for `unban_user`. Neither shape is
+inferable from the other, and neither is inferable from the API arm, which takes
+a dict in both functions.
+
+**246. `send_message` HAS `current_user` AS A DEFINITION-TIME DEFAULT
+ARGUMENT.** `app/chat/util.py:12` is
+`def send_message(message: str, conversation_id: int, user: User = current_user, src=SRC_WEB)`.
+Python evaluates that default **once, when the module is imported**, so the
+parameter is bound to the `LocalProxy` object itself and not to any user -- it
+resolves per call at attribute access, which means it resolves to whatever the
+CALLER's context has, never to whatever the caller passed as its own `user`.
+`app/shared/user.py:335` calls it without overriding the argument. Two
+consequences worth carrying: a caller that already holds an authorised `User`
+model silently does not pass it, and outside a request context the proxy is not
+an anonymous user but plain `None` in this codebase's flask_login
+configuration -- which is what makes `bot_challenge_user`'s API arm fail with
+`AttributeError: 'NoneType' object has no attribute '_sa_instance_state'` two
+lines BEFORE `send_message` is reached (register entry D555).
+
+**247. A NARROW `--cov` MAKES `check_coverage_floors.py` REPORT FALSE
+VIOLATIONS FOR EVERY OTHER FLOORED MODULE.** `violations()`
+(`tests/check_coverage_floors.py:65-78`) does
+`actual = entry['summary']['percent_covered'] if entry else 0.0` -- **a floored
+module absent from the report scores 0.0 rather than passing**, deliberately, so
+that a rename or an import failure cannot satisfy the ratchet silently. That
+behaviour is correct and it means the floors check is only meaningful against a
+report that covers every floored module. Run the ratchet against a
+`--cov=app.shared.<one module>` json and it reports a violation for each of the
+other floored modules: at sub-project 43 that would have been **21** of the 22
+entries, which looks exactly like a catastrophic regression. **Measure with
+`--cov=app` for the ratchet, and take the narrow `--cov=app.<module>` run
+separately when you want the module's own figures fast.** Fact 168 covers which
+FIELD the checker compares; this is about which FILES have to be in the report
+for that comparison to mean anything.
+
+**248. `git commit --amend` WITH NOTHING STAGED CHANGES THE MESSAGE AND NOTHING
+ELSE, AND EVERY WORKING-TREE CHECK STILL PASSES.** The trap is that the
+evidence you would naturally reach for is all derived from the working tree: a
+grep finds your edit, a test run exercises your edit, `git status` is clean
+because the file matches... the INDEX, which you never updated. The commit
+object contains none of it. This is the same boundary as facts at
+`git show HEAD:` elsewhere in this file, arriving from the authoring side rather
+than the mutation side: **during an amend, the tree is not the artifact.**
+Verify against the commit object -- `git show HEAD:<path>`,
+`git diff --numstat <base> HEAD`, `git show --stat HEAD` -- before reporting a
+commit as carrying a change, and `git add` the paths explicitly rather than
+relying on `-a` or on the previous commit's staging.
+
+**249. CHOOSING A MUTATION ORACLE THAT DOES NOT EXECUTE THE FUNCTION UNDER TEST
+SILENTLY CONVERTS EVERY MUTANT THERE INTO A SURVIVOR.** A survivor means "the
+mutant is equivalent OR no test kills it" (fact 241) -- but only if a test ran
+through the line at all. If the oracle never enters the function, every mutant
+in it survives for a third reason that looks identical in the results table and
+is evidence about nothing. Sub-project 43's dispatch prescribed three
+`tests/test_shared_user_*.py` files as the oracle for all of
+`app/shared/user.py`; those three cover the module at **78.18%** with
+`subscribe_user`'s `:90-138` entirely missing, so **34 mutants would have
+survived vacuously**, the kill rate would have read 63.3% instead of 76.5%, and
+the two genuinely-equivalent mutants in that function would have been buried
+among 34 identical-looking ones with recipes attached for tests that already
+exist. **The check costs one command and belongs BEFORE the first mutant:
+measure the proposed oracle against the module and read `missing_lines`.** If a
+region is missing, either widen the oracle or label the region's mutants with
+the oracle that judged them and report both count sets -- which is what was
+done, and why register entry D574 records the correction rather than a bad
+number.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not

@@ -12398,6 +12398,193 @@ at `missing_lines []` and `missing_branches []`, `num_partial_branches 0`,
 next group, and the campaign needs a new target** -- see D538 for the list of
 open findings that nobody owns.
 
+## Sub-project 43: the `reply_count_cross_posted` backfill, and `app/shared/user.py` -- the campaign's first target after `app/shared/reply.py` closed
+
+**The round in one line: a data-repair migration closed the DATA half of D543
+and left its CODE half open, `app/shared/user.py` went 35.831% -> 98.697% with a
+NEW floor entry of 98, four production lines in `ban_user` stopped testing a
+constant and started testing the caller's source, a 196-mutant pass killed 150,
+and every other finding -- eleven in the code, three about process -- is
+REGISTERED HERE RATHER THAN FIXED.** The round's production budget was exactly
+two changes and it spent exactly two.
+
+**This is the first round in the campaign to close a module deliberately BELOW
+100.** Two statements in `subscribe_user` are unreachable from either of the
+function's two callers, the unreachability is proven rather than assumed, and
+the floor is `floor(98.697) = 98` in consequence. D564 is that proof, and it is
+the entry to read before anyone tries to "finish" this module.
+
+### 0. THE MEASUREMENT, AND WHY IT WAS TAKEN TWICE
+
+Both runs are on the delivered tree, both controller-only, both through
+`./run_tests.sh`, and both report the same suite totals. The second run exists
+because of the checker's behaviour rather than because the first was doubted.
+
+| run | `--cov` scope | suite result | wall | exit |
+|---|---|---|---|---|
+| 1 | `app.shared.user` (dotted) | **4931 passed, 3 skipped, 6 subtests** | 363.52s | `PYTEST_EXIT=0` |
+| 2 | `app` (dotted) | **4931 passed, 3 skipped, 6 subtests** | 443.07s | `PYTEST_EXIT=0` |
+
+`app/shared/user.py` reports `percent_covered 98.6970684039088`,
+`missing_lines [107, 115]`, `missing_branches [[104,107],[112,115]]`,
+`num_partial_branches 2`, `num_statements 211`, `num_branches 96` -- **identical
+under both scopes**, which is the evidence that the figure is a property of the
+module and not of the measurement window. It entered the round at **35.831%**,
+131 statements and 66 arcs.
+
+**THE RATCHET CHECK HAD TO RUN AGAINST THE WIDE JSON, AND THAT IS NOT A
+PREFERENCE.** `tests/check_coverage_floors.py`'s `violations()` reads
+`files.get(module)` and substitutes `0.0` for any floored module the report does
+not contain -- its own docstring says a rename or an import failure must not
+satisfy the ratchet silently. `coverage_floors.ini` carries 22 modules
+(`/usr/bin/grep -c "^app/" coverage_floors.ini` -> `22`), so chaining the floors
+check against run 1's `--cov=app.shared.user` JSON would have reported **21
+false violations** and looked exactly like a catastrophic regression. Against
+run 2's JSON: `All 22 module floors met.`, `FLOORS_EXIT=0`.
+
+**Floor entry added, not raised:** `app/shared/user.py = 98` at
+`coverage_floors.ini:16`. The module had no entry before this round.
+
+### 1. THE ROUND'S STATE, AS A MEASUREMENT RATHER THAN A SUMMARY -- D554
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D554 | `app/shared/user.py`; `coverage_floors.ini:16`; `tests/check_coverage_floors.py:65-78` | **Not a defect -- the campaign's state.** `app/shared/user.py` moves **35.831% -> 98.6970684039088** in one round, from 131 statements and 66 arcs to `num_statements 211`, `num_branches 96`, `missing_lines [107, 115]`, `missing_branches [[104,107],[112,115]]`, `num_partial_branches 2`. **The two missing lines are the proven-unreachable pair of D564, so the module is closed as far as any input can take it and the floor is `floor(98.697) = 98` rather than 100** -- a NEW entry at `coverage_floors.ini:16`, the file's twenty-second. Full suite on the delivered tree, twice: **4931 passed, 3 skipped, 6 subtests, `PYTEST_EXIT=0`** under `--cov=app.shared.user` (363.52s) and again under `--cov=app` (443.07s), with the module's figures byte-identical between them. Floors checked against the WIDE json only -- `All 22 module floors met.`, `FLOORS_EXIT=0` -- because `violations()` scores a floored module absent from the report as `0.0`, so the narrow json would have produced **21 false violations**. The 22 is derived (`/usr/bin/grep -c "^app/" coverage_floors.ini`), not recalled. | **state, registered** | Two controller-only full-suite runs plus the checker's source |
+
+### 2. `bot_challenge_user` APPENDS THE WRONG USER, AND THE PLAN'S ACCOUNT OF IT WAS WRONG TWICE OVER -- D555, D556
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D555 | `app/shared/user.py:320` against `:322`; `:303-307`; `app/user/routes.py:2115`; `app/chat/util.py:12` | **`:320` builds the conversation from `user` and `:322` appends `current_user`, and the two are not the same object on the `SRC_API` arm.** `:320` is `conversation = Conversation(user_id=user.id)` where `user` came from `authorise_api_user(auth, return_type='model')` at `:305`; `:322` is `conversation.members.append(current_user)`. The disagreement between the two lines is real and is the finding. **THE PLAN'S DESCRIPTION OF THE CONSEQUENCE WAS WRONG AND IS CORRECTED HERE ON BOTH LIMBS.** First limb: the plan said the arm dies inside `send_message` (`app/chat/util.py:12`) on its definition-time `user: User = current_user` default, reached from `:335`. **It never gets there.** Task 3's probe observed `AttributeError: 'NoneType' object has no attribute '_sa_instance_state'` -- `:322` appends plain `None` into the ORM relationship and the flush inside `db.session.commit()` at `:324` raises, eleven lines before `:335` is evaluated. Second limb: the plan called this "an API call with no logged-in session". **There is no such call.** `/usr/bin/grep -rn "bot_challenge_user" app/ --include=*.py` returns the definition at `:303`, one import at `app/user/routes.py:29`, and one call at `app/user/routes.py:2115` which hardcodes `src=SRC_WEB`. **And the crash as pinned is an artefact of the bare call the test makes**: under a genuine Flask request context flask_login's `_load_user()` sets `current_user` to an `AnonymousUserMixin`, not to `None`, so a future `SRC_API` route would fail differently or not at all. **REAL-REQUEST-CONTEXT BEHAVIOUR IS UNVERIFIED AND THIS ENTRY DOES NOT CLAIM IT.** What is established: the two lines disagree, and the disagreement is observable the moment anything calls the function with `SRC_API`. | **open, registered, pinned not fixed** -- `tests/test_shared_user_blocks.py::test_bot_challenge_user_src_api_bare_call_crashes_on_none_current_user` | Probe run in Task 3; grep re-run at source in Task 10 |
+| D556 | `app/shared/user.py:303-307` and `:314-316`; `app/user/routes.py:2115` | **`bot_challenge_user`'s `src` parameter is vestigial and its `SRC_API` fork is dead code.** One caller exists and it passes `src=SRC_WEB` as a literal, so `:306`'s true arm is never taken in the current tree and the parameter carries exactly one value in production. This is registered for two reasons and neither is style. First, it is the reason D555 cannot be stated as a live production defect -- the wrong-name bug at `:322` sits behind a fork nothing enters. Second, it is the reason the arm's behaviour is worth writing down BEFORE someone wires an API route to it, because the wiring is one line and the defect it would expose is already known. Same shape as **D503**'s `SRC_PLD` (a source constant with no production caller) one module over. | **open, registered, not fixed** | `/usr/bin/grep -rn "bot_challenge_user" app/ --include=*.py`, three hits |
+
+### 3. `unfollow_user` DECREMENTS COUNTERS THAT `follow_user` NEVER INCREMENTED -- D557
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D557 | `app/shared/user.py:286-287` against `:239-246`; `:289-291` | **Both counters are decremented unconditionally, on a path that never checks whether there was anything to undo, and the mirror does not always increment them.** `:286-287` are `user.num_following -= 1` and `to_unfollow.num_followers -= 1`, executed before the `DELETE FROM "user_follower"` at `:289-291` and regardless of whether that DELETE removes a row. Two distinct ways to drift. **(a) No row at all:** unfollowing someone you never followed lowers both counters and deletes nothing. **(b) The manually-approving arm:** `follow_user:241-242` sets `is_accepted = None` when `to_follow.ap_manually_approves_followers is True` and takes the sibling `else` at `:243-246` otherwise, so the increments at `:245-246` are SKIPPED for a manually-approving local target -- **following and then unfollowing such a user drives `num_following` and `num_followers` to -1 from a standing start.** This is the same counter-drift family as **D523** (a drift neither side of the mirror repairs) and **D522** (two verbs disagreeing about which counters a removal moves); the mechanism here is the third variant, where one side of the mirror is conditional and the other is not. Reachability is NOT in doubt on limb (b): `ap_manually_approves_followers` is an ordinary column and both callers reach `follow_user` with any local target. | **open, registered, pinned not fixed** -- `tests/test_shared_user_follows.py` | Read at source in Task 10; pinned by Task 7 |
+
+### 4. TWO QUERY-SHAPE DIVERGENCES, IN SIBLING FUNCTIONS OF ONE MODULE -- D558, D559
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D558 | `app/shared/user.py:33-34` against `:35`; `app/constants.py:80-81` | **A one-row read standing in for a set membership test.** `:33-34` execute `SELECT role_id FROM "user_role" WHERE user_id = :person_id` and take `.scalar()`, which returns the FIRST row's first column and discards the rest; `:35` then asks `if role == ROLE_ADMIN or role == ROLE_STAFF:`. **`user_role` is a many-to-many association table** -- a user may hold several roles -- so for a multi-role user the guard is answered by whichever row the planner happened to return first. A user holding an admin role plus any other can therefore be blocked, or not, depending on row order, with no ordering clause anywhere to make it deterministic. The correct shape is a membership test (`WHERE user_id = :person_id AND role_id IN (3, 4)` with `.first() is not None`, or the `IN` pushed into an `EXISTS`). Note this is also a THIRD spelling of "is this user privileged" in a campaign that has already registered two -- **D295**/**D442**/**D481** cover `Site.admins()` keying on role ID against `User.is_admin()` keying on role NAME; this one keys on a raw role ID read out of the association table directly, bypassing both. | **open, registered, not fixed** | Read at source in Task 10 |
+| D559 | `app/shared/user.py:91` against `:151`, `:216`, `:219`, `:237`, `:284` | **`.one()` where every sibling in the module uses `.get()`.** `subscribe_user:91` is `person = db.session.query(User).filter_by(id=person_id, banned=False).one()`, which raises `sqlalchemy.exc.NoResultFound` -- an uncaught 500 -- for a `person_id` that does not exist OR that exists and is banned. `ban_user`, `unban_user`, `follow_user` and `unfollow_user` all reach their target with `db.session.query(User).get(...)`, which returns `None` and fails later and differently. **The divergence matters most on the banned limb**, because that is not a missing row: subscribing to a user who was banned between page render and form submission is an ordinary race, and this function answers it with a traceback. Direct sibling of **D506**, the same `.one()`-versus-404 divergence at `delete_reply:247` and `restore_reply:275` one module over -- **second sighting of that class, and the first one outside `app/shared/reply.py`.** | **open, registered, not fixed** | Read at source in Task 10 |
+
+### 5. `ban_user` PERFORMS NO AUTHORIZATION AT ALL, AND THE SPEC'S CLAIM THAT IT DOES IS RETRACTED -- D560
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D560 | `app/shared/user.py:141-210` (the whole function); `app/api/alpha/utils/user.py:971`; `app/user/routes.py:767`; against `app/shared/post.py` and `app/shared/reply.py`'s shared-layer gates | **THERE IS NO PERMISSION CHECK IN `ban_user`. NOT A WEAK ONE, NOT AN API-ONLY ONE -- NONE.** `:141` through `:210` was read line by line and contains no `user_access(...)`, no `is_admin_or_staff()`, no moderator test: the function takes whatever actor its caller hands it and bans whoever the caller names. Both current callers gate it correctly and identically -- `app/api/alpha/utils/user.py:971` and `app/user/routes.py:767` each read `if user_access('ban users', ...) or user_access('manage users', ...)` -- so **nothing is exploitable today**; the finding is that the module's own convention is not honoured here, and a third caller would walk into an ungated ban with no diagnostic. That convention is not hypothetical: `app/shared/post.py` and `app/shared/reply.py` check in the shared layer, which is the entire premise of **D519**/**D521**/**D499**. **THIS ENTRY ALSO RETRACTS THIS ROUND'S OWN SPEC.** The spec asserted a guard existed and prescribed a MANDATORY mutation to neutralise it and prove the suite noticed; the mutation was retracted before Task 9 ran, because there is nothing to neutralise. The retraction is recorded rather than applied silently, per **D539**'s rule -- and the cheap check that would have caught it before the spec shipped was reading `:141-210`, which is seventy lines. | **open, registered, not fixed; the spec's contrary claim RETRACTED** | `:141-210` read in full in Task 9 and re-read in Task 10; both callers read at source |
+
+### 6. `follow_user`'s TWO NOTIFICATION BRANCHES BUILD THE SAME PAYLOAD -- D561
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D561 | `app/shared/user.py:252-269` | **Eighteen lines of `if`/`else` whose two arms differ in exactly one string.** `:253-255` and `:262-264` construct `targets_data` byte for byte identically -- same `'gen': '0'`, same `'author_id': user.id`, same `'author_user_name': user.ap_id if user.ap_id else user.user_name` -- and `:256-260` and `:265-269` construct the `Notification` with the same `url`, `user_id`, `author_id`, `notif_type`, `subtype` and `targets`. The only difference is `title=_('Someone wants to follow you')` against `title=_('You have a new follower')`. This is the **D455** duplication family's Nth instance (registered there for `make_post` against `edit_post`, and again at **D466**), and it carries the family's usual cost: a change to the payload has two sites and nothing makes the second one fail if it is missed. It also has a testing cost this round paid -- the two arms are indistinguishable to any oracle that reads `targets`, so the ONLY discriminator between them is the title string, which is why Task 7's controller correction had to be carried to the implementer and why that assertion's docstring now says it is load-bearing. | **open, registered, not fixed** | Read at source in Task 10 |
+
+### 7. THE ROUND'S ONE CODE FIX, AND THE COUNT THAT WAS FIVE UNTIL IT WAS FOUR -- D562
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D562 | `app/shared/user.py:161`, `:171`, `:183`, `:192`; commit `fd5b9bcd` | **FIXED. Four guards tested a CONSTANT instead of the caller's source.** Each read `if SRC_WEB:` where it meant `if src == SRC_WEB:`. `SRC_WEB` is a truthy module constant, so all four were unconditionally true and **seven `flash()` calls fired inside `ban_user` on API bans**, outside any request context. Pinned first by Tasks 4 and 5, then INVERTED in the same commit that fixed them, so the fix arrives with four tests that fail against the old code. Task 9 reverted each of the four to the bare form individually and **all four died separately** -- M44 `:161`, M52 `:171`, M58 `:183`, M61 `:192`. **RECORD THE COUNT'S HISTORY, BECAUSE THE FIRST COUNT WAS WRONG.** The spec said FIVE sites; the correct number is FOUR. The fifth candidate was the `else` at `:197`, and it does not hang off a source test at all -- it is the `else` of the ROLE check at `:195` (`if to_ban.is_admin() or to_ban.is_staff():`), one indent level in from `:192`. Reading the indentation rather than the grep hits is what separated them, which is **D536**'s rule arriving from the other direction: indentation is load-bearing evidence. | **FIXED at `fd5b9bcd`, four inverted pins** | Four individual mutants, four individual kills, in Task 9's table |
+
+### 8. THE BACKFILL REPAIRS DATA, NOT CODE -- D563
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D563 | `migrations/versions/9e99070afe06_backfill_reply_count_cross_posted.py` (revision `9e99070afe06`, down_revision `7b8bf43fa079`); against `app/shared/reply.py:267`, `:295`, `:431`, `:468` and `app/activitypub/util.py:2315`; `app/models.py:1723` | **D543'S DATA HALF IS CLOSED AND ITS CODE HALF IS STILL OPEN, AND CONFLATING THE TWO IS THE MISTAKE THIS ENTRY EXISTS TO PREVENT.** The revision does two things: `UPDATE post SET reply_count_cross_posted = reply_count WHERE reply_count_cross_posted IS NULL` (the value is `reply_count` and not `0` because `app/models.py:3108` DEFINES the column as the post's own `reply_count` when it has no cross-post set, and the `WHERE` keeps correctly-maintained counts from being flattened), and `ALTER COLUMN ... SET DEFAULT 0` so rows inserted outside the ORM stop arriving NULL. **What it does NOT do: change a single line of application code.** The five arithmetic sites remain exactly as unguarded as they were, `None - 1` still raises `TypeError`, and **a row explicitly set to NULL after this migration still crashes every one of them** -- a server default is applied on INSERT when the column is omitted and is not a constraint. So the population of NULL rows is drained and the hole they fell into is not filled. `downgrade()` drops only the default and deliberately does NOT re-NULL the backfilled rows: a downgrade that destroys data is worse than the defect it reverses. **Read D543 with this entry; neither is complete alone.** | **D543's data half FIXED at `2aa65043`; D543's code half OPEN, unchanged** | Migration read at source; round-trip upgrade/downgrade/upgrade verified in Task 1 |
+
+### 9. TWO UNREACHABLE STATEMENTS, PROVEN RATHER THAN ASSUMED -- AND THE TWO GUARDS ABOVE THEM ARE NOT -- D564
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D564 | `app/shared/user.py:107` and `:115`; the proof chain `:91`, `:93-94`, `:96-97`, `app/models.py:1600-1604`; callers `app/api/alpha/utils/user.py:315` and `app/user/routes.py:758`; `coverage_floors.ini:16` | **`:107` AND `:115` ARE UNREACHABLE FROM EITHER CALLER, WITH A STRUCTURAL PROOF, AND THAT IS WHY THE FLOOR IS 98.** Each link re-verified in Task 9 rather than inherited. (1) `:91` loads `person` by `id=person_id`, so `person.id == person_id` for the rest of the function. (2) `:93-94` set `subscribe = False if person.notify_new_posts(user_id) else True`, **on `SRC_WEB` only**. (3) `app/models.py:1600-1604` shows `notify_new_posts` filtering `NotificationSubscription` on the triple `(entity_id == self.id, user_id == user_id, type == NOTIF_USER)`. (4) `:96-97` filter on `(entity_id=person_id, user_id=user_id, type=NOTIF_USER)` -- **the identical triple**, by (1). So under `SRC_WEB`, `subscribe == False` and `existing_notification is not None` move in lockstep, and each `else` arm asks for one of them without the other. (5) `/usr/bin/grep -rn "subscribe_user" app/ --include=*.py` returns **exactly two callers**, one `SRC_API` and one `SRC_WEB`, so `src` has no third value. `:107` needs `subscribe == False`, no row, and `src != SRC_API`; `:115` needs the mirror. Both are contradictory. **N23 (`:107` -> `pass`) and N26 (`:115` -> `pass`) survived, and the equivalence is claimed on the proof, never on the survival** -- per this file's standing rule that a surviving mutant is ambiguous evidence (**D539**, README fact 241). **DO NOT OVERSTATE THIS.** The GUARDS at `:104` and `:112` are NOT equivalent: inverting either diverts the REACHABLE `SRC_API` arm into the else, and M32 and M34 were both KILLED. The kill mechanism was checked rather than assumed -- re-running M32 with `--tb=line` showed the discriminator is the message equality at `tests/test_api_user_subscriptions.py:51`, not the bare `RuntimeError` from `flash()` outside a request context, which a `pytest.raises(Exception)` would have swallowed (see N28 in D572, the same shape with no message assert, which survives). **The consequence for the ratchet: this module is finished, and its floor is 98.** | **equivalent, proven; registered as the reason the floor is not 100** | Every link re-read at source in Task 9; M32 re-run with `--tb=line` |
+
+### 10. THE MUTATION PASS'S SURVIVORS, RANKED AS THE PASS RANKED THEM, WITH RECIPES -- D565, D566, D567, D568, D569, D570, D571, D572
+
+196 mutants applied from a published scope derivation (211 statement lines, 5
+compound lines; 186 mutated, 25 skipped each named and justified). **150 KILLED
+/ 46 SURVIVED as run.** Against the three files the dispatch actually
+prescribed, strictly, **124 / 72** -- both figures are reported because a count
+is a claim, and the reason there are two is D574.
+
+**The 46 partition exactly.** Seven are vacuous: the five in D573 and the two
+proven-equivalent in D564. **The remaining 39 are carried below, every one
+killable, every one with a recipe** -- 1 in D565, 2 in D566, 2 in D567, 1 in
+D568, 6 in D569, and 27 in D572. 1+2+2+1+6+27 = 39, and 39+7 = 46. The
+partition is by MUTANT ID rather than by the source report's own sub-group
+headers, because two of those headers do not sum cleanly (its section 7.5 says
+seven but two of them are counted again in 7.1, and 7.6 says six and lists
+five). D570 and D571 are findings about KILLS, not survivors, and add nothing
+to the 39.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D565 | `app/shared/user.py:201` (M68) | **THE HIGHEST-CONSEQUENCE SURVIVOR IN THE MODULE.** `if ban_ip_address and to_ban.ip_address:` -> `if to_ban.ip_address:` leaves the suite green, so **the mutant IP-bans every banned user who happens to have an address, whether or not the moderator asked for it.** The other two mutants on the line died (`and`->`or`, and dropping `ip_address`), both to `test_ban_user_skips_the_ip_ban_when_the_target_has_no_address`, which is exactly false-witness mechanism (e): the suite covers `(ban_ip_address=True, address present)` and `(ban_ip_address=True, address None)` and never `(ban_ip_address=False, address present)`. **RECIPE:** ban with `ban_ip_address` false against a target that HAS an `ip_address`, and assert no `IpBan` row is created. One test. | **open hole, registered with recipe, not closed** | M68 survived the four-file oracle |
+| D566 | `app/shared/user.py:175-176` (M53, M54) | **The remote purge does not have to actually purge.** `to_ban.delete_dependencies()` -> `pass` and `to_ban.purge_content(flush=flush_cdn)` -> `pass` both survive. The BRANCH is pinned -- M49, inverting `to_ban.is_local()` at `:168`, took down both the local and the remote purge test as required -- and the bookkeeping (`deleted`, `deleted_by`) is asserted, but **the two calls that are the entire substance of the remote deletion are not.** **RECIPE:** seed dependent rows and assert they are gone, or spy on both methods and assert each is called, `purge_content` with `flush=flush_cdn`. | **open hole, registered with recipe, not closed** | M53, M54 survived |
+| D567 | `app/shared/user.py:164` and `:195` (M47, M64) | **The `is_staff()` disjunct is never the sole reason either warning fires.** `if to_ban.is_admin() or to_ban.is_staff():` -> `if to_ban.is_admin():` survives at both sites. The mirror mutants dropping `is_admin()` (M48, M65) and the `or`->`and` flips (M46, M63) were all killed -- by a single test each, and **both of those tests make the target an ADMIN.** So a staff-only target would be banned or purged with no role warning and nothing would notice. `is_staff() and not is_admin()` is a reachable state; this is a missing test, not a structural void. **RECIPE:** a target that is staff and not admin, created with an explicit `Role(id=ROLE_STAFF, name='role-with-id-3', weight=0)` per the module's id-collision trap and README fact 242, asserting the role warning still fires. | **open hole, registered with recipe, not closed** | M47, M64 survived; M46/M48/M63/M65 killed |
+| D568 | `app/shared/user.py:94` (M29) | **The web toggle's DIRECTION is untested.** `subscribe = False if person.notify_new_posts(user_id) else True` can be inverted with the suite green, because **both web tests assert only the ABSENCE of a subscription row -- which the inverted toggle also produces.** That is false-witness mechanism (c), emptiness with no same-mechanism positive control. The path with no test at all is the ordinary one: subscribe on the web to someone you are not yet subscribed to, and a row appears. **RECIPE:** one `SRC_WEB` call against a person with no existing `NotificationSubscription`, asserting a row now exists with `(entity_id, user_id, type=NOTIF_USER)`. | **open hole, registered with recipe, not closed** | M29 survived the four-file oracle |
+| D569 | `app/shared/user.py:239`, `:248`, `:253`, `:271`, `:290`, `:298` (M82, M89, N66, M92, M97, M101) | **NOTHING IN THE SUITE EVER LOOKS AT THE `UserFollower` ROW.** Six survivors, one cause: the follow tests assert counters and the dispatched task name, and never the row the functions exist to write and delete. `is_accepted = False` -> `True` at `:239` (M82) is observable only on the remote arm, where it goes straight into the insert at `:248`; `is_inward=False` -> `True` in that same insert (M89); the `unfollow_user` DELETE's `AND is_inward is false` -> `is true` at `:290` (M97); the `user_follow_request` DELETE's bind params swapped at `:298` (M101); `to_follow.unread_notifications += 1` -> `-= 1` at `:271` (M92), a line that IS executed and simply unasserted; and the notification payload's `'gen': '0'` -> `'1'` at `:253` (N66). **RECIPE:** one test that asserts the `UserFollower` row exists with the right `is_accepted` and `is_inward` after a follow and is GONE after an unfollow closes M82, M89 and M97 together; seed a `user_follow_request` row and assert it is deleted for M101; assert `unread_notifications` for M92 and `new_notification.targets['gen'] == '0'` for N66. | **open holes, registered with recipes, not closed** | Six survivors, four-file oracle |
+| D570 | `app/shared/user.py:161`, `:171`, `:183`, `:192`; `tests/test_shared_user_bans.py` | **D562's four fixes are each held up by ONE test, and three of those tests are the ones written this round to catch that very fix.** All four reverts died, so the pins are load-bearing rather than decorative -- but only `:183` has a second, independent witness (`test_ban_user_purging_via_the_api_does_not_warn`, which is `:161`'s pin). **No pre-existing test catches any of the four.** Per this file's standing rule, fix-catching is not an independent kill; the fixes are correct and the evidence for them is thin, and if any one of those four API-arm tests is deleted or weakened its line silently becomes decorative again. Registered as FRAGILE, not as wrong. | **registered; the fix stands, the evidence is single-witness** | Per-mutant kill lists in Task 9's section 3 |
+| D571 | `app/shared/user.py:232` and `:279`, with `:235` and `:282` (M81, M94) | **The `src` fork in `follow_user` and `unfollow_user` is not behaviourally pinned -- it merely crashes.** Both fork mutants are recorded as KILLED, and both die by `AttributeError: 'NoneType' object has no attribute 'id'` at `:248`, because the mutant falls into `user = current_user` outside a login context. **`:235` and `:282` are never executed by the oracle at all** -- the follow tests only ever call with `SRC_API` -- so no non-crashing variant of the same fault is available, and per this campaign's rule a crash kill without one is not banked. Contrast `block_another_user`, `unblock_another_user`, `ban_user`, `unban_user` and `bot_challenge_user`, where BOTH arms execute and the fork mutants (M01, M16, M40, M75, M102) die on behavioural assertions. **RECIPE:** call both functions through `web_ctx(app, <the wrong user>)` so a flipped mutant resolves to a real but incorrect user instead of crashing, and let the counter assertions discriminate -- the same remedy Task 7 applied at `:279-280`. | **registered; two kills reclassified as crash-shaped** | M81 re-run with `--tb=line` |
+| D572 | `app/shared/user.py:30`, `:39`, `:51`, `:71`, `:72`, `:79`, `:118`, `:120`, `:122`, `:128`, `:138`, `:153`, `:154`, `:157`, `:163`, `:165`, `:178`, `:182`, `:194`, `:196`, `:210`, `:223`, `:249`, `:292`, `:300`, `:326`, `:334` | **The remaining 27 survivors, carried in full so the recipes outlive the workspace.** **(a) Flash CATEGORY never asserted anywhere in the module -- 7** (N04 `:30`, N08 `:39`, N15 `:71`, N49 `:163`, N50 `:165`, N55 `:194`, N56 `:196`): the second argument of `flash()` can be changed at will because the test helpers compare message TEXT only, and every corresponding text mutation on those same lines was killed. One systematic gap, not seven; **recipe:** assert the `(message, category)` pair. **(b) Six unpinned `db.session.commit()` calls** (M42 `:157`, M57 `:182`, M78 `:223`, M98 `:292`, N65 `:249`, N74 `:300`): the tests read back through the same session, where autoflush already shows the change; **recipe:** force a `db.session.rollback()` after the call and re-read. Note the asymmetry -- the commits at `:49`, `:77`, `:101`, `:133`, `:205`, `:272`, `:324` and `:339` WERE killed, because a later read there crosses a session boundary. **(c) Unasserted side effects -- 4**: `plugins.fire_hook("ban_user", to_ban)` at `:210` (M74), `cache.delete_memoized(blocked_users, user_id)` at `:51` and `:79` (M13, M23; inert under `NullCache` but a real invalidation in production), and the redis lock's key and timeouts at `:178` (N52, discarded because the local double returns `contextlib.nullcontext()`); **recipes:** patch the name ON THE MODULE with a recorder, and make the lock double record its arguments instead of ignoring them. **(d) `subscribe_user`'s self-subscribe and web error paths -- 5** (N27 `:118`, N28 `:120`, N29 `:122`, N32 `:128`, N37 `:138`): the self-subscribe case uses a bare `pytest.raises(Exception)` with no message assert while the module's other three error cases DO assert their messages, and that asymmetry is the whole reason N28 lives; the two web flashes are unasserted because both web tests check only that no row appears; and nothing asserts what the web arm returns. **(e) `ban_user`'s web arm inputs never varied -- 2** (N46 `:153`, N47 `:154`): `ban_ip_address` and `reason` are read from the form and never exercised on the web path, though the API path pins `reason`. **(f) Two singletons**: the self-unblock guard's `return` at `:72` (N16) can fall through harmlessly because the lookup below then finds no self-block row -- note the contrast with the BLOCK side, where the same mutation was killed because falling through creates a row; **recipe:** seed a `blocker_id == blocked_id` row and assert `unblock_another_user` refuses to delete it. And the bot-challenge message's opening and closing prose at `:326`/`:334` (N80, N81), where the test asserts the challenge URL and not the copy around it. | **open holes, registered with recipes, not closed** | 27 survivors across Task 9's sections 7.1, 7.3, 7.4, 7.6, 7.7, 7.8 |
+
+### 11. FIVE SURVIVORS THAT ARE ARTEFACTS OF THE ORACLE AND MUST NOT BE READ AS SUITE GAPS -- D573
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D573 | `app/shared/user.py:244`, `:245`, `:246`, `:262`, `:265` (M86, M87, M88, N68, N69) | **NOT A SUITE GAP, AND SAYING SO PRECISELY IS THE ENTRY.** These five lines -- `follow_user`'s auto-accepting local arm and its accepted-follow notification -- are **covered by the full suite**; the module sits at 98.697% with only `107` and `115` missing. They survive here because the mutation oracle was four files, and the auto-accepting arm is never entered by them. A survivor from an oracle that does not execute the line is evidence about the ORACLE and about nothing else. Registering them as holes would put five recipes in this file for tests that already exist, and would make the next round's survivor count wrong in the safe-looking direction. The correct reading: **the module's coverage is closed on these lines and its MUTATION evidence is not, and the fix for the latter is a wider oracle, not a new test.** Compare D571, which looks similar and is not -- there the unexecuted lines make a recorded KILL weaker, which is a real finding. | **oracle-scope artefact, registered as such; NOT counted as a suite gap** | Four-file oracle missing lines `[107, 115, 235, 244, 245, 246, 262, 265, 282]` against the full suite's `[107, 115]` |
+
+### 12. AN ORACLE WAS PRESCRIBED WITHOUT CHECKING THAT IT EXECUTES THE FUNCTION UNDER TEST -- D574
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D574 | the controller's Task 9 dispatch; `tests/test_shared_user_blocks.py`, `tests/test_shared_user_bans.py`, `tests/test_shared_user_follows.py`; `tests/test_api_user_subscriptions.py` | **A PROCESS FINDING ABOUT ORACLE SELECTION, AND THE ROUND'S THIRD CORRECTION OF ITS OWN PLAN.** The dispatch named three files as the kill oracle for the whole module. **Those three do not execute `subscribe_user` at all**: measured against the module they give `percent_covered 78.17589576547232` with `:90-138` entirely missing, and the 98.697% figure comes from the full suite. Had the pass run as dispatched, **all 34 `subscribe_user` mutants would have survived vacuously and the report would have shown a 63.3% kill rate that meant nothing** -- worse than a wrong number, because the survivors would have carried recipes for tests that already exist and the two genuinely equivalent mutants would have been buried among 34 identical-looking ones. **The rule, in one line: choosing a mutation oracle that does not execute the function under test silently converts every mutant there into a survivor.** What was done instead is the part worth copying: the agent detected it from its own baseline measurement, added `tests/test_api_user_subscriptions.py` for exactly the 34 affected mutants, labelled that oracle `subs` in its table so every row says which oracle judged it, and **reported BOTH count sets -- 150/46 as run and 124/72 against the dispatch as written -- rather than quietly using the flattering one.** The check that prevents this costs one command: measure the proposed oracle against the module and read `missing_lines` before dispatching. Sibling of **D485** (a file-scoped baseline compared against a suite-scoped plan) and **D511** (the measurement-block checklist, promoted from advice to a gate). | **process finding, register-bound; the dispatch was corrected in flight** | Baseline `--cov` run of the prescribed three files, published in Task 9's section 2 |
+
+**Next free number: D575.** D554-D574 were taken by this round -- **D554** the
+module measurement, `app/shared/user.py` **35.831% -> 98.697%** with a NEW floor
+entry of 98 and the ratchet checked against a `--cov=app` json because a narrow
+one would have reported 21 false violations; **D555** and **D556**
+`bot_challenge_user`'s wrong-name append at `:322`, **with the plan's account of
+it corrected on both limbs** -- it crashes at `:324` and not inside
+`send_message`, and there is no API caller to crash, the `SRC_API` fork being
+dead code -- and with real-request-context behaviour explicitly UNVERIFIED;
+**D557** `unfollow_user`'s unconditional decrements, which reach **-1** for a
+manually-approving target because `follow_user` skips the matching increments,
+the third variant of the **D522**/**D523** counter-drift family; **D558**
+`block_another_user`'s `.scalar()` over a many-to-many table, a third spelling
+of "is this user privileged" beside **D295**/**D442**/**D481**; **D559**
+`subscribe_user:91`'s `.one()` where five siblings use `.get()`, **D506**'s
+class outside `app/shared/reply.py` for the first time; **D560** the discovery
+that `ban_user` has **NO authorization check at all**, which also **RETRACTS
+this round's spec**, whose mandatory mutation was to neutralise a guard that
+does not exist; **D561** `follow_user`'s byte-identical notification branches,
+the **D455** duplication family again; **D562** the round's only code fix, four
+`if SRC_WEB:` guards testing a constant, **first counted as five and corrected
+to four** because the fifth candidate was the `else` of a ROLE check one indent
+level in; **D563** the backfill migration, which **closes D543's DATA half and
+leaves its CODE half open** -- five unguarded arithmetic sites, and an
+explicitly-NULLed row still raises `TypeError`, because a server default is not
+a constraint; **D564** the proof that `subscribe_user:107` and `:115` are
+unreachable from either caller, **which is why the floor is 98 and not 100**,
+stated with the matching warning that `:104` and `:112` are NOT equivalent and
+were both killed; **D565** through **D572** the mutation pass's 39 carried
+survivors, ranked, partitioned by mutant id and each with a recipe -- led by
+`:201`'s unpinned `ban_ip_address`, `:175-176`'s unpinned remote purge, the
+never-independently-exercised `is_staff()` disjunct, `subscribe_user:94`'s
+untested toggle direction, and the `UserFollower` row nothing ever reads;
+**D573** five survivors that are **ORACLE ARTEFACTS AND NOT SUITE GAPS**,
+registered as such so the next round does not write tests that already exist;
+and **D574** the process finding, an oracle prescribed without checking that it
+executes the function under test, caught by the agent from its own baseline and
+answered by reporting BOTH count sets.
+**One module change and one migration shipped, and nothing else.** `ban_user`'s
+four lines at `fd5b9bcd` and revision `9e99070afe06` at `2aa65043`; every other
+finding above is registered rather than fixed, by ruling, with its recipe
+attached. **`app/shared/user.py`'s floor is NEW at 98** -- the first floor this
+campaign has set deliberately below 100, on a proof rather than on a shortfall.
+
 ## Ratchet gotchas
 
 - `percent_covered` is a **blended statement+branch figure**. This matters for
