@@ -115,6 +115,25 @@ TASK 4's FINDING ON THE SEVEN `PostReplyValidationError` RAISES, via
     :3046  UNREACHABLE from a plain factory seed -- see PROBE A above.
     :3049  Same as `:3046`.
 
+TASK 8's STRUCTURAL FINDING: `is_owner` IS SUBSUMED BY `is_moderator` IN ALL
+THREE OF THIS MODULE'S PERMISSION GUARDS, so the `is_owner` operand at
+`make_reply:177`, at `edit_reply:224` and at `edit_reply:239` can be deleted
+without changing what any of them decides. `Community.is_moderator`
+(app/models.py:736-740) is `any(moderator.user_id == user.id for moderator in
+self.moderators())` -- it matches on `user_id` and NEVER READS THE
+`is_moderator` FLAG -- while `Community.moderators()` (`:716-722`) selects
+rows where `is_owner OR is_moderator`. So every row that can make
+`is_owner(u)` true is a row in `moderators()` with `user_id == u.id`, which
+makes `is_moderator(u)` true as well: `is_owner(u)` implies `is_moderator(u)`
+for every u, and `A or is_owner` / `not A and not is_owner` reduce to `A` and
+`not A`. Task 8 mutated all three operands out (M022, M075, M091) and all
+three survived; they are EQUIVALENT MUTANTS, not test holes, and no test was
+written for them. THE EDIT OWED IF `Community.is_moderator` IS EVER CHANGED
+TO READ THE `is_moderator` FLAG: the three operands become independently
+observable and each needs an owner-not-moderator test
+(`make_community_member(..., is_moderator=False)` with `is_owner` set True
+on the returned row, which no factory parameter covers today).
+
 `:2983`/`:3025`/`:3039` close the reachable-and-worth-it slice of
 `PostReply.new`'s surface for this task; `:3036` is left to whichever task
 next touches `PostReply.new` directly, and the two flag-gated ones remain
@@ -292,8 +311,19 @@ class TestEditReply:
         Asserts `body` AND `edited_at`, because `:233`-`:238` write six
         attributes unconditionally and any single one of them would pass with
         the other five deleted.
+
+        `notify_author` IS SET FALSE ON THE ROW FIRST, added by Task 8's
+        mutation pass. `PostReply.notify_author` (app/models.py:2914) is
+        `db.Column(db.Boolean, default=True)` and `make_post_reply` never
+        sets it, so the seeded row ALREADY reads True -- the assertion
+        below held with `:235` deleted outright (M084), which is exactly
+        what the mutation pass found. Starting from False makes the
+        assertion a genuine transition rather than a restatement of the
+        column default.
         """
         s = _seed_for_reply()
+        s.reply.notify_author = False
+        db.session.commit()
         payload = {'body': 'edited through the api', 'notify_author': True,
                    'language_id': None, 'distinguished': False}
 
@@ -312,13 +342,38 @@ class TestEditReply:
         `web_ctx` takes the app fixture FIRST -- `web_ctx(app, user)`,
         tests/factories.py:1217. Sub-project 41's plan wrote `web_ctx(user)`
         five times and every occurrence was wrong.
+
+        TWO OF THE WEB ARM'S FOUR READS WERE UNPINNED UNTIL TASK 8'S
+        MUTATION PASS, and the fixes are in the form and the assertions
+        rather than in any new test:
+
+          `:229` negated (M079) survived because the row's
+            `notify_author` already reads True (the column default,
+            app/models.py:2914) and nothing asserted it. The row is forced
+            False first and the form sends True, so the assertion is a
+            transition.
+          `:230` -> `None` (M080) survived because the form sent `None`
+            already, which is `language_id`'s value on a fresh row -- an
+            equivalent mutant against the old form. A real `Language` row
+            is seeded and its id sent, exactly as
+            `test_editing_writes_all_six_attributes_not_just_body` does for
+            the API arm.
+
+        `:231`'s `distinguished` read stays unpinned HERE and is witnessed
+        by `test_the_web_arm_applies_distinguished_for_a_moderator` instead
+        -- this form sends False, against which `:231` -> `False` is
+        equivalent.
         """
         from flask import get_flashed_messages
         s = _seed_for_reply()
+        language = Language(code='en', name='English')
+        db.session.add(language)
+        s.reply.notify_author = False
+        db.session.commit()
         form = SimpleNamespace(
             body=SimpleNamespace(data='edited through the web'),
-            notify_author=SimpleNamespace(data=False),
-            language_id=SimpleNamespace(data=None),
+            notify_author=SimpleNamespace(data=True),
+            language_id=SimpleNamespace(data=language.id),
             distinguished=SimpleNamespace(data=False),
         )
 
@@ -330,6 +385,8 @@ class TestEditReply:
         assert 'Your changes have been saved.' in messages
         db.session.refresh(s.reply)
         assert 'edited through the web' in s.reply.body
+        assert s.reply.notify_author is True
+        assert s.reply.language_id == language.id
 
     def test_editing_writes_all_six_attributes_not_just_body(self, db_session):
         """`:233`-`:238` write SIX attributes unconditionally: `body`,
@@ -381,7 +438,23 @@ class TestEditReply:
         (reply.distinguished == True and distinguished == False)` -- two
         disjuncts, one arc pair to coverage.py. This takes the FIRST:
         undistinguished becoming distinguished.
+
+        `_burn_a_seed()` WAS ADDED BY TASK 8, AND WITHOUT IT THE MODERATOR
+        LEVER IN THIS TEST IS DECORATIVE. `_seed_for_reply` mints `author`
+        first and tests/conftest.py resets every sequence before each test,
+        so `s.author` is id 1 and `User.is_admin` (app/models.py:1259-1261)
+        calls id 1 an admin outright. `:224`'s guard and `:239`'s guard were
+        BOTH therefore satisfied by the id-1 shortcut, not by
+        `make_moderator`, and the two guards' `is_moderator` operands could
+        be deleted outright with this test still green (M074, M090).
+        Demonstrated rather than argued: Task 8's probe P01 replaced
+        `reply.community.is_moderator(user)` with `False` at BOTH `:224`
+        and `:239` simultaneously -- making moderator status invisible to
+        the entire function -- and all 38 tests still passed. With the burn,
+        `s.author` is id 3 and the moderator row is the only thing carrying
+        this test.
         """
+        _burn_a_seed()
         s = _seed_for_reply()
         make_moderator(s, user=s.author)
         s.reply.distinguished = False
@@ -400,7 +473,13 @@ class TestEditReply:
         The first disjunct is false here (`reply.distinguished` is already
         True), so this is the only test that can witness the second. Without
         it the two move only in lockstep -- false-witness mechanism (e).
+
+        `_burn_a_seed()` for the same reason as the test above: without it
+        `s.author` is id 1, an admin by `User.is_admin`'s id shortcut, and
+        neither `:224` nor `:239` is decided by the moderator row this test
+        creates.
         """
+        _burn_a_seed()
         s = _seed_for_reply()
         make_moderator(s, user=s.author)
         s.reply.distinguished = True
@@ -448,7 +527,21 @@ class TestEditReply:
 
         The same non-moderator as the test above succeeds here, which is what
         proves `:223` gates `:224` rather than `:224` refusing unconditionally.
+
+        THAT CLAIM WAS FALSE UNTIL TASK 8 ADDED `_burn_a_seed()`. Without the
+        burn `s.author` is id 1, which `User.is_admin` (app/models.py:
+        1259-1261) treats as an admin, so `:224` would not have refused this
+        user even if it HAD been reached -- the sentence above described a
+        control this test did not have. Three mutants proved it by surviving:
+        `:223` forced to `if True:` (M064), and each of `:223`'s two
+        disjuncts reduced to the conjunct that is true here -- disjunct one
+        to `not reply.distinguished` (M069) and disjunct two to
+        `distinguished == False` (M070). All three enter `:224` on this
+        input, and with an id-1 admin none of them raised. With the burn
+        `s.author` is a plain user and each of the three now fails here,
+        which is what makes this test the gate witness it claims to be.
         """
+        _burn_a_seed()
         s = _seed_for_reply()
         s.reply.distinguished = False
         db.session.commit()
@@ -459,6 +552,281 @@ class TestEditReply:
 
         db.session.refresh(s.reply)
         assert 'saved fine' in s.reply.body
+
+    def test_leaving_an_already_distinguished_reply_distinguished_is_allowed(self, db_session):
+        """`:223`'s OTHER false combination -- already distinguished, and the
+        payload asks for distinguished again.
+
+        ADDED BY TASK 8'S MUTATION PASS. `test_leaving_distinguished_
+        unchanged_skips_the_moderator_check` covers the no-change case with
+        `reply.distinguished` FALSE; this is the no-change case with it
+        TRUE, and it is the only input on which `:223`'s two remaining
+        conjunct-drops are observable:
+
+          disjunct one reduced to `distinguished == True` (M068) -- true
+            here, where the full `not reply.distinguished and distinguished
+            == True` is false because the reply is already distinguished.
+          disjunct two reduced to `reply.distinguished == True` (M071) --
+            true here, where the full conjunction is false because the
+            payload is not asking to undistinguish.
+
+        Both mutants enter `:224` on this input and a non-moderator is then
+        refused, so this test fails against each of them and passes against
+        the real code. Neither is observable on the false/false input the
+        other test uses, which is why this is a second test rather than an
+        extra assertion on that one.
+
+        `_burn_a_seed()` for the reason the whole class needs it:
+        `s.author` is otherwise id 1 and `:224` would refuse nobody.
+
+        `distinguished` IS ASSERTED TO STILL BE TRUE AFTERWARDS. `:239` is
+        false for this non-moderator, so `:240` never runs and the column
+        keeps the value the fixture set -- the edit succeeding is what the
+        test is about, and the column not moving is the evidence that it
+        succeeded without going through the moderator path.
+        """
+        _burn_a_seed()
+        s = _seed_for_reply()
+        s.reply.distinguished = True
+        db.session.commit()
+        payload = {'body': 'still distinguished', 'notify_author': False,
+                   'language_id': None, 'distinguished': True}
+
+        edit_reply(payload, s.reply, s.post, SRC_API, auth=bearer(s.author))
+
+        db.session.refresh(s.reply)
+        assert 'still distinguished' in s.reply.body
+        assert s.reply.distinguished is True
+
+    def test_a_non_moderator_undistinguishing_is_refused_by_the_api(self, db_session):
+        """`:223`'s SECOND disjunct reaching `:224`'s raise.
+
+        ADDED BY TASK 8'S MUTATION PASS: deleting the second disjunct from
+        `:223` outright (M067) left every test green.
+        `test_a_non_moderator_changing_distinguished_is_refused_by_the_api`
+        drives the refusal through the FIRST disjunct (undistinguished ->
+        distinguished), and `test_undistinguishing_takes_the_second_
+        disjunct` drives the second disjunct with a MODERATOR, who is not
+        refused -- so no test made the second disjunct's refusal happen, and
+        a `:223` that had lost it entirely still refused everything the
+        suite asked it to refuse.
+
+        As in the first-disjunct refusal test, the raise is not the only
+        witness: `:233` runs after the guard, so the body is asserted
+        unchanged as well.
+
+        `_burn_a_seed()` is load-bearing here exactly as it is there -- an
+        id-1 `s.author` is an admin and `:224` would not refuse.
+        """
+        _burn_a_seed()
+        s = _seed_for_reply()
+        s.reply.distinguished = True
+        db.session.commit()
+        original_body = s.reply.body
+        payload = {'body': 'should not be saved', 'notify_author': False,
+                   'language_id': None, 'distinguished': False}
+
+        with pytest.raises(Exception, match='Not a moderator'):
+            edit_reply(payload, s.reply, s.post, SRC_API, auth=bearer(s.author))
+
+        db.session.refresh(s.reply)
+        assert s.reply.body == original_body
+        assert s.reply.distinguished is True
+
+    def test_a_staff_author_may_distinguish_their_own_reply(self, db_session):
+        """`:224`'s THIRD conjunct (`not user.is_staff()`) and `:239`'s
+        `is_admin_or_staff()` disjunct.
+
+        ADDED BY TASK 8'S MUTATION PASS: deleting `not user.is_staff()` from
+        `:224` (M076) and deleting `or user.is_admin_or_staff()` from `:239`
+        (M092) both left every test green, because no test in this class
+        ever made the acting user staff.
+
+        WHY THE ACTOR IS THE REPLY'S OWN AUTHOR: `:218` passes
+        `id_match=reply.user_id`, so the API arm only ever runs for the
+        reply's author. A staff user editing SOMEONE ELSE'S comment cannot
+        reach `:224` at all -- it is refused at `:218` with
+        `incorrect_login` (see
+        `test_a_user_who_is_not_the_author_cannot_edit_through_the_api`).
+        Staff privilege here is therefore about distinguishing one's OWN
+        comment without being a moderator of the community.
+
+        `is_staff` IS NAME-BASED AND MEMOIZED. `User.is_staff`
+        (app/models.py:1267-1272) walks `self.roles` for `role.name ==
+        'Staff'` under `@cache.memoize(timeout=30)`; tests/conftest.py:68
+        sets `CACHE_TYPE = 'NullCache'`, so the memo never serves a stale
+        answer across tests.
+
+        `_burn_a_seed()` IS LOAD-BEARING AND NOT BOILERPLATE HERE: without
+        it `s.author` is id 1, `User.is_admin` calls id 1 an admin, and
+        `:224`'s FOURTH conjunct would be the one deciding -- deleting the
+        staff conjunct would then still leave the guard false and M076
+        would survive this test too.
+        """
+        from app.models import Role, user_role
+        _burn_a_seed()
+        s = _seed_for_reply()
+        role = Role(name='Staff', weight=0)
+        db.session.add(role)
+        db.session.commit()
+        db.session.execute(user_role.insert().values(user_id=s.author.id,
+                                                     role_id=role.id))
+        s.reply.distinguished = False
+        db.session.commit()
+        assert s.author.id != 1, 'the id-1 admin shortcut would decide instead'
+        payload = {'body': 'staff speaking', 'notify_author': False,
+                   'language_id': None, 'distinguished': True}
+
+        edit_reply(payload, s.reply, s.post, SRC_API, auth=bearer(s.author))
+
+        db.session.refresh(s.reply)
+        assert s.reply.distinguished is True
+
+    def test_an_admin_author_may_distinguish_their_own_reply(self, db_session):
+        """`:224`'s FOURTH conjunct (`not user.is_admin()`).
+
+        ADDED BY TASK 8'S MUTATION PASS: deleting it (M077) left every test
+        green -- no test made the acting user an admin, because
+        `_burn_a_seed()` exists throughout this class precisely to STOP the
+        id-1 accident from making one.
+
+        THE ADMIN-NESS IS A ROLE ROW, NOT THE ID SHORTCUT. `_burn_a_seed()`
+        moves `s.author` off id 1 and a `Role(name='Admin')` is attached
+        instead, so this test asserts the intended mechanism rather than
+        `User.is_admin`'s `self.id == 1` special case. The role is named,
+        not numbered, because `is_admin` compares `role.name`; that is the
+        opposite of what `Site.admins()` needs and is register entry D442's
+        two-spellings finding read from this side.
+
+        The same test also witnesses `:239`'s `is_admin_or_staff()`
+        disjunct, which is `is_admin() or is_staff()`
+        (app/models.py:1274-1275) -- the distinguished value reaching the
+        column is what proves `:239` was true.
+        """
+        from app.models import Role, user_role
+        _burn_a_seed()
+        s = _seed_for_reply()
+        role = Role(name='Admin', weight=0)
+        db.session.add(role)
+        db.session.commit()
+        db.session.execute(user_role.insert().values(user_id=s.author.id,
+                                                     role_id=role.id))
+        s.reply.distinguished = False
+        db.session.commit()
+        assert s.author.id != 1, 'the id-1 shortcut would make the role row moot'
+        payload = {'body': 'admin speaking', 'notify_author': False,
+                   'language_id': None, 'distinguished': True}
+
+        edit_reply(payload, s.reply, s.post, SRC_API, auth=bearer(s.author))
+
+        db.session.refresh(s.reply)
+        assert s.reply.distinguished is True
+
+    def test_a_user_who_is_not_the_author_cannot_edit_through_the_api(self, db_session):
+        """`:218`'s `id_match=reply.user_id` -- the ownership check.
+
+        ADDED BY TASK 8'S MUTATION PASS, WHICH FOUND THE CHECK ENTIRELY
+        UNPINNED: deleting `, id_match=reply.user_id` from `:218` (M058)
+        left every test in this file green, because every API test here
+        passes the reply author's own token. `authorise_api_user`
+        (app/utils.py:3635-3636) raises `Exception('incorrect_login')` on a
+        mismatch, and nothing else in `edit_reply` re-checks ownership --
+        `:239`'s moderator test governs `distinguished` only, so without
+        `id_match` ANY valid token could rewrite ANY comment's body.
+
+        THE BODY ASSERTION IS THE WITNESS, not the raise: `:233` is
+        downstream of `:218`, so a mutant that edited first and raised
+        afterwards would pass a bare `pytest.raises`.
+        """
+        s = _seed_for_reply()
+        original_body = s.reply.body
+        payload = {'body': 'hijacked', 'notify_author': False,
+                   'language_id': None, 'distinguished': False}
+
+        with pytest.raises(Exception, match='incorrect_login'):
+            edit_reply(payload, s.reply, s.post, SRC_API, auth=bearer(s.actor))
+
+        db.session.refresh(s.reply)
+        assert s.reply.body == original_body
+
+    def test_the_author_of_a_reply_on_someone_elses_post_may_edit_it(self, db_session):
+        """`:218`'s `id_match` names the REPLY's author, not the POST's.
+
+        ADDED BY TASK 8'S MUTATION PASS: swapping `id_match=reply.user_id`
+        for `id_match=post.user_id` (M059) left every test green, because
+        `_seed_for_reply` gives its one post and its one reply the SAME
+        author (`s.author`) -- the two ids are equal in that fixture and the
+        swap is invisible.
+
+        This test builds the shape that separates them: a reply authored by
+        `s.actor` on a post authored by `s.author`. The real code matches
+        the token against the reply's author and succeeds; the mutant
+        matches it against the post's author and raises `incorrect_login`.
+        The assertion is the edit landing, which is the positive half the
+        refusal test above cannot supply.
+        """
+        s = _seed_for_reply()
+        actors_reply = make_post_reply(s.post, s.actor, 'the actor said this')
+        db.session.commit()
+        assert actors_reply.user_id != s.post.user_id, (
+            'this test needs the reply author and the post author to differ, '
+            'or the id_match operand swap is invisible'
+        )
+        payload = {'body': 'the actor revised it', 'notify_author': False,
+                   'language_id': None, 'distinguished': False}
+
+        user_id, reply = edit_reply(payload, actors_reply, s.post, SRC_API,
+                                    auth=bearer(s.actor))
+
+        assert user_id == s.actor.id
+        db.session.refresh(actors_reply)
+        assert 'the actor revised it' in actors_reply.body
+
+    def test_the_federation_task_is_selected_with_the_replys_parent_id(self, db_session):
+        """`:246`'s `task_selector` call.
+
+        ADDED BY TASK 8'S MUTATION PASS: no test in this class touched
+        `:246` at all, so THREE mutants survived on it -- the whole call
+        deleted (M097), `parent_id=reply.parent_id` -> `parent_id=None`
+        (M098), and the task key changed from `'edit_reply'` to
+        `'make_reply'` (M100). Coverage counted the line on every edit test
+        in the class; nothing observed it.
+
+        THE REPLY EDITED HERE HAS A PARENT, which `_seed_for_reply`'s does
+        not: `make_post_reply` never sets `parent_id`, so against the
+        seeded reply `parent_id=reply.parent_id` is already `None` and the
+        `-> None` mutant is equivalent. `parent_id` is set directly on a
+        second reply rather than by routing through `make_reply`, which
+        would drag `:192`'s creation guards into a test about `:246`.
+
+        The recorder rebinds `app.shared.reply.task_selector`, the name
+        `:246` actually calls (the module imported it at app/shared/
+        reply.py:12), and restores it in a `finally` -- the same mechanism
+        and the same reason as
+        `test_the_federation_task_is_selected_with_the_parent_id` in
+        `TestMakeReply`.
+        """
+        import app.shared.reply as reply_module
+        s = _seed_for_reply()
+        child = make_post_reply(s.post, s.author, 'a child reply')
+        child.parent_id = s.reply.id
+        db.session.commit()
+        calls = []
+        original = reply_module.task_selector
+
+        def recorder(task_key, **kwargs):
+            calls.append((task_key, kwargs.get('reply_id'), kwargs.get('parent_id')))
+            return original(task_key, **kwargs)
+
+        reply_module.task_selector = recorder
+        try:
+            payload = {'body': 'edited child', 'notify_author': False,
+                       'language_id': None, 'distinguished': False}
+            edit_reply(payload, child, s.post, SRC_API, auth=bearer(s.author))
+        finally:
+            reply_module.task_selector = original
+
+        assert calls == [('edit_reply', child.id, s.reply.id)]
 
     def test_the_web_arm_silently_declines_distinguished(self, db_session, app):
         """`:239`'s false arm -- AND IT ASSERTS A REGISTERED DEFECT ON PURPOSE.
@@ -510,6 +878,46 @@ class TestEditReply:
         assert 'edited anyway' in s.reply.body
         assert s.reply.distinguished is False
 
+    def test_the_web_arm_applies_distinguished_for_a_moderator(self, db_session, app):
+        """`:231`'s read reaching `:240` through `:239`'s TRUE arm.
+
+        ADDED BY TASK 8'S MUTATION PASS: replacing `:231` with a constant
+        `False` (M081) left every test green. The web arm's other two tests
+        both send `distinguished=False` (`test_the_web_arm_reads_the_form_
+        and_returns_none`) or send True and correctly expect it to be
+        DROPPED (`test_the_web_arm_silently_declines_distinguished`, whose
+        actor is a non-moderator) -- so no test ever needed `:231`'s value
+        to survive as far as the column.
+
+        This is the positive control for
+        `test_the_web_arm_silently_declines_distinguished`: same arm, same
+        form value, one lever moved (the actor is a moderator), opposite
+        outcome. Without it, "distinguished stays False" there is equally
+        the signature of a web arm that can never set it at all.
+
+        `_burn_a_seed()` for the class's usual reason -- an id-1 `s.author`
+        satisfies `:239` through `User.is_admin`'s id shortcut instead of
+        through the moderator row, and the moderator lever would again be
+        decorative (Task 8's probe P01).
+        """
+        _burn_a_seed()
+        s = _seed_for_reply()
+        make_moderator(s, user=s.author)
+        s.reply.distinguished = False
+        db.session.commit()
+        form = SimpleNamespace(
+            body=SimpleNamespace(data='distinguished through the web'),
+            notify_author=SimpleNamespace(data=False),
+            language_id=SimpleNamespace(data=None),
+            distinguished=SimpleNamespace(data=True),
+        )
+
+        with web_ctx(app, s.author):
+            edit_reply(form, s.reply, s.post, SRC_WEB, auth=None)
+
+        db.session.refresh(s.reply)
+        assert s.reply.distinguished is True
+
 
 class TestMakeReply:
     """`make_reply` (app/shared/reply.py:156-213).
@@ -541,13 +949,58 @@ class TestMakeReply:
         version of this assertion still passed. Using a genuine, non-`None`
         id makes the assertion a value round-trip -- confirmed by the same
         mutate-and-restore cycle below.
+
+        THE ROW ASSERTIONS BELOW WERE ADDED BY TASK 8'S MUTATION PASS, WHICH
+        FOUND EIGHT SURVIVORS BEHIND THIS ONE CALL. `reply.id is not None`
+        and the returned pair say a row was created; they say nothing about
+        what is IN it, and `:161`-`:165` and `:196`-`:198` carry seven
+        separate values into `PostReply.new`. Each assertion here kills a
+        named mutant:
+
+          `reply.body` == the CONVERTED text   `:196`'s
+            `body=piefed_markdown_to_lemmy_markdown(content)` -> `body=content`
+            (M036). The payload body carries a `\\r\\n` soft break on purpose:
+            `piefed_markdown_to_lemmy_markdown` (app/utils.py:1233-1237) is
+            exactly `re.sub(r'(\\S)(\\r\\n)', r'\\1  \\2', ...)` -- two spaces
+            inserted before the break and NOTHING else. A single-line body
+            makes that function the identity and the assertion vacuous.
+          `'<p>' in reply.body_html`   `:197`'s `body_html=markdown_to_html(
+            content)` -> `body_html=content` (M037).
+          `reply.notify_author is False`   `:162` flipped (M006) AND `:197`'s
+            `notify_author=notify_author` -> `notify_author=True` (M038).
+            THE PAYLOAD SENDS `False` DELIBERATELY: with `True` the forced-
+            `True` mutant is equivalent on this input and survives, which is
+            what it did before this test was changed.
+          `reply.language_id`   `:198`'s `language_id=language_id` ->
+            `language_id=None` (M039). Distinct from the `s.actor.language_id`
+            assertion above, which pins `:200` -- a different statement
+            writing the same value to a different row.
+          `reply.answer is False`   `:165`'s `answer = False` -> `True`
+            (M010) and `:198`'s `answer=answer` -> `answer=True` (M041).
+            Nothing else in this file reads `answer`; a new comment silently
+            arriving as a question's accepted answer is what those mutants
+            do.
+          `s.actor.ip_address == ''`   `:201`'s
+            `user.ip_address = ip_address()` deleted (M043). `''`, not a
+            dotted quad: `SRC_API` here runs with no request context, and
+            `get_ip_address` catches the resulting `RuntimeError` and returns
+            `''` (established in Group A, re-confirmed by this file's PROBE B
+            note). `''` is falsy but NOT `None`, and the column's fresh value
+            is `None`, so this is a value round-trip and not an `is not None`
+            check that the deletion would also pass.
+
+        `:202`'s `reply.ap_id = reply.profile_id()` IS DELIBERATELY NOT
+        ASSERTED. `PostReply.new` already does the identical assignment at
+        app/models.py:3087, unconditionally, before it returns, so deleting
+        `:202` changes nothing observable -- a provably equivalent mutant
+        (M044), registered by Task 8 rather than chased.
         """
         s = _seed_for_reply()
         _clear_creation_guards(s.actor)
         language = Language(code='en', name='English')
         db.session.add(language)
         db.session.commit()
-        payload = {'body': 'a new reply', 'notify_author': True,
+        payload = {'body': 'a new reply\r\nsecond line', 'notify_author': False,
                    'language_id': language.id, 'distinguished': False}
 
         user_id, reply = make_reply(payload, s.post, None, SRC_API,
@@ -556,7 +1009,14 @@ class TestMakeReply:
         assert user_id == s.actor.id
         assert reply.id is not None
         db.session.refresh(s.actor)
+        db.session.refresh(reply)
         assert s.actor.language_id == language.id
+        assert s.actor.ip_address == ''
+        assert reply.body == 'a new reply  \r\nsecond line'
+        assert '<p>' in reply.body_html
+        assert reply.notify_author is False
+        assert reply.language_id == language.id
+        assert reply.answer is False
 
     def test_the_web_arm_reads_the_form_clears_it_and_flashes(self, db_session, app):
         """`:157` false -> `:167`-`:172`, `:204`-`:206`, `:213`.
@@ -568,14 +1028,44 @@ class TestMakeReply:
         `_clear_creation_guards(s.actor)` is required here too -- see
         `_clear_creation_guards`'s docstring; `:192` gates the web arm
         exactly as it does the API arm.
+
+        THE ROW ASSERTIONS WERE ADDED BY TASK 8'S MUTATION PASS. `:168`-`:172`
+        are the web arm's OWN five reads, and not one of them was pinned:
+        `reply.id is not None` plus the cleared form plus the flash all hold
+        with every one of those five lines writing a constant. The four
+        mutants each assertion kills:
+
+          `reply.body`               `:168` -> a constant (M011)
+          `reply.notify_author`      `:169` negated (M012)
+          `reply.language_id`        `:170` -> `None` (M013)
+          `reply.answer is False`    `:172` -> `True` (M015)
+
+        THE FORM CARRIES A REAL `Language` ID, not `None` as it did before:
+        `None` is already `language_id`'s value on a fresh row, so `:170` ->
+        `None` was an equivalent mutant against the old form and survived.
+        The body carries a `\\r\\n` soft break for the same reason it does in
+        the API test above -- see that docstring for what
+        `piefed_markdown_to_lemmy_markdown` actually does.
+
+        `form.body.data` IS READ BACK AS `''`: `:205` writes into the form
+        object, so the body sent must be compared against `reply.body`
+        rather than against `form.body.data` afterwards.
+
+        `:171`'s `distinguished` read is NOT pinned here -- this form sends
+        `False`, so `:171` -> `False` is equivalent on this input.
+        `test_the_web_arm_honours_distinguished_for_a_moderator` is where
+        that read is witnessed.
         """
         from flask import get_flashed_messages
         s = _seed_for_reply()
         _clear_creation_guards(s.actor)
+        language = Language(code='en', name='English')
+        db.session.add(language)
+        db.session.commit()
         form = SimpleNamespace(
-            body=SimpleNamespace(data='a web reply'),
-            notify_author=SimpleNamespace(data=True),
-            language_id=SimpleNamespace(data=None),
+            body=SimpleNamespace(data='a web reply\r\nsecond line'),
+            notify_author=SimpleNamespace(data=False),
+            language_id=SimpleNamespace(data=language.id),
             distinguished=SimpleNamespace(data=False),
         )
 
@@ -586,6 +1076,11 @@ class TestMakeReply:
         assert reply.id is not None
         assert form.body.data == ''
         assert 'Your comment has been added.' in messages
+        db.session.refresh(reply)
+        assert reply.body == 'a web reply  \r\nsecond line'
+        assert reply.notify_author is False
+        assert reply.language_id == language.id
+        assert reply.answer is False
 
     def test_an_ip_banned_user_is_refused(self, db_session, app):
         """`:174`'s true arm (the `user_ip_banned()` disjunct) and `:175`'s
@@ -702,6 +1197,107 @@ class TestMakeReply:
         db.session.refresh(reply)
         assert reply.distinguished is True
 
+    def test_an_admin_keeps_distinguished_on_a_new_reply(self, db_session):
+        """`:177`'s THIRD conjunct, `user.is_admin_or_staff()`.
+
+        ADDED BY TASK 8'S MUTATION PASS: deleting this conjunct (M023) left
+        every test in this file green, because no test made the acting user
+        an admin or staff at `:177`.
+
+        THE ROLE IS NAMED, NOT NUMBERED, and that is the opposite of what
+        `tests/test_shared_reply_report.py` needs. `User.is_admin`
+        (app/models.py:1259-1265) walks `self.roles` and compares
+        `role.name == 'Admin'`; `Site.admins()` (`:4011-4012`) joins on
+        `user_role.c.role_id == ROLE_ADMIN` by VALUE. This test goes through
+        `is_admin()`, so the NAME is what has to be right and the id is
+        free -- register entry D442's two-spellings finding, in the
+        direction this function reads it.
+
+        `s.actor` is id 2 (`_seed_for_reply` mints `author` first and
+        tests/conftest.py resets every sequence before each test), so
+        `User.is_admin`'s `self.id == 1` shortcut is NOT what makes this
+        pass -- the role row is. No `_burn_a_seed()` is needed for the same
+        reason.
+        """
+        from app.models import Role, user_role
+        s = _seed_for_reply()
+        _clear_creation_guards(s.actor)
+        role = Role(name='Admin', weight=0)
+        db.session.add(role)
+        db.session.commit()
+        db.session.execute(user_role.insert().values(user_id=s.actor.id,
+                                                     role_id=role.id))
+        db.session.commit()
+        assert s.actor.id != 1, 'the id-1 shortcut would make the role row moot'
+        payload = {'body': 'admin speaking', 'notify_author': False,
+                   'language_id': None, 'distinguished': True}
+
+        user_id, reply = make_reply(payload, s.post, None, SRC_API,
+                                    auth=bearer(s.actor))
+
+        db.session.refresh(reply)
+        assert reply.distinguished is True
+
+    def test_a_payload_without_distinguished_defaults_to_false(self, db_session):
+        """`:164`'s `else` arm -- the ternary's default when the API payload
+        omits the key entirely.
+
+        ADDED BY TASK 8'S MUTATION PASS: flipping the default to `True`
+        (M008) left every test green, because every payload in this file
+        sends an explicit `'distinguished'`. Lemmy-compatible clients do
+        not all send it, so the `else` arm is the reachable case this
+        function was written for.
+
+        THE ACTOR IS A MODERATOR, AND THAT IS LOAD-BEARING. With a
+        non-moderator, `:177` demotes `distinguished` to False three lines
+        later whatever `:164` produced, so the flipped default would be
+        masked and this test would pass against the mutant. A moderator
+        takes `:177`'s false arm, leaving `:164`'s value the only thing
+        that can reach the row.
+        """
+        s = _seed_for_reply()
+        _clear_creation_guards(s.actor)
+        make_moderator(s)
+        payload = {'body': 'no distinguished key at all',
+                   'notify_author': False, 'language_id': None}
+
+        user_id, reply = make_reply(payload, s.post, None, SRC_API,
+                                    auth=bearer(s.actor))
+
+        db.session.refresh(reply)
+        assert reply.distinguished is False
+
+    def test_the_web_arm_honours_distinguished_for_a_moderator(self, db_session, app):
+        """`:171` -- the web arm's own `distinguished` read.
+
+        ADDED BY TASK 8'S MUTATION PASS: replacing `:171` with a constant
+        `False` (M014) left every test green.
+        `test_the_web_arm_reads_the_form_clears_it_and_flashes` sends
+        `False` already, so the mutant is equivalent against it, and
+        `test_a_non_moderator_cannot_distinguish_a_new_reply` /
+        `test_a_moderator_keeps_distinguished_on_a_new_reply` are both
+        SRC_API, reading `:164` instead.
+
+        The actor is a moderator so `:177` does not demote the value before
+        it reaches the row -- the same reason the payload-default test
+        above needs one.
+        """
+        s = _seed_for_reply()
+        _clear_creation_guards(s.actor)
+        make_moderator(s)
+        form = SimpleNamespace(
+            body=SimpleNamespace(data='a distinguished web reply'),
+            notify_author=SimpleNamespace(data=False),
+            language_id=SimpleNamespace(data=None),
+            distinguished=SimpleNamespace(data=True),
+        )
+
+        with web_ctx(app, s.actor):
+            reply = make_reply(form, s.post, None, SRC_WEB, auth=None)
+
+        db.session.refresh(reply)
+        assert reply.distinguished is True
+
     def test_replying_to_a_parent_sets_the_path_and_the_parent_id(self, db_session):
         """`:180`'s true arm, `:181`'s lookup, and `PostReply.new`'s path build.
 
@@ -754,6 +1350,73 @@ class TestMakeReply:
         with pytest.raises(Exception, match='parent reply'):
             make_reply(payload, s.post, s.reply.id, SRC_API,
                        auth=bearer(s.actor))
+
+        assert db.session.query(PostReply).count() == before
+
+    def test_a_replier_on_a_blocked_instance_is_refused_by_the_parents_author(self, db_session):
+        """`:182`'s SECOND disjunct,
+        `parent_reply.author.has_blocked_instance(user.instance_id)`.
+
+        ADDED BY TASK 8'S MUTATION PASS: deleting it (M028) left every test
+        green, because `test_a_blocked_replier_is_refused_by_the_parents_
+        author` uses a `UserBlock` and drives only the FIRST disjunct. The
+        two are different features -- blocking a person and defederating a
+        server -- and only one of them was witnessed.
+
+        `has_blocked_instance` (app/models.py:1467-1471) returns False
+        outright when `instance_id` is `None`, and matches an
+        `InstanceBlock(user_id, instance_id)` row otherwise. `make_user`
+        sets `instance_id`, so `s.actor.instance_id` is a real id here and
+        the short-circuit does not apply.
+
+        `match='parent reply'` IS LOAD-BEARING for the same reason it is in
+        the `UserBlock` test above: `_seed_for_reply`'s post and its one
+        top-level reply share ONE author, so the same `InstanceBlock` row
+        also satisfies `:189`'s post-author check three lines later, whose
+        message differs only in the words 'parent post'. The row-count
+        assertion carries the state half.
+        """
+        from app.models import InstanceBlock
+        s = _seed_for_reply()
+        db.session.add(InstanceBlock(user_id=s.author.id,
+                                     instance_id=s.actor.instance_id))
+        db.session.commit()
+        before = db.session.query(PostReply).count()
+        payload = {'body': 'blocked instance', 'notify_author': False,
+                   'language_id': None, 'distinguished': False}
+
+        with pytest.raises(Exception, match='parent reply'):
+            make_reply(payload, s.post, s.reply.id, SRC_API,
+                       auth=bearer(s.actor))
+
+        assert db.session.query(PostReply).count() == before
+
+    def test_a_replier_on_a_blocked_instance_is_refused_by_the_posts_author(self, db_session):
+        """`:189`'s SECOND disjunct,
+        `post.author.has_blocked_instance(user.instance_id)`.
+
+        ADDED BY TASK 8'S MUTATION PASS: deleting it (M032) left every test
+        green -- the same gap as at `:182`, in the `else` branch's
+        downstream twin.
+
+        `parent_id=None`, so `:180` is false and `:182` never runs at all;
+        `match='parent post'` isolates `:190` from `:183` in the other
+        direction, exactly as
+        `test_a_blocked_replier_is_refused_by_the_posts_author` does for
+        the `UserBlock` disjunct.
+        """
+        from app.models import InstanceBlock
+        s = _seed_for_reply()
+        db.session.add(InstanceBlock(user_id=s.author.id,
+                                     instance_id=s.actor.instance_id))
+        db.session.commit()
+        before = db.session.query(PostReply).count()
+        payload = {'body': 'blocked instance at post level',
+                   'notify_author': False, 'language_id': None,
+                   'distinguished': False}
+
+        with pytest.raises(Exception, match='parent post'):
+            make_reply(payload, s.post, None, SRC_API, auth=bearer(s.actor))
 
         assert db.session.query(PostReply).count() == before
 
@@ -863,27 +1526,48 @@ class TestMakeReply:
         whose `private_key` is `None` -- see `_clear_creation_guards`'s
         docstring. Without it this test dies at `:193` before
         `task_selector` is ever called.
+
+        `reply_id` IS RECORDED AND ASSERTED TOO, added by Task 8's mutation
+        pass: `:208` passes THREE things and only the task key and
+        `parent_id` were pinned, so `reply_id=reply.id` -> `reply_id=post.id`
+        (M052) survived.
+
+        D533 DOES NOT COVER THIS PAIR, which is why two spare replies are
+        burned below. `_seed_for_reply` forces `community.id`, `post.id` and
+        `author.id` apart, but the id this test needs separated is the
+        NEWLY CREATED reply's against `post.id` -- and those two collide
+        exactly. The fixture leaves one reply (id 1) and two posts (ids 1
+        and 2), so without the burn the new reply lands on id 2 and so does
+        `s.post`, making the `reply_id=post.id` mutation invisible. Found by
+        running the assertion, not by reading: the first version of this
+        test failed on `assert 2 != 2`. Two spare replies push the new one
+        to id 4. The guard assertion below keeps it that way if the fixture
+        ever changes again.
         """
         s = _seed_for_reply()
         _clear_creation_guards(s.actor)
+        make_post_reply(s.post, s.author, 'reply-id burner one')
+        make_post_reply(s.post, s.author, 'reply-id burner two')
+        db.session.commit()
         import app.shared.reply as reply_module
         calls = []
         original = reply_module.task_selector
 
         def recorder(task_key, **kwargs):
-            calls.append((task_key, kwargs.get('parent_id')))
+            calls.append((task_key, kwargs.get('reply_id'), kwargs.get('parent_id')))
             return original(task_key, **kwargs)
 
         reply_module.task_selector = recorder
         try:
             payload = {'body': 'federated', 'notify_author': False,
                        'language_id': None, 'distinguished': False}
-            make_reply(payload, s.post, s.reply.id, SRC_API,
-                       auth=bearer(s.actor))
+            user_id, reply = make_reply(payload, s.post, s.reply.id, SRC_API,
+                                        auth=bearer(s.actor))
         finally:
             reply_module.task_selector = original
 
-        assert ('make_reply', s.reply.id) in calls
+        assert reply.id != s.post.id, 'D533: a wrong-id mutation would be invisible'
+        assert ('make_reply', reply.id, s.reply.id) in calls
 
     def test_a_reply_is_rejected_when_the_post_has_comments_disabled(self, db_session):
         """`PostReply.new`'s FIRST guard, app/models.py:2982-2983
