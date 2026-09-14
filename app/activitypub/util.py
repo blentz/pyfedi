@@ -2312,7 +2312,9 @@ def restore_post_or_comment(restorer, to_restore, store_ap_json, request_json, r
             to_restore.deleted_by = None
             if not to_restore.author.bot:
                 to_restore.post.reply_count += 1
+                to_restore.post.reply_count_cross_posted += 1
             to_restore.author.post_reply_count += 1
+            community.post_reply_count += 1
             if to_restore.path and len(to_restore.path) > 1:
                 db.session.execute(text('update post_reply set child_count = child_count + 1 where id in :parents'),
                                    {'parents': tuple(to_restore.path[:-1])})
