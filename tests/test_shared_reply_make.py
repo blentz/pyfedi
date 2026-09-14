@@ -134,6 +134,49 @@ def make_moderator(s, user=None):
     return make_community_member(user or s.actor, s.community, is_moderator=True)
 
 
+def _clear_creation_guards(user):
+    """TWO CORRECTIONS, established while writing Task 3, for every test that
+    reaches a REAL `PostReply.new` call rather than raising before it.
+
+    FIFTH CORRECTION: `make_reply:192`'s `can_create_post_reply`
+    (app/utils.py:2546-2578) refuses ANY local user whose `private_key` is
+    `None` -- `tests/test_shared_post_make.py:15-19` and
+    `tests/test_shared_reply_interactions.py:544-550` already document the
+    identical trap for `can_create_post`, but nothing in `edit_reply`'s chain
+    trips it, since `edit_reply` never calls either function. Without this,
+    every `TestMakeReply` test that reaches a real `PostReply.new` call dies
+    at `:193` with 'You are not permitted to comment in this community' --
+    a message indistinguishable from `:174`'s or `:190`'s.
+
+    A REAL RSA KEYPAIR IS NOT NEEDED: `can_create_post_reply` only checks
+    `is None`, and `_seed_for_reply`'s `community.private=True` stops the
+    eager Celery task bodies that would otherwise try to USE the key for
+    signing (see `_seed_for_reply`'s own docstring) before `make_reply`'s
+    `task_selector` call at `:208` is ever reached. `make_user`'s
+    `with_keys=True` (tests/factories.py:44-49) costs roughly a second per
+    call precisely because it generates a real keypair; a plain sentinel
+    string is functionally identical for this guard and free.
+
+    SIXTH CORRECTION: past that guard, `PostReply.new` (app/models.py:3023)
+    unconditionally calls `blocked_phrases()` (app/utils.py:1751-1754), which
+    does `db.session.query(Site).get(1).blocked_phrases` with no `None`
+    guard. `db_session` (tests/conftest.py) only truncates tables, so no
+    `Site` row exists unless a test creates one -- exactly the situation
+    `tests/factories.py:353-358`'s `make_site()` docstring already documents
+    for `Post.new()`; `PostReply.new()` shares the same unconditional call.
+    Without a `Site` row, every test here dies with `AttributeError:
+    'NoneType' object has no attribute 'blocked_phrases'` instead of
+    reaching this task's actual target lines.
+
+    `_seed_for_reply`'s signature is a fixed interface other tasks consume,
+    so this sets the attribute and creates the row directly rather than
+    adding parameters to it.
+    """
+    user.private_key = 'test-key-not-a-real-pem'
+    db.session.commit()
+    make_site()
+
+
 def _burn_a_seed():
     """Advance the user/community/post sequences by one full `_seed_for_reply`
     unit -- 2 users, 3 communities, 2 posts -- so the NEXT `_seed_for_reply`
@@ -418,3 +461,257 @@ class TestEditReply:
         db.session.refresh(s.reply)
         assert 'edited anyway' in s.reply.body
         assert s.reply.distinguished is False
+
+
+class TestMakeReply:
+    """`make_reply` (app/shared/reply.py:156-213).
+
+    THE WEIGHT IS IN `PostReply.new`, WHICH THIS FUNCTION CALLS AT `:196`.
+    `make_reply` itself is a source fork, four guards and a commit. The
+    filters, the `path` construction, the three counter increments and the
+    `reply_count_cross_posted` recompute all live in the model, and five
+    `PostReplyValidationError` raises are reachable from there -- Task 1's
+    Probe A records which a factory seed can drive.
+    """
+
+    def test_the_api_arm_creates_a_reply_and_returns_the_pair(self, db_session):
+        """`:157` true, `:158`-`:165`, `:196`'s `PostReply.new`, `:211`.
+
+        Asserts the row exists AND that `user.language_id` was written at
+        `:200`, because `:211` returns a pair whose shape a mutant could
+        produce without creating anything.
+
+        `_clear_creation_guards(s.actor)` is required: `:192`'s `can_create_post_reply`
+        refuses any local user whose `private_key` is `None` -- see
+        `_clear_creation_guards`'s docstring.
+        """
+        s = _seed_for_reply()
+        _clear_creation_guards(s.actor)
+        payload = {'body': 'a new reply', 'notify_author': True,
+                   'language_id': None, 'distinguished': False}
+
+        user_id, reply = make_reply(payload, s.post, None, SRC_API,
+                                    auth=bearer(s.actor))
+
+        assert user_id == s.actor.id
+        assert reply.id is not None
+        db.session.refresh(s.actor)
+        assert s.actor.language_id is None
+
+    def test_the_web_arm_reads_the_form_clears_it_and_flashes(self, db_session, app):
+        """`:157` false -> `:167`-`:172`, `:204`-`:206`, `:213`.
+
+        `:205` sets `input.body.data = ''`, which is a write BACK INTO the
+        form object -- assert it, because nothing else in the function does
+        and a mutant deleting `:205` is otherwise invisible.
+
+        `_clear_creation_guards(s.actor)` is required here too -- see
+        `_clear_creation_guards`'s docstring; `:192` gates the web arm
+        exactly as it does the API arm.
+        """
+        from flask import get_flashed_messages
+        s = _seed_for_reply()
+        _clear_creation_guards(s.actor)
+        form = SimpleNamespace(
+            body=SimpleNamespace(data='a web reply'),
+            notify_author=SimpleNamespace(data=True),
+            language_id=SimpleNamespace(data=None),
+            distinguished=SimpleNamespace(data=False),
+        )
+
+        with web_ctx(app, s.actor):
+            reply = make_reply(form, s.post, None, SRC_WEB, auth=None)
+            messages = get_flashed_messages()
+
+        assert reply.id is not None
+        assert form.body.data == ''
+        assert 'Your comment has been added.' in messages
+
+    def test_an_ip_banned_user_is_refused(self, db_session, app):
+        """`:174`'s true arm (the `user_ip_banned()` disjunct) and `:175`'s
+        raise.
+
+        A SEVENTH CORRECTION, established by mutation-testing this test
+        rather than by reading. `user.banned` is UNSUITABLE as this guard's
+        lever, despite the brief's plan naming it: `can_create_post_reply`
+        (app/utils.py:2547) has its OWN unconditional `user.banned` check,
+        so a banned user is refused at `:192`-`:193` even if `:174`-`:175`
+        are deleted outright -- `:175`'s and `:193`'s messages are also
+        byte-for-byte identical ('You are not permitted to comment in this
+        community'). Proven by mutating `:174`-`:175` to a no-op: a
+        `user.banned`-based version of this test, EVEN WITH
+        `_clear_creation_guards` applied, still passed against that mutant,
+        with `can_create_post_reply` supplying the same-text raise and the
+        row-count assertion holding for the wrong reason -- an equivalent
+        mutant with respect to that lever, not a caught one.
+
+        `user_ip_banned()` has no such twin: `can_create_post_reply` never
+        calls it or `banned_ip_addresses()`, so it is the ONLY reachable way
+        to isolate `:174` from `:192`. `ip_address()` (`user_ip_banned`'s own
+        call) resolves `request.remote_addr`, which plain `web_ctx` leaves
+        `None` (Werkzeug's `test_request_context` sets no REMOTE_ADDR by
+        default) -- confirmed by inspection, since `''` is falsy and
+        `user_ip_banned` would short-circuit to `None` regardless of any
+        `IpBan` row. This test builds its own request context with
+        `environ_overrides` instead of calling `web_ctx`, to supply a
+        REMOTE_ADDR an `IpBan` row can match.
+
+        THE STATE ASSERTION CARRIES IT, not the raise: no `PostReply` row may
+        be created. `_clear_creation_guards(s.actor)` is load-bearing for the
+        kill, confirmed by the same mutation: with it applied, a neutered
+        `:174`-`:175` lets the call run to a real, successful
+        `PostReply.new`, so a mutant deleting the guard is genuinely caught
+        by the row-count assertion rather than passing on `can_create_post_reply`'s
+        unrelated say-so.
+
+        `SRC_API` is used, not `SRC_WEB`: the API arm resolves `user` from
+        the bearer token via `authorise_api_user`, with no need for
+        `login_user`/`current_user` -- only a request context is needed, for
+        `ip_address()`'s `request.remote_addr` read.
+        """
+        from app.models import IpBan
+        s = _seed_for_reply()
+        _clear_creation_guards(s.actor)
+        db.session.add(IpBan(ip_address='203.0.113.5'))
+        db.session.commit()
+        before = db.session.query(PostReply).count()
+        payload = {'body': 'ip banned attempt', 'notify_author': False,
+                   'language_id': None, 'distinguished': False}
+
+        with app.test_request_context('/', environ_overrides={'REMOTE_ADDR': '203.0.113.5'}):
+            with pytest.raises(Exception, match='not permitted to comment'):
+                make_reply(payload, s.post, None, SRC_API, auth=bearer(s.actor))
+
+        assert db.session.query(PostReply).count() == before
+
+    def test_a_non_moderator_cannot_distinguish_a_new_reply(self, db_session):
+        """`:177`'s true arm and `:178`'s demotion.
+
+        `:177` is three negated conditions; this takes all three false at
+        once, which is the only combination that reaches `:178`. The witness
+        is `distinguished` being False on the created row DESPITE the payload
+        asking for True -- a mutant deleting `:178` leaves it True.
+
+        THE id-1 TRAP DOES NOT BITE HERE, but only because of who is acting.
+        `user.is_admin_or_staff()` is evaluated on the ACTING user, which is
+        `s.actor` here (the bearer token belongs to `s.actor`), not
+        `s.author`. `_seed_for_reply` mints `author` first and `actor`
+        second, and tests/conftest.py resets every sequence before each
+        test, so `author` is id 1 and `actor` is id 2 -- deterministically,
+        every run. `User.is_admin` (app/models.py:1259-1261) only special-
+        cases id 1, so `actor` (id 2) is never accidentally an admin and no
+        `_burn_a_seed()` is needed to keep this guard meaningful. Neither
+        `post.community.is_moderator(actor)` nor `is_owner(actor)` can be
+        true either: `_seed_for_reply` never adds `actor` as a
+        `CommunityMember` of `s.community`, so `Community.moderators()`
+        (app/models.py:716-722) never returns a row for it.
+
+        `_clear_creation_guards(s.actor)` clears `:192`'s unrelated guard so the demotion
+        at `:178` can be witnessed on an actually-created row -- see
+        `_clear_creation_guards`'s docstring.
+        """
+        s = _seed_for_reply()
+        _clear_creation_guards(s.actor)
+        payload = {'body': 'presumptuous', 'notify_author': False,
+                   'language_id': None, 'distinguished': True}
+
+        user_id, reply = make_reply(payload, s.post, None, SRC_API,
+                                    auth=bearer(s.actor))
+
+        db.session.refresh(reply)
+        assert reply.distinguished is False
+
+    def test_a_moderator_keeps_distinguished_on_a_new_reply(self, db_session):
+        """`:177`'s false arm -- the same-mechanism positive control.
+
+        Without it, a fixture in which `distinguished` could never survive
+        would produce the same False above. Same payload, one lever moved.
+
+        `_clear_creation_guards(s.actor)` clears `:192`'s unrelated guard -- see
+        `_clear_creation_guards`'s docstring.
+        """
+        s = _seed_for_reply()
+        _clear_creation_guards(s.actor)
+        make_moderator(s)
+        payload = {'body': 'entitled', 'notify_author': False,
+                   'language_id': None, 'distinguished': True}
+
+        user_id, reply = make_reply(payload, s.post, None, SRC_API,
+                                    auth=bearer(s.actor))
+
+        db.session.refresh(reply)
+        assert reply.distinguished is True
+
+    def test_replying_to_a_parent_sets_the_path_and_the_parent_id(self, db_session):
+        """`:180`'s true arm, `:181`'s lookup, and `PostReply.new`'s path build.
+
+        The seeded parent has no `path` of its own -- `make_post_reply` does
+        not set one -- so this also witnesses the `else` at
+        app/models.py:3063-3064, which gives a top-level reply `[0, reply.id]`.
+        Assert the SHAPE, not just non-emptiness: a two-element path with the
+        sentinel first is what every reader of this column assumes.
+
+        `_clear_creation_guards(s.actor)` clears `:192`'s unrelated guard -- see
+        `_clear_creation_guards`'s docstring.
+        """
+        s = _seed_for_reply()
+        _clear_creation_guards(s.actor)
+        payload = {'body': 'a child reply', 'notify_author': False,
+                   'language_id': None, 'distinguished': False}
+
+        user_id, reply = make_reply(payload, s.post, s.reply.id, SRC_API,
+                                    auth=bearer(s.actor))
+
+        db.session.refresh(reply)
+        assert reply.parent_id == s.reply.id
+        assert reply.path == [0, reply.id]
+
+    def test_a_blocked_replier_is_refused_by_the_parents_author(self, db_session):
+        """`:182`'s true arm and `:183`'s raise.
+
+        `has_blocked_user` is the lever. The state assertion is that no new
+        `PostReply` row exists -- the raise alone would pass against a mutant
+        that created it first.
+
+        `match='parent reply'` IS LOAD-BEARING, not decoration -- proven by
+        mutating `:182`-`:183` to a no-op: a bare `pytest.raises(Exception)`
+        still passed, because `_seed_for_reply`'s `post` and its lone
+        top-level `reply` share ONE author (`s.author`), so the SAME
+        `UserBlock` row ALSO satisfies `:189`'s post-author check and the
+        call still raised and still created no row -- for the wrong reason.
+        `:183`'s message says 'parent reply'; `:190`'s says 'parent post' --
+        the two are otherwise identical text, so this is the only way to
+        pin the raise to `:183` rather than its downstream twin.
+        """
+        s = _seed_for_reply()
+        from app.models import UserBlock
+        db.session.add(UserBlock(blocker_id=s.author.id, blocked_id=s.actor.id))
+        db.session.commit()
+        before = db.session.query(PostReply).count()
+        payload = {'body': 'blocked', 'notify_author': False,
+                   'language_id': None, 'distinguished': False}
+
+        with pytest.raises(Exception, match='parent reply'):
+            make_reply(payload, s.post, s.reply.id, SRC_API,
+                       auth=bearer(s.actor))
+
+        assert db.session.query(PostReply).count() == before
+
+    def test_a_locked_parent_cannot_be_replied_to(self, db_session):
+        """`:184`'s true arm and `:185`'s raise.
+
+        `replies_enabled` False is what `lock_post_reply` sets, so this is the
+        downstream half of the lock Group F covers.
+        """
+        s = _seed_for_reply()
+        s.reply.replies_enabled = False
+        db.session.commit()
+        before = db.session.query(PostReply).count()
+        payload = {'body': 'locked out', 'notify_author': False,
+                   'language_id': None, 'distinguished': False}
+
+        with pytest.raises(Exception, match='cannot be replied to'):
+            make_reply(payload, s.post, s.reply.id, SRC_API,
+                       auth=bearer(s.actor))
+
+        assert db.session.query(PostReply).count() == before
