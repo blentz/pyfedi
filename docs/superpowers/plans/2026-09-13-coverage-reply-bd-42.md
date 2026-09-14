@@ -1180,7 +1180,9 @@ Subject: `fix: restore the two counters a delete leaves behind`
 
 - [ ] **Step 1: Derive the statement and compound lists mechanically**
 
-`ast.walk` over the three target functions. **Publish the command and its raw output beside the count.** An `ast.walk` counts the `def` line where coverage.py does not, so the list runs one longer per function — expected, and not to be reconciled away.
+`ast.walk` over the three target functions. **Publish the command and its raw output beside the count.**
+
+**CORRECTED AT TASK 9.** The sentence that stood here — *"An `ast.walk` counts the `def` line where coverage.py does not, so the list runs one longer per function — expected, and not to be reconciled away"* — is **ambiguous, and false under the reading that matters**; the design document carried the same claim. Coverage.py's `PythonParser` includes every `def` line, and so does the FILE-level `num_statements` (measured at `0cf503a6` over `app/shared/reply.py`: all sixteen `def` linenos in `p.statements`, parser total 381, JSON file total 381). What excludes the `def` line is the PER-FUNCTION `functions[name]['summary']['num_statements']`, which bills it to the `<module>` entry instead — hence `43/30/56` = 129 by `ast.walk` and by coverage's own statement set over the same spans, against `42/29/55` = 126 in the per-function summaries. **The `def` lines are covered statements coverage.py measures**; the real objection to their mutants is that they are free kills (D528), not that coverage cannot see them. Task 8 reached 129 by measuring, which is right; reconciling down to 126 would drop three mutants. Registered as **D542**.
 
 - [ ] **Step 2: Run the pass, one mutation at a time**
 

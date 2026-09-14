@@ -14,16 +14,39 @@ tree at `903dab20^`, where `delete_reply` opened at `:241` and `restore_reply`
 at `:269`. Commit `903dab20` then added a net fourteen lines above them --
 the `len(X.path) > 1` repair and the reversal permission arm -- without a
 sweep of this file, so every citation to `delete_reply`, `restore_reply` and
-everything below them has been FOURTEEN LOW since that commit. Sub-project 42
-task 7 added two more statements inside `restore_reply`, making it sixteen low
-from `restore_reply`'s guard onward. THIS IS A PRE-EXISTING CONDITION THAT TASK
-7 FOUND, NOT ONE IT CAUSED, and it is left standing rather than half-swept:
-re-deriving ~90 citations against a two-commit-old baseline is a task of its
-own, and a partial sweep would leave no way to tell a corrected citation from
-an uncorrected one. The docstrings task 7 REWROTE -- this paragraph, the D496
-retraction below, `TestRestoreReply`'s class docstring and three of its tests
--- use CURRENT numbering and say so where they cite a line. Everything else in
-this file is fourteen (or sixteen) low. `tests/test_shared_reply_moderation.py`
+everything below them has been FOURTEEN LOW since that commit.
+
+*** CORRECTED AT SUB-PROJECT 42 TASK 9: THE OFFSET IS NOT ONE NUMBER, AND THE
+PARAGRAPH THAT STOOD HERE GAVE ONE. *** Task 7 wrote "sub-project 42 task 7
+added two more statements inside `restore_reply`, making it sixteen low from
+`restore_reply`'s guard onward". That understates the drift for everything
+below `restore_reply`, because task 7 added SIX lines in THREE places -- two
+inside `restore_reply`, two inside `mod_remove_reply` and two inside
+`mod_restore_reply` -- so the offset STEPS UP three times rather than settling
+at sixteen. Derived mechanically from the four `tuple(reply.path[:-1])` sites,
+which this file's DEFECT 4 paragraph cites in old numbering as `:258`, `:284`,
+`:418` and `:453` and which a `/usr/bin/grep -n` for the `path[:-1]` slice over
+`app/shared/reply.py` now returns as `:272`, `:300`, `:436` and `:473`:
+
+    citation region                              add
+    above `restore_reply`'s guard (`delete_reply`) +14   (258 -> 272)
+    `restore_reply`'s guard onward                +16   (284 -> 300)
+    `mod_remove_reply`'s counter block onward     +18   (418 -> 436)
+    `mod_restore_reply`'s counter block onward    +20   (453 -> 473)
+
+One sentence in this file -- DEFECT 4's `tuple(path[:-1])` list -- carries
+THREE different offsets inside a single comma-separated list, which is why a
+one-number rule cannot be right here.
+
+THIS IS A PRE-EXISTING CONDITION THAT TASK 7 FOUND, NOT ONE IT CAUSED, and it
+is left standing rather than half-swept: re-deriving ~90 citations against a
+two-commit-old baseline is a task of its own, and a partial sweep would leave
+no way to tell a corrected citation from an uncorrected one. The follow-up is
+registered as D545 with the table above. The docstrings task 7 REWROTE -- this
+paragraph, the D496 retraction below, `TestRestoreReply`'s class docstring and
+three of its tests -- use CURRENT numbering and say so where they cite a line.
+Everything else in this file is low by whichever of the four offsets covers the
+line it names. `tests/test_shared_reply_moderation.py`
 and `tests/test_shared_reply_report.py` were swept at task 7 and are current.
 
 THIS MODULE IS `app/shared/post.py`'S TWIN, and that is why this round is
