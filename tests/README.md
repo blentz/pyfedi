@@ -7269,8 +7269,15 @@ helper's docstring advertised the decoration as a mechanism until this was
 caught. The calls are left in place deliberately: a whole-line deletion in a
 cited file is never free (register entry D545), and this fact and fact 240 both
 cite line numbers below `:125`. **THE SHAPE IS THE LESSON, AND THIS ROUND HIT
-IT FOUR TIMES: A CORRECTION CAN INTRODUCE THE DEFECT IT WAS WRITTEN TO
-REMOVE.** A reviewer read `make_site_admin`, saw `make_site()`, and inferred a
+IT SEVEN TIMES: A CORRECTION CAN INTRODUCE THE DEFECT IT WAS WRITTEN TO
+REMOVE.** (An earlier wording of this sentence said FOUR. That count was
+inherited from a controller ruling and never re-derived -- which made the
+sentence naming this defect class the class's own seventh instance. Two of the
+seven occurred inside the commit that added this fact, and the round's
+line-number discipline was applied to every citation and to no tally.
+**A COUNT IS A CLAIM: re-derive it like a line number.**)
+
+A reviewer read `make_site_admin`, saw `make_site()`, and inferred a
 requirement from a call -- **a call is evidence that somebody wrote it, not
 evidence that anything needs it**; the only way to tell the two apart is to
 take it away and run. **WHAT SURVIVES FROM THE NARROWING, BECAUSE IT IS TRUE
