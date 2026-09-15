@@ -7920,6 +7920,37 @@ ninth cause). Until fact 75 itself is amended, cite this fact and cause 3
 together rather than reaching for a number that does not exist. See
 **D616**.
 
+**267. A LOOKUP THAT FINDS A ROW IS NOT THE SAME AS A LOOKUP THAT FINDS THE
+RIGHT KIND OF ROW -- WHEN A GUARD'S ERROR MESSAGE NAMES A ROLE, CHECK THE
+QUERY FILTERS ON THAT ROLE.** `remove_mod_from_community`'s
+`existing_member` lookup (`app/shared/community.py`) filtered on
+`user_id` and `community_id` alone and used the result to decide whether
+to refuse with "That user is not a moderator of this community." The
+message names a role, `moderator`; the query does not check for one --
+any `CommunityMember` row, including the bare, both-flags-False row
+`join_community` creates for every plain subscriber, satisfied it. A
+prior fix (`43b18996`) had already narrowed the guard's `if existing_
+member:` with an `else`, closing the no-row case, and was recorded as
+"FIXED" on the strength of that -- but a query finding *a* row is a
+weaker fact than a query finding a row *of the kind the message claims
+to check*, and nothing in that fix touched the query itself. **The
+tell**: read the guard's refusal string before trusting the query above
+it. If the string names a role, a status, or any other qualifier ("is
+not a moderator," "is already banned," "is not the owner"), the query
+that produced the value the guard tests must filter on that same
+qualifier -- not merely on the identity/scope columns (here, `user_id`
+and `community_id`) that get you *a* row. A `.filter(...).first()` or
+`.one()` that reads as an existence check is not automatically a
+membership-in-the-right-set check; verify the `WHERE` clause names
+every condition the error message claims to be reporting on. Two more
+of this shape follow from the identical root cause once named: the same
+lookup's `community_id` predicate had no test giving a user membership
+in two communities (fact 75 cause 2 -- an unmutated clause, not an
+equivalence), and the two refusal branches' flash categories
+(`'error'`/`'warning'`) had only one pinned via `with_categories=True`
+in the whole file, so a swap between them was undetectable. See D621,
+D622, D623.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
