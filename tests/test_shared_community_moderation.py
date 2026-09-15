@@ -60,8 +60,19 @@ for an absent id, so `:494`'s `community.is_owner(user)` raises
 `.filter_by(id=community_id).one()`, which raises `NoResultFound` directly
 for the same absent id. The two tests near the bottom of this file pin
 today's actual, divergent behaviour rather than papering over it; this
-round's production budget is spent elsewhere (on remove_mod_from_community's
-two defects), so the divergence stands as found.
+round's production budget was spent on remove_mod_from_community's two
+defects instead, so this divergence stands as found.
+
+REMOVE_MOD_FROM_COMMUNITY'S TWO DEFECTS, ONE NOW HISTORY: `:622`'s
+`if existing_member:` used to have no `else`, so removing a moderator who
+held no CommunityMember row at all still flashed 'Moderator removed', still
+wrote a `remove_mod` ModLog entry naming them, and still fired the task --
+the moderation log recorded a removal that never happened. Task 5 added the
+`else` (refusing through this module's established `SRC_API` raise /
+web-flash-and-return fork) and inverted the test that had pinned it; see
+that test below for the fixed behaviour. The second defect -- `:624`
+stripping a community's last owner with no guard, unlike the route's check
+at `app/community/routes.py:1477` -- is still pinned below; Task 6 fixes it.
 """
 from types import SimpleNamespace
 
@@ -821,7 +832,7 @@ def test_add_mod_to_community_remote_moderator_reuses_an_existing_conversation(
                                        'community_id': s.community.id})]
 
 
-# `remove_mod_from_community` (app/shared/community.py:608-645).
+# `remove_mod_from_community` (app/shared/community.py:608-653).
 #
 # `task_selector` is patched on `app.shared.community` for the same reason as
 # every other test in this file: the `from app.shared.tasks import
@@ -843,7 +854,7 @@ def test_remove_mod_from_community_api_owner_alone_removes_and_returns_user_id(
         app, db_session, monkeypatch):
     """`:610-611`'s SRC_API arm, `:617`'s guard passing through its FIRST
     operand alone (owner, not admin -- `_seed()` burns user id 1, so `s.user`
-    is never the id-1 admin trap), and `:644-645`'s true arm returning the
+    is never the id-1 admin trap), and `:652-653`'s true arm returning the
     caller's id.
 
     The target is seeded as BOTH `is_moderator=True` and (set directly after
@@ -882,8 +893,8 @@ def test_remove_mod_from_community_admin_who_is_not_owner_may_remove_and_flashes
     """`:612-613`'s else arm (`current_user`), `:617`'s guard passing through
     its SECOND operand alone (staff, not owner -- `s.user` holds no
     CommunityMember row at all, so `community.is_owner` is False on its own,
-    and is instead a site admin via `_make_site_admin`), `:626-627`'s web
-    flash, and `:644`'s false arm: a non-API src falls off the end and
+    and is instead a site admin via `_make_site_admin`), `:634-635`'s web
+    flash, and `:652`'s false arm: a non-API src falls off the end and
     returns `None` rather than the actor's id.
     """
     from flask import get_flashed_messages
@@ -913,7 +924,7 @@ def test_remove_mod_from_community_admin_who_is_not_owner_may_remove_and_flashes
 def test_remove_mod_from_community_neither_owner_nor_admin_is_refused(app, db_session):
     """`:617` with BOTH operands false -- a plain, non-owner CommunityMember
     row for the actor and no admin role -- raises `'incorrect_login'` at
-    `:618`, before `:620-625`'s membership work or `:629`'s modlog write ever
+    `:618`, before `:620-625`'s membership work or `:637`'s modlog write ever
     run. The target's existing moderator row and the modlog table must both
     survive untouched.
     """
@@ -930,21 +941,19 @@ def test_remove_mod_from_community_neither_owner_nor_admin_is_refused(app, db_se
     assert db.session.query(ModLog).filter_by(action='remove_mod').count() == 0
 
 
-def test_remove_mod_from_community_non_member_still_flashes_and_writes_a_modlog_entry(
+def test_remove_mod_from_community_non_member_web_is_refused_and_writes_no_modlog_entry(
         app, db_session, monkeypatch):
-    """PIN. `:622`'s `if existing_member:` has no `else`, so a target who
-    holds no CommunityMember row at all writes nothing at `:623-624` -- yet
-    `:626-627` still flashes 'Moderator removed', `:629-630` still writes a
-    `remove_mod` ModLog entry naming them, and `:642` still fires the task.
-    The moderation log records a removal that never happened.
+    """`:622`'s `if existing_member:` now has an `else` (Task 5): a target
+    who holds no CommunityMember row at all is refused at `:626-632` before
+    `:634-635`'s flash, `:637-638`'s modlog write, or `:650`'s task can run.
 
-    THIS TEST ASSERTS THE DEFECT AND PASSES TODAY. Task 5 fixes `:622` (adds
-    an `else`) and inverts this test. The ModLog assertion is the
-    load-bearing one, not the flash: a test that only checked the flash would
-    still pass against a fix that stopped writing the record but left the
-    flash text alone, and the actual harm here is the audit record claiming a
-    removal that never happened -- invisible to coverage because every line
-    still executes either way.
+    FORMERLY A PIN. Until Task 5, `:622` had no `else`, so this same
+    non-member removal still flashed 'Moderator removed', still wrote a
+    `remove_mod` ModLog entry naming the stranger, and still fired the task
+    -- the moderation log recorded a removal that never happened. The ModLog
+    assertion below is the load-bearing one, not the flash: a fix that only
+    changed the flash text but left the audit write in place would still
+    fail it.
     """
     s = _seed()
     owner = make_community_member(s.user, s.community, is_moderator=False)
@@ -963,13 +972,39 @@ def test_remove_mod_from_community_non_member_still_flashes_and_writes_a_modlog_
         remove_mod_from_community(s.community.id, stranger.id, SRC_WEB)
         flashed = get_flashed_messages()
 
-    assert flashed == ['Moderator removed']
+    assert flashed == ['That user is not a moderator of this community.']
     assert db.session.query(ModLog).filter_by(
-        action='remove_mod', target_user_id=stranger.id).count() == 1
+        action='remove_mod', target_user_id=stranger.id).count() == 0
     assert db.session.query(CommunityMember).filter_by(
         user_id=stranger.id, community_id=s.community.id).count() == 0
-    assert calls == [('remove_mod', {'user_id': s.user.id, 'mod_id': stranger.id,
-                                     'community_id': s.community.id})]
+    assert calls == []
+
+
+def test_remove_mod_from_community_non_member_api_raises_and_writes_no_modlog_entry(
+        app, db_session, monkeypatch):
+    """Same non-member refusal as the web test above, but through `:610-611`'s
+    SRC_API arm: `:628-629`'s `raise Exception(msg)` fires instead of the web
+    flash, still before any ModLog write or task dispatch.
+    """
+    s = _seed()
+    owner = make_community_member(s.user, s.community, is_moderator=False)
+    owner.is_owner = True
+    db.session.commit()
+    stranger = make_user(s.instance, 'stranger', local=True)
+    assert db.session.query(CommunityMember).filter_by(
+        user_id=stranger.id, community_id=s.community.id).count() == 0
+    calls = []
+    monkeypatch.setattr('app.shared.community.task_selector',
+                         lambda task_key, **kw: calls.append((task_key, kw)))
+
+    with pytest.raises(Exception, match='not a moderator'):
+        remove_mod_from_community(s.community.id, stranger.id, SRC_API, bearer(s.user))
+
+    assert db.session.query(ModLog).filter_by(
+        action='remove_mod', target_user_id=stranger.id).count() == 0
+    assert db.session.query(CommunityMember).filter_by(
+        user_id=stranger.id, community_id=s.community.id).count() == 0
+    assert calls == []
 
 
 def test_remove_mod_from_community_strips_the_last_owner_leaving_none(
