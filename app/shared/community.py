@@ -6,7 +6,7 @@ from flask import current_app, flash, render_template
 from flask_babel import _, force_locale, gettext
 from flask_login import current_user
 from slugify import slugify
-from sqlalchemy import text, func
+from sqlalchemy import text, func, or_
 from sqlalchemy.exc import IntegrityError
 
 from app import db, cache, plugins
@@ -617,8 +617,11 @@ def remove_mod_from_community(community_id: int, person_id: int, src, auth=None)
     if not community.is_owner(user) and not user.is_admin_or_staff():
         raise Exception('incorrect_login')
 
-    existing_member = db.session.query(CommunityMember).filter(CommunityMember.user_id == old_moderator.id,
-                                                   CommunityMember.community_id == community_id).first()
+    existing_member = db.session.query(CommunityMember).filter(
+        CommunityMember.user_id == old_moderator.id,
+        CommunityMember.community_id == community_id,
+        or_(CommunityMember.is_moderator == True,
+            CommunityMember.is_owner == True)).first()
     if existing_member:
         if existing_member.is_owner and community.num_owners() == 1:
             msg = ('A community must have one or more owners. Make someone '
