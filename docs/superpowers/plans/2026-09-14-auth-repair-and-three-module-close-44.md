@@ -18,7 +18,7 @@ Every task's requirements implicitly include this section. These are not style p
 
 ### The rule this round exists to honour
 
-**A line no *input* can reach is not always a line no *test* can reach — but sometimes it is, and the two cases are different.** Sub-project 43 ruled two lines equivalent because no production caller reached them, when a legitimate third argument value did; that ruling was retracted (D564). Sub-projects 19 and 20 ruled two other lines unreachable because the callee cannot raise on that path; that ruling stands. **Before calling anything uncoverable, say which of the two you have, and prove it.** `tests/README.md` fact 75 catalogues the causes; cause 4(c) is the one that stands.
+**A line no *input* can reach is not always a line no *test* can reach — but sometimes it is, and the two cases are different.** Sub-project 43 ruled two lines equivalent because no production caller reached them, when a legitimate third argument value did; that ruling was retracted (D564). Sub-projects 19 and 20 ruled two other lines unreachable because the callee cannot raise on that path; that ruling stands. **Before calling anything uncoverable, say which of the two you have, and prove it.** `tests/README.md` fact 75 catalogues the causes. **CORRECTED MID-ROUND: the cause that stands is 8, "Unreachable handler" — a `try`/`except` whose body can never run because the callee inside the `try` has no raising path. This plan originally cited "cause 4(c)", which DOES NOT EXIST — fact 75's cause 4 has only (a) and (b). The wrong label was inherited verbatim from `tests/test_shared_tasks_send_reply.py:1584`; the substance was right, only the label was wrong. See D577. And do NOT now force-fit cause 8: it is scoped to a `try`/`except`, and a bare `if <cond>: raise` is not cause 8 however unreachable it is (D587).**
 
 ### Choosing a measurement oracle
 
@@ -1297,7 +1297,7 @@ Candidates, all verified this round — add the genuinely new ones and **re-deri
 
 - `from ... import` binds a name into the importing module's globals, so `app/shared/auth.py:14`'s `user_ip_banned` is patched by rebinding `app.shared.auth.user_ip_banned`; patching `app.utils` does not intercept. `app/utils.py:2308`'s `ip_address = get_ip_address` is an alias and follows the same rule.
 - A module's coverage is not necessarily produced by the test files named after it: `app/shared/auth.py`'s web arm comes from `tests/test_redirect_targets.py` and `app/shared/upload.py`'s SVG paths from `tests/test_utils_security.py`.
-- **The distinction this round turned on**: "no production caller reaches it" is not a reason to stop measuring (D564's retraction), but "no input reaches it because the callee cannot produce the condition" is fact 75's cause 4(c) and stands. Ask which you have.
+- **The distinction this round turned on**: "no production caller reaches it" is not a reason to stop measuring (D564's retraction), but "no input reaches it because the callee cannot produce the condition" is fact 75's **cause 8, "Unreachable handler"**, and stands. Ask which you have. (This line originally cited "cause 4(c)", a label fact 75 does not contain — see D577.)
 
 - [ ] **Step 3: Commit**
 

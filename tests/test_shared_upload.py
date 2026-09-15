@@ -30,7 +30,7 @@ from sqlalchemy import text
 from werkzeug.datastructures import FileStorage
 
 from app import db
-from app.models import File, user_file
+from app.models import File
 from app.shared.upload import process_file_delete, process_upload
 from tests.factories import make_instance, make_user
 
@@ -68,6 +68,27 @@ def _image(fmt='PNG', size=(8, 8), filename=None):
 def _stored_path(url: str) -> str:
     """process_upload returns SERVER_URL + '/' + final_place minus 'app/'."""
     return 'app/static/' + url.split('/static/', 1)[1]
+
+
+def _seed_user_file(source_url: str, user_id: int) -> int:
+    """A File row plus its `user_file` link, shaped as :112-118 builds them.
+
+    Returns the File id. No disk file is created -- these rows exist so a
+    deletion (or the absence of one) can be OBSERVED in the database.
+    """
+    file_row = File(source_url=source_url)
+    db.session.add(file_row)
+    db.session.commit()
+    db.session.execute(
+        text('INSERT INTO "user_file" (file_id, user_id, size) VALUES (:fid, :uid, :size)'),
+        {'fid': file_row.id, 'uid': user_id, 'size': 123})
+    db.session.commit()
+    return file_row.id
+
+
+def _user_file_row_exists(file_id: int) -> bool:
+    return db.session.execute(
+        text('SELECT 1 FROM "user_file" WHERE file_id = :fid'), {'fid': file_id}).first() is not None
 
 
 def _cleanup(before, root=MEDIA_ROOT):
@@ -137,10 +158,12 @@ class TestCanUploadVideoGate:
                 process_upload(video, user=user)
 
     def test_video_extension_allowed_when_user_has_permission(self, app, db_session, monkeypatch):
-        """True arm of :22, and the True arm of :67's `not is_video_url(...)` gate
-        (mp4 is recognised by app.utils.is_video_url, so this SKIPS the Pillow
-        re-encode) and the True arm of :112's `if user:` (a real File/user_file
-        row is written).
+        """True arm of :22, the VIDEO FALSE ARM of :67's gate (mp4 is recognised
+        by app.utils.is_video_url, so `not is_video_url(...)` is False, the whole
+        conjunction is False, and the Pillow re-encode is SKIPPED -- the same
+        short-circuit TestPillowReencodeGate below names as the video False arm),
+        and the True arm of :112's `if user:` (a real File/user_file row is
+        written).
         """
         monkeypatch.setattr('app.shared.upload.can_upload_video', lambda user: True)
         instance = make_instance('yesvideo.test')
@@ -239,12 +262,22 @@ class TestFormatVersusExtensionMismatch:
 
 
 class TestImageFormatAndQualityKwargs:
-    """`:75`/`:79` -- the `image_format`/`image_quality` kwargs, both arms each.
+    """`:75`/`:79` -- the `image_format`/`image_quality` kwargs. Both arms of
+    each are DRIVEN; only the format half is OBSERVED.
 
     Both read `current_app.config['MEDIA_IMAGE_FORMAT']` /
-    `['MEDIA_IMAGE_QUALITY']`; each test sets both explicitly (rather than
-    relying on whatever config.py's environment-derived default happens to
-    be) so the True/False arm each test hits is asserted, not assumed.
+    `['MEDIA_IMAGE_QUALITY']`, and each test sets both explicitly rather than
+    relying on whatever config.py's environment-derived default happens to be,
+    so which arm each test takes is determined here rather than inherited.
+
+    WHAT IS ASSERTED IS THE FORMAT HALF ONLY. The output extension and
+    `Image.open(stored).format` distinguish :75's True arm from its False arm.
+    Nothing in this file observes image quality at all, and at these settings
+    it is unobservable in principle: `MEDIA_IMAGE_QUALITY = 80` is Pillow's own
+    WebP default, so :79-80's `kwargs['quality'] = 80` produces the same output
+    as omitting the kwarg entirely. :79/:80 are therefore entered but not
+    discriminated. That gap is registered as D592(d) with its recipe (assert
+    output bytes or size on a lossy format); no test is added for it here.
     """
 
     def test_a_configured_format_and_quality_are_both_applied(self, app):
@@ -327,7 +360,7 @@ class TestS3Branch:
                 s3 = boto3.client('s3', region_name='us-east-1',
                                   endpoint_url='https://s3.amazonaws.com',
                                   aws_access_key_id='test-key', aws_secret_access_key='test-secret')
-                key = url.split(f'https://cdn.example.test/', 1)[1]
+                key = url.split('https://cdn.example.test/', 1)[1]
                 head = s3.head_object(Bucket=s3_bucket, Key=key)
                 assert head['ContentType'] == 'image/png'
             finally:
@@ -430,18 +463,48 @@ class TestProcessFileDelete:
     """`process_file_delete`'s two False arms (`:127`, `:130`)."""
 
     def test_falsy_user_id_skips_the_lookup_entirely(self, app, db_session):
-        """:127 False arm: no query is even attempted."""
+        """:127 False arm: user_id=0 short-circuits before the query.
+
+        ASSERTS STATE, NOT THE RETURN VALUE. `process_file_delete` has no
+        `return` on any path (:126-134), so `... is None` is unconditionally
+        true and passed identically with :127 deleted or inverted -- false
+        witness mechanism (a). A real File and its `user_file` link are seeded
+        first and asserted still present afterwards, so what is checked is
+        what the call did rather than what Python returns from a procedure.
+
+        This does NOT claim to kill a :127 mutant: with user_id=0 the query at
+        :128-129 filters on `user_file.c.user_id == 0` and finds nothing on
+        either arm. It claims only that nothing was deleted.
+        """
+        instance = make_instance('skiplookup.test')
+        user = make_user(instance, 'skiplookupuser', local=True)
         with app.app_context():
-            # Any url/user_id combination is fine: user_id=0 short-circuits
-            # before the query, so a real File row is not needed to prove it.
-            assert process_file_delete('https://example.test/does-not-matter', 0) is None
+            source_url = 'https://example.test/does-not-matter.png'
+            file_id = _seed_user_file(source_url, user.id)
+
+            process_file_delete(source_url, 0)
+
+            assert File.query.get(file_id) is not None
+            assert _user_file_row_exists(file_id)
 
     def test_user_id_with_no_matching_file_is_a_noop(self, app, db_session):
-        """:130 False arm: the query runs (True at :127) but finds nothing."""
+        """:130 False arm: the query runs (True at :127) but matches nothing.
+
+        ASSERTS STATE, NOT THE RETURN VALUE, for the same reason as the test
+        above. Here the assertion is genuinely falsifiable: the seeded row
+        belongs to this user but sits at a DIFFERENT source_url, so dropping
+        :129's `File.source_url == url` filter makes the query find it, :130
+        True, and the row deleted -- which these assertions catch.
+        """
         instance = make_instance('nodelete.test')
         user = make_user(instance, 'nodeleteuser', local=True)
         with app.app_context():
-            assert process_file_delete('https://example.test/nonexistent.png', user.id) is None
+            file_id = _seed_user_file('https://example.test/a-different-file.png', user.id)
+
+            process_file_delete('https://example.test/nonexistent.png', user.id)
+
+            assert File.query.get(file_id) is not None
+            assert _user_file_row_exists(file_id)
 
     def test_a_matching_file_is_deleted_from_db_and_disk(self, app, db_session):
         """:130 True arm, and a genuine disk deletion.
@@ -513,4 +576,10 @@ class TestUrlCannotBeFalsy:
     exactly what tests/README.md fact 75 warns against doing to manufacture a
     fake kill. No test is written for this line; this class exists only to
     keep the ruling colocated with the code it rules on.
+
+    DELIBERATELY EMPTY: pytest collects ZERO items from this class. It is a
+    `Test*`-named docstring, not a test that silently stopped running. The
+    same ruling is recorded in the register at D587, which cites this class;
+    it is kept here as well so a reader of `:120-121` meets the reasoning
+    without having to know the register exists.
     """
