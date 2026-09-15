@@ -17,6 +17,7 @@ def block_remote_instance(instance_id, src, auth=None):
             raise Exception(msg)
         else:
             flash(_(msg), 'error')
+            return
 
     existing = db.session.query(InstanceBlock).filter_by(user_id=user_id, instance_id=instance_id).first()
     if not existing:

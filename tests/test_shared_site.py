@@ -2,19 +2,27 @@
 
 The module was at 86.957% before this file: 2 statements and 4 arcs missing.
 
-ONE TEST HERE PINS A DEFECT. app/shared/site.py:14-19 refuses to block the
-local instance -- the API arm raises at :17, the web arm flashes at :19 --
-but the web arm does NOT return, so control falls to :21 and :23 creates the
-block anyway. Both twins return: app/shared/user.py:29-31's
-block_another_user flashes then returns, and app/shared/domain.py does the
-same. That test asserts today's wrong behaviour and is INVERTED by the task
-that adds the return. It says PINS A DEFECT in its docstring.
+HISTORY. app/shared/site.py:14-19 refuses to block the local instance -- the
+API arm raises at :17, the web arm flashed at :19 -- but the web arm did NOT
+return, so control fell to :21 and :23 created the block anyway. Both twins
+returned: app/shared/user.py:29-31's block_another_user flashes then
+returns, and app/shared/domain.py does the same. site.py was the one that
+did not.
 
-The defect is reachable through ordinary routes rather than only by a
+This round added `return` after :19, so the web arm now exits before :21
+the same way the twins do. The test below,
+test_block_remote_instance_web_refuses_the_local_instance, is the INVERTED
+pin: it used to assert the wrong behaviour (a block created despite the
+refusal message) under the name
+test_block_remote_instance_web_blocks_the_local_instance_anyway, and now
+asserts the guard actually guards.
+
+The defect was reachable through ordinary routes rather than only by a
 crafted call: app/post/routes.py:1480 passes post.instance_id and
 app/user/routes.py:881 passes user.instance_id, and app/shared/post.py:218
 builds a Post with instance_id=user.instance_id, which is 1 for a local
-user. Clicking "block instance" on a local post blocks your own instance.
+user. Clicking "block instance" on a local post used to block your own
+instance.
 """
 from types import SimpleNamespace
 
@@ -108,15 +116,18 @@ def test_block_remote_instance_api_refuses_the_local_instance(app, db_session):
     assert db.session.query(InstanceBlock).count() == 0
 
 
-def test_block_remote_instance_web_blocks_the_local_instance_anyway(app, db_session):
-    """PINS A DEFECT. :18-19 flashes the refusal and does NOT return, so :23
-    creates the block the message just said was impossible.
+def test_block_remote_instance_web_refuses_the_local_instance(app, db_session):
+    """:18-20. The web arm flashes the refusal and now returns before :23.
 
-    BOTH halves are asserted, and the second is the defect: the flash is what
-    makes this look correct to a reader, and the row is what proves it is
-    not. Asserting only the flash would pass against the fixed code too.
-
-    THIS ASSERTION IS INVERTED by the task that adds the return.
+    BOTH halves are asserted. The flash proves the function actually reached
+    :19 rather than failing earlier for some unrelated reason -- it is not
+    redundant with the row check. The row count is the outcome the guard
+    exists to guarantee: `count() == 0` alone would be false-witness
+    mechanism (c), emptiness with no positive control, so its control is the
+    sibling tests in this file that DO create a row on the same code path
+    (test_block_remote_instance_web_creates_the_block_and_returns_none and
+    the API-arm tests) -- proving that row insertion works in this harness
+    and that the zero here is the guard, not a broken fixture.
     """
     s = _seed_blocker()
 
@@ -126,7 +137,7 @@ def test_block_remote_instance_web_blocks_the_local_instance_anyway(app, db_sess
 
     assert flashed == ['You cannot block the local instance.']
     assert db.session.query(InstanceBlock).filter_by(
-        user_id=s.blocker.id, instance_id=1).count() == 1
+        user_id=s.blocker.id, instance_id=1).count() == 0
 
 
 def test_unblock_remote_instance_api_removes_the_block(app, db_session):
