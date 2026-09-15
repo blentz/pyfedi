@@ -57,7 +57,7 @@ def join_community(community_id: int, src, auth=None, user_id=None):
 def leave_community(community_id: int, src, auth=None, bulk_leave=False):
     user_id = authorise_api_user(auth) if src == SRC_API else current_user.id
     cm = db.session.query(CommunityMember).filter_by(user_id=user_id, community_id=community_id).one()
-    if not cm.is_owner or not cm.is_moderator:
+    if not cm.is_owner and not cm.is_moderator:
         task_selector('leave_community', user_id=user_id, community_id=community_id)
 
         db.session.query(CommunityMember).filter_by(user_id=user_id, community_id=community_id).delete()
