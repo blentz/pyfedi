@@ -623,6 +623,14 @@ def remove_mod_from_community(community_id: int, person_id: int, src, auth=None)
         existing_member.is_moderator = False
         existing_member.is_owner = False
         db.session.commit()
+    else:
+        msg = 'That user is not a moderator of this community.'
+        if src == SRC_API:
+            raise Exception(msg)
+        else:
+            flash(_(msg), 'warning')
+            return
+
     if src == SRC_WEB:
         flash(_('Moderator removed'))
 
