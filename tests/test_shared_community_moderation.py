@@ -63,7 +63,7 @@ today's actual, divergent behaviour rather than papering over it; this
 round's production budget was spent on remove_mod_from_community's two
 defects instead, so this divergence stands as found.
 
-REMOVE_MOD_FROM_COMMUNITY'S TWO DEFECTS, BOTH NOW HISTORY: `:622`'s
+REMOVE_MOD_FROM_COMMUNITY'S TWO DEFECTS, BOTH NOW HISTORY: `:625`'s
 `if existing_member:` used to have no `else`, so removing a moderator who
 held no CommunityMember row at all still flashed 'Moderator removed', still
 wrote a `remove_mod` ModLog entry naming them, and still fired the task --
@@ -71,10 +71,10 @@ the moderation log recorded a removal that never happened. Task 5 added the
 `else` (refusing through this module's established `SRC_API` raise /
 web-flash-and-return fork) and inverted the test that had pinned it; see
 that test below for the fixed behaviour. The second defect -- `:624` (now
-`:632`) stripping a community's last owner with no guard, unlike the route's
+`:635`) stripping a community's last owner with no guard, unlike the route's
 check at `app/community/routes.py:1477-1478` -- is fixed by Task 6, which
 adds `if existing_member.is_owner and community.num_owners() == 1:` at the
-top of `:622`'s branch, using the same wording and `'error'` category as the
+top of `:625`'s branch, using the same wording and `'error'` category as the
 route. The tests that had pinned the defect are inverted below; see them for
 the fixed behaviour.
 """
@@ -858,13 +858,13 @@ def test_remove_mod_from_community_api_owner_alone_removes_and_returns_user_id(
         app, db_session, monkeypatch):
     """`:610-611`'s SRC_API arm, `:617`'s guard passing through its FIRST
     operand alone (owner, not admin -- `_seed()` burns user id 1, so `s.user`
-    is never the id-1 admin trap), and `:652-653`'s true arm returning the
+    is never the id-1 admin trap), and `:663-664`'s true arm returning the
     caller's id.
 
     The target is seeded as BOTH `is_moderator=True` and (set directly after
     the factory call, which always writes `is_owner=False`) `is_owner=True`
-    -- a co-owner-and-moderator row -- so `:622`'s true branch clearing both
-    flags at `:623-624` is asserted as a real True-to-False transition on
+    -- a co-owner-and-moderator row -- so `:625`'s true branch clearing both
+    flags at `:634-635` is asserted as a real True-to-False transition on
     each column, not just on the one the factory happened to default True.
     """
     s = _seed()
@@ -896,18 +896,18 @@ def test_remove_mod_from_community_web_owner_alone_removes_when_two_owners_remai
         app, db_session, monkeypatch):
     """The SRC_WEB sibling of `:857` above, seeded identically (actor owner,
     target a co-owner-and-moderator, `community.num_owners() == 2`), added
-    specifically to give `:623`'s `community.num_owners() == 1` operand a
+    specifically to give `:626`'s `community.num_owners() == 1` operand a
     NON-CRASHING kill.
 
     Mutation testing found that `:857` alone -- SRC_API -- kills the mutant
-    that deletes ` and community.num_owners() == 1` from `:623` (leaving
+    that deletes ` and community.num_owners() == 1` from `:626` (leaving
     `if existing_member.is_owner:`, refusing ANY owner removal) only by
-    letting `:627`'s `raise Exception(msg)` escape uncaught. This campaign
+    letting `:630`'s `raise Exception(msg)` escape uncaught. This campaign
     does not count a crash as a kill unless a viable non-crashing variant
     also dies, and no other test removed an owner from a community with a
     second owner remaining through SRC_WEB -- so before this test, that
     operand's killability rested entirely on an exception path. Under the
-    mutant here, SRC_WEB's `else` arm at `:628-630` flashes the last-owner
+    mutant here, SRC_WEB's `else` arm at `:631-633` flashes the last-owner
     refusal message and returns -- no exception -- so the assertions below
     fail as a plain `AssertionError`, not a crash.
     """
@@ -944,8 +944,8 @@ def test_remove_mod_from_community_admin_who_is_not_owner_may_remove_and_flashes
     """`:612-613`'s else arm (`current_user`), `:617`'s guard passing through
     its SECOND operand alone (staff, not owner -- `s.user` holds no
     CommunityMember row at all, so `community.is_owner` is False on its own,
-    and is instead a site admin via `_make_site_admin`), `:634-635`'s web
-    flash, and `:652`'s false arm: a non-API src falls off the end and
+    and is instead a site admin via `_make_site_admin`), `:645-646`'s web
+    flash, and `:663`'s false arm: a non-API src falls off the end and
     returns `None` rather than the actor's id.
     """
     from flask import get_flashed_messages
@@ -975,7 +975,7 @@ def test_remove_mod_from_community_admin_who_is_not_owner_may_remove_and_flashes
 def test_remove_mod_from_community_neither_owner_nor_admin_is_refused(app, db_session):
     """`:617` with BOTH operands false -- a plain, non-owner CommunityMember
     row for the actor and no admin role -- raises `'incorrect_login'` at
-    `:618`, before `:620-625`'s membership work or `:637`'s modlog write ever
+    `:618`, before `:620-636`'s membership work or `:648`'s modlog write ever
     run. The target's existing moderator row and the modlog table must both
     survive untouched.
     """
@@ -994,11 +994,11 @@ def test_remove_mod_from_community_neither_owner_nor_admin_is_refused(app, db_se
 
 def test_remove_mod_from_community_non_member_web_is_refused_and_writes_no_modlog_entry(
         app, db_session, monkeypatch):
-    """`:622`'s `if existing_member:` now has an `else` (Task 5): a target
-    who holds no CommunityMember row at all is refused at `:626-632` before
-    `:634-635`'s flash, `:637-638`'s modlog write, or `:650`'s task can run.
+    """`:625`'s `if existing_member:` now has an `else` (Task 5): a target
+    who holds no CommunityMember row at all is refused at `:637-643` before
+    `:645-646`'s flash, `:648-649`'s modlog write, or `:661`'s task can run.
 
-    FORMERLY A PIN. Until Task 5, `:622` had no `else`, so this same
+    FORMERLY A PIN. Until Task 5, `:625` had no `else`, so this same
     non-member removal still flashed 'Moderator removed', still wrote a
     `remove_mod` ModLog entry naming the stranger, and still fired the task
     -- the moderation log recorded a removal that never happened. The ModLog
@@ -1042,7 +1042,7 @@ def test_remove_mod_from_community_non_member_web_is_refused_and_writes_no_modlo
 def test_remove_mod_from_community_non_member_api_raises_and_writes_no_modlog_entry(
         app, db_session, monkeypatch):
     """Same non-member refusal as the web test above, but through `:610-611`'s
-    SRC_API arm: `:628-629`'s `raise Exception(msg)` fires instead of the web
+    SRC_API arm: `:639-640`'s `raise Exception(msg)` fires instead of the web
     flash, still before any ModLog write or task dispatch.
     """
     s = _seed()
@@ -1167,12 +1167,12 @@ def test_remove_mod_from_community_bystander_community_member_is_refused(
 def test_remove_mod_from_community_refuses_to_strip_the_last_owner(
         app, db_session, monkeypatch):
     """Task 6's guard: `existing_member.is_owner and community.num_owners()
-    == 1` refuses at the top of `:622`'s branch, before `:631-632` ever
+    == 1` refuses at the top of `:625`'s branch, before `:634-635` ever
     clears the flags, matching the route's own check at
     `app/community/routes.py:1477-1478` -- the wording and `'error'` category
     are copied from there deliberately, so the two paths say the same thing.
 
-    FORMERLY A PIN. Until Task 6, `:624` (now `:632`) set
+    FORMERLY A PIN. Until Task 6, `:624` (now `:635`) set
     `existing_member.is_owner = False` with no guard at all, so this same
     self-removal by a community's sole owner silently succeeded and left the
     community with zero owners -- an invariant the route-based path has
@@ -1219,7 +1219,7 @@ def test_remove_mod_from_community_refuses_to_strip_the_last_owner(
 
 def test_remove_mod_from_community_api_refuses_to_strip_the_last_owner(
         app, db_session, monkeypatch):
-    """Same guard as above, through `:610-611`'s SRC_API arm: `:627`'s
+    """Same guard as above, through `:610-611`'s SRC_API arm: `:630`'s
     `raise Exception(msg)` fires instead of the web flash, before any flag
     is cleared, ModLog write happens, or task fires. `community.num_owners()`
     staying at 1 is the load-bearing assertion, matching the web test above.
