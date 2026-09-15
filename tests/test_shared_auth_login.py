@@ -183,12 +183,15 @@ def test_log_user_in_refuses_an_unknown_source(app, db_session):
 
 
 def test_log_user_in_api_bans_the_ip_of_a_banned_user_and_refuses(app, db_session, monkeypatch):
-    """ROW ONE of the four ban states, and the ONLY one refused today.
+    """ROW ONE of the four ban states, and the only one that WAS refused
+    before the dedent. As delivered, all four are refused: the three tests
+    below this one cover rows two, three and four, and each of them now
+    asserts a refusal.
 
     banned=True, ip_banned=False: :57 enters, :59 is true, :61-63 writes an
     IpBan for the current address, and :75 raises.
 
-    THIS TEST IS NOT INVERTED by the dedent -- it is the control that proves
+    THIS TEST WAS NOT INVERTED by the dedent -- it is the control that proves
     the dedent did not simply disable the branch. Assert both halves: the
     refusal AND the IpBan row, because a dedent that broke :59-64 would still
     raise.
@@ -220,8 +223,11 @@ def test_log_user_in_api_refuses_a_banned_user_whose_ip_is_already_banned(app, d
     too.
 
     THIS ASSERTION WAS INVERTED by the task that dedented :66-75. The IpBan
-    count assertion proves :59's body was correctly skipped (still 1, not 2)
-    while the dedented refusal still fired.
+    count assertion PINS, rather than observes, that :59's body was skipped
+    (still 1, not 2) while the dedented refusal fired: with user_ip_banned
+    patched True, :59's `and not user_ip_banned()` is False under the
+    unmutated code, so the count cannot vary and the assertion can only fail
+    against a mutant that re-reaches :61-63.
     """
     s = _seed_login_user()
     s.user.banned = True
@@ -395,8 +401,10 @@ def test_log_user_in_web_looks_up_by_exact_user_name(app, db_session, monkeypatc
     """:21-24. The web arm's own lookup, `filter_by(user_name=username,
     ap_id=None)` -- distinct from :26-33's API arm, which lower-cases the
     comparison in SQL and falls back to an email match. Asserts the returned
-    response is a redirect, not the API arm's JWT dict, since that is the
-    thing that distinguishes SRC_WEB's branch from SRC_API's at this point.
+    response is a redirect, which is the thing that distinguishes SRC_WEB's
+    branch from SRC_API's at this point: the `.status_code` dereference below
+    already excludes the API arm's JWT dict, which has no such attribute and
+    would raise AttributeError rather than compare unequal.
 
     DRIVES A SOURCE VALUE PRODUCTION NEVER PASSES to this function.
     app/auth/util.py:474 is a different log_user_in and serves the real web
@@ -411,7 +419,6 @@ def test_log_user_in_web_looks_up_by_exact_user_name(app, db_session, monkeypatc
             response = log_user_in(Form('loginuser', s.password), SRC_WEB)
 
     assert response.status_code == 302
-    assert not isinstance(response, dict)
 
 
 def test_log_user_in_web_refuses_an_unknown_user_name(app, db_session, monkeypatch):
@@ -557,15 +564,17 @@ def test_log_user_in_web_refuses_a_wrong_password_without_a_reset_link(app, db_s
 
 
 def test_log_user_in_web_refuses_a_banned_user_row_one(app, db_session, monkeypatch):
-    """:66-73. The web arm of the ban refusal, ROW ONE only (banned=True,
-    ip_banned=False) -- the one row of the four :57 admits that IS refused
-    today. Assert the flash AND the `sesion` cookie set at :72, since that
-    cookie is the mechanism `user_cookie_banned` later reads.
+    """:66-73. The web arm of the ban refusal, ROW ONE (banned=True,
+    ip_banned=False) -- the one row of the four :57 admits that was already
+    refused BEFORE the dedent. Assert the flash AND the `sesion` cookie set
+    at :72, since that cookie is the mechanism `user_cookie_banned` later
+    reads.
 
-    MARKED A CONTROL, NOT A PIN: row one is the state a later task's dedent
-    of :66-75 does not change -- unlike this file's three PINNED-DEFECT
-    tests near the top (rows two through four), which invert. This test must
-    keep passing unchanged after that dedent.
+    A CONTROL, NOT A PIN: row one is the state the dedent of :66-75 did not
+    change -- unlike this file's three REFUSES-A-DEFECT tests near the top
+    (rows two through four), which were inverted when it landed. This test
+    kept passing unchanged across the dedent, and that is what makes it
+    evidence the dedent moved the refusal rather than disabling the branch.
 
     DRIVES A SOURCE VALUE PRODUCTION NEVER PASSES to this function.
     app/auth/util.py:474 is a different log_user_in and serves the real web
