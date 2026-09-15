@@ -98,8 +98,13 @@ matters more than what it proposed.
 This spec claimed `notes.py:100-101` and `pages.py:107-108` were an oversight that a
 monkeypatch would close. They are not an oversight. **Sub-projects 19 and 20 reached
 them, analysed them, and ruled them unreachable deliberately**, filing them under this
-campaign's own taxonomy as `tests/README.md` fact 75, **cause 4(c)** — a handler for an
-exception the callee cannot raise on this path. The argument is written out at
+campaign's own taxonomy as **`tests/README.md` fact 75, cause 8, "Unreachable handler"** — a
+`try`/`except` whose body can never run because the callee inside the `try` has no raising
+path. **(This spec first cited that shape as "cause 4(c)". There is no cause 4(c): fact 75's
+cause 4 has only (a) and (b). The wrong label was inherited verbatim from
+`tests/test_shared_tasks_send_reply.py:1584`, a committed artifact of sub-project 20, which
+mis-cited the very cause sub-project 19 had just added. Corrected while writing the plan's
+Task 5; the reasoning the label names is unaffected.)** The argument is written out at
 `tests/test_shared_tasks_send_reply.py:1565-1588`:
 
 > `search_for_user` cannot raise for a bare local name. `:95` has already established
@@ -120,7 +125,7 @@ prior rulings on this spec's say-so rather than on evidence they were wrong.
 **The distinction, stated so the next round does not have to re-derive it:** "no
 production caller reaches it" is not a reason to stop measuring, and that was D564's
 mistake. "No possible input reaches it, because the callee cannot produce the condition"
-is a different claim, and it is the one cause 4(c) names. Ask which of the two you have.
+is a different claim, and it is the one **cause 8** names. Ask which of the two you have.
 
 **Consequence for this round.** `app/shared/tasks/notes.py` and `app/shared/tasks/pages.py`
 stay at floor 99. Part 2 closes **three** modules, not five: `domain.py`, `auth.py` and
@@ -128,7 +133,7 @@ stay at floor 99. Part 2 closes **three** modules, not five: `domain.py`, `auth.
 116 statements is superseded by this paragraph. The floors total is unchanged at 25,
 because the three new entries were always the three this round adds.
 
-**Left open for a later round, and worth settling once:** whether cause 4(c) is a
+**Left open for a later round, and worth settling once:** whether cause 8 is a
 do-not-cover category or a cover-with-a-double category. The campaign has met this shape at
 least twice (`send_post`'s `:107-108`, `send_reply`'s `:100-101`) and re-litigates it each
 time. That question is bigger than one round.
