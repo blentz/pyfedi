@@ -41,9 +41,10 @@ from flask import session as flask_session
 
 from app import db
 from app.constants import SRC_API, SRC_WEB
-from app.models import InstanceRole, IpBan, ModLog, User
+from app.models import InstanceRole, IpBan, ModLog, Post, PostReply, User
 from app.shared.user import ban_user, unban_user
-from tests.factories import (bearer, grant_permission, make_instance,
+from tests.factories import (bearer, grant_permission, make_community,
+                             make_instance, make_post, make_post_reply,
                              make_user, web_ctx)
 
 
@@ -298,8 +299,7 @@ def test_ban_user_skips_the_ip_ban_when_the_target_has_no_address(app, db_sessio
     assert db.session.query(IpBan).count() == 0
 
 
-def test_ban_user_ip_bans_everyone_when_the_flag_is_false_is_not_the_case(
-        app, db_session):
+def test_ban_user_skips_the_ip_ban_when_the_flag_is_false(app, db_session):
     """The FIRST operand of :201's `if ban_ip_address and to_ban.ip_address:`.
 
     test_ban_user_creates_an_ip_ban covers `(True, present)` and
@@ -321,10 +321,22 @@ def test_ban_user_ip_bans_everyone_when_the_flag_is_false_is_not_the_case(
     is not enough alone, the other proves `to_ban.ip_address` is not enough
     alone. Removing either test from the suite silently reopens the operand
     the other one was pinning.
+
+    The final assertion is emptiness, which by itself is mechanism (c) of
+    the five false witnesses -- emptiness with no same-mechanism positive
+    control. test_ban_user_creates_an_ip_ban is that control: it drives the
+    identical `ip_address='203.0.113.7'` value through `ban_ip_address=True`
+    and gets a row, proving this harness does create IpBan rows under these
+    conditions when the flag allows it. The precondition assertion below is
+    the other half -- it proves the address actually took, the way its
+    sibling test_ban_user_skips_the_ip_ban_when_the_target_has_no_address
+    asserts its own precondition at :290 -- so the final count of zero is
+    evidence the flag gated the ban, not evidence the address was never set.
     """
     s = _seed_ban_scenario()
     s.target.ip_address = '203.0.113.7'
     db.session.commit()
+    assert s.target.ip_address == '203.0.113.7'
 
     with app.test_request_context('/'):
         with _recording_task_selector():
@@ -781,63 +793,78 @@ def test_ban_user_without_purge_warns_about_an_instance_admin_too(
         f'{s.target.display_name()} has been banned.']
 
 
-def test_ban_user_purging_a_remote_target_calls_delete_dependencies_and_purge_content(
-        app, db_session, monkeypatch, redis_lock_only_double):
+def test_ban_user_purging_a_remote_target_deletes_the_targets_posts_and_replies(
+        app, db_session, no_real_purge, redis_lock_only_double):
     """:175-176's two calls on the remote purge path -- `to_ban.
     delete_dependencies()` and `to_ban.purge_content(flush=flush_cdn)`.
 
-    RECORDING, NOT BEHAVIOURAL, AND HERE IS WHY. `User.purge_content`
-    (app/models.py:1561-1591) calls `self.delete_dependencies()` itself, at
-    :1566, before it touches posts, replies or user_file rows.
-    `delete_dependencies` (app/models.py:1490-1559) is idempotent: every
-    statement in it is a DELETE/UPDATE filtered to `self.id`, so a second
-    call after the first finds nothing left to remove and is a no-op. That
-    means deleting the explicit call at :175 (mutant M53) changes NOTHING
-    observable in the test database: purge_content's OWN internal call at
-    :1566 still runs exactly once by the time purge_content returns, and
-    every row delete_dependencies would have made is made either way, in
-    either order, before purge_content's post/reply/file loops read that
-    state at :1568 and :1586. There is no column and no row in this schema
-    that differs between "delete_dependencies runs once, explicitly, then
-    purge_content runs and no-ops its own internal call" and
-    "delete_dependencies is skipped explicitly and purge_content's internal
-    call is the only one" -- both leave the database in the identical final
-    state. No assertion against a real row or column can therefore
-    distinguish M53's survivor from the real code, which is exactly the
-    "neither leaves an observable trace" case the brief anticipates. M54
-    (deleting the `purge_content` call itself) is not similarly masked --
-    nothing else in ban_user's remote branch touches posts, replies or
-    Post-joined files -- but it is bundled into the same monkeypatch here
-    for one assertion covering both lines, rather than as a second
-    behavioural test, so that the docstring's reasoning about M53 is not
-    read as applying to a line it does not apply to.
+    THIS KILLS M54 BEHAVIOURALLY, WITH THE REAL METHOD RUNNING.
+    `to_ban.purge_content(flush=flush_cdn)` at :176 is not mocked here.
+    `User.purge_content` (app/models.py:1561-1591) sets `post.deleted = True`
+    for every Post the target authored (:1568-1572) and `reply.deleted =
+    True` for every PostReply they authored (:1577-1581), each after that
+    object's own `delete_dependencies()` clears its non-cascading rows. A
+    Post and a PostReply are seeded for the target below, and both flags
+    are asserted True afterward: deleting the call at :176 (M54) would
+    leave both False, since nothing else in ban_user's remote branch
+    touches either table. That makes this a real kill on behaviour, not a
+    call-recording proxy for one.
 
-    Both methods are patched on the CLASS (`User`), matching the pattern at
-    tests/test_actor_profiles.py:1421 (`type(user)`), because monkeypatch.
-    setattr on an already-bound instance method needs the replacement to
-    take `self` explicitly to match how Python would have bound the
-    original -- patching the class and taking `self` as the first parameter
-    keeps that binding correct for whichever User instance `to_ban` turns
-    out to be.
+    `is_local() is False` is asserted on the target so a reader can confirm
+    :174's else-branch -- not :168's local/purge_user_then_delete branch --
+    is the one under test. `no_real_purge` is requested and asserted empty
+    for the same reason test_ban_user_purging_a_remote_target_takes_the_
+    local_deletion_path does: an empty recorder is the proof :170 was never
+    reached, not an artefact of the fixture being unused.
 
-    `flush=False` is asserted, not just presence of the kwarg: `purge_content`
-    defaults `flush` to True (app/models.py:1561), so a mutant that dropped
-    the `flush=flush_cdn` argument while keeping the call itself would still
-    satisfy a "was it called" assertion but would silently pass True instead
-    of the API path's hardcoded False (:148) -- the exact value pins that the
-    argument, not merely the call, survived.
+    M53 (`to_ban.delete_dependencies()` at :175) IS NOT TESTED HERE, AND
+    DELIBERATELY SO -- it is registered as EQUIVALENT under tests/README.md
+    fact 75 CAUSE 6, "Redundant statement -- the mutated statement's only
+    observable effect is performed unconditionally by code that runs after
+    it on every path", not killed. The proof, in full:
+
+    `User.purge_content` calls `self.delete_dependencies()` itself, at
+    app/models.py:1566, before it reads any post/reply/file state that
+    :175 could have changed first. `delete_dependencies`
+    (app/models.py:1490-1559) is idempotent -- every statement in it is a
+    DELETE/UPDATE filtered to `self.id` (or to file ids read off `self`),
+    so a second call after the first finds nothing left to remove. Deleting
+    the explicit call at :175 therefore leaves purge_content's OWN internal
+    call at :1566 to do the identical work, exactly once, regardless -- the
+    database ends up in the same state either way.
+
+    The one place this needed a second look: `delete_dependencies` calls
+    `file.delete_from_disk(purge_cdn=False)` at :1506, while purge_content's
+    own file loops call the same method with `purge_cdn=flush` at :1564 and
+    :1588 -- a different argument, on file sets whose relative deletion
+    order :175 changes. That would matter if a single File row could
+    appear in both sets, since :429 and :442's local-path branches guard
+    the actual `os.unlink` with `os.path.isfile`, making the deleting
+    caller order-sensitive there (first caller wins; the second call is a
+    no-op). It cannot: :1503-1507's `user_file`-joined files are the ones
+    created at app/shared/upload.py:112-118, always against a File the
+    function mints for itself, while the Post-joined files purge_content's
+    own loop touches at :1562-1564 are separately constructed at
+    app/shared/post.py:614-620 and assigned straight to `post.image_id` --
+    the two File sets are disjoint by construction and never merge. And
+    even where that `os.path.isfile` guard would not apply -- the
+    `source_url` branch at app/models.py:449-459 has no such guard, only a
+    try/except around `os.unlink` -- a second call against the same row is
+    still order-independent, because `purge_cdn` there only gates
+    `flush_cdn_cache` (app/models.py:468-469), an external CDN call, never
+    a row or column this test database can observe.
+
+    No column and no row in this schema distinguishes "delete_dependencies
+    runs explicitly at :175, then purge_content's internal call at :1566
+    no-ops" from "delete_dependencies is skipped at :175 and purge_content's
+    internal call is the only one" -- so per fact 75 cause 6, M53 is not
+    fixable, and no test should be written to fake a kill of it.
     """
     s = _seed_ban_scenario(target_local=False)
-    calls = []
-
-    def record_delete_dependencies(self):
-        calls.append(('delete_dependencies', self.id))
-
-    def record_purge_content(self, flush=True):
-        calls.append(('purge_content', self.id, flush))
-
-    monkeypatch.setattr(User, 'delete_dependencies', record_delete_dependencies)
-    monkeypatch.setattr(User, 'purge_content', record_purge_content)
+    assert s.target.is_local() is False
+    community = make_community()
+    post = make_post(community, s.target, ap_id='https://remote.example/post/1')
+    reply = make_post_reply(post, s.target)
 
     with app.test_request_context('/'):
         with _recording_task_selector():
@@ -845,5 +872,7 @@ def test_ban_user_purging_a_remote_target_calls_delete_dependencies_and_purge_co
                       'ban_ip_address': False, 'reason': 'spam'},
                      SRC_API, bearer(s.admin))
 
-    assert calls == [('delete_dependencies', s.target.id),
-                      ('purge_content', s.target.id, False)]
+    db.session.expire_all()
+    assert no_real_purge == []
+    assert db.session.query(Post).get(post.id).deleted is True
+    assert db.session.query(PostReply).get(reply.id).deleted is True
