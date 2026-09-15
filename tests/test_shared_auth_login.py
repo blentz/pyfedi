@@ -13,11 +13,14 @@ and precedented (tests/test_redirect_targets.py:234-265 already does it,
 and tests/test_shared_post_interactions.py:577 is the campaign's canonical
 case), but it must never be left implicit.
 
-THREE TESTS HERE PIN A DEFECT. :57 admits four ban states and only one is
-refused, because the refusal at :73/:75 is nested inside :59's new-IP
-detection rather than hanging off :57. The three that fall through assert
-that a banned or IP-banned user LOGS IN. They are inverted by the task that
-dedents :66-75. Each says PINS A DEFECT in its docstring.
+THREE TESTS HERE PINNED A DEFECT. :57 used to admit four ban states while
+only one was refused, because the refusal at :73/:75 was nested inside :59's
+new-IP detection rather than hanging off :57. :66-75 were dedented one level
+in this round, out of :59's block and into :57's, so the refusal now applies
+to every state the outer guard admits; :59-64 kept its own body, since
+banning the new IP is correct and stays there. The three tests below are the
+inverted pins: they now assert that a banned, IP-banned, or cookie-banned
+user is REFUSED, and each says REFUSES A DEFECT in its docstring.
 """
 import contextlib
 from types import SimpleNamespace
@@ -203,39 +206,46 @@ def test_log_user_in_api_bans_the_ip_of_a_banned_user_and_refuses(app, db_sessio
     assert db.session.query(IpBan).filter_by(ip_address='203.0.113.7').count() == 1
 
 
-def test_log_user_in_api_admits_a_banned_user_whose_ip_is_already_banned(app, db_session, monkeypatch):
-    """PINS A DEFECT -- and this is the serious one.
+def test_log_user_in_api_refuses_a_banned_user_whose_ip_is_already_banned(app, db_session, monkeypatch):
+    """REFUSES A DEFECT -- and this was the serious one.
 
-    ROW TWO: banned=True, ip_banned=True. :57 enters, but :59 is
-    `True and not True` = False, so the refusal at :75 -- nested inside :59 --
-    never runs, and control falls through to :83 and :111-113. A JWT is
-    returned to a banned user.
+    ROW TWO: banned=True, ip_banned=True. :57 enters; :59 is
+    `True and not True` = False, so :59's body (banning a new IP) is
+    correctly skipped, but the refusal now hangs directly off :57 instead of
+    being nested inside :59, so it still fires.
 
     This state is not hypothetical: it is what ROW ONE produces. The banned
     user's first attempt bans their IP and is refused; every attempt after
-    that, from the same address, is this test.
+    that, from the same address, is this test -- and it must now be refused
+    too.
 
-    THIS ASSERTION IS INVERTED by the task that dedents :66-75.
+    THIS ASSERTION WAS INVERTED by the task that dedented :66-75. The IpBan
+    count assertion proves :59's body was correctly skipped (still 1, not 2)
+    while the dedented refusal still fired.
     """
     s = _seed_login_user()
     s.user.banned = True
+    db.session.add(IpBan(ip_address='203.0.113.7', notes='pre-existing ban from row one'))
     db.session.commit()
+    assert db.session.query(IpBan).filter_by(ip_address='203.0.113.7').count() == 1
 
     with app.test_request_context('/'):
         with _ban_state(monkeypatch, ip_banned=True):
-            result = log_user_in({'username': 'loginuser',
-                                  'password': s.password}, SRC_API)
+            with pytest.raises(Exception, match='incorrect_login'):
+                log_user_in({'username': 'loginuser',
+                             'password': s.password}, SRC_API)
 
-    assert result['jwt']
+    assert db.session.query(IpBan).filter_by(ip_address='203.0.113.7').count() == 1
 
 
-def test_log_user_in_api_admits_an_ip_banned_user_who_is_not_banned(app, db_session, monkeypatch):
-    """PINS A DEFECT. ROW THREE: banned=False, ip_banned=True.
+def test_log_user_in_api_refuses_an_ip_banned_user_who_is_not_banned(app, db_session, monkeypatch):
+    """REFUSES A DEFECT. ROW THREE: banned=False, ip_banned=True.
 
-    :57 enters on the second disjunct, :59's first conjunct is false, and the
-    refusal never runs.
+    :57 enters on the second disjunct, :59's first conjunct is false, so
+    :59's body never runs, but the refusal now hangs directly off :57 and
+    fires anyway.
 
-    THIS ASSERTION IS INVERTED by the task that dedents :66-75.
+    THIS ASSERTION WAS INVERTED by the task that dedented :66-75.
 
     Self-verifying: real user_ip_banned() consults banned_ip_addresses(),
     which queries the IpBan table and finds no rows here, so it returns False
@@ -243,9 +253,11 @@ def test_log_user_in_api_admits_an_ip_banned_user_who_is_not_banned(app, db_sess
     a cookie-less request. If _ban_state's patch were ever retargeted at
     app.utils.user_ip_banned (which would not intercept, per app/shared/
     auth.py:14's `from ... import`), :57 would never be entered and the
-    function would still fall through to a successful login -- indistinguish-
-    able from today's correct-but-defective behaviour by this test's final
-    assertion alone. The explicit check below fails loudly instead.
+    function would fall through to a successful login instead of raising --
+    indistinguishable from a false pass by the pytest.raises alone. The
+    explicit check below fails loudly instead, and the IpBan-count assertion
+    after the call proves the refusal came from the dedented block rather
+    than from :59-64 (which would have inserted a row).
     """
     s = _seed_login_user()
     assert s.user.banned is False
@@ -254,29 +266,32 @@ def test_log_user_in_api_admits_an_ip_banned_user_who_is_not_banned(app, db_sess
         with _ban_state(monkeypatch, ip_banned=True):
             assert auth_module.user_ip_banned() is True, \
                 '_ban_state did not intercept; the patch target is wrong'
-            result = log_user_in({'username': 'loginuser',
-                                  'password': s.password}, SRC_API)
+            with pytest.raises(Exception, match='incorrect_login'):
+                log_user_in({'username': 'loginuser',
+                             'password': s.password}, SRC_API)
 
-    assert result['jwt']
+    assert db.session.query(IpBan).count() == 0
 
 
-def test_log_user_in_api_admits_a_cookie_banned_user(app, db_session, monkeypatch):
-    """PINS A DEFECT. ROW FOUR: banned=False, cookie_banned=True.
+def test_log_user_in_api_refuses_a_cookie_banned_user(app, db_session, monkeypatch):
+    """REFUSES A DEFECT. ROW FOUR: banned=False, cookie_banned=True.
 
-    :57 enters on the third disjunct and :59 is false.
+    :57 enters on the third disjunct and :59 is false, so :59's body never
+    runs, but the refusal now hangs directly off :57 and fires anyway.
 
-    THIS ASSERTION IS INVERTED by the task that dedents :66-75.
+    THIS ASSERTION WAS INVERTED by the task that dedented :66-75.
 
     Self-verifying: real user_cookie_banned() reads request.cookies.get
     ('sesion'), which is absent under app.test_request_context('/'), so it
     returns False on its own. If _ban_state's patch were ever retargeted at
     app.utils.user_cookie_banned (which would not intercept, per app/shared/
     auth.py:14's `from ... import`), all three real predicates would be
-    falsy, :57 would never be entered, and the function would still fall
-    through to a successful login -- indistinguishable from today's correct-
-    but-defective behaviour by this test's final assertion alone. The
-    explicit check below fails loudly instead of passing for the wrong
-    reason.
+    falsy, :57 would never be entered, and the function would fall through
+    to a successful login instead of raising -- indistinguishable from a
+    false pass by the pytest.raises alone. The explicit check below fails
+    loudly instead of passing for the wrong reason, and the IpBan-count
+    assertion after the call proves the refusal came from the dedented block
+    rather than from :59-64 (which would have inserted a row).
     """
     s = _seed_login_user()
 
@@ -284,10 +299,11 @@ def test_log_user_in_api_admits_a_cookie_banned_user(app, db_session, monkeypatc
         with _ban_state(monkeypatch, cookie_banned=True):
             assert auth_module.user_cookie_banned() is True, \
                 '_ban_state did not intercept; the patch target is wrong'
-            result = log_user_in({'username': 'loginuser',
-                                  'password': s.password}, SRC_API)
+            with pytest.raises(Exception, match='incorrect_login'):
+                log_user_in({'username': 'loginuser',
+                             'password': s.password}, SRC_API)
 
-    assert result['jwt']
+    assert db.session.query(IpBan).count() == 0
 
 
 def test_log_user_in_exempts_the_id_1_account_from_every_ban_check(app, db_session, monkeypatch):
