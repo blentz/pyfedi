@@ -13106,9 +13106,19 @@ run. A false count in the register outranks a missing one, so this line is
 left for the controller's re-measurement on the delivered tree rather than
 carrying the stale number forward:
 
-> **`____ passed, 3 skipped, 6 subtests, PYTEST_EXIT=0` (wall clock `____s`),
-> floors chained `&&`: all 26 floors met, `FLOORS_EXIT=0`. -- TO BE FILLED
-> IN BY THE CONTROLLER, NOT BY TASK 9.**
+> **`5061 passed, 3 skipped, 6 subtests, PYTEST_EXIT=0` (wall clock 351.18s),
+> all 26 floors met, `FLOORS_EXIT=0`**, measured on the delivered tree
+> (`74820196`) against its own `--cov=app` JSON with both arguments.
+
+The count closes twice over, which is why it was worth re-measuring rather than
+carrying the earlier figure: **5061 = 5060 + 1**, the single test that commit
+`74820196` added after the previous run; and **5061 - 5031 = 30**, which is
+exactly `/usr/bin/grep -cE "^ *def test_" tests/test_shared_community_moderation.py`
+against the commit object. Two independent derivations, same answer.
+
+The stale figure would have been 5060. It was measured at `1eda0352`, one commit
+before the thirtieth test landed — close enough to look right and wrong anyway,
+which is the shape of error this register exists to keep out.
 
 **Exactly two production changes shipped**, both in `remove_mod_from_community`
 (D611, D612); every other finding in this section is registered rather than
