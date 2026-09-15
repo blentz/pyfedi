@@ -176,16 +176,32 @@ class TestPillowReencodeGate:
     """
 
     def test_a_gif_upload_skips_the_pillow_reencode(self, app):
+        """Under the suite's default (empty) MEDIA_IMAGE_FORMAT, a skipped
+        re-encode and a re-encode that happened to run are indistinguishable
+        -- neither one would change the extension or the sniffed format, so
+        the original assertions here held whether or not :67's '.gif' arm
+        actually fired. MEDIA_IMAGE_FORMAT is set to 'WEBP' below precisely
+        because that value WOULD visibly change the output (extension
+        '.gif' -> '.webp', sniffed format GIF -> WEBP) if the re-encode ran
+        -- the same technique TestImageFormatAndQualityKwargs uses to prove
+        its kwargs are applied. Asserting the file stayed a GIF under that
+        setting is what actually discriminates "skipped" from "ran".
+        """
         before = files_under(MEDIA_ROOT)
         with app.app_context():
+            original_format = app.config['MEDIA_IMAGE_FORMAT']
+            app.config['MEDIA_IMAGE_FORMAT'] = 'WEBP'
             try:
                 url = process_upload(_image(fmt='GIF'))
                 assert url.endswith('.gif')
                 stored = _stored_path(url)
-                # Untouched by Pillow's re-encode: still a valid GIF on disk.
+                # Untouched by Pillow's re-encode: still a valid GIF on
+                # disk, not converted to WEBP as MEDIA_IMAGE_FORMAT='WEBP'
+                # would force if the '.gif' skip at :67 did not fire.
                 with Image.open(stored) as img:
                     assert img.format == 'GIF'
             finally:
+                app.config['MEDIA_IMAGE_FORMAT'] = original_format
                 _cleanup(before)
 
 
@@ -428,12 +444,31 @@ class TestProcessFileDelete:
             assert process_file_delete('https://example.test/nonexistent.png', user.id) is None
 
     def test_a_matching_file_is_deleted_from_db_and_disk(self, app, db_session):
-        """:130 True arm, for contrast: the file row IS found and removed."""
+        """:130 True arm, and a genuine disk deletion.
+
+        `delete_from_disk` (app/models.py:421-434) acts on `File.file_path`,
+        not `source_url`. A File row built with only `source_url` set -- as
+        the original version of this test did, matching how process_upload
+        itself builds the row at :113 -- has `file_path=None`, so :424's
+        `if self.file_path:` never fires and no disk I/O happens at all; the
+        `delete_from_disk` half of this test's name was previously vacuous.
+        `file_path` is set here to a real file this test creates first, so
+        the deletion is real, and the file's absence afterward is asserted
+        directly rather than only the DB rows.
+        """
         instance = make_instance('dodelete.test')
         user = make_user(instance, 'deleteuser', local=True)
         with app.app_context():
-            source_url = f"{app.config['SERVER_URL']}/static/media/posts/xx/yy/doesnotexist.png"
-            file_row = File(source_url=source_url)
+            before = files_under(MEDIA_ROOT)
+            directory = 'app/static/media/posts/xx/yy'
+            os.makedirs(directory, exist_ok=True)
+            disk_path = os.path.join(directory, 'doesexist.png')
+            with open(disk_path, 'wb') as fh:
+                fh.write(b'not really a png, just needs to exist on disk')
+            assert os.path.isfile(disk_path)
+
+            source_url = f"{app.config['SERVER_URL']}/static/media/posts/xx/yy/doesexist.png"
+            file_row = File(source_url=source_url, file_path=disk_path)
             db.session.add(file_row)
             db.session.commit()
             db.session.execute(
@@ -442,12 +477,17 @@ class TestProcessFileDelete:
             db.session.commit()
             file_id = file_row.id
 
-            process_file_delete(source_url, user.id)
+            try:
+                process_file_delete(source_url, user.id)
 
-            assert File.query.get(file_id) is None
-            remaining = db.session.execute(
-                text('SELECT 1 FROM "user_file" WHERE file_id = :fid'), {'fid': file_id}).first()
-            assert remaining is None
+                assert File.query.get(file_id) is None
+                remaining = db.session.execute(
+                    text('SELECT 1 FROM "user_file" WHERE file_id = :fid'), {'fid': file_id}).first()
+                assert remaining is None
+                assert not os.path.isfile(disk_path)
+                assert files_under(MEDIA_ROOT) == before
+            finally:
+                _cleanup(before)
 
 
 class TestUrlCannotBeFalsy:
