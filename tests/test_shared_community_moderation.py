@@ -63,16 +63,20 @@ today's actual, divergent behaviour rather than papering over it; this
 round's production budget was spent on remove_mod_from_community's two
 defects instead, so this divergence stands as found.
 
-REMOVE_MOD_FROM_COMMUNITY'S TWO DEFECTS, ONE NOW HISTORY: `:622`'s
+REMOVE_MOD_FROM_COMMUNITY'S TWO DEFECTS, BOTH NOW HISTORY: `:622`'s
 `if existing_member:` used to have no `else`, so removing a moderator who
 held no CommunityMember row at all still flashed 'Moderator removed', still
 wrote a `remove_mod` ModLog entry naming them, and still fired the task --
 the moderation log recorded a removal that never happened. Task 5 added the
 `else` (refusing through this module's established `SRC_API` raise /
 web-flash-and-return fork) and inverted the test that had pinned it; see
-that test below for the fixed behaviour. The second defect -- `:624`
-stripping a community's last owner with no guard, unlike the route's check
-at `app/community/routes.py:1477` -- is still pinned below; Task 6 fixes it.
+that test below for the fixed behaviour. The second defect -- `:624` (now
+`:632`) stripping a community's last owner with no guard, unlike the route's
+check at `app/community/routes.py:1477-1478` -- is fixed by Task 6, which
+adds `if existing_member.is_owner and community.num_owners() == 1:` at the
+top of `:622`'s branch, using the same wording and `'error'` category as the
+route. The tests that had pinned the defect are inverted below; see them for
+the fixed behaviour.
 """
 from types import SimpleNamespace
 
@@ -1007,29 +1011,35 @@ def test_remove_mod_from_community_non_member_api_raises_and_writes_no_modlog_en
     assert calls == []
 
 
-def test_remove_mod_from_community_strips_the_last_owner_leaving_none(
+def test_remove_mod_from_community_refuses_to_strip_the_last_owner(
         app, db_session, monkeypatch):
-    """PIN. `:624` sets `existing_member.is_owner = False` with no guard,
-    where the route doing the same thing refuses:
-    `app/community/routes.py:1477` checks `community.num_owners() == 1` and
-    flashes 'A community must have one or more owners. Make someone else an
-    owner before removing this owner.' The shared function silently permits
-    what the route forbids.
+    """Task 6's guard: `existing_member.is_owner and community.num_owners()
+    == 1` refuses at the top of `:622`'s branch, before `:631-632` ever
+    clears the flags, matching the route's own check at
+    `app/community/routes.py:1477-1478` -- the wording and `'error'` category
+    are copied from there deliberately, so the two paths say the same thing.
 
-    THIS TEST ASSERTS THE DEFECT AND PASSES TODAY. Task 6 adds the guard and
-    inverts this test. The load-bearing assertion is `community.num_owners()`
-    going from 1 to 0 -- naming the invariant that breaks (a community left
-    with no owner), not merely the flag that flipped -- per
-    `app/models.py:762`'s `num_owners()`.
+    FORMERLY A PIN. Until Task 6, `:624` (now `:632`) set
+    `existing_member.is_owner = False` with no guard at all, so this same
+    self-removal by a community's sole owner silently succeeded and left the
+    community with zero owners -- an invariant the route-based path has
+    always refused. The load-bearing assertion is `community.num_owners()`
+    staying at 1 afterwards -- naming the invariant the guard protects (a
+    community must keep an owner), not merely the flag that would have
+    flipped -- per `app/models.py:762`'s `num_owners()`.
 
     The actor is the sole owner AND an admin, removing themselves: `:617`
     needs the caller to be owner-or-admin, and making the actor a site admin
     (via `_make_site_admin`) means the guard passes on that operand alone
-    regardless of the self-targeting removal that follows. Because
-    `is_owner(user)` implies `is_moderator(user)` (see this file's REDUNDANT
-    DISJUNCT comment), this single CommunityMember row is simultaneously the
-    community's only owner and its only moderator.
+    regardless of the self-targeting removal that follows. The row is seeded
+    with the `is_moderator` COLUMN False and `is_owner` set True directly
+    afterward -- per this file's REDUNDANT DISJUNCT comment, `is_owner(user)`
+    implies the `is_moderator(user)` METHOD (an OR-based membership check
+    over `moderators()`), not the column, so this row is this community's
+    only owner while the column below stays False, untouched by the guard.
     """
+    from flask import get_flashed_messages
+
     s = _seed()
     _make_site_admin(s.user)
     owner_member = make_community_member(s.user, s.community, is_moderator=False)
@@ -1042,9 +1052,80 @@ def test_remove_mod_from_community_strips_the_last_owner_leaving_none(
 
     with web_ctx(app, s.user):
         remove_mod_from_community(s.community.id, s.user.id, SRC_WEB)
+        flashed = get_flashed_messages(with_categories=True)
 
-    assert s.community.num_owners() == 0
-    assert owner_member.is_owner is False
+    assert flashed == [('error', 'A community must have one or more owners. '
+                                  'Make someone else an owner before removing '
+                                  'this owner.')]
+    assert s.community.num_owners() == 1
+    assert owner_member.is_owner is True
     assert owner_member.is_moderator is False
-    assert calls == [('remove_mod', {'user_id': s.user.id, 'mod_id': s.user.id,
+    assert db.session.query(ModLog).filter_by(action='remove_mod').count() == 0
+    assert calls == []
+
+
+def test_remove_mod_from_community_api_refuses_to_strip_the_last_owner(
+        app, db_session, monkeypatch):
+    """Same guard as above, through `:610-611`'s SRC_API arm: `:627`'s
+    `raise Exception(msg)` fires instead of the web flash, before any flag
+    is cleared, ModLog write happens, or task fires. `community.num_owners()`
+    staying at 1 is the load-bearing assertion, matching the web test above.
+    """
+    s = _seed()
+    _make_site_admin(s.user)
+    owner_member = make_community_member(s.user, s.community, is_moderator=False)
+    owner_member.is_owner = True
+    db.session.commit()
+    assert s.community.num_owners() == 1
+    calls = []
+    monkeypatch.setattr('app.shared.community.task_selector',
+                         lambda task_key, **kw: calls.append((task_key, kw)))
+
+    with pytest.raises(Exception, match='one or more owners'):
+        remove_mod_from_community(s.community.id, s.user.id, SRC_API, bearer(s.user))
+
+    assert s.community.num_owners() == 1
+    assert owner_member.is_owner is True
+    assert owner_member.is_moderator is False
+    assert db.session.query(ModLog).filter_by(action='remove_mod').count() == 0
+    assert calls == []
+
+
+def test_remove_mod_from_community_a_plain_moderator_is_removed_from_a_one_owner_community(
+        app, db_session, monkeypatch):
+    """The guard's FIRST operand alone: `community.num_owners() == 1` is
+    TRUE (someone else is the community's sole owner), but the removal
+    target is a plain moderator (`is_owner=False`), so `existing_member.
+    is_owner` is False and the guard does not fire -- the removal proceeds.
+
+    Without `existing_member.is_owner and`, a mutant reading just
+    `community.num_owners() == 1` would refuse this removal too, which is
+    wrong: removing a plain moderator can never take a community's last
+    owner away. That wrongful refusal is what makes this test kill that
+    mutant.
+    """
+    from flask import get_flashed_messages
+
+    s = _seed()
+    owner = make_community_member(s.user, s.community, is_moderator=False)
+    owner.is_owner = True
+    db.session.commit()
+    target = make_user(s.instance, 'bob', local=True)
+    target_member = make_community_member(target, s.community, is_moderator=True)
+    assert s.community.num_owners() == 1
+    calls = []
+    monkeypatch.setattr('app.shared.community.task_selector',
+                         lambda task_key, **kw: calls.append((task_key, kw)))
+
+    with web_ctx(app, s.user):
+        remove_mod_from_community(s.community.id, target.id, SRC_WEB)
+        flashed = get_flashed_messages()
+
+    assert flashed == ['Moderator removed']
+    assert target_member.is_moderator is False
+    assert target_member.is_owner is False
+    assert s.community.num_owners() == 1
+    modlog_row = db.session.query(ModLog).filter_by(action='remove_mod').one()
+    assert modlog_row.target_user_id == target.id
+    assert calls == [('remove_mod', {'user_id': s.user.id, 'mod_id': target.id,
                                      'community_id': s.community.id})]
