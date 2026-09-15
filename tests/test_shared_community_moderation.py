@@ -18,11 +18,40 @@ fixed by the plan, not just local convenience.
 
 THE THREE-OPERAND GUARD, at both `:494` and `:523`:
 `if not (community.is_owner(user) or community.is_moderator(user) or
-user.is_admin_or_staff()):`. Three tests per function isolate each operand
-as the SOLE reason the guard passes -- an owner who is not a moderator and
-not staff, a moderator who is not an owner and not staff, and a site admin
-who holds no CommunityMember row at all -- so that a mutant deleting any one
-operand still has to survive the other two tests it cannot pass.
+user.is_admin_or_staff()):`. `is_owner(user)` and `is_moderator(user)` are NOT
+independent, and no test below claims otherwise. `moderators()`
+(`app/models.py:716-722`) returns every non-banned `CommunityMember` row
+where `is_owner OR is_moderator` holds. `is_moderator(user)` (`:740`) then
+checks membership of `user.id` in THAT LIST -- it never reads the
+`is_moderator` COLUMN. `is_owner(user)` (`:747`) checks the column on the
+same list. So a row with `is_owner=True` is always admitted to
+`moderators()` by the `OR`, which makes `is_moderator(user)` true for that
+same user on the same call; the `(user_id, community_id)` primary key rules
+out a second, differently-shaped row that could make the two diverge. THERE
+IS NO REACHABLE STATE WHERE A USER IS AN OWNER BUT NOT A MODERATOR. The
+owner test below therefore makes BOTH the first and second operands of
+`:494`/`:523` true at once -- it isolates the {owner, moderator} pair from
+the third operand (`is_admin_or_staff()`), not the first operand from the
+second. The moderator-alone test (plain `is_moderator=True`,
+`is_owner=False`, the shape federated moderators are created in) is the one
+genuine, independent isolation of operand two; see this file's REDUNDANT
+DISJUNCT comment below for why operand one is never isolated on its own and
+no test attempts it.
+
+Every test below that reaches `:510`/`:534` also patches
+`app.shared.community.task_selector` (rebound there by this module's own
+`from app.shared.tasks import task_selector`, never on `app.shared.tasks`
+itself -- see tests/test_shared_community_membership.py's identical note)
+and asserts its exact call. Un-patched, `task_selector`'s default
+`send_async=True` runs the real Celery body
+(`app/shared/tasks/deletes.py:89-113`) synchronously under this test
+config's `task_always_eager` (`tests/conftest.py:106-107`) -- undetected,
+not merely unasserted. `_seed()` mints an unused bystander `Community` first
+specifically so the community under test never lands on the trivial id `1`
+that conftest's per-test sequence reset (`:131-132`) would otherwise hand
+it; without that, a mutant hardcoding `community_id=1` at `:510`/`:534`
+would still satisfy an argument assertion built only from this test's own
+seed, because the correct value would also happen to be `1`.
 
 THE DIVERGENCE, REGISTERED NOT FIXED: `delete_community:493` reads community
 with `db.session.query(Community).get(community_id)`, which returns `None`
@@ -44,6 +73,44 @@ from app.constants import SRC_API, SRC_WEB
 from app.shared.community import delete_community, restore_community
 from tests.factories import (bearer, make_community, make_community_member, make_instance,
                              make_user, web_ctx)
+
+# REDUNDANT DISJUNCT, REGISTERED NOT TESTED -- `community.is_owner(user) or`
+# at `:494` and `:523`.
+#
+# `community.is_owner(user)` can never be the reason `:494`/`:523`'s guard
+# passes, for any input, because its truth value is a subset of
+# `community.is_moderator(user)`'s. `moderators()` (app/models.py:716-722)
+# selects every non-banned CommunityMember row where `is_owner OR
+# is_moderator` holds. `is_moderator(user)` (:740) tests membership of
+# `user.id` in THAT LIST -- not the `is_moderator` column. `is_owner(user)`
+# (:747) tests the `is_owner` column on the same list. A row with
+# `is_owner=True` is therefore always admitted to `moderators()` by the OR,
+# which makes `is_moderator(user)` true for the identical user on the
+# identical call; the CommunityMember primary key (user_id, community_id)
+# rules out a second row for this user in this community that could make
+# the two diverge. Deleting `community.is_owner(user) or` cannot change
+# `:494`/`:523`'s outcome for ANY input -- this is proved by reading the two
+# method bodies above, not by any test's failure to kill a mutant that
+# removes it, which is what this campaign's equivalence claims require.
+#
+# This is tests/README.md fact 75, cause 6, "Redundant statement"
+# (tests/README.md:3025-3045): the mutated clause's only observable effect
+# (making the guard pass) is performed unconditionally, on every path where
+# it would have mattered, by code that runs alongside it (`is_moderator`'s
+# check over the same list). It is not cause 4 -- fact 75 has no cause 4(c)
+# -- and not cause 8, which is scoped to a `try`/`except` whose body can
+# never run; neither shape applies here.
+#
+# NO TEST ISOLATES OPERAND ONE ALONE, and none should be written to. Doing
+# so would require a CommunityMember row with `is_owner=True` and
+# `is_moderator=False` for the same user in the same community -- a state
+# production cannot reach, per the proof above. Monkeypatching
+# `Community.is_moderator` to fake that shape was suggested in review and is
+# rejected here: it would fabricate a state production cannot reach, which
+# is a false witness of a different shape than the one this campaign hunts.
+# Task 8's mutation pass should expect a mutant deleting `community.is_owner
+# (user) or` to survive both this file's owner-alone tests and treat it as
+# already explained here, not as an uncovered gap.
 
 
 def _make_site_admin(user):
@@ -85,10 +152,19 @@ def _seed():
     make_community (tests/factories.py:124) hardcodes instance_id=1 and
     user_id=1, so the burn is load-bearing twice: it dodges the admin trap and
     it supplies the row make_community's foreign keys point at.
+
+    A bystander community is minted first, purely to consume Community id 1.
+    conftest.py:131-132 resets every sequence between tests, so without this
+    the returned community's id would deterministically be 1 in every test,
+    and a mutant hardcoding `community_id=1` into `:510`/`:534`'s
+    `task_selector(...)` call would be indistinguishable from correct code by
+    any assertion built from this seed alone. The bystander is otherwise
+    unused and unreferenced.
     """
     _burn_a_seed()
     instance = make_instance('test.piefed.local')
     user = make_user(instance, 'alice', local=True)
+    make_community('bystander', host='bystander.example')
     community = make_community()
     return SimpleNamespace(instance=instance, user=user, community=community)
 
@@ -96,42 +172,74 @@ def _seed():
 # `delete_community` (app/shared/community.py:487-513).
 
 
-def test_delete_community_api_owner_alone_deletes_and_returns_user_id(app, db_session):
-    """`:488`'s SRC_API arm, `:494`'s guard passing through its FIRST operand
-    alone (is_owner=True, is_moderator=False, and no admin role granted), and
-    `:496`'s false arm (the seeded community is local by default: `ap_id` is
-    left `None`, so `Community.is_local` (`app/models.py:795-796`) short-
-    circuits True through its own first operand). `:512`'s true arm returns
-    the caller's id.
+def test_delete_community_api_owner_alone_deletes_and_returns_user_id(app, db_session, monkeypatch):
+    """`:488`'s SRC_API arm and `:496`'s false arm (the seeded community is
+    local by default: `ap_id` is left `None`, so `Community.is_local`
+    (`app/models.py:795-796`) short-circuits True through its own first
+    operand), then `:512`'s true arm returning the caller's id.
+
+    This makes `community.is_owner(user)` True, which -- per this module's
+    docstring and the REDUNDANT DISJUNCT comment above -- ALSO makes
+    `community.is_moderator(user)` True for the identical row: an owner's row
+    is always a member of `moderators()` (`app/models.py:716-722`), and
+    `is_moderator(user)` (`:740`) is a membership check over that same list,
+    not the `is_moderator` column. `:494`'s guard therefore passes on either
+    of its first two operands here; this test isolates that PAIR from the
+    third operand (`is_admin_or_staff()`, isolated instead by the admin-alone
+    test below), not the first operand from the second -- no reachable state
+    does that.
+
+    `task_selector` is patched on `app.shared.community` (never on
+    `app.shared.tasks` -- the `from ... import` at this module's own top
+    rebinds the name into `app.shared.community`'s globals) and the capture
+    asserts BOTH the task key and that `community_id` is the seeded
+    community's actual id, not a literal -- `_seed()`'s bystander community
+    keeps that id off the trivial `1` a hardcoding mutant could otherwise
+    hide behind.
     """
     s = _seed()
     member = make_community_member(s.user, s.community, is_moderator=False)
     member.is_owner = True
     db.session.commit()
+    calls = []
+    monkeypatch.setattr('app.shared.community.task_selector',
+                         lambda task_key, **kw: calls.append((task_key, kw)))
 
     returned = delete_community(s.community.id, SRC_API, bearer(s.user))
 
     assert returned == s.user.id
     assert s.community.banned is True
+    assert calls == [('delete_community', {'user_id': s.user.id, 'community_id': s.community.id})]
 
 
-def test_delete_community_web_moderator_alone_deletes_and_returns_none(app, db_session):
+def test_delete_community_web_moderator_alone_deletes_and_returns_none(app, db_session, monkeypatch):
     """`:488`'s else arm (`current_user`), `:494`'s guard passing through its
-    SECOND operand alone (is_moderator=True, is_owner=False, no admin role),
-    and `:512`'s false arm: a non-API src falls off the end of the function
-    and returns `None` rather than the user's id.
+    SECOND operand alone (is_moderator=True, is_owner=False, no admin role --
+    a plain moderator, the shape federated moderators are created in, and the
+    one case of the three that is genuinely separable; see the REDUNDANT
+    DISJUNCT comment above for why operand one never is), and `:512`'s false
+    arm: a non-API src falls off the end of the function and returns `None`
+    rather than the user's id.
+
+    See the previous test's docstring for why `task_selector` is patched on
+    `app.shared.community` and what the argument assertion is defending
+    against.
     """
     s = _seed()
     make_community_member(s.user, s.community, is_moderator=True)
+    calls = []
+    monkeypatch.setattr('app.shared.community.task_selector',
+                         lambda task_key, **kw: calls.append((task_key, kw)))
 
     with web_ctx(app, s.user):
         returned = delete_community(s.community.id, SRC_WEB)
 
     assert returned is None
     assert s.community.banned is True
+    assert calls == [('delete_community', {'user_id': s.user.id, 'community_id': s.community.id})]
 
 
-def test_delete_community_admin_alone_without_membership_deletes(app, db_session):
+def test_delete_community_admin_alone_without_membership_deletes(app, db_session, monkeypatch):
     """`:494`'s guard passing through its THIRD operand alone: `s.user` holds
     no CommunityMember row at all -- `Community.moderators()`
     (`app/models.py:716-722`) returns an empty list for it, so `is_owner` and
@@ -139,14 +247,22 @@ def test_delete_community_admin_alone_without_membership_deletes(app, db_session
     a site admin via `_make_site_admin`, which grants a Role named exactly
     'Admin' so `User.is_admin()` (`app/models.py:1259-1265`) returns True and
     `is_admin_or_staff()` (`:1274-1275`) follows.
+
+    See the owner-alone test's docstring above for why `task_selector` is
+    patched on `app.shared.community` and what the argument assertion is
+    defending against.
     """
     s = _seed()
     _make_site_admin(s.user)
+    calls = []
+    monkeypatch.setattr('app.shared.community.task_selector',
+                         lambda task_key, **kw: calls.append((task_key, kw)))
 
     returned = delete_community(s.community.id, SRC_API, bearer(s.user))
 
     assert returned == s.user.id
     assert s.community.banned is True
+    assert calls == [('delete_community', {'user_id': s.user.id, 'community_id': s.community.id})]
 
 
 def test_delete_community_permission_refusal_raises_and_leaves_community_untouched(
@@ -215,12 +331,28 @@ def test_delete_community_missing_id_raises_AttributeError_not_NoResultFound(app
 # `restore_community` (app/shared/community.py:516-537).
 
 
-def test_restore_community_api_owner_alone_restores_and_returns_user_id(app, db_session):
-    """`:517`'s SRC_API arm, `:523`'s guard passing through its FIRST operand
-    alone, `:525`'s false arm (the community stays local, same reasoning as
-    delete_community's twin above), and `:536`'s true arm returning the
-    caller's id. The community starts banned so the state change from `True`
-    to `False` is real, not a no-op.
+def test_restore_community_api_owner_alone_restores_and_returns_user_id(app, db_session, monkeypatch):
+    """`:517`'s SRC_API arm and `:525`'s false arm (the community stays
+    local, same reasoning as delete_community's twin above), then `:536`'s
+    true arm returning the caller's id. The community starts banned so the
+    state change from `True` to `False` is real, not a no-op.
+
+    This makes `community.is_owner(user)` True, which -- per the REDUNDANT
+    DISJUNCT comment near the top of this file -- ALSO makes
+    `community.is_moderator(user)` True for the identical row (an owner's
+    row is always a member of `moderators()`, `app/models.py:716-722`, and
+    `is_moderator(user)`, `:740`, is a membership check over that list, not
+    the column). `:523`'s guard therefore passes on either of its first two
+    operands here; this isolates that PAIR from the third
+    (`is_admin_or_staff()`, isolated by the admin-alone test below), not the
+    first operand from the second -- no reachable state does that.
+
+    `task_selector` is patched on `app.shared.community` (never
+    `app.shared.tasks` -- the module-level rebinding this file's docstring
+    describes) and the capture asserts the task key and that `community_id`
+    is the seeded community's actual id, not a literal; `_seed()`'s
+    bystander community keeps that id off the trivial `1` a hardcoding
+    mutant could otherwise hide behind.
     """
     s = _seed()
     s.community.banned = True
@@ -228,43 +360,63 @@ def test_restore_community_api_owner_alone_restores_and_returns_user_id(app, db_
     member = make_community_member(s.user, s.community, is_moderator=False)
     member.is_owner = True
     db.session.commit()
+    calls = []
+    monkeypatch.setattr('app.shared.community.task_selector',
+                         lambda task_key, **kw: calls.append((task_key, kw)))
 
     returned = restore_community(s.community.id, SRC_API, bearer(s.user))
 
     assert returned == s.user.id
     assert s.community.banned is False
+    assert calls == [('restore_community', {'user_id': s.user.id, 'community_id': s.community.id})]
 
 
-def test_restore_community_web_moderator_alone_restores_and_returns_none(app, db_session):
+def test_restore_community_web_moderator_alone_restores_and_returns_none(app, db_session, monkeypatch):
     """`:517`'s else arm, `:523`'s guard passing through its SECOND operand
-    alone, and `:536`'s false arm: a non-API src returns `None`.
+    alone (plain moderator, not owner, not staff -- the one of the three
+    that is genuinely separable; see the REDUNDANT DISJUNCT comment above),
+    and `:536`'s false arm: a non-API src returns `None`.
+
+    See the previous test's docstring for the `task_selector` patch and
+    argument assertion.
     """
     s = _seed()
     s.community.banned = True
     db.session.commit()
     make_community_member(s.user, s.community, is_moderator=True)
+    calls = []
+    monkeypatch.setattr('app.shared.community.task_selector',
+                         lambda task_key, **kw: calls.append((task_key, kw)))
 
     with web_ctx(app, s.user):
         returned = restore_community(s.community.id, SRC_WEB)
 
     assert returned is None
     assert s.community.banned is False
+    assert calls == [('restore_community', {'user_id': s.user.id, 'community_id': s.community.id})]
 
 
-def test_restore_community_admin_alone_without_membership_restores(app, db_session):
+def test_restore_community_admin_alone_without_membership_restores(app, db_session, monkeypatch):
     """`:523`'s guard passing through its THIRD operand alone, same shape as
     delete_community's admin-alone test above: no CommunityMember row, a
     site-admin Role instead.
+
+    See the owner-alone test's docstring above for the `task_selector` patch
+    and argument assertion.
     """
     s = _seed()
     s.community.banned = True
     db.session.commit()
     _make_site_admin(s.user)
+    calls = []
+    monkeypatch.setattr('app.shared.community.task_selector',
+                         lambda task_key, **kw: calls.append((task_key, kw)))
 
     returned = restore_community(s.community.id, SRC_API, bearer(s.user))
 
     assert returned == s.user.id
     assert s.community.banned is False
+    assert calls == [('restore_community', {'user_id': s.user.id, 'community_id': s.community.id})]
 
 
 def test_restore_community_permission_refusal_raises_and_leaves_community_untouched(
