@@ -13106,19 +13106,25 @@ run. A false count in the register outranks a missing one, so this line is
 left for the controller's re-measurement on the delivered tree rather than
 carrying the stale number forward:
 
-> **`5061 passed, 3 skipped, 6 subtests, PYTEST_EXIT=0` (wall clock 351.18s),
+> **`5063 passed, 3 skipped, 6 subtests, PYTEST_EXIT=0` (wall clock 352.03s),
 > all 26 floors met, `FLOORS_EXIT=0`**, measured on the delivered tree
-> (`74820196`) against its own `--cov=app` JSON with both arguments.
+> (`fcd04d7e`) against its own `--cov=app` JSON with both arguments.
 
-The count closes twice over, which is why it was worth re-measuring rather than
-carrying the earlier figure: **5061 = 5060 + 1**, the single test that commit
-`74820196` added after the previous run; and **5061 - 5031 = 30**, which is
-exactly `/usr/bin/grep -cE "^ *def test_" tests/test_shared_community_moderation.py`
-against the commit object. Two independent derivations, same answer.
+The count closes twice over: **5063 - 5031 = 32**, which is exactly
+`/usr/bin/grep -cE "^ *def test_" tests/test_shared_community_moderation.py`
+against the commit object; and 5063 is 5061 plus the two tests the final fix
+round added (the plain-member pin, inverted, and the bystander-community test
+that closes the `community_id` predicate gap of D622). Two independent
+derivations, same answer.
 
-The stale figure would have been 5060. It was measured at `1eda0352`, one commit
-before the thirtieth test landed — close enough to look right and wrong anyway,
-which is the shape of error this register exists to keep out.
+**This line went stale twice, and that is the finding worth keeping.** It first
+read 5060, measured at `1eda0352`, one commit before the thirtieth test landed.
+Corrected to 5061 at `93fd0922` — and the final review's fix round then added
+two more tests, making *that* stale in turn. Each wrong value was within two of
+the truth: close enough to survive a glance, wrong anyway. A suite count is only
+true of the tree it ran on, and the last commit of a round is rarely the commit
+anyone measured. Re-measure after the last change, not after the last change you
+expected to make.
 
 **Exactly two production changes shipped**, both in `remove_mod_from_community`
 (D611, D612); every other finding in this section is registered rather than
