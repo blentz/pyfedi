@@ -313,29 +313,29 @@ def test_leave_community_neither_owner_nor_moderator_leaves_successfully(
         user_id=s.user.id, community_id=s.community.id).count() == 0
 
 
-def test_leave_community_moderator_without_owner_leaves_freely(app, db_session, monkeypatch):
-    """PINS A DEFECT: app/shared/community.py:60 reads
-    `if not cm.is_owner or not cm.is_moderator:`, which by De Morgan is
-    `not (cm.is_owner and cm.is_moderator)` -- the leave path runs unless
-    the member is BOTH owner and moderator. A plain moderator
+def test_leave_community_moderator_without_owner_is_refused(app, db_session, monkeypatch):
+    """`:60` used to read `if not cm.is_owner or not cm.is_moderator:`, which
+    by De Morgan is `not (cm.is_owner and cm.is_moderator)` -- the leave path
+    ran unless the member was BOTH owner and moderator. A plain moderator
     (is_moderator=True, is_owner=False, the shape federated moderators are
-    created in -- app/activitypub/util.py:959) therefore leaves freely
-    instead of being told to step down first at `:75`.
+    created in -- app/activitypub/util.py:959) therefore left freely instead
+    of being told to step down first at `:75`. That was a pinned defect;
+    Task 5 fixed `:60` to gate on EITHER role and inverted this test to
+    match.
 
-    This test asserts today's wrong behaviour on purpose: no exception is
-    raised and the CommunityMember row is gone. Task 5 inverts this
-    assertion to expect a refusal once `:60` is corrected to gate on EITHER
-    role rather than both.
+    Now a plain moderator hits `:60`'s false arm and is refused, same as the
+    owner-and-moderator control. The row must survive the refusal: a raise
+    alone would also be satisfied by a mutant that raised after deleting it.
     """
     s = _seed_member()
     make_community_member(s.user, s.community, is_moderator=True)
     monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
 
-    returned = leave_community(s.community.id, SRC_API, bearer(s.user))
+    with pytest.raises(Exception, match='Step down as a moderator before leaving the community'):
+        leave_community(s.community.id, SRC_API, bearer(s.user))
 
-    assert returned == s.user.id
     assert db.session.query(CommunityMember).filter_by(
-        user_id=s.user.id, community_id=s.community.id).count() == 0
+        user_id=s.user.id, community_id=s.community.id).count() == 1
 
 
 def test_leave_community_owner_and_moderator_is_refused_via_api(app, db_session, monkeypatch):
