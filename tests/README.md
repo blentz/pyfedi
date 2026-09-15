@@ -7803,6 +7803,123 @@ unasserted by a bad test choice -- neither configuration-scoped nor a void
 `try`/`except`.** Say so plainly rather than mis-filing it under a cause
 that does not describe it.
 
+**261. A SUCCESS THAT DID NOT SUCCEED IS THE MIRROR IMAGE OF A REFUSAL THAT
+DOES NOT REFUSE, AND IS EQUALLY INVISIBLE TO COVERAGE: ASSERT THE AUDIT
+RECORD, NOT THE FLASH.** `app/shared/community.py:622`'s
+`remove_mod_from_community` had an `if existing_member:` with no `else`.
+Removing a moderator who held no `CommunityMember` row wrote nothing, yet
+the function still flashed `'Moderator removed'`, still wrote a `ModLog`
+row via `add_to_modlog('remove_mod', ...)` naming the target, and still
+dispatched the `remove_mod` task -- every line executed on every run, so a
+test asserting only the flash text or only "no exception was raised" would
+have passed against the bug. Facts 256/257 and their sibling defects
+(D576, D595, D596) established that a refusal's own flash firing is not
+evidence the thing it refuses was prevented; this is the same blind spot
+approached from the opposite direction -- a success's own flash and modlog
+write firing is not evidence the thing it claims happened, happened. The
+remedy generalizes the same way in both directions: for a refusal, assert
+the state it exists to prevent (a row not created, not deleted); for a
+success, assert the state it claims to have produced (here, a `ModLog` row
+that actually exists, or -- as the inverted test does -- a query for it
+returning zero). See **D611**, **D613**.
+
+**262. WHEN A ROUTE AND A SHARED FUNCTION BOTH IMPLEMENT ONE INVARIANT,
+THEY DRIFT, SO TEST THAT THEY AGREE RATHER THAN TESTING EITHER ONE ALONE.**
+`app/community/routes.py:1477` (`community_remove_owner`) already refused
+to strip a community's last owner, checking `community.num_owners() == 1`
+before clearing the owner flag. `app/shared/community.py`'s
+`remove_mod_from_community` did the identical flag-clear with no such
+check at all -- reachable from a *different* route, removing a moderator
+who happened to also be the sole owner. The codebase therefore
+contradicted itself about whether an ownerless community is legal: one
+path said no, the other said yes, and nothing before this round's fix
+tested that the two paths agreed. A guard duplicated between a route and a
+shared function is not one invariant maintained twice; it is two
+invariants that happen to currently coincide, and only a test that checks
+both paths against the same rule -- not a test of either path in isolation
+-- will notice when they stop. See **D612**.
+
+**263. A GREP FOR A FUNCTION NAME FINDS EVERY MODULE THAT DEFINES A
+FUNCTION OF THAT NAME, SO CONFIRM THE IMPORT, NOT THE STRING.**
+`/usr/bin/grep -rln "delete_community\|restore_community" tests/` returns
+both `tests/test_shared_community_moderation.py` (the correct oracle for
+`app/shared/community.py`'s Group C) and `tests/test_shared_tasks_deletes.py`,
+whose `:55-58` imports `delete_community` and `restore_community` from
+`app.shared.tasks.deletes` -- a different module's ActivityPub Celery
+functions of the identical names. A grep-only check would have reported
+Group C as already carrying a second oracle; reading the import line
+instead showed it does not. This is the third grep-shaped oracle trap
+caught in three consecutive rounds (fact 253's test-file-not-named-after-
+its-module is the previous instance; before that, a match landed inside a
+docstring rather than an import) -- common enough now to name as a class:
+**a name match in `grep` output is a candidate, never a conclusion, until
+the import statement is read.** See **D617**.
+
+**264. `make_community_member` HARDCODES `is_owner=False`, SO ANY TEST
+NEEDING AN OWNER MUST SET IT EXPLICITLY AFTERWARD, NOT PASS IT AS AN
+ARGUMENT.** `tests/factories.py:384-394` takes `is_moderator` as a
+parameter but writes `is_owner=False` unconditionally into the
+`CommunityMember` it builds and returns. Every test in this round's
+suite that needs an owner (e.g. `test_remove_mod_from_community_api_owner_alone_removes_and_returns_user_id`
+and its `SRC_WEB` sibling) therefore calls `make_community_member(...)`
+and then sets `<member>.is_owner = True` followed by `db.session.commit()`
+as a second step -- there is no factory argument that produces an owner
+row directly. A test that assumes passing some flag to the factory
+produces an owner, without checking the factory's own body, will silently
+build a plain moderator instead and exercise the wrong branch of any
+owner-versus-moderator guard.
+
+**265. A MUTANT KILLED ONLY BY AN UNCAUGHT EXCEPTION IS NOT KILLED UNDER
+THIS CAMPAIGN'S RULES; FIND OR WRITE THE NON-CRASHING VARIANT BEFORE
+BANKING THE SCORE.** Deleting `and community.num_owners() == 1` from
+`app/shared/community.py:623` (leaving `if existing_member.is_owner:`,
+refusing any owner's removal regardless of how many owners remain) was
+killed by exactly one test in the 29-test suite that existed at the time
+of the mutation pass, and only because that test used `SRC_API`: the
+mutated guard's refusal path is `raise Exception(msg)`, which the test's
+assertions never got a chance to run against because the exception
+propagated uncaught. No `SRC_WEB` counterpart existed -- one that removes
+an owner while a second owner remains -- to surface the identical mutant
+as a plain `AssertionError`. The mutation pass flagged this itself rather
+than reporting a clean score, and the remedy was one additive test,
+seeded identically but routed through the web arm, where the same mutant
+now produces `assert flashed == ['Moderator removed']` failing against the
+last-owner refusal message instead -- a crash-free kill. **The check
+generalizes**: before crediting a mutation as killed, confirm at least one
+of its kills is an assertion failure, not merely that the process exited
+nonzero -- an uncaught exception proves the mutant changed behaviour, not
+that a test would have noticed had the SUT's own designed control flow
+not happened to convert that behaviour change into a crash. See **D619**.
+
+**266. FACT 75's CAUSE 3 IS CATALOGUED FOR CONJUNCTS; A SURVIVOR CAN ALSO
+BE ITS DISJUNCTIVE DUAL, AND THE CATALOGUED PROSE DOES NOT YET SAY SO.**
+Cause 3's text (`:2997-3001` above) reads "a later conjunct implies this
+one" -- the shape `A and B` where a later B implies an earlier A, making A
+redundant. `app/shared/community.py:494` and `:523`'s
+`community.is_owner(user) or community.is_moderator(user) or
+user.is_admin_or_staff()` is the mirror: `A or B or C` where the *earlier*
+disjunct A (`is_owner(user)`) is proved, algebraically, to *imply* the
+next one B (`is_moderator(user)`) -- `app/models.py:740`'s `is_moderator`
+tests membership in a list (`:716-722`) already built from `is_owner OR
+is_moderator`, and the `(user_id, community_id)` primary key rules out a
+second row that could make the two diverge for the same user. So `A or B`
+reduces to `B`, and it is the *earlier* term that is redundant, not the
+later one -- same principle as cause 3, mirrored across the operator, and
+proved the same way cause 3 demands: algebraically, from the two method
+bodies, never from a mutant's silence. **Cause 6 does not apply**, checked
+rather than assumed: cause 6 (`:3025`) opens with "the only cause on this
+list that is not about a clause," and `community.is_owner(user) or` is
+exactly a clause -- a disjunct. An earlier draft in this campaign cited
+cause 6 anyway, and a scoped re-review certified it by quoting cause 6
+with an ellipsis that elided the disqualifying sentence; the mistake cost
+a fix round before a stronger-model re-review caught it. **This gap sits
+beside two other registered-but-unenacted taxonomy extensions rather than
+replacing either**: fact 252/D578 (a tautology's mirror image, under cause
+4) and D589 (configuration-scoped unkillability, proposed as a possible
+ninth cause). Until fact 75 itself is amended, cite this fact and cause 3
+together rather than reaching for a number that does not exist. See
+**D616**.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
