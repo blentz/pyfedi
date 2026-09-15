@@ -620,6 +620,14 @@ def remove_mod_from_community(community_id: int, person_id: int, src, auth=None)
     existing_member = db.session.query(CommunityMember).filter(CommunityMember.user_id == old_moderator.id,
                                                    CommunityMember.community_id == community_id).first()
     if existing_member:
+        if existing_member.is_owner and community.num_owners() == 1:
+            msg = ('A community must have one or more owners. Make someone '
+                   'else an owner before removing this owner.')
+            if src == SRC_API:
+                raise Exception(msg)
+            else:
+                flash(_(msg), 'error')
+                return
         existing_member.is_moderator = False
         existing_member.is_owner = False
         db.session.commit()
