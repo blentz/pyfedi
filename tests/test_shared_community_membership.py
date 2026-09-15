@@ -14,10 +14,12 @@ from flask import current_app, get_flashed_messages
 from sqlalchemy.exc import NoResultFound
 
 from app import db
-from app.constants import SRC_API, SRC_PLD, SRC_WEB
-from app.models import CommunityBlock, CommunityMember
-from app.shared.community import block_community, join_community, leave_community, unblock_community
-from tests.factories import bearer, make_community, make_community_member, make_instance, make_user, web_ctx
+from app.constants import NOTIF_COMMUNITY, SRC_API, SRC_PLD, SRC_WEB
+from app.models import CommunityBan, CommunityBlock, CommunityFavorite, CommunityMember, NotificationSubscription
+from app.shared.community import (block_community, favorite_community, join_community,
+                                  leave_community, subscribe_community, unblock_community)
+from tests.factories import (ban_user_from_community, bearer, make_community, make_community_member,
+                             make_instance, make_site, make_user, web_ctx)
 
 
 def _seed_member():
@@ -460,3 +462,332 @@ def test_leave_community_a_third_source_reaches_no_flash_the_web_arm_cannot_isol
     assert flashed == []
     assert db.session.query(CommunityMember).filter_by(
         user_id=s.user.id, community_id=s.community.id).count() == 0
+
+
+# `subscribe_community` and `favorite_community` (app/shared/community.py:394-484).
+#
+# `subscribe_community` already has 24 of 29 statements covered before this
+# file: tests/test_api_community_subscriptions.py's `put_community_subscribe`
+# calls reach it entirely through SRC_API, exercising :395's banned-community
+# `.one()`, :401-402's lookup, both :403 arms, :409's raise, both :414 arms,
+# :417's raise, :422's banned-from check and both its arms, :428-433's insert,
+# and :435's SRC_API return. What that oracle CANNOT reach: :399 (the SRC_WEB
+# override -- it never passes SRC_WEB), :427 (the SRC_WEB banned-from flash,
+# same reason), :438 (the SRC_WEB return, same reason), and :412/:420 (the two
+# flash arms below, which no SRC_WEB call can reach either -- see below).
+# favorite_community has no oracle anywhere under tests/ --
+# `/usr/bin/grep -rln "favorite_community" tests/` matches nothing outside
+# this file before it -- so every statement of it below is new.
+#
+# `:399`'s override and `:401`'s existing_notification lookup run the identical
+# filter (entity_id=community_id, user_id, type=NOTIF_COMMUNITY), so under
+# SRC_WEB `subscribe == False` exactly when a matching row exists: :412 needs
+# `subscribe == False` AND no row, :420 needs `subscribe == True` AND a row --
+# both contradictions under that lockstep. SRC_API cannot reach them either:
+# :409 and :417 always take the raise instead of the else. Neither production
+# caller reaches :412/:420 -- app/community/routes.py:1720 passes SRC_WEB,
+# app/api/alpha/utils/community.py:270 passes SRC_API -- but production-
+# unreachability is not test-unreachability. Sub-project 43 drew that
+# equivalence for two lines of this exact shape and the ruling was retracted
+# as D564. `favorite_community:441-484` repeats the identical shape at
+# :458/:466, gated by :445-446's override against :448's lookup. SRC_PLD
+# (app/constants.py:94) is neither SRC_WEB nor SRC_API, so :398/:445 skip the
+# override and the caller's `subscribe` argument survives, and :409/:417 and
+# :455/:463 take their else arms instead of raising. The precedent, down to
+# the constant, is tests/test_shared_post_interactions.py:577 (read in full
+# before writing the tests below), tests/test_shared_reply_interactions.py:1018,
+# and sub-project 43's D564 retraction itself (the user twin).
+#
+# ASYMMETRY, registered per this round's scope rather than fixed: :479's
+# `cache.delete_memoized(favorite_communities, user_id)` runs unconditionally
+# on every arm of favorite_community that reaches it (both raise arms above it
+# skip it by unwinding first, same as any exception would). subscribe_community
+# has no equivalent call anywhere, on any arm, including :429-433's insert,
+# which is exactly the kind of write a memoized reader would need invalidated.
+# The two "identical shape" functions are not identical here.
+
+
+def test_subscribe_community_web_creates_via_override_and_returns_the_render(app, db_session):
+    """:398's true arm and :399's override, then the ordinary create path
+    (:414's false arm, :422's false arm, :428-433) and :435's false arm
+    landing on :438's render.
+
+    `community.notify_new_posts(user_id)` is False for a user with no
+    NotificationSubscription row, so :399 sets `subscribe = True` --
+    overriding the `None` this test passes in as the `subscribe` argument,
+    which proves the override (not the argument) drives the outcome.
+    `make_site()` is required: :438's render calls `current_theme()`
+    (app/utils.py:3228), which falls back to `Site.query.get(1)` and raises
+    AttributeError on a None site with no Site row present.
+    """
+    make_site()
+    s = _seed_member()
+
+    with web_ctx(app, s.user):
+        result = subscribe_community(s.community.id, None, SRC_WEB)
+
+    assert isinstance(result, str)
+    assert db.session.query(NotificationSubscription).filter_by(
+        entity_id=s.community.id, user_id=s.user.id, type=NOTIF_COMMUNITY).count() == 1
+
+
+def test_subscribe_community_web_banned_user_flashes_and_creates_nothing(app, db_session):
+    """:422's true arm reached via SRC_WEB, and :427's flash -- NOT one of the
+    two lockstep-unreachable arms: this branch is gated on
+    `communities_banned_from`, not on the :398/:401 lockstep, so a plain
+    SRC_WEB call reaches it with no third source value needed.
+
+    The row must NOT exist afterward: a mutant that flashed but inserted
+    anyway would pass a flash-only assertion.
+    """
+    make_site()
+    s = _seed_member()
+    ban_user_from_community(s.user, s.community)
+
+    with web_ctx(app, s.user):
+        result = subscribe_community(s.community.id, None, SRC_WEB)
+        flashed = get_flashed_messages()
+
+    assert isinstance(result, str)
+    assert len(flashed) == 1
+    assert 'banned from this community' in flashed[0]
+    assert db.session.query(NotificationSubscription).filter_by(
+        entity_id=s.community.id, user_id=s.user.id).count() == 0
+
+
+def test_subscribe_community_a_third_source_reaches_the_flash_branches_the_web_arm_cannot(
+        app, db_session):
+    """:403's false arm and :412's flash, then :414's true arm, :417's false
+    arm and :420's flash.
+
+    NEITHER SRC_WEB NOR SRC_API CAN REACH :412/:420 -- see this section's
+    header comment for the full derivation; in short, SRC_WEB keeps
+    `subscribe` and `existing_notification` in lockstep via the identical
+    filter :399 and :401 both use, so the "mismatched" arms these two flashes
+    sit behind are jointly unreachable there, and SRC_API's :409/:417 always
+    take the raise instead. A third source value is the only way in: SRC_PLD
+    (app/constants.py:94, the admin preload path) is used here PURELY as such
+    a value to reach these two statements. IT IS NOT HOW SUBSCRIBE_COMMUNITY
+    IS CALLED IN PRODUCTION -- app/community/routes.py:1720 passes SRC_WEB and
+    app/api/alpha/utils/community.py:270 passes SRC_API, and those are the
+    only two callers -- and this docstring says so rather than implying
+    otherwise. The precedent, down to the constant, is
+    tests/test_shared_post_interactions.py:577-639 against the twin
+    `subscribe_post`.
+
+    `web_ctx` is used even though this is not an SRC_WEB call, because :396's
+    else-arm reads `current_user.id` for any non-SRC_API source, and :438
+    renders for any non-SRC_API source too; `make_site()` is there for that
+    render, same as the two tests above.
+
+    THE ASSERTIONS ARE ON `flashed`'s CONTENT, NOT ON `result`, and that is
+    load-bearing: under SRC_PLD, :435's `if src == SRC_API:` is always False,
+    so control reaches :438's render whether or not the flash call is there --
+    deleting `flash(_(msg))` outright would still return a normal render and
+    pass a result-only assertion silently. The row counts are the second half:
+    0 after the first call and 1 after the second, separating "refused and
+    flashed" from "flashed and then also wrote", which is what reaching :412
+    or :420 from the wrong outer arm would look like.
+    """
+    make_site()
+    s = _seed_member()
+
+    with web_ctx(app, s.user):
+        result = subscribe_community(s.community.id, False, SRC_PLD)
+        flashed = get_flashed_messages()
+
+    assert isinstance(result, str)
+    assert len(flashed) == 1
+    assert 'did not exist' in flashed[0]
+    assert db.session.query(NotificationSubscription).filter_by(
+        entity_id=s.community.id, user_id=s.user.id).count() == 0
+
+    subscribe_community(s.community.id, True, SRC_API, auth=bearer(s.user))
+
+    with web_ctx(app, s.user):
+        result = subscribe_community(s.community.id, True, SRC_PLD)
+        flashed = get_flashed_messages()
+
+    assert isinstance(result, str)
+    assert len(flashed) == 1
+    assert 'already existed' in flashed[0]
+    assert db.session.query(NotificationSubscription).filter_by(
+        entity_id=s.community.id, user_id=s.user.id).count() == 1
+
+
+def test_favorite_community_api_creates_the_favorite_and_returns_the_user_id(app, db_session):
+    """:449's false arm (the `else:` at :460), :461's false arm, :468's false
+    arm, :475-477's insert, and :481's true arm returning the user id.
+    """
+    s = _seed_member()
+
+    returned = favorite_community(s.community.id, True, SRC_API, auth=bearer(s.user))
+
+    assert returned == s.user.id
+    assert db.session.query(CommunityFavorite).filter_by(
+        community_id=s.community.id, user_id=s.user.id).count() == 1
+
+
+def test_favorite_community_api_toggle_off_removes_it(app, db_session):
+    """:449's true arm and :461's true arm, both taken across the two calls:
+    the second call's `subscribe=False` hits :449 true, and the existing row
+    from the first call hits :450 true, deleting it.
+    """
+    s = _seed_member()
+    favorite_community(s.community.id, True, SRC_API, auth=bearer(s.user))
+
+    returned = favorite_community(s.community.id, False, SRC_API, auth=bearer(s.user))
+
+    assert returned == s.user.id
+    assert db.session.query(CommunityFavorite).count() == 0
+
+
+def test_favorite_community_api_remove_nonexistent_raises(app, db_session):
+    """:449's true arm, :450's false arm, :454's message, :455's true arm and
+    :456's raise. The row must not exist either before or after.
+    """
+    s = _seed_member()
+
+    with pytest.raises(Exception, match='A favorite for this community did not exist.'):
+        favorite_community(s.community.id, False, SRC_API, auth=bearer(s.user))
+
+    assert db.session.query(CommunityFavorite).count() == 0
+
+
+def test_favorite_community_api_add_existing_raises(app, db_session):
+    """:461's true arm, :462's message, :463's true arm and :464's raise. The
+    original row must survive the second, refused call.
+    """
+    s = _seed_member()
+    favorite_community(s.community.id, True, SRC_API, auth=bearer(s.user))
+
+    with pytest.raises(Exception, match='A favorite for this community already existed.'):
+        favorite_community(s.community.id, True, SRC_API, auth=bearer(s.user))
+
+    assert db.session.query(CommunityFavorite).filter_by(
+        community_id=s.community.id, user_id=s.user.id).count() == 1
+
+
+def test_favorite_community_api_banned_user_raises(app, db_session):
+    """:468's true arm, :469's message, :470's true arm and :471's raise. No
+    row must be created.
+    """
+    s = _seed_member()
+    ban_user_from_community(s.user, s.community)
+
+    with pytest.raises(Exception, match='You are banned from this community.'):
+        favorite_community(s.community.id, True, SRC_API, auth=bearer(s.user))
+
+    assert db.session.query(CommunityFavorite).count() == 0
+
+
+def test_favorite_community_banned_community_raises_NoResultFound(app, db_session):
+    """:442's `.filter_by(id=community_id, banned=False).one()` -- a banned
+    community has no row matching `banned=False`, so `.one()` raises rather
+    than returning the row with `banned=True` on it.
+    """
+    s = _seed_member()
+    s.community.banned = True
+    db.session.commit()
+
+    with pytest.raises(NoResultFound):
+        favorite_community(s.community.id, True, SRC_API, auth=bearer(s.user))
+
+
+def test_favorite_community_web_creates_via_override_and_returns_the_render(app, db_session):
+    """:445's true arm and :446's override, then the ordinary create path
+    (:449's false arm, :461's false arm, :468's false arm, :475-477) and
+    :481's false arm landing on :484's render.
+
+    `community_id in favorite_communities(user_id)` is False for a user with
+    no CommunityFavorite row, so :446 sets `subscribe = True` -- overriding
+    the `False` this test passes in as the `subscribe` argument, the same
+    proof-of-override shape as subscribe_community's web test above.
+    """
+    make_site()
+    s = _seed_member()
+
+    with web_ctx(app, s.user):
+        result = favorite_community(s.community.id, False, SRC_WEB)
+
+    assert isinstance(result, str)
+    assert db.session.query(CommunityFavorite).filter_by(
+        community_id=s.community.id, user_id=s.user.id).count() == 1
+
+
+def test_favorite_community_web_banned_user_flashes_and_creates_nothing(app, db_session):
+    """:468's true arm reached via SRC_WEB, and :473's flash -- NOT one of the
+    two lockstep-unreachable arms below: this branch is gated on
+    `communities_banned_from`, not on the :445/:448 lockstep, so a plain
+    SRC_WEB call (not favorited, so :446's override leaves `subscribe = True`)
+    reaches it with no third source value needed.
+    """
+    make_site()
+    s = _seed_member()
+    ban_user_from_community(s.user, s.community)
+
+    with web_ctx(app, s.user):
+        result = favorite_community(s.community.id, False, SRC_WEB)
+        flashed = get_flashed_messages()
+
+    assert isinstance(result, str)
+    assert len(flashed) == 1
+    assert 'banned from this community' in flashed[0]
+    assert db.session.query(CommunityFavorite).filter_by(
+        community_id=s.community.id, user_id=s.user.id).count() == 0
+
+
+def test_favorite_community_a_third_source_reaches_the_flash_branches_the_web_arm_cannot(
+        app, db_session):
+    """:449's false arm and :458's flash, then :461's true arm, :463's false
+    arm and :466's flash -- favorite_community's own instance of the shape
+    this campaign retracted D564 over.
+
+    NEITHER SRC_WEB NOR SRC_API CAN REACH :458/:466. SRC_WEB keeps `subscribe`
+    and `existing_fave` in lockstep via the identical filter :446 and :448
+    both use (community_id, user_id), so the "mismatched" arms these two
+    flashes sit behind are jointly unreachable there, and SRC_API's
+    :455/:463 always take the raise instead. SRC_PLD (app/constants.py:94,
+    the admin preload path) is used here PURELY as a third source value to
+    reach these two statements. IT IS NOT HOW FAVORITE_COMMUNITY IS CALLED IN
+    PRODUCTION -- app/community/routes.py:1729 passes SRC_WEB and there is no
+    SRC_API caller at all today -- and this docstring says so rather than
+    implying otherwise. The precedent, down to the constant, is
+    tests/test_shared_post_interactions.py:577-639 and this file's own
+    subscribe_community twin above.
+
+    `web_ctx` is used even though this is not an SRC_WEB call, for the same
+    reason as subscribe_community's SRC_PLD test: :443's else-arm reads
+    `current_user.id` for any non-SRC_API source, and :484 renders for any
+    non-SRC_API source too. `make_site()` covers that render.
+
+    THE ASSERTIONS ARE ON `flashed`'s CONTENT, NOT ON `result`: under SRC_PLD,
+    :481's `if src == SRC_API:` is always False, so control reaches :484's
+    render whether or not the flash call is there. The row counts are the
+    second half, separating "refused and flashed" from "flashed and then also
+    wrote" the way test_subscribe_community_a_third_source... does.
+    """
+    make_site()
+    s = _seed_member()
+
+    with web_ctx(app, s.user):
+        result = favorite_community(s.community.id, False, SRC_PLD)
+        flashed = get_flashed_messages()
+
+    assert isinstance(result, str)
+    assert len(flashed) == 1
+    assert 'did not exist' in flashed[0]
+    assert db.session.query(CommunityFavorite).filter_by(
+        community_id=s.community.id, user_id=s.user.id).count() == 0
+
+    favorite_community(s.community.id, True, SRC_API, auth=bearer(s.user))
+
+    with web_ctx(app, s.user):
+        result = favorite_community(s.community.id, True, SRC_PLD)
+        flashed = get_flashed_messages()
+
+    assert isinstance(result, str)
+    assert len(flashed) == 1
+    assert 'already existed' in flashed[0]
+    assert db.session.query(CommunityFavorite).filter_by(
+        community_id=s.community.id, user_id=s.user.id).count() == 1
