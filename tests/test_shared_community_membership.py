@@ -1,11 +1,44 @@
-"""`block_community` and `unblock_community` (app/shared/community.py:85-118).
+"""Six functions of app/shared/community.py's membership surface:
+`join_community` (:32), `leave_community` (:57), `block_community` (:85),
+`unblock_community` (:103), `subscribe_community` (:394) and
+`favorite_community` (:441).
 
-Both are at 0.0% before this file: 22 statements and 12 arcs missing.
+`block_community` and `unblock_community` were this file's original scope --
+both at 0.0% before it, 22 statements and 12 arcs missing, the fifth instance
+of a shape this campaign has closed four times before (block_another_user,
+block_domain, block_remote_instance, and this one). The src fork, bearer,
+web_ctx, the id-1 burn, and the deliberate bystander-first seeding order all
+transfer from tests/test_shared_domain.py. `join_community`, `leave_community`,
+`subscribe_community` and `favorite_community` were added later in the same
+round; the file now carries 36 tests over all six functions.
 
-These are the fifth instance of a shape this campaign has closed four times --
-block_another_user, block_domain, block_remote_instance, and now this.
-The src fork, bearer, web_ctx, the id-1 burn, and the deliberate bystander-first
-seeding order all transfer from tests/test_shared_domain.py.
+HISTORY WORTH KEEPING RATHER THAN ERASING:
+
+`leave_community:60` carries this round's one pinned-then-inverted guard
+(D596). It read `if not cm.is_owner or not cm.is_moderator:` -- by De Morgan,
+`not (cm.is_owner and cm.is_moderator)` -- so the free-leave branch ran unless
+a member was BOTH owner and moderator, letting a plain moderator
+(is_moderator=True, is_owner=False, the shape federated moderators are
+created in) leave freely instead of being refused at :75.
+`test_leave_community_moderator_without_owner_is_refused` (:351) was pinned
+against that defect under its old name,
+`test_leave_community_moderator_without_owner_leaves_freely`, then Task 5
+fixed :60 to `and` and the test was inverted and renamed to match; a reader
+searching for the old name in the tree will not find it, and that is
+intentional. (The round's OTHER pinned-then-inverted guard, D595's
+`app/shared/site.py:19-20` `return`, belongs to `tests/test_shared_site.py`,
+not to this file.)
+
+The two SRC_WEB tests for `subscribe_community` (:543, :573, at the time of
+this note) originally passed `None` as the `subscribe` argument and a
+docstring claimed that proved the :398-399 override drove the outcome. It did
+not: `None == False` is `False`, so `None` takes the same arm as `True` under
+both the override and its deletion, and deleting :398-399 left both tests
+green. Both call sites now pass `False`, which does distinguish the two
+cases, and the docstrings say only what the algebra supports. Two further
+tests (:607, :820 at the time of this note) exercise the OFF half of
+:398-399's and :445-446's ternaries, which no earlier test in this file
+reached.
 """
 from types import SimpleNamespace
 
@@ -514,8 +547,14 @@ def test_subscribe_community_web_creates_via_override_and_returns_the_render(app
 
     `community.notify_new_posts(user_id)` is False for a user with no
     NotificationSubscription row, so :399 sets `subscribe = True` --
-    overriding the `None` this test passes in as the `subscribe` argument,
-    which proves the override (not the argument) drives the outcome.
+    overriding the `False` this test passes in as the `subscribe` argument.
+    That is a genuine kill of the "delete :398-399" mutant: `False == False`
+    takes :403's true arm, whose :404 `if existing_notification:` is empty,
+    so :407-412 flash and nothing is created -- the `count() == 1` assertion
+    below would fail. Passing `None` instead would NOT prove this, because
+    `None == False` is also False, so `None` takes the same arm as `True`
+    under both the override and its deletion; see tests/README.md's fact on
+    this (added alongside this fix) for the general shape.
     `make_site()` is required: :438's render calls `current_theme()`
     (app/utils.py:3228), which falls back to `Site.query.get(1)` and raises
     AttributeError on a None site with no Site row present.
@@ -524,7 +563,7 @@ def test_subscribe_community_web_creates_via_override_and_returns_the_render(app
     s = _seed_member()
 
     with web_ctx(app, s.user):
-        result = subscribe_community(s.community.id, None, SRC_WEB)
+        result = subscribe_community(s.community.id, False, SRC_WEB)
 
     assert isinstance(result, str)
     assert db.session.query(NotificationSubscription).filter_by(
@@ -539,13 +578,23 @@ def test_subscribe_community_web_banned_user_flashes_and_creates_nothing(app, db
 
     The row must NOT exist afterward: a mutant that flashed but inserted
     anyway would pass a flash-only assertion.
+
+    `False` is passed as the `subscribe` argument (not `None`) for the same
+    reason as the test above: with :398-399 present, `notify_new_posts` is
+    False for this banned user with no notification row, so the override
+    sets `subscribe = True` regardless of the argument, and control reaches
+    the banned check at :422 either way. With :398-399 DELETED, the literal
+    `False` argument survives and takes :403's true arm instead, producing
+    the "did not exist" flash rather than the banned one -- a genuine kill
+    that `None` (which also survives :398-399's deletion but happens to take
+    the same non-False arm here) would not have been.
     """
     make_site()
     s = _seed_member()
     ban_user_from_community(s.user, s.community)
 
     with web_ctx(app, s.user):
-        result = subscribe_community(s.community.id, None, SRC_WEB)
+        result = subscribe_community(s.community.id, False, SRC_WEB)
         flashed = get_flashed_messages()
 
     assert isinstance(result, str)
@@ -553,6 +602,37 @@ def test_subscribe_community_web_banned_user_flashes_and_creates_nothing(app, db
     assert 'banned from this community' in flashed[0]
     assert db.session.query(NotificationSubscription).filter_by(
         entity_id=s.community.id, user_id=s.user.id).count() == 0
+
+
+def test_subscribe_community_web_override_off_removes_an_existing_subscription(app, db_session):
+    """The OFF half of :399's ternary, never exercised by the two web tests
+    above: both seed a user with NO NotificationSubscription row, so
+    `community.notify_new_posts(user_id)` is always False there and the
+    override always computes `True`. `coverage.py` does not branch-measure
+    a conditional expression, so `[]`/`[]` on this function was consistent
+    with that half never running at all.
+
+    Here a NotificationSubscription row is seeded FIRST, making
+    `notify_new_posts(user_id)` True, so :399 computes `subscribe = False`
+    -- overriding the `True` passed in as the argument. :403's true arm is
+    then taken, :404's `if existing_notification:` is True, and :405-406
+    delete the seeded row. The row's absence afterward is the assertion:
+    a mutant that skipped the override (leaving `subscribe = True`) would
+    instead reach :414's else-branch, find `existing_notification` truthy,
+    flash "already existed", and leave the row in place.
+    """
+    make_site()
+    s = _seed_member()
+    db.session.add(NotificationSubscription(
+        name='pre-existing', user_id=s.user.id, entity_id=s.community.id, type=NOTIF_COMMUNITY))
+    db.session.commit()
+
+    with web_ctx(app, s.user):
+        result = subscribe_community(s.community.id, True, SRC_WEB)
+
+    assert isinstance(result, str)
+    assert db.session.query(NotificationSubscription).filter_by(
+        entity_id=s.community.id, user_id=s.user.id, type=NOTIF_COMMUNITY).count() == 0
 
 
 def test_subscribe_community_a_third_source_reaches_the_flash_branches_the_web_arm_cannot(
@@ -733,6 +813,36 @@ def test_favorite_community_web_banned_user_flashes_and_creates_nothing(app, db_
     assert isinstance(result, str)
     assert len(flashed) == 1
     assert 'banned from this community' in flashed[0]
+    assert db.session.query(CommunityFavorite).filter_by(
+        community_id=s.community.id, user_id=s.user.id).count() == 0
+
+
+def test_favorite_community_web_override_off_removes_an_existing_favorite(app, db_session):
+    """The OFF half of :446's ternary, never exercised by the two web tests
+    above: both seed a user with NO CommunityFavorite row, so
+    `community_id in favorite_communities(user_id)` is always False there
+    and the override always computes `True`. `coverage.py` does not
+    branch-measure a conditional expression, so `[]`/`[]` on this function
+    was consistent with that half never running at all.
+
+    Here a CommunityFavorite row is seeded FIRST, making the membership
+    test True, so :446 computes `subscribe = False` -- overriding the
+    `True` passed in as the argument. :449's true arm is then taken,
+    :450's `if existing_fave:` is True, and :451-452 delete the seeded row.
+    The row's absence afterward is the assertion: a mutant that skipped the
+    override (leaving `subscribe = True`) would instead reach :461's
+    else-branch, find `existing_fave` truthy, flash "already existed", and
+    leave the row in place.
+    """
+    make_site()
+    s = _seed_member()
+    db.session.add(CommunityFavorite(user_id=s.user.id, community_id=s.community.id))
+    db.session.commit()
+
+    with web_ctx(app, s.user):
+        result = favorite_community(s.community.id, True, SRC_WEB)
+
+    assert isinstance(result, str)
     assert db.session.query(CommunityFavorite).filter_by(
         community_id=s.community.id, user_id=s.user.id).count() == 0
 
