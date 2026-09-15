@@ -335,7 +335,17 @@ def test_log_user_in_exempts_the_id_1_account_from_every_ban_check(app, db_sessi
 
 def test_log_user_in_stamps_last_seen_and_ip(app, db_session, monkeypatch):
     """:83-86. `ip` comes from :19's ip_address() call, patched to a known
-    value, so this distinguishes the stamp from a column default."""
+    value, so the `ip_address` assertion below distinguishes the stamp from
+    a column default -- that half is load-bearing.
+
+    The `last_seen` assertion is NOT load-bearing: `User.last_seen` is
+    declared `db.Column(db.DateTime, default=utcnow, index=True)`
+    (app/models.py:997), so the column fills itself on insert whether or not
+    :83 runs, and `stored.last_seen is not None` holds even if :83 is
+    deleted. Kept anyway -- it is not wrong, only insufficient on its own --
+    because a stronger replacement (seeding a known old `last_seen` and
+    asserting it advanced) is out of this test's scope.
+    """
     s = _seed_login_user()
     assert s.user.ip_address is None
 
@@ -476,6 +486,15 @@ def test_log_user_in_web_refuses_a_wrong_password_with_a_reset_link(app, db_sess
     false-witness mechanism (d), an input taking the same path under both
     arms.
 
+    THE FLASH LIST IS ASSERTED EXACTLY, not with `any(...)`. Deleting :51's
+    `return redirect(...)` lets flow fall into :52-53 too, which appends a
+    second 'Invalid password' flash and returns the same login redirect --
+    `any('reset_password_request' in m for m in flashed)` still holds against
+    that two-item list, so the mutant would survive an `any` check. It does
+    NOT reach login_user: :53 still returns before :57's ban check, so this
+    is a milder gap than :53's own deletion (see the sibling test below) and
+    is closed by pinning the exact list rather than by a login-state check.
+
     password_hash is set to None AFTER set_password, because _seed_login_user
     needs a real hash to exist first for the other tests in this file and
     check_password (app/models.py:1125) is total over a None hash rather than
@@ -492,7 +511,9 @@ def test_log_user_in_web_refuses_a_wrong_password_with_a_reset_link(app, db_sess
                        flask_session.get('_flashes', [])]
 
     assert response.status_code == 302
-    assert any('reset_password_request' in message for message in flashed)
+    assert flashed == [
+        'Invalid password. Please <a href="/auth/reset_password_request">reset your password</a>.'
+    ]
 
 
 def test_log_user_in_web_refuses_a_wrong_password_without_a_reset_link(app, db_session, monkeypatch):
@@ -503,6 +524,17 @@ def test_log_user_in_web_refuses_a_wrong_password_without_a_reset_link(app, db_s
     that a flash happened, because asserting the latter would let the two
     branches swap undetected -- false-witness mechanism (d), an input taking
     the same path under both arms.
+
+    THE LOGGED-IN CHECK BELOW IS THE LOAD-BEARING ASSERTION. Deleting :53's
+    `return redirect(...)` makes a wrong-password web login fall through --
+    out of :46's block, past the ban check, into :80's
+    `login_user(user, remember=True)` -- and return the ordinary success
+    redirect. Without this check nothing fails: the mutant still returns a
+    302 and :52's flash still ran, so `status_code == 302` and
+    `flashed == ['Invalid password']` both hold on the success path too.
+    `test_log_user_in_web_logs_in_and_sets_ui_language` below establishes a
+    login DID happen with `'_user_id' in flask_session`; this asserts the
+    negation of that same probe, so the pair is symmetric.
 
     DRIVES A SOURCE VALUE PRODUCTION NEVER PASSES to this function.
     app/auth/util.py:474 is a different log_user_in and serves the real web
@@ -517,9 +549,11 @@ def test_log_user_in_web_refuses_a_wrong_password_without_a_reset_link(app, db_s
             response = log_user_in(Form('loginuser', 'wrong'), SRC_WEB)
             flashed = [str(message) for _category, message in
                        flask_session.get('_flashes', [])]
+            logged_in = '_user_id' in flask_session
 
     assert response.status_code == 302
     assert flashed == ['Invalid password']
+    assert logged_in is False
 
 
 def test_log_user_in_web_refuses_a_banned_user_row_one(app, db_session, monkeypatch):
