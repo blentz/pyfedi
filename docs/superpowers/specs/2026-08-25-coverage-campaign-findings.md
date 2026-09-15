@@ -12998,6 +12998,65 @@ and a confirmation together, a consequence of D595's own (correct) fix;
 file's standing policy that the register backlog waits until a round's
 production budget is spent; none required a change to `app/` to record.
 
+### 11. THE TEST SUITE'S MEMORY AND RUNTIME BASELINE, MEASURED -- AND A "LEAK" RETRACTED BEFORE IT WAS FIXED -- D610
+
+Three full-suite runs were killed by the host OOM killer while closing this
+round. Two died inside `run_tests.sh:83`'s `flask db upgrade` before pytest
+collected anything, which is harmless: no test had started, so conftest's
+per-test teardown had nothing pending. The third died mid-test at 21% and did
+require `./run_tests.sh --down`, because a kill during a test leaves the
+teardown at `tests/conftest.py:191-202` unrun.
+
+Diagnosing it produced three successive wrong causes, each named before
+anything was instrumented, and each contradicted by the first measurement that
+followed. They are recorded because the pattern is the finding:
+
+1. **"The host is busy."** Asserted from `free -h` with no profile of the
+   suite at all.
+2. **"`--cov=app` is the memory driver."** Concluded from a single
+   no-coverage run that passed. Measured: coverage costs about **18 MB**, and
+   the no-coverage run peaked *higher* than the coverage run.
+3. **"The session leaks monotonically."** Read off a curve printed at every
+   sixth sample. Printing all 264 shows a plateau the decimation had hidden.
+
+**There is no leak.** Sampling `podman stats --no-stream` every 5s across both
+runs on the delivered tree (`11d6f3a3`):
+
+| | without `--cov` | with `--cov=app` |
+|---|---|---|
+| result | 5031 passed, 3 skipped, 6 subtests, exit 0 | 5031 passed, 3 skipped, 6 subtests, exit 0 |
+| wall clock | 286.98s | 368.61s |
+| plateau | ~645-665 MB | ~680-691 MB |
+| peak | **745 MB** | **734 MB** |
+| after teardown | ~18 MB | ~19 MB |
+
+The shape is a decelerating warm-up to a flat plateau, not a climb: memory
+holds 680-691 MB for roughly twenty consecutive samples (~100 seconds) before
+one late step near the end of collection. A leak does not plateau. The
+plateau is genuine steady state rather than a ceiling forcing collection --
+`compose.test.yaml` sets no `mem_limit` on any container, checked rather than
+assumed. The late step appears in *both* runs, so it is a heavy late test
+file and not coverage serialisation.
+
+The ~690 MB plateau is this application's working set under test: module
+imports, SQLAlchemy mappers, lazily compiled Jinja templates and compiled-query
+caches reaching steady state. Bounded and expected.
+
+**No fix was shipped, deliberately.** A change that "repairs" a leak the
+measurement does not show is this campaign's signature defect class wearing
+new clothes -- code that looks like it does something, does nothing, and
+carries a commit message asserting otherwise. A false line in the record is
+worse than a missing one; a false line in `app/` or `tests/` is worse still.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D610 | `tests/conftest.py:136-202` (the `db_session` fixture); `compose.test.yaml` (no `mem_limit`); `run_tests.sh:83` | **THE SUITE'S MEASURED MEMORY AND RUNTIME BASELINE, AND THE RETRACTION OF A LEAK THAT WAS NEVER THERE.** Peak **745 MB** without coverage and **734 MB** with; plateau ~645-665 MB and ~680-691 MB respectively; ~18 MB after teardown; **coverage costs about 18 MB, roughly 2.5%**, and the no-coverage run peaks *higher*. Wall clock 286.98s without coverage, 368.61s with, both `5031 passed, 3 skipped, 6 subtests, PYTEST_EXIT=0` on `11d6f3a3`. Sampled with `podman stats --no-stream` at 5s intervals, 264 samples. The curve decelerates to a **flat plateau held for ~100 seconds**, which is why the earlier "monotonic leak" reading was wrong -- it was printed at every sixth sample and the decimation hid the plateau. No `mem_limit` is configured, so the plateau is steady state, not a ceiling. Three host OOM kills preceded this measurement: two inside `flask db upgrade` before collection (harmless, no teardown pending) and one mid-test at 21% (required `./run_tests.sh --down`, per the standing rule that a killed pytest leaves `conftest.py:191-202` unrun). **Registered as a baseline, not as a defect, and no fix was shipped** -- the numbers make the next OOM diagnosable instead of arguable. | **measured baseline; no defect found, no fix shipped** | `/tmp/claude-1000/.../scratchpad/memsample.txt` and `memsample2.txt` (raw samples); both runs' pytest output; `compose.test.yaml` grepped for `mem_limit`/`resources` -- no match |
+
+**Next free number: D611.** D610 records the harness baseline above. It
+required no change to `app/` or `tests/`, and deliberately shipped no fix:
+the investigation's conclusion was that the defect it set out to fix does
+not exist.
+
 ## Ratchet gotchas
 
 - `percent_covered` is a **blended statement+branch figure**. This matters for
