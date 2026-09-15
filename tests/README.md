@@ -7548,6 +7548,127 @@ has still never closed a module below 100. Registered as the rewritten
 **D564**, which -- like **D539** before it -- is a retraction rather than a
 finding.
 
+**251. FACT 75 HAS NO CAUSE 4(c), AND THE LABEL THAT DOES NOT EXIST WAS CITED
+BY TWO SUB-PROJECTS RUNNING BEFORE ANYONE RE-READ THE SOURCE.** Fact 75's
+catalogue is 1, 2, 3, 4(a), 4(b), 5, 6, 7, 8. Item 4, "Tautology", has exactly
+two shapes and **there is no 4(c)**. The shape the label keeps getting reached
+for -- a `try`/`except` whose body can never run because the callee inside the
+`try` has no raising path for the argument shape the call site can produce -- is
+**cause 8, "Unreachable handler"**, added by sub-project 19 for exactly that
+purpose. The wrong label originates at
+`tests/test_shared_tasks_send_reply.py:1584`, a committed artifact of
+sub-project 20, **which mis-cited the very cause its immediate predecessor had
+just added**; sub-project 44's spec and `global-constraints.md` inherited it
+verbatim and were corrected mid-round (`8f8402c7`), while the source citation is
+still wrong and is registered as **D577** with a proposed fix rather than
+quietly repaired. **The substance was right in all three places and only the
+number was wrong**, which is precisely why it survived two reviews: a reader who
+checks the argument and not the number sees nothing amiss. Two rules follow.
+**A cause number handed to you in a brief is a claim like any other -- open fact
+75 and read the item before citing it**, the same discipline this file already
+demands for line numbers and test counts. And **having learned 4(c) does not
+exist, do not now force-fit cause 8**: it is scoped to a `try`/`except`, and a
+bare `if <cond>: raise` with no handler anywhere near it is not cause 8 however
+unreachable it is -- `app/shared/upload.py:120-121` is that shape and is filed
+under 4(b) instead (**D587**). Sibling of fact 250, which is the same failure
+one item over: a fact cited for the half that suited the conclusion.
+
+**252. THE MIRROR IMAGE OF CAUSE 4(b) -- AN INVARIANT THAT MAKES A CONDITION A
+TAUTOLOGY AND STRANDS ITS *FALSE* ARM -- IS NOT IN FACT 75's CATALOGUE, AND TWO
+TASKS REACHED FOR THE WRONG NUMBER INDEPENDENTLY BECAUSE OF IT.** 4(b)'s literal
+text is *"The condition is falsified by an invariant established BEFORE the
+guard runs -- by a caller, or by an enclosing guard -- so its **True** branch is
+dead code."* `app/shared/auth.py`'s three residual dead branches
+`[[54,57],[74,77],[111,-18]]` are the opposite polarity. `:21-39` is an
+exhaustive `if src == SRC_WEB / elif src == SRC_API / else: return None` and
+`src` is a parameter never reassigned in the body, so every line after `:39`
+runs with `src` provably in `{SRC_WEB, SRC_API}`; each later
+`elif src == SRC_API:` is reached only when its paired `if src == SRC_WEB:` was
+false and is therefore **always true when reached**, leaving the **False arm**
+dead. **The first draft of that ruling filed it under 4(b) by quoting 4(b) with
+a bracketed "[non-matching]" substituted for the source's literal "True"** -- a
+bent quotation that concealed the polarity mismatch, caught in review. **Filing
+this shape under 4(b) as written is a mis-shelving; filing it under cause 8 is
+worse** (there is no handler); **and there is no 4(c) to file it under** (fact
+251). Registered as **D578** with a proposed amendment -- a new sub-shape under
+cause 4, or an explicit note extending 4(b) to its mirror -- **which has NOT yet
+been folded into fact 75**, so until it is, cite this fact rather than a number.
+The proof obligations are 4(b)'s either way: name the construct that establishes
+the invariant and prove it **against every branch of that construct**, not
+against a sample. And note what this is NOT: a third `src` value genuinely can
+be passed (`test_log_user_in_refuses_an_unknown_source` passes one), and the
+proof is that it is **intercepted and returned at `:39`** rather than that no
+caller supplies it -- which is the distinction fact 241 exists for.
+
+**253. A MODULE'S COVERAGE IS OFTEN NOT PRODUCED BY THE TEST FILE NAMED AFTER
+IT, SO DERIVE THE ORACLE INSTEAD OF INFERRING IT FROM THE FILENAME.** Fact 249
+says an oracle that does not execute the function turns every mutant into a
+survivor; this is the near-miss that produces it. Two instances verified at
+source in sub-project 44: **`app/shared/auth.py`'s entire `SRC_WEB` arm is
+exercised by `tests/test_redirect_targets.py:234-265`**
+(`TestSharedAuthNextPageIsChecked`), not by `tests/test_shared_auth_login.py`
+alone -- omit it and `:99-105` look uncovered and every mutant there survives
+vacuously. And **`app/shared/upload.py`'s SVG paths come from
+`tests/test_utils_security.py`**, which imports `process_upload` at `:35` and
+drives it for real around `:993-1049`; measured at the same moment in the round,
+`tests/test_shared_upload.py` alone reported **92.1875%** with
+`missing_lines [53, 55, 65, 121]` where the pair reported **96.875%** with
+`missing_lines [121]` -- three of the four apparent gaps belonged to the file
+that is not named after the module. **The check costs one command
+and it is the same one either way: measure the proposed oracle against the module
+with `--cov=<dotted module>` and read `missing_lines` BEFORE trusting a gap it
+shows you** -- an oracle that reproduces the module's full-suite figure is the
+only one whose survivors mean anything. The negative control is worth keeping in
+mind for what it looks like: in the same round, a domain-only oracle reported
+`app/shared/upload.py` at **9.375% with 76 missing lines**, which is what a
+non-executing oracle really looks like and is nothing like a subtle gap.
+
+**254. `git commit --amend` ALWAYS TARGETS HEAD, SO A FIX ROUND ON AN EARLIER
+TASK'S COMMIT AMENDS THE WRONG COMMIT THE MOMENT A LATER TASK HAS LANDED.** Fact
+248 covers the amend that stages nothing; this is the amend that stages correctly
+and hits the wrong object. Reconstructed from the reflog in sub-project 44:
+`HEAD@{4}` Task 1's commit, `HEAD@{3}` Task 2's commit on top, `HEAD@{2}` **Task
+1's fix round running `git commit --amend` while HEAD was Task 2's commit, so it
+amended TASK 2's commit with TASK 1's message**; the implementer noticed and
+reset to its own base, which dropped Task 2 from the branch, and Task 2's commit
+had to be recovered from the reflog and cherry-picked back. **The root cause was
+the dispatch, not the implementer**: "amend your existing commit" was true when
+written and false by the time it ran. Three rules. **`--amend` is safe only when
+the target IS HEAD** -- check `git rev-parse HEAD` against the SHA you mean to
+amend, and check it at the moment of the amend, not at the moment of the
+instruction. **A fix round on a commit that is no longer HEAD commits a NEW
+commit on top** and lets whoever owns the branch decide about squashing;
+`git rebase` is not the remedy either. And the controller-side rule that
+prevents it entirely: **do not run an implementer for one task while an earlier
+task's fix round is still open**, because the reasoning "they touch different
+files" is correct about files and irrelevant to git.
+
+**255. A STATUS-CODE ASSERTION PAIRED WITH A FLASH-TEXT ASSERTION CANNOT
+DISTINGUISH A REFUSAL FROM A FALL-THROUGH INTO THE SUCCESS PATH, BECAUSE BOTH
+PRODUCE THE SAME 302 AND THE FLASH HAS ALREADY BEEN EMITTED.**
+`app/shared/auth.py:53`'s `return redirect(url_for('auth.login'))` could be
+deleted with the whole suite green: a **web login with a wrong password** then
+flashes `'Invalid password'` at `:52`, falls out of `:46`'s block, past the ban
+check at `:57`, into `:80`'s `login_user(user, remember=True)`, and returns the
+ordinary success redirect. **A wrong password logged the user in.** The test
+asserted `response.status_code == 302` and `flashed == ['Invalid password']`,
+**and the bypass satisfies both** -- the success path is also a 302, and the
+flash was emitted one line before the deleted return, so no further flash is
+added. This is false-witness mechanism (a) -- asserting on state the success path
+sets just as unconditionally -- and it is easy to miss because the assertions
+look specific: an exact flash list feels like a strong assertion, and here it is
+strong about the wrong thing. **The remedy is an assertion about the OUTCOME the
+refusal exists to prevent, not about the refusal's cosmetics**: capture
+`logged_in = '_user_id' in flask_session` inside the request context and assert
+it is `False`, which is the same probe the file's success-path test uses with the
+opposite expectation, so the pair is symmetric. **Generalise it: on any refusal
+path that shares a status code with the success path, assert the thing that
+would be true only if the refusal had NOT happened.** Registered with the round's
+mutation pass at **D585**; the sibling at `:51` is a genuinely milder gap (no
+bypass, because `:53` still returns) and was closed differently, by pinning the
+exact flash list -- **checked rather than assumed, which is why the two got
+different remedies.**
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
