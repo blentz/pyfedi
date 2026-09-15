@@ -298,6 +298,43 @@ def test_ban_user_skips_the_ip_ban_when_the_target_has_no_address(app, db_sessio
     assert db.session.query(IpBan).count() == 0
 
 
+def test_ban_user_ip_bans_everyone_when_the_flag_is_false_is_not_the_case(
+        app, db_session):
+    """The FIRST operand of :201's `if ban_ip_address and to_ban.ip_address:`.
+
+    test_ban_user_creates_an_ip_ban covers `(True, present)` and
+    test_ban_user_skips_the_ip_ban_when_the_target_has_no_address covers
+    `(True, absent)` -- both leave `ban_ip_address` fixed at True, so neither
+    can tell the difference between the real `and` and a mutant with the
+    first operand deleted (`if to_ban.ip_address:`): the target has an
+    address in both, so a deleted first operand would still gate correctly
+    by accident. This test is the missing `(False, present)` cell: the flag
+    is off but the target has an address, so a deleted first operand would
+    IP-ban them anyway -- everyone banned would get IP-banned regardless of
+    the caller's choice.
+
+    Neither test is redundant with the other: this one alone would leave the
+    SECOND operand deletable (a mutant reading `if ban_ip_address:` alone
+    would also pass here, since it never looks at ip_address). It is the
+    PAIR of this test and test_ban_user_skips_the_ip_ban_when_the_target_has_
+    no_address together that pins both operands -- one proves `ban_ip_address`
+    is not enough alone, the other proves `to_ban.ip_address` is not enough
+    alone. Removing either test from the suite silently reopens the operand
+    the other one was pinning.
+    """
+    s = _seed_ban_scenario()
+    s.target.ip_address = '203.0.113.7'
+    db.session.commit()
+
+    with app.test_request_context('/'):
+        with _recording_task_selector():
+            ban_user({'person_id': s.target.id, 'purge_content': False,
+                      'ban_ip_address': False, 'reason': 'spam'},
+                     SRC_API, bearer(s.admin))
+
+    assert db.session.query(IpBan).count() == 0
+
+
 def test_ban_user_does_not_duplicate_an_existing_ip_ban(app, db_session):
     """:203's `if not existing_ip_ban` -- the false arc."""
     s = _seed_ban_scenario()
@@ -742,3 +779,71 @@ def test_ban_user_without_purge_warns_about_an_instance_admin_too(
     assert flashed == [
         'Banned user was a remote instance admin.',
         f'{s.target.display_name()} has been banned.']
+
+
+def test_ban_user_purging_a_remote_target_calls_delete_dependencies_and_purge_content(
+        app, db_session, monkeypatch, redis_lock_only_double):
+    """:175-176's two calls on the remote purge path -- `to_ban.
+    delete_dependencies()` and `to_ban.purge_content(flush=flush_cdn)`.
+
+    RECORDING, NOT BEHAVIOURAL, AND HERE IS WHY. `User.purge_content`
+    (app/models.py:1561-1591) calls `self.delete_dependencies()` itself, at
+    :1566, before it touches posts, replies or user_file rows.
+    `delete_dependencies` (app/models.py:1490-1559) is idempotent: every
+    statement in it is a DELETE/UPDATE filtered to `self.id`, so a second
+    call after the first finds nothing left to remove and is a no-op. That
+    means deleting the explicit call at :175 (mutant M53) changes NOTHING
+    observable in the test database: purge_content's OWN internal call at
+    :1566 still runs exactly once by the time purge_content returns, and
+    every row delete_dependencies would have made is made either way, in
+    either order, before purge_content's post/reply/file loops read that
+    state at :1568 and :1586. There is no column and no row in this schema
+    that differs between "delete_dependencies runs once, explicitly, then
+    purge_content runs and no-ops its own internal call" and
+    "delete_dependencies is skipped explicitly and purge_content's internal
+    call is the only one" -- both leave the database in the identical final
+    state. No assertion against a real row or column can therefore
+    distinguish M53's survivor from the real code, which is exactly the
+    "neither leaves an observable trace" case the brief anticipates. M54
+    (deleting the `purge_content` call itself) is not similarly masked --
+    nothing else in ban_user's remote branch touches posts, replies or
+    Post-joined files -- but it is bundled into the same monkeypatch here
+    for one assertion covering both lines, rather than as a second
+    behavioural test, so that the docstring's reasoning about M53 is not
+    read as applying to a line it does not apply to.
+
+    Both methods are patched on the CLASS (`User`), matching the pattern at
+    tests/test_actor_profiles.py:1421 (`type(user)`), because monkeypatch.
+    setattr on an already-bound instance method needs the replacement to
+    take `self` explicitly to match how Python would have bound the
+    original -- patching the class and taking `self` as the first parameter
+    keeps that binding correct for whichever User instance `to_ban` turns
+    out to be.
+
+    `flush=False` is asserted, not just presence of the kwarg: `purge_content`
+    defaults `flush` to True (app/models.py:1561), so a mutant that dropped
+    the `flush=flush_cdn` argument while keeping the call itself would still
+    satisfy a "was it called" assertion but would silently pass True instead
+    of the API path's hardcoded False (:148) -- the exact value pins that the
+    argument, not merely the call, survived.
+    """
+    s = _seed_ban_scenario(target_local=False)
+    calls = []
+
+    def record_delete_dependencies(self):
+        calls.append(('delete_dependencies', self.id))
+
+    def record_purge_content(self, flush=True):
+        calls.append(('purge_content', self.id, flush))
+
+    monkeypatch.setattr(User, 'delete_dependencies', record_delete_dependencies)
+    monkeypatch.setattr(User, 'purge_content', record_purge_content)
+
+    with app.test_request_context('/'):
+        with _recording_task_selector():
+            ban_user({'person_id': s.target.id, 'purge_content': True,
+                      'ban_ip_address': False, 'reason': 'spam'},
+                     SRC_API, bearer(s.admin))
+
+    assert calls == [('delete_dependencies', s.target.id),
+                      ('purge_content', s.target.id, False)]
