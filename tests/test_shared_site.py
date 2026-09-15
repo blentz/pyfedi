@@ -73,7 +73,7 @@ def test_block_remote_instance_api_creates_the_block_and_returns_the_blocker(app
 
 
 def test_block_remote_instance_web_creates_the_block_and_returns_none(app, db_session):
-    """:32 returns None and leaves the flash to its caller.
+    """:33 returns None and leaves the flash to its caller.
 
     Both the return value and the row are asserted: a function that created
     nothing would also return None.
@@ -89,8 +89,8 @@ def test_block_remote_instance_web_creates_the_block_and_returns_none(app, db_se
 
 
 def test_block_remote_instance_is_idempotent(app, db_session):
-    """:22's `if not existing` -- the false arm. The second call must not add
-    a second row and must still return the blocker's id from :30."""
+    """:23's `if not existing` -- the false arm. The second call must not add
+    a second row and must still return the blocker's id from :31."""
     s = _seed_blocker()
     block_remote_instance(s.remote.id, SRC_API, bearer(s.blocker))
 
@@ -101,7 +101,9 @@ def test_block_remote_instance_is_idempotent(app, db_session):
 
 
 def test_block_remote_instance_api_refuses_the_local_instance(app, db_session):
-    """:16-17. The API arm raises and never reaches :21.
+    """:16-17. The API arm raises and never reaches :24, the InstanceBlock
+    insert (:21 itself is a blank line, between the web arm's early return
+    at :20 and the existence check at :22-23).
 
     THIS IS THE CONTROL, not a pin: it is the arm that already refuses
     correctly and must keep refusing after the web arm is fixed. The row
@@ -164,9 +166,9 @@ def test_unblock_remote_instance_web_removes_the_block_and_returns_none(app, db_
 
 
 def test_unblock_remote_instance_leaves_another_users_block_alone(app, db_session):
-    """:38's filter is on BOTH user_id and instance_id.
+    """:39's filter is on BOTH user_id and instance_id.
 
-    THE BYSTANDER'S ROW IS SEEDED FIRST, DELIBERATELY. `.first()` at :38 has
+    THE BYSTANDER'S ROW IS SEEDED FIRST, DELIBERATELY. `.first()` at :39 has
     no ORDER BY, so a heap scan over two rows inserted in one transaction
     returns them in insertion order. If the subject's row were seeded first, a
     mutant narrowing the filter to instance_id alone would return and delete
@@ -188,8 +190,8 @@ def test_unblock_remote_instance_leaves_another_users_block_alone(app, db_sessio
 
 
 def test_unblock_remote_instance_is_idempotent(app, db_session):
-    """:39's `if existing` -- the false arm. No block exists, so the body is
-    skipped and :47 still returns the caller's id."""
+    """:40's `if existing` -- the false arm. No block exists, so the body is
+    skipped and :48 still returns the caller's id."""
     s = _seed_blocker()
 
     returned = unblock_remote_instance(s.remote.id, SRC_API, bearer(s.blocker))
