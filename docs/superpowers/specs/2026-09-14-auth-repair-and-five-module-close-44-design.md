@@ -1,4 +1,4 @@
-# Coverage sub-project 44: the login ban bypass, and five modules closed
+# Coverage sub-project 44: the login ban bypass, and three modules closed
 
 **Date:** 2026-09-14
 **Branch:** `blentz`
@@ -11,9 +11,9 @@ Three parts, in this order.
 **Part 1 — repair a live authentication bypass.** `app/shared/auth.py:57-75` refuses a
 banned user once and then lets them in on every subsequent attempt.
 
-**Part 2 — close five modules**: `app/shared/tasks/notes.py`, `app/shared/tasks/pages.py`,
-`app/shared/domain.py`, `app/shared/auth.py`, `app/shared/upload.py`. Together 116
-statements and 72 arcs.
+**Part 2 — close three modules**: `app/shared/domain.py`, `app/shared/auth.py` and
+`app/shared/upload.py`. Together 112 statements and 72 arcs. (This read "five modules" and
+"116 statements" before the CORRECTION below withdrew Group A.)
 
 **Part 3 — pay down the two highest-ranked survivors** sub-project 43 registered.
 
@@ -73,7 +73,7 @@ succeeds, before any production line changes. Then the dedent, then the three pi
 Row one must keep passing unchanged throughout — it is the control that proves the dedent did
 not simply disable the branch.
 
-## Part 2: the five modules
+## Part 2: the modules
 
 ### Measurement, from the full-suite JSON at `83f4cd6d`
 
@@ -84,7 +84,54 @@ not simply disable the branch.
 | `app/shared/domain.py` | 14.000 | 27 | 16 | none |
 | `app/shared/auth.py` | 43.548 | 40 | 30 | none |
 | `app/shared/upload.py` | 44.531 | 45 | 26 | none |
-| | | **116** | **72** | |
+| | | **112 in scope** | **72** | |
+
+(The `notes.py` and `pages.py` rows are left in place as the measurement that prompted
+Group A. Their 4 statements are NOT in this round's scope — see the CORRECTION above.)
+
+### CORRECTION, added after this spec was committed: Group A is WITHDRAWN
+
+**Group A as written below is wrong, and the two modules it would have closed stay
+open.** The correction is kept in place rather than deleted, because what it got wrong
+matters more than what it proposed.
+
+This spec claimed `notes.py:100-101` and `pages.py:107-108` were an oversight that a
+monkeypatch would close. They are not an oversight. **Sub-projects 19 and 20 reached
+them, analysed them, and ruled them unreachable deliberately**, filing them under this
+campaign's own taxonomy as `tests/README.md` fact 75, **cause 4(c)** — a handler for an
+exception the callee cannot raise on this path. The argument is written out at
+`tests/test_shared_tasks_send_reply.py:1565-1588`:
+
+> `search_for_user` cannot raise for a bare local name. `:95` has already established
+> that the mention's host half equals `SERVER_NAME`, so `user_name` reaching `:99`
+> carries no `'@'` and no scheme, and `search_for_user` takes its local branch — a query
+> returning None for a miss, not an exception. The remote half of the same scan
+> (`:102` onward) is where a raise is possible, and it has its own handler.
+
+That is sound, and this spec's author had not read it before proposing the monkeypatch.
+
+**Why this is NOT the shape sub-project 43 retracted.** D564's error was ruling two lines
+equivalent when a legitimate third `src` value reached them and the twin module already
+shipped the test — a real input, already precedented. Here there is no input at all: the
+handler can only be entered by making the callee do something it provably cannot do.
+Covering it with a double would assert a counterfactual and would overturn two deliberate
+prior rulings on this spec's say-so rather than on evidence they were wrong.
+
+**The distinction, stated so the next round does not have to re-derive it:** "no
+production caller reaches it" is not a reason to stop measuring, and that was D564's
+mistake. "No possible input reaches it, because the callee cannot produce the condition"
+is a different claim, and it is the one cause 4(c) names. Ask which of the two you have.
+
+**Consequence for this round.** `app/shared/tasks/notes.py` and `app/shared/tasks/pages.py`
+stay at floor 99. Part 2 closes **three** modules, not five: `domain.py`, `auth.py` and
+`upload.py` — **112 statements and 72 arcs**. Every figure below that says five modules or
+116 statements is superseded by this paragraph. The floors total is unchanged at 25,
+because the three new entries were always the three this round adds.
+
+**Left open for a later round, and worth settling once:** whether cause 4(c) is a
+do-not-cover category or a cover-with-a-double category. The campaign has met this shape at
+least twice (`send_post`'s `:107-108`, `send_reply`'s `:100-101`) and re-litigates it each
+time. That question is bigger than one round.
 
 ### Group A — the bare-`except` twins (4 statements, two modules closed)
 
@@ -211,11 +258,11 @@ changes and each named them in the spec before the round began; this one names e
 ## Success criteria
 
 - The four ban states pinned, the dedent made, three pins inverted, row one still passing.
-- All five modules at `missing_lines []` and `missing_branches []`, **checked as lists**, with
+- All three modules at `missing_lines []` and `missing_branches []`, **checked as lists**, with
   any line ruled unreachable carrying a proof that no *test* can reach it — not merely that no
   production caller does.
-- Floors: `notes.py` and `pages.py` 99 → 100; **new** entries for `domain.py`, `auth.py` and
-  `upload.py` at their measured values. 25 floors total.
+- Floors: **new** entries for `domain.py`, `auth.py` and `upload.py` at their measured
+  values. 25 floors total. `notes.py` and `pages.py` stay at 99 — see the CORRECTION.
 - `app/shared/user.py` still at 100 after Part 3.
 - Full suite green, run by the controller, floors check chained with `&&` and **both**
   arguments, against a `--cov=app` JSON — a narrow `--cov` makes
