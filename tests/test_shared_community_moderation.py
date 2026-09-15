@@ -70,7 +70,8 @@ from sqlalchemy.exc import NoResultFound
 
 from app import db
 from app.constants import SRC_API, SRC_WEB
-from app.shared.community import delete_community, restore_community
+from app.models import CommunityMember, ModLog
+from app.shared.community import add_mod_to_community, delete_community, restore_community
 from tests.factories import (bearer, make_community, make_community_member, make_instance,
                              make_user, web_ctx)
 
@@ -489,3 +490,192 @@ def test_restore_community_missing_id_raises_NoResultFound(app, db_session):
     with web_ctx(app, s.user):
         with pytest.raises(NoResultFound):
             restore_community(999999, SRC_WEB)
+
+
+# `add_mod_to_community` (app/shared/community.py:540-605), first half only:
+# `:542-562` (lookup, the permission guard, and the existing-member fork) and
+# `:589-605` (the modlog write, the task_selector call, and the API return).
+# `:564-588` -- the new_moderator.is_local() notify/chat-message fork -- is
+# Task 3's; the tests below let that code execute (it must, since it sits
+# between `:562` and `:589` in a straight-line function) but assert nothing
+# about it. Every target user below is minted with `local=True` so that fork
+# always takes its notify-in-app arm, which is a handful of local Notification
+# writes with no outbound side effects (email, federation, chat) to stub out.
+#
+# `task_selector` is patched on `app.shared.community` for the same reason as
+# this file's delete_community/restore_community tests above: the `from
+# app.shared.tasks import task_selector` at this module's own top rebinds the
+# name into `app.shared.community`'s globals, and `_seed()`'s bystander
+# community keeps `community_id` off the trivial `1` a hardcoding mutant
+# could otherwise hide behind.
+
+
+def test_add_mod_to_community_owner_may_add(app, db_session, monkeypatch):
+    """`:549`'s first operand alone: the actor is an owner and NOT an admin
+    (`_seed()` burns user id 1, so `s.user` is never the id-1 admin trap).
+
+    Exercises `:542-548` (the SRC_API auth arm, then the community and
+    target lookups), `:551-558`'s else arm (the target holds no existing
+    CommunityMember row here, so a new one is created), `:559-561`'s false
+    arm (SRC_API skips the flash), `:589-590` (add_to_modlog writes a ModLog
+    row -- this task's target range), and `:602-605` (the task_selector call
+    and the SRC_API return of the actor's id).
+    """
+    s = _seed()
+    member = make_community_member(s.user, s.community, is_moderator=False)
+    member.is_owner = True
+    db.session.commit()
+    target = make_user(s.instance, 'bob', local=True)
+    calls = []
+    monkeypatch.setattr('app.shared.community.task_selector',
+                         lambda task_key, **kw: calls.append((task_key, kw)))
+
+    returned = add_mod_to_community(s.community.id, target.id, SRC_API, bearer(s.user))
+
+    assert returned == s.user.id
+    new_row = db.session.query(CommunityMember).filter_by(
+        user_id=target.id, community_id=s.community.id).one()
+    assert new_row.is_moderator is True
+    modlog_row = db.session.query(ModLog).filter_by(action='add_mod').one()
+    assert modlog_row.user_id == s.user.id
+    assert modlog_row.target_user_id == target.id
+    assert modlog_row.community_id == s.community.id
+    assert calls == [('add_mod', {'user_id': s.user.id, 'mod_id': target.id,
+                                  'community_id': s.community.id})]
+
+
+def test_add_mod_to_community_admin_who_is_not_owner_may_add(app, db_session, monkeypatch):
+    """`:549`'s second operand alone: the actor is staff and NOT an owner --
+    `s.user` holds no CommunityMember row at all, so `community.is_owner`
+    (`app/models.py:742-747`) is False on its own, and is instead a site
+    admin via `_make_site_admin`.
+
+    Also exercises `:559-561`'s true arm: SRC_WEB flashes 'Moderator added'
+    (asserted via Flask's `get_flashed_messages`, available because
+    `web_ctx` opens a real request context) and `:604-605`'s false arm
+    returns `None` rather than the actor's id.
+    """
+    from flask import get_flashed_messages
+
+    s = _seed()
+    _make_site_admin(s.user)
+    target = make_user(s.instance, 'bob', local=True)
+    calls = []
+    monkeypatch.setattr('app.shared.community.task_selector',
+                         lambda task_key, **kw: calls.append((task_key, kw)))
+
+    with web_ctx(app, s.user):
+        returned = add_mod_to_community(s.community.id, target.id, SRC_WEB)
+        flashed = get_flashed_messages()
+
+    assert returned is None
+    assert flashed == ['Moderator added']
+    new_row = db.session.query(CommunityMember).filter_by(
+        user_id=target.id, community_id=s.community.id).one()
+    assert new_row.is_moderator is True
+    assert calls == [('add_mod', {'user_id': s.user.id, 'mod_id': target.id,
+                                  'community_id': s.community.id})]
+
+
+def test_add_mod_to_community_plain_member_is_refused(app, db_session):
+    """`:549` with BOTH operands false -- a plain, non-owner CommunityMember
+    row and no admin role -- raises `'no_permission'` at `:550`.
+
+    Note the string: `:550` raises `'no_permission'` where the twin at
+    `:618` (`remove_mod_from_community`) raises `'incorrect_login'` for the
+    same shape of condition. Asserting the actual string here, not assuming
+    symmetry with the removal twin.
+
+    No CommunityMember row is created or altered for the target, and no
+    ModLog row is written: the guard raises before `:551-558` and `:589-590`
+    ever run.
+    """
+    s = _seed()
+    make_community_member(s.user, s.community, is_moderator=False)
+    target = make_user(s.instance, 'bob', local=True)
+
+    with web_ctx(app, s.user):
+        with pytest.raises(Exception, match='no_permission'):
+            add_mod_to_community(s.community.id, target.id, SRC_WEB)
+
+    assert db.session.query(CommunityMember).filter_by(
+        user_id=target.id, community_id=s.community.id).count() == 0
+    assert db.session.query(ModLog).filter_by(action='add_mod').count() == 0
+
+
+def test_add_mod_to_community_existing_member_is_promoted_without_new_row(
+        app, db_session, monkeypatch):
+    """`:554`'s true arm: the target already holds a CommunityMember row (a
+    plain, non-moderator member), so `:555` flips its `is_moderator` column
+    True in place. Asserting the row count stays at 1 catches a mutant that
+    creates a second, duplicate row instead of reusing the existing one.
+    """
+    s = _seed()
+    member = make_community_member(s.user, s.community, is_moderator=False)
+    member.is_owner = True
+    db.session.commit()
+    target = make_user(s.instance, 'bob', local=True)
+    make_community_member(target, s.community, is_moderator=False)
+    calls = []
+    monkeypatch.setattr('app.shared.community.task_selector',
+                         lambda task_key, **kw: calls.append((task_key, kw)))
+
+    returned = add_mod_to_community(s.community.id, target.id, SRC_API, bearer(s.user))
+
+    assert returned == s.user.id
+    rows = db.session.query(CommunityMember).filter_by(
+        user_id=target.id, community_id=s.community.id).all()
+    assert len(rows) == 1
+    assert rows[0].is_moderator is True
+    assert calls == [('add_mod', {'user_id': s.user.id, 'mod_id': target.id,
+                                  'community_id': s.community.id})]
+
+
+def test_add_mod_to_community_no_existing_member_creates_new_row(app, db_session, monkeypatch):
+    """`:554`'s false arm: the target holds no CommunityMember row at all, so
+    `:557-558` creates a new one with `is_moderator=True`. Asserting the row
+    count reaches exactly 1 (not 0, and not more than 1) catches a mutant
+    that skips the creation entirely or that runs it more than once.
+    """
+    s = _seed()
+    member = make_community_member(s.user, s.community, is_moderator=False)
+    member.is_owner = True
+    db.session.commit()
+    target = make_user(s.instance, 'bob', local=True)
+    assert db.session.query(CommunityMember).filter_by(
+        user_id=target.id, community_id=s.community.id).count() == 0
+    calls = []
+    monkeypatch.setattr('app.shared.community.task_selector',
+                         lambda task_key, **kw: calls.append((task_key, kw)))
+
+    returned = add_mod_to_community(s.community.id, target.id, SRC_API, bearer(s.user))
+
+    assert returned == s.user.id
+    rows = db.session.query(CommunityMember).filter_by(
+        user_id=target.id, community_id=s.community.id).all()
+    assert len(rows) == 1
+    assert rows[0].is_moderator is True
+    assert calls == [('add_mod', {'user_id': s.user.id, 'mod_id': target.id,
+                                  'community_id': s.community.id})]
+
+
+def test_add_mod_to_community_banned_user_cannot_be_added(app, db_session):
+    """`:548` is `User.query.filter_by(id=person_id, banned=False).one()`, so
+    a banned target raises `NoResultFound` before any permission work at
+    `:549` or any membership work at `:551-558`.
+
+    Its twin at `:616` (`remove_mod_from_community`) omits `banned=False`,
+    which looks deliberate -- you want to be able to demote a banned
+    moderator. That asymmetry is a test case here, not a finding.
+    """
+    s = _seed()
+    member = make_community_member(s.user, s.community, is_moderator=False)
+    member.is_owner = True
+    db.session.commit()
+    target = make_user(s.instance, 'bob', local=True)
+    target.banned = True
+    db.session.commit()
+
+    with web_ctx(app, s.user):
+        with pytest.raises(NoResultFound):
+            add_mod_to_community(s.community.id, target.id, SRC_WEB)
