@@ -7669,6 +7669,98 @@ bypass, because `:53` still returns) and was closed differently, by pinning the
 exact flash list -- **checked rather than assumed, which is why the two got
 different remedies.**
 
+**256. A GUARD THAT FLASHES A REFUSAL AND DOES NOT RETURN IS INVISIBLE TO
+COVERAGE, BECAUSE THE FLASH LINE AND THE FALL-THROUGH LINE BOTH EXECUTE AND
+BOTH REPORT COVERED.** Sub-project 45 shipped two instances of this in one
+round. `app/shared/site.py:14-20`'s `block_remote_instance` flashed `'You
+cannot block the local instance.'` and then, for lack of a `return`, fell
+through into the block-creation code that follows -- the local instance got
+"blocked" on the web arm despite being warned against it. One function over,
+`app/shared/community.py:60`'s `leave_community` guard read `not cm.is_owner
+and not cm.is_moderator` -- correct -- but an earlier reading of the same
+guard as `not cm.is_owner or not cm.is_moderator` shows the failure mode from
+the other direction: under `or`, a plain moderator's row (`is_owner=False,
+is_moderator=True`) evaluates the guard `True`, taking the free-leave branch
+instead of the refusal, and the guard is dead for exactly the population --
+moderators without ownership -- it exists to catch. **In both cases every
+line runs on every test, line and branch coverage report 100%, and nothing
+about the coverage tooling can tell you the refusal refuses nothing.** Fact
+255 established this same shape for a status-code-plus-flash-text assertion
+that a fall-through into a *different* path satisfies just as well; this is
+its sibling for the case where the refusal never reaches a `return` or a
+`raise` at all. **The mechanical remedy, stated once so a third and fourth
+instance recognise it as a class rather than as luck**: a test of any
+guard whose failure mode is "did nothing, or did too much" must assert the
+row or session state the guard exists to protect -- `InstanceBlock` row count,
+`CommunityMember` row count, `'_user_id' in flask_session` -- never merely
+that a message was flashed or an exception's text matched. This is now the
+third consecutive round to ship exactly this shape (sub-project 43's
+`if SRC_WEB:`, sub-project 44's mis-nested ban refusal, and this round's two);
+see **D597**.
+
+**257. `not A or not B` IS `not (A and B)`, NOT `not (A or B)` -- SO A DE
+MORGAN SLIP ON A TWO-FLAG GUARD MAKES IT FIRE ONLY WHEN *BOTH* FLAGS ARE SET,
+THE OPPOSITE OF THE USUAL "REFUSE IF EITHER" INTENT.** `app/shared/community.py:60`
+guards a refusal (`leave_community` must bar an owner or a moderator from
+leaving without stepping down first) and the population it needs to catch is
+"has EITHER role" -- `is_owner OR is_moderator`. The refusal condition for
+that population is `not (is_owner or is_moderator)`, whose De Morgan
+expansion is `not is_owner AND not is_moderator` (the free-leave branch). Read
+it with the operator flipped -- `not is_owner OR not is_moderator` -- and the
+free-leave branch now fires whenever EITHER flag is false, which is every
+population except "has both roles simultaneously": a plain moderator
+(`is_owner=False, is_moderator=True`) satisfies `not is_owner` and is waved
+through. **The population size matters here as much as the algebra**: for a
+local community, ownership and moderation are usually correlated (the
+creator is both), so a fixture built only from local owners would never
+notice the guard was upside down; the guard is dead specifically for
+federated communities' moderators, who are moderators without local
+ownership by construction. A two-flag "refuse if either" guard should be
+read as a conjunction of negations, and a reviewer checking one should
+write out both De Morgan forms and confirm which population each admits,
+rather than trusting that `or` "sounds like" the permissive direction. See
+**D596**.
+
+**258. THE ID-1 SEED BURN IS LOAD-BEARING TWICE OVER FOR ANY TEST THAT CALLS
+`make_community`, NOT JUST ONCE.** Fact 216 established that `User.is_admin()`
+returns `True` unconditionally for `id == 1` (`app/models.py:1259-1261`), so a
+test that wants an unprivileged actor must burn the first seeded seat with a
+throwaway user before minting its real actor. Fact 21 separately established
+that `make_community` (`tests/factories.py:124`) hardcodes `instance_id=1,
+user_id=1` and never takes either as an argument, so an `Instance` and a
+`User` must already occupy id 1 -- with a real foreign key -- before it can be
+called at all. **The two facts describe the SAME burned seed doing DOUBLE
+DUTY, and sub-project 45 is the first round to state that explicitly rather
+than satisfy each requirement separately.** A test that seeds a bystander
+user first (to dodge the admin trap) and asserts `burn.id == 1` has, in the
+same act, also supplied the row `make_community`'s hardcoded `user_id=1`
+needs to exist -- so the community `make_community` builds is silently owned
+by the burned bystander, not by whichever user the test seeds next. Confirmed
+at source by Task 3's review reading `tests/factories.py:124` and
+`app/models.py:1258-1261` side by side. The corollary for anyone auditing a
+community fixture: check what role id 1 plays in BOTH senses before assuming
+a seeded "throwaway" user is inert -- it is simultaneously the admin-trap
+dodge and the community's owner of record.
+
+**259. INSTANCE ID 1 IS THE LOCAL INSTANCE THROUGHOUT THIS CODEBASE, AND A
+GUARD WRITTEN AS A HARDCODED `== 1` IS REACHABLE FROM AN ORDINARY LOCAL
+ACTION, NOT JUST FROM A CONTRIVED FIXTURE.** `app/shared/site.py:14`'s
+`block_remote_instance` guard, `if instance_id == 1:`, is a literal integer
+comparison rather than a lookup against `Instance.is_local()` or similar --
+and the campaign has repeatedly confirmed that literal is safe to treat as
+"the local instance" because nothing in this codebase assigns any other
+value to a local `Instance` row. The production route that makes the guard
+reachable from an ordinary user action, not merely from a test that passes
+`instance_id=1` directly, chains through three files: `app/post/routes.py:1480`
+calls `block_remote_instance(post.instance_id, SRC_WEB)`; `post.instance_id`
+is set once, at creation, in `app/shared/post.py:218` as
+`instance_id=user.instance_id`; and a LOCAL user's `instance_id` is 1 by the
+same construction this fact's sibling facts document for `Community` and
+`User` rows built by this suite's own factories. So any post authored by a
+local user, later "blocked" via this route, drives `instance_id == 1` through
+an ordinary call chain -- the guard's trigger is not a fixture artifact, it is
+the common case. See **D595**.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
