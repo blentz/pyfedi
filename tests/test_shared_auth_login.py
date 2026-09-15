@@ -23,13 +23,15 @@ import contextlib
 from types import SimpleNamespace
 
 import pytest
+from flask import session as flask_session, url_for
 
 import app.shared.auth as auth_module
 from app import db
 from app.constants import SRC_API, SRC_WEB
 from app.models import Instance, IpBan, User
 from app.shared.auth import log_user_in
-from tests.factories import make_instance, make_user
+from tests.factories import (make_community, make_community_member, make_instance,
+                              make_user, make_user_registration)
 
 
 class Field:
@@ -351,3 +353,324 @@ def test_log_user_in_survives_a_failing_ldap_sync(app, db_session, monkeypatch):
                                   'password': s.password}, SRC_API)
 
     assert result['jwt']
+
+
+# ---------------------------------------------------------------------------
+# SRC_WEB arm. Every test below drives a source value production never
+# passes to this function: app/auth/util.py:474 is a different log_user_in
+# that serves the real web login flow, and app/shared/auth.py:18's only
+# caller, app/api/alpha/routes.py:1277, passes SRC_API. The SRC_WEB arm is
+# live code, so it is covered -- but no login page reaches it, and a reader
+# should not mistake these for tests of one.
+# ---------------------------------------------------------------------------
+
+
+def test_log_user_in_web_looks_up_by_exact_user_name(app, db_session, monkeypatch):
+    """:21-24. The web arm's own lookup, `filter_by(user_name=username,
+    ap_id=None)` -- distinct from :26-33's API arm, which lower-cases the
+    comparison in SQL and falls back to an email match. Asserts the returned
+    response is a redirect, not the API arm's JWT dict, since that is the
+    thing that distinguishes SRC_WEB's branch from SRC_API's at this point.
+
+    DRIVES A SOURCE VALUE PRODUCTION NEVER PASSES to this function.
+    app/auth/util.py:474 is a different log_user_in and serves the real web
+    login flow; this one's only caller, app/api/alpha/routes.py:1277, passes
+    SRC_API. The SRC_WEB arm is live code, so it is covered -- but no login
+    page reaches it, and a reader should not mistake this for a test of one.
+    """
+    s = _seed_login_user()
+
+    with app.test_request_context('/'):
+        with _ban_state(monkeypatch):
+            response = log_user_in(Form('loginuser', s.password), SRC_WEB)
+
+    assert response.status_code == 302
+    assert not isinstance(response, dict)
+
+
+def test_log_user_in_web_refuses_an_unknown_user_name(app, db_session, monkeypatch):
+    """:41-44's first operand, `user is None`. Two tests cover this `or`
+    because a single test would leave one operand deletable -- see the
+    sibling test below for `user.deleted`, the other operand.
+
+    DRIVES A SOURCE VALUE PRODUCTION NEVER PASSES to this function.
+    app/auth/util.py:474 is a different log_user_in and serves the real web
+    login flow; this one's only caller, app/api/alpha/routes.py:1277, passes
+    SRC_API. The SRC_WEB arm is live code, so it is covered -- but no login
+    page reaches it, and a reader should not mistake this for a test of one.
+    """
+    _seed_login_user()
+
+    with app.test_request_context('/'):
+        with _ban_state(monkeypatch):
+            response = log_user_in(Form('nobody', 'whatever'), SRC_WEB)
+            flashed = [str(message) for _category, message in
+                       flask_session.get('_flashes', [])]
+            expected_location = url_for('auth.login')
+
+    assert response.status_code == 302
+    assert 'No account exists with that user name.' in flashed
+    assert response.headers['Location'] == expected_location
+
+
+def test_log_user_in_web_refuses_a_deleted_user(app, db_session, monkeypatch):
+    """:41-44's second operand, `user.deleted`. The user name is known and
+    the password is correct -- only `deleted=True` should trigger the
+    refusal, isolating this operand from the `user is None` operand covered
+    above. :24's lookup does not filter on `deleted` (unlike :29's API-arm
+    lookup), so a deleted user is still found here and must be rejected by
+    this check instead.
+
+    DRIVES A SOURCE VALUE PRODUCTION NEVER PASSES to this function.
+    app/auth/util.py:474 is a different log_user_in and serves the real web
+    login flow; this one's only caller, app/api/alpha/routes.py:1277, passes
+    SRC_API. The SRC_WEB arm is live code, so it is covered -- but no login
+    page reaches it, and a reader should not mistake this for a test of one.
+    """
+    s = _seed_login_user()
+    s.user.deleted = True
+    db.session.commit()
+
+    with app.test_request_context('/'):
+        with _ban_state(monkeypatch):
+            response = log_user_in(Form('loginuser', s.password), SRC_WEB)
+            flashed = [str(message) for _category, message in
+                       flask_session.get('_flashes', [])]
+            expected_location = url_for('auth.login')
+
+    assert response.status_code == 302
+    assert 'No account exists with that user name.' in flashed
+    assert response.headers['Location'] == expected_location
+
+
+def test_log_user_in_web_refuses_a_wrong_password_with_a_reset_link(app, db_session, monkeypatch):
+    """:47-51. A wrong password on the web arm when `user.password_hash` is
+    None.
+
+    DRIVES A SOURCE VALUE PRODUCTION NEVER PASSES to this function.
+    app/auth/util.py:474 is a different log_user_in and serves the real web
+    login flow; this one's only caller, app/api/alpha/routes.py:1277, passes
+    SRC_API. The SRC_WEB arm is live code, so it is covered -- but no login
+    page reaches it, and a reader should not mistake this for a test of one.
+
+    The two wrong-password messages differ: :49-51 offers a reset link when
+    there is no hash to check against, :52-53 says only 'Invalid password'.
+    The exact text is asserted rather than merely that a flash happened,
+    because asserting the latter would let the two branches swap undetected --
+    false-witness mechanism (d), an input taking the same path under both
+    arms.
+
+    password_hash is set to None AFTER set_password, because _seed_login_user
+    needs a real hash to exist first for the other tests in this file and
+    check_password (app/models.py:1125) is total over a None hash rather than
+    raising on it.
+    """
+    s = _seed_login_user()
+    s.user.password_hash = None
+    db.session.commit()
+
+    with app.test_request_context('/'):
+        with _ban_state(monkeypatch):
+            response = log_user_in(Form('loginuser', 'wrong'), SRC_WEB)
+            flashed = [str(message) for _category, message in
+                       flask_session.get('_flashes', [])]
+
+    assert response.status_code == 302
+    assert any('reset_password_request' in message for message in flashed)
+
+
+def test_log_user_in_web_refuses_a_wrong_password_without_a_reset_link(app, db_session, monkeypatch):
+    """:52-53. A wrong password on the web arm when `user.password_hash` IS
+    set -- the counterpart to the test above, which sets it to None. The two
+    wrong-password messages differ: :49-51 offers a reset link, :52-53 says
+    only 'Invalid password'. The exact text is asserted rather than merely
+    that a flash happened, because asserting the latter would let the two
+    branches swap undetected -- false-witness mechanism (d), an input taking
+    the same path under both arms.
+
+    DRIVES A SOURCE VALUE PRODUCTION NEVER PASSES to this function.
+    app/auth/util.py:474 is a different log_user_in and serves the real web
+    login flow; this one's only caller, app/api/alpha/routes.py:1277, passes
+    SRC_API. The SRC_WEB arm is live code, so it is covered -- but no login
+    page reaches it, and a reader should not mistake this for a test of one.
+    """
+    s = _seed_login_user()
+
+    with app.test_request_context('/'):
+        with _ban_state(monkeypatch):
+            response = log_user_in(Form('loginuser', 'wrong'), SRC_WEB)
+            flashed = [str(message) for _category, message in
+                       flask_session.get('_flashes', [])]
+
+    assert response.status_code == 302
+    assert flashed == ['Invalid password']
+
+
+def test_log_user_in_web_refuses_a_banned_user_row_one(app, db_session, monkeypatch):
+    """:66-73. The web arm of the ban refusal, ROW ONE only (banned=True,
+    ip_banned=False) -- the one row of the four :57 admits that IS refused
+    today. Assert the flash AND the `sesion` cookie set at :72, since that
+    cookie is the mechanism `user_cookie_banned` later reads.
+
+    MARKED A CONTROL, NOT A PIN: row one is the state a later task's dedent
+    of :66-75 does not change -- unlike this file's three PINNED-DEFECT
+    tests near the top (rows two through four), which invert. This test must
+    keep passing unchanged after that dedent.
+
+    DRIVES A SOURCE VALUE PRODUCTION NEVER PASSES to this function.
+    app/auth/util.py:474 is a different log_user_in and serves the real web
+    login flow; this one's only caller, app/api/alpha/routes.py:1277, passes
+    SRC_API. The SRC_WEB arm is live code, so it is covered -- but no login
+    page reaches it, and a reader should not mistake this for a test of one.
+    """
+    s = _seed_login_user()
+    s.user.banned = True
+    db.session.commit()
+
+    with app.test_request_context('/'):
+        with _ban_state(monkeypatch, ip_banned=False):
+            response = log_user_in(Form('loginuser', s.password), SRC_WEB)
+            flashed = [str(message) for _category, message in
+                       flask_session.get('_flashes', [])]
+
+    assert response.status_code == 302
+    assert 'You have been banned.' in flashed
+    set_cookie_headers = response.headers.getlist('Set-Cookie')
+    assert any(header.startswith('sesion=') for header in set_cookie_headers), set_cookie_headers
+
+
+def test_log_user_in_web_redirects_a_user_awaiting_approval(app, db_session, monkeypatch):
+    """:77-79. `user.waiting_for_approval()` (app/models.py:1254-1256) finds a
+    pending UserRegistration row and redirects to auth.please_wait instead of
+    reaching :80's login_user -- so the user is never actually logged in.
+    make_user_registration(user, status=0) (tests/factories.py:1126) creates
+    exactly the row waiting_for_approval() looks for.
+
+    DRIVES A SOURCE VALUE PRODUCTION NEVER PASSES to this function.
+    app/auth/util.py:474 is a different log_user_in and serves the real web
+    login flow; this one's only caller, app/api/alpha/routes.py:1277, passes
+    SRC_API. The SRC_WEB arm is live code, so it is covered -- but no login
+    page reaches it, and a reader should not mistake this for a test of one.
+    """
+    s = _seed_login_user()
+    make_user_registration(s.user, status=0)
+
+    with app.test_request_context('/'):
+        with _ban_state(monkeypatch):
+            response = log_user_in(Form('loginuser', s.password), SRC_WEB)
+            logged_in = '_user_id' in flask_session
+            expected_location = url_for('auth.please_wait')
+
+    assert response.status_code == 302
+    assert response.headers['Location'] == expected_location
+    assert logged_in is False
+
+
+def test_log_user_in_web_logs_in_and_sets_ui_language(app, db_session, monkeypatch):
+    """:80-81. The non-waiting path: `login_user(user, remember=True)` then
+    `session['ui_language'] = user.interface_language`. interface_language is
+    set to a distinctive, non-default value first, so the assertion is not
+    indistinguishable from a session key defaulting to None on its own --
+    false-witness mechanism (c), emptiness with no same-mechanism positive
+    control.
+
+    DRIVES A SOURCE VALUE PRODUCTION NEVER PASSES to this function.
+    app/auth/util.py:474 is a different log_user_in and serves the real web
+    login flow; this one's only caller, app/api/alpha/routes.py:1277, passes
+    SRC_API. The SRC_WEB arm is live code, so it is covered -- but no login
+    page reaches it, and a reader should not mistake this for a test of one.
+    """
+    s = _seed_login_user()
+    s.user.interface_language = 'fr'
+    db.session.commit()
+
+    with app.test_request_context('/'):
+        with _ban_state(monkeypatch):
+            log_user_in(Form('loginuser', s.password), SRC_WEB)
+            logged_in = '_user_id' in flask_session
+            ui_language = flask_session.get('ui_language')
+
+    assert logged_in is True
+    assert ui_language == 'fr'
+
+
+def test_log_user_in_web_falls_back_to_main_index_for_a_member(app, db_session, monkeypatch):
+    """:101-104's `else` arm. :99-100 finds no safe `next` (none was supplied,
+    and `is_safe_redirect_target(None)` is False), so :101 checks
+    `len(user.communities()) == 0`; a user who belongs to at least one
+    non-banned community takes the `else` branch to `main.index` instead of
+    :102's `auth.filter_selection`. This is distinct from the next-parameter
+    branches tests/test_redirect_targets.py:250-265 already covers -- those
+    tests use a community-less user, so :101 is always true there and :104
+    is never reached; that gap is real, not a duplicate, which is why this
+    test exists rather than being skipped as already covered.
+
+    DRIVES A SOURCE VALUE PRODUCTION NEVER PASSES to this function.
+    app/auth/util.py:474 is a different log_user_in and serves the real web
+    login flow; this one's only caller, app/api/alpha/routes.py:1277, passes
+    SRC_API. The SRC_WEB arm is live code, so it is covered -- but no login
+    page reaches it, and a reader should not mistake this for a test of one.
+    """
+    s = _seed_login_user()
+    community = make_community('loginmembertest')
+    make_community_member(s.user, community)
+
+    with app.test_request_context('/'):
+        with _ban_state(monkeypatch):
+            response = log_user_in(Form('loginuser', s.password), SRC_WEB)
+            expected_location = url_for('main.index')
+
+    assert response.status_code == 302
+    assert response.headers['Location'] == expected_location
+
+
+def test_log_user_in_web_sets_low_bandwidth_cookie_when_requested(app, db_session, monkeypatch):
+    """:106-107. `input.low_bandwidth_mode.data` true sets the `low_bandwidth`
+    cookie to '1'. tests/test_redirect_targets.py:234-265's
+    TestSharedAuthNextPageIsChecked already drives :99-105's next-parameter
+    branches through this same function, but its Form fixes
+    low_bandwidth_mode to False (test_redirect_targets.py:248), so it never
+    reaches this arm's true branch and never asserts on the cookie value --
+    only that the redirect stays on-site. This test targets the cookie
+    itself instead.
+
+    DRIVES A SOURCE VALUE PRODUCTION NEVER PASSES to this function.
+    app/auth/util.py:474 is a different log_user_in and serves the real web
+    login flow; this one's only caller, app/api/alpha/routes.py:1277, passes
+    SRC_API. The SRC_WEB arm is live code, so it is covered -- but no login
+    page reaches it, and a reader should not mistake this for a test of one.
+    """
+    s = _seed_login_user()
+
+    with app.test_request_context('/'):
+        with _ban_state(monkeypatch):
+            response = log_user_in(Form('loginuser', s.password, low_bandwidth_mode=True), SRC_WEB)
+
+    assert response.status_code == 302
+    cookies = response.headers.getlist('Set-Cookie')
+    assert any(cookie.startswith('low_bandwidth=1') for cookie in cookies), cookies
+
+
+def test_log_user_in_web_clears_low_bandwidth_cookie_when_not_requested(app, db_session, monkeypatch):
+    """:108-109. The `else` arm sets the `low_bandwidth` cookie to '0'.
+    tests/test_redirect_targets.py's Form always passes low_bandwidth_mode as
+    False, so its tests already execute this line -- but assert nothing about
+    the cookie, only that the redirect stays on-site. This test makes the
+    cookie value itself the assertion, as the sibling test above does for the
+    true arm, so the two arms cannot swap undetected.
+
+    DRIVES A SOURCE VALUE PRODUCTION NEVER PASSES to this function.
+    app/auth/util.py:474 is a different log_user_in and serves the real web
+    login flow; this one's only caller, app/api/alpha/routes.py:1277, passes
+    SRC_API. The SRC_WEB arm is live code, so it is covered -- but no login
+    page reaches it, and a reader should not mistake this for a test of one.
+    """
+    s = _seed_login_user()
+
+    with app.test_request_context('/'):
+        with _ban_state(monkeypatch):
+            response = log_user_in(Form('loginuser', s.password, low_bandwidth_mode=False), SRC_WEB)
+
+    assert response.status_code == 302
+    cookies = response.headers.getlist('Set-Cookie')
+    assert any(cookie.startswith('low_bandwidth=0') for cookie in cookies), cookies
