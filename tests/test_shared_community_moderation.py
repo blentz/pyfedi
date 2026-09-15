@@ -69,11 +69,11 @@ import pytest
 from sqlalchemy.exc import NoResultFound
 
 from app import db
-from app.constants import SRC_API, SRC_WEB
-from app.models import CommunityMember, ModLog
+from app.constants import NOTIF_NEW_MOD, SRC_API, SRC_WEB
+from app.models import CommunityMember, Conversation, ModLog, Notification
 from app.shared.community import add_mod_to_community, delete_community, restore_community
-from tests.factories import (bearer, make_community, make_community_member, make_instance,
-                             make_user, web_ctx)
+from tests.factories import (bearer, make_community, make_community_member, make_conversation,
+                             make_instance, make_user, web_ctx)
 
 # REDUNDANT DISJUNCT, REGISTERED NOT TESTED -- `community.is_owner(user) or`
 # at `:494` and `:523`.
@@ -679,3 +679,142 @@ def test_add_mod_to_community_banned_user_cannot_be_added(app, db_session):
     with web_ctx(app, s.user):
         with pytest.raises(NoResultFound):
             add_mod_to_community(s.community.id, target.id, SRC_WEB)
+
+
+# `add_mod_to_community`'s notify fork (app/shared/community.py:564-588). The
+# local arm (`:564-574`) writes a `Notification` row and increments
+# `unread_notifications`; the remote arm (`:575-587`) builds or reuses a
+# `Conversation` and sends a chat message. `User.is_local()`
+# (`app/models.py:1251-1252`) is `self.ap_id is None or
+# self.ap_profile_id.startswith(SERVER_URL)`; `make_user(..., local=True)`
+# leaves both `None` (the local arm), while `make_user(remote_instance, ...,
+# local=False)` on a distinct instance domain sets both off that instance's
+# own domain, which is never `SERVER_NAME` (`'test.piefed.local'`,
+# tests/conftest.py:69) for a genuinely separate instance (the remote arm).
+
+
+def test_add_mod_to_community_local_moderator_gets_notification_and_unread_count(
+        app, db_session, monkeypatch):
+    """`:564`'s true arm: the target is local, so `:567-571` builds a
+    `Notification` row and `:572` separately increments
+    `new_moderator.unread_notifications`. Asserting the increment apart from
+    the row's existence is what catches a mutant that deletes `:572` alone --
+    the notification would still be written, but the counter would stay at 0.
+
+    Also asserts `notif_type` (must be `NOTIF_NEW_MOD`, not some other
+    constant), `subtype`, `url`, and `targets['community_id']` -- the latter
+    is the seeded, non-`1` community id (`_seed()` burns a bystander
+    community first; see this file's module docstring), so a mutant
+    corrupting `targets_data`'s `community_id` at `:565` cannot hide behind a
+    coincidental match with a hardcoded `1`.
+
+    `task_selector` is patched and its call asserted for the same reason as
+    every other test in this file reaching `:602`.
+    """
+    s = _seed()
+    member = make_community_member(s.user, s.community, is_moderator=False)
+    member.is_owner = True
+    db.session.commit()
+    target = make_user(s.instance, 'bob', local=True)
+    assert target.unread_notifications == 0
+    calls = []
+    monkeypatch.setattr('app.shared.community.task_selector',
+                         lambda task_key, **kw: calls.append((task_key, kw)))
+
+    returned = add_mod_to_community(s.community.id, target.id, SRC_API, bearer(s.user))
+
+    assert returned == s.user.id
+    notif = db.session.query(Notification).filter_by(
+        user_id=target.id, author_id=s.user.id).one()
+    assert notif.notif_type == NOTIF_NEW_MOD
+    assert notif.subtype == 'new_moderator'
+    assert notif.url == '/c/' + s.community.name
+    assert notif.targets == {'gen': '0', 'community_id': s.community.id}
+    assert target.unread_notifications == 1
+    assert calls == [('add_mod', {'user_id': s.user.id, 'mod_id': target.id,
+                                  'community_id': s.community.id})]
+
+
+def test_add_mod_to_community_remote_moderator_creates_a_conversation(
+        app, db_session, monkeypatch):
+    """`:579`'s true arm -- no prior conversation for this pair, so
+    `:580-584` creates one. Asserting the `Conversation` row COUNT (0 -> 1)
+    is what the reuse test below turns into a kill: a mutant that always
+    creates a fresh row regardless of `:579`'s outcome passes this test (0 ->
+    1 either way) but fails the reuse test (1 -> 2 instead of staying at 1).
+
+    `send_message` is patched on `app.shared.community` -- the `from
+    app.chat.util import send_message` at this module's own top rebinds the
+    name into `app.shared.community`'s globals, so patching
+    `app.chat.util.send_message` would never be observed here. The capture
+    asserts the community's name appears in the message body (`:586`) and
+    that the call carries the newly created conversation's id.
+    """
+    s = _seed()
+    member = make_community_member(s.user, s.community, is_moderator=False)
+    member.is_owner = True
+    db.session.commit()
+    remote_instance = make_instance('remote.example')
+    target = make_user(remote_instance, 'bob', local=False)
+    assert db.session.query(Conversation).count() == 0
+    task_calls = []
+    monkeypatch.setattr('app.shared.community.task_selector',
+                         lambda task_key, **kw: task_calls.append((task_key, kw)))
+    send_calls = []
+    monkeypatch.setattr(
+        'app.shared.community.send_message',
+        lambda message, conversation_id, user=None: send_calls.append(
+            (message, conversation_id, user)))
+
+    returned = add_mod_to_community(s.community.id, target.id, SRC_API, bearer(s.user))
+
+    assert returned == s.user.id
+    assert db.session.query(Conversation).count() == 1
+    conversation = db.session.query(Conversation).one()
+    assert {u.id for u in conversation.members} == {s.user.id, target.id}
+    assert len(send_calls) == 1
+    message, conversation_id, user_arg = send_calls[0]
+    assert s.community.name in message
+    assert conversation_id == conversation.id
+    assert user_arg.id == s.user.id
+    assert task_calls == [('add_mod', {'user_id': s.user.id, 'mod_id': target.id,
+                                       'community_id': s.community.id})]
+
+
+def test_add_mod_to_community_remote_moderator_reuses_an_existing_conversation(
+        app, db_session, monkeypatch):
+    """`:579`'s false arm -- `make_conversation` (`tests/factories.py:647`)
+    seeded a conversation between the two parties first, so
+    `Conversation.find_existing_conversation` returns it at `:577` and no
+    second row is created. Asserting the row COUNT stays at 1 (not 2) is
+    what kills a mutant that always builds a fresh `Conversation`; see the
+    creation test above for that mutant's other half.
+    """
+    s = _seed()
+    member = make_community_member(s.user, s.community, is_moderator=False)
+    member.is_owner = True
+    db.session.commit()
+    remote_instance = make_instance('remote.example')
+    target = make_user(remote_instance, 'bob', local=False)
+    existing = make_conversation(s.user, target)
+    assert db.session.query(Conversation).count() == 1
+    task_calls = []
+    monkeypatch.setattr('app.shared.community.task_selector',
+                         lambda task_key, **kw: task_calls.append((task_key, kw)))
+    send_calls = []
+    monkeypatch.setattr(
+        'app.shared.community.send_message',
+        lambda message, conversation_id, user=None: send_calls.append(
+            (message, conversation_id, user)))
+
+    returned = add_mod_to_community(s.community.id, target.id, SRC_API, bearer(s.user))
+
+    assert returned == s.user.id
+    assert db.session.query(Conversation).count() == 1
+    assert len(send_calls) == 1
+    message, conversation_id, user_arg = send_calls[0]
+    assert s.community.name in message
+    assert conversation_id == existing.id
+    assert user_arg.id == s.user.id
+    assert task_calls == [('add_mod', {'user_id': s.user.id, 'mod_id': target.id,
+                                       'community_id': s.community.id})]
