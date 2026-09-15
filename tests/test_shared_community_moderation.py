@@ -1005,6 +1005,14 @@ def test_remove_mod_from_community_non_member_web_is_refused_and_writes_no_modlo
     assertion below is the load-bearing one, not the flash: a fix that only
     changed the flash text but left the audit write in place would still
     fail it.
+
+    The flash CATEGORY is asserted via `get_flashed_messages(with_categories=
+    True)`, not just the text: this refusal flashes `'warning'`
+    (`app/shared/community.py:642`), where the last-owner refusal elsewhere
+    in this file flashes `'error'` -- a category swap between the two would
+    otherwise go undetected, and the `'error'` category on the sibling
+    matters especially because it deliberately matches
+    `app/community/routes.py:1478`.
     """
     s = _seed()
     owner = make_community_member(s.user, s.community, is_moderator=False)
@@ -1021,9 +1029,9 @@ def test_remove_mod_from_community_non_member_web_is_refused_and_writes_no_modlo
 
     with web_ctx(app, s.user):
         remove_mod_from_community(s.community.id, stranger.id, SRC_WEB)
-        flashed = get_flashed_messages()
+        flashed = get_flashed_messages(with_categories=True)
 
-    assert flashed == ['That user is not a moderator of this community.']
+    assert flashed == [('warning', 'That user is not a moderator of this community.')]
     assert db.session.query(ModLog).filter_by(
         action='remove_mod', target_user_id=stranger.id).count() == 0
     assert db.session.query(CommunityMember).filter_by(
@@ -1055,6 +1063,104 @@ def test_remove_mod_from_community_non_member_api_raises_and_writes_no_modlog_en
         action='remove_mod', target_user_id=stranger.id).count() == 0
     assert db.session.query(CommunityMember).filter_by(
         user_id=stranger.id, community_id=s.community.id).count() == 0
+    assert calls == []
+
+
+def test_remove_mod_from_community_plain_member_target_is_refused_and_writes_no_modlog_entry(
+        app, db_session, monkeypatch):
+    """`:620-624`'s `existing_member` lookup now carries an `or_(is_moderator
+    == True, is_owner == True)` predicate alongside the `user_id`/
+    `community_id` filter, so a plain, non-moderator `CommunityMember` row
+    (the shape `join_community:44` creates for every subscriber, with both
+    flags defaulting False) no longer satisfies the lookup. `existing_member`
+    comes back `None` and `:637-643`'s `else` refuses the removal, exactly as
+    it already does for a target with no row at all.
+
+    FORMERLY A PIN OF A CRITICAL DEFECT, THIS ROUND'S HEADLINE FIX. Before the
+    `or_` predicate was added, this exact removal -- target holds a plain
+    member row, never a moderator or owner -- took `:625`'s TRUE branch: it
+    set two already-False flags, flashed 'Moderator removed', and wrote a
+    `remove_mod` ModLog entry naming a user who was never a moderator. That is
+    verbatim the shape of the defect `43b18996` claims to have fixed; its
+    `else` only refused a target with NO row, never a member who is not a
+    moderator. The pin (`assert flashed == ['Moderator removed']` and a
+    `ModLog` count of 1) was confirmed to PASS against the pre-fix code by
+    running it, then inverted here. The ModLog assertion is the load-bearing
+    one, matching this file's non-member refusal test above: a fix that only
+    changed the flash text but left the audit write in place would still
+    fail it.
+    """
+    from flask import get_flashed_messages
+
+    s = _seed()
+    owner = make_community_member(s.user, s.community, is_moderator=False)
+    owner.is_owner = True
+    db.session.commit()
+    target = make_user(s.instance, 'bob', local=True)
+    make_community_member(target, s.community, is_moderator=False)
+    calls = []
+    monkeypatch.setattr('app.shared.community.task_selector',
+                         lambda task_key, **kw: calls.append((task_key, kw)))
+
+    with web_ctx(app, s.user):
+        remove_mod_from_community(s.community.id, target.id, SRC_WEB)
+        flashed = get_flashed_messages(with_categories=True)
+
+    assert flashed == [('warning', 'That user is not a moderator of this community.')]
+    assert db.session.query(ModLog).filter_by(
+        action='remove_mod', target_user_id=target.id).count() == 0
+    assert db.session.query(CommunityMember).filter_by(
+        user_id=target.id, community_id=s.community.id).one().is_moderator is False
+    assert calls == []
+
+
+def test_remove_mod_from_community_bystander_community_member_is_refused(
+        app, db_session, monkeypatch):
+    """`:622`'s `CommunityMember.community_id == community_id` predicate,
+    isolated: the target is a moderator (even an owner) of `_seed()`'s
+    bystander community (`:186-206`) but holds no row at all in `s.community`,
+    the community under test. Without the `community_id` filter, the lookup
+    at `:620-624` would find the target's bystander-community row -- it
+    matches on `user_id` and satisfies the `is_moderator`/`is_owner` `or_` --
+    and treat it as if it belonged to `s.community`. `tests/README.md` fact
+    75 cause 2, read on its own terms: "the excluded set is empty under every
+    fixture in the file... Fixable" -- no test before this one ever gave a
+    user membership in a second, distinct community, so a mutant dropping
+    `community_id` from the filter was unkillable, a gap rather than an
+    equivalence (NOT cause 3: nothing here is implied by anything else in the
+    filter; NOT cause 6, which is expressly not about a clause at all).
+
+    The target's bystander-community row is left completely untouched
+    (`is_moderator` stays True) and `s.community` gets no `ModLog` row --
+    the two assertions that would catch a mutant treating the bystander row
+    as the target's membership in `s.community`.
+    """
+    s = _seed()
+    from app.models import Community
+    bystander = db.session.query(Community).filter_by(name='bystander').one()
+    owner = make_community_member(s.user, s.community, is_moderator=False)
+    owner.is_owner = True
+    db.session.commit()
+    target = make_user(s.instance, 'bob', local=True)
+    bystander_member = make_community_member(target, bystander, is_moderator=True)
+    bystander_member.is_owner = True
+    db.session.commit()
+    calls = []
+    monkeypatch.setattr('app.shared.community.task_selector',
+                         lambda task_key, **kw: calls.append((task_key, kw)))
+
+    from flask import get_flashed_messages
+
+    with web_ctx(app, s.user):
+        remove_mod_from_community(s.community.id, target.id, SRC_WEB)
+        flashed = get_flashed_messages(with_categories=True)
+
+    assert flashed == [('warning', 'That user is not a moderator of this community.')]
+    assert db.session.query(ModLog).filter_by(action='remove_mod').count() == 0
+    assert bystander_member.is_moderator is True
+    assert bystander_member.is_owner is True
+    assert db.session.query(CommunityMember).filter_by(
+        user_id=target.id, community_id=s.community.id).count() == 0
     assert calls == []
 
 
