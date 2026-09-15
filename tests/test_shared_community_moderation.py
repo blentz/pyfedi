@@ -892,6 +892,53 @@ def test_remove_mod_from_community_api_owner_alone_removes_and_returns_user_id(
                                      'community_id': s.community.id})]
 
 
+def test_remove_mod_from_community_web_owner_alone_removes_when_two_owners_remain(
+        app, db_session, monkeypatch):
+    """The SRC_WEB sibling of `:857` above, seeded identically (actor owner,
+    target a co-owner-and-moderator, `community.num_owners() == 2`), added
+    specifically to give `:623`'s `community.num_owners() == 1` operand a
+    NON-CRASHING kill.
+
+    Mutation testing found that `:857` alone -- SRC_API -- kills the mutant
+    that deletes ` and community.num_owners() == 1` from `:623` (leaving
+    `if existing_member.is_owner:`, refusing ANY owner removal) only by
+    letting `:627`'s `raise Exception(msg)` escape uncaught. This campaign
+    does not count a crash as a kill unless a viable non-crashing variant
+    also dies, and no other test removed an owner from a community with a
+    second owner remaining through SRC_WEB -- so before this test, that
+    operand's killability rested entirely on an exception path. Under the
+    mutant here, SRC_WEB's `else` arm at `:628-630` flashes the last-owner
+    refusal message and returns -- no exception -- so the assertions below
+    fail as a plain `AssertionError`, not a crash.
+    """
+    from flask import get_flashed_messages
+
+    s = _seed()
+    owner = make_community_member(s.user, s.community, is_moderator=False)
+    owner.is_owner = True
+    db.session.commit()
+    target = make_user(s.instance, 'bob', local=True)
+    target_member = make_community_member(target, s.community, is_moderator=True)
+    target_member.is_owner = True
+    db.session.commit()
+    assert s.community.num_owners() == 2
+    calls = []
+    monkeypatch.setattr('app.shared.community.task_selector',
+                         lambda task_key, **kw: calls.append((task_key, kw)))
+
+    with web_ctx(app, s.user):
+        returned = remove_mod_from_community(s.community.id, target.id, SRC_WEB)
+        flashed = get_flashed_messages()
+
+    assert returned is None
+    assert flashed == ['Moderator removed']
+    assert target_member.is_moderator is False
+    assert target_member.is_owner is False
+    assert s.community.num_owners() == 1
+    assert calls == [('remove_mod', {'user_id': s.user.id, 'mod_id': target.id,
+                                     'community_id': s.community.id})]
+
+
 def test_remove_mod_from_community_admin_who_is_not_owner_may_remove_and_flashes(
         app, db_session, monkeypatch):
     """`:612-613`'s else arm (`current_user`), `:617`'s guard passing through
