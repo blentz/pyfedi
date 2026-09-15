@@ -93,13 +93,33 @@ from tests.factories import (bearer, make_community, make_community_member, make
 # method bodies above, not by any test's failure to kill a mutant that
 # removes it, which is what this campaign's equivalence claims require.
 #
-# This is tests/README.md fact 75, cause 6, "Redundant statement"
-# (tests/README.md:3025-3045): the mutated clause's only observable effect
-# (making the guard pass) is performed unconditionally, on every path where
-# it would have mattered, by code that runs alongside it (`is_moderator`'s
-# check over the same list). It is not cause 4 -- fact 75 has no cause 4(c)
-# -- and not cause 8, which is scoped to a `try`/`except` whose body can
-# never run; neither shape applies here.
+# This is tests/README.md fact 75, cause 3, "Subsumption" (tests/README.md:
+# 2997-3001): "a later conjunct implies this one. Prove it algebraically,
+# not by observing zero failures" -- exactly this proof's shape, derived
+# from the two method bodies above rather than from any test's silence.
+# NOT cause 6: tests/README.md:3025 opens cause 6 with "the only cause on
+# this list that is not about a clause", and `community.is_owner(user) or`
+# IS a clause -- a disjunct in a boolean expression -- so cause 6 is
+# disqualified by its own first sentence, not merely a worse fit. (A prior
+# draft of this comment cited cause 6 anyway; the citation did not survive
+# review and is corrected here.)
+#
+# THE WRINKLE, STATED RATHER THAN GLOSSED: cause 3's catalogued text is
+# written for CONJUNCTS -- `A and B` where the later conjunct B implies the
+# earlier A, so A is redundant. This site is the DISJUNCTIVE DUAL -- `A or
+# B` where the EARLIER disjunct A (`is_owner(user)`) implies the LATER one B
+# (`is_moderator(user)`), so `A or B` reduces to `B` and A is what is
+# redundant. Same principle, mirrored across the operator; the catalogued
+# prose does not yet say so. The taxonomy already has shape-sensitive edges
+# elsewhere -- tests/README.md:2990-2991 notes that a mutation dropping a
+# whole statement rather than a conjunct puts causes 1-5 out of scope, and
+# that collapsing one arm of a ternary escapes 1-5, 6 and 8 alike -- and two
+# extensions sit registered but unenacted against exactly that kind of gap:
+# D578 (a tautology's mirror image, under cause 4) and D589 (configuration-
+# scoped unkillability, proposed as a ninth cause). This disjunctive-dual
+# reading of cause 3 is a third such gap, belongs beside those two in the
+# same register, and is left for Task 9 to register formally rather than
+# amending fact 75 from inside this file.
 #
 # NO TEST ISOLATES OPERAND ONE ALONE, and none should be written to. Doing
 # so would require a CommunityMember row with `is_owner=True` and
