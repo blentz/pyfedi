@@ -63,16 +63,16 @@ def log_user_in(input, src):
             db.session.commit()
             cache.delete_memoized(banned_ip_addresses)
 
-            if src == SRC_WEB:
-                flash(_('You have been banned.'), 'error')
+        if src == SRC_WEB:
+            flash(_('You have been banned.'), 'error')
 
-                response = make_response(redirect(url_for('auth.login')))
+            response = make_response(redirect(url_for('auth.login')))
 
-                # Set a cookie so we have another way to track banned people
-                response.set_cookie('sesion', '17489047567495', expires=datetime(year=2099, month=12, day=30))
-                return response
-            elif src == SRC_API:
-                raise Exception('incorrect_login')
+            # Set a cookie so we have another way to track banned people
+            response.set_cookie('sesion', '17489047567495', expires=datetime(year=2099, month=12, day=30))
+            return response
+        elif src == SRC_API:
+            raise Exception('incorrect_login')
 
     if src == SRC_WEB:
         if user.waiting_for_approval():
