@@ -7703,9 +7703,10 @@ MORGAN SLIP ON A TWO-FLAG GUARD MAKES IT FIRE ONLY WHEN *BOTH* FLAGS ARE SET,
 THE OPPOSITE OF THE USUAL "REFUSE IF EITHER" INTENT.** `app/shared/community.py:60`
 guards a refusal (`leave_community` must bar an owner or a moderator from
 leaving without stepping down first) and the population it needs to catch is
-"has EITHER role" -- `is_owner OR is_moderator`. The refusal condition for
-that population is `not (is_owner or is_moderator)`, whose De Morgan
-expansion is `not is_owner AND not is_moderator` (the free-leave branch). Read
+"has EITHER role" -- `is_owner OR is_moderator`. The free-leave condition
+(the guard must be False, refusing, for anyone with either role) is
+`not (is_owner or is_moderator)`, whose De Morgan expansion is
+`not is_owner AND not is_moderator`. Read
 it with the operator flipped -- `not is_owner OR not is_moderator` -- and the
 free-leave branch now fires whenever EITHER flag is false, which is every
 population except "has both roles simultaneously": a plain moderator
@@ -7760,6 +7761,47 @@ same construction this fact's sibling facts document for `Community` and
 local user, later "blocked" via this route, drives `instance_id == 1` through
 an ordinary call chain -- the guard's trigger is not a fixture artifact, it is
 the common case. See **D595**.
+
+**260. AN ARGUMENT THAT IS `None` CANNOT PROVE AN OVERRIDE DRIVES THE
+OUTCOME, BECAUSE `None == False` IS `False` AND BOTH TAKE THE SAME ARM --
+TO PROVE AN OVERRIDE DRIVES THE OUTCOME, PASS THE VALUE THAT WOULD TAKE THE
+OTHER PATH IF THE OVERRIDE WERE ABSENT.** `app/shared/community.py:398-399`
+(`subscribe_community`) and `:445-446` (`favorite_community`) each
+unconditionally recompute their `subscribe` parameter under `SRC_WEB`,
+discarding whatever the caller passed. Two tests in
+`tests/test_shared_community_membership.py` were written to demonstrate this
+by passing `None` as `subscribe` and asserting the create path ran anyway --
+but `if subscribe == False:` (`:403`/`:449`) treats `None` exactly like
+`True`: `None == False` evaluates to `False`, so `None` takes the SAME arm as
+the override's `True` result whether or not `:398-399`/`:445-446` ever run.
+Deleting the override left both tests green. This is false-witness mechanism
+(d) -- an input that takes the same path under both the mutant and the fix --
+and it had gone unnoticed inside a docstring that explicitly (and
+incorrectly) claimed the opposite. **The remedy generalizes**: to prove code
+recomputes/overrides a value regardless of what the caller passed, the
+argument must be the value that would produce a DIFFERENT, DISTINGUISHABLE
+result if the override were deleted -- here, `False` (which the override's
+absence routes to the delete/"did not exist" arm, while the override's
+presence routes to the create arm) rather than `None` or any other value
+that happens to compare unequal to `False` under `==`. Passing a value
+merely because it "isn't `True`" is not enough; it must be a value the
+surrounding code treats DIFFERENTLY depending on whether the code being
+tested runs.
+
+**NONE OF FACT 75'S CATALOGUED CAUSES FIT THIS SHAPE, AND NONE SHOULD BE
+FORCED TO.** This is not cause 4 (there is no cause 4(c); causes 4(a) and
+4(b) are about a guard whose own body or an enclosing invariant makes it a
+tautology -- nothing here is a tautology, both arms of `:403`/`:449` are
+genuinely reachable and genuinely distinguishable). It is not cause 8 (no
+`try`/`except` is involved). It is not cause 7 either, despite `:399`/`:446`
+being conditional-expression arms: cause 7 covers an arm that is
+UNKILLABLE because its sibling's callee already computes the identical
+value for every input; here both arms of the ternary compute genuinely
+different, killable values, and the tests simply chose an argument (`None`)
+that could not tell them apart. **The defect was reachable and simply
+unasserted by a bad test choice -- neither configuration-scoped nor a void
+`try`/`except`.** Say so plainly rather than mis-filing it under a cause
+that does not describe it.
 
 ## Known noise
 
