@@ -177,20 +177,24 @@ each other, and are not in lockstep with each other (mechanism (e)'s
 concern) because each test's failing operand differs while the other two's
 values are held at whichever combination makes them irrelevant or passing.
 
-PIN, `:130-131`, NAMED DISTINCTLY FROM TASK 3'S: `community: Community =
-db.session.query(Community).get(community_id)` immediately followed by
-`if community.banned:` shares the exact `.get()`-then-dereference shape
-Task 3 pinned at `invite_with_email:196-197`
-(`test_invite_with_email_missing_community_raises_AttributeError`) -- a
-missing id makes `.get()` return `None` quietly, and the very next line
-dereferences it, raising `AttributeError: 'NoneType' object has no
-attribute 'banned'`. Task 3's test and this task's test assert the
-identical EXCEPTION TYPE at two DIFFERENT call sites, so this one is named
+FORMER PIN, `:130-131`, NOW FIXED (TASK 6), NAMED DISTINCTLY FROM TASK 3'S:
+`community: Community = db.session.query(Community).get(community_id)`
+immediately followed by `if community.banned:` used to share the exact
+`.get()`-then-dereference shape Task 3 pinned at `invite_with_email:196-197`
+(formerly `test_invite_with_email_missing_community_raises_AttributeError`)
+-- a missing id made `.get()` return `None` quietly, and the very next line
+dereferenced it, raising `AttributeError: 'NoneType' object has no
+attribute 'banned'`. Task 3's test and this task's test asserted the
+identical EXCEPTION TYPE at two DIFFERENT call sites, so this one was named
 `test_invite_with_chat_missing_community_raises_AttributeError` --
 distinct from Task 3's `test_invite_with_email_missing_community_raises_
-AttributeError` by function name -- so Task 6's planned inversion of both
-(once each site is rewritten to `.filter_by(id=...).one()`, raising
-`NoResultFound` instead) can target each by name without a collision.
+AttributeError` by function name -- so that Task 6's fix of both call
+sites (each rewritten to `.filter_by(id=...).one()`) could invert both
+without a name collision. Task 6 has since landed: both sites now raise
+`sqlalchemy.exc.NoResultFound`, and the two tests are renamed
+`test_invite_with_chat_missing_community_raises_NoResultFound` and
+`test_invite_with_email_missing_community_raises_NoResultFound`
+respectively.
 
 FOUR PATHS, ONE RETURN VALUE: `:129`'s false arm (via `:173`), `:132`'s
 banned-community arm, and `:172`'s failure arm (`reply` falsy; Task 5's)
@@ -912,32 +916,30 @@ def test_invite_with_email_banned_community_returns_0(app, db_session, monkeypat
     assert calls == []
 
 
-def test_invite_with_email_missing_community_raises_AttributeError(app, db_session):
-    """PIN, NOT A FIX. `:196` fetches the community with `db.session.query
-    (Community).get(community_id)` -- SQLAlchemy's legacy `Query.get` --
-    which returns `None` quietly for an id matching no row, with nothing
-    guarding `:197`'s immediate `community.banned` dereference. Python
-    therefore raises `AttributeError: 'NoneType' object has no attribute
-    'banned'`.
+def test_invite_with_email_missing_community_raises_NoResultFound(app, db_session):
+    """FIX APPLIED, TASK 6. `:196` now fetches the community with
+    `db.session.query(Community).filter_by(id=community_id).one()`, matching
+    this module's OTHER `Community`-by-id lookup, `restore_community:522`.
+    An id matching no row makes `.one()` raise `sqlalchemy.exc.NoResultFound`
+    -- a recognisable, specific error -- instead of quietly returning `None`
+    for `:197`'s `community.banned` to dereference into an opaque
+    `AttributeError: 'NoneType' object has no attribute 'banned'`.
 
-    This module's OTHER `Community`-by-id lookup, `restore_community:522`,
-    uses `.filter_by(id=community_id).one()` for the identical "does this id
-    exist" question, and `.one()` raises `sqlalchemy.exc.NoResultFound`
-    instead -- a different exception for the same kind of missing input.
-    `invite_with_chat:130` shares today's `.get()`-then-dereference shape
-    and is pinned by a SEPARATELY NAMED test in this round's Task 4, so that
-    Task 6's fix of both call sites cannot collide on a shared test name.
+    `invite_with_chat:130` shared the old `.get()`-then-dereference shape and
+    was fixed identically by this same Task 6 change; it is covered by a
+    SEPARATELY NAMED test,
+    `test_invite_with_chat_missing_community_raises_NoResultFound`, so the
+    two do not collide on a shared test name.
 
-    THIS TEST ASSERTS TODAY'S ACTUAL, BROKEN BEHAVIOUR -- NOT THE INTENDED
-    ONE -- AND PASSES AGAINST CURRENT CODE. A later task (Task 6) rewrites
-    `:196` to use `.filter_by(id=...).one()` (matching `restore_community`'s
-    own pattern) and must INVERT this test to expect `NoResultFound` in
-    place of `AttributeError` once that fix lands.
+    THIS TEST IS THE INVERSION of the former PIN,
+    `test_invite_with_email_missing_community_raises_AttributeError`, which
+    asserted the pre-fix `AttributeError` and passed against the code before
+    this fix. That test's name and assertion no longer apply.
     """
     s = _seed()
 
     with web_ctx(app, s.user):
-        with pytest.raises(AttributeError):
+        with pytest.raises(NoResultFound):
             invite_with_email(999999, 'invitee@example.com', SRC_WEB)
 
 
@@ -1030,45 +1032,44 @@ def test_invite_with_chat_banned_instance_returns_0_and_creates_no_conversation(
     assert db.session.query(Conversation).count() == 0
 
 
-def test_invite_with_chat_missing_community_raises_AttributeError(app, db_session):
-    """PIN, NOT A FIX -- see the module docstring's PIN section above for
-    the full rationale and why this is named distinctly from Task 3's
-    `test_invite_with_email_missing_community_raises_AttributeError`.
+def test_invite_with_chat_missing_community_raises_NoResultFound(app, db_session):
+    """FIX APPLIED, TASK 6 -- see the module docstring's PIN section above
+    for the full rationale and why this is named distinctly from
+    `test_invite_with_email_missing_community_raises_NoResultFound`.
 
     `:129`'s guard is genuinely TRUE here (a real, unbanned local recipient
     on a real, unbanned instance), so control reaches `:130`'s
-    `db.session.query(Community).get(community_id)` for a `community_id`
-    that matches no row. `.get()` returns `None` quietly, and `:131`'s
-    `if community.banned:` dereferences it immediately, raising
-    `AttributeError: 'NoneType' object has no attribute 'banned'`.
+    `db.session.query(Community).filter_by(id=community_id).one()` for a
+    `community_id` that matches no row. `.one()` now raises
+    `sqlalchemy.exc.NoResultFound` immediately, before `:131`'s
+    `community.banned` is ever evaluated.
 
-    STRENGTHENED AFTER REVIEW: asserting the exception TYPE alone does not
-    prove WHERE it was raised. A reviewer-applied mutant, `if src ==
-    SRC_API and community.banned:` at `:131`, short-circuits on this test's
-    `src=SRC_WEB` before ever touching the `None` community -- so `:131`'s
-    guard is false, execution falls through to `:134-138` and COMMITS a
-    spurious `Conversation` row for the `None` community, and only THEN
-    crashes at `:140`'s `community.private` read. The exception type is
-    still `AttributeError`, so a bare `pytest.raises(AttributeError)`
-    passes either way and cannot tell "died at :131 before doing anything"
-    (today's real behaviour) from "did :134-138's work first, then died
-    two lines later" (the mutant's). The added `Conversation` count
-    assertion below distinguishes them: it is `0` under real code and `1`
-    under that mutant, so this pin now fails under it as it should.
+    THE CONVERSATION-COUNT ASSERTION SURVIVES THE INVERSION UNCHANGED, AND
+    STILL MATTERS: asserting the exception TYPE alone does not prove WHERE
+    it was raised. Before this fix, a reviewer-applied mutant, `if src ==
+    SRC_API and community.banned:` at `:131`, short-circuited on this
+    test's `src=SRC_WEB` before ever touching the `None` community -- so
+    `:131`'s guard was false, execution fell through to `:134-138` and
+    COMMITTED a spurious `Conversation` row for the `None` community, and
+    only THEN crashed at `:140`'s `community.private` read. The exception
+    type was still `AttributeError` either way, so a bare
+    `pytest.raises(AttributeError)` could not tell "died at :131 before
+    doing anything" (real behaviour) from "did :134-138's work first, then
+    died two lines later" (the mutant's) -- only the `Conversation` count
+    distinguished them. Now that `:130` itself raises `NoResultFound`
+    before `:131` is reached at all, the count assertion below confirms
+    that no such fallthrough occurred: it must remain `0`.
 
-    THIS TEST ASSERTS TODAY'S ACTUAL, BROKEN BEHAVIOUR -- NOT THE INTENDED
-    ONE -- AND PASSES AGAINST CURRENT CODE. Task 6 rewrites `:130` to use
-    `.filter_by(id=...).one()` (matching `restore_community:522`'s own
-    pattern) and must INVERT this test to expect `NoResultFound` in place
-    of `AttributeError` once that fix lands; the `Conversation`-count
-    assertion should survive that inversion unchanged, since a
-    `NoResultFound` at `:130` itself dies even earlier than `:131` does.
+    THIS TEST IS THE INVERSION of the former PIN,
+    `test_invite_with_chat_missing_community_raises_AttributeError`, which
+    asserted the pre-fix `AttributeError` and passed against the code
+    before this fix. That test's name and assertion no longer apply.
     """
     s = _seed()
     recipient = make_user(s.instance, 'bob', local=True)
 
     with web_ctx(app, s.user):
-        with pytest.raises(AttributeError):
+        with pytest.raises(NoResultFound):
             invite_with_chat(999999, 'bob', SRC_WEB)
 
     assert db.session.query(Conversation).count() == 0
