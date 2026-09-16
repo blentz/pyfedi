@@ -144,6 +144,103 @@ as derived above, then was discarded -- it is not part of this file because
 a crash is not evidence a falsy return is reachable, per this round's
 explicit instruction not to accept one as proof either way.
 
+`invite_with_chat` (app/shared/community.py:121-173), FIRST HALF ONLY --
+`:122-143` and `:173`. Task 5 covers `:144-172`, the software-fork half; a
+scope ruling assigned `:173`'s bare `return 0` here because it is the
+fall-through of `:129`'s guard, which this task owns.
+
+THE `:129` THREE-OPERAND GUARD, INDEPENDENCE CHECKED BEFORE ASSUMING IT:
+
+    if recipient and not recipient.banned and not instance_banned(recipient.instance.domain):
+
+`recipient` (a lookup result that may be `None`), `recipient.banned` (a
+boolean column on the found `User` row), and `instance_banned(recipient.
+instance.domain)` (a query against a DIFFERENT table, `BannedInstances`,
+keyed on the recipient's instance's domain) are three genuinely separate
+data sources: a `User` row's own ban flag does not derive from, or get
+derived from, its instance's presence in `BannedInstances`, and neither
+predicate constrains what `search_for_user` can return. This is NOT
+`delete_community:494`'s shape (sub-project 46, fact 75 cause 3): that
+guard's first operand, `is_owner(user)`, was PROVABLY SUBSUMED by its
+second, `is_moderator(user)`, because `is_moderator()`'s own body tested
+membership in a list built by unioning owners into it -- true owner
+implied true moderator by construction, so no input could make the first
+operand true while the second was false. Here, nothing analogous holds:
+a `User.banned=True` row on an unbanned instance, and a `User.banned=False`
+row on a banned instance, are both perfectly constructible rows -- neither
+predicate's truth value constrains the other's. This was verified
+empirically, not just algebraically, by the three tests below: each holds
+the OTHER two operands at their PASSING value and flips exactly one to
+failing, and each independently drives the guard false and the function to
+`:173`'s `return 0` -- three configurations that are not restatements of
+each other, and are not in lockstep with each other (mechanism (e)'s
+concern) because each test's failing operand differs while the other two's
+values are held at whichever combination makes them irrelevant or passing.
+
+PIN, `:130-131`, NAMED DISTINCTLY FROM TASK 3'S: `community: Community =
+db.session.query(Community).get(community_id)` immediately followed by
+`if community.banned:` shares the exact `.get()`-then-dereference shape
+Task 3 pinned at `invite_with_email:196-197`
+(`test_invite_with_email_missing_community_raises_AttributeError`) -- a
+missing id makes `.get()` return `None` quietly, and the very next line
+dereferences it, raising `AttributeError: 'NoneType' object has no
+attribute 'banned'`. Task 3's test and this task's test assert the
+identical EXCEPTION TYPE at two DIFFERENT call sites, so this one is named
+`test_invite_with_chat_missing_community_raises_AttributeError` --
+distinct from Task 3's `test_invite_with_email_missing_community_raises_
+AttributeError` by function name -- so Task 6's planned inversion of both
+(once each site is rewritten to `.filter_by(id=...).one()`, raising
+`NoResultFound` instead) can target each by name without a collision.
+
+FOUR PATHS, ONE RETURN VALUE: `:129`'s false arm (via `:173`), `:132`'s
+banned-community arm, and `:172`'s failure arm (`reply` falsy; Task 5's)
+all return plain `0`, and `app/community/routes.py:2614` sums exactly this
+return value into a count it reports to the requesting user as "invites
+sent" -- indistinguishable to that caller. Every test below for a
+`return 0` path therefore asserts WHICH path ran by checking for the
+absence of a `Conversation` row (created only at `:134-137`, strictly
+inside the guard and after the banned-community check), not merely that
+the return value equals `0`.
+
+MECHANISM (c) FOR THE SUCCESS PATH: the two message-fork tests both assert
+a `Conversation` was created with exactly `{user, recipient}` as its
+members. A bare `Conversation.query.first()` after the call would pass
+even under a mutant that created the RIGHT SHAPE of conversation attached
+to the WRONG pair of users, if the table were otherwise empty at that
+point (the same false-witness-by-emptiness gap this file's D622 note
+registered against `get_comm_flair_list`). Both tests seed an unrelated
+decoy `Conversation` (via `make_conversation`, between two bystander users
+who play no other role) BEFORE calling `invite_with_chat`, then find the
+new row by filtering on its member-id SET (`{m.id for m in c.members} ==
+{inviter.id, recipient.id}`) rather than assuming order or position --
+per this round's ban on ordered assertions over query-planner rows -- and
+assert there is exactly one such row, distinct from the untouched decoy.
+
+MESSAGE-FORK VALUE-SWAP RESISTANCE, `:140-143`: `s.community.title` is set
+to a string DIFFERENT from `s.community.name` before these two tests run.
+`Community.link()` returns `self.name` (`:706`, `ap_id` is `None` for every
+community this suite's factory builds) and `Community.display_name()`
+returns `self.title` (`:700`, same `ap_id is None` condition) -- with
+`title == name` (the factory default, since `make_community(name=...)`
+also sets `title=name`), a mutant that swapped WHICH of the two methods
+`:141`/`:143` call would produce byte-identical message text, and no
+assertion on the rendered string could tell the swap from correct code.
+Diverging `title` from `name` first makes the two calls' outputs diverge,
+so a value-swap mutant is caught by an exact-substring assertion built
+from the CORRECT method's output. `:144-146`'s `community.link()` (in the
+subscribe-link suffix, reached identically on BOTH the private and public
+arms for a local recipient at default `invitations`) is why neither test
+asserts `community.link() not in message` as a blanket negative check --
+that substring legitimately appears in every such message regardless of
+the `:140` fork, on Task 5's territory this task's tests merely pass
+through rather than target. Instead each test asserts (a) the correct
+fork's exact phrase, INCLUDING its correct interpolated value, is present,
+which a value-swap alone already falsifies since `link() != display_name()`
+here, and (b) the OTHER fork's distinctive wording (`"check it out"` for
+public, `"the private community called"` for private) is wholly absent,
+which catches a mutant that swaps the entire branch body rather than only
+its interpolated value.
+
 CAUSE CHECK, FACT 75: none of the eight catalogued causes names this shape
 precisely, and none is force-fitted here. `:698`'s clause is a single
 condition on one local variable, not a compound `and` of two conjuncts of
@@ -183,12 +280,12 @@ from sqlalchemy.exc import NoResultFound
 
 from app import db
 from app.constants import INVITE_APPLY, SRC_API, SRC_WEB
-from app.models import Community, CommunityFlair, CommunityInvitation
+from app.models import Community, CommunityFlair, CommunityInvitation, Conversation
 from app.shared.community import (comm_flair_ap_format, create_invite_token, get_comm_flair_list,
-                                  invite_with_email)
+                                  invite_with_chat, invite_with_email)
 from app.utils import markdown_to_html
-from tests.factories import (bearer, make_community, make_community_flair, make_instance, make_user,
-                             web_ctx)
+from tests.factories import (bearer, make_community, make_community_flair, make_conversation,
+                             make_instance, make_user, web_ctx)
 
 
 def _burn_a_seed():
@@ -842,3 +939,238 @@ def test_invite_with_email_missing_community_raises_AttributeError(app, db_sessi
     with web_ctx(app, s.user):
         with pytest.raises(AttributeError):
             invite_with_email(999999, 'invitee@example.com', SRC_WEB)
+
+
+# `invite_with_chat` (app/shared/community.py:121-173), first half only:
+# `:122-143` and `:173`. See the module docstring above for the `:129`
+# independence proof, the pin's naming rationale, the four-paths-return-0
+# problem, and this section's mechanism (c)/(e) mitigations.
+
+
+def test_invite_with_chat_no_matching_recipient_returns_0_and_creates_no_conversation(
+        app, db_session, monkeypatch):
+    """`:129`'s FIRST operand isolated: `search_for_user(handle)` is patched
+    to return `None` -- no such handle -- so `recipient` is falsy and the
+    `and`-chain short-circuits before either `recipient.banned` or
+    `instance_banned(...)` is ever evaluated. Control falls through to
+    `:173`'s bare `return 0`.
+
+    `search_for_user` is patched on `app.shared.community`, never on its
+    source module `app.user.utils`: `from app.user.utils import
+    search_for_user` (`:22`) binds the name into THIS module's globals at
+    import time, so a patch on the source module would leave the
+    already-bound reference here untouched.
+
+    Asserting `Conversation.query.count() == 0` (not merely `result == 0`)
+    is what distinguishes this path from `:132`'s banned-community arm and
+    `:172`'s failure arm -- see the module docstring's FOUR PATHS note --
+    all three return the identical `0`.
+    """
+    s = _seed()
+    monkeypatch.setattr('app.shared.community.search_for_user', lambda handle: None)
+
+    result = invite_with_chat(s.community.id, 'nobody', SRC_API, bearer(s.user))
+
+    assert result == 0
+    assert db.session.query(Conversation).count() == 0
+
+
+def test_invite_with_chat_banned_recipient_returns_0_and_creates_no_conversation(
+        app, db_session, monkeypatch):
+    """`:129`'s SECOND operand isolated: `search_for_user` is patched to
+    return a real, banned `User` row, while `instance_banned` is patched to
+    return `False` -- the recipient's OWN ban flag is what drives the guard
+    false here, not their instance's status, which is held at its passing
+    value.
+
+    Both `search_for_user` and `instance_banned` are patched on
+    `app.shared.community`, matching how `:22`/`:24-27` bind those names
+    into this module's globals (see the sibling test above and the
+    `invite_with_email` tests' `send_email` patches for the same pattern).
+    """
+    s = _seed()
+    recipient = make_user(s.instance, 'banneduser', local=True)
+    recipient.banned = True
+    db.session.commit()
+    monkeypatch.setattr('app.shared.community.search_for_user', lambda handle: recipient)
+    monkeypatch.setattr('app.shared.community.instance_banned', lambda domain: False)
+
+    with web_ctx(app, s.user):
+        result = invite_with_chat(s.community.id, 'banneduser', SRC_WEB)
+
+    assert result == 0
+    assert db.session.query(Conversation).count() == 0
+
+
+def test_invite_with_chat_banned_instance_returns_0_and_creates_no_conversation(
+        app, db_session, monkeypatch):
+    """`:129`'s THIRD operand isolated: `search_for_user` is patched to
+    return a real recipient with `banned=False` (the second operand held at
+    its passing value), while `instance_banned` is patched to return `True`
+    regardless of the domain it is passed -- the recipient's INSTANCE being
+    banned is what drives the guard false here.
+
+    Together with the two tests above, these three configurations flip
+    exactly one operand each away from its passing value while holding the
+    other two passing (or, for the first test, irrelevant post-short-circuit)
+    -- the empirical half of the module docstring's independence proof: no
+    two of these three tests vary the same operand in lockstep with another,
+    per this round's mechanism (e) caution.
+    """
+    s = _seed()
+    recipient = make_user(s.instance, 'remoteuser', local=True)
+    recipient.banned = False
+    db.session.commit()
+    monkeypatch.setattr('app.shared.community.search_for_user', lambda handle: recipient)
+    monkeypatch.setattr('app.shared.community.instance_banned', lambda domain: True)
+
+    result = invite_with_chat(s.community.id, 'remoteuser', SRC_API, bearer(s.user))
+
+    assert result == 0
+    assert db.session.query(Conversation).count() == 0
+
+
+def test_invite_with_chat_missing_community_raises_AttributeError(app, db_session):
+    """PIN, NOT A FIX -- see the module docstring's PIN section above for
+    the full rationale and why this is named distinctly from Task 3's
+    `test_invite_with_email_missing_community_raises_AttributeError`.
+
+    `:129`'s guard is genuinely TRUE here (a real, unbanned local recipient
+    on a real, unbanned instance), so control reaches `:130`'s
+    `db.session.query(Community).get(community_id)` for a `community_id`
+    that matches no row. `.get()` returns `None` quietly, and `:131`'s
+    `if community.banned:` dereferences it immediately, raising
+    `AttributeError: 'NoneType' object has no attribute 'banned'`.
+
+    THIS TEST ASSERTS TODAY'S ACTUAL, BROKEN BEHAVIOUR -- NOT THE INTENDED
+    ONE -- AND PASSES AGAINST CURRENT CODE. Task 6 rewrites `:130` to use
+    `.filter_by(id=...).one()` (matching `restore_community:522`'s own
+    pattern) and must INVERT this test to expect `NoResultFound` in place
+    of `AttributeError` once that fix lands.
+    """
+    s = _seed()
+    recipient = make_user(s.instance, 'bob', local=True)
+
+    with web_ctx(app, s.user):
+        with pytest.raises(AttributeError):
+            invite_with_chat(999999, 'bob', SRC_WEB)
+
+
+def test_invite_with_chat_banned_community_returns_0_and_creates_no_conversation(
+        app, db_session):
+    """`:131`'s TRUE arm: a banned community makes `:132` return `0` before
+    any `Conversation` is created -- one of the FOUR paths sharing that same
+    return value (see the module docstring), distinguished here the same
+    way as the `:129`-false tests above: by the absence of a `Conversation`
+    row, not merely by the return value.
+
+    The recipient here is real and passes `:129`'s guard outright (local,
+    unbanned, on an unbanned instance), so this test isolates `:131-132`
+    on its own rather than conflating it with the guard.
+    """
+    s = _seed()
+    recipient = make_user(s.instance, 'carol', local=True)
+    s.community.banned = True
+    db.session.commit()
+
+    result = invite_with_chat(s.community.id, 'carol', SRC_API, bearer(s.user))
+
+    assert result == 0
+    assert db.session.query(Conversation).count() == 0
+
+
+def test_invite_with_chat_public_community_message_embeds_community_link(
+        app, db_session, monkeypatch):
+    """`:140`'s FALSE arm (`community.private` is `False`, the factory
+    default): `:141` builds the message around `community.link()`, embedded
+    in a "check it out" sentence -- see the module docstring's MESSAGE-FORK
+    VALUE-SWAP RESISTANCE section for why `s.community.title` is diverged
+    from `s.community.name` first, and why the assertions below check for
+    the presence of the correct exact phrase and the absence of the OTHER
+    arm's wording rather than a blanket absence of `link()`'s value (which
+    legitimately reappears in `:146`'s subscribe-link suffix regardless of
+    this fork).
+
+    Also covers `:134-138`'s conversation creation on the success path: a
+    decoy `Conversation` between two unrelated users is seeded first (the
+    module docstring's mechanism (c) note), and the assertions below find
+    the NEW conversation by its member-id set rather than assuming it is
+    the only row or the first one returned.
+
+    `send_message` is patched on `app.shared.community`, never on its
+    source module `app.chat.util`: `from app.chat.util import send_message`
+    binds the name into this module's globals at import time. The patched
+    replacement returns a truthy sentinel so `:172`'s `return 1 if reply
+    else 0` -- Task 5's territory, merely passed through here -- takes its
+    true arm, and captures the exact `message` argument so the fork's
+    content can be asserted directly.
+    """
+    s = _seed()
+    s.community.title = 'A Community Worth Joining'
+    assert s.community.title != s.community.name
+    db.session.commit()
+    recipient = make_user(s.instance, 'dora', local=True)
+    decoy_a = make_user(s.instance, 'decoy_a', local=True)
+    decoy_b = make_user(s.instance, 'decoy_b', local=True)
+    make_conversation(decoy_a, decoy_b)
+    calls = []
+    monkeypatch.setattr('app.shared.community.send_message',
+                        lambda message, conversation_id: calls.append(message) or object())
+
+    with web_ctx(app, s.user):
+        result = invite_with_chat(s.community.id, 'dora', SRC_WEB)
+
+    assert result == 1
+    assert len(calls) == 1
+    message = calls[0]
+    pattern_public = (f"this community, check it out: {app.config['SERVER_URL']}/c/"
+                      f"{s.community.link()}.\n\n")
+    assert pattern_public in message
+    assert 'the private community called' not in message
+
+    all_conversations = db.session.query(Conversation).all()
+    assert len(all_conversations) == 2
+    matches = [c for c in all_conversations
+              if {m.id for m in c.members} == {s.user.id, recipient.id}]
+    assert len(matches) == 1
+
+
+def test_invite_with_chat_private_community_message_embeds_display_name(
+        app, db_session, monkeypatch):
+    """`:140`'s TRUE arm: `community.private = True` makes `:143` build the
+    message around `community.display_name()` instead, embedded in a
+    "the private community called" sentence -- the mirror of the public-arm
+    test above. See that test's docstring and the module docstring's
+    MESSAGE-FORK VALUE-SWAP RESISTANCE section for the shared rationale.
+
+    Also covers the `:134-138`/mechanism (c) success-path assertion a
+    second time, with a decoy conversation seeded the same way.
+    """
+    s = _seed()
+    s.community.title = 'A Secret Society'
+    assert s.community.title != s.community.name
+    s.community.private = True
+    db.session.commit()
+    recipient = make_user(s.instance, 'erin', local=True)
+    decoy_a = make_user(s.instance, 'decoy_c', local=True)
+    decoy_b = make_user(s.instance, 'decoy_d', local=True)
+    make_conversation(decoy_a, decoy_b)
+    calls = []
+    monkeypatch.setattr('app.shared.community.send_message',
+                        lambda message, conversation_id: calls.append(message) or object())
+
+    result = invite_with_chat(s.community.id, 'erin', SRC_API, bearer(s.user))
+
+    assert result == 1
+    assert len(calls) == 1
+    message = calls[0]
+    pattern_private = (f"the private community called {s.community.display_name()} on "
+                       f"{app.config['SERVER_NAME']}")
+    assert pattern_private in message
+    assert 'check it out' not in message
+
+    all_conversations = db.session.query(Conversation).all()
+    assert len(all_conversations) == 2
+    matches = [c for c in all_conversations
+              if {m.id for m in c.members} == {s.user.id, recipient.id}]
+    assert len(matches) == 1
