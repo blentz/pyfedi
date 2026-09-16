@@ -13275,23 +13275,37 @@ count outranks a missing one, so this line is left for the controller's
 own re-measurement on the delivered tree (`cddae19d`) rather than carrying
 the stale number forward:
 
-> **`5105 passed, 3 skipped, 6 subtests, PYTEST_EXIT=0` (wall clock
-> 641.94s), all 26 floors met, `FLOORS_EXIT=0`**, measured on the delivered
-> tree (`cddae19d`) against its own `--cov=app` JSON with both arguments.
+> **`5112 passed, 3 skipped, 6 subtests, PYTEST_EXIT=0` (wall clock
+> 386.27s), all 26 floors met, `FLOORS_EXIT=0`**, measured on the delivered
+> tree (`23ed667b`) against its own `--cov=app` JSON with both arguments.
 
-**The task's arithmetic prediction was right, and it was right to refuse to
-certify it.** It offered 5101 + 4 = 5105 as a number to check the
-measurement against rather than as a substitute for one, and the
-measurement returned exactly that. The count closes twice over: 5105 = 5101
-plus the four residual-closing tests `cddae19d` added, and 5105 - 5063
-(sub-project 46's delivered figure) = 42, which is exactly
+The count closes twice over: **5112 = 5105 + 7**, the seven tests the final
+review's fix round added, and **5112 - 5063** (sub-project 46's delivered
+figure) **= 49**, exactly
 `/usr/bin/grep -cE "^ *def test_" tests/test_shared_community_invites.py`
 against the commit object. Two independent derivations, same answer.
 
-The distinction matters and is worth keeping: a prediction that happens to
-be correct is still not a measurement, and this register has twice carried
-a stale count that was within a handful of the truth -- close enough to
-survive a glance, wrong anyway.
+**THIS LINE HAS NOW GONE STALE THREE TIMES IN ONE ROUND, AND THAT IS THE
+FINDING.** It read 5101 while `cddae19d` was landing four residual-closing
+tests; corrected to 5105, which the final review's fix round invalidated by
+adding seven more; now 5112. In sub-project 46 the same line went stale
+twice. Every wrong value was within single digits of the truth -- close
+enough to survive a glance, wrong anyway.
+
+The rule this yields is not "re-measure more carefully" but something
+structural: **a suite count is only true of the tree it ran on, and a round
+does not know which commit is its last until the final review has closed.**
+Measuring at what looks like the end measures the second-to-last tree. The
+figure has to be taken after the last commit that touches `tests/`, which in
+practice means after the final review's fix round, not after the task the
+plan happens to number last.
+
+Worth preserving from the superseded text, because the reasoning was right
+even though its number did not survive: Task 9 offered `5101 + 4 = 5105` as
+arithmetic to check a measurement against and explicitly declined to certify
+it. The measurement returned exactly that. **A prediction that happens to be
+correct is still not a measurement** -- and the very next commit proved the
+point by making it wrong.
 
 **Exactly two production changes**, both in `app/shared/community.py`
 (D625): `git diff --numstat 41772ce8 HEAD -- app/` is `2 2
