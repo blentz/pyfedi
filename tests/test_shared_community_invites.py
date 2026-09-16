@@ -740,6 +740,61 @@ def test_invite_with_email_web_src_uses_current_user_and_lemmy_link_when_apply_r
     assert html_body == markdown_to_html(expected_message)
 
 
+def test_invite_with_email_api_src_with_invitations_above_apply_uses_lemmy_link(
+        app, db_session, monkeypatch):
+    """D469 (docs/superpowers/specs/2026-08-25-coverage-campaign-findings.md
+    :11352), false-witness mechanism (e): two independent conditions
+    exercised only in lockstep with each other cannot detect a mutant that
+    CONJOINS them, however precise the assertions on the resulting state.
+
+    Every OTHER test above pairs `src == SRC_API` with `:201`'s FALSE arm
+    (the first test), or `SRC_WEB` with its TRUE arm (the previous test) --
+    never crossed. A reviewer proved by hand-applied mutation that
+    `if community.invitations > INVITE_APPLY:` at `:201` can be silently
+    rewritten to `if community.invitations > INVITE_APPLY and src ==
+    SRC_WEB:` with the full file still reporting `20 passed`: every existing
+    test's `src` and `:201` truth value already agreed with that added
+    conjunct, so the conjunct was free -- it never had to fire.
+
+    This test BREAKS the lockstep: `src == SRC_API` (via `bearer`), crossed
+    with `:201`'s TRUE arm (`invitations` raised above `INVITE_APPLY` as in
+    the sibling test above). Under the mutant that conjoins `and src ==
+    SRC_WEB`, this test's `src` is `SRC_API`, so the conjoined condition
+    is FALSE even though `invitations > INVITE_APPLY` is TRUE -- `:200`'s
+    plain `'subscribe'` literal would survive instead of `:202`'s
+    `lemmy_link()` form, and the `subscribe`/body assertions below catch
+    that divergence directly (verified by hand-applying the mutant and
+    running this file; see the task report for the exact failure text,
+    restored afterwards). The sibling SRC_WEB+true-arm test above supplies
+    the other half: it dies under the MIRROR-IMAGE mutant that conjoins
+    `and src == SRC_API` instead, since ITS `src` is `SRC_WEB`. Between the
+    two tests, both conjoining directions are caught; neither alone would
+    be.
+    """
+    s = _seed()
+    s.community.invitations = INVITE_APPLY + 1
+    db.session.commit()
+    calls = []
+    monkeypatch.setattr('app.shared.community.send_email',
+                        lambda *a, **kw: calls.append(a))
+
+    result = invite_with_email(s.community.id, 'invitee@example.com', SRC_API, bearer(s.user))
+
+    assert result == 1
+    assert len(calls) == 1
+    subject, sender, recipients, text_body, html_body = calls[0]
+    assert subject == f"{s.community.display_name()} on {app.config['SERVER_NAME']}"
+    assert sender == f"{s.user.display_name()} <{app.config['MAIL_FROM']}>"
+    assert recipients == ['invitee@example.com']
+    expected_subscribe = f'accept_invite/{s.user.lemmy_link()}'
+    assert '@' in s.user.lemmy_link()
+    expected_message = render_template(
+        'email/invite_to_community.txt', user=s.user, community=s.community,
+        host=app.config['SERVER_URL'], subscribe=expected_subscribe)
+    assert text_body == expected_message
+    assert html_body == markdown_to_html(expected_message)
+
+
 def test_invite_with_email_banned_community_returns_0(app, db_session, monkeypatch):
     """`:197`'s TRUE arm: a banned community makes `invite_with_email`
     return `0` immediately -- `:200-209` never run, so `send_email` is never
