@@ -88,9 +88,44 @@ same as here, only defends a mutant that HARDCODES `community_id=1`; it does
 nothing against a mutant that deletes the filter entirely, because nothing
 ever populated the bystander with a row of the kind under query. `_seed()`
 below now returns the bystander as `.bystander` specifically so a flair can
-be attached to it and excluded, closing this gap for `get_comm_flair_list`
-and handing later tasks in this round a ready-made second community for
-their own cross-community negative controls.
+be attached to it and excluded, closing this gap at `:681` and handing later
+tasks in this round a ready-made second community for their own
+cross-community negative controls.
+
+D629, THREE MORE SITES OF THE SAME MECHANISM (c), FOUND BY ASKING THE D622
+QUESTION AT EVERY PREDICATE RATHER THAN ONLY THE ONE REVIEW NAMED. The
+register's D629 entry recorded this class as closed at `:681`, `:686` and
+`:688`. It was not closed at three further predicates in this file's own
+target functions, each a live survivor against the 42-test suite:
+
+  * `:178`, `CommunityInvitation.user_id == recipient.id`. No test seeded a
+    SECOND `CommunityInvitation` row -- the two `create_invite_token` tests
+    seed exactly one each -- so any row the `:177-178` lookup could return
+    was the right row, and neutralising the predicate returned it anyway.
+  * `:177`, `CommunityInvitation.community_id == community.id`. The same
+    shape at the sibling predicate of the same query; checked because it is
+    the same shape, not because it was reported.
+  * `:675`, `.filter_by(name=name, ap_domain=ap_domain)`. No test gave two
+    communities the same `name` on different `ap_domain`s, so `name` alone
+    identified a unique row in every `str`-arg test and dropping the
+    `ap_domain` predicate changed nothing observable.
+
+Each is now closed by a decoy row of the same kind, seeded so that exactly
+one row matches the mutant's widened filter -- which keeps the kill
+independent of query-planner ordering at `:177-178`, and at `:675` is
+asserted explicitly rather than assumed (see that test's docstring). All
+three were hand-verified to survive before the decoys and to die on a clean
+`AssertionError` after.
+
+`:134` AND `:170` ARE A DIFFERENT GAP: UNASSERTED ARGUMENTS, NOT MECHANISM
+(c). `Conversation(user_id=user.id)` and `send_message(message,
+conversation.id)` each pass a value no assertion in this file read back. The
+distinction worth keeping is that the PERSIST half of `:134-138` was already
+covered -- deleting `:138`'s `db.session.commit()` fails five tests on clean
+assertion errors -- while the VALUES were not, and both mutants are
+user-visible in production: an invite conversation owned by the invitee
+instead of the inviter, and an invite message delivered into conversation
+`0`. Both are now pinned by the public-arm message-fork test.
 
 `comm_flair_ap_format` (app/shared/community.py:684-707). THE THREE INPUT
 TYPES: `:685-686` (`int`, via `CommunityFlair.query.get(flair)`), `:687-688`
@@ -388,6 +423,68 @@ def test_create_invite_token_returns_the_existing_token_unchanged(app, db_sessio
         community_id=s.community.id, user_id=recipient.id).count() == 1
 
 
+def test_create_invite_token_ignores_invitations_for_another_user_or_community(
+        app, db_session):
+    """Same-mechanism negative control for BOTH of `:177-178`'s predicates --
+    mechanism (c), the class registered as D629.
+
+    `:177-178` is a two-predicate lookup:
+
+        .filter(CommunityInvitation.community_id == community.id,
+                CommunityInvitation.user_id == recipient.id).first()
+
+    Before this test, the two tests above were the only ones seeding a
+    `CommunityInvitation` row at all, and each seeded EXACTLY ONE -- so at
+    the point either ran, any row the query could possibly return was the
+    right row, and neutralising either predicate (or both) returned it just
+    the same. Hand-verified against the 42-test file: replacing
+    `CommunityInvitation.user_id == recipient.id` with the tautology
+    `CommunityInvitation.user_id == CommunityInvitation.user_id` passed all
+    42, and so did the same neutralisation of `:177`'s `community_id`
+    predicate. Neither is defended by row COUNT assertions -- both existing
+    tests count rows, and a mutant that merely widens a lookup creates no
+    extra row.
+
+    This test seeds one decoy per predicate, each chosen to be caught by
+    exactly one of them:
+
+      * `decoy_same_community` -- the target community, a DIFFERENT user.
+        Matches `:177`'s predicate, fails `:178`'s. A mutant neutralising
+        `:178` finds it and returns its token instead of minting.
+      * `decoy_same_user` -- the target user, a DIFFERENT community
+        (`s.bystander`, which `_seed()` returns for exactly this purpose).
+        Matches `:178`'s predicate, fails `:177`'s. A mutant neutralising
+        `:177` finds it and returns its token instead of minting.
+
+    Each mutant's filter therefore matches exactly ONE row, so which row
+    `.first()` returns is not left to query-planner order. Asserting the
+    returned token differs from BOTH decoy tokens is what kills them; the
+    row-count assertion additionally pins that the real code took `:179`'s
+    FALSE arm and minted rather than reusing either decoy.
+    """
+    s = _seed()
+    recipient = make_user(s.instance, 'bob', local=True)
+    other_user = make_user(s.instance, 'carol', local=True)
+    decoy_same_community = CommunityInvitation(
+        token='decoysamecommunity', community_id=s.community.id,
+        user_id=other_user.id, inviter_id=s.user.id)
+    decoy_same_user = CommunityInvitation(
+        token='decoysameuser', community_id=s.bystander.id,
+        user_id=recipient.id, inviter_id=s.user.id)
+    db.session.add_all([decoy_same_community, decoy_same_user])
+    db.session.commit()
+
+    token = create_invite_token(s.community, recipient, s.user)
+
+    assert token != 'decoysamecommunity'
+    assert token != 'decoysameuser'
+    minted = db.session.query(CommunityInvitation).filter_by(
+        community_id=s.community.id, user_id=recipient.id).all()
+    assert len(minted) == 1
+    assert minted[0].token == token
+    assert db.session.query(CommunityInvitation).count() == 3
+
+
 # `get_comm_flair_list` (app/shared/community.py:667-681).
 
 
@@ -545,6 +642,51 @@ def test_get_comm_flair_list_excludes_a_flair_belonging_to_another_community(
     make_community_flair(s.bystander, name='unwanted')
 
     result = get_comm_flair_list(s.community)
+
+    assert {f.flair for f in result} == {'wanted'}
+
+
+def test_get_comm_flair_list_str_arg_exact_match_requires_the_ap_domain_too(
+        app, db_session):
+    """Same-mechanism negative control for `:675`'s SECOND predicate --
+    mechanism (c) again, the D629 class, at a site the D629 entry did not
+    name.
+
+    `:675` is `.filter_by(name=name, ap_domain=ap_domain).first()`. Every
+    other `str`-arg test above builds its lookup string from the single
+    seeded community, and no test anywhere in this file gave two communities
+    the SAME `name` on different `ap_domain`s -- so `name` alone already
+    identified a unique row in every one of them, and dropping
+    `ap_domain=ap_domain` from the filter changed nothing any assertion
+    could see. Hand-verified against the 42-test file:
+    `.filter_by(name=name).first()` passed all 42.
+
+    Two communities are minted here sharing the name `'shared'` and
+    differing only in host. The DECOY is created FIRST and the TARGET
+    second, and the lookup asks for the TARGET's `ap_domain`: correct code
+    matches on both predicates and returns the target, while a mutant
+    filtering on `name` alone matches both rows and `.first()` -- which
+    carries no `order_by` -- returns the decoy.
+
+    THAT LAST STEP IS AN ASSUMPTION ABOUT AN UNORDERED QUERY, SO IT IS
+    ASSERTED RATHER THAN TRUSTED: the precondition below runs the mutant's
+    own `name`-only query directly and pins that it yields the decoy. The
+    assertion is the test's own, independent of production code, so it
+    cannot make a mutant look dead that is not: if a future backend or
+    planner ever returned the target first, this precondition fails loudly
+    and names the reason, instead of the test silently passing while the
+    mutant it exists to kill survives.
+    """
+    s = _seed()
+    decoy = make_community('shared', host='decoy.example')
+    target = make_community('shared', host='target.example')
+    make_community_flair(decoy, name='unwanted')
+    make_community_flair(target, name='wanted')
+    assert decoy.name == target.name
+    assert decoy.ap_domain != target.ap_domain
+    assert db.session.query(Community).filter_by(name='shared').first().id == decoy.id
+
+    result = get_comm_flair_list(f'{target.name}@{target.ap_domain}')
 
     assert {f.flair for f in result} == {'wanted'}
 
@@ -1169,6 +1311,31 @@ def test_invite_with_chat_public_community_message_embeds_community_link(
     `:140`'s real `if not community.private:` undetected. Both tests now
     share `src=SRC_WEB` and differ only in `community.private`, which
     decouples the two.
+
+    TWO ARGUMENT VALUES, NOT JUST THE PERSIST: `:134`'s `Conversation(
+    user_id=user.id)` and `:170`'s `send_message(message, conversation.id)`
+    each pass a value nothing in this file read back until now. The persist
+    HALF of `:134-138` was already covered -- deleting `:138`'s
+    `db.session.commit()` is killed by the conversation-row assertions here
+    -- but the VALUES were not, and the distinction matters: both surviving
+    mutants are user-visible in production, not bookkeeping.
+
+      * `Conversation(user_id=recipient.id)` -- an invite conversation owned
+        by the INVITEE instead of the inviter. `user_id` is the initiator
+        (`app/models.py:190`, `:196-197`'s `initiator` relationship); the
+        member SET is `{user, recipient}` either way, so the member-set
+        assertion above cannot see this swap. `matches[0].user_id ==
+        s.user.id` is what does.
+      * `send_message(message, 0)` -- the invite delivered into the wrong
+        conversation. All fourteen `send_message` patches in this file were
+        `lambda message, conversation_id: ...` discarding the second
+        argument entirely, so ANY value could be passed and no assertion
+        would notice. This patch now captures the pair and
+        `sent_to_conversation_id == matches[0].id` pins it to the
+        conversation `:134-138` actually created.
+
+    Both were hand-verified to survive the 42-test file before these two
+    assertions were added.
     """
     s = _seed()
     s.community.title = 'A Community Worth Joining'
@@ -1180,14 +1347,15 @@ def test_invite_with_chat_public_community_message_embeds_community_link(
     make_conversation(decoy_a, decoy_b)
     calls = []
     monkeypatch.setattr('app.shared.community.send_message',
-                        lambda message, conversation_id: calls.append(message) or object())
+                        lambda message, conversation_id:
+                        calls.append((message, conversation_id)) or object())
 
     with web_ctx(app, s.user):
         result = invite_with_chat(s.community.id, 'dora', SRC_WEB)
 
     assert result == 1
     assert len(calls) == 1
-    message = calls[0]
+    message, sent_to_conversation_id = calls[0]
     pattern_public = (f"this community, check it out: {app.config['SERVER_URL']}/c/"
                       f"{s.community.link()}.\n\n")
     assert pattern_public in message
@@ -1198,6 +1366,8 @@ def test_invite_with_chat_public_community_message_embeds_community_link(
     matches = [c for c in all_conversations
               if {m.id for m in c.members} == {s.user.id, recipient.id}]
     assert len(matches) == 1
+    assert matches[0].user_id == s.user.id
+    assert sent_to_conversation_id == matches[0].id
 
 
 def test_invite_with_chat_private_community_message_embeds_display_name(
@@ -1261,6 +1431,59 @@ def test_invite_with_chat_private_community_message_embeds_display_name(
     assert len(matches) == 1
 
 
+def test_invite_with_chat_private_community_api_src_still_embeds_display_name(
+        app, db_session, monkeypatch):
+    """`:140`'s FALSE arm again, at the OTHER `src` value.
+
+    FOUND BY THE REBUILT TABLE, NOT BY THE REVIEW THAT PROMPTED THIS ROUND.
+    Once `:140`'s row was rebuilt with an OBSERVABILITY column (see the
+    section comment below for what that column is and why it exists), the
+    row read: two observable samples, `:140`=T at WEB (the public-arm test
+    above) and `:140`=F at WEB (the private-arm test above), with the third
+    observable sample -- `:140`=T at API -- added to the local apply-open
+    test by this round. That left `:140`=F with a single observable sample,
+    at WEB only, which is precisely the single-sample shape that lets one
+    of a mirrored literal pair survive: `if not community.private or src ==
+    SRC_API:` evaluates `False or (WEB==API is False)` = `False` on that
+    one sample, agreeing with real `False` everywhere it is looked at.
+    Hand-verified: that mutant passed the whole file before this test
+    existed.
+
+    This test reaches `:140`=F at `src=API`, where the mutant evaluates
+    `False or (API==API is True)` = `True` and wrongly builds `:141`'s
+    public greeting for a private community -- caught by the
+    `pattern_private` assertion below and, independently, by
+    `'check it out' not in message`.
+
+    Assertions mirror the private-arm test's exactly: same arm, different
+    `src`. `community.title` is diverged from `community.name` first for
+    the same value-swap reason the module docstring's MESSAGE-FORK
+    VALUE-SWAP RESISTANCE section gives.
+
+    Sites reached: `:140`=F, `:144`=T, `:145`=T; `src`=API; `reply`=T.
+    Greeting observable: YES.
+    """
+    s = _seed()
+    s.community.title = 'An Invitation-Only Circle'
+    assert s.community.title != s.community.name
+    s.community.private = True
+    db.session.commit()
+    recipient = make_user(s.instance, 'rosa', local=True)
+    calls = []
+    monkeypatch.setattr('app.shared.community.send_message',
+                        lambda message, conversation_id: calls.append(message) or object())
+
+    result = invite_with_chat(s.community.id, 'rosa', SRC_API, bearer(s.user))
+
+    assert result == 1
+    assert len(calls) == 1
+    message = calls[0]
+    pattern_private = (f"the private community called {s.community.display_name()} on "
+                       f"{app.config['SERVER_NAME']}")
+    assert pattern_private in message
+    assert 'check it out' not in message
+
+
 # `invite_with_chat` (app/shared/community.py:121-173), SECOND half: `:144-172`,
 # the software fork. A scope ruling assigned `:173` to the first half above --
 # it is `:129`'s fall-through, not this fork's -- so this section's range is
@@ -1290,6 +1513,96 @@ def test_invite_with_chat_private_community_message_embeds_display_name(
 # report, along with the pairwise check: for every two columns both reached
 # by at least two tests, do the values that appear together vary
 # independently rather than moving in lockstep.
+#
+# RULING 5's SECOND HALF, EARNED THE HARD WAY A SECOND TIME: A ROW MUST
+# RECORD WHETHER THE OUTCOME IS **OBSERVABLE**, NOT MERELY WHETHER THE SITE
+# WAS REACHED WITH A GIVEN VALUE. Keying by branch site (above) was necessary
+# and not sufficient. The site-keyed table recorded reached-with-value, and on
+# that basis reported `:140` as decoupled from `src`: `:140`=True is reached
+# at `src=API` by seven tests. But every one of those seven asserted only
+# substrings appended at `:146` and later -- none could see WHICH greeting
+# `:141` or `:143` built. The only two tests that asserted the greeting at all
+# were both at `src=WEB`. So `:140`=True had SEVEN samples at API and ZERO
+# observable ones, and `if not community.private and src == SRC_WEB:` survived
+# the whole file while the table called the site decoupled.
+#
+# THE ROUND DISCOVERED THIS PRINCIPLE AND FAILED TO FEED IT BACK. The
+# apply-open test's own docstring already said it, about `:145`: "that test
+# carries no assertion on `message` content ... so a wrong-arm mutant is
+# invisible to it regardless of which `src` it uses." That is the observability
+# rule, stated correctly, and used correctly to reject one candidate fix -- and
+# then not applied to `:140`'s row, nor to `:145`'s own row, where the same
+# unobservable sample was inflating the count from one to two. Both sites had a
+# surviving mutant for exactly that reason.
+#
+# A TEST CONTRIBUTES TO A SITE'S DECOUPLING ONLY IF THE ANSWER TO ALL THREE
+# QUESTIONS IS YES: does it reach the site? with which value? and does any
+# assertion in that test DISTINGUISH THE TWO ARMS? A site is decoupled from
+# `src` only across tests where the third answer is yes. The table below
+# therefore carries an `obs` column, and a sample with `obs=no` is counted as
+# ABSENT, not as a sample.
+#
+# THE REBUILT TABLE. Rows are the tests reaching this fork, in file order;
+# `-` means the test's control flow never evaluates that site. A cell is
+# `T`/`F` with `obs` recording whether that test can tell which arm ran.
+#
+#   test (line)                                    src  :140 :144 :145 :151 :152 :156 :160 :161 rply obs
+#   public_community_message (1246)                WEB   T    T    T    -    -    -    -    -    T   :140,:170,:134
+#   private_community_message (1338)               WEB   F    T    T    -    -    -    -    -    T   :140
+#   private_community_api_src (1399)         [NEW] API   F    T    T    -    -    -    -    -    T   :140
+#   local_apply_open (1558)                        API   T    T    T    -    -    -    -    -    T   :140,:145
+#   local_invite_required (1648)                   API   T    T    F    -    -    -    -    -    T   :145
+#   local_invite_required_web_src (1691)     [NEW] WEB   T    T    F    -    -    -    -    -    T   :145
+#   remote_piefed_apply_open (1752)                WEB   T    F    -    T    T    -    -    -    T   :151,:152
+#   remote_piefed_apply_open_api_src (1796)        API   T    F    -    T    T    -    -    -    T   :151,:152
+#   remote_piefed_local_only (1842)                WEB   T    F    -    T    F    T    -    -    T   :152,:156
+#   remote_piefed_local_only_api_src (1920)        API   T    F    -    T    F    T    -    -    T   :152,:156
+#   remote_piefed_not_local_only (1973)            API   T    F    -    T    F    F    -    -    T   :152,:156
+#   remote_piefed_not_local_only_web (2020)  [NEW] WEB   T    F    -    T    F    F    -    -    T   :152,:156
+#   remote_lemmy_apply_open (2076)                 WEB   T    F    -    F    -    -    T    T    T   :160,:161
+#   remote_lemmy_apply_open_api_src (2152)         API   T    F    -    F    -    -    T    T    T   :160,:161
+#   remote_mbin_invite_required (2198)             API   T    F    -    F    -    -    T    F    T   :160,:161
+#   remote_mbin_invite_required_web (2241)   [NEW] WEB   T    F    -    F    -    -    T    F    T   :160,:161
+#   remote_other_software (2294)                   API   T    F    -    F    -    -    F    -    T   :160,:166
+#   remote_other_software_web_src (2346)           WEB   T    F    -    F    -    -    F    -    T   :160,:166
+#   failed_delivery (2399)                         WEB   T    T    T    -    -    -    -    -    F   :145,rply
+#   failed_delivery_api_src (2469)           [NEW] API   T    T    T    -    -    -    -    -    F   rply
+#
+# `failed_delivery`'s `:145`=T is observable ONLY because this fix round gave
+# it a `:146`-arm substring assertion; before that its `obs` for `:145` was
+# `no` and `:145`=T was effectively single-sampled at API, which is what let
+# `... and src == SRC_API:` live. Its `:140`=T is still unobservable (it
+# asserts no greeting) and is not counted toward `:140`.
+#
+# PAIRWISE RESULT, EVERY SITE x `src`, COUNTING ONLY OBSERVABLE SAMPLES:
+# every one of `:140`, `:144`, `:145`, `:151`, `:152`, `:156`, `:160`, `:161`
+# and `rply` now has an observable sample at BOTH `src` values on BOTH of its
+# reachable sides. That is the condition under which all four mutant forms --
+# `and SRC_WEB`, `and SRC_API`, `or SRC_WEB`, `or SRC_API` -- must diverge
+# from real code on at least one test, because an AND-mutant diverges on the
+# site's TRUE side and an OR-mutant on its FALSE side.
+#
+# VERIFIED BY EXHAUSTIVE EXECUTION, NOT BY THE TABLE ALONE. All 9 sites x 2
+# operators x 2 literals = 36 mutants were applied one at a time to
+# `app/shared/community.py` and run against this file. Before this fix round:
+# 7 survived (`:140 and SRC_WEB`, `:140 or SRC_API`, `:145 and SRC_API`,
+# `:145 or SRC_WEB`, `:156 or SRC_WEB`, `:161 or SRC_WEB`, `:172 or SRC_API`)
+# -- note that the review which prompted this round named five of those seven;
+# the table rebuilt with the `obs` column is what found the other two. After:
+# 36 of 36 killed, 0 survivors. Exact failure text for each is in this round's
+# final fix report.
+#
+# THE ROOT-CAUSE REASONING SLIP, QUOTED SO IT IS NOT REPEATED. `cddae19d`'s
+# commit message argued that no further sample was needed where a pair had
+# "an inherent single-sample side the mutation pass did not flag (an
+# AND-mutant's False side or an OR-mutant's True side cannot diverge from real
+# regardless of src)". THE PARENTHETICAL IS CORRECT. THE CONCLUSION DRAWN FROM
+# IT IS NOT: an OR-mutant diverges on its FALSE side, and `:145`, `:156` and
+# `:161` each had exactly ONE False-side sample. The round applied precisely
+# the right recipe at `:160` -- giving its False side a second `src` via
+# `..._other_software_web_src_...` -- and simply never applied it to the three
+# sibling sites of identical shape. `:152` needed nothing: its False side
+# already had samples at both `src` values, which is why it alone was clean.
 #
 # THE FORK HAS FIVE INDEPENDENT CONDITION *KINDS* (`recipient.is_local()`,
 # `recipient.instance.software`, `invitations <= INVITE_APPLY`, `community.
@@ -1394,9 +1707,42 @@ def test_invite_with_chat_local_recipient_apply_open_message_has_subscribe_link(
     the exact substring `:146` produces and its absence rules out `:148-
     149`'s token substring -- both fail cleanly when the mutant takes the
     wrong arm. `:145` now has one sample at each `src` value (this test at
-    API, falsy-delivery below at WEB), closing the gap in both directions
-    with only two tests, unlike `:156`'s and `:161`'s single-direction
-    residual (each of those has only one sample on its TRUE side).
+    API, falsy-delivery below at WEB).
+
+    THE CLAIM THAT USED TO END THIS PARAGRAPH WAS WRONG BY THE TIME IT WAS
+    WRITTEN, AND IS KEPT HERE RATHER THAN QUIETLY DELETED. It read:
+    "closing the gap in both directions with only two tests, unlike
+    `:156`'s and `:161`'s single-direction residual (each of those has only
+    one sample on its TRUE side)." The commit that wrote it (`cddae19d`)
+    had, in that same commit, given `:156` and `:161` their SECOND TRUE-side
+    samples -- the `..._api_src_still_...` tests below -- so neither had a
+    single-direction residual any more. The claim described the file as it
+    stood one commit earlier. Both of those residuals are closed; what
+    `:145` had left instead is described immediately below.
+
+    `assert 'check it out' in message`, ADDED BY THIS FIX ROUND, IS ABOUT
+    `:140`, NOT `:145`. This test reaches `:140`=True at `src=API` and was
+    one of seven tests that did so while asserting only substrings appended
+    at `:146` and later -- none of which can see WHICH greeting `:141` or
+    `:143` built. The only two tests that asserted the greeting at all were
+    both at `src=WEB`, so `:140`'s True arm had no OBSERVABLE sample at API
+    and `if not community.private and src == SRC_WEB:` survived the whole
+    file. Adding one assertion to a test that already reached the site with
+    the right value closes it with no new test: under that mutant this
+    test's `:140` goes False, `:143` builds the private greeting, and this
+    assertion fails cleanly. See the section comment below on why a site's
+    row must record observability and not merely reachedness.
+
+    `:145`'s OWN REMAINING GAP, ALSO CLOSED THIS ROUND, WAS THE SAME SHAPE.
+    `:145`=T had two samples (this test at API, falsy-delivery below at
+    WEB) but only ONE observable one -- this test -- because the
+    falsy-delivery test asserted nothing about `message`. That is why `if
+    community.invitations <= INVITE_APPLY and src == SRC_API:` survived:
+    it goes False on the falsy-delivery test, which cannot tell. That test
+    now carries a `:146`-arm substring assertion of its own, giving `:145`=T
+    an observable sample at each `src`; and a new `:145`=F-at-WEB sibling
+    below gives `:145`=F the same, which is what kills the OR-form mutant
+    `... or src == SRC_WEB:`.
     """
     s = _seed()
     recipient = make_user(s.instance, 'fiona', local=True)
@@ -1412,6 +1758,7 @@ def test_invite_with_chat_local_recipient_apply_open_message_has_subscribe_link(
     assert result == 1
     assert len(calls) == 1
     message = calls[0]
+    assert 'check it out' in message
     assert f"{app.config['SERVER_URL']}/c/{s.community.link()}/subscribe." in message
     assert 'accept_invite' not in message
     assert db.session.query(CommunityInvitation).count() == 0
@@ -1464,6 +1811,67 @@ def test_invite_with_chat_local_recipient_invite_required_message_has_token_acce
     assert (f"{app.config['SERVER_URL']}/community/{s.community.link()}/accept_invite/"
            f"{invite_row.token}.") in message
     assert 'subscribe' not in message
+
+
+def test_invite_with_chat_local_recipient_invite_required_web_src_still_has_token_accept_invite_link(
+        app, db_session, monkeypatch):
+    """`:145`'s FALSE arm again, at the OTHER `src` value -- closes an
+    OR-form survivor: `if community.invitations <= INVITE_APPLY or src ==
+    SRC_WEB:` at `:145`.
+
+    THE REASONING SLIP THIS CLOSES, STATED PLAINLY. `cddae19d`'s commit
+    message argued that a column pair needed no further sample when it had
+    "an inherent single-sample side the mutation pass did not flag (an
+    AND-mutant's False side or an OR-mutant's True side cannot diverge from
+    real regardless of src)". That parenthetical is CORRECT. The conclusion
+    drawn from it was not: an OR-mutant diverges on its FALSE side, and
+    `:145`=F had exactly ONE sample -- the sibling test above, at `src=API`.
+    On that one sample the mutant evaluates `False or (API==WEB is False)` =
+    `False`, agreeing with real `False`, so it survived the whole file
+    (hand-verified: 42 passed). The round had already applied exactly this
+    recipe at `:160`, whose False side it gave a second `src` -- it simply
+    never applied it to the three sibling sites of identical shape
+    (`:145`, `:156`, `:161`).
+
+    This test reaches the identical arm (`:144`=T, `:145`=F) at `src=WEB`,
+    where the mutant evaluates `False or (WEB==WEB is True)` = `True` and
+    wrongly takes `:146`'s plain-subscribe arm -- minting no token at all.
+
+    ASSERTION ORDER IS DELIBERATE. Under the mutant no `CommunityInvitation`
+    row exists, so the `.one()` lookup below would raise
+    `sqlalchemy.exc.NoResultFound` -- a CRASH, which this campaign does not
+    accept on its own as evidence of a kill. `'accept_invite' in message`
+    is therefore asserted BEFORE the lookup runs, so the mutant dies on a
+    plain string-containment `AssertionError`; the exact-token assertion
+    after it still pins the real arm's full URL shape.
+
+    Software/locality is unchanged from the sibling above (a local
+    recipient), and `invitations` is raised the same way -- the whole point
+    is that the message must not depend on `src`.
+
+    Sites reached: `:144`=T, `:145`=F; `src`=WEB; `reply`=T.
+    `:145` observable: YES (the two substring assertions below).
+    """
+    s = _seed()
+    s.community.invitations = INVITE_APPLY + 1
+    db.session.commit()
+    recipient = make_user(s.instance, 'silas', local=True)
+    calls = []
+    monkeypatch.setattr('app.shared.community.send_message',
+                        lambda message, conversation_id: calls.append(message) or object())
+
+    with web_ctx(app, s.user):
+        result = invite_with_chat(s.community.id, 'silas', SRC_WEB)
+
+    assert result == 1
+    assert len(calls) == 1
+    message = calls[0]
+    assert 'accept_invite' in message
+    assert 'subscribe' not in message
+    invite_row = db.session.query(CommunityInvitation).filter_by(
+        community_id=s.community.id, user_id=recipient.id).one()
+    assert (f"{app.config['SERVER_URL']}/community/{s.community.link()}/accept_invite/"
+           f"{invite_row.token}.") in message
 
 
 def test_invite_with_chat_remote_piefed_apply_open_message_has_remote_subscribe_link(
@@ -1581,10 +1989,25 @@ def test_invite_with_chat_remote_piefed_local_only_invite_required_message_has_l
     of this arm's local-link text, and the assertions below -- built for
     the local-link shape -- fail. The sibling test below keeps `src=API`,
     so `:156` now has one sample at each `src` value instead of one
-    correlated pair; a mutant using the mirror literal (`src == SRC_WEB`)
-    would still slip through with only two tests total reaching `:156` --
-    recorded as a known residual limitation in the task report, not silently
-    left unstated.
+    correlated pair.
+
+    THE SENTENCE THAT USED TO CLOSE THIS PARAGRAPH IS KEPT HERE, CORRECTED
+    RATHER THAN DELETED. It read: "a mutant using the mirror literal (`src
+    == SRC_WEB`) would still slip through with only two tests total
+    reaching `:156` -- recorded as a known residual limitation in the task
+    report, not silently left unstated." That was true of the file as it
+    stood BEFORE `cddae19d`, but `cddae19d` itself added
+    `..._api_src_still_has_local_accept_invite_link` below -- a second
+    `:156`=T sample, at `src=API`, which closes exactly that mirror. The
+    commit added 198 lines and edited none, so the sentence was left
+    standing beside the code that had already falsified it.
+
+    `:156`'s ACTUAL residual after `cddae19d` was on the other diagonal:
+    its FALSE side had one sample, and the OR-form mutant `if
+    community.local_only or src == SRC_WEB:` survived there until this fix
+    round added `..._not_local_only_invite_required_web_src_still_...`
+    below. All four `and`/`or` x `SRC_WEB`/`SRC_API` forms at `:156` are
+    now killed.
 
     Asserting `'add_remote' not in message` is what catches a mutant that
     took `:159`'s remote-accept-invite sibling instead -- both arms mint a
@@ -1719,6 +2142,62 @@ def test_invite_with_chat_remote_piefed_not_local_only_invite_required_message_h
     assert 'You need to be logged in' not in message
 
 
+def test_invite_with_chat_remote_piefed_not_local_only_invite_required_web_src_still_has_remote_accept_invite_link(
+        app, db_session, monkeypatch):
+    """`:156`'s FALSE arm again, at the OTHER `src` value -- closes an
+    OR-form survivor: `if community.local_only or src == SRC_WEB:` at
+    `:156`.
+
+    Same slip, same site-shape as the `:145`-FALSE sibling above (see its
+    docstring for the reasoning `cddae19d` got half-right). `:156`=F had
+    exactly ONE sample, the test above at `src=API`, where the mutant
+    evaluates `False or (API==WEB is False)` = `False` and agrees with real
+    `False` -- hand-verified to pass the whole 42-test file. `:156`'s TRUE
+    side was already sampled at both `src` values by the earlier round, so
+    this is the opposite diagonal of the fix that round applied, not a
+    repeat of it.
+
+    This test reaches the identical arm (`:144`=F, `:151`=T, `:152`=F,
+    `:156`=F) at `src=WEB`, where the mutant evaluates `False or (WEB==WEB
+    is True)` = `True` and wrongly takes `:157`'s LOCAL accept-invite text
+    in place of `:159`'s remote one.
+
+    No crash risk here, unlike the `:145` and `:161` siblings: `:155` mints
+    the token BEFORE `:156` is evaluated, so both arms of this fork have a
+    `CommunityInvitation` row and the `.one()` lookup below succeeds either
+    way. The mutant dies on the plain-string assertions, which is what makes
+    this a clean kill rather than a crash.
+
+    Software is `'piefed'` and `local_only` is left at the factory default
+    `False`, exactly as in the sibling above; assertions mirror it.
+
+    Sites reached: `:144`=F, `:151`=T, `:152`=F, `:156`=F; `src`=WEB;
+    `reply`=T. `:156` observable: YES.
+    """
+    s = _seed()
+    s.community.invitations = INVITE_APPLY + 1
+    assert s.community.local_only is False
+    db.session.commit()
+    remote_instance = make_instance('remote-piefed-remote-web.example', software='piefed')
+    recipient = make_user(remote_instance, 'tariq', local=False)
+    calls = []
+    monkeypatch.setattr('app.shared.community.send_message',
+                        lambda message, conversation_id: calls.append(message) or object())
+
+    with web_ctx(app, s.user):
+        result = invite_with_chat(s.community.id, recipient.ap_id, SRC_WEB)
+
+    assert result == 1
+    assert len(calls) == 1
+    message = calls[0]
+    invite_row = db.session.query(CommunityInvitation).filter_by(
+        community_id=s.community.id, user_id=recipient.id).one()
+    assert (f"https://{remote_instance.domain}/community/{s.community.link()}@"
+           f"{s.community.ap_domain}/accept_invite/{invite_row.token}") in message
+    assert f"https://{remote_instance.domain}/community/add_remote." in message
+    assert 'You need to be logged in' not in message
+
+
 def test_invite_with_chat_remote_lemmy_apply_open_message_has_join_link(
         app, db_session, monkeypatch):
     """`:160`'s TRUE arm (the `:151` check having already failed since
@@ -1751,9 +2230,21 @@ def test_invite_with_chat_remote_lemmy_apply_open_message_has_join_link(
     pairs with `src=WEB` and the sibling test below's `:160`=T pairs with
     `src=API`, so `:160` itself stays decoupled from `src` in both
     directions even after this swap (both `src` values occur at `:160`=T
-    across the two tests) -- `:161`, with only two tests reaching it total,
-    keeps the same single-direction residual the `:156` fix has, recorded
-    in the task report.
+    across the two tests).
+
+    THE CLAUSE THAT USED TO CLOSE THIS PARAGRAPH IS KEPT HERE, CORRECTED
+    RATHER THAN DELETED. It read: "`:161`, with only two tests reaching it
+    total, keeps the same single-direction residual the `:156` fix has,
+    recorded in the task report." `cddae19d` invalidated it in the same
+    commit that wrote it, by adding `..._api_src_still_has_join_link`
+    below -- a second `:161`=T sample at `src=API`. `:161`'s TRUE side has
+    not had a single-direction residual since.
+
+    `:161`'s ACTUAL residual was its FALSE side, single-sampled at
+    `src=API`, where the OR-form mutant `if community.invitations <=
+    INVITE_APPLY or src == SRC_WEB:` survived until this fix round added
+    `..._remote_mbin_invite_required_web_src_still_...` below. All four
+    `and`/`or` x `SRC_WEB`/`SRC_API` forms at `:161` are now killed.
 
     This also serves as the non-crashing sibling for the `:151` x `apply`
     mutant in the section comment: under `if (...piefed check...) or
@@ -1870,6 +2361,59 @@ def test_invite_with_chat_remote_mbin_invite_required_message_has_token_accept_i
            f"{invite_row.token}.") in message
     assert 'You need to be logged in to a' in message
     assert "clicking 'Join'" not in message
+
+
+def test_invite_with_chat_remote_mbin_invite_required_web_src_still_has_token_accept_invite_link(
+        app, db_session, monkeypatch):
+    """`:161`'s FALSE arm again, at the OTHER `src` value -- closes an
+    OR-form survivor: `if community.invitations <= INVITE_APPLY or src ==
+    SRC_WEB:` at `:161`.
+
+    Third instance of the same slip, same shape as the `:145` and `:156`
+    siblings above. `:161`=F had exactly ONE sample, the test above at
+    `src=API`, where the mutant evaluates `False or (API==WEB is False)` =
+    `False` and agrees with real `False` -- hand-verified to pass the whole
+    42-test file. `:161`'s TRUE side already had a sample at each `src`
+    from the earlier round; this is the other diagonal.
+
+    This test reaches the identical arm (`:144`=F, `:151`=F, `:160`=T,
+    `:161`=F) at `src=WEB`, where the mutant evaluates `False or (WEB==WEB
+    is True)` = `True` and wrongly takes `:162`'s join-link arm.
+
+    ASSERTION ORDER IS DELIBERATE, for the same reason as the `:145`
+    sibling: `:162` mints no token, so the `.one()` lookup would raise
+    `sqlalchemy.exc.NoResultFound` under the mutant -- a crash, not
+    evidence. `"clicking 'Join'" not in message` is asserted BEFORE the
+    lookup so the mutant dies on a plain string-containment
+    `AssertionError`.
+
+    Software is `'mbin'` and `invitations` is raised exactly as in the
+    sibling above; assertions mirror it.
+
+    Sites reached: `:144`=F, `:151`=F, `:160`=T, `:161`=F; `src`=WEB;
+    `reply`=T. `:161` observable: YES.
+    """
+    s = _seed()
+    s.community.invitations = INVITE_APPLY + 1
+    db.session.commit()
+    remote_instance = make_instance('remote-mbin-token-web.example', software='mbin')
+    recipient = make_user(remote_instance, 'ursula', local=False)
+    calls = []
+    monkeypatch.setattr('app.shared.community.send_message',
+                        lambda message, conversation_id: calls.append(message) or object())
+
+    with web_ctx(app, s.user):
+        result = invite_with_chat(s.community.id, recipient.ap_id, SRC_WEB)
+
+    assert result == 1
+    assert len(calls) == 1
+    message = calls[0]
+    assert "clicking 'Join'" not in message
+    assert 'You need to be logged in to a' in message
+    invite_row = db.session.query(CommunityInvitation).filter_by(
+        community_id=s.community.id, user_id=recipient.id).one()
+    assert (f"{app.config['SERVER_URL']}/community/{s.community.link()}/accept_invite/"
+           f"{invite_row.token}.") in message
 
 
 def test_invite_with_chat_remote_other_software_message_replaces_greeting_with_rendered_template(
@@ -1996,26 +2540,104 @@ def test_invite_with_chat_failed_delivery_returns_0_and_still_creates_conversati
     identically after every message-building arm -- so no new arm-specific
     assertion is needed on `message` itself here.
 
-    Sites reached: `:144`=T, `:145`=T; `src`=WEB; `reply`=F. This test's own
-    `:145`=T sample stays at `src=WEB`, same as it always was -- this test
-    carries no assertion on `message` content (only on the return value and
-    the `Conversation` row, neither of which differs between `:146`'s and
-    `:148-149`'s arms), so it cannot distinguish a wrong-arm mutant
-    regardless of which `src` it uses, and an earlier attempt to close the
-    `:145` x `src` gap by flipping THIS test's `src` instead of the
-    apply-open test above's was verified NOT to work for exactly that
-    reason (documented in that test's own docstring, where the working fix
-    lives).
+    Sites reached: `:144`=T, `:145`=T; `src`=WEB; `reply`=F.
+    `:145` observable: YES, BUT ONLY SINCE THIS FIX ROUND -- see below.
+
+    THIS TEST'S `src` STAYS AT WEB; WHAT CHANGED IS THAT IT NOW ASSERTS ON
+    `message`. The earlier round recorded, correctly, that flipping this
+    test's `src` to API would not close `:145`'s gap, because the test
+    "carries no assertion on `message` content (only on the return value
+    and the `Conversation` row, neither of which differs between `:146`'s
+    and `:148-149`'s arms), so it cannot distinguish a wrong-arm mutant
+    regardless of which `src` it uses". That reasoning was right, and the
+    round then drew the correct conclusion for the mutant it was chasing
+    (flip the apply-open test instead, where the working fix is documented).
+
+    What it did not do was feed the observation back into `:145`'s own row.
+    `:145`=T had two samples -- the apply-open test at API and this one at
+    WEB -- but only ONE of them could SEE which arm ran. A site sampled at
+    both `src` values is not decoupled from `src` if only one of those
+    samples is observable; it is single-sampled, with an extra row that
+    contributes nothing. That is exactly why `if community.invitations <=
+    INVITE_APPLY and src == SRC_API:` survived the whole 42-test file: the
+    mutant goes False here, takes `:148-149`'s token arm, and nothing this
+    test asserted could tell.
+
+    The fix is the cheap one the same insight suggests everywhere else in
+    this file: give the existing sample an assertion rather than move its
+    `src` or add a test. `message` is now captured by the patched
+    `send_message` (which still returns `None`, so `reply` stays falsy and
+    this test's own `:172`-FALSE purpose is untouched) and the `:146`-arm
+    substring is asserted present with `:148-149`'s absent. `:145`=T now
+    has an OBSERVABLE sample at each `src`.
     """
     s = _seed()
     recipient = make_user(s.instance, 'noor', local=True)
+    calls = []
     monkeypatch.setattr('app.shared.community.send_message',
-                        lambda message, conversation_id: None)
+                        lambda message, conversation_id: calls.append(message) or None)
 
     with web_ctx(app, s.user):
         result = invite_with_chat(s.community.id, 'noor', SRC_WEB)
 
     assert result == 0
+    assert len(calls) == 1
+    message = calls[0]
+    assert f"{app.config['SERVER_URL']}/c/{s.community.link()}/subscribe." in message
+    assert 'accept_invite' not in message
+
+    all_conversations = db.session.query(Conversation).all()
+    assert len(all_conversations) == 1
+    assert {m.id for m in all_conversations[0].members} == {s.user.id, recipient.id}
+
+
+def test_invite_with_chat_failed_delivery_api_src_also_returns_0(
+        app, db_session, monkeypatch):
+    """`:172`'s FALSE arm again, at the OTHER `src` value -- closes an
+    OR-form survivor: `return 1 if reply or src == SRC_API else 0`.
+
+    Fourth instance of the slip the `:145`, `:156` and `:161` siblings
+    above describe, here on a ternary's condition rather than an `if`.
+    `reply`=F had exactly ONE sample, the test above at `src=WEB`, where
+    the mutant evaluates `False or (WEB==API is False)` = `False` and
+    returns `0` just as real code does -- hand-verified to pass the whole
+    42-test file. `reply`=T is sampled at both `src` values many times over
+    by every success-path test, so it is only the False side that was
+    single-sampled.
+
+    This test reaches `reply`=F at `src=API`, where the mutant evaluates
+    `False or (API==API is True)` = `True` and returns `1` for a delivery
+    that never happened -- caught by `result == 0` below, a clean
+    `AssertionError` with no crash involved.
+
+    FACT 252 APPLIES TO HOW THIS IS FILED, NOT TO WHETHER IT IS A KILL.
+    `:172` is an arm of a conditional expression, which is the shape fact
+    75 cause 7 is scoped to -- but cause 7 is about proving an arm
+    UNREACHABLE, and this arm is plainly reachable (this test reaches it).
+    The resemblance is to the shape, not to the establisher, so this is
+    recorded as an ordinary single-sample lockstep survivor rather than
+    tagged with cause 7.
+
+    The arm used to reach `send_message` (local recipient, apply-open) is
+    arbitrary and identical to the sibling above, per the section comment's
+    note that `:170-172` runs the same after every message-building arm.
+    The `Conversation` row is asserted present here for the same reason the
+    sibling asserts it: it is what distinguishes this `return 0` path from
+    the three that return `0` having created none.
+
+    Sites reached: `:144`=T, `:145`=T; `src`=API; `reply`=F.
+    `reply` observable: YES (`result == 0`).
+    """
+    s = _seed()
+    recipient = make_user(s.instance, 'viktor', local=True)
+    calls = []
+    monkeypatch.setattr('app.shared.community.send_message',
+                        lambda message, conversation_id: calls.append(message) or None)
+
+    result = invite_with_chat(s.community.id, 'viktor', SRC_API, bearer(s.user))
+
+    assert result == 0
+    assert len(calls) == 1
 
     all_conversations = db.session.query(Conversation).all()
     assert len(all_conversations) == 1
