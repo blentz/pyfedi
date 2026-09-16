@@ -7951,6 +7951,119 @@ equivalence), and the two refusal branches' flash categories
 in the whole file, so a swap between them was undetectable. See D621,
 D622, D623.
 
+**268. A DECOUPLING TABLE MUST BE KEYED BY BRANCH SITE, NOT BY CONDITION
+NAME -- AGGREGATING SAME-NAMED CONDITIONS HIDES THE ESCAPE THE TABLE
+EXISTS TO FIND, AND A SITE NO TEST REACHES MUST BE LEFT BLANK, NOT
+MARKED `False`.** Four of five tasks in one round each shipped a
+mechanism-(e) lockstep survivor -- a mutant conjoining two conditions
+(`src == SRC_WEB`/`SRC_API` with a guard the round's own tests never
+varied independently) that passed every test in the file. Each
+implementer built a condition-decoupling table in good faith and each
+still missed a gap, and the common cause was the table's own shape:
+`app/shared/community.py`'s `invite_with_chat` has **three separate
+`apply` checks** (`:145`, `:152`, `:161`), and a table with one row
+labelled `apply` aggregates all three -- reporting "decoupled" because
+some instance of `apply` varies independently of `src` somewhere in the
+file, while the *specific* instance a given test set reaches (`:145`)
+does not. **The fix, and the reason it matters**: build one row per
+branch *site* (a source line, not a condition name), and mark each
+cell from the actual test set -- `True`/`False` when a test reaches that
+site with that value, and **blank, not `False`, when no test reaches it
+at all**. The blank/`False` distinction is exactly where two of the
+round's five escapes hid: a condition that looks "checked" in an
+aggregated table can be a site with zero reaching tests on one side,
+which is indistinguishable from "checked and found decoupled" unless
+the table can say so. Once the table was rekeyed this way, it
+immediately surfaced a third gap (`:161`) that neither the original
+implementer nor the first reviewer had found by inspection -- the
+method was wrong, not the people applying it. See D627.
+
+**269. WHEN A GUARD'S CONDITION IS UNSATISFIABLE BECAUSE A CALLEE
+INVOKED IN THE STATEMENT IMMEDIATELY BEFORE IT CANNOT RETURN THE VALUE
+BEING TESTED, NO CATALOGUED FACT 75 CAUSE FITS -- CITE THIS FACT, PER
+FACT 252's PRECEDENT, RATHER THAN FORCING A NUMBER.** `app/shared/
+community.py:696-699` (`comm_flair_ap_format`) is `if not flair.ap_id:
+ap_id = flair.get_ap_id(); if not ap_id: return`. `get_ap_id()`
+(`app/models.py:4305-4313`) either raises `TypeError` (via `None +
+str` inside `Community.local_url()`, `:800`) or returns a non-empty
+string ending in `/tag/{id}` (`:802`) -- proved from the callee's own
+body, over every branch of it, not sampled -- so it cannot return a
+falsy value, and `:698`'s `if not ap_id:` is always `False` when
+reached. **Discriminate this from its three nearest neighbours by
+reading each one's own text, not by shape alone**: it is **not cause
+3** (subsumption is about a later conjunct implying an earlier one
+within one clause, not a callee's return-value proof); **not cause
+4(b)**, whose establisher is explicitly *"a caller, or an enclosing
+guard"* -- here the establisher is a **callee invoked at the guard
+site**, a third kind of establisher fact 75's "NAME THE ESTABLISHER"
+note does not yet enumerate; **not cause 6**, which opens *"the only
+cause on this list that is not about a clause"* -- this is an `if`,
+exactly a clause, and citing cause 6 here would repeat the mistake
+fact 252 already records costing a fix round; **not cause 7**, which
+is *"the only cause on this list that is about an ARM OF A CONDITIONAL
+EXPRESSION"* -- `:696`/`:698` are plain `if` statements, not a
+ternary. **This sits beside three other registered-but-uncatalogued
+taxonomy extensions rather than replacing any of them**: fact
+252/D578 (a tautology's mirror image stranding a False arm), D589
+(configuration-scoped unkillability, a possible ninth cause) and fact
+266/D616 (cause 3's disjunctive dual). Until fact 75 itself is amended
+to add a establisher category for "a callee invoked at the guard
+site," cite this fact and say plainly that none of the eight
+catalogued causes fits, exactly as fact 252 already models for its own
+shape. See D628.
+
+**270. A PIN THAT ASSERTS ONLY AN EXCEPTION'S *TYPE* IS BLIND TO SIDE
+EFFECTS THAT HAPPENED BEFORE THE EXCEPTION WAS RAISED -- ASSERT THAT
+NOTHING WAS WRITTEN, TOO.** A bare `pytest.raises(SomeError)` proves
+only that some statement raised `SomeError` somewhere in the call;
+it says nothing about what ran, and what it wrote, in the statements
+between the start of the function and the raise. `app/shared/
+community.py:130`'s pin (`invite_with_chat`, missing community) is the
+worked example: a mutant that moves the guard so the exception fires
+one branch later than expected lets a `Conversation` row get created
+and committed first, and a pin asserting only `pytest.raises(
+NoResultFound)` still passes, blind to the spurious row -- a moderation
+or audit-adjacent side effect that ran and was never observed, the
+identical shape fact 214(a) names for `add_to_modlog`'s unconditional
+commit. **The generalisable check**: whenever a pin covers a function
+whose early lines might already have inserted, updated or dispatched
+something before the line that eventually raises, add a query-based
+assertion for the state the raise is supposed to have prevented (here,
+`db.session.query(Conversation).count() == 0`) alongside the exception-
+type assertion, not instead of it. This is the same principle fact
+215 states for crash kills generally (a crash is evidence about *an*
+observable difference, not about every observable difference) applied
+specifically to the moment a pin is first written, before any mutation
+pass has a chance to expose the gap by accident. See D625.
+
+**271. AN ASSIGNMENT INSIDE ONE BRANCH OF A STRING-BUILDING FORK
+(`message = ...`, REPLACING RATHER THAN `message += ...`, APPENDING) IS
+ONLY PINNED BY ASSERTING THE EARLIER TEXT IS *GONE*, NOT BY ASSERTING
+THE LATER TEXT IS *PRESENT*.** `app/shared/community.py`'s
+`invite_with_chat` builds most of its message with `+=` (`:146`,
+`:149`, `:153`, `:157`, `:159`, `:162`, `:165`), but its `:166-168`
+`else` arm (unrecognised remote instance software) does `message =
+render_template(...)`, which **replaces** the greeting `:141`/`:143`
+already built rather than appending to it. Both the campaign's own
+production template and `:141`'s greeting text happen to open with
+similar prose ("Hi there,"), so a test asserting only `'expected
+template phrase' in message` is satisfied whether the mutant that
+turns `:167`'s `=` into `+=` is present or not -- the appended-onto
+message would contain BOTH the old greeting and the new template text,
+and a bare presence check cannot see the leftover. **The assertion
+that actually kills that mutant is a negative one, naming the specific
+phrase the earlier branch would have left behind if it had not been
+replaced** -- `'check it out' not in message`, `:141`'s public-
+community greeting phrase, with the fixture deliberately left non-
+private so that specific phrase, not `:143`'s private-community
+variant, is the one that would leak. **The general form: when a
+branch's job is to REPLACE state a sibling branch builds, the pin must
+assert the sibling's marker is absent, not merely that the branch's
+own marker is present** -- presence-only assertions are invisible to
+an `=`-for-`+=` swap by construction, because the swap's only visible
+effect is something extra being there, never something expected being
+missing. See `tests/test_shared_community_invites.py:1875-1924`.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
