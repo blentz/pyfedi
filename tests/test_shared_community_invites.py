@@ -461,14 +461,34 @@ def test_comm_flair_ap_format_int_arg_with_existing_ap_id_returns_full_dict(
     this assertion. `text_color`/`background_color`/`blur_images` are set to
     distinct, non-default values below specifically so such a swap cannot
     hide behind two fields that happen to start out equal.
+
+    A SECOND `CommunityFlair` row (`decoy`) is seeded first, with a
+    different id, name, ap_id and colors, so this test also kills the
+    mutant that deletes `:686`'s primary-key lookup outright -- turning
+    `CommunityFlair.query.get(flair)` into a bare `CommunityFlair.
+    query.first()`. Without a decoy, the table would hold exactly one row
+    at the point this test runs, and `.first()` would return that same row
+    by emptiness alone: false-witness mechanism (c), the same gap this
+    file's D622 note registered against `get_comm_flair_list`'s
+    `community_id` filter. With the decoy present (and created first, so
+    it holds the lower id), `.first()` returns the WRONG row, and the
+    dict-equality assertion below -- which pins the WANTED flair's own
+    values, not merely "some dict came back" -- catches it.
     """
     s = _seed()
+    decoy = make_community_flair(
+        s.bystander, name='decoy', ap_id='https://test.piefed.local/c/decoy/tag/decoy')
+    decoy.text_color = '#000000'
+    decoy.background_color = '#000000'
+    decoy.blur_images = False
+    db.session.commit()
     flair = make_community_flair(
         s.community, name='alpha', ap_id='https://test.piefed.local/c/x/tag/existing')
     flair.text_color = '#ff0000'
     flair.background_color = '#00ff00'
     flair.blur_images = True
     db.session.commit()
+    assert flair.id != decoy.id
 
     result = comm_flair_ap_format(flair.id)
 
@@ -491,8 +511,19 @@ def test_comm_flair_ap_format_int_arg_missing_id_returns_none(app, db_session):
     returning bare `None` here is a real mismatch with that annotation,
     registered as a finding and left unfixed per this round's production
     budget, not smoothed over by asserting mere falsiness.
+
+    A `CommunityFlair` row is seeded so the table is NOT empty at the point
+    `comm_flair_ap_format` runs -- otherwise a mutant that deletes `:686`'s
+    primary-key lookup (bare `CommunityFlair.query.first()`) would also see
+    an empty table and return `None` for the wrong reason, an
+    indistinguishable false witness. With the row present, the mutant's
+    `.first()` returns THAT row (truthy), so `flair` is no longer falsy at
+    `:690` and the function falls through to the happy path and returns a
+    dict, not `None` -- caught by the assertion below.
     """
-    _seed()
+    s = _seed()
+    make_community_flair(
+        s.community, name='present', ap_id='https://test.piefed.local/c/x/tag/present')
 
     result = comm_flair_ap_format(999999)
 
@@ -502,8 +533,25 @@ def test_comm_flair_ap_format_int_arg_missing_id_returns_none(app, db_session):
 def test_comm_flair_ap_format_str_arg_returns_full_dict(app, db_session):
     """`:687-688`'s true arm: `isinstance(flair, str)` is true, and
     `.filter_by(ap_id=flair).first()` finds the row by its `ap_id` column.
+
+    A SECOND `CommunityFlair` row (`decoy`), with a DIFFERENT `ap_id`, name
+    and colors, is seeded first so this test also kills the mutant that
+    deletes `:688`'s `filter_by(ap_id=flair)` outright -- turning it into a
+    bare `CommunityFlair.query.first()`. Without the decoy, the table would
+    hold exactly the one row this test looks up, and `.first()` would
+    return it by emptiness alone (the same false-witness mechanism (c) as
+    the int-arg test above). With the decoy present and created first (so
+    it holds the lower id), `.first()` returns the WRONG row, and the
+    dict-equality assertion below -- pinned to the WANTED flair's own
+    values -- catches it.
     """
     s = _seed()
+    decoy = make_community_flair(
+        s.bystander, name='decoy', ap_id='https://test.piefed.local/c/decoy/tag/decoy')
+    decoy.text_color = '#000000'
+    decoy.background_color = '#000000'
+    decoy.blur_images = True
+    db.session.commit()
     flair = make_community_flair(
         s.community, name='beta', ap_id='https://test.piefed.local/c/x/tag/beta')
     flair.text_color = '#111111'
@@ -528,8 +576,17 @@ def test_comm_flair_ap_format_str_arg_no_match_returns_none(app, db_session):
     `.filter_by(ap_id=flair).first()` returns `None` quietly -- no
     exception, unlike `get_comm_flair_list`'s `.one()` fallback above -- and
     `:690-691` returns bare `None`.
+
+    A `CommunityFlair` row with a DIFFERENT `ap_id` is seeded so the table
+    is NOT empty when the lookup, which matches nothing, runs -- otherwise a
+    mutant that deletes `:688`'s `filter_by(ap_id=flair)` (bare
+    `CommunityFlair.query.first()`) would also see an empty table and
+    return `None` for the wrong reason. With the row present, the mutant's
+    `.first()` returns it (truthy) instead of `None`, caught below.
     """
-    _seed()
+    s = _seed()
+    make_community_flair(
+        s.community, name='present', ap_id='https://test.piefed.local/c/x/tag/present')
 
     result = comm_flair_ap_format('no-such-ap-id')
 
