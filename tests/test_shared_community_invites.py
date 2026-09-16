@@ -1265,23 +1265,68 @@ def test_invite_with_chat_private_community_message_embeds_display_name(
 # it is `:129`'s fall-through, not this fork's -- so this section's range is
 # `:144-172`, not the `:144-173` the plan originally named.
 #
-# THE FORK HAS FIVE INDEPENDENT CONDITIONS, MORE THAN ANY OTHER TASK THIS
-# ROUND: `recipient.is_local()` (`:144`), `recipient.instance.software`
-# (`:151`/`:160`, each folded through `.lower()`), `community.invitations <=
-# INVITE_APPLY` (`:145`/`:152`/`:161`), `community.local_only` (`:156`, read
-# only inside the piefed/pylova token sub-branch), and `src` (a nuisance
-# parameter carried over from the setup half, not read anywhere in this
-# fork's own body). Mechanism (e) -- two conditions varied only in lockstep,
-# invisible to branch coverage, caught only by a conjoined mutant -- has hit
-# this file three times already (module docstring's `:129`/`:131`/`:140`
-# notes), always via `src` silently tracking a real production condition.
-# The nine tests below are laid out so every pair of these five conditions
-# takes both of its values across at least two tests, `src` included. The
-# table (condition value per test) is reproduced in this round's task
-# report; two conjoined mutants built from pairs the table shows decoupled
-# (`is_local()` x `src` at `:144`, and the software-family check x
-# `invitations <= INVITE_APPLY` at `:151`) were hand-applied against this
-# file and confirmed to die, then reverted -- also detailed in the report.
+# THE TABLE MUST BE KEYED BY BRANCH SITE, NOT BY CONDITION NAME -- LEARNED
+# THE HARD WAY. An earlier draft of this section built one column named
+# "apply" and aggregated `:145`, `:152` and `:161` into it, on the theory
+# that "invitations <= INVITE_APPLY" is one condition wherever it appears.
+# It is not, for lockstep purposes: `:145`, `:152` and `:161` are three
+# separate branch sites, each with its own small set of tests reaching it,
+# and each capable of hiding its OWN conjoined mutant independently of
+# whatever the aggregated column showed. Review found two: `:156` (an
+# analogous slip -- `local_only` was checked against `apply` and never
+# against `src` at all, because the row-per-condition shape had no column
+# for "this specific site's src pairing") and `:145` itself, both surviving
+# an `and src == SRC_X` conjunction that the aggregated table reported as
+# "decoupled" by averaging across sites where it manifestly was not. A
+# systematic re-check of every remaining site by this same method (not
+# prompted by review, but by applying its method everywhere) turned up a
+# third instance at `:161`, fixed alongside the other two. THE CORRECTED
+# TABLE HAS ONE ROW PER TEST AND ONE COLUMN PER BRANCH SITE -- `:144`,
+# `:145`, `:151`, `:152`, `:156`, `:160`, `:161`, `:166`, `:172` -- plus
+# `src`, recording which sites each test actually REACHES (blank, not
+# `False`, when a test's control flow never evaluates that site) and what
+# value it took there. It is reproduced in full in this round's task
+# report, along with the pairwise check: for every two columns both reached
+# by at least two tests, do the values that appear together vary
+# independently rather than moving in lockstep.
+#
+# THE FORK HAS FIVE INDEPENDENT CONDITION *KINDS* (`recipient.is_local()`,
+# `recipient.instance.software`, `invitations <= INVITE_APPLY`, `community.
+# local_only`, and `src`), but the SITES are what the table tracks, since a
+# condition kind repeated at multiple sites (`invitations <= INVITE_APPLY`
+# at three of them) is three separate lockstep opportunities, not one.
+# Mechanism (e) has now hit this file's `:129`/`:131`/`:140` (module
+# docstring) and this section's own `:145`/`:156`/`:161` -- always via `src`
+# silently tracking a real production condition at ONE specific site while
+# looking decoupled in aggregate. Two of the three fixes here rebalance an
+# existing test's `src` rather than add a test (cheaper, and avoids growing
+# the file for a fix that a swap already covers); each rebalance was
+# rechecked against every OTHER site-pair that test participates in before
+# being accepted, so closing one site's gap does not silently reopen
+# another's (the risk this section's own history shows is real).
+#
+# Two conjoined mutants from the ORIGINAL (pre-review) table are still
+# valid kills and remain below with one correction: `is_local()` x `src` at
+# `:144` (`if recipient.is_local() and src == SRC_WEB:`) kills via
+# `test_invite_with_chat_local_recipient_invite_required_message_has_token_accept_invite_link`,
+# but that test's failure is `sqlalchemy.exc.NoResultFound` -- A CRASH, not
+# an assertion failure. A crash kill on its own is not trustworthy evidence
+# of decoupling (the crash could as easily be an artifact of test plumbing
+# as of the mutant), so this round also built the non-crashing sibling `if
+# recipient.is_local() or src == SRC_WEB:` and confirmed it fails cleanly,
+# on a plain string-containment assertion, via
+# `test_invite_with_chat_remote_piefed_apply_open_message_has_remote_subscribe_link`.
+# The software-family check x `invitations <= INVITE_APPLY` mutant at
+# `:151` has the identical defect for the identical reason -- conjoining the
+# OUTER family gate with `apply` skips `create_invite_token` entirely on the
+# affected tests, so their `.one()` lookups raise `NoResultFound` rather
+# than failing an assertion -- and gets the same treatment: the non-crashing
+# sibling `if (...piefed check...) or community.invitations <= INVITE_APPLY:`
+# was built and confirmed to fail cleanly (wrong-arm message text) via
+# `test_invite_with_chat_remote_lemmy_apply_open_message_has_join_link`. All
+# four mutants (two AND-conjoined, two OR-sibling) and their exact failure
+# text are recorded in the task report, along with the three CRITICAL fixes
+# above; none of the four changed `app/`, and all were reverted by hand.
 #
 # SEVEN OF EIGHT TERMINAL FORMS APPEND TO `message`; `:167` REPLACES IT.
 # Every append-arm test below asserts its own arm's distinguishing exact
@@ -1329,10 +1374,28 @@ def test_invite_with_chat_local_recipient_apply_open_message_has_subscribe_link(
     `:148-149`'s token-minting sibling never runs -- no `CommunityInvitation`
     row is created.
 
-    `src=SRC_WEB`, `reply` truthy: this test's row in the round's condition
-    table is (is_local=T, family=-, apply=T, local_only=-, src=WEB,
-    reply=T), sharing `apply=T` with two remote-family tests below that use
-    `src=API`, so `apply` and `src` do not move together across the file.
+    Sites reached: `:144`=T, `:145`=T; `src`=API; `reply`=T.
+
+    `src=API` HERE, NOT `WEB` -- CHANGED DURING THIS FIX ROUND. This test
+    originally used `SRC_WEB`, and so did the falsy-delivery test below
+    (the only other test reaching `:145`=T), pairing `:145`=T with `src=WEB`
+    on BOTH of its samples -- the same diagonal shape `:156` and `:161` had.
+    Hand-verified: `if community.invitations <= INVITE_APPLY and src ==
+    SRC_WEB:` at `:145` passed the whole file (38 passed) under that
+    pairing. An initial attempt to fix this by flipping the OTHER test
+    (falsy-delivery) to `src=API` instead of this one did NOT work: that
+    test carries no assertion on `message` content, only on the return
+    value and the `Conversation` row, neither of which differs between
+    `:146`'s and `:148-149`'s arms -- so a wrong-arm mutant is invisible to
+    it regardless of which `src` it uses. Flipping THIS test instead (real
+    `:145`=T, mutant now `T and (API==WEB is False)` = False) is what
+    actually catches the mutant, since this test's assertions below check
+    the exact substring `:146` produces and its absence rules out `:148-
+    149`'s token substring -- both fail cleanly when the mutant takes the
+    wrong arm. `:145` now has one sample at each `src` value (this test at
+    API, falsy-delivery below at WEB), closing the gap in both directions
+    with only two tests, unlike `:156`'s and `:161`'s single-direction
+    residual (each of those has only one sample on its TRUE side).
     """
     s = _seed()
     recipient = make_user(s.instance, 'fiona', local=True)
@@ -1343,8 +1406,7 @@ def test_invite_with_chat_local_recipient_apply_open_message_has_subscribe_link(
     monkeypatch.setattr('app.shared.community.send_message',
                         lambda message, conversation_id: calls.append(message) or object())
 
-    with web_ctx(app, s.user):
-        result = invite_with_chat(s.community.id, 'fiona', SRC_WEB)
+    result = invite_with_chat(s.community.id, 'fiona', SRC_API, bearer(s.user))
 
     assert result == 1
     assert len(calls) == 1
@@ -1368,13 +1430,17 @@ def test_invite_with_chat_local_recipient_invite_required_message_has_token_acce
     embeds it in an `accept_invite` link instead of `:146`'s plain
     `subscribe` link.
 
-    Table row: (is_local=T, family=-, apply=F, local_only=-, src=API,
-    reply=T) -- `src` flips to API relative to the sibling test above while
-    `is_local` stays True, decoupling `is_local()` from `src`; a mutant
-    conjoining `:144`'s check with `src == SRC_WEB` would make THIS test
-    take the `:150` remote branch instead (the local recipient's own
-    instance's `software` is `'mastodon'` by factory default, landing on
-    `:167`'s template-replacement arm) and fail every assertion below.
+    Sites reached: `:144`=T, `:145`=F; `src`=API; `reply`=T. `src` flips to
+    API relative to the sibling test above while `:144`=T stays the same,
+    decoupling `:144` from `src`; a mutant conjoining `:144`'s check with
+    `src == SRC_WEB` would make THIS test take the `:150` remote branch
+    instead (the local recipient's own instance's `software` is
+    `'mastodon'` by factory default, landing on `:167`'s template-
+    replacement arm) and fail every assertion below -- confirmed by hand:
+    this is the test that catches that exact mutant, via
+    `sqlalchemy.exc.NoResultFound` on the `.one()` lookup below (a CRASH
+    kill; see the section comment for the non-crashing sibling mutant that
+    corroborates it).
 
     Asserting `'subscribe' not in message` is what catches a mutant that
     left `:146`'s literal fallback in place instead of taking this arm.
@@ -1415,8 +1481,13 @@ def test_invite_with_chat_remote_piefed_apply_open_message_has_remote_subscribe_
     need to be logged in'` (the two `:152`-FALSE siblings' distinguishing
     text) are asserted absent.
 
-    Table row: (is_local=F, family=piefed, apply=T, local_only=-, src=WEB,
-    reply=T).
+    Sites reached: `:144`=F, `:151`=T, `:152`=T; `src`=WEB; `reply`=T. This
+    is also the non-crashing sibling of the `:144` x `src` mutant discussed
+    in the section comment: under `if recipient.is_local() or src ==
+    SRC_WEB:`, this test's `src=WEB` makes the mutant wrongly true despite a
+    remote recipient, routing it into `:145`'s local-arm text instead of
+    this arm's remote-subscribe text -- confirmed to fail cleanly on the
+    plain-string assertion below, not a crash.
     """
     s = _seed()
     remote_instance = make_instance('remote-piefed-open.example', software='PieFed')
@@ -1448,18 +1519,33 @@ def test_invite_with_chat_remote_piefed_local_only_invite_required_message_has_l
     token in a LOCAL `accept_invite` link (this instance's own `SERVER_URL`,
     not the recipient's remote domain).
 
-    Table row: (is_local=F, family=piefed, apply=F, local_only=T, src=API,
-    reply=T) -- `apply=F` here pairs with `src=API`, while the sibling test
-    below pairs `apply=F` with `src=WEB`, decoupling `apply` from `src`
-    within the piefed family alone (on top of the file-wide decoupling the
-    section comment above describes).
+    Sites reached: `:144`=F, `:151`=T, `:152`=F, `:156`=T; `src`=WEB;
+    `reply`=T.
+
+    `src=WEB` HERE, NOT `API` -- CHANGED AFTER REVIEW. This test originally
+    used `SRC_API`, pairing `:156`=T with `src=API` while the sibling test
+    below paired `:156`=F with `src=WEB` -- a perfect diagonal that let a
+    reviewer-applied mutant, `if community.local_only and src == SRC_API:`
+    at `:156`, pass the whole file (38 passed): whenever `:156` was really
+    true, `src` was always `API` too, so the conjunction agreed with the
+    real condition on both tests that ever reached it. Flipping THIS test
+    to `src=WEB` (real `:156`=T, mutant now `T and (WEB==API is False)` =
+    False) breaks that: the mutant takes `:159`'s remote-link text instead
+    of this arm's local-link text, and the assertions below -- built for
+    the local-link shape -- fail. The sibling test below keeps `src=API`,
+    so `:156` now has one sample at each `src` value instead of one
+    correlated pair; a mutant using the mirror literal (`src == SRC_WEB`)
+    would still slip through with only two tests total reaching `:156` --
+    recorded as a known residual limitation in the task report, not silently
+    left unstated.
 
     Asserting `'add_remote' not in message` is what catches a mutant that
     took `:159`'s remote-accept-invite sibling instead -- both arms mint a
     token and mention `accept_invite`, so the `add_remote` hint (present
     only on `:159`) is the discriminator, and `remote_instance.domain not in
     message` gives a second, independent check that no remote-domain URL
-    leaked into what should be an entirely local link.
+    leaked into what should be an entirely local link. Both are exactly the
+    assertions the `:156` x `src` mutant above now fails.
     """
     s = _seed()
     s.community.invitations = INVITE_APPLY + 1
@@ -1471,7 +1557,8 @@ def test_invite_with_chat_remote_piefed_local_only_invite_required_message_has_l
     monkeypatch.setattr('app.shared.community.send_message',
                         lambda message, conversation_id: calls.append(message) or object())
 
-    result = invite_with_chat(s.community.id, recipient.ap_id, SRC_API, bearer(s.user))
+    with web_ctx(app, s.user):
+        result = invite_with_chat(s.community.id, recipient.ap_id, SRC_WEB)
 
     assert result == 1
     assert len(calls) == 1
@@ -1498,8 +1585,12 @@ def test_invite_with_chat_remote_piefed_not_local_only_invite_required_message_h
     this sub-branch does not need its own mixed-case value, only the site
     does, once.
 
-    Table row: (is_local=F, family=piefed, apply=F, local_only=F, src=WEB,
-    reply=T).
+    Sites reached: `:144`=F, `:151`=T, `:152`=F, `:156`=F; `src`=API;
+    `reply`=T. `src=API` HERE, NOT `WEB` -- also changed after review, as
+    the other half of the `:156` x `src` rebalance the sibling test above's
+    docstring explains: that test now supplies `:156`=T at `src=WEB`, this
+    one supplies `:156`=F at `src=API`, so `:156`'s two reaching tests no
+    longer share a single `src` value between them.
 
     Asserting `'You need to be logged in' not in message` catches a mutant
     that took `:157`'s sibling instead; `add_remote` and the remote domain's
@@ -1515,8 +1606,7 @@ def test_invite_with_chat_remote_piefed_not_local_only_invite_required_message_h
     monkeypatch.setattr('app.shared.community.send_message',
                         lambda message, conversation_id: calls.append(message) or object())
 
-    with web_ctx(app, s.user):
-        result = invite_with_chat(s.community.id, recipient.ap_id, SRC_WEB)
+    result = invite_with_chat(s.community.id, recipient.ap_id, SRC_API, bearer(s.user))
 
     assert result == 1
     assert len(calls) == 1
@@ -1543,8 +1633,35 @@ def test_invite_with_chat_remote_lemmy_apply_open_message_has_join_link(
     distinguishing text, shared with the piefed-family arms above) is
     asserted absent.
 
-    Table row: (is_local=F, family=lemmy, apply=T, local_only=-, src=API,
-    reply=T).
+    Sites reached: `:144`=F, `:151`=F, `:160`=T, `:161`=T; `src`=WEB;
+    `reply`=T.
+
+    `src=WEB` HERE, NOT `API` -- CHANGED DURING THIS FIX ROUND, by the same
+    method review used on `:156` and `:145`, applied here proactively
+    rather than in response to a reported survivor. This test originally
+    used `SRC_API` and the sibling test below used `SRC_WEB`, pairing
+    `:161`=T with `src=API` and `:161`=F with `src=WEB` -- the identical
+    diagonal shape that let `:156`'s and `:145`'s mutants slip through.
+    Hand-verified: `if community.invitations <= INVITE_APPLY and src ==
+    SRC_API:` at `:161` passed the whole file (38 passed) under the
+    original pairing. Flipping THIS test to `src=WEB` (real `:161`=T,
+    mutant now `T and (WEB==API is False)` = False) makes the mutant take
+    `:164-165`'s token-and-accept_invite text instead of this arm's
+    join-link text, failing the assertions below. This test's `:160`=T
+    pairs with `src=WEB` and the sibling test below's `:160`=T pairs with
+    `src=API`, so `:160` itself stays decoupled from `src` in both
+    directions even after this swap (both `src` values occur at `:160`=T
+    across the two tests) -- `:161`, with only two tests reaching it total,
+    keeps the same single-direction residual the `:156` fix has, recorded
+    in the task report.
+
+    This also serves as the non-crashing sibling for the `:151` x `apply`
+    mutant in the section comment: under `if (...piefed check...) or
+    community.invitations <= INVITE_APPLY:`, this test's real software is a
+    lemmy value (not piefed) but `:161`'s `apply`=T here makes the OR
+    mutant true anyway, routing it into `:151`'s piefed-family text instead
+    of this arm's lemmy join-link text -- confirmed to fail cleanly on the
+    plain-string assertions below, not a crash.
     """
     s = _seed()
     remote_instance = make_instance('remote-lemmy-open.example', software='LEMMY')
@@ -1553,7 +1670,8 @@ def test_invite_with_chat_remote_lemmy_apply_open_message_has_join_link(
     monkeypatch.setattr('app.shared.community.send_message',
                         lambda message, conversation_id: calls.append(message) or object())
 
-    result = invite_with_chat(s.community.id, recipient.ap_id, SRC_API, bearer(s.user))
+    with web_ctx(app, s.user):
+        result = invite_with_chat(s.community.id, recipient.ap_id, SRC_WEB)
 
     assert result == 1
     assert len(calls) == 1
@@ -1575,11 +1693,13 @@ def test_invite_with_chat_remote_mbin_invite_required_message_has_token_accept_i
     identical f-string reached via an unrelated branch, per the section
     comment above -- not a value-swap gap).
 
-    Table row: (is_local=F, family=lemmy, apply=F, local_only=-, src=WEB,
-    reply=T) -- `apply` takes its OTHER value relative to the sibling test
-    above while software stays in the lemmy family, and `src` flips from
-    API to WEB, keeping `apply` and `src` from moving together within this
-    family too.
+    Sites reached: `:144`=F, `:151`=F, `:160`=T, `:161`=F; `src`=API;
+    `reply`=T. `src=API` HERE, NOT `WEB` -- the other half of the `:161` x
+    `src` rebalance the sibling test above's docstring explains: that test
+    now supplies `:161`=T at `src=WEB`, this one supplies `:161`=F at
+    `src=API`, and `:160`=T now has one sample at each `src` value across
+    the two tests (WEB above, API here), keeping `:160` itself decoupled
+    from `src` in both directions.
 
     Asserting `"clicking 'Join'" not in message` catches a mutant that took
     `:162`'s sibling instead.
@@ -1593,8 +1713,7 @@ def test_invite_with_chat_remote_mbin_invite_required_message_has_token_accept_i
     monkeypatch.setattr('app.shared.community.send_message',
                         lambda message, conversation_id: calls.append(message) or object())
 
-    with web_ctx(app, s.user):
-        result = invite_with_chat(s.community.id, recipient.ap_id, SRC_WEB)
+    result = invite_with_chat(s.community.id, recipient.ap_id, SRC_API, bearer(s.user))
 
     assert result == 1
     assert len(calls) == 1
@@ -1634,8 +1753,9 @@ def test_invite_with_chat_remote_other_software_message_replaces_greeting_with_r
     left non-private (the factory default) specifically so `:141`, not
     `:143`, is the phrase that would leak.
 
-    Table row: (is_local=F, family=other, apply=T [irrelevant to this arm,
-    left at the factory default], local_only=-, src=API, reply=T).
+    Sites reached: `:144`=F, `:151`=F, `:160`=F (falls to the `:166` else);
+    `src`=API; `reply`=T. `:145`/`:152`/`:156`/`:161` are never reached by
+    this test.
     """
     s = _seed()
     assert s.community.private is False
@@ -1676,6 +1796,17 @@ def test_invite_with_chat_failed_delivery_returns_0_and_still_creates_conversati
     apply-open) is arbitrary -- the return fork at `:170-172` runs
     identically after every message-building arm -- so no new arm-specific
     assertion is needed on `message` itself here.
+
+    Sites reached: `:144`=T, `:145`=T; `src`=WEB; `reply`=F. This test's own
+    `:145`=T sample stays at `src=WEB`, same as it always was -- this test
+    carries no assertion on `message` content (only on the return value and
+    the `Conversation` row, neither of which differs between `:146`'s and
+    `:148-149`'s arms), so it cannot distinguish a wrong-arm mutant
+    regardless of which `src` it uses, and an earlier attempt to close the
+    `:145` x `src` gap by flipping THIS test's `src` instead of the
+    apply-open test above's was verified NOT to work for exactly that
+    reason (documented in that test's own docstring, where the working fix
+    lives).
     """
     s = _seed()
     recipient = make_user(s.instance, 'noor', local=True)
