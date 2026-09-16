@@ -1258,3 +1258,435 @@ def test_invite_with_chat_private_community_message_embeds_display_name(
     matches = [c for c in all_conversations
               if {m.id for m in c.members} == {s.user.id, recipient.id}]
     assert len(matches) == 1
+
+
+# `invite_with_chat` (app/shared/community.py:121-173), SECOND half: `:144-172`,
+# the software fork. A scope ruling assigned `:173` to the first half above --
+# it is `:129`'s fall-through, not this fork's -- so this section's range is
+# `:144-172`, not the `:144-173` the plan originally named.
+#
+# THE FORK HAS FIVE INDEPENDENT CONDITIONS, MORE THAN ANY OTHER TASK THIS
+# ROUND: `recipient.is_local()` (`:144`), `recipient.instance.software`
+# (`:151`/`:160`, each folded through `.lower()`), `community.invitations <=
+# INVITE_APPLY` (`:145`/`:152`/`:161`), `community.local_only` (`:156`, read
+# only inside the piefed/pylova token sub-branch), and `src` (a nuisance
+# parameter carried over from the setup half, not read anywhere in this
+# fork's own body). Mechanism (e) -- two conditions varied only in lockstep,
+# invisible to branch coverage, caught only by a conjoined mutant -- has hit
+# this file three times already (module docstring's `:129`/`:131`/`:140`
+# notes), always via `src` silently tracking a real production condition.
+# The nine tests below are laid out so every pair of these five conditions
+# takes both of its values across at least two tests, `src` included. The
+# table (condition value per test) is reproduced in this round's task
+# report; two conjoined mutants built from pairs the table shows decoupled
+# (`is_local()` x `src` at `:144`, and the software-family check x
+# `invitations <= INVITE_APPLY` at `:151`) were hand-applied against this
+# file and confirmed to die, then reverted -- also detailed in the report.
+#
+# SEVEN OF EIGHT TERMINAL FORMS APPEND TO `message`; `:167` REPLACES IT.
+# Every append-arm test below asserts its own arm's distinguishing exact
+# substring is present AND the substrings unique to every SIBLING arm within
+# the same immediate `if`/`elif`/`else` are absent -- a mutant swapping two
+# neighbouring arms (e.g. `:153`'s open-apply text for `:159`'s token text)
+# must fail at least one of these tests. `:157` and `:165` happen to build
+# BYTE-IDENTICAL text (same f-string, reached via two unrelated branches --
+# piefed/pylova with `local_only` true, versus lemmy/mbin requiring a
+# token) -- this is not a value-swap gap to defend against, since swapping
+# two textually identical statements produces no mutant at all. `:167`
+# REPLACES `message` (`=`, not `+=`); its test builds the exact expected
+# string via the same `render_template` call invite_with_email's own
+# `:167`-sibling tests use, then asserts the REPLACED-away `:141` greeting
+# phrase (`'check it out'`) is absent from the final message -- the only
+# assertion a `+=` mutant at `:167` fails, since a blanket "template text
+# present" check would still pass under it.
+#
+# `:151` and `:160` EACH GET A MIXED-CASE SOFTWARE VALUE (`'PieFed'` at
+# `:151`'s first test, `'LEMMY'` at `:160`'s first test) so a mutant
+# deleting either site's `.lower()` call dies at that site specifically --
+# every other software value below is lower-case already and would pass
+# under such a mutant, so mixed case is not spread across every test, only
+# at least once per site as the brief requires.
+#
+# `:170-172`'s RETURN FORK is orthogonal to the message fork: `reply =
+# send_message(...)` runs identically regardless of which arm built
+# `message`, so one truthy-reply test per arm (all eight below) and one
+# additional falsy-reply test (the ninth) are enough to cover both `return 1
+# if reply else 0` arcs without re-deriving the message fork's own table.
+# The falsy-reply test is the FOURTH `return 0` path the module docstring's
+# FOUR PATHS note names; unlike `:129`'s and `:132`'s arms (which return `0`
+# having created NO `Conversation`), this path returns `0` AFTER `:134-138`
+# already created and committed one -- so its own assertion checks the
+# `Conversation` WAS created, the mirror image of the other three paths'
+# assertions, keeping all four `0`-returning paths distinguishable from each
+# other by more than their shared return value.
+
+
+def test_invite_with_chat_local_recipient_apply_open_message_has_subscribe_link(
+        app, db_session, monkeypatch):
+    """`:144`'s TRUE arm (`recipient.is_local()`) and `:145`'s TRUE arm
+    (`community.invitations` left at the factory default `0`, `<=
+    INVITE_APPLY`): `:146` appends the plain subscribe-link sentence, and
+    `:148-149`'s token-minting sibling never runs -- no `CommunityInvitation`
+    row is created.
+
+    `src=SRC_WEB`, `reply` truthy: this test's row in the round's condition
+    table is (is_local=T, family=-, apply=T, local_only=-, src=WEB,
+    reply=T), sharing `apply=T` with two remote-family tests below that use
+    `src=API`, so `apply` and `src` do not move together across the file.
+    """
+    s = _seed()
+    recipient = make_user(s.instance, 'fiona', local=True)
+    decoy_a = make_user(s.instance, 'decoy_e', local=True)
+    decoy_b = make_user(s.instance, 'decoy_f', local=True)
+    make_conversation(decoy_a, decoy_b)
+    calls = []
+    monkeypatch.setattr('app.shared.community.send_message',
+                        lambda message, conversation_id: calls.append(message) or object())
+
+    with web_ctx(app, s.user):
+        result = invite_with_chat(s.community.id, 'fiona', SRC_WEB)
+
+    assert result == 1
+    assert len(calls) == 1
+    message = calls[0]
+    assert f"{app.config['SERVER_URL']}/c/{s.community.link()}/subscribe." in message
+    assert 'accept_invite' not in message
+    assert db.session.query(CommunityInvitation).count() == 0
+
+    all_conversations = db.session.query(Conversation).all()
+    assert len(all_conversations) == 2
+    matches = [c for c in all_conversations
+              if {m.id for m in c.members} == {s.user.id, recipient.id}]
+    assert len(matches) == 1
+
+
+def test_invite_with_chat_local_recipient_invite_required_message_has_token_accept_invite_link(
+        app, db_session, monkeypatch):
+    """`:144`'s TRUE arm again, but `:145`'s FALSE arm this time:
+    `community.invitations` is raised above `INVITE_APPLY`, so `:148` mints a
+    real `CommunityInvitation` token via `create_invite_token` and `:149`
+    embeds it in an `accept_invite` link instead of `:146`'s plain
+    `subscribe` link.
+
+    Table row: (is_local=T, family=-, apply=F, local_only=-, src=API,
+    reply=T) -- `src` flips to API relative to the sibling test above while
+    `is_local` stays True, decoupling `is_local()` from `src`; a mutant
+    conjoining `:144`'s check with `src == SRC_WEB` would make THIS test
+    take the `:150` remote branch instead (the local recipient's own
+    instance's `software` is `'mastodon'` by factory default, landing on
+    `:167`'s template-replacement arm) and fail every assertion below.
+
+    Asserting `'subscribe' not in message` is what catches a mutant that
+    left `:146`'s literal fallback in place instead of taking this arm.
+    """
+    s = _seed()
+    s.community.invitations = INVITE_APPLY + 1
+    db.session.commit()
+    recipient = make_user(s.instance, 'gabe', local=True)
+    calls = []
+    monkeypatch.setattr('app.shared.community.send_message',
+                        lambda message, conversation_id: calls.append(message) or object())
+
+    result = invite_with_chat(s.community.id, 'gabe', SRC_API, bearer(s.user))
+
+    assert result == 1
+    assert len(calls) == 1
+    message = calls[0]
+    invite_row = db.session.query(CommunityInvitation).filter_by(
+        community_id=s.community.id, user_id=recipient.id).one()
+    assert (f"{app.config['SERVER_URL']}/community/{s.community.link()}/accept_invite/"
+           f"{invite_row.token}.") in message
+    assert 'subscribe' not in message
+
+
+def test_invite_with_chat_remote_piefed_apply_open_message_has_remote_subscribe_link(
+        app, db_session, monkeypatch):
+    """`:144`'s FALSE arm (remote recipient) and `:151`'s TRUE arm: the
+    recipient's instance software is `'PieFed'`, MIXED CASE, so this test
+    also proves `:151`'s `.lower()` is load-bearing -- a mutant deleting it
+    makes `'PieFed' == 'piefed'` false, falls through to `:160`'s lemmy/mbin
+    check (also false), and lands on `:166`'s `else`, replacing `message`
+    with the rendered template instead of appending this arm's text.
+
+    `:152`'s TRUE arm (`invitations` at the factory default `0`) appends
+    `:153`'s remote-subscribe sentence, which embeds both a direct subscribe
+    link AND the `add_remote` fallback hint -- asserted together since a
+    mutant could drop either half independently. `'accept_invite'` and `'You
+    need to be logged in'` (the two `:152`-FALSE siblings' distinguishing
+    text) are asserted absent.
+
+    Table row: (is_local=F, family=piefed, apply=T, local_only=-, src=WEB,
+    reply=T).
+    """
+    s = _seed()
+    remote_instance = make_instance('remote-piefed-open.example', software='PieFed')
+    recipient = make_user(remote_instance, 'hana', local=False)
+    calls = []
+    monkeypatch.setattr('app.shared.community.send_message',
+                        lambda message, conversation_id: calls.append(message) or object())
+
+    with web_ctx(app, s.user):
+        result = invite_with_chat(s.community.id, recipient.ap_id, SRC_WEB)
+
+    assert result == 1
+    assert len(calls) == 1
+    message = calls[0]
+    assert (f"https://{remote_instance.domain}/c/{s.community.link()}@{s.community.ap_domain}"
+           f"/subscribe") in message
+    assert f"https://{remote_instance.domain}/community/add_remote." in message
+    assert 'accept_invite' not in message
+    assert 'You need to be logged in' not in message
+
+
+def test_invite_with_chat_remote_piefed_local_only_invite_required_message_has_local_accept_invite_link(
+        app, db_session, monkeypatch):
+    """`:151`'s TRUE arm again with the OTHER alternative, `'pylova'`
+    (lower-case; the sibling test above already pins `:151`'s `.lower()`
+    with `'PieFed'`), and `:152`'s FALSE arm: `invitations` is raised above
+    `INVITE_APPLY`, so `:155` mints a token and `:156`'s local_only check
+    runs. `community.local_only = True` here takes `:157`, embedding the
+    token in a LOCAL `accept_invite` link (this instance's own `SERVER_URL`,
+    not the recipient's remote domain).
+
+    Table row: (is_local=F, family=piefed, apply=F, local_only=T, src=API,
+    reply=T) -- `apply=F` here pairs with `src=API`, while the sibling test
+    below pairs `apply=F` with `src=WEB`, decoupling `apply` from `src`
+    within the piefed family alone (on top of the file-wide decoupling the
+    section comment above describes).
+
+    Asserting `'add_remote' not in message` is what catches a mutant that
+    took `:159`'s remote-accept-invite sibling instead -- both arms mint a
+    token and mention `accept_invite`, so the `add_remote` hint (present
+    only on `:159`) is the discriminator, and `remote_instance.domain not in
+    message` gives a second, independent check that no remote-domain URL
+    leaked into what should be an entirely local link.
+    """
+    s = _seed()
+    s.community.invitations = INVITE_APPLY + 1
+    s.community.local_only = True
+    db.session.commit()
+    remote_instance = make_instance('remote-piefed-local-only.example', software='pylova')
+    recipient = make_user(remote_instance, 'ivan', local=False)
+    calls = []
+    monkeypatch.setattr('app.shared.community.send_message',
+                        lambda message, conversation_id: calls.append(message) or object())
+
+    result = invite_with_chat(s.community.id, recipient.ap_id, SRC_API, bearer(s.user))
+
+    assert result == 1
+    assert len(calls) == 1
+    message = calls[0]
+    invite_row = db.session.query(CommunityInvitation).filter_by(
+        community_id=s.community.id, user_id=recipient.id).one()
+    assert (f"{app.config['SERVER_URL']}/community/{s.community.link()}/accept_invite/"
+           f"{invite_row.token}.") in message
+    assert 'You need to be logged in to a' in message
+    assert 'add_remote' not in message
+    assert remote_instance.domain not in message
+
+
+def test_invite_with_chat_remote_piefed_not_local_only_invite_required_message_has_remote_accept_invite_link(
+        app, db_session, monkeypatch):
+    """`:156`'s FALSE arm, the mirror of the sibling test above:
+    `community.local_only` stays at the factory default `False`, so `:159`
+    embeds the token in a REMOTE `accept_invite` link (the recipient's own
+    instance domain) plus the `add_remote` fallback hint, instead of `:157`'s
+    local link.
+
+    Software is `'piefed'` (lower-case) here -- the mixed-case pin for
+    `:151` already lives on the apply-open test above, so every arm within
+    this sub-branch does not need its own mixed-case value, only the site
+    does, once.
+
+    Table row: (is_local=F, family=piefed, apply=F, local_only=F, src=WEB,
+    reply=T).
+
+    Asserting `'You need to be logged in' not in message` catches a mutant
+    that took `:157`'s sibling instead; `add_remote` and the remote domain's
+    presence catch the reverse swap.
+    """
+    s = _seed()
+    s.community.invitations = INVITE_APPLY + 1
+    assert s.community.local_only is False
+    db.session.commit()
+    remote_instance = make_instance('remote-piefed-remote.example', software='piefed')
+    recipient = make_user(remote_instance, 'jill', local=False)
+    calls = []
+    monkeypatch.setattr('app.shared.community.send_message',
+                        lambda message, conversation_id: calls.append(message) or object())
+
+    with web_ctx(app, s.user):
+        result = invite_with_chat(s.community.id, recipient.ap_id, SRC_WEB)
+
+    assert result == 1
+    assert len(calls) == 1
+    message = calls[0]
+    invite_row = db.session.query(CommunityInvitation).filter_by(
+        community_id=s.community.id, user_id=recipient.id).one()
+    assert (f"https://{remote_instance.domain}/community/{s.community.link()}@"
+           f"{s.community.ap_domain}/accept_invite/{invite_row.token}") in message
+    assert f"https://{remote_instance.domain}/community/add_remote." in message
+    assert 'You need to be logged in' not in message
+
+
+def test_invite_with_chat_remote_lemmy_apply_open_message_has_join_link(
+        app, db_session, monkeypatch):
+    """`:160`'s TRUE arm (the `:151` check having already failed since
+    software is a lemmy-family value): `'LEMMY'`, MIXED CASE, proves `:160`'s
+    own `.lower()` is load-bearing the same way the piefed apply-open test
+    proves `:151`'s -- a mutant deleting `:160`'s `.lower()` makes
+    `'LEMMY' == 'lemmy'` false, falls to `:166`'s `else`, and replaces
+    `message` with the template instead.
+
+    `:161`'s TRUE arm (`invitations` at the factory default) appends `:162`'s
+    join-link sentence. `'accept_invite'` (the `:161`-FALSE sibling's
+    distinguishing text, shared with the piefed-family arms above) is
+    asserted absent.
+
+    Table row: (is_local=F, family=lemmy, apply=T, local_only=-, src=API,
+    reply=T).
+    """
+    s = _seed()
+    remote_instance = make_instance('remote-lemmy-open.example', software='LEMMY')
+    recipient = make_user(remote_instance, 'kara', local=False)
+    calls = []
+    monkeypatch.setattr('app.shared.community.send_message',
+                        lambda message, conversation_id: calls.append(message) or object())
+
+    result = invite_with_chat(s.community.id, recipient.ap_id, SRC_API, bearer(s.user))
+
+    assert result == 1
+    assert len(calls) == 1
+    message = calls[0]
+    assert (f"clicking 'Join' at https://{remote_instance.domain}/c/{s.community.link()}@"
+           f"{s.community.ap_domain}") in message
+    assert 'into your search function.' in message
+    assert 'accept_invite' not in message
+    assert 'You need to be logged in' not in message
+
+
+def test_invite_with_chat_remote_mbin_invite_required_message_has_token_accept_invite_link(
+        app, db_session, monkeypatch):
+    """`:160`'s TRUE arm again with the OTHER alternative, `'mbin'`
+    (lower-case; `:160`'s `.lower()` is already pinned by the sibling test
+    above's `'LEMMY'`), and `:161`'s FALSE arm: `invitations` is raised
+    above `INVITE_APPLY`, so `:164` mints a token and `:165` embeds it in the
+    same LOCAL `accept_invite` link shape `:157` builds (a genuinely
+    identical f-string reached via an unrelated branch, per the section
+    comment above -- not a value-swap gap).
+
+    Table row: (is_local=F, family=lemmy, apply=F, local_only=-, src=WEB,
+    reply=T) -- `apply` takes its OTHER value relative to the sibling test
+    above while software stays in the lemmy family, and `src` flips from
+    API to WEB, keeping `apply` and `src` from moving together within this
+    family too.
+
+    Asserting `"clicking 'Join'" not in message` catches a mutant that took
+    `:162`'s sibling instead.
+    """
+    s = _seed()
+    s.community.invitations = INVITE_APPLY + 1
+    db.session.commit()
+    remote_instance = make_instance('remote-mbin-token.example', software='mbin')
+    recipient = make_user(remote_instance, 'liam', local=False)
+    calls = []
+    monkeypatch.setattr('app.shared.community.send_message',
+                        lambda message, conversation_id: calls.append(message) or object())
+
+    with web_ctx(app, s.user):
+        result = invite_with_chat(s.community.id, recipient.ap_id, SRC_WEB)
+
+    assert result == 1
+    assert len(calls) == 1
+    message = calls[0]
+    invite_row = db.session.query(CommunityInvitation).filter_by(
+        community_id=s.community.id, user_id=recipient.id).one()
+    assert (f"{app.config['SERVER_URL']}/community/{s.community.link()}/accept_invite/"
+           f"{invite_row.token}.") in message
+    assert 'You need to be logged in to a' in message
+    assert "clicking 'Join'" not in message
+
+
+def test_invite_with_chat_remote_other_software_message_replaces_greeting_with_rendered_template(
+        app, db_session, monkeypatch):
+    """`:151` and `:160` BOTH false: the recipient's instance software is
+    left at `make_instance`'s own default, `'mastodon'`, which matches
+    neither the piefed/pylova nor the lemmy/mbin families, so `:166`'s
+    `else` runs `:167`.
+
+    `:167` is different IN KIND from every other arm in this fork: `message
+    = render_template(...)` REPLACES the greeting `:141` already built,
+    rather than appending to it (every other arm uses `+=`). The expected
+    string is built the same way invite_with_email's own `:167`-sibling
+    tests build theirs (same template, same `render_template` call, same
+    keyword arguments this call site actually passes -- `user`, `community`,
+    `host=SERVER_NAME`, no `subscribe` -- so this test does not echo
+    production's string-building back at itself for anything this call
+    varies). Asserting `text == expected_message` on its own would still
+    pass under a mutant that changed `=` to `+=` at `:167`, SINCE THE
+    TEMPLATE ITSELF ALSO OPENS WITH "Hi there," -- the mutant's message
+    would contain BOTH the old greeting and the template text, and a bare
+    "template text present" check cannot see the extra leftover text. The
+    assertion that actually catches that mutant is `'check it out' not in
+    message`: `:141`'s public-community greeting phrase (asserted present in
+    this file's own message-fork tests above) would still be sitting at the
+    front of the message under a `+=` mutant, and this test's community is
+    left non-private (the factory default) specifically so `:141`, not
+    `:143`, is the phrase that would leak.
+
+    Table row: (is_local=F, family=other, apply=T [irrelevant to this arm,
+    left at the factory default], local_only=-, src=API, reply=T).
+    """
+    s = _seed()
+    assert s.community.private is False
+    remote_instance = make_instance('remote-other-software.example')
+    assert remote_instance.software == 'mastodon'
+    recipient = make_user(remote_instance, 'maya', local=False)
+    calls = []
+    monkeypatch.setattr('app.shared.community.send_message',
+                        lambda message, conversation_id: calls.append(message) or object())
+
+    result = invite_with_chat(s.community.id, recipient.ap_id, SRC_API, bearer(s.user))
+
+    assert result == 1
+    assert len(calls) == 1
+    message = calls[0]
+    expected_message = render_template('email/invite_to_community.txt', user=s.user,
+                                       community=s.community, host=app.config['SERVER_NAME'])
+    assert message == expected_message
+    assert 'check it out' not in message
+    assert 'Create an account' in message
+
+
+def test_invite_with_chat_failed_delivery_returns_0_and_still_creates_conversation(
+        app, db_session, monkeypatch):
+    """`:170-172`'s return fork, FALSE arm: `send_message` is patched to
+    return a falsy sentinel (`None`), so `reply` is falsy and `:172` returns
+    `0` -- the FOURTH path sharing that return value, per the module
+    docstring's FOUR PATHS note.
+
+    Unlike the other three `return 0` paths (`:129`'s guard failing,
+    `:131`'s banned-community check, both covered in the first-half tests
+    above with an ASSERTED-ABSENT `Conversation`), THIS path reaches
+    `:134-138` and commits a real `Conversation` BEFORE `send_message` is
+    even called -- so asserting the row WAS created (the mirror image of the
+    other three tests' assertions) is what keeps all four `0`-returning
+    paths distinguishable from each other despite the identical return
+    value. The arm exercised to reach this point (local recipient,
+    apply-open) is arbitrary -- the return fork at `:170-172` runs
+    identically after every message-building arm -- so no new arm-specific
+    assertion is needed on `message` itself here.
+    """
+    s = _seed()
+    recipient = make_user(s.instance, 'noor', local=True)
+    monkeypatch.setattr('app.shared.community.send_message',
+                        lambda message, conversation_id: None)
+
+    with web_ctx(app, s.user):
+        result = invite_with_chat(s.community.id, 'noor', SRC_WEB)
+
+    assert result == 0
+
+    all_conversations = db.session.query(Conversation).all()
+    assert len(all_conversations) == 1
+    assert {m.id for m in all_conversations[0].members} == {s.user.id, recipient.id}
