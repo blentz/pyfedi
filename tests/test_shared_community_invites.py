@@ -1547,26 +1547,26 @@ def test_invite_with_chat_private_community_api_src_still_embeds_display_name(
 # `T`/`F` with `obs` recording whether that test can tell which arm ran.
 #
 #   test (line)                                    src  :140 :144 :145 :151 :152 :156 :160 :161 rply obs
-#   public_community_message (1246)                WEB   T    T    T    -    -    -    -    -    T   :140,:170,:134
-#   private_community_message (1338)               WEB   F    T    T    -    -    -    -    -    T   :140
-#   private_community_api_src (1399)         [NEW] API   F    T    T    -    -    -    -    -    T   :140
-#   local_apply_open (1558)                        API   T    T    T    -    -    -    -    -    T   :140,:145
-#   local_invite_required (1648)                   API   T    T    F    -    -    -    -    -    T   :145
-#   local_invite_required_web_src (1691)     [NEW] WEB   T    T    F    -    -    -    -    -    T   :145
-#   remote_piefed_apply_open (1752)                WEB   T    F    -    T    T    -    -    -    T   :151,:152
-#   remote_piefed_apply_open_api_src (1796)        API   T    F    -    T    T    -    -    -    T   :151,:152
-#   remote_piefed_local_only (1842)                WEB   T    F    -    T    F    T    -    -    T   :152,:156
-#   remote_piefed_local_only_api_src (1920)        API   T    F    -    T    F    T    -    -    T   :152,:156
-#   remote_piefed_not_local_only (1973)            API   T    F    -    T    F    F    -    -    T   :152,:156
-#   remote_piefed_not_local_only_web (2020)  [NEW] WEB   T    F    -    T    F    F    -    -    T   :152,:156
-#   remote_lemmy_apply_open (2076)                 WEB   T    F    -    F    -    -    T    T    T   :160,:161
-#   remote_lemmy_apply_open_api_src (2152)         API   T    F    -    F    -    -    T    T    T   :160,:161
-#   remote_mbin_invite_required (2198)             API   T    F    -    F    -    -    T    F    T   :160,:161
-#   remote_mbin_invite_required_web (2241)   [NEW] WEB   T    F    -    F    -    -    T    F    T   :160,:161
-#   remote_other_software (2294)                   API   T    F    -    F    -    -    F    -    T   :160,:166
-#   remote_other_software_web_src (2346)           WEB   T    F    -    F    -    -    F    -    T   :160,:166
-#   failed_delivery (2399)                         WEB   T    T    T    -    -    -    -    -    F   :145,rply
-#   failed_delivery_api_src (2469)           [NEW] API   T    T    T    -    -    -    -    -    F   rply
+#   public_community_message (1281)                WEB   T    T    T    -    -    -    -    -    T   :140,:170,:134
+#   private_community_message (1373)               WEB   F    T    T    -    -    -    -    -    T   :140
+#   private_community_api_src (1434)         [NEW] API   F    T    T    -    -    -    -    -    T   :140
+#   local_apply_open (1683)                        API   T    T    T    -    -    -    -    -    T   :140,:145
+#   local_invite_required (1773)                   API   T    T    F    -    -    -    -    -    T   :145
+#   local_invite_required_web_src (1816)     [NEW] WEB   T    T    F    -    -    -    -    -    T   :145
+#   remote_piefed_apply_open (1877)                WEB   T    F    -    T    T    -    -    -    T   :151,:152
+#   remote_piefed_apply_open_api_src (1921)        API   T    F    -    T    T    -    -    -    T   :151,:152
+#   remote_piefed_local_only (1967)                WEB   T    F    -    T    F    T    -    -    T   :152,:156
+#   remote_piefed_local_only_api_src (2045)        API   T    F    -    T    F    T    -    -    T   :152,:156
+#   remote_piefed_not_local_only (2098)            API   T    F    -    T    F    F    -    -    T   :152,:156
+#   remote_piefed_not_local_only_web (2145)  [NEW] WEB   T    F    -    T    F    F    -    -    T   :152,:156
+#   remote_lemmy_apply_open (2201)                 WEB   T    F    -    F    -    -    T    T    T   :160,:161
+#   remote_lemmy_apply_open_api_src (2277)         API   T    F    -    F    -    -    T    T    T   :160,:161
+#   remote_mbin_invite_required (2323)             API   T    F    -    F    -    -    T    F    T   :160,:161
+#   remote_mbin_invite_required_web (2366)   [NEW] WEB   T    F    -    F    -    -    T    F    T   :160,:161
+#   remote_other_software (2419)                   API   T    F    -    F    -    -    F    -    T   :160,:166
+#   remote_other_software_web_src (2471)           WEB   T    F    -    F    -    -    F    -    T   :160,:166
+#   failed_delivery (2524)                         WEB   T    T    T    -    -    -    -    -    F   :145,rply
+#   failed_delivery_api_src (2594)           [NEW] API   T    T    T    -    -    -    -    -    F   rply
 #
 # `failed_delivery`'s `:145`=T is observable ONLY because this fix round gave
 # it a `:146`-arm substring assertion; before that its `obs` for `:145` was
