@@ -5,20 +5,20 @@ STEP 1'S ORACLE CHECK, CONFIRMED BEFORE WRITING ANYTHING ELSE: `/usr/bin/grep
 -rln "create_invite_token" tests/ --include=*.py` and the same for
 `get_comm_flair_list` both return nothing -- neither function is named by any
 existing test file. `get_comm_flair_list` nonetheless has production callers
-in FOUR other files that pass it a `Community` object: `app/api/alpha/
-views.py:602`, `app/community/routes.py:677` and `:2474`, and `app/post/
-routes.py:315` and `:737` (a fifth line, `app/shared/tasks/groups.py:5`, only
-imports the name and never calls it). Whatever those other modules' test
-suites already exercise reaches `:671-672` (the `isinstance(community,
-Community)` arm) and the final query at `:681` through those call sites, so
-a full-suite coverage run credits this file's target functions with lines
-already green from elsewhere. Every number below states whether it is
-measured against THIS FILE ALONE (`--cov=app.shared.community` run against
-just this test module) or FULL-SUITE (deferred to Task 7's `--cov=app` run,
-which is the only run that will see those other modules' contribution). A
-per-file run over this test alone will report `get_comm_flair_list` with
-more missing lines than the full-suite figure -- that gap is the callers
-above, not a defect in this file.
+in THREE other files that pass it a `Community` object, five call sites total:
+`app/api/alpha/views.py:602`, `app/community/routes.py:677` and `:2474`, and
+`app/post/routes.py:315` and `:737` (a FOURTH file, `app/shared/tasks/
+groups.py:5`, only imports the name and never calls it). Whatever those other
+modules' test suites already exercise reaches `:671-672` (the
+`isinstance(community, Community)` arm) and the final query at `:681` through
+those call sites, so a full-suite coverage run credits this file's target
+functions with lines already green from elsewhere. Every number below states
+whether it is measured against THIS FILE ALONE (`--cov=app.shared.community`
+run against just this test module) or FULL-SUITE (deferred to Task 7's
+`--cov=app` run, which is the only run that will see those other modules'
+contribution). A per-file run over this test alone will report
+`get_comm_flair_list` with more missing lines than the full-suite figure --
+that gap is the callers above, not a defect in this file.
 
 `_burn_a_seed()` and `_seed()` below are consumed by this round's later
 tasks (2-5) against the rest of this file's invite-and-flair surface, so
@@ -71,6 +71,26 @@ below pins today's actual failure (an `UnboundLocalError` naming an internal
 variable, not a `TypeError` naming the broken contract) rather than the
 intended behaviour; a later round's fix should invert it once an `else`
 raises something that names the caller's mistake instead.
+
+D622, RECURRING: `:681`'s `.filter_by(community_id=community_id)` had NO
+same-mechanism negative control before the test added below. Every
+`make_community_flair` call above attaches to `s.community`, and no test
+ever gave a SECOND community a `CommunityFlair` row -- so at the point any
+of those five tests ran, the seeded flair was the only `CommunityFlair` row
+in the whole database, and deleting the `filter_by(...)` outright (leaving
+`CommunityFlair.query.order_by(CommunityFlair.flair).all()`) would still
+return exactly that row. This is false-witness mechanism (c): emptiness
+with no same-mechanism negative control, and it is a second instance of the
+same gap the previous sub-project registered as D622 against
+`remove_mod_from_community`'s `community_id` predicate in
+tests/test_shared_community_moderation.py -- the bystander community there,
+same as here, only defends a mutant that HARDCODES `community_id=1`; it does
+nothing against a mutant that deletes the filter entirely, because nothing
+ever populated the bystander with a row of the kind under query. `_seed()`
+below now returns the bystander as `.bystander` specifically so a flair can
+be attached to it and excluded, closing this gap for `get_comm_flair_list`
+and handing later tasks in this round a ready-made second community for
+their own cross-community negative controls.
 """
 from types import SimpleNamespace
 
@@ -101,22 +121,32 @@ def _burn_a_seed():
 
 
 def _seed():
-    """An instance, a non-admin user, and a local community, with id 1 burned.
+    """An instance, a non-admin user, a local community, and a bystander
+    community, with id 1 burned.
 
-    A bystander community is minted FIRST, purely to consume Community id 1.
+    The bystander is minted FIRST, purely to consume Community id 1.
     conftest.py:131-132 resets every sequence between tests, so without this
     the returned community's id would deterministically be 1 in every test,
     and a mutant hardcoding `community_id=1` anywhere in this round's later
     tasks would be indistinguishable from correct code by any assertion
-    built from this seed alone. The bystander is otherwise unused and
-    unreferenced.
+    built from this seed alone.
+
+    The bystander is also returned as `.bystander` so a caller can attach a
+    row to it and assert that row is EXCLUDED from a query scoped to
+    `.community` -- a same-mechanism negative control that a mutant deleting
+    a `community_id` filter entirely (as opposed to one hardcoding
+    `community_id=1`) needs to be caught, per this file's D622 note above.
+    Before this round, nothing populated the bystander with a matching row
+    of any kind, so that class of mutant went unkilled; Tasks 2-5 can reuse
+    `.bystander` for their own cross-community negative controls rather than
+    minting a second community themselves.
     """
     _burn_a_seed()
     instance = make_instance('test.piefed.local')
     user = make_user(instance, 'alice', local=True)
-    make_community('bystander', host='bystander.example')
+    bystander = make_community('bystander', host='bystander.example')
     community = make_community()
-    return SimpleNamespace(instance=instance, user=user, community=community)
+    return SimpleNamespace(instance=instance, user=user, community=community, bystander=bystander)
 
 
 # `create_invite_token` (app/shared/community.py:176-186).
@@ -300,3 +330,31 @@ def test_get_comm_flair_list_out_of_contract_arg_raises_UnboundLocalError(app, d
 
     with pytest.raises(UnboundLocalError):
         get_comm_flair_list(None)
+
+
+def test_get_comm_flair_list_excludes_a_flair_belonging_to_another_community(
+        app, db_session):
+    """Kills the mutant that deletes `:681`'s `filter_by(community_id=
+    community_id)` outright, leaving `CommunityFlair.query.order_by
+    (CommunityFlair.flair).all()`. See this file's D622 note above: every
+    OTHER test in this file attaches its `CommunityFlair` rows only to
+    `s.community`, so at the point any of them run, the seeded flair is the
+    only `CommunityFlair` row in the database and a query with no
+    `community_id` filter at all would still return exactly it -- a
+    same-mechanism false witness (emptiness with no same-mechanism negative
+    control). This test attaches a flair to `s.bystander` instead, a SECOND
+    community distinct from `s.community`, so a deleted filter would pull in
+    both rows.
+
+    The assertion compares the returned NAME SET, not just a count of 1: a
+    mutant that swapped which community's flair got returned (rather than
+    just adding the bystander's on top) would still pass a bare count
+    assertion but fails this one, since `{'wanted'} != {'unwanted'}`.
+    """
+    s = _seed()
+    make_community_flair(s.community, name='wanted')
+    make_community_flair(s.bystander, name='unwanted')
+
+    result = get_comm_flair_list(s.community)
+
+    assert {f.flair for f in result} == {'wanted'}
