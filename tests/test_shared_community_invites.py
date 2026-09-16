@@ -1042,11 +1042,27 @@ def test_invite_with_chat_missing_community_raises_AttributeError(app, db_sessio
     `if community.banned:` dereferences it immediately, raising
     `AttributeError: 'NoneType' object has no attribute 'banned'`.
 
+    STRENGTHENED AFTER REVIEW: asserting the exception TYPE alone does not
+    prove WHERE it was raised. A reviewer-applied mutant, `if src ==
+    SRC_API and community.banned:` at `:131`, short-circuits on this test's
+    `src=SRC_WEB` before ever touching the `None` community -- so `:131`'s
+    guard is false, execution falls through to `:134-138` and COMMITS a
+    spurious `Conversation` row for the `None` community, and only THEN
+    crashes at `:140`'s `community.private` read. The exception type is
+    still `AttributeError`, so a bare `pytest.raises(AttributeError)`
+    passes either way and cannot tell "died at :131 before doing anything"
+    (today's real behaviour) from "did :134-138's work first, then died
+    two lines later" (the mutant's). The added `Conversation` count
+    assertion below distinguishes them: it is `0` under real code and `1`
+    under that mutant, so this pin now fails under it as it should.
+
     THIS TEST ASSERTS TODAY'S ACTUAL, BROKEN BEHAVIOUR -- NOT THE INTENDED
     ONE -- AND PASSES AGAINST CURRENT CODE. Task 6 rewrites `:130` to use
     `.filter_by(id=...).one()` (matching `restore_community:522`'s own
     pattern) and must INVERT this test to expect `NoResultFound` in place
-    of `AttributeError` once that fix lands.
+    of `AttributeError` once that fix lands; the `Conversation`-count
+    assertion should survive that inversion unchanged, since a
+    `NoResultFound` at `:130` itself dies even earlier than `:131` does.
     """
     s = _seed()
     recipient = make_user(s.instance, 'bob', local=True)
@@ -1054,6 +1070,8 @@ def test_invite_with_chat_missing_community_raises_AttributeError(app, db_sessio
     with web_ctx(app, s.user):
         with pytest.raises(AttributeError):
             invite_with_chat(999999, 'bob', SRC_WEB)
+
+    assert db.session.query(Conversation).count() == 0
 
 
 def test_invite_with_chat_banned_community_returns_0_and_creates_no_conversation(
@@ -1067,6 +1085,11 @@ def test_invite_with_chat_banned_community_returns_0_and_creates_no_conversation
     The recipient here is real and passes `:129`'s guard outright (local,
     unbanned, on an unbanned instance), so this test isolates `:131-132`
     on its own rather than conflating it with the guard.
+
+    Uses `SRC_API`; the sibling test directly below uses `SRC_WEB` against
+    an identically banned community specifically so `src` and
+    `community.banned` are NOT paired in only one direction across this
+    file's tests -- see that test's docstring for the mutant this decouples.
     """
     s = _seed()
     recipient = make_user(s.instance, 'carol', local=True)
@@ -1074,6 +1097,39 @@ def test_invite_with_chat_banned_community_returns_0_and_creates_no_conversation
     db.session.commit()
 
     result = invite_with_chat(s.community.id, 'carol', SRC_API, bearer(s.user))
+
+    assert result == 0
+    assert db.session.query(Conversation).count() == 0
+
+
+def test_invite_with_chat_banned_community_web_src_returns_0_and_creates_no_conversation(
+        app, db_session):
+    """`:131`'s TRUE arm again, this time with `SRC_WEB` -- added after
+    review found the sibling test above, the ONLY test reaching `:131`'s
+    true arm before this one, always paired a banned community with
+    `SRC_API`. That lockstep let a reviewer-applied mutant, `if src ==
+    SRC_API and community.banned:`, pass the whole file: under `SRC_API` it
+    behaves identically to the real `if community.banned:`, so nothing
+    already in this file could tell the two apart.
+
+    This test breaks that lockstep: `community.banned=True` with
+    `src=SRC_WEB`. Under the real guard this still returns `0` and creates
+    no `Conversation`. Under the mutant, `src == SRC_API` is FALSE, so the
+    conjunction is false regardless of `community.banned`, execution falls
+    through to `:134-138` and creates a `Conversation` for the (banned, but
+    now unchecked) community, then continues to `:140` onward and returns
+    `1` -- both assertions below fail under it. Verified by hand-applying
+    the mutant and running this file: `AssertionError: assert 1 == 0` on
+    the `result == 0` line (the `Conversation`-count assertion never even
+    runs, since `assert` stops at the first failure), then restored.
+    """
+    s = _seed()
+    recipient = make_user(s.instance, 'dana', local=True)
+    s.community.banned = True
+    db.session.commit()
+
+    with web_ctx(app, s.user):
+        result = invite_with_chat(s.community.id, 'dana', SRC_WEB)
 
     assert result == 0
     assert db.session.query(Conversation).count() == 0
@@ -1104,6 +1160,14 @@ def test_invite_with_chat_public_community_message_embeds_community_link(
     else 0` -- Task 5's territory, merely passed through here -- takes its
     true arm, and captures the exact `message` argument so the fork's
     content can be asserted directly.
+
+    Uses `SRC_WEB`, same as the sibling private-arm test below (see its own
+    docstring for why): a review found this file originally paired
+    `SRC_WEB` with EVERY public-community test and `SRC_API` with EVERY
+    private-community one, letting `if src == SRC_WEB:` stand in for
+    `:140`'s real `if not community.private:` undetected. Both tests now
+    share `src=SRC_WEB` and differ only in `community.private`, which
+    decouples the two.
     """
     s = _seed()
     s.community.title = 'A Community Worth Joining'
@@ -1145,6 +1209,25 @@ def test_invite_with_chat_private_community_message_embeds_display_name(
 
     Also covers the `:134-138`/mechanism (c) success-path assertion a
     second time, with a decoy conversation seeded the same way.
+
+    USES `SRC_WEB`, NOT `SRC_API` -- CHANGED AFTER REVIEW. This test
+    originally used `SRC_API`, which meant every test in this file reaching
+    `:140` paired `SRC_WEB` with a public community and `SRC_API` with a
+    private one, in lockstep. A reviewer-applied mutant, `if src ==
+    SRC_WEB:` in place of `:140`'s real `if not community.private:`,
+    reproduced both outcomes exactly and passed the whole file: under
+    `SRC_WEB` it took the `link()` arm (matching the public test, which was
+    also public), and under `SRC_API` it took the `display_name()` arm
+    (matching this test, which was also private) -- purely because `src`
+    tracked `community.private` everywhere the fork was exercised, never
+    the reverse. Switching this test to `SRC_WEB` -- now identical to the
+    public-arm test's `src`, differing only in `community.private` -- makes
+    the mutant's `src == SRC_WEB` branch fire for BOTH tests regardless of
+    which is actually private, so this test's `pattern_private` assertion
+    now fails under it: the mutant returns the `link()`-based message where
+    `display_name()` was expected. Verified by hand-applying the mutant and
+    running this file; the exact failure text is recorded in this round's
+    task report, then the mutant was reverted.
     """
     s = _seed()
     s.community.title = 'A Secret Society'
@@ -1159,7 +1242,8 @@ def test_invite_with_chat_private_community_message_embeds_display_name(
     monkeypatch.setattr('app.shared.community.send_message',
                         lambda message, conversation_id: calls.append(message) or object())
 
-    result = invite_with_chat(s.community.id, 'erin', SRC_API, bearer(s.user))
+    with web_ctx(app, s.user):
+        result = invite_with_chat(s.community.id, 'erin', SRC_WEB)
 
     assert result == 1
     assert len(calls) == 1
