@@ -1510,6 +1510,52 @@ def test_invite_with_chat_remote_piefed_apply_open_message_has_remote_subscribe_
     assert 'You need to be logged in' not in message
 
 
+def test_invite_with_chat_remote_piefed_apply_open_api_src_still_has_remote_subscribe_link(
+        app, db_session, monkeypatch):
+    """`:152`'s TRUE arm again, at the OTHER `src` value -- closes a
+    mutation-pass survivor: `if community.invitations <= INVITE_APPLY and
+    src == SRC_WEB:` at `:152`. The sibling test above is `:152`'s only
+    other reaching-True sample, at `src=WEB`; with just that one sample,
+    the mutant's `src == SRC_WEB` conjunct agreed with it on every test in
+    the file (`True and (WEB==WEB is True)` = `True`, matching real
+    `True`), so the mutant survived even though the earlier fix round's
+    MIRROR mutant on this same site (`src == SRC_API`) was already killed
+    by that same sample.
+
+    This test reaches the identical arm (`:144`=F, `:151`=T, `:152`=T) at
+    `src=API`, so `:152`'s True side now has a sample at EACH `src` value:
+    the mutant above evaluates `True and (API==WEB is False)` = `False`
+    here, taking `:154`'s token-arm text instead of this arm's
+    remote-subscribe text, and fails the assertions below (verified by
+    hand; see the task report for the exact failure text).
+
+    Software is `'piefed'` (lower-case; `:151`'s `.lower()` is already
+    pinned by the apply-open test above's mixed-case `'PieFed'`), and the
+    assertions below are the identical substrings that test uses -- the
+    whole point of this test is that the message content must not depend
+    on `src`.
+
+    Sites reached: `:144`=F, `:151`=T, `:152`=T; `src`=API; `reply`=T.
+    """
+    s = _seed()
+    remote_instance = make_instance('remote-piefed-open-api.example', software='piefed')
+    recipient = make_user(remote_instance, 'nadia', local=False)
+    calls = []
+    monkeypatch.setattr('app.shared.community.send_message',
+                        lambda message, conversation_id: calls.append(message) or object())
+
+    result = invite_with_chat(s.community.id, recipient.ap_id, SRC_API, bearer(s.user))
+
+    assert result == 1
+    assert len(calls) == 1
+    message = calls[0]
+    assert (f"https://{remote_instance.domain}/c/{s.community.link()}@{s.community.ap_domain}"
+           f"/subscribe") in message
+    assert f"https://{remote_instance.domain}/community/add_remote." in message
+    assert 'accept_invite' not in message
+    assert 'You need to be logged in' not in message
+
+
 def test_invite_with_chat_remote_piefed_local_only_invite_required_message_has_local_accept_invite_link(
         app, db_session, monkeypatch):
     """`:151`'s TRUE arm again with the OTHER alternative, `'pylova'`
@@ -1560,6 +1606,59 @@ def test_invite_with_chat_remote_piefed_local_only_invite_required_message_has_l
 
     with web_ctx(app, s.user):
         result = invite_with_chat(s.community.id, recipient.ap_id, SRC_WEB)
+
+    assert result == 1
+    assert len(calls) == 1
+    message = calls[0]
+    invite_row = db.session.query(CommunityInvitation).filter_by(
+        community_id=s.community.id, user_id=recipient.id).one()
+    assert (f"{app.config['SERVER_URL']}/community/{s.community.link()}/accept_invite/"
+           f"{invite_row.token}.") in message
+    assert 'You need to be logged in to a' in message
+    assert 'add_remote' not in message
+    assert remote_instance.domain not in message
+
+
+def test_invite_with_chat_remote_piefed_local_only_invite_required_api_src_still_has_local_accept_invite_link(
+        app, db_session, monkeypatch):
+    """`:156`'s TRUE arm again, at the OTHER `src` value -- closes a
+    mutation-pass survivor: the MIRROR of the earlier fix round's
+    `:156`-conjoined mutant. That round closed `if community.local_only and
+    src == SRC_API:` by giving `:156`'s True side its only sample (the
+    sibling test above) at `src=WEB`, real `True` there, mutant `True and
+    (WEB==API is False)` = `False` -- a mismatch that killed it. But the
+    MIRROR, `if community.local_only and src == SRC_WEB:`, evaluates `True
+    and (WEB==WEB is True)` = `True` on that exact same sample, matching
+    real `True` -- so with only one True-side sample total, closing one
+    literal's mutant necessarily left its mirror free, and the mirror
+    survived the whole file.
+
+    This test reaches the identical arm (`:144`=F, `:151`=T, `:152`=F,
+    `:156`=T) at `src=API`, so `:156`'s True side now has a sample at EACH
+    `src` value: the mirror mutant evaluates `True and (API==WEB is
+    False)` = `False` here, taking `:159`'s remote-link text instead of
+    this arm's local-link text, and fails the assertions below (verified
+    by hand; see the task report for the exact failure text).
+
+    Software is `'pylova'` here, same as the sibling test above -- no new
+    mixed-case pin is needed since `:151`'s `.lower()` is already proven by
+    the apply-open test. Assertions mirror the sibling test's exactly: same
+    arm, different `src`.
+
+    Sites reached: `:144`=F, `:151`=T, `:152`=F, `:156`=T; `src`=API;
+    `reply`=T.
+    """
+    s = _seed()
+    s.community.invitations = INVITE_APPLY + 1
+    s.community.local_only = True
+    db.session.commit()
+    remote_instance = make_instance('remote-piefed-local-only-api.example', software='pylova')
+    recipient = make_user(remote_instance, 'oscar', local=False)
+    calls = []
+    monkeypatch.setattr('app.shared.community.send_message',
+                        lambda message, conversation_id: calls.append(message) or object())
+
+    result = invite_with_chat(s.community.id, recipient.ap_id, SRC_API, bearer(s.user))
 
     assert result == 1
     assert len(calls) == 1
@@ -1684,6 +1783,52 @@ def test_invite_with_chat_remote_lemmy_apply_open_message_has_join_link(
     assert 'You need to be logged in' not in message
 
 
+def test_invite_with_chat_remote_lemmy_apply_open_api_src_still_has_join_link(
+        app, db_session, monkeypatch):
+    """`:161`'s TRUE arm again, at the OTHER `src` value -- closes a
+    mutation-pass survivor: the mirror mutant `if community.invitations <=
+    INVITE_APPLY and src == SRC_WEB:` at `:161`. The sibling test above is
+    `:161`'s only other reaching-True sample, at `src=WEB` -- the same
+    single-sample shape `:152`'s and `:156`'s residuals had: that sample
+    already killed the literal `src == SRC_API` mutant (real `True`, mutant
+    `True and (WEB==API is False)` = `False`), but the mirror `src ==
+    SRC_WEB` matches it exactly (`True and (WEB==WEB is True)` = `True`),
+    so closing one literal necessarily left the other's mirror free.
+
+    This test reaches the identical arm (`:144`=F, `:151`=F, `:160`=T,
+    `:161`=T) at `src=API`, so `:161`'s True side now has a sample at EACH
+    `src` value: the mirror mutant evaluates `True and (API==WEB is
+    False)` = `False` here, taking `:164-165`'s token-and-accept_invite
+    text instead of this arm's join-link text, and fails the assertions
+    below (verified by hand; see the task report for the exact failure
+    text).
+
+    Software is `'lemmy'` (lower-case; `:160`'s `.lower()` is already
+    pinned by the apply-open test above's mixed-case `'LEMMY'`).
+    Assertions mirror that test's exactly: same arm, different `src`.
+
+    Sites reached: `:144`=F, `:151`=F, `:160`=T, `:161`=T; `src`=API;
+    `reply`=T.
+    """
+    s = _seed()
+    remote_instance = make_instance('remote-lemmy-open-api.example', software='lemmy')
+    recipient = make_user(remote_instance, 'petra', local=False)
+    calls = []
+    monkeypatch.setattr('app.shared.community.send_message',
+                        lambda message, conversation_id: calls.append(message) or object())
+
+    result = invite_with_chat(s.community.id, recipient.ap_id, SRC_API, bearer(s.user))
+
+    assert result == 1
+    assert len(calls) == 1
+    message = calls[0]
+    assert (f"clicking 'Join' at https://{remote_instance.domain}/c/{s.community.link()}@"
+           f"{s.community.ap_domain}") in message
+    assert 'into your search function.' in message
+    assert 'accept_invite' not in message
+    assert 'You need to be logged in' not in message
+
+
 def test_invite_with_chat_remote_mbin_invite_required_message_has_token_accept_invite_link(
         app, db_session, monkeypatch):
     """`:160`'s TRUE arm again with the OTHER alternative, `'mbin'`
@@ -1768,6 +1913,59 @@ def test_invite_with_chat_remote_other_software_message_replaces_greeting_with_r
                         lambda message, conversation_id: calls.append(message) or object())
 
     result = invite_with_chat(s.community.id, recipient.ap_id, SRC_API, bearer(s.user))
+
+    assert result == 1
+    assert len(calls) == 1
+    message = calls[0]
+    expected_message = render_template('email/invite_to_community.txt', user=s.user,
+                                       community=s.community, host=app.config['SERVER_NAME'])
+    assert message == expected_message
+    assert 'check it out' not in message
+    assert 'Create an account' in message
+
+
+def test_invite_with_chat_remote_other_software_web_src_still_replaces_greeting_with_rendered_template(
+        app, db_session, monkeypatch):
+    """`:160`'s FALSE arm (the `:166` else) again, at the OTHER `src`
+    value -- closes a mutation-pass survivor: an OR conjoined onto `:160`'s
+    own elif, `elif recipient.instance.software.lower() == 'lemmy' or
+    recipient.instance.software.lower() == 'mbin' or src == SRC_WEB:`. The
+    sibling test above is `:160`'s only False-side (else-arm) sample, at
+    `src=API` -- that sample already killed the literal `src == SRC_API`
+    OR-mutant (real `False`, mutant `False or (API==API is True)` = `True`,
+    a mismatch), but the mirror `src == SRC_WEB` matches it exactly (`False
+    or (API==WEB is False)` = `False`, agreeing with real `False`), so
+    closing one literal necessarily left the other's mirror free -- the
+    same single-sample shape as `:152`'s, `:156`'s and `:161`'s residuals,
+    on the OR-mutant's False side instead of an AND-mutant's True side.
+
+    This test reaches the identical arm (`:144`=F, `:151`=F, `:160`=F) at
+    `src=WEB`, so `:160`'s False side now has a sample at EACH `src` value:
+    the mirror mutant evaluates `False or (WEB==WEB is True)` = `True`
+    here, wrongly taking `:161`'s lemmy/mbin branch (specifically its
+    `:161`-TRUE join-link arm, since `community.invitations` is still at
+    the factory default `0`) instead of `:166`'s template-replace arm, and
+    fails the assertions below (verified by hand; see the task report for
+    the exact failure text).
+
+    Software is left at `make_instance`'s own default, `'mastodon'`, same
+    as the sibling test above. Assertions mirror that test's exactly: same
+    arm, different `src`.
+
+    Sites reached: `:144`=F, `:151`=F, `:160`=F (falls to the `:166` else);
+    `src`=WEB; `reply`=T.
+    """
+    s = _seed()
+    assert s.community.private is False
+    remote_instance = make_instance('remote-other-software-web.example')
+    assert remote_instance.software == 'mastodon'
+    recipient = make_user(remote_instance, 'quinn', local=False)
+    calls = []
+    monkeypatch.setattr('app.shared.community.send_message',
+                        lambda message, conversation_id: calls.append(message) or object())
+
+    with web_ctx(app, s.user):
+        result = invite_with_chat(s.community.id, recipient.ap_id, SRC_WEB)
 
     assert result == 1
     assert len(calls) == 1
