@@ -13275,16 +13275,23 @@ count outranks a missing one, so this line is left for the controller's
 own re-measurement on the delivered tree (`cddae19d`) rather than carrying
 the stale number forward:
 
-> **`[PLACEHOLDER -- controller to re-measure and fill in: N passed, 3
-> skipped, 6 subtests, PYTEST_EXIT=0, wall clock Ns, all 26 floors met,
-> FLOORS_EXIT=0]`**, measured on the delivered tree (`cddae19d`) against
-> its own `--cov=app` JSON with both arguments.
+> **`5105 passed, 3 skipped, 6 subtests, PYTEST_EXIT=0` (wall clock
+> 641.94s), all 26 floors met, `FLOORS_EXIT=0`**, measured on the delivered
+> tree (`cddae19d`) against its own `--cov=app` JSON with both arguments.
 
-The count should close on derivation: 5101 + 4 = 5105 is the arithmetic
-prediction (`tests/test_shared_community_invites.py` grew from 38 to 42
-tests in `cddae19d`, and 42 - 38 = 4), but this task did not run the
-suite and does not certify 5105 -- it is offered as the number to check
-the controller's own re-measurement against, not as a substitute for one.
+**The task's arithmetic prediction was right, and it was right to refuse to
+certify it.** It offered 5101 + 4 = 5105 as a number to check the
+measurement against rather than as a substitute for one, and the
+measurement returned exactly that. The count closes twice over: 5105 = 5101
+plus the four residual-closing tests `cddae19d` added, and 5105 - 5063
+(sub-project 46's delivered figure) = 42, which is exactly
+`/usr/bin/grep -cE "^ *def test_" tests/test_shared_community_invites.py`
+against the commit object. Two independent derivations, same answer.
+
+The distinction matters and is worth keeping: a prediction that happens to
+be correct is still not a measurement, and this register has twice carried
+a stale count that was within a handful of the truth -- close enough to
+survive a glance, wrong anyway.
 
 **Exactly two production changes**, both in `app/shared/community.py`
 (D625): `git diff --numstat 41772ce8 HEAD -- app/` is `2 2

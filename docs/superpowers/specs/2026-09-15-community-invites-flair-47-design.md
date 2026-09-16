@@ -83,8 +83,13 @@ in this same module is `db.session.query(Community).filter_by(id=community_id).o
 (`restore_community:522`), which raises `NoResultFound` — an error a caller can
 recognise and handle.
 
-**This is a recurrence, not a new class.** **D613**, registered by sub-project
-46, records the identical shape at `delete_community:493`. Fixing these two
+**This is a recurrence, not a new class.** **D614**, registered by sub-project
+46 as an extension of **D598**, records the identical shape at
+`delete_community:493`. (This spec originally cited D613, which is a
+different finding entirely -- the "every line executes" class. Task 9 caught
+the mis-citation by reading D613's own entry before writing it into the
+register, and the correction is left visible here rather than silently
+applied.) Fixing these two
 closes the class at two of its three known sites; `delete_community:493` is left
 for a later round, because it sits in a group already closed and reopening a
 closed function's coverage for an unrelated fix is how a round's budget escapes.
