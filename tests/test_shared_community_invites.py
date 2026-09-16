@@ -178,12 +178,17 @@ ceiling, not a gap left by an incomplete test suite.
 from types import SimpleNamespace
 
 import pytest
+from flask import render_template
 from sqlalchemy.exc import NoResultFound
 
 from app import db
+from app.constants import INVITE_APPLY, SRC_API, SRC_WEB
 from app.models import Community, CommunityFlair, CommunityInvitation
-from app.shared.community import comm_flair_ap_format, create_invite_token, get_comm_flair_list
-from tests.factories import make_community, make_community_flair, make_instance, make_user
+from app.shared.community import (comm_flair_ap_format, create_invite_token, get_comm_flair_list,
+                                  invite_with_email)
+from app.utils import markdown_to_html
+from tests.factories import (bearer, make_community, make_community_flair, make_instance, make_user,
+                             web_ctx)
 
 
 def _burn_a_seed():
@@ -633,3 +638,152 @@ def test_comm_flair_ap_format_instance_arg_mints_and_persists_ap_id(app, db_sess
     db.session.expire_all()
     persisted = db.session.query(CommunityFlair).filter_by(id=flair.id).one()
     assert persisted.ap_id == expected_ap_id
+
+
+# `invite_with_email` (app/shared/community.py:189-210).
+
+
+def test_invite_with_email_api_src_authorises_user_and_sends_plain_invite(
+        app, db_session, monkeypatch):
+    """`:190-192`'s SRC_API arm: `user_id = authorise_api_user(auth)` then
+    `User.query.get(user_id)` resolves the inviter, unlike the web arm's
+    bare `current_user` (covered by the sibling test below).
+
+    `:201`'s FALSE arm: `s.community.invitations` is left at its factory
+    default of `0`, which is not greater than `INVITE_APPLY` (`1`), so
+    `:200`'s plain `'subscribe'` literal survives unchanged into the
+    template -- the `lemmy_link()` fallback (the sibling test below) never
+    runs on this path. `:210`'s return of `1` is asserted directly.
+
+    `send_email` is patched on `app.shared.community`, never on its source
+    module `app.email`: `from app.email import send_email` (`:17`) binds the
+    name into THIS module's globals at import time, so a patch on
+    `app.email.send_email` would leave the already-bound reference here
+    untouched and the real network/SMTP path would still run. Every
+    argument `send_email` receives is asserted by VALUE -- the subject, the
+    from-address string, the recipient list, and the rendered body (built
+    independently here via the same `render_template` call with the same
+    context, so this test does not merely echo the production code's own
+    string-building back at itself for the parts that differ per test:
+    `user`, `community`, and `subscribe`) -- not merely that it was called
+    once. A mutant that called `send_email` with a corrupted subject, the
+    wrong recipient, or a hand-rolled body would still pass a bare
+    call-count assertion but fails every one of these.
+    """
+    s = _seed()
+    calls = []
+    monkeypatch.setattr('app.shared.community.send_email',
+                        lambda *a, **kw: calls.append(a))
+
+    result = invite_with_email(s.community.id, 'invitee@example.com', SRC_API, bearer(s.user))
+
+    assert result == 1
+    assert len(calls) == 1
+    subject, sender, recipients, text_body, html_body = calls[0]
+    assert subject == f"{s.community.display_name()} on {app.config['SERVER_NAME']}"
+    assert sender == f"{s.user.display_name()} <{app.config['MAIL_FROM']}>"
+    assert recipients == ['invitee@example.com']
+    expected_message = render_template(
+        'email/invite_to_community.txt', user=s.user, community=s.community,
+        host=app.config['SERVER_URL'], subscribe='subscribe')
+    assert text_body == expected_message
+    assert html_body == markdown_to_html(expected_message)
+
+
+def test_invite_with_email_web_src_uses_current_user_and_lemmy_link_when_apply_required(
+        app, db_session, monkeypatch):
+    """`:193-194`'s else arm: `user = current_user`, the web-request path's
+    sibling to the SRC_API arm above.
+
+    `:201`'s TRUE arm: `s.community.invitations` is raised above
+    `INVITE_APPLY` (`1`), so `:202` sets `subscribe = f'accept_invite/
+    {user.lemmy_link()}'` instead of the plain `'subscribe'` literal.
+
+    THIS SHAPE IS DELIBERATE, NOT A DEFECT -- unlike this module's other
+    `.get()` finding pinned separately below. `invite_with_chat:148` mints a
+    real, single-use token via `create_invite_token` because its recipient
+    already has an account row to key the resulting `CommunityInvitation` on
+    (`community_id`, `recipient.id`). An email invitee has no account yet --
+    there is no `recipient.id` to key a token row on -- so no such token can
+    exist for them, and the emailed link instead carries the INVITER's own
+    handle. `community_invite_accept` (app/community/routes.py:2641) opens
+    with `if '@' in token:` at `:2644` specifically to detect this shape (a
+    `lemmy_link()` always contains an `@`, confirmed below) and flashes
+    "Ask %(token)s to send an invite to %(current_user)s" rather than treat
+    the handle as a real, redeemable token. This test asserts that the
+    `lemmy_link()` form actually reaches the rendered template body, so a
+    later round reading `:202` beside `:148` does not "fix" this deliberate
+    fallback into matching the chat arm's real-token shape.
+    """
+    s = _seed()
+    s.community.invitations = INVITE_APPLY + 1
+    db.session.commit()
+    calls = []
+    monkeypatch.setattr('app.shared.community.send_email',
+                        lambda *a, **kw: calls.append(a))
+
+    with web_ctx(app, s.user):
+        result = invite_with_email(s.community.id, 'invitee@example.com', SRC_WEB)
+
+    assert result == 1
+    assert len(calls) == 1
+    subject, sender, recipients, text_body, html_body = calls[0]
+    assert subject == f"{s.community.display_name()} on {app.config['SERVER_NAME']}"
+    assert sender == f"{s.user.display_name()} <{app.config['MAIL_FROM']}>"
+    assert recipients == ['invitee@example.com']
+    expected_subscribe = f'accept_invite/{s.user.lemmy_link()}'
+    assert '@' in s.user.lemmy_link()
+    expected_message = render_template(
+        'email/invite_to_community.txt', user=s.user, community=s.community,
+        host=app.config['SERVER_URL'], subscribe=expected_subscribe)
+    assert text_body == expected_message
+    assert html_body == markdown_to_html(expected_message)
+
+
+def test_invite_with_email_banned_community_returns_0(app, db_session, monkeypatch):
+    """`:197`'s TRUE arm: a banned community makes `invite_with_email`
+    return `0` immediately -- `:200-209` never run, so `send_email` is never
+    called at all, asserted here directly rather than inferred from the
+    return value alone.
+    """
+    s = _seed()
+    s.community.banned = True
+    db.session.commit()
+    calls = []
+    monkeypatch.setattr('app.shared.community.send_email',
+                        lambda *a, **kw: calls.append(a))
+
+    with web_ctx(app, s.user):
+        result = invite_with_email(s.community.id, 'invitee@example.com', SRC_WEB)
+
+    assert result == 0
+    assert calls == []
+
+
+def test_invite_with_email_missing_community_raises_AttributeError(app, db_session):
+    """PIN, NOT A FIX. `:196` fetches the community with `db.session.query
+    (Community).get(community_id)` -- SQLAlchemy's legacy `Query.get` --
+    which returns `None` quietly for an id matching no row, with nothing
+    guarding `:197`'s immediate `community.banned` dereference. Python
+    therefore raises `AttributeError: 'NoneType' object has no attribute
+    'banned'`.
+
+    This module's OTHER `Community`-by-id lookup, `restore_community:522`,
+    uses `.filter_by(id=community_id).one()` for the identical "does this id
+    exist" question, and `.one()` raises `sqlalchemy.exc.NoResultFound`
+    instead -- a different exception for the same kind of missing input.
+    `invite_with_chat:130` shares today's `.get()`-then-dereference shape
+    and is pinned by a SEPARATELY NAMED test in this round's Task 4, so that
+    Task 6's fix of both call sites cannot collide on a shared test name.
+
+    THIS TEST ASSERTS TODAY'S ACTUAL, BROKEN BEHAVIOUR -- NOT THE INTENDED
+    ONE -- AND PASSES AGAINST CURRENT CODE. A later task (Task 6) rewrites
+    `:196` to use `.filter_by(id=...).one()` (matching `restore_community`'s
+    own pattern) and must INVERT this test to expect `NoResultFound` in
+    place of `AttributeError` once that fix lands.
+    """
+    s = _seed()
+
+    with web_ctx(app, s.user):
+        with pytest.raises(AttributeError):
+            invite_with_email(999999, 'invitee@example.com', SRC_WEB)
