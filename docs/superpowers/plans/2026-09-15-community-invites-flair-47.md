@@ -353,7 +353,7 @@ Then sweep both functions' callers and check none relies on the old `AttributeEr
 
 - [ ] **Step 6: Commit**
 
-Subject: `fix: raise NoResultFound for a missing community in the invite paths`. Body: that `.get()` returned `None` and the next line dereferenced it; that `restore_community:522` is the sibling form; and that this closes two of D613's three known sites, leaving `delete_community:493` for a later round.
+Subject: `fix: raise NoResultFound for a missing community in the invite paths`. Body: that `.get()` returned `None` and the next line dereferenced it; that `restore_community:522` is the sibling form; and that this closes two of D614's three known sites, leaving `delete_community:493` for a later round. (D613 was cited here originally and is a different finding -- the "every line executes" class; D614, extending D598, is the `.get()`-versus-`.one()` class.)
 
 ---
 
@@ -440,7 +440,7 @@ Register from **D625**; facts from **268**. Derive both and publish the derivati
 
 - [ ] **Step 1: Register**
 
-1. **`invite_with_chat:130` and `invite_with_email:196` — FIXED.** The `.get()`-then-dereference shape; that `restore_community:522` is the sibling form; that this is a **recurrence of D613**, now closed at two of three known sites.
+1. **`invite_with_chat:130` and `invite_with_email:196` — FIXED.** The `.get()`-then-dereference shape; that `restore_community:522` is the sibling form; that this is a **recurrence of D614** (extending D598), now closed at two of three known sites.
 2. **A FOURTH site of the same class, found while scoping:** `app/models.py:4309`, inside `CommunityFlair.get_ap_id()`, does `db.session.query(Community).get(self.community_id)` and dereferences at `:4311`. Registered, not fixed — it is outside this round's target module.
 3. **`get_comm_flair_list:668-679` has no `else`** — an out-of-contract argument leaves `community_id` unbound and `:681` raises `UnboundLocalError`.
 4. **`comm_flair_ap_format` returns `None` from a `-> dict` signature** at `:691` and `:699`.
