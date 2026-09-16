@@ -91,6 +91,89 @@ below now returns the bystander as `.bystander` specifically so a flair can
 be attached to it and excluded, closing this gap for `get_comm_flair_list`
 and handing later tasks in this round a ready-made second community for
 their own cross-community negative controls.
+
+`comm_flair_ap_format` (app/shared/community.py:684-707). THE THREE INPUT
+TYPES: `:685-686` (`int`, via `CommunityFlair.query.get(flair)`), `:687-688`
+(`str`, via `.filter_by(ap_id=flair).first()`), and a bare `CommunityFlair`
+instance, which matches neither `isinstance` check and passes through
+`:685-688` unchanged. THE `:686` DISTINCTION, NOT TO BE FLATTENED: `.get()`
+returning `None` for a missing primary key is handled by `:690-691`'s guard
+below it -- this is NOT the same defect as this round's production fix at
+`:130` and `:196`, where a `.get()` result is dereferenced immediately with
+no intervening guard. The two tests below that pass a non-existent `int`/
+`str` cover `:690-691`'s bare `return` (the signature declares `-> dict`;
+returning `None` is a real mismatch, registered here as a finding and left
+unfixed per this round's production budget) and assert the result IS `None`,
+not merely falsy.
+
+THE `:698-699` UNREACHABILITY PROOF (established by reading, not assumed):
+`:696-699` is
+    if not flair.ap_id:
+        ap_id = flair.get_ap_id()
+        if not ap_id:
+            return
+`get_ap_id()` (app/models.py:4305-4313) is only called here when
+`flair.ap_id` is already falsy (the `:696` guard), so its own early return
+at `:4306-4307` (`if self.ap_id: return self.ap_id`) never fires from this
+call site -- every call reaching `:698` falls through to `:4309-4313`:
+`community = db.session.query(Community).get(self.community_id)`,
+`self.ap_id = community.local_url() + f"/tag/{self.id}"`, `db.session.
+commit()`, `return self.ap_id`. `Community.local_url()` (app/models.py:
+798-802) returns `self.ap_profile_id` when `is_local()` is true and
+`f"{SERVER_URL}/c/{self.ap_id}"` otherwise. Case A, `is_local()` true and
+`ap_profile_id` truthy: `local_url()` returns a non-empty string, string-
+concatenation with `f"/tag/{id}"` at `:4311` is always non-empty, so
+`self.ap_id` is truthy -- `:698` is false. Case B, `is_local()` true and
+`ap_profile_id` is `''` (empty but not `None`): `local_url()` returns `''`,
+and `'' + f"/tag/{id}"` is STILL a non-empty, truthy string (`"/tag/5"`) --
+`:698` is still false. Case C, `is_local()` true and `ap_profile_id` is
+`None`: `local_url()` returns `None`, and `:4311`'s `None + f"/tag/{id}"`
+raises `TypeError` before the assignment completes -- `:698` is never
+reached at all, by a crash, not a falsy return. Case D, `is_local()` false:
+`local_url()` returns `f"{SERVER_URL}/c/{self.ap_id}"`, a non-empty string
+by construction (an `is_local()`-false `CommunityFlair`'s owning community
+has a non-`None` `ap_id`, per `:795-796`'s first disjunct, and `SERVER_URL`
+is a non-empty app config value) -- truthy, `:698` false. EVERY case is
+either a truthy `ap_id` (`:698` false, falls through to `:701-707`) or a
+crash before `:698` runs at all (Case C) -- there is no case in which
+`ap_id` is assigned a falsy value and `:698`'s body at `:699` executes.
+This was checked empirically before being written here: a throwaway test
+seeding a `Community` with `ap_profile_id=None` (Case C) confirmed
+`local_url() is None` and `flair.get_ap_id()` raising `TypeError`, exactly
+as derived above, then was discarded -- it is not part of this file because
+a crash is not evidence a falsy return is reachable, per this round's
+explicit instruction not to accept one as proof either way.
+
+CAUSE CHECK, FACT 75: none of the eight catalogued causes names this shape
+precisely, and none is force-fitted here. `:698`'s clause is a single
+condition on one local variable, not a compound `and` of two conjuncts of
+the SAME expression, so cause 3 (subsumption) does not apply as written --
+that cause's own example is two conjuncts of one boolean expression, and
+this is one condition tested after a separate prior *statement* (`:697`'s
+assignment), not after an earlier conjunct of `:698` itself. Cause 4(b)
+("an invariant established BEFORE the guard runs -- by a caller, or by an
+enclosing guard") is the closest textual neighbor, but its own two named
+mechanisms are a caller passing pre-validated input and an enclosing `if`;
+the invariant here is established by neither -- it is established by the
+return-value contract of the callee invoked on the immediately preceding
+line, which the text does not name as one of the two mechanisms it lists.
+Causes 1, 2 and 5 are about a fixture's inability to populate an excluded
+value or a column's own domain, not a callee's return contract. Cause 6 is
+explicitly "the only cause on this list that is not about a clause" and
+`:698` is a clause, so it is excluded on its own terms. Cause 7 is scoped to
+"an ARM OF A CONDITIONAL EXPRESSION" (a ternary); `:696-699` is a plain
+`if`/`return` statement, not a ternary, so cause 7's scope excludes it even
+though its proof TECHNIQUE (read the callee's statements, show no path
+returns the value that would discriminate) is exactly the technique used
+above. Cause 8 is narrowed by its own text to "a `try`/`except` whose body
+can never run"; there is no `try`/`except` here. Stated plainly, per this
+round's brief allowing exactly this outcome: no catalogued cause fits this
+survivor precisely, so it is recorded here as unreachable by direct proof
+rather than tagged with a cause number that does not, on a text-first
+reading, describe it. Consequently `comm_flair_ap_format` cannot reach
+`missing_lines: []` / `missing_branches: []` by any legitimate test -- line
+`:699` and the `:698`-true arc are asserted below to be the coverage
+ceiling, not a gap left by an incomplete test suite.
 """
 from types import SimpleNamespace
 
@@ -99,7 +182,7 @@ from sqlalchemy.exc import NoResultFound
 
 from app import db
 from app.models import Community, CommunityFlair, CommunityInvitation
-from app.shared.community import create_invite_token, get_comm_flair_list
+from app.shared.community import comm_flair_ap_format, create_invite_token, get_comm_flair_list
 from tests.factories import make_community, make_community_flair, make_instance, make_user
 
 
@@ -358,3 +441,138 @@ def test_get_comm_flair_list_excludes_a_flair_belonging_to_another_community(
     result = get_comm_flair_list(s.community)
 
     assert {f.flair for f in result} == {'wanted'}
+
+
+# `comm_flair_ap_format` (app/shared/community.py:684-707).
+
+
+def test_comm_flair_ap_format_int_arg_with_existing_ap_id_returns_full_dict(
+        app, db_session):
+    """`:685-686`'s true arm: `isinstance(flair, int)` is true, and
+    `CommunityFlair.query.get(flair)` finds the row by primary key.
+
+    `:696`'s FALSE arm: `flair.ap_id` is already set, so `:697-699`'s
+    minting path never runs here -- that arm is covered separately by
+    `test_comm_flair_ap_format_instance_arg_mints_and_persists_ap_id` below.
+
+    Every key `:701-706` writes is asserted by VALUE via one dict equality,
+    not by presence or truthiness, so a mutant dropping any single line (or
+    swapping two right-hand sides, e.g. `backgroundColor`/`textColor`) fails
+    this assertion. `text_color`/`background_color`/`blur_images` are set to
+    distinct, non-default values below specifically so such a swap cannot
+    hide behind two fields that happen to start out equal.
+    """
+    s = _seed()
+    flair = make_community_flair(
+        s.community, name='alpha', ap_id='https://test.piefed.local/c/x/tag/existing')
+    flair.text_color = '#ff0000'
+    flair.background_color = '#00ff00'
+    flair.blur_images = True
+    db.session.commit()
+
+    result = comm_flair_ap_format(flair.id)
+
+    assert result == {
+        'type': 'CommunityPostTag',
+        'id': 'https://test.piefed.local/c/x/tag/existing',
+        'preferredUsername': 'alpha',
+        'textColor': '#ff0000',
+        'backgroundColor': '#00ff00',
+        'blurImages': True,
+    }
+
+
+def test_comm_flair_ap_format_int_arg_missing_id_returns_none(app, db_session):
+    """`:685-686`'s true arm with a primary key matching no row:
+    `CommunityFlair.query.get(flair)` -- SQLAlchemy's legacy `Query.get`,
+    unrelated to the `.get()` sites this round's production fix addresses at
+    `:130`/`:196` (see the module docstring) -- returns `None` quietly, and
+    `:690-691`'s guard catches it. The signature declares `-> dict`;
+    returning bare `None` here is a real mismatch with that annotation,
+    registered as a finding and left unfixed per this round's production
+    budget, not smoothed over by asserting mere falsiness.
+    """
+    _seed()
+
+    result = comm_flair_ap_format(999999)
+
+    assert result is None
+
+
+def test_comm_flair_ap_format_str_arg_returns_full_dict(app, db_session):
+    """`:687-688`'s true arm: `isinstance(flair, str)` is true, and
+    `.filter_by(ap_id=flair).first()` finds the row by its `ap_id` column.
+    """
+    s = _seed()
+    flair = make_community_flair(
+        s.community, name='beta', ap_id='https://test.piefed.local/c/x/tag/beta')
+    flair.text_color = '#111111'
+    flair.background_color = '#222222'
+    flair.blur_images = False
+    db.session.commit()
+
+    result = comm_flair_ap_format('https://test.piefed.local/c/x/tag/beta')
+
+    assert result == {
+        'type': 'CommunityPostTag',
+        'id': 'https://test.piefed.local/c/x/tag/beta',
+        'preferredUsername': 'beta',
+        'textColor': '#111111',
+        'backgroundColor': '#222222',
+        'blurImages': False,
+    }
+
+
+def test_comm_flair_ap_format_str_arg_no_match_returns_none(app, db_session):
+    """`:687-688`'s true arm with an `ap_id` matching no row:
+    `.filter_by(ap_id=flair).first()` returns `None` quietly -- no
+    exception, unlike `get_comm_flair_list`'s `.one()` fallback above -- and
+    `:690-691` returns bare `None`.
+    """
+    _seed()
+
+    result = comm_flair_ap_format('no-such-ap-id')
+
+    assert result is None
+
+
+def test_comm_flair_ap_format_instance_arg_mints_and_persists_ap_id(app, db_session):
+    """The third input type, per the module docstring's `:698-699` proof:
+    a bare `CommunityFlair` instance matches neither `:685`'s nor `:687`'s
+    `isinstance` check, so `flair` passes through `:685-688` unchanged with
+    no query run.
+
+    Also covers `:696`'s TRUE arm: `flair.ap_id` starts `None`, so `:697`'s
+    `flair.get_ap_id()` mints one via `app/models.py:4305-4313`, which
+    assigns `community.local_url() + f"/tag/{self.id}"` and commits --
+    `s.community` is local with a non-`None` `ap_profile_id`
+    (`tests/factories.py:143`), landing in Case A of the module docstring's
+    proof, so the mint always succeeds here and `:698`'s guard is false.
+    `db.session.expire_all()` before the re-query below forces SQLAlchemy to
+    re-read `ap_id` from the database rather than returning the in-memory
+    attribute this test already holds a reference to, so the assertion
+    actually proves the commit at `app/models.py:4312` reached the database,
+    not merely that the Python object was mutated.
+    """
+    s = _seed()
+    flair = make_community_flair(s.community, name='gamma', ap_id=None)
+    flair.text_color = '#333333'
+    flair.background_color = '#444444'
+    flair.blur_images = True
+    db.session.commit()
+    assert flair.ap_id is None
+
+    result = comm_flair_ap_format(flair)
+
+    expected_ap_id = s.community.ap_profile_id + f'/tag/{flair.id}'
+    assert result == {
+        'type': 'CommunityPostTag',
+        'id': expected_ap_id,
+        'preferredUsername': 'gamma',
+        'textColor': '#333333',
+        'backgroundColor': '#444444',
+        'blurImages': True,
+    }
+    db.session.expire_all()
+    persisted = db.session.query(CommunityFlair).filter_by(id=flair.id).one()
+    assert persisted.ap_id == expected_ap_id
