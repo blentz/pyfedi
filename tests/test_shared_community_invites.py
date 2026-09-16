@@ -59,6 +59,18 @@ flairs in an order that is NOT alphabetical ('zebra' before 'apple') so
 that an assertion on the returned order actually exercises `order_by`
 rather than merely reproducing insertion order, which SQLite/Postgres often
 return by default without seeing a rows-happen-to-agree false pass.
+
+FINDING 3, PINNED NOT FIXED: `:668-679` is an `if`/`elif`/`elif` chain with
+no `else`. An argument that is none of `int`, `Community`, or `str` --
+out of contract for the declared signature `Community | int | str`, but
+Python enforces no such thing at runtime -- falls through all three arms
+without `community_id` ever being bound, and `:681`'s `CommunityFlair.query
+.filter_by(community_id=community_id)` then raises `UnboundLocalError`
+reading it. This round's production budget was spent elsewhere, so the test
+below pins today's actual failure (an `UnboundLocalError` naming an internal
+variable, not a `TypeError` naming the broken contract) rather than the
+intended behaviour; a later round's fix should invert it once an `else`
+raises something that names the caller's mistake instead.
 """
 from types import SimpleNamespace
 
@@ -263,3 +275,28 @@ def test_get_comm_flair_list_orders_by_flair_name(app, db_session):
     result = get_comm_flair_list(s.community)
 
     assert [f.flair for f in result] == ['apple', 'zebra']
+
+
+def test_get_comm_flair_list_out_of_contract_arg_raises_UnboundLocalError(app, db_session):
+    """FINDING 3, PINNED NOT FIXED (see module docstring). The signature
+    declares `Community | int | str`, but `:668-673`'s `if`/`elif`/`elif`
+    chain has no final `else`, so passing something else entirely --
+    `None`, chosen here as an unambiguous out-of-contract value no caller
+    should pass -- satisfies none of the three `isinstance` checks.
+    `community_id` is therefore never bound by any of `:669`, `:672`, or
+    `:679`, and `:681`'s `CommunityFlair.query.filter_by(community_id=
+    community_id)` raises `UnboundLocalError` reading a name that was never
+    assigned on this code path.
+
+    This is pinned as an honest description of today's behaviour, not the
+    intended one: the failure names the internal variable `community_id`
+    rather than the contract the caller actually broke (passing a type
+    outside `Community | int | str`), which is exactly why this is
+    registered as a finding rather than silently accepted. A later round
+    that adds an `else` raising a caller-facing error (e.g. `TypeError`)
+    should invert this test rather than leave it pinning `UnboundLocalError`.
+    """
+    _seed()
+
+    with pytest.raises(UnboundLocalError):
+        get_comm_flair_list(None)
