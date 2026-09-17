@@ -117,7 +117,7 @@ from sqlalchemy import event, text
 
 from app import db
 from app.constants import SRC_API, SRC_WEB
-from app.models import Community, File, Language, User
+from app.models import Community, CommunityMember, File, Language, User
 from app.shared.community import edit_community, make_community
 from app.utils import markdown_to_html, piefed_markdown_to_lemmy_markdown
 # `make_community` (tests/factories.py:124) is renamed on import here, per
@@ -1914,3 +1914,396 @@ def test_make_community_guard_verified_none_registered_defect_not_blocked(app, d
     make_community(api_input, SRC_API, bearer(user))
 
     assert Community.query.filter_by(name='defectcommunity').one() is not None
+
+
+# `make_community` (app/shared/community.py:253-290), the last uncovered group
+# in this module: the Community construction, the IntegrityError fallback,
+# membership creation, the discussion_languages/'und' language block, the
+# `edit_community(..., from_scratch=True)` call, the plugin hook, and the
+# return fork. Task 4 owns :214-251, closed with zero missing lines/branches
+# in that range; every test below necessarily runs through :214-251 too
+# (Python does not stop at :251), but asserts nothing about that range beyond
+# what Task 4 already established.
+#
+# BASELINE, MEASURED BEFORE ANY TEST IN THIS SECTION EXISTED (`--cov=app.
+# shared.community` against only the 39 tests above): the only missing lines
+# inside :213-290 were `266, 267, 268` (the `except IntegrityError:` fallback,
+# never reached -- no prior test ever produced a genuine duplicate-key
+# collision) and `273, 274, 275` (the discussion_languages loop body, never
+# reached -- every prior test's discussion_languages was the input builder's
+# own empty-list default). The only missing BRANCHES inside that range were
+# `[272, 273]` (the loop never entered at all), `[274, 272]` and `[274, 275]`
+# (both arms of `if language:`, unreached for the same reason), and
+# `[278, 280]` (`:278`'s FALSE arm -- 'und' already in discussion_languages --
+# unreached because every prior test's discussion_languages was empty, making
+# `undetermined.id not in []` trivially True every time).
+
+
+def test_make_community_construction_sets_ap_fields_and_membership_flags(app, db_session):
+    """`:253-262`'s `Community` construction, `:261`'s FALSE arm ('memes' not
+    in the candidate name -- `low_quality` stays `False`), and `:270`'s
+    `CommunityMember` row: both `is_moderator=True` and `is_owner=True` are
+    asserted, not just that a row exists, so a mutant dropping either keyword
+    (leaving the column's own `default=False`, app/models.py:3514-3515) is
+    caught.
+
+    `ap_profile_id`/`ap_public_url`/`ap_followers_url`/`ap_domain` are
+    compared against independently-built expected strings (not re-derived
+    from the community row itself), and `instance_id`/`subscriptions_count`
+    against their literal `:261` values, so a mutant altering any one of the
+    six construction keywords is caught by its own assertion rather than a
+    single blanket check.
+    """
+    s = _seed()
+    _seed_und_language()
+    user = _keyed_user(s.instance, 'fieldscreator')
+    api_input = _api_input(name='freshfields')
+
+    make_community(api_input, SRC_API, bearer(user))
+
+    community = Community.query.filter_by(name='freshfields').one()
+    server_name = app.config['SERVER_NAME']
+    assert community.ap_profile_id == f'https://{server_name}/c/freshfields'
+    assert community.ap_public_url == f'https://{server_name}/c/freshfields'
+    assert community.ap_followers_url == f'https://{server_name}/c/freshfields/followers'
+    assert community.ap_domain == server_name
+    assert community.instance_id == 1
+    assert community.subscriptions_count == 1
+    assert community.low_quality is False
+    membership = CommunityMember.query.filter_by(user_id=user.id, community_id=community.id).one()
+    assert membership.is_moderator is True
+    assert membership.is_owner is True
+
+
+def test_make_community_low_quality_true_when_name_contains_memes(app, db_session):
+    """`:261`'s TRUE arm: a candidate name containing the substring 'memes'
+    is created with `low_quality=True` -- real behaviour, not an accident of
+    this test's fixture, per the brief. Paired with the sibling test above
+    (a name with no 'memes' substring, `low_quality=False`), a mutant that
+    forced either constant value regardless of the name, or inverted the
+    `in` check, fails exactly one of the two.
+    """
+    s = _seed()
+    _seed_und_language()
+    user = _keyed_user(s.instance, 'memescreator')
+    api_input = _api_input(name='cool_memes_hub')
+
+    make_community(api_input, SRC_API, bearer(user))
+
+    community = Community.query.filter_by(name='cool_memes_hub').one()
+    assert community.low_quality is True
+
+
+def test_make_community_genuine_duplicate_raises_capital_c_message_and_rolls_back(
+        app, db_session, monkeypatch):
+    """`:263-268`'s `try`/`except IntegrityError:` fallback, WITH A GENUINE,
+    UNMOCKED integrity violation -- not `IntegrityError` raised directly by
+    the test.
+
+    REACHABILITY, established by reading the schema before writing this
+    test: `Community.ap_profile_id` (app/models.py:595) carries the ONLY
+    unique constraint this collision can violate
+    (`db.Column(db.String(255), index=True, unique=True)`) -- `name` itself
+    (`:561`) has no `unique=True`. `:249`'s own pre-check queries by that
+    EXACT SAME column (`db.session.query(Community).filter_by(ap_profile_id=
+    ap_profile_id).first()`), so under ordinary, single-threaded execution
+    `:249` always catches a collision before `:265`'s insert is ever
+    attempted -- `:268` is reachable ONLY by a genuine TOCTOU race (a second
+    writer's commit lands between `:249`'s read and `:265`'s write), which a
+    single test process cannot produce by simply calling `make_community`
+    twice in sequence (the first call's own `:249`/`:250` check would catch
+    the second). This is NOT fact 75 cause 8 ("Unreachable handler"): cause
+    8 is proved by reading the callee's raising paths and showing NONE of
+    them can fire for the call site's argument shape; here the callee
+    (Postgres' own unique index) DOES have a raising path for this exact
+    argument shape, and the only obstacle is `:249` running first in the
+    SAME process -- a reachability gap from test-harness single-threading,
+    not a proof that the `except` body can never execute for any input.
+
+    The race is reproduced by leaving `:265`'s INSERT and the database's own
+    unique index on `ap_profile_id` completely real, and blinding ONLY
+    `:249`'s own lookup: `db.session.query` is patched (rebound on the
+    `db.session` instance, per this round's constraint) so that a call whose
+    first positional argument is `Community` returns a stub whose
+    `filter_by(...).first()` always answers `None`, regardless of what the
+    table actually contains -- exactly modelling `:249` reading a snapshot
+    that predates the concurrent writer's commit. Every OTHER `db.session.
+    query(...)` call (there are none elsewhere on this call path) and every
+    `User.query`/`Language.query` call (a different attribute entirely, see
+    `:244`'s own `User.query.filter_by(...)`, unaffected by this patch) pass
+    through unchanged. A real `Community` row with the EXACT `ap_profile_id`
+    the candidate name will produce is inserted first, via the same
+    `make_community_factory` row-builder `_seed()` itself uses, at the
+    default host (`test.piefed.local`), which is `app.config['SERVER_NAME']`
+    in this test config (`.env.test:7`) -- confirmed by this file's own
+    `:250` collision test using the identical assumption. So `:265`'s
+    `db.session.commit()` genuinely violates the real unique index and
+    Postgres genuinely raises `IntegrityError` -- nothing about the
+    exception itself is mocked, only the pre-check that would otherwise
+    have prevented reaching it.
+
+    The message is asserted EXACTLY, case-sensitively: `'Community with
+    that name already exists'`, capital C, at `:268` -- distinct from
+    `:251`'s lowercase-c `'community with that name already exists'`, the
+    pre-emptive check's own message, per this round's disclosure
+    requirement (Task 4's `:250` test already makes the same point from the
+    other side).
+
+    `monkeypatch.undo()` restores `db.session.query` immediately after the
+    call, before the follow-up assertion, so that assertion is provably
+    unaffected by the patch regardless of whatever internal machinery
+    `Community.query`'s own query-property does or does not share with
+    `db.session.query` -- not merely assumed safe because `Community.query`
+    is a different attribute.
+
+    `_seed_und_language()` is deliberately NOT called here: the raise at
+    `:268` happens before execution ever reaches Task 5's own
+    `:270-280` membership/language block, so the module docstring's
+    `_seed_und_language` crash hazard does not apply to this test at all.
+    """
+    s = _seed()
+    user = _keyed_user(s.instance, 'racer')
+    make_community_factory('racecommunity')
+    real_query = db.session.query
+
+    class _AlwaysEmptyCommunityFilter:
+        def filter_by(self, **kwargs):
+            class _Result:
+                def first(self):
+                    return None
+            return _Result()
+
+    def _query_stub(*args, **kwargs):
+        if args and args[0] is Community:
+            return _AlwaysEmptyCommunityFilter()
+        return real_query(*args, **kwargs)
+
+    monkeypatch.setattr(db.session, 'query', _query_stub)
+    api_input = _api_input(name='racecommunity')
+
+    with pytest.raises(Exception) as exc_info:
+        make_community(api_input, SRC_API, bearer(user))
+    monkeypatch.undo()
+
+    assert str(exc_info.value) == 'Community with that name already exists'
+    surviving = Community.query.filter_by(name='racecommunity').one()
+    assert surviving.ap_profile_id == f"https://{app.config['SERVER_NAME']}/c/racecommunity"
+
+
+def test_make_community_discussion_languages_loop_appends_valid_skips_invalid(
+        app, db_session):
+    """`:272-275`'s loop over `discussion_languages`: `:274`'s `if
+    language:` TRUE arm (a valid id resolves via `Language.query.get` and is
+    appended at `:275`) and FALSE arm (a nonexistent id resolves to `None`
+    and is silently skipped) are both exercised in the SAME call -- Task
+    4's tests all passed an empty list, so this loop body was entirely
+    unexercised before this test (see this section's baseline note).
+
+    Mechanism (c), the SAME shape the module docstring warns about for
+    `:277`'s filter: `:273`'s `Language.query.get(language_choice)` is a
+    lookup by a SPECIFIC id, reducible by a mutant to `Language.query.
+    first()` (ignoring `language_choice` entirely) with no negative control
+    if only one `Language` row existed. `decoy`, inserted FIRST with a
+    DIFFERENT id than `english`'s, is that negative control: a
+    `.get()`-to-`.first()` mutant would wrongly resolve BOTH loop iterations
+    to `decoy` regardless of `language_choice`, so `decoy.id` would appear
+    in `community.languages` and `english.id` would not -- this test's
+    assertions (checked by id, not by count) diverge from the correct
+    result in exactly that case.
+    """
+    s = _seed()
+    decoy = Language(code='zz', name='Decoy, must sort before english')
+    db.session.add(decoy)
+    db.session.commit()
+    english = Language(code='en', name='English')
+    db.session.add(english)
+    db.session.commit()
+    _seed_und_language()
+    user = _keyed_user(s.instance, 'languagecreator')
+    nonexistent_id = english.id + 10000
+    assert Language.query.get(nonexistent_id) is None, 'test setup must pick a truly absent id'
+    api_input = _api_input(name='languagecommunity',
+                           discussion_languages=[english.id, nonexistent_id])
+
+    make_community(api_input, SRC_API, bearer(user))
+
+    community = Community.query.filter_by(name='languagecommunity').one()
+    community_language_ids = {language.id for language in community.languages}
+    assert english.id in community_language_ids
+    assert decoy.id not in community_language_ids
+    assert nonexistent_id not in community_language_ids
+
+
+def test_make_community_und_not_already_requested_gets_appended(app, db_session):
+    """`:277-279`'s TRUE arm: `undetermined.id` is NOT already in
+    `discussion_languages` (the input builder's own empty-list default), so
+    `:279` appends it.
+
+    Same mechanism (c) hazard as `:273` above, for `:277`'s own
+    `Language.query.filter(Language.code == 'und').first()`: `decoy`, a
+    `Language` with a DIFFERENT code inserted BEFORE 'und', is the negative
+    control -- a predicate-dropped `.first()` (ignoring the `code == 'und'`
+    filter) would wrongly resolve to `decoy` instead, and this test's
+    code-based assertions (not a bare row count) diverge from the correct
+    result in that case, matching `edit_community`'s identical `:377`
+    test (`test_edit_community_undetermined_language_appended_and_correct_
+    row_selected`) this one mirrors.
+    """
+    s = _seed()
+    decoy = Language(code='xx', name='Decoy, must sort before und')
+    db.session.add(decoy)
+    db.session.commit()
+    _seed_und_language()
+    user = _keyed_user(s.instance, 'undappendcreator')
+    api_input = _api_input(name='undappendcommunity')
+
+    make_community(api_input, SRC_API, bearer(user))
+
+    community = Community.query.filter_by(name='undappendcommunity').one()
+    community_language_codes = {language.code for language in community.languages}
+    assert 'und' in community_language_codes
+    assert 'xx' not in community_language_codes
+
+
+def test_make_community_und_already_requested_skips_duplicate_append(app, db_session):
+    """`:277-279`'s FALSE arm: `undetermined.id` IS already in
+    `discussion_languages`, so `:279`'s second append is skipped.
+
+    SAME ORM-NORMALISATION HAZARD `edit_community`'s identical `:378` test
+    registered (`test_edit_community_und_already_in_discussion_languages_
+    skips_duplicate_append`'s docstring, verified there by hand-applying `if
+    True:` at that line and observing NO `IntegrityError` and an IDENTICAL
+    persisted row count either way): SQLAlchemy's flush-time dependency
+    processing for a plain many-to-many collection de-duplicates an object
+    appended twice BEFORE emitting SQL, so `community.languages`'s final
+    state cannot distinguish a guarded single append from an unguarded
+    double append -- `len(matching) == 1` below is kept only as a sanity
+    check on the FINAL state, not as this test's mutation oracle. The actual
+    oracle is a Python-level count of `.append()` CALLS on the collection,
+    upstream of that normalisation: `sqlalchemy.event`'s `'append'` event on
+    `Community.languages` fires once per `.append()` call. A mutant that
+    drops `:278`'s guard fires it TWICE for `und.id` in this exact scenario
+    (once from `:272-275`'s loop, since 'und' is itself a valid `Language`
+    row and its own id is in `discussion_languages`; once more from the now
+    -unconditional `:279`); the correct code fires it once.
+    """
+    s = _seed()
+    und = _seed_und_language()
+    user = _keyed_user(s.instance, 'undskipcreator')
+    api_input = _api_input(name='undskipcommunity', discussion_languages=[und.id])
+    # The community doesn't exist yet at listener-registration time (it is
+    # created INSIDE the call this listener wraps), so every append on
+    # `Community.languages` is recorded regardless of target and filtered
+    # afterward by object identity -- simpler than pre-computing an id, and
+    # equally precise, since this test creates exactly one community and
+    # relies on the same session's identity map to return that SAME object
+    # from the query below (no expire/close happens in between).
+    append_calls = []
+
+    def _record_append(target, value, initiator):
+        append_calls.append((target, value.id))
+        return value
+
+    event.listen(Community.languages, 'append', _record_append)
+    try:
+        make_community(api_input, SRC_API, bearer(user))
+    finally:
+        event.remove(Community.languages, 'append', _record_append)
+
+    community = Community.query.filter_by(name='undskipcommunity').one()
+    matching = [language for language in community.languages if language.id == und.id]
+    assert len(matching) == 1
+    community_append_calls = [value_id for target, value_id in append_calls if target is community]
+    assert community_append_calls.count(und.id) == 1
+
+
+def test_make_community_calls_edit_community_from_scratch_and_returns_api_tuple(app, db_session):
+    """`:282`'s `community = edit_community(input, community, src, auth,
+    uploaded_icon_file, uploaded_banner_file, from_scratch=True)` -- per the
+    module docstring's oracle check, this is the ONLY path in the whole
+    codebase that reaches `edit_community`'s `from_scratch=True` arm (its
+    other production caller, app/api/alpha/utils/community.py:261, always
+    passes the default `from_scratch=False`).
+
+    `description`/`rules` are the proof this call actually ran and its
+    result was kept: `make_community`'s OWN construction (`:254-262`) never
+    reads either key (RULING 1, this file's module docstring), so if `:282`
+    were deleted or its return value discarded, the persisted community
+    would have `description`/`rules` at their column defaults (`None`), not
+    the values asserted below. `description` is asserted UNCHANGED from the
+    raw input (no `\\r\\n`-normalising transform), matching `edit_community`'s
+    own SRC_API-arm test above (`test_edit_community_api_arm_reads_all_ten_
+    keys_and_authorises_user`) -- this call reaches that same arm, since
+    `make_community`'s own `src` (`SRC_API`) is passed straight through.
+
+    `:287`'s TRUE arm (`src == SRC_API`, `return user.id, community.id`) is
+    asserted directly against the returned tuple -- the web arm's `:290`
+    (`return community.name`) is already asserted by Task 4's `test_make_
+    community_web_arm_strips_leading_c_prefix_and_reads_seven_attributes`
+    and its sibling, so it is not re-tested here.
+
+    AN ORDER TRAP, CAUGHT BY ACTUALLY RUNNING THE MUTATION (see this task's
+    own report): `_seed()` mints its bystander/burn rows in lockstep for
+    both the `User` and `Community` id sequences, so without the extra
+    `make_user` call below, THIS test's own acting user and its own new
+    community land on the SAME numeric id (both the 4th row minted in their
+    respective tables) -- `result == (user.id, community.id)` would then
+    pass identically whether `:288` returned `(user.id, community.id)` or
+    the SWAPPED `(community.id, user.id)`, silently failing to discriminate
+    argument order. `_decoy_user` below burns one extra `User` id first,
+    desynchronising the two sequences so `user.id != community.id` and an
+    order swap is actually observable.
+    """
+    s = _seed()
+    _seed_und_language()
+    _decoy_user = make_user(s.instance, 'editscratchdecoy', local=True)
+    user = _keyed_user(s.instance, 'editscratchcreator')
+    api_input = _api_input(name='editscratchcommunity', description='Custom Desc',
+                           rules='Custom Rules')
+
+    result = make_community(api_input, SRC_API, bearer(user))
+
+    community = Community.query.filter_by(name='editscratchcommunity').one()
+    assert user.id != community.id, 'test setup must desynchronise the two id sequences'
+    assert result == (user.id, community.id)
+    assert community.description == 'Custom Desc'
+    assert community.rules == 'Custom Rules'
+
+
+def test_make_community_fires_new_local_community_plugin_hook(app, db_session, monkeypatch):
+    """`:285`'s `plugins.fire_hook("new_local_community", community)`.
+    `plugins` (`from app import db, cache, plugins`, app/shared/community.py
+    :12) is a module-level name bound into THIS module's globals at import
+    time, so the patch is rebound on `app.shared.community.plugins` itself,
+    never on `app.plugins`, matching this round's constraint and this
+    file's established convention for `process_upload`/`task_selector`/
+    `is_image_url` above.
+
+    The exact positional arguments are asserted, not just the call count: a
+    mutant that passed the wrong hook name, or the community's id/name
+    instead of the object itself, is caught by this tuple comparison. The
+    SAME `community` object `make_community`'s own `:287-290` return fork
+    would use is asserted as the second argument (`is`, not `==`), proving
+    the hook fires with the fully-`edit_community`-processed row from
+    `:282`, not a stale reference from before that call.
+    """
+    s = _seed()
+    _seed_und_language()
+    user = _keyed_user(s.instance, 'hookcreator')
+    api_input = _api_input(name='hookcommunity')
+    calls = []
+
+    class _FakePlugins:
+        def fire_hook(self, *args, **kwargs):
+            calls.append((args, kwargs))
+
+    monkeypatch.setattr('app.shared.community.plugins', _FakePlugins())
+
+    make_community(api_input, SRC_API, bearer(user))
+
+    community = Community.query.filter_by(name='hookcommunity').one()
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args == ('new_local_community', community)
+    assert kwargs == {}
+    assert args[1] is community
