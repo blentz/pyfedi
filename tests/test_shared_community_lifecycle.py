@@ -111,10 +111,15 @@ invites.py`'s `get_comm_flair_list` did.
 """
 from types import SimpleNamespace
 
+import pytest
+from sqlalchemy import text
+
+from app import db
 from app.constants import SRC_API, SRC_WEB
+from app.models import File, Language
 from app.shared.community import edit_community
 from app.utils import markdown_to_html, piefed_markdown_to_lemmy_markdown
-from tests.factories import bearer, make_community, make_instance, make_user, web_ctx
+from tests.factories import bearer, make_community, make_community_member, make_instance, make_user, web_ctx
 
 
 def _burn_a_seed():
@@ -439,3 +444,552 @@ def test_edit_community_web_arm_processes_uploaded_banner_via_process_upload(
     args, kwargs = calls[0]
     assert args == ('FAKE_BANNER_FILE',)
     assert kwargs == {'destination': 'communities'}
+
+
+# `edit_community` (app/shared/community.py:321-346), the permission guard
+# and icon/banner-changed detection -- this round's other task, following on
+# from the source-fork tests above. Task 3 owns :348-391.
+
+
+def _make_site_admin(user):
+    """Give `user` a role named exactly 'Admin'.
+
+    Transcribed from tests/test_shared_community_moderation.py's identical
+    helper (itself transcribed from tests/test_shared_reply_moderation.py):
+    `User.is_admin()` (app/models.py:1259-1265) checks role NAMES, not
+    permissions, so `grant_permission` (tests/factories.py:365) cannot
+    produce a site admin however it is called -- the name must be the
+    literal string 'Admin'.
+    """
+    from app.models import Role, user_role
+    role = Role(name='Admin', weight=0)
+    db.session.add(role)
+    db.session.commit()
+    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.commit()
+    return role
+
+
+def _make_site_staff(user):
+    """Give `user` a role named exactly 'Staff'.
+
+    `User.is_staff()` (app/models.py:1267-1272) checks role names the same
+    way `is_admin()` does. This is the counterpart used to pin `:322`'s
+    inconsistency with its four sibling guards: `delete_community:494`,
+    `restore_community:523`, `add_mod_to_community:549`, and
+    `remove_mod_from_community:617` all call `is_admin_or_staff()`
+    (app/models.py:1274-1275), but `edit_community:322` calls the narrower
+    `is_admin()` alone, so a Staff-only user is refused here where the four
+    siblings would admit them.
+    """
+    from app.models import Role, user_role
+    role = Role(name='Staff', weight=0)
+    db.session.add(role)
+    db.session.commit()
+    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.commit()
+    return role
+
+
+def _seed_und_language():
+    """The 'und' Language row `:377-379` unconditionally requires once
+    `from_scratch=False` reaches it.
+
+    Every test below that gets past `:322`'s guard passes `from_scratch=
+    False` to reach this task's `:321-346` target, and Python does not stop
+    at `:346` -- execution runs on through Task 3's `:371-380` too.
+    `:377`'s `Language.query.filter(Language.code == 'und').first()` returns
+    None on an empty table, and `:378`'s `undetermined.id` then raises
+    AttributeError before any of this task's own assertions can run. The
+    module docstring's oracle check found no prior test file that ever drove
+    `from_scratch=False` through this function, so this seed has no
+    precedent to copy; it exists solely to keep Task 3's territory from
+    crashing this task's tests and makes no claim on that territory beyond
+    that.
+    """
+    und = Language(code='und', name='Undetermined')
+    db.session.add(und)
+    db.session.commit()
+    return und
+
+
+# SUBSUMPTION, VERIFIED AT SOURCE, REGISTERED NOT TESTED -- `:322`'s
+# `community.is_owner(user) or community.is_moderator(user) or
+# user.is_admin()`. `Community.is_owner(user)` (app/models.py:747) checks
+# the `is_owner` COLUMN on a CommunityMember row drawn from
+# `self.moderators()` (:716-722), which selects every non-banned row where
+# `is_owner OR is_moderator` holds. `Community.is_moderator(user)` (:740)
+# then only checks MEMBERSHIP of `user.id` in that same list -- it never
+# reads the `is_moderator` column. So a row with `is_owner=True` is always
+# admitted to `moderators()` by the `OR`, which makes `is_moderator(user)`
+# True for the identical user on the identical call; the CommunityMember
+# primary key (user_id, community_id) rules out a second, differently-
+# shaped row for the same user in the same community that could make the
+# two diverge. `community.is_owner(user)` can therefore never be the reason
+# `:322`'s guard passes, for any input -- proved by reading the two method
+# bodies above, not by any test's failure to kill a mutant that removes it.
+#
+# This is tests/README.md fact 75, cause 3, "Subsumption", identical in
+# shape to `delete_community:494`'s registered instance of the same proof
+# (sub-project 46, tests/test_shared_community_moderation.py:94-150), which
+# also notes: NOT cause 6 (cause 6 opens "the only cause on this list that
+# is not about a clause", and `community.is_owner(user) or` IS a clause --
+# a disjunct in a boolean expression); and that this is the DISJUNCTIVE dual
+# of cause 3's catalogued conjunctive text -- `A or B` where the EARLIER
+# disjunct (`is_owner(user)`) implies the LATER one (`is_moderator(user)`),
+# the mirror image of `A and B` where the LATER conjunct implies the
+# EARLIER one.
+#
+# NO TEST ISOLATES OPERAND ONE ALONE, and none should be written to: doing
+# so would require a CommunityMember row with `is_owner=True` and
+# `is_moderator=False` for the same user in the same community -- a state
+# production cannot reach, per the proof above. Monkeypatching
+# `Community.is_moderator` to fake that shape is rejected for the same
+# reason sub-project 46 rejected it there: it would fabricate a state
+# production cannot reach, a false witness of a different shape than this
+# campaign hunts. A mutant deleting `community.is_owner(user) or` from
+# `:322` is expected to survive every test in this file and should be read
+# against this comment, not treated as an uncovered gap.
+
+
+def test_edit_community_permission_guard_moderator_not_admin_is_admitted(
+        app, db_session, monkeypatch):
+    """`:322`'s SECOND operand alone: `is_moderator=True`, `is_owner=False`,
+    no admin role -- the one operand of the three that is genuinely
+    separable from the other two (see the SUBSUMPTION comment above for why
+    operand one never is, and the admin-alone test below for operand
+    three). The guard passes and execution proceeds past `:323`'s raise.
+
+    `task_selector` is patched on `app.shared.community` (this module's own
+    `from app.shared.tasks import task_selector` rebinds the name into ITS
+    globals at import time, matching this suite's established convention --
+    patching `app.shared.tasks.task_selector` would leave the reference
+    already bound here untouched) so `:382`'s call, reached because
+    `from_scratch=False` runs on through Task 3's territory, doesn't fire
+    the real AP Update body under this test config's eager task execution.
+
+    The return value (`:391`'s `return user.id`, the `from_scratch=False`
+    arm) and the title landing are both asserted, so a mutant that let the
+    guard pass but skipped the field-write block entirely would still be
+    caught.
+    """
+    s = _seed()
+    _seed_und_language()
+    make_community_member(s.user, s.community, is_moderator=True)
+    monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
+    api_input = _api_input(title='Modded Title')
+
+    result = edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+    assert result == s.user.id
+    assert s.community.title == 'Modded Title'
+
+
+def test_edit_community_permission_guard_admin_not_member_is_admitted(
+        app, db_session, monkeypatch):
+    """`:322`'s THIRD operand alone: `s.user` holds no CommunityMember row at
+    all -- `Community.moderators()` (app/models.py:716-722) returns an empty
+    list for it, so `is_owner`/`is_moderator` are both False on their own --
+    and is instead a site admin via `_make_site_admin`, which grants a Role
+    named exactly 'Admin' so `User.is_admin()` returns True.
+    """
+    s = _seed()
+    _seed_und_language()
+    _make_site_admin(s.user)
+    monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
+    api_input = _api_input(title='Admin Title')
+
+    result = edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+    assert result == s.user.id
+    assert s.community.title == 'Admin Title'
+
+
+def test_edit_community_permission_guard_neither_raises_and_leaves_community_untouched(
+        app, db_session):
+    """`:322`'s all-three-False case: no CommunityMember row and no admin
+    role. `:323` raises before any of this task's own target lines
+    (`:325-346`) or Task 3's territory run, so `community.title` must
+    survive unchanged from before the call -- a mutant that raised AFTER
+    mutating the row would still satisfy a raise-only assertion.
+    """
+    s = _seed()
+    original_title = s.community.title
+    api_input = _api_input(title='Should Not Land')
+
+    with pytest.raises(Exception, match='incorrect_login'):
+        edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+    assert s.community.title == original_title
+
+
+def test_edit_community_permission_guard_staff_alone_is_refused_unlike_sibling_guards(
+        app, db_session):
+    """`:322` reads `user.is_admin()`, NOT `is_admin_or_staff()` -- the only
+    guard in this module that uses the narrower form. `delete_community:494`,
+    `restore_community:523`, `add_mod_to_community:549`, and
+    `remove_mod_from_community:617` all use `is_admin_or_staff()`
+    (app/models.py:1274-1275) and would admit a Staff-only user where this
+    site refuses them. REGISTERED AS FOUND, NOT FIXED: this test pins
+    today's actual, inconsistent behaviour -- a staff user with no
+    CommunityMember row and no 'Admin' role is refused here.
+    """
+    s = _seed()
+    _make_site_staff(s.user)
+    original_title = s.community.title
+    api_input = _api_input(title='Should Not Land Either')
+
+    with pytest.raises(Exception, match='incorrect_login'):
+        edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+    assert s.community.title == original_title
+
+
+# `edit_community` (app/shared/community.py:325-333), the icon block.
+#
+# `icon_url_changed` is a local variable with no return-value or row
+# exposure of its own. Every test below observes it through `:348`'s
+# downstream composite `icon_url and (from_scratch or icon_url_changed) and
+# is_image_url(icon_url)`: with `from_scratch=False` and `icon_url` held
+# truthy and IDENTICAL across all four icon-block tests, `is_image_url` is
+# called if and only if `icon_url_changed` is True. `is_image_url` is
+# patched to a call-recording spy that always returns False, which both
+# makes the observation possible and keeps `:348`'s real branch (a new
+# `File` row and `make_image_sizes`, neither this task's territory) from
+# running. `banner_url` is held at the input builder's own falsy default
+# (`None`) throughout so the banner block's own `is_image_url` call
+# (`:354`) never fires and confounds this spy -- the mirror-image banner
+# tests below hold `icon_url` at `None` for the same reason.
+
+
+def test_edit_community_icon_block_no_icon_id_marks_changed_without_delete(
+        app, db_session, monkeypatch):
+    """`:325`'s FALSE arm (`community.icon_id` is falsy -- the factory never
+    sets it) skips straight to `:332`'s TRUE arm, which sets
+    `icon_url_changed = True` without ever reaching `:326`'s inner guard or
+    `:330`'s `delete_from_disk()`. `File.delete_from_disk` is patched with
+    its own call-recording spy (never called on this path, since `:328`'s
+    `File.query.get(community.icon_id)` is only reached from inside `:326`'s
+    TRUE arm) and `community.icon_id` is asserted to remain None: there was
+    nothing to clear.
+    """
+    s = _seed()
+    _seed_und_language()
+    make_community_member(s.user, s.community, is_moderator=True)
+    monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
+    image_url_calls = []
+    monkeypatch.setattr('app.shared.community.is_image_url',
+                        lambda url: image_url_calls.append(url) or False)
+    delete_calls = []
+    monkeypatch.setattr(File, 'delete_from_disk', lambda self, *a, **kw: delete_calls.append(self.id))
+    assert s.community.icon_id is None
+    api_input = _api_input(icon_url='https://icon.example/candidate.png', banner_url=None)
+
+    edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+    assert image_url_calls == ['https://icon.example/candidate.png']
+    assert delete_calls == []
+    assert s.community.icon_id is None
+
+
+def test_edit_community_icon_block_icon_url_matches_source_url_no_change(
+        app, db_session, monkeypatch):
+    """`:325`'s FALSE arm via its second conjunct: `community.icon_id` is
+    truthy but `icon_url == community.icon.source_url`, so the `and`
+    short-circuits false and `:326-331` never run. `:332`'s `not
+    community.icon_id` is then also False (the icon row survives untouched),
+    so `icon_url_changed` stays at its `:319` initial value of False.
+    """
+    s = _seed()
+    _seed_und_language()
+    make_community_member(s.user, s.community, is_moderator=True)
+    monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
+    icon_file = File(source_url='https://icon.example/original.png',
+                     file_path='app/static/media/communities/thumb.png')
+    db.session.add(icon_file)
+    db.session.commit()
+    s.community.icon_id = icon_file.id
+    db.session.commit()
+    image_url_calls = []
+    monkeypatch.setattr('app.shared.community.is_image_url',
+                        lambda url: image_url_calls.append(url) or False)
+    delete_calls = []
+    monkeypatch.setattr(File, 'delete_from_disk', lambda self, *a, **kw: delete_calls.append(self.id))
+    api_input = _api_input(icon_url=icon_file.source_url, banner_url=None)
+
+    edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+    assert image_url_calls == []
+    assert delete_calls == []
+    assert s.community.icon_id == icon_file.id
+
+
+def test_edit_community_icon_block_icon_url_matches_medium_url_no_change(
+        app, db_session, monkeypatch):
+    """`:325`'s TRUE arm (`icon_url != source_url`) but `:326`'s FALSE arm
+    (`icon_url == community.icon.medium_url()`): `:326-331`'s inner block --
+    `icon_url_changed = True`, `delete_from_disk()`,
+    `community.icon_id = None` -- never runs. The expected medium URL is
+    computed by calling the real `File.medium_url()` on the seeded row
+    rather than hand-built, matching this suite's convention of deriving
+    expected values from the production helper rather than guessing its
+    output shape (the sibling `_web_input` test above does the same with
+    `piefed_markdown_to_lemmy_markdown`).
+    """
+    s = _seed()
+    _seed_und_language()
+    make_community_member(s.user, s.community, is_moderator=True)
+    monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
+    icon_file = File(source_url='https://icon.example/original.png',
+                     file_path='app/static/media/communities/thumb.png')
+    db.session.add(icon_file)
+    db.session.commit()
+    s.community.icon_id = icon_file.id
+    db.session.commit()
+    medium_url = icon_file.medium_url()
+    assert medium_url != icon_file.source_url, 'test setup must diverge source_url from medium_url'
+    image_url_calls = []
+    monkeypatch.setattr('app.shared.community.is_image_url',
+                        lambda url: image_url_calls.append(url) or False)
+    delete_calls = []
+    monkeypatch.setattr(File, 'delete_from_disk', lambda self, *a, **kw: delete_calls.append(self.id))
+    api_input = _api_input(icon_url=medium_url, banner_url=None)
+
+    edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+    assert image_url_calls == []
+    assert delete_calls == []
+    assert s.community.icon_id == icon_file.id
+
+
+def test_edit_community_icon_block_icon_url_matches_neither_clears_and_deletes(
+        app, db_session, monkeypatch):
+    """`:325` and `:326` BOTH TRUE: `icon_url_changed = True`,
+    `remove_file.delete_from_disk()` runs on the row `community.icon_id`
+    pointed at, and `community.icon_id` is cleared to None. `is_image_url`
+    is asserted called exactly ONCE (not twice) even though `:332`'s `not
+    community.icon_id` is then also True: `icon_url_changed` is a plain
+    boolean re-set to the same True value there, not re-checked a second
+    time before `:348`'s single downstream read.
+    """
+    s = _seed()
+    _seed_und_language()
+    make_community_member(s.user, s.community, is_moderator=True)
+    monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
+    icon_file = File(source_url='https://icon.example/original.png',
+                     file_path='app/static/media/communities/thumb.png')
+    db.session.add(icon_file)
+    db.session.commit()
+    s.community.icon_id = icon_file.id
+    db.session.commit()
+    image_url_calls = []
+    monkeypatch.setattr('app.shared.community.is_image_url',
+                        lambda url: image_url_calls.append(url) or False)
+    delete_calls = []
+    monkeypatch.setattr(File, 'delete_from_disk', lambda self, *a, **kw: delete_calls.append(self.id))
+    api_input = _api_input(icon_url='https://icon.example/totally-different.png', banner_url=None)
+
+    edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+    assert image_url_calls == ['https://icon.example/totally-different.png']
+    assert delete_calls == [icon_file.id]
+    assert s.community.icon_id is None
+
+
+# `edit_community` (app/shared/community.py:334-344), the banner block --
+# structurally the icon block's mirror, PLUS `cache.delete_memoized(
+# Community.header_image, community)` at both `:341` and `:343`. When
+# `:340` clears `image_id`, `:342` is then also true, so the call fires
+# TWICE for the "matches neither" state below; the icon block has no
+# equivalent cache call in either of ITS arms at all. REGISTERED AS AN
+# ASYMMETRY, NOT FIXED -- this suite's tests never assert on the cache call
+# itself: it is unkillable under tests/conftest.py:68's `CACHE_TYPE =
+# 'NullCache'` (D602, D589). `icon_url` is held at the input builder's own
+# falsy default (`None`) throughout so the icon block's own `is_image_url`
+# call (`:348`) never fires and confounds the spy these tests reuse from
+# the icon-block tests above to observe `banner_url_changed`.
+
+
+def test_edit_community_banner_block_no_image_id_marks_changed_without_delete(
+        app, db_session, monkeypatch):
+    """`:334`'s FALSE arm (`community.image_id` is falsy) skips to `:342`'s
+    TRUE arm, which sets `banner_url_changed = True` without ever reaching
+    `:335`'s inner guard or `:339`'s `delete_from_disk()`.
+    """
+    s = _seed()
+    _seed_und_language()
+    make_community_member(s.user, s.community, is_moderator=True)
+    monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
+    image_url_calls = []
+    monkeypatch.setattr('app.shared.community.is_image_url',
+                        lambda url: image_url_calls.append(url) or False)
+    delete_calls = []
+    monkeypatch.setattr(File, 'delete_from_disk', lambda self, *a, **kw: delete_calls.append(self.id))
+    assert s.community.image_id is None
+    api_input = _api_input(icon_url=None, banner_url='https://banner.example/candidate.png')
+
+    edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+    assert image_url_calls == ['https://banner.example/candidate.png']
+    assert delete_calls == []
+    assert s.community.image_id is None
+
+
+def test_edit_community_banner_block_banner_url_matches_source_url_no_change(
+        app, db_session, monkeypatch):
+    """`:334`'s FALSE arm via its second conjunct: `community.image_id` is
+    truthy but `banner_url == community.image.source_url`, so `:335-340`
+    never run and `:342`'s `not community.image_id` is also False (the
+    banner row survives untouched) -- `banner_url_changed` stays False.
+    """
+    s = _seed()
+    _seed_und_language()
+    make_community_member(s.user, s.community, is_moderator=True)
+    monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
+    banner_file = File(source_url='https://banner.example/original.png',
+                       file_path='app/static/media/communities/banner.png')
+    db.session.add(banner_file)
+    db.session.commit()
+    s.community.image_id = banner_file.id
+    db.session.commit()
+    image_url_calls = []
+    monkeypatch.setattr('app.shared.community.is_image_url',
+                        lambda url: image_url_calls.append(url) or False)
+    delete_calls = []
+    monkeypatch.setattr(File, 'delete_from_disk', lambda self, *a, **kw: delete_calls.append(self.id))
+    api_input = _api_input(icon_url=None, banner_url=banner_file.source_url)
+
+    edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+    assert image_url_calls == []
+    assert delete_calls == []
+    assert s.community.image_id == banner_file.id
+
+
+def test_edit_community_banner_block_banner_url_matches_medium_url_no_change(
+        app, db_session, monkeypatch):
+    """`:334`'s TRUE arm (`banner_url != source_url`) but `:335`'s FALSE arm
+    (`banner_url == community.image.medium_url()`): `:335-340`'s inner
+    block never runs. The expected medium URL is computed by calling the
+    real `File.medium_url()` on the seeded row, matching this suite's
+    convention.
+    """
+    s = _seed()
+    _seed_und_language()
+    make_community_member(s.user, s.community, is_moderator=True)
+    monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
+    banner_file = File(source_url='https://banner.example/original.png',
+                       file_path='app/static/media/communities/banner.png')
+    db.session.add(banner_file)
+    db.session.commit()
+    s.community.image_id = banner_file.id
+    db.session.commit()
+    medium_url = banner_file.medium_url()
+    assert medium_url != banner_file.source_url, 'test setup must diverge source_url from medium_url'
+    image_url_calls = []
+    monkeypatch.setattr('app.shared.community.is_image_url',
+                        lambda url: image_url_calls.append(url) or False)
+    delete_calls = []
+    monkeypatch.setattr(File, 'delete_from_disk', lambda self, *a, **kw: delete_calls.append(self.id))
+    api_input = _api_input(icon_url=None, banner_url=medium_url)
+
+    edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+    assert image_url_calls == []
+    assert delete_calls == []
+    assert s.community.image_id == banner_file.id
+
+
+def test_edit_community_banner_block_banner_url_matches_neither_clears_and_deletes(
+        app, db_session, monkeypatch):
+    """`:334` and `:335` BOTH TRUE: `banner_url_changed = True`,
+    `remove_file.delete_from_disk()` runs, and `community.image_id` clears
+    to None. See this section's header comment for the `cache.
+    delete_memoized` double-call asymmetry this state triggers at `:341`
+    and `:343` -- not asserted here, since it is unkillable under NullCache.
+    """
+    s = _seed()
+    _seed_und_language()
+    make_community_member(s.user, s.community, is_moderator=True)
+    monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
+    banner_file = File(source_url='https://banner.example/original.png',
+                       file_path='app/static/media/communities/banner.png')
+    db.session.add(banner_file)
+    db.session.commit()
+    s.community.image_id = banner_file.id
+    db.session.commit()
+    image_url_calls = []
+    monkeypatch.setattr('app.shared.community.is_image_url',
+                        lambda url: image_url_calls.append(url) or False)
+    delete_calls = []
+    monkeypatch.setattr(File, 'delete_from_disk', lambda self, *a, **kw: delete_calls.append(self.id))
+    api_input = _api_input(icon_url=None, banner_url='https://banner.example/totally-different.png')
+
+    edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+    assert image_url_calls == ['https://banner.example/totally-different.png']
+    assert delete_calls == [banner_file.id]
+    assert s.community.image_id is None
+
+
+# `edit_community` (app/shared/community.py:345-346), the language delete.
+
+
+def test_edit_community_language_delete_scoped_to_community_not_bystander(
+        app, db_session, monkeypatch):
+    """The raw `db.session.execute(text('DELETE FROM "community_language"
+    WHERE community_id = :community_id'), ...)`. Seeded rows: two languages
+    attached to `s.community` (English, French) and one attached to
+    `s.bystander` (English, reused) -- inserted directly into the
+    `community_language` association table with the identical raw-SQL idiom
+    production uses, rather than through `Community.languages.append(...)`,
+    which would route through the ORM's own collection machinery instead of
+    this statement's actual table shape.
+
+    After the call, `s.community`'s two seeded rows must be GONE, and
+    `s.bystander`'s seeded row must SURVIVE -- the second half is what
+    actually kills a mutant dropping the `WHERE community_id =
+    :community_id` predicate, which would otherwise wipe every row in the
+    table (including the bystander's) and still leave this test's first
+    half passing on its own; sub-project 47 hit exactly this mechanism (c)
+    three times, twice in one file.
+
+    `:377-379`'s own append of the 'und' Language re-populates a single row
+    for `s.community` (Task 3's territory, incidentally exercised here
+    since `from_scratch=False` runs on through it) -- this test's own two
+    languages are asserted gone BY ID, not by an empty-table count, so that
+    re-population cannot mask a mutant that only partially applied the
+    predicate.
+    """
+    s = _seed()
+    _seed_und_language()
+    english = Language(code='en', name='English')
+    french = Language(code='fr', name='French')
+    db.session.add_all([english, french])
+    db.session.commit()
+    db.session.execute(text('INSERT INTO "community_language" (community_id, language_id) '
+                            'VALUES (:community_id, :language_id)'),
+                       {'community_id': s.community.id, 'language_id': english.id})
+    db.session.execute(text('INSERT INTO "community_language" (community_id, language_id) '
+                            'VALUES (:community_id, :language_id)'),
+                       {'community_id': s.community.id, 'language_id': french.id})
+    db.session.execute(text('INSERT INTO "community_language" (community_id, language_id) '
+                            'VALUES (:community_id, :language_id)'),
+                       {'community_id': s.bystander.id, 'language_id': english.id})
+    db.session.commit()
+    make_community_member(s.user, s.community, is_moderator=True)
+    monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
+    monkeypatch.setattr('app.shared.community.is_image_url', lambda url: False)
+    api_input = _api_input()
+
+    edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+    remaining = db.session.execute(text(
+        'SELECT community_id, language_id FROM "community_language" '
+        'WHERE community_id IN (:community_id, :bystander_id)'),
+        {'community_id': s.community.id, 'bystander_id': s.bystander.id}).fetchall()
+    remaining_pairs = {(row[0], row[1]) for row in remaining}
+
+    assert (s.community.id, english.id) not in remaining_pairs
+    assert (s.community.id, french.id) not in remaining_pairs
+    assert (s.bystander.id, english.id) in remaining_pairs
