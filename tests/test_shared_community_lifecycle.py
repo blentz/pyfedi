@@ -1116,3 +1116,326 @@ def test_edit_community_language_delete_scoped_to_community_not_bystander(
     assert (s.community.id, english.id) not in remaining_pairs
     assert (s.community.id, french.id) not in remaining_pairs
     assert (s.bystander.id, english.id) in remaining_pairs
+
+
+# `edit_community` (app/shared/community.py:348-391), image creation, field
+# assignment (already fully covered by the source-fork and permission-guard
+# tests above, per this task's own baseline coverage run -- see the task
+# report), the language block, and the return fork. Task 3's territory.
+#
+# NETWORK HAZARD, RESTATED FOR THIS SECTION: every test above kept
+# `icon_url`/`banner_url` falsy specifically to keep `:348`/`:354`'s
+# `is_image_url(...)` call from ever firing (see the module docstring).
+# This section's target is exactly the branch that call sits on, so every
+# test below that gives `icon_url` or `banner_url` a truthy value patches
+# `app.shared.community.is_image_url` BEFORE that value can reach it --
+# rebound on `app.shared.community`, never on `app.utils` where it is
+# defined, for the same import-binding reason as `process_upload`/
+# `task_selector` above (`from app.utils import ... is_image_url ...`,
+# app/shared/community.py:23-25, binds the name into THIS module's globals
+# at import time).
+#
+# BASELINE, MEASURED BEFORE ANY TEST IN THIS SECTION EXISTED (`--cov=app.
+# shared.community` against only the 19 tests above): `edit_community`'s
+# only missing statements were `349-353` (the icon-creation body) and
+# `355-359` (its banner mirror), plus `373-375` (the discussion_languages
+# loop, never exercised with a non-empty list) and the single missing
+# branch `378->380` (the `undetermined.id not in discussion_languages`
+# FALSE arm, never exercised because every prior test's discussion_languages
+# was empty, making the `not in` trivially True every time). Lines `361-369`
+# (the field-assignment block) and `388-391` (the return fork) were ALREADY
+# fully covered, both branches, by the tests above -- restated here so a
+# reader does not have to re-derive it: `test_edit_community_api_arm_reads_
+# all_ten_keys_and_authorises_user` and its web-arm sibling already assert
+# every one of `:361-369`'s eight fields (including `:365`'s
+# `markdown_to_html`-transformed value, not the raw string) under
+# `from_scratch=True`'s `return community` (`:388`'s TRUE arm), and
+# `test_edit_community_permission_guard_moderator_not_admin_is_admitted`
+# (and its admin-alone sibling) already assert `:391`'s `return user.id`
+# under `from_scratch=False`. This section adds no new tests for either of
+# those two ranges: doing so would duplicate assertions this file already
+# makes elsewhere, not close a gap.
+
+
+def test_edit_community_icon_creation_from_scratch_true_creates_file_and_sizes(
+        app, db_session, monkeypatch):
+    """`:348`'s PASSING case via its FIRST disjunct: `icon_url` truthy,
+    `is_image_url` forced True, and `from_scratch=True` alone drives
+    `(from_scratch or icon_url_changed)` True -- `icon_url_changed` stays at
+    its `:319` initial value of False the whole way through, since
+    `from_scratch=True` skips `:321-346` (the only place that sets it)
+    entirely. The sibling test below
+    (`..._icon_creation_via_icon_url_changed_when_not_from_scratch`) proves
+    the SECOND disjunct alone suffices, with `from_scratch=False`; a mutant
+    that dropped either name from the `or` (e.g. requiring both, or keeping
+    only one) fails one of the two tests.
+
+    `make_image_sizes`'s arguments are asserted as a tuple, not just that it
+    was called once: `community.icon_id` (read AFTER the call -- `:352` sets
+    it before `:353` reads it), `40`, `250`, `'communities'`, and
+    `community.low_quality` read dynamically off the row rather than
+    hardcoded `False`. An argument-drop or argument-swap mutant on `:353` is
+    caught by this tuple comparison rather than a bare call-count assertion
+    (sub-project 47's D639, registered for exactly this class of survivor).
+    `banner_url` stays at the input builder's falsy default throughout so
+    `:354`'s independent `is_image_url` call never fires and confounds the
+    spy.
+    """
+    s = _seed()
+    is_image_url_calls = []
+    monkeypatch.setattr('app.shared.community.is_image_url',
+                        lambda url: is_image_url_calls.append(url) or True)
+    make_image_sizes_calls = []
+    monkeypatch.setattr('app.shared.community.make_image_sizes',
+                        lambda *a: make_image_sizes_calls.append(a))
+    icon_url = 'https://icon.example/new-icon.png'
+    api_input = _api_input(icon_url=icon_url, banner_url=None)
+
+    result = edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=True)
+
+    assert result is s.community
+    assert is_image_url_calls == [icon_url]
+    new_file = File.query.filter_by(source_url=icon_url).one()
+    assert s.community.icon_id == new_file.id
+    assert make_image_sizes_calls == [
+        (s.community.icon_id, 40, 250, 'communities', s.community.low_quality),
+    ]
+
+
+def test_edit_community_banner_creation_from_scratch_true_creates_file_and_sizes(
+        app, db_session, monkeypatch):
+    """`:354`'s PASSING case via its first disjunct -- the banner mirror of
+    the icon test above. `icon_url` stays at the input builder's falsy
+    default throughout so `:348`'s independent `is_image_url` call never
+    fires and confounds the spy.
+    """
+    s = _seed()
+    is_image_url_calls = []
+    monkeypatch.setattr('app.shared.community.is_image_url',
+                        lambda url: is_image_url_calls.append(url) or True)
+    make_image_sizes_calls = []
+    monkeypatch.setattr('app.shared.community.make_image_sizes',
+                        lambda *a: make_image_sizes_calls.append(a))
+    banner_url = 'https://banner.example/new-banner.png'
+    api_input = _api_input(icon_url=None, banner_url=banner_url)
+
+    result = edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=True)
+
+    assert result is s.community
+    assert is_image_url_calls == [banner_url]
+    new_file = File.query.filter_by(source_url=banner_url).one()
+    assert s.community.image_id == new_file.id
+    assert make_image_sizes_calls == [
+        (s.community.image_id, 878, 1600, 'communities', s.community.low_quality),
+    ]
+
+
+def test_edit_community_icon_creation_via_icon_url_changed_when_not_from_scratch(
+        app, db_session, monkeypatch):
+    """`:348`'s PASSING case via its SECOND disjunct: `from_scratch=False`,
+    but `icon_url_changed=True` -- set at `:327` by the same mismatch
+    scenario Task 2's `icon_url_block_icon_url_matches_neither_clears_and_
+    deletes` test uses (`icon_url` differs from both `community.icon.
+    source_url` and its `medium_url()`) -- alone drives `(from_scratch or
+    icon_url_changed)` True. Task 2's own test of this scenario forces
+    `is_image_url` False to stay inside Task 2's territory and never reaches
+    `:349-353`; this test forces it True instead, to reach them.
+
+    Paired with the sibling test above, a mutant keeping only one of the
+    disjunction's two names fails exactly one of this pair.
+    """
+    s = _seed()
+    _seed_und_language()
+    make_community_member(s.user, s.community, is_moderator=True)
+    monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
+    old_icon = File(source_url='https://icon.example/original.png',
+                    file_path='app/static/media/communities/thumb.png')
+    db.session.add(old_icon)
+    db.session.commit()
+    s.community.icon_id = old_icon.id
+    db.session.commit()
+    is_image_url_calls = []
+    monkeypatch.setattr('app.shared.community.is_image_url',
+                        lambda url: is_image_url_calls.append(url) or True)
+    make_image_sizes_calls = []
+    monkeypatch.setattr('app.shared.community.make_image_sizes',
+                        lambda *a: make_image_sizes_calls.append(a))
+    new_icon_url = 'https://icon.example/totally-different.png'
+    api_input = _api_input(icon_url=new_icon_url, banner_url=None)
+
+    edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+    assert is_image_url_calls == [new_icon_url]
+    new_file = File.query.filter_by(source_url=new_icon_url).one()
+    assert s.community.icon_id == new_file.id
+    assert s.community.icon_id != old_icon.id
+    assert make_image_sizes_calls == [
+        (s.community.icon_id, 40, 250, 'communities', s.community.low_quality),
+    ]
+
+
+def test_edit_community_banner_creation_via_banner_url_changed_when_not_from_scratch(
+        app, db_session, monkeypatch):
+    """`:354`'s PASSING case via its second disjunct -- the banner mirror of
+    the icon test above.
+    """
+    s = _seed()
+    _seed_und_language()
+    make_community_member(s.user, s.community, is_moderator=True)
+    monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
+    old_banner = File(source_url='https://banner.example/original.png',
+                      file_path='app/static/media/communities/banner.png')
+    db.session.add(old_banner)
+    db.session.commit()
+    s.community.image_id = old_banner.id
+    db.session.commit()
+    is_image_url_calls = []
+    monkeypatch.setattr('app.shared.community.is_image_url',
+                        lambda url: is_image_url_calls.append(url) or True)
+    make_image_sizes_calls = []
+    monkeypatch.setattr('app.shared.community.make_image_sizes',
+                        lambda *a: make_image_sizes_calls.append(a))
+    new_banner_url = 'https://banner.example/totally-different.png'
+    api_input = _api_input(icon_url=None, banner_url=new_banner_url)
+
+    edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+    assert is_image_url_calls == [new_banner_url]
+    new_file = File.query.filter_by(source_url=new_banner_url).one()
+    assert s.community.image_id == new_file.id
+    assert s.community.image_id != old_banner.id
+    assert make_image_sizes_calls == [
+        (s.community.image_id, 878, 1600, 'communities', s.community.low_quality),
+    ]
+
+
+def test_edit_community_language_loop_appends_valid_skips_invalid(
+        app, db_session, monkeypatch):
+    """`:372-375`'s loop over `discussion_languages`: `:374`'s `if
+    language:` TRUE arm (a valid id resolves via `Language.query.get` and is
+    appended at `:375`) and FALSE arm (a nonexistent id resolves to `None`
+    and is silently skipped) are both exercised in the SAME call,
+    `discussion_languages` holding one of each -- a mutant dropping `:374`'s
+    guard would still pass if only the valid-id case were tested (appending
+    `None` would raise on to a relationship append, which is a crash, not a
+    clean assertion failure), and a mutant that dropped the loop entirely
+    would fail this test's `english.id in ...` assertion regardless.
+    """
+    s = _seed()
+    _seed_und_language()
+    make_community_member(s.user, s.community, is_moderator=True)
+    monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
+    monkeypatch.setattr('app.shared.community.is_image_url', lambda url: False)
+    english = Language(code='en', name='English')
+    db.session.add(english)
+    db.session.commit()
+    nonexistent_id = english.id + 10000
+    assert Language.query.get(nonexistent_id) is None, 'test setup must pick a truly absent id'
+    api_input = _api_input(discussion_languages=[english.id, nonexistent_id])
+
+    edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+    community_language_ids = {language.id for language in s.community.languages}
+    assert english.id in community_language_ids
+    assert nonexistent_id not in community_language_ids
+
+
+def test_edit_community_und_already_in_discussion_languages_skips_duplicate_append(
+        app, db_session, monkeypatch):
+    """`:378`'s FALSE arm: `undetermined.id` is already IN
+    `discussion_languages` (appended once already by `:372-375`'s loop,
+    since 'und' is itself a valid `Language` row), so `:379`'s second append
+    is skipped. This task's own baseline coverage run (before any test in
+    this section existed) reported `378->380` as the one missing BRANCH
+    inside `edit_community` -- every test above this section leaves
+    `discussion_languages` empty, so `undetermined.id not in []` is always
+    True and the FALSE arm this test isolates had never run.
+
+    A mutant that dropped the `if` and always appended would attempt to
+    insert the SAME `(community_id, language_id)` row into
+    `community_language` twice; that table's composite primary key
+    (app/models.py:334-338) makes the second insert an `IntegrityError` in
+    production, which is a crash, not the clean `AssertionError` this
+    round's hand-applied mutants must produce -- see the report's mutation-
+    verification section for a mutant actually applied by hand and the kind
+    of failure it produces here.
+    """
+    s = _seed()
+    und = _seed_und_language()
+    make_community_member(s.user, s.community, is_moderator=True)
+    monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
+    monkeypatch.setattr('app.shared.community.is_image_url', lambda url: False)
+    api_input = _api_input(discussion_languages=[und.id])
+
+    edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+    matching = [language for language in s.community.languages if language.id == und.id]
+    assert len(matching) == 1
+
+
+def test_edit_community_task_selector_called_with_real_ids_not_literal(
+        app, db_session, monkeypatch):
+    """`:382`'s `task_selector('edit_community', user_id=user.id,
+    community_id=community.id)`: arguments recorded and asserted, including
+    that `community_id` is `s.community.id` and NOT a literal `1` --
+    `_seed`'s bystander community consumes id 1 first (see the module
+    docstring's id-1 trap note), so `s.community.id != 1` here, and a mutant
+    hardcoding `community_id=1` at `:382` is caught by the tuple comparison
+    below where a bare call-count assertion would miss it.
+    """
+    s = _seed()
+    _seed_und_language()
+    make_community_member(s.user, s.community, is_moderator=True)
+    monkeypatch.setattr('app.shared.community.is_image_url', lambda url: False)
+    calls = []
+    monkeypatch.setattr('app.shared.community.task_selector',
+                        lambda *a, **kw: calls.append((a, kw)))
+    api_input = _api_input()
+
+    edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+    assert s.community.id != 1
+    assert calls == [(('edit_community',), {'user_id': s.user.id, 'community_id': s.community.id})]
+
+
+def test_edit_community_undetermined_language_missing_raises_attributeerror_registered_defect(
+        app, db_session, monkeypatch):
+    """REGISTERED, NOT FIXED: `:378`'s `undetermined.id` dereferences
+    `:377`'s `Language.query.filter(Language.code == 'und').first()` result
+    UNCONDITIONALLY -- if that lookup returns `None`, this raises
+    `AttributeError: 'NoneType' object has no attribute 'id'`. Latent in
+    production because `app/cli.py:181` seeds the 'und' row once at
+    instance setup; this test does NOT delete that seed (every sibling test
+    in this file shares `_seed_und_language` and deleting the row for real
+    would break them within the same session) and does NOT even call
+    `_seed_und_language` itself, so no 'und' row exists in this test's own
+    database at all -- reflecting the genuinely-missing-row state directly
+    rather than needing to fake it.
+
+    `Language.query` is replaced on the class (matching Task 2's `File.
+    query` stand-in technique, not a rebound `from ... import` name) with an
+    object whose `.get` still delegates to the real query object (so
+    `:373`'s loop, which runs first in the same call, is unaffected) and
+    whose `.filter(...).first()` always returns `None`, so this test proves
+    the crash from the row's absence specifically, not merely from an
+    unpatched attribute error somewhere else in the call.
+    """
+    s = _seed()
+    make_community_member(s.user, s.community, is_moderator=True)
+    real_query = Language.query
+
+    class _NoUndeterminedQuery:
+        def get(self, ident):
+            return real_query.get(ident)
+
+        def filter(self, *a, **kw):
+            class _EmptyResult:
+                def first(self):
+                    return None
+            return _EmptyResult()
+
+    monkeypatch.setattr(Language, 'query', _NoUndeterminedQuery())
+    api_input = _api_input()
+
+    with pytest.raises(AttributeError):
+        edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
