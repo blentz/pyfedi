@@ -131,3 +131,61 @@ def test_announce_add_remove_honours_feed_auto_follow_for_local_members(app, db_
 
     subscribed = {c.args[1] for c in subscribe.call_args_list}
     assert subscribed == {optin.id}
+
+
+def test_feed_add_community_route_lets_any_user_act_as_another(app, db_session):
+    """PIN of a live authorization defect. INVERTED in Step 5 of this task.
+
+    app/feed/routes.py:347 guards with
+    `if Feed.query.get(feed_id).user_id != user_id: abort(404)`.
+
+    That compares the CALLER-SUPPLIED user_id against the feed's owner. It never
+    compares either value against current_user.id, and @login_required
+    establishes only that someone is signed in. Supplying the victim's id
+    together with the victim's own feed id satisfies the guard.
+
+    do_subscribe (app/community/routes.py:828) acts on the user_id it is given
+    and does not re-validate it, so the victim is subscribed to a community the
+    attacker chose. The route is a GET, so it is also reachable by CSRF.
+    """
+    from app.feed.routes import feed_add_community
+
+    s = _seed()
+    attacker = make_user(s.instance, 'attacker', local=True)
+    db.session.commit()
+    qs = (f'user_id={s.owner.id}&new_feed_id={s.feed.id}'
+          f'&current_feed_id=0&community_id={s.community.id}')
+
+    with web_ctx(app, attacker, query_string=qs):
+        with patch('app.community.routes.do_subscribe') as subscribe:
+            feed_add_community()
+
+    assert subscribe.call_count == 1
+    assert subscribe.call_args.args[1] == s.owner.id
+    assert s.owner.id != attacker.id
+
+
+def test_feed_add_community_route_deletes_feed_items_from_feeds_it_does_not_own(app, db_session):
+    """PIN of the same defect's second half. INVERTED in Step 5.
+
+    current_feed_id is never ownership-checked at all. _feed_add_community:390-392
+    looks up a FeedItem by (current_feed_id, community_id) -- both caller-supplied
+    -- and deletes it, then :396-399 decrements that feed's num_communities.
+    """
+    from app.feed.routes import feed_add_community
+
+    s = _seed()
+    attacker = make_user(s.instance, 'attacker2', local=True)
+    victim_item = make_feed_item(s.bystander_feed, s.community)
+    s.bystander_feed.num_communities = 1
+    db.session.commit()
+    assert s.bystander_feed.user_id != attacker.id
+    qs = (f'user_id={s.owner.id}&new_feed_id={s.feed.id}'
+          f'&current_feed_id={s.bystander_feed.id}&community_id={s.community.id}')
+
+    with web_ctx(app, attacker, query_string=qs):
+        with patch('app.community.routes.do_subscribe'):
+            feed_add_community()
+
+    assert db.session.get(FeedItem, victim_item.id) is None
+    assert s.bystander_feed.num_communities == 0
