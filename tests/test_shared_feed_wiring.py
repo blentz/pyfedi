@@ -340,26 +340,42 @@ def test_announce_add_remove_skips_the_feed_owner(app, db_session):
     the comparison at :549 is never equal and this branch would be
     unreachable, so the assignment is load-bearing rather than tidiness.
 
-    A second, non-owner remote member is the positive control: the send that
-    does happen proves the loop ran and the skip was selective.
-
-    CORRECTION: as with the test above, instance.inbox must be set for the
-    non-owner member's send to actually fire through the real task session.
+    FIX (round 1 of 5, Major): the prior version of this test asserted only
+    send.call_count == 1. Both members are remote, so exactly one send
+    happens whether the owner is skipped (correct) or the owner is sent to
+    and the non-owner is skipped instead (the :549 `==`-to-`!=` mutant) --
+    a counting oracle where an identity oracle is required, verified by hand
+    (see task-4-report.md's mutant transcript). The owner and the non-owner
+    are now placed on two DIFFERENT instances with two different inboxes, so
+    send_post_request's first argument (instance.inbox, :561) discloses WHICH
+    member's Instance row the surviving branch actually reached. Asserting
+    that argument equals the non-owner's inbox -- not merely that a send
+    happened -- is what a passing owner-check requires and a failing one
+    cannot produce, because under the mutant the call carries the owner's
+    instance's inbox instead.
     """
     s = _seed()
+    owner_instance = s.instance
+    owner_instance.inbox = 'https://ownerinstance.example/inbox'
     s.owner.ap_id = 'feedowner@remote.example'
-    other = make_user(s.instance, 'otherremote', local=False)
-    s.instance.inbox = 'https://remote.example/inbox'
+
+    other_instance = make_instance('otherinstance.example')
+    other_instance.inbox = 'https://otherinstance.example/inbox'
+    other = make_user(other_instance, 'otherremote', local=False)
     db.session.commit()
+
     make_feed_member(s.owner, s.feed)
     make_feed_member(other, s.feed)
     assert s.feed.user_id == s.owner.id
+    assert owner_instance.id != other_instance.id
+    assert owner_instance.inbox != other_instance.inbox
 
     with patch('app.shared.feed.send_post_request') as send:
         with patch('app.shared.feed.instance_banned', return_value=False):
             announce_feed_add_remove_to_subscribers('Add', s.feed.id, s.community.id)
 
     assert send.call_count == 1
+    assert send.call_args.args[0] == other_instance.inbox
 
 
 @pytest.mark.parametrize('inbox, online, banned, expect_send', [
