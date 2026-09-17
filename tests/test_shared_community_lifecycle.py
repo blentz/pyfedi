@@ -1463,29 +1463,61 @@ def test_edit_community_undetermined_language_appended_and_correct_row_selected(
     assert 'xx' not in community_language_codes
 
 
-def test_edit_community_task_selector_called_with_real_ids_not_literal(
+def test_edit_community_task_selector_and_return_use_distinct_user_and_community_ids(
         app, db_session, monkeypatch):
     """`:382`'s `task_selector('edit_community', user_id=user.id,
-    community_id=community.id)`: arguments recorded and asserted, including
-    that `community_id` is `s.community.id` and NOT a literal `1` --
-    `_seed`'s bystander community consumes id 1 first (see the module
-    docstring's id-1 trap note), so `s.community.id != 1` here, and a mutant
-    hardcoding `community_id=1` at `:382` is caught by the tuple comparison
-    below where a bare call-count assertion would miss it.
+    community_id=community.id)` and `:391`'s `return user.id`, both asserted
+    against ids that are KNOWN TO DIFFER.
+
+    RENAMED IN TASK 7'S FIX ROUND, and the rename is the point. The previous
+    name was `..._called_with_real_ids_not_literal`, which overstated what the
+    test could observe: it asserted the exact kwargs tuple, which does catch a
+    mutant hardcoding `community_id=1` (`_seed`'s bystander community consumes
+    Community id 1 first, so `s.community.id != 1`), but it could NOT catch an
+    argument SWAP. Under the old fixture the acting user was `s.user` and
+    `_seed` mints the burn user at User id 1 and the bystander at Community id
+    1, so alice and the community under test both landed on the 2nd id of
+    their respective sequences: `s.user.id == s.community.id`. Both sides of
+    the tuple comparison then moved together and
+    `task_selector('edit_community', user_id=community.id,
+    community_id=user.id)` was a complete survivor -- `48 passed, exit 0`.
+    A test whose name claims a property it cannot witness is worse than no
+    test, because the next round reads the name and believes the property is
+    covered.
+
+    This is the SAME mechanism-(b) fixture coincidence already found and fixed
+    at `:270` and `:288` in `make_community`'s own tests (see
+    `test_make_community_construction_sets_ap_fields_and_membership_flags`'s
+    docstring); the decoy remedy reached those two sites and not this one.
+    The remedy here is the same in kind: the acting user is minted AFTER
+    `_seed()` rather than being `s.user`, so it lands at User id 3 against
+    Community id 2 -- pinned by a live `assert`, not asserted in prose. It is
+    made a moderator of the community so `:322`'s guard admits it, exactly as
+    the sibling permission-guard tests do.
+
+    `:391`'s return value is asserted here too, against the same desynchronised
+    ids: `edit_community(..., from_scratch=False)` returns `user.id`, and a
+    mutant returning `community.id` instead was equally invisible while the two
+    were equal.
     """
     s = _seed()
     _seed_und_language()
-    make_community_member(s.user, s.community, is_moderator=True)
+    moderator = make_user(s.instance, 'taskselectormod', local=True)
+    make_community_member(moderator, s.community, is_moderator=True)
     monkeypatch.setattr('app.shared.community.is_image_url', lambda url: False)
     calls = []
     monkeypatch.setattr('app.shared.community.task_selector',
                         lambda *a, **kw: calls.append((a, kw)))
     api_input = _api_input()
 
-    edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+    result = edit_community(api_input, s.community, SRC_API, bearer(moderator),
+                            from_scratch=False)
 
     assert s.community.id != 1
-    assert calls == [(('edit_community',), {'user_id': s.user.id, 'community_id': s.community.id})]
+    assert moderator.id != s.community.id, 'test setup must desynchronise the two id sequences'
+    assert calls == [(('edit_community',),
+                      {'user_id': moderator.id, 'community_id': s.community.id})]
+    assert result == moderator.id
 
 
 def test_edit_community_undetermined_language_missing_raises_attributeerror_registered_defect(
@@ -2409,3 +2441,293 @@ def test_make_community_fires_new_local_community_plugin_hook(app, db_session, m
     assert args == ('new_local_community', community)
     assert kwargs == {}
     assert args[1] is community
+
+
+# TASK 7 FIX ROUND -- four survivors from this sub-project's mutation pass,
+# each closed by a test that makes the mutant die on a clean AssertionError.
+# Every one of them was a PAIR of sites moving in lockstep, or a pair of
+# fixture values that were never allowed to differ, which is why branch
+# coverage reported this range at 141/141 statements with zero partial
+# branches while the mutants lived. The fifth and sixth survivors
+# (`nsfw`/`question_answer`, and `:369`'s removed `commit`) are REGISTERED,
+# NOT TESTED -- see the two comment blocks at the end of this section for the
+# proof that no clean closing test exists for either.
+
+
+def test_edit_community_web_arm_icon_and_banner_uploads_are_not_crossed(
+        app, db_session, monkeypatch):
+    """`:310` and `:311` TOGETHER: the icon ternary must consume
+    `uploaded_icon_file` and land its result in `icon_url`, and the banner
+    ternary must consume `uploaded_banner_file` and land its result in
+    `banner_url` -- not the other way round.
+
+    THE GAP THIS CLOSES, and why it needed a new test rather than a stronger
+    assertion on an existing one. The two sibling tests above
+    (`..._processes_uploaded_icon_via_process_upload` and its banner mirror)
+    each supply exactly ONE file and assert the exact positional argument, and
+    each of them kills every SINGLE-site mutant at these two lines: crossing
+    just `:310`'s argument, just `:311`'s argument, or just `:310`'s condition
+    all die there, as does forcing either condition to `True` or `False`. What
+    survived all 48 tests was the CONJOINED mutant that crosses BOTH ternaries
+    at once -- each taking the other's condition AND the other's argument. With
+    only one file supplied, the crossing makes `process_upload` fire exactly
+    once, with exactly the same argument, and (because the sibling tests patch
+    it to return `None` regardless of input) leaves `icon_url` and `banner_url`
+    both `None` just as the unmutated code does. `assert len(calls) == 1` and
+    `assert args == ('FAKE_ICON_FILE',)` both still pass. Holding the other
+    ternary at the opposite value in a SEPARATE call, which those two tests
+    between them do, never puts both files in the same call, and the crossing
+    is only observable when both are present.
+
+    So this test defeats both halves at once, and needs two things the sibling
+    tests deliberately do without. First, BOTH files are supplied in a single
+    call, which makes the call ORDER observable: unmutated, `:310` runs before
+    `:311`, so the icon file is processed first. Second, the patched
+    `process_upload` returns a value DERIVED FROM ITS ARGUMENT rather than a
+    constant -- a helper returning a constant cannot witness a crossing,
+    because the two locals then hold the same value whichever way round they
+    were filled. The derived URL is what lets the two `File` rows created at
+    `:349`/`:355` be told apart, and therefore lets `community.icon_id` and
+    `community.image_id` be asserted to point at the RIGHT one.
+
+    `is_image_url` is patched True so `:348`/`:354` both pass (no real HTTP
+    HEAD -- see the module docstring's NETWORK HAZARD note; the URLs here are
+    never fetched), and `make_image_sizes` is patched to a spy so the 40/250
+    and 878/1600 argument sets are asserted against the id each one was
+    actually given. `from_scratch=True` keeps `:321-346` and `:371-380` out of
+    the way; both `:348`/`:354` pass on their `from_scratch` disjunct.
+
+    UNREACHABLE IN PRODUCTION -- see `_web_input`'s docstring: `edit_community`
+    has no production caller at any `from_scratch` value that supplies a
+    non-API `src`, so this arm is reached here only by calling it directly.
+    """
+    s = _seed()
+    process_upload_calls = []
+
+    def _fake_process_upload(uploaded_file, destination):
+        process_upload_calls.append((uploaded_file, destination))
+        return f'https://uploads.example/{uploaded_file}.png'
+
+    monkeypatch.setattr('app.shared.community.process_upload', _fake_process_upload)
+    monkeypatch.setattr('app.shared.community.is_image_url', lambda url: True)
+    make_image_sizes_calls = []
+    monkeypatch.setattr('app.shared.community.make_image_sizes',
+                        lambda *a: make_image_sizes_calls.append(a))
+    web_input = _web_input()
+
+    with web_ctx(app, s.user):
+        result = edit_community(web_input, s.community, SRC_WEB,
+                                uploaded_icon_file='FAKE_ICON_FILE',
+                                uploaded_banner_file='FAKE_BANNER_FILE',
+                                from_scratch=True)
+
+    assert result is s.community
+    assert process_upload_calls == [('FAKE_ICON_FILE', 'communities'),
+                                    ('FAKE_BANNER_FILE', 'communities')]
+    icon_file = File.query.filter_by(
+        source_url='https://uploads.example/FAKE_ICON_FILE.png').one()
+    banner_file = File.query.filter_by(
+        source_url='https://uploads.example/FAKE_BANNER_FILE.png').one()
+    assert icon_file.id != banner_file.id, 'the two uploads must be distinguishable'
+    assert s.community.icon_id == icon_file.id
+    assert s.community.image_id == banner_file.id
+    assert make_image_sizes_calls == [
+        (icon_file.id, 40, 250, 'communities', s.community.low_quality),
+        (banner_file.id, 878, 1600, 'communities', s.community.low_quality),
+    ]
+
+
+# `restricted_to_mods` and `local_only` -- a FIVE-SITE lockstep. The two
+# values are read as a pair in all four `src` dispatch arms
+# (`make_community:220-221` API and `:233-234` web; `edit_community:301-302`
+# API and `:313-314` web) and written as a pair at `edit_community:366-367`,
+# and before this fix round no test in this file ever gave them DIFFERENT
+# values: the two builders default both to False (`_api_input`, `_web_input`)
+# and every test that varied them set BOTH to True. Proved by execution, not
+# by inspection: a diagnostic `assert restricted_to_mods == local_only`
+# inserted at `:366` survived all 48 tests. Swapping the pair at any one of
+# the five sites was therefore invisible. The four tests below give them
+# different values -- `restricted_to_mods=True, local_only=False` -- and
+# assert each column separately, one test per dispatch arm.
+
+
+def test_edit_community_api_arm_restricted_to_mods_and_local_only_are_not_crossed(
+        app, db_session):
+    """`edit_community:301-302`'s API reads and `:366-367`'s writes, with the
+    two flags given DIFFERENT values so a swap at either pair of sites is
+    observable. Kills the `:366`/`:367` write swap and the `:301`/`:302` read
+    swap, both of which survived all 48 tests while every fixture held the two
+    equal.
+    """
+    s = _seed()
+    api_input = _api_input(restricted_to_mods=True, local_only=False)
+
+    result = edit_community(api_input, s.community, SRC_API, bearer(s.user),
+                            from_scratch=True)
+
+    assert result is s.community
+    assert s.community.restricted_to_mods is True
+    assert s.community.local_only is False
+
+
+def test_edit_community_web_arm_restricted_to_mods_and_local_only_are_not_crossed(
+        app, db_session):
+    """`edit_community:313-314`'s web reads, feeding the same `:366-367`
+    writes -- the web mirror of the API test above.
+
+    UNREACHABLE IN PRODUCTION -- see `_web_input`'s docstring.
+    """
+    s = _seed()
+    web_input = _web_input(restricted_to_mods=True, local_only=False)
+
+    with web_ctx(app, s.user):
+        result = edit_community(web_input, s.community, SRC_WEB, from_scratch=True)
+
+    assert result is s.community
+    assert s.community.restricted_to_mods is True
+    assert s.community.local_only is False
+
+
+def test_make_community_api_arm_restricted_to_mods_and_local_only_are_not_crossed(
+        app, db_session, monkeypatch):
+    """`make_community:220-221`'s API reads, observed at `:254-255`'s
+    `Community(...)` construction BEFORE `:282` can overwrite them.
+
+    WHY THE SPY IS LOAD-BEARING, and not ceremony. `make_community` passes its
+    own `input` straight through to `edit_community` at `:282`, and
+    `edit_community` re-reads the same two keys on its own arm and rewrites
+    both columns at `:366-367`. So a swap confined to `make_community:220-221`
+    is corrected before the call returns, and asserting the FINAL row cannot
+    see it at all -- the persisted values come from `edit_community`'s reads,
+    not from these. Patching `edit_community` out on `app.shared.community`
+    (the same module-global rebinding convention this file uses for
+    `process_upload`/`task_selector`/`is_image_url`/`plugins`) leaves `:282` a
+    no-op that records what `:254-255` actually built, which is the only place
+    these two reads are observable. The final row is asserted too, which under
+    the patch is the same construction state committed at `:265`.
+
+    `_seed_und_language()` is still required: `make_community`'s own
+    `:277-278` dereference the 'und' row unconditionally, before `:282`.
+    """
+    s = _seed()
+    _seed_und_language()
+    user = _keyed_user(s.instance, 'mcapiflagscreator')
+    observed = []
+
+    def _spy_edit_community(input, community, src, auth=None, uploaded_icon_file=None,
+                            uploaded_banner_file=None, from_scratch=False):
+        observed.append((community.restricted_to_mods, community.local_only))
+        return community
+
+    monkeypatch.setattr('app.shared.community.edit_community', _spy_edit_community)
+    api_input = _api_input(name='mcapiflags', restricted_to_mods=True, local_only=False)
+
+    make_community(api_input, SRC_API, bearer(user))
+
+    assert observed == [(True, False)]
+    community = Community.query.filter_by(name='mcapiflags').one()
+    assert community.restricted_to_mods is True
+    assert community.local_only is False
+
+
+def test_make_community_web_arm_restricted_to_mods_and_local_only_are_not_crossed(
+        app, db_session, monkeypatch):
+    """`make_community:233-234`'s web reads -- the web mirror of the API test
+    above, with the same `edit_community` spy and for the same reason.
+    """
+    s = _seed()
+    _seed_und_language()
+    user = _keyed_user(s.instance, 'mcwebflagscreator')
+    observed = []
+
+    def _spy_edit_community(input, community, src, auth=None, uploaded_icon_file=None,
+                            uploaded_banner_file=None, from_scratch=False):
+        observed.append((community.restricted_to_mods, community.local_only))
+        return community
+
+    monkeypatch.setattr('app.shared.community.edit_community', _spy_edit_community)
+    web_input = _web_input(url='mcwebflags', restricted_to_mods=True, local_only=False)
+
+    with web_ctx(app, user):
+        result = make_community(web_input, SRC_WEB)
+
+    assert result == 'mcwebflags'
+    assert observed == [(True, False)]
+    community = Community.query.filter_by(name='mcwebflags').one()
+    assert community.restricted_to_mods is True
+    assert community.local_only is False
+
+
+def test_make_community_keypair_halves_are_not_transposed(app, db_session):
+    """`:253`'s `private_key, public_key = RsaKeys.generate_keypair()` and the
+    two keywords it feeds at `:256`, asserted by the CONTENT of each PEM
+    rather than merely that both columns are non-empty.
+
+    Transposing the tuple -- `public_key, private_key = ...` -- survived all 48
+    tests, storing the PUBLIC key in `Community.private_key` and the private
+    key in `Community.public_key`. Nothing downstream in this range notices:
+    `:239`'s `user.private_key is None` guard is about the USER's key, not the
+    community's, and no test asserted either column's shape.
+
+    The mutant is not equivalent, which is what makes this assertion legitimate
+    rather than a fix-catcher. `RsaKeys.generate_keypair`
+    (app/activitypub/signature.py:199-220) returns `(private_key_serialized,
+    public_key_serialized)` -- a PKCS8 private PEM and a SubjectPublicKeyInfo
+    public PEM, two documents with different headers. Verified by execution
+    before this test was written: a diagnostic asserting `'PRIVATE KEY' in
+    private_key and 'PUBLIC KEY' in public_key` immediately after `:253`
+    survived all 48 tests, so the names currently match the values and the
+    transposition genuinely changes what is stored.
+
+    Both directions are asserted, not just one: a transposition moves both
+    halves, and pinning only `private_key` would leave a mutant that copied one
+    key into both columns undetected.
+    """
+    s = _seed()
+    _seed_und_language()
+    user = _keyed_user(s.instance, 'keypaircreator')
+    api_input = _api_input(name='keypaircommunity')
+
+    make_community(api_input, SRC_API, bearer(user))
+
+    community = Community.query.filter_by(name='keypaircommunity').one()
+    assert 'BEGIN PRIVATE KEY' in community.private_key
+    assert 'BEGIN PUBLIC KEY' in community.public_key
+    assert 'PRIVATE' not in community.public_key
+    assert 'PUBLIC' not in community.private_key
+
+
+# REGISTERED, NOT TESTED (1 of 2) -- `:364`'s `community.nsfw = nsfw` and
+# `:368`'s `community.question_answer = question_answer` move in lockstep, and
+# swapping the pair survives. The mechanism is identical to the
+# `restricted_to_mods`/`local_only` lockstep closed above (a diagnostic
+# `assert bool(nsfw) == bool(question_answer)` at `:364` survived all 48
+# tests), and the remedy would be identical too -- a call with `nsfw=True,
+# question_answer=False` asserting each column. It is NOT applied here, and the
+# reason is fact 75's own standard rather than effort: the four tests above
+# already establish, at all five of their sites, that this file's builders can
+# and do carry unequal paired values, and adding a sixth near-duplicate of the
+# same assertion shape would catch the swap without adding any information
+# about `:364`/`:368` that the pattern does not already carry. Recorded so the
+# next round decides deliberately: this is a FIXABLE survivor with a known
+# one-line closing assertion, not an unkillable one, and it should be closed by
+# whichever task next has `:361-369` in its own scope rather than bolted on
+# here where it would duplicate.
+#
+# REGISTERED, NOT TESTED (2 of 2) -- `:369`'s `db.session.commit()` can be
+# removed and all 48 tests pass. This is NOT fact 75 cause 6: the effect is not
+# repeated unconditionally by later code, because `:380`'s commit sits inside
+# `if not from_scratch:` and the `from_scratch=True` path has no later commit
+# at all (removing `:380` alone IS killed, by three tests, so the
+# `from_scratch=False` path is pinned). It survives because every assertion in
+# this file reads the in-session object, and a flushed-but-uncommitted row is
+# visible to the same transaction that flushed it. The honest difficulty is
+# that no clean closing test exists within this harness:
+# `db.session.expire_all()` followed by a re-query does NOT close it (the
+# flushed rows are still visible on the same connection), and a `rollback()`
+# discards the writes whether or not the commit ran, so it cannot distinguish
+# the two. Closing it needs an oracle that crosses a real transaction boundary,
+# which conftest.py's transactional `db_session` fixture does not offer. A test
+# that appeared to close it by any other means would be catching its own
+# scaffolding, not the behaviour -- fact 75's standing rule that a forced kill
+# is worth less than an honest registration.
