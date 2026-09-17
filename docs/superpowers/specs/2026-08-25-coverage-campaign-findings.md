@@ -13602,6 +13602,39 @@ by the fix round; `020cae17`'s `5166 passed, 3 skipped, 6 subtests passed`
 therefore no longer covers the delivered tree's test count and is not quoted as
 if it did.
 
+**THE AUTHORITATIVE FULL-SUITE RUN, on the final delivered tree `d5827937`**,
+taken by the controller after the final fix round, the scoped re-review and the
+record corrections had all landed -- so it is measured after the last commit
+that touches `tests/`, which is the rule this section states three paragraphs
+above:
+
+> **`5167 passed, 3 skipped, 5630 warnings, 6 subtests passed in 386.41s`,
+> `PYTEST_EXIT=0`; `All 27 module floors met.`, `FLOORS_EXIT=0`**, the floors
+> check run against `/tmp/sp48auth.json`, printed mtime `2026-09-17 04:43:31`,
+> matching this run. `5167 = 5166 + 1`, the one addition being D649's closing
+> test. `app/shared/community.py` re-measures **99.71387696709586** with
+> `[699]` / `[[698, 699]]`, both functions re-measure `[]`/`[]` on the
+> full-suite basis, and all five previously closed modules re-measure `100.0`
+> with `[]`/`[]`.
+
+**One run between these two is VOID and is recorded here so that nobody later
+finds it in a log and mistakes it for a regression.** A full-suite run on
+`0a71d9f7` returned `5 failed, 5161 passed, 1 error`, `PYTEST_EXIT=1`. The
+controller had launched it in the background and then dispatched the scoped
+re-review, whose brief instructs it to run the lifecycle file; two pytest
+sessions then shared one database while `tests/conftest.py`'s teardown DELETEs
+every row after each test, so each deleted rows out from under the other. The
+six failures were spread across six unrelated files -- `test_check_password.py`,
+`test_feed_visibility_filters.py`, `test_fixture_proofs.py` (twice),
+`test_shared_community_invites.py` and an error in `test_boost_storage.py` --
+**none** in the only file the round touched, with the round's `app/` diff empty.
+The re-reviewer independently hit the same contention, and **blocked until the
+controller's run exited rather than killing it**. Recovery was
+`./run_tests.sh --down` and a re-run with nothing else against the database.
+**The rule "only the controller runs the full suite, one pytest session at a
+time" binds the CONTROLLER'S SCHEDULING, not merely the subagents' behaviour: a
+single-file run by a subagent is still a pytest session.**
+
 **ZERO production changes.** `git diff --numstat 5c0964a6 020cae17 -- app/` is
 empty, re-derived by this task against the commit object. ~~The round's entire
 diff is `828 11 tests/test_shared_community_lifecycle.py` and `1 0
