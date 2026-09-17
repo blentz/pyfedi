@@ -459,13 +459,31 @@ def test_announce_delete_builds_a_delete_naming_the_feed_and_actor(app, db_sessi
     instance.inbox must be set or :604's delivery guard is always False and
     send is never called -- the brief's original version of this test omitted
     it, which would have left send.call_args None.
+
+    FIX (round 1): the original version of this test inspected only the
+    payload (args[1]) and never the signing credentials at :605
+    (user.private_key, user.ap_profile_id) -- a mutant swapping either for
+    the FEED's equivalent passed silently. s.owner and s.feed are given
+    distinct, non-None private_key values by hand (no real RSA material is
+    needed; send_post_request is mocked) and their ap_profile_id values are
+    already distinct by construction (make_user's '/users/<name>' vs
+    make_feed's '/f/<name>'), with both separations pinned by a live assert
+    before exercising the code -- otherwise a coincidence (e.g. both None)
+    would make the credential assertions pass under the mutant too.
     """
     s = _seed()
     s.owner.ap_public_url = 'https://test.piefed.local/u/feedowner'
+    s.owner.private_key = 'ownerprivatekeymaterial'
+    s.feed.private_key = 'feedprivatekeymaterial'
     remote = make_user(s.instance, 'remotemember', local=False)
     s.instance.inbox = 'https://remote.example/inbox'
     db.session.commit()
     make_feed_member(remote, s.feed)
+
+    assert s.owner.private_key is not None and s.feed.private_key is not None
+    assert s.owner.private_key != s.feed.private_key
+    assert s.owner.ap_profile_id is not None and s.feed.ap_profile_id is not None
+    assert s.owner.ap_profile_id != s.feed.ap_profile_id
 
     with patch('app.shared.feed.send_post_request') as send:
         with patch('app.shared.feed.instance_banned', return_value=False):
@@ -476,6 +494,8 @@ def test_announce_delete_builds_a_delete_naming_the_feed_and_actor(app, db_sessi
     assert activity['actor'] == s.owner.ap_public_url
     assert activity['object']['type'] == 'Feed'
     assert activity['object']['id'] == s.feed.ap_public_url
+    assert send.call_args.args[2] == s.owner.private_key
+    assert send.call_args.args[3] == s.owner.ap_profile_id + '#main-key'
 
 
 def test_announce_delete_skips_the_feed_owner(app, db_session):
