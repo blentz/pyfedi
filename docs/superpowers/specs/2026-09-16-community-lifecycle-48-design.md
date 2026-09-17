@@ -46,10 +46,17 @@ with `/usr/bin/grep -rn` over `app/`:
   with `SRC_API`. Its entire web arm, `:226-237`, is dead in production.
 - **`edit_community` has exactly two callers**: `app/api/alpha/utils/community.py:261`
   (`SRC_API`, `from_scratch=False`) and `make_community:282` (`from_scratch=True`,
-  passing `src` through). So its web arm `:306-317` is reachable only through
-  `make_community`, and the combination **"web arm AND `from_scratch=False`"** —
-  which contains the whole icon and banner deletion block at `:325-346` — is
-  **unreachable in production entirely**.
+  passing `src` through).
+
+  **CORRECTION, from Task 1, and it is stronger than this spec originally
+  claimed.** The spec first said the web arm was "reachable only through
+  `make_community`", which implies it is reachable. It is not.
+  `make_community`'s sole caller is `app/api/alpha/utils/community.py:221` and it
+  passes **`SRC_API`**, so `:282`'s pass-through also resolves to `SRC_API`.
+  **`edit_community`'s web arm `:307-317` therefore has NO production caller at
+  all, at either value of `from_scratch`** — not merely the `from_scratch=False`
+  combination. The icon and banner deletion block at `:325-346` is dead for the
+  same reason plus its own.
 
 **The web path is a separate implementation.** `app/community/routes.py:1216`'s
 `community_edit` does not call the shared function. It sets fields on the model
