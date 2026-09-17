@@ -87,12 +87,20 @@ passes `from_scratch=True`". That was true of the first commit only. Both
 values are exercised deliberately, and the count, re-derived at the fix commit
 with its basis stated: a plain line-grep for the keyword-argument spelling
 returns **26** lines, which is the figure the final whole-branch review quotes,
-but 26 is not the number of call sites -- one of those lines is `_web_input`'s
-docstring prose and two are the `def _spy_edit_community(...)` signatures of
-the two `edit_community` stand-ins further down, where the keyword is a
-PARAMETER and not an argument. **23 real call sites pass it**, 22 of them on
-the same line as the `edit_community(` that consumes it plus one wrapped
-continuation. Same measurement as the review's, counted one level finer. `from_scratch=True` lets a direct call to
+but 26 is not the number of call sites -- ~~one of those lines is
+`_web_input`'s docstring prose and two are~~ **TWO of those lines are docstring
+prose (`_web_input`'s and the `ids:` line further down) and two are** the
+`def _spy_edit_community(...)` signatures of the two `edit_community` stand-ins
+further down, where the keyword is a PARAMETER and not an argument.
+~~**23 real call sites pass it**, 22 of them on the same line as the
+`edit_community(` that consumes it plus one wrapped continuation.~~
+**22 real call sites pass it**, 21 of them on the same line as the
+`edit_community(` that consumes it plus one wrapped continuation. CORRECTED A
+SECOND TIME, by the scoped re-review: the first correction found one prose line
+and missed the other, so "the other three" was four and 23 was 22. Confirmed by
+an `ast` parse counting `Call` nodes with `from_scratch=False`, which returns
+**22**, all of them `edit_community`. Same measurement as the review's, counted
+one level finer. `from_scratch=True` lets a direct call to
 `edit_community` skip `:321-346` without needing a `CommunityMember` row
 granting ownership (`if not from_scratch:` at `:321` gates the whole block);
 `from_scratch=False` is what reaches the guard, the changed-detection, the
@@ -100,7 +108,7 @@ language rebuild at `:371-380`, the `task_selector` dispatch at `:382` and
 the `user.id` return at `:391`. The same docstring also said the file "makes
 no claim on [`:348-391`] and asserts nothing that depends on their
 correctness beyond 'the call completes and the four fields this task's fork
-sets land on the community row'". CORRECTED: the 23 `from_scratch=False`
+sets land on the community row'". CORRECTED: the ~~23~~ **22** `from_scratch=False`
 call sites exist precisely to make claims on `:321-391`, and so does the
 `from_scratch=True` durability test at the end of this file, which pins
 `:369`'s commit.
@@ -238,7 +246,7 @@ def _api_input(**overrides):
     (:272-279). CORRECTED BY THE FINAL WHOLE-BRANCH REVIEW: this paragraph
     used to say "every test in this file passes `from_scratch=True`, which
     skips edit_community's own use of it entirely", which was true only of
-    the file's first commit -- 23 call sites now pass `from_scratch`
+    the file's first commit -- ~~23~~ **22** call sites now pass `from_scratch`
     as `False` and do reach `:371-380` (see the module docstring for that
     count's basis). The key is read at `:303` either way (a plain
     dict-index, not a branch), so a missing key would raise `KeyError` there
@@ -398,7 +406,8 @@ def test_edit_community_api_arm_reads_all_ten_keys_and_authorises_user(
     of `:295-304`'s ten assignments run; those execute unconditionally once
     `:294` takes the SRC_API arm. (An earlier version of this sentence said
     `from_scratch=True` was passed "as in every test in this file". CORRECTED
-    BY THE FINAL REVIEW: 26 call sites in this file pass `from_scratch=False`;
+    BY THE FINAL REVIEW: 26 ~~call sites~~ **lines** in this file carry the
+    `from_scratch=False` spelling, of which **22 are real call sites**;
     it was true only of the file's first task.)
 
     ORIGINAL, AND WRONG -- this docstring used to claim: "Every boolean key is
