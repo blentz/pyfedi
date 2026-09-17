@@ -1953,15 +1953,45 @@ def test_make_community_construction_sets_ap_fields_and_membership_flags(app, db
     against their literal `:261` values, so a mutant altering any one of the
     six construction keywords is caught by its own assertion rather than a
     single blanket check.
+
+    FIX ROUND 1, MECHANISM (b) at `:270`, per code review: the ORIGINAL
+    version of this test looked the membership row up via `CommunityMember.
+    query.filter_by(user_id=user.id, community_id=community.id).one()` and
+    asserted only its two boolean flags -- and in THIS test's own fixture
+    (`_seed()`'s burn/alice/bystander/microblogs rows put both `User` and
+    `Community` at their 3rd-minted id), `user.id == community.id == 3`
+    coincided, the SAME trap already found and fixed at `:288` in
+    `test_make_community_calls_edit_community_from_scratch_and_returns_api_
+    tuple` below, but left live here. A single-argument mutant
+    (`CommunityMember(user_id=community.id, ...)` at `:270`) was a complete
+    survivor: `47 passed, exit 0`, because the row's `user_id`/`community_id`
+    were never asserted, only looked up BY them (and a lookup that matches
+    on the wrong column just finds the same row via the other one, since
+    both filter values were equal anyway).
+
+    `_decoy_user` below mints one extra `User` first, exactly as `test_make_
+    community_calls_edit_community_from_scratch_and_returns_api_tuple`
+    already does, so `user.id (4) != community.id (3)` -- pinned by a live
+    `assert`, not just asserted in prose. The membership row is now looked
+    up by `community_id` ALONE (never by `user_id`, which is exactly the
+    column under test and must be free to diverge from the query's own
+    filter without turning into `NoResultFound`), and `user_id`/
+    `community_id` are asserted EXPLICITLY, not merely used as the query's
+    own filter arguments -- a single-argument mutant now lands on a row
+    that still matches the `community_id` filter (correctly) but whose
+    `user_id` no longer matches `user.id`, giving a clean, non-crash
+    `AssertionError` rather than a silent pass or a crash.
     """
     s = _seed()
     _seed_und_language()
+    _decoy_user = make_user(s.instance, 'fieldsdecoy', local=True)
     user = _keyed_user(s.instance, 'fieldscreator')
     api_input = _api_input(name='freshfields')
 
     make_community(api_input, SRC_API, bearer(user))
 
     community = Community.query.filter_by(name='freshfields').one()
+    assert user.id != community.id, 'test setup must desynchronise the two id sequences'
     server_name = app.config['SERVER_NAME']
     assert community.ap_profile_id == f'https://{server_name}/c/freshfields'
     assert community.ap_public_url == f'https://{server_name}/c/freshfields'
@@ -1970,7 +2000,9 @@ def test_make_community_construction_sets_ap_fields_and_membership_flags(app, db
     assert community.instance_id == 1
     assert community.subscriptions_count == 1
     assert community.low_quality is False
-    membership = CommunityMember.query.filter_by(user_id=user.id, community_id=community.id).one()
+    membership = CommunityMember.query.filter_by(community_id=community.id).one()
+    assert membership.user_id == user.id
+    assert membership.community_id == community.id
     assert membership.is_moderator is True
     assert membership.is_owner is True
 
@@ -2213,6 +2245,76 @@ def test_make_community_und_already_requested_skips_duplicate_append(app, db_ses
     community = Community.query.filter_by(name='undskipcommunity').one()
     matching = [language for language in community.languages if language.id == und.id]
     assert len(matching) == 1
+    community_append_calls = [value_id for target, value_id in append_calls if target is community]
+    assert community_append_calls.count(und.id) == 1
+
+
+def test_make_community_language_loop_true_arm_independent_of_und_false_arm(app, db_session):
+    """MECHANISM (e), LOCKSTEP AT `(:274, :278)`, per code review round 1 on
+    this task's own commit: `test_make_community_und_already_requested_
+    skips_duplicate_append` (the sibling test above) is the ONLY test in
+    this file where `:274` evaluates TRUE while `:278` evaluates FALSE in
+    the SAME call, and its own `discussion_languages` holds ONLY `und.id`.
+    A conjoined mutant -- `:274`'s `if language:` inverted to `if not
+    language:`, PLUS `:278`'s guard replaced outright with `if True:` --
+    makes 'und' arrive via `:279` instead of `:275`, and that sibling
+    test's two oracles (the final `len(matching) == 1` row count, and the
+    `sqlalchemy.event` append-COUNT for `und.id`) read IDENTICALLY either
+    way: both are blind to WHICH line performed the append when 'und' is
+    the only language involved. Verified by execution before writing this
+    test: the conjoined mutant leaves that sibling test PASSING; the only
+    test in the file it fails is `test_make_community_discussion_
+    languages_loop_appends_valid_skips_invalid`, and that one fails by
+    `sqlalchemy.orm.exc.FlushError` -- a crash, not a clean kill. So the
+    pair had NO clean kill anywhere in the file before this test (fact 252
+    applies -- this is a killable mutant with a missing test, not an
+    equivalence, so no fact 75 cause is cited).
+
+    This test breaks the lockstep by requesting a SECOND, non-'und'
+    language alongside `und.id` itself. Under CORRECT code, `:272-275`'s
+    loop appends BOTH `english` and `und` via `:275` (`und`'s own id
+    resolves to a real `Language` row, so the loop's OWN pass over it is
+    already truthy), and `:277-278` then correctly finds `undetermined.id`
+    already in the requested list and skips its own append. Under the
+    conjoined mutant, `:274`'s inverted guard skips BOTH loop appends
+    (`english` is never attached to the community AT ALL), while `:278`'s
+    unconditional `True` still appends `und` via `:279` -- so `english.id
+    in community_language_ids` diverges cleanly (`True` under correct code,
+    `False` under the mutant) with NO dependency on which line appended
+    `und`, unlike the sibling test's own oracle.
+
+    A decoy `Language` (mechanism (c), same convention as the loop and
+    'und' tests above) guards `:273`'s per-id lookup and `:277`'s `code ==
+    'und'` filter against a predicate-dropped mutant, independently of this
+    test's own lockstep target.
+    """
+    s = _seed()
+    decoy = Language(code='yy', name='Decoy, must sort before english and und')
+    db.session.add(decoy)
+    db.session.commit()
+    english = Language(code='en', name='English')
+    db.session.add(english)
+    db.session.commit()
+    und = _seed_und_language()
+    user = _keyed_user(s.instance, 'lockstepcreator')
+    api_input = _api_input(name='lockstepcommunity', discussion_languages=[english.id, und.id])
+    append_calls = []
+
+    def _record_append(target, value, initiator):
+        append_calls.append((target, value.id))
+        return value
+
+    event.listen(Community.languages, 'append', _record_append)
+    try:
+        make_community(api_input, SRC_API, bearer(user))
+    finally:
+        event.remove(Community.languages, 'append', _record_append)
+
+    community = Community.query.filter_by(name='lockstepcommunity').one()
+    community_language_ids = {language.id for language in community.languages}
+    assert english.id in community_language_ids
+    assert decoy.id not in community_language_ids
+    assert und.id in community_language_ids
     community_append_calls = [value_id for target, value_id in append_calls if target is community]
     assert community_append_calls.count(und.id) == 1
 
