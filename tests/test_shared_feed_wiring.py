@@ -295,3 +295,142 @@ def test_existing_communities_returns_the_feed_s_community_ids(app, db_session):
 
     assert result == {s.community.id, s.bystander_community.id}
     assert s.feed.id != s.bystander_feed.id
+
+
+def test_announce_add_remove_builds_an_announce_wrapping_the_action(app, db_session):
+    """:511-535. The Announce wraps an object whose `type` is the action.
+
+    `action` is a parameter and reaches the JSON at :521 only. Asserting the
+    embedded type is what makes :521 observable; asserting the outer "Announce"
+    alone would pass under a mutant that ignored the argument.
+
+    A remote member is required or the loop body never runs and the JSON is
+    never sent, so this would assert on a structure nothing consumed.
+
+    CORRECTION: the brief's version of this test never set instance.inbox, so
+    the :560 delivery guard was always False and send was never called.
+    session = get_task_session() here is the REAL function (unpatched), so the
+    Instance :559 fetches through it is the genuine row -- unlike the
+    rollback/close tests below, where get_task_session is mocked and the
+    guard is satisfied by a Mock regardless of the real row's inbox.
+    """
+    s = _seed()
+    s.feed.ap_following_url = 'https://test.piefed.local/f/wiringfeed/following'
+    remote = make_user(s.instance, 'remotemember', local=False)
+    s.instance.inbox = 'https://remote.example/inbox'
+    db.session.commit()
+    make_feed_member(remote, s.feed)
+
+    with patch('app.shared.feed.send_post_request') as send:
+        with patch('app.shared.feed.instance_banned', return_value=False):
+            announce_feed_add_remove_to_subscribers('Remove', s.feed.id, s.community.id)
+
+    assert send.call_count == 1
+    activity = send.call_args.args[1]
+    assert activity['type'] == 'Announce'
+    assert activity['object']['type'] == 'Remove'
+    assert activity['object']['object']['id'] == s.community.ap_public_url
+    assert activity['object']['target']['id'] == s.feed.ap_following_url
+
+
+def test_announce_add_remove_skips_the_feed_owner(app, db_session):
+    """:549. The owner is skipped before the local/remote fork.
+
+    _seed() assigns feed.user_id, which the factory leaves None -- with None
+    the comparison at :549 is never equal and this branch would be
+    unreachable, so the assignment is load-bearing rather than tidiness.
+
+    A second, non-owner remote member is the positive control: the send that
+    does happen proves the loop ran and the skip was selective.
+
+    CORRECTION: as with the test above, instance.inbox must be set for the
+    non-owner member's send to actually fire through the real task session.
+    """
+    s = _seed()
+    s.owner.ap_id = 'feedowner@remote.example'
+    other = make_user(s.instance, 'otherremote', local=False)
+    s.instance.inbox = 'https://remote.example/inbox'
+    db.session.commit()
+    make_feed_member(s.owner, s.feed)
+    make_feed_member(other, s.feed)
+    assert s.feed.user_id == s.owner.id
+
+    with patch('app.shared.feed.send_post_request') as send:
+        with patch('app.shared.feed.instance_banned', return_value=False):
+            announce_feed_add_remove_to_subscribers('Add', s.feed.id, s.community.id)
+
+    assert send.call_count == 1
+
+
+@pytest.mark.parametrize('inbox, online, banned, expect_send', [
+    ('https://remote.example/inbox', True, False, 1),
+    (None, True, False, 0),
+    ('https://remote.example/inbox', False, False, 0),
+    ('https://remote.example/inbox', True, True, 0),
+])
+def test_announce_add_remove_delivery_guard_isolates_each_operand(
+        app, db_session, inbox, online, banned, expect_send):
+    """:560's three operands, one falsified per row against a passing control.
+
+    Row 1 is the control. Each later row falsifies exactly one operand, so no
+    row can pass because of another's condition -- false-witness mechanism (d).
+    instance_banned is patched on app.shared.feed, where feed.py:21 bound it.
+    """
+    s = _seed()
+    remote = make_user(s.instance, 'remotemember', local=False)
+    db.session.commit()
+    make_feed_member(remote, s.feed)
+    s.instance.inbox = inbox
+    db.session.commit()
+
+    with patch('app.shared.feed.send_post_request') as send:
+        with patch('app.shared.feed.instance_banned', return_value=banned):
+            with patch.object(type(s.instance), 'online', return_value=online):
+                announce_feed_add_remove_to_subscribers('Add', s.feed.id, s.community.id)
+
+    assert send.call_count == expect_send
+
+
+def test_announce_add_remove_rolls_back_and_re_raises_on_failure(app, db_session):
+    """:562-564. The except arm rolls the task session back and re-raises.
+
+    The raise comes from send_post_request, which is the last thing the loop
+    body does, so the failure is inside the try rather than before it. Asserting
+    both the rollback AND the propagation is what separates this from :565's
+    finally, which runs either way.
+    """
+    s = _seed()
+    remote = make_user(s.instance, 'remotemember', local=False)
+    db.session.commit()
+    make_feed_member(remote, s.feed)
+    fake_session = patch('app.shared.feed.get_task_session').start()
+
+    try:
+        with patch('app.shared.feed.instance_banned', return_value=False):
+            with patch('app.shared.feed.send_post_request', side_effect=RuntimeError('boom')):
+                with pytest.raises(RuntimeError):
+                    announce_feed_add_remove_to_subscribers('Add', s.feed.id, s.community.id)
+    finally:
+        patch.stopall()
+
+    assert fake_session.return_value.rollback.call_count == 1
+    assert fake_session.return_value.close.call_count == 1
+
+
+def test_announce_add_remove_closes_the_task_session_on_success(app, db_session):
+    """:565-566's finally on the path where no exception was raised.
+
+    The control for the test above: close is called in both cases, rollback in
+    only one. Without this pair, a mutant deleting the rollback would be caught
+    but a mutant moving close into the except arm would not.
+    """
+    s = _seed()
+    fake_session = patch('app.shared.feed.get_task_session').start()
+
+    try:
+        announce_feed_add_remove_to_subscribers('Add', s.feed.id, s.community.id)
+    finally:
+        patch.stopall()
+
+    assert fake_session.return_value.rollback.call_count == 0
+    assert fake_session.return_value.close.call_count == 1
