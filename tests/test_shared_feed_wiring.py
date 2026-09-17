@@ -266,8 +266,17 @@ def test_form_communities_to_ids_on_empty_input_searches_for_a_bare_host(app, db
 def test_existing_communities_returns_the_feed_s_community_ids(app, db_session):
     """:613-614. Two items on the feed under test and one on the bystander feed.
 
-    The bystander item is what makes the WHERE clause observable: without it a
-    mutant dropping the feed_id filter would return the same rows and pass.
+    FIX (round 1): the brief's original third row put the bystander feed's item
+    on s.bystander_community, which is ALREADY one of the feed-under-test's two
+    communities. Dropping the WHERE filter then returns the multiset
+    {community, bystander_community, bystander_community}, which as a set is
+    still {community, bystander_community} -- identical to the filtered
+    result, so the mutant survived. A decoy community that appears on the
+    bystander feed and NOWHERE on the feed under test is required so that
+    removing the filter actually changes the returned set: filtered ->
+    {community, bystander_community}; with `WHERE 1=1` -> that same set PLUS
+    decoy_community.id, which is a set the assertion below rejects.
+
     Compared as a set -- these are query-planner rows and their order is not a
     claim.
 
@@ -276,9 +285,11 @@ def test_existing_communities_returns_the_feed_s_community_ids(app, db_session):
     repaired; this test consumes it as an iterator, which is what callers do.
     """
     s = _seed()
+    decoy_community = make_community(name='decoy')
+    assert decoy_community.id not in {s.community.id, s.bystander_community.id}
     make_feed_item(s.feed, s.community)
     make_feed_item(s.feed, s.bystander_community)
-    make_feed_item(s.bystander_feed, s.bystander_community)
+    make_feed_item(s.bystander_feed, decoy_community)
 
     result = set(existing_communities(s.feed.id))
 
