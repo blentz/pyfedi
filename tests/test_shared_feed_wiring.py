@@ -87,54 +87,47 @@ def _seed():
                            feed=feed, bystander_feed=bystander_feed)
 
 
-def test_feed_add_community_reads_the_request_global_not_its_user_id_parameter(app, db_session):
-    """PIN of a live defect. INVERTED in Step 6 of this task.
+def test_feed_add_community_uses_its_user_id_parameter_not_the_request_global(app, db_session):
+    """Was a PIN; INVERTED once :430 was fixed.
 
-    _feed_add_community's signature is (community_id, current_feed_id, feed_id,
-    user_id). :429 correctly uses the user_id parameter. :430 then reads
-    `current_user.feed_auto_follow` -- the request global -- instead.
-
-    On SRC_API (app/api/alpha/utils/feed.py:166 and :202 reach this through
-    make_feed and edit_feed) authentication is a bearer token resolved by
-    authorise_api_user and there is NO logged-in current_user, so :430 reaches
-    AnonymousUserMixin, which has no feed_auto_follow. That is an AttributeError
-    on an ordinary API call.
-
-    The module reads the preference off a resolved user at :49, :87, :135 and
-    :455. :430 is the only site that does not, and the only one with user_id
-    already in scope.
-
-    The feed is left non-public so :421's announce fork does not fire and the
-    pin stays narrow to :430.
+    ORIGINAL PINNED CLAIM, now false: ":430 reads current_user, so the API path
+    raises AttributeError." The fix resolves the acting user from the user_id
+    parameter, so the call completes with no request user at all and
+    do_subscribe receives the id that was passed in.
     """
     s = _seed()
-    assert s.feed.public is False
     with app.test_request_context('/'):
-        with pytest.raises(AttributeError):
+        with patch('app.community.routes.do_subscribe') as subscribe:
             _feed_add_community(s.community.id, 0, s.feed.id, s.actor.id)
 
+    assert subscribe.call_count == 1
+    assert subscribe.call_args.args[1] == s.actor.id
+    assert s.actor.id != s.community.id and s.actor.id != s.feed.id
 
-def test_announce_add_remove_subscribes_local_members_ignoring_feed_auto_follow(app, db_session):
-    """PIN of a live defect. INVERTED in Step 6 of this task.
 
-    announce_feed_add_remove_to_subscribers:550-555 subscribes every local feed
-    member to the community unconditionally. The user preference that exists to
-    govern exactly this is not consulted.
+def test_announce_add_remove_honours_feed_auto_follow_for_local_members(app, db_session):
+    """Was a PIN; INVERTED once :550 was fixed.
 
-    Proved by its own twin: app/activitypub/routes.py:1440 performs the same
-    operation on the federated path and reads
-    `if fm_user.is_local() and fm_user.feed_auto_follow:`.
+    ORIGINAL PINNED CLAIM, now false: "every local feed member is subscribed
+    unconditionally." The fix matches the federated twin at
+    app/activitypub/routes.py:1440.
 
-    The member here has feed_auto_follow=False and is subscribed anyway.
+    Two members, differing only in the preference, are the control: one is
+    subscribed and one is not, so this cannot pass by the call simply never
+    firing. That control is what makes the assertion a kill rather than an
+    emptiness claim -- false-witness mechanism (c).
     """
     s = _seed()
-    member = make_user(s.instance, 'localmember', local=True)
-    member.feed_auto_follow = False
+    optout = make_user(s.instance, 'optout', local=True)
+    optout.feed_auto_follow = False
+    optin = make_user(s.instance, 'optin', local=True)
+    optin.feed_auto_follow = True
     db.session.commit()
-    make_feed_member(member, s.feed)
+    make_feed_member(optout, s.feed)
+    make_feed_member(optin, s.feed)
 
     with patch('app.community.routes.do_subscribe') as subscribe:
         announce_feed_add_remove_to_subscribers('Add', s.feed.id, s.community.id)
 
-    assert subscribe.call_count == 1
-    assert subscribe.call_args.args[1] == member.id
+    subscribed = {c.args[1] for c in subscribe.call_args_list}
+    assert subscribed == {optin.id}
