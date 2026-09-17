@@ -112,11 +112,11 @@ invites.py`'s `get_comm_flair_list` did.
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import event, text
 
 from app import db
 from app.constants import SRC_API, SRC_WEB
-from app.models import File, Language
+from app.models import Community, File, Language
 from app.shared.community import edit_community
 from app.utils import markdown_to_html, piefed_markdown_to_lemmy_markdown
 from tests.factories import bearer, make_community, make_community_member, make_instance, make_user, web_ctx
@@ -1351,14 +1351,42 @@ def test_edit_community_und_already_in_discussion_languages_skips_duplicate_appe
     `discussion_languages` empty, so `undetermined.id not in []` is always
     True and the FALSE arm this test isolates had never run.
 
-    A mutant that dropped the `if` and always appended would attempt to
-    insert the SAME `(community_id, language_id)` row into
-    `community_language` twice; that table's composite primary key
-    (app/models.py:334-338) makes the second insert an `IntegrityError` in
-    production, which is a crash, not the clean `AssertionError` this
-    round's hand-applied mutants must produce -- see the report's mutation-
-    verification section for a mutant actually applied by hand and the kind
-    of failure it produces here.
+    CORRECTED, PER CODE REVIEW: an earlier version of this docstring claimed
+    a mutant that dropped `:378`'s guard and always appended would raise
+    `IntegrityError` on `community_language`'s composite primary key
+    (app/models.py:334-338), and that this made the FALSE arm's own
+    behaviour unverifiable by a clean assertion. THAT CLAIM WAS NOT VERIFIED
+    BY RUNNING THE MUTANT, AND IT WAS WRONG: applying `if True:` at `:378`
+    by hand produces no `IntegrityError` at all. SQLAlchemy's flush-time
+    dependency processing for a plain (non-association-object) many-to-many
+    collection de-duplicates an object appended twice to the same
+    relationship BEFORE emitting SQL, so `community_language` still ends up
+    with exactly one `(community_id, und.id)` row either way -- the
+    persisted state, and therefore `matching`/`len(matching)` below, is
+    IDENTICAL whether the guard is present or not. `matching == 1` cannot
+    tell the two apart; it was never a valid oracle for this branch's TRUE
+    direction, and is kept below only for its ORIGINAL, still-valid purpose
+    (proving `:379` does not raise / does not leave a second, distinct
+    row -- see `_seed_und_language`'s own unique-code column, which a
+    genuine duplicate INSERT attempt would violate before the relationship
+    dedup even had a chance to apply, if the table lacked its composite key
+    -- i.e. this assertion is a sanity check on the FINAL state, not a
+    mutation oracle for the guard itself).
+
+    The mutation oracle that actually works is a Python-level count of how
+    many times `.append()` was CALLED on the collection, independent of
+    what SQLAlchemy later folds into SQL: `sqlalchemy.event`'s `'append'`
+    event on `Community.languages` fires once per `.append()` call, before
+    any deduplication. A mutant that drops `:378`'s guard fires it TWICE for
+    `und.id` in this exact scenario (once from `:372-375`'s loop, once more
+    from the now-unconditional `:379`); the correct code fires it once. This
+    is registered here as the fix for a false line in this task's own
+    report (the crash claim), confirmed by hand-applying `if True:` at
+    `:378` and observing `1 failed, 26 passed` with NO `IntegrityError` --
+    the one failure was this task's own `:378`-missing-row pin test, dying
+    for an UNRELATED reason (the guard's removal skips straight past the
+    `.id` dereference that pin exists to catch), which is fix-catching, not
+    a genuine kill, and does not by itself close this gap.
     """
     s = _seed()
     und = _seed_und_language()
@@ -1366,11 +1394,65 @@ def test_edit_community_und_already_in_discussion_languages_skips_duplicate_appe
     monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
     monkeypatch.setattr('app.shared.community.is_image_url', lambda url: False)
     api_input = _api_input(discussion_languages=[und.id])
+    append_calls = []
 
-    edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+    def _record_append(target, value, initiator):
+        if target is s.community:
+            append_calls.append(value.id)
+        return value
+
+    event.listen(Community.languages, 'append', _record_append)
+    try:
+        edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+    finally:
+        event.remove(Community.languages, 'append', _record_append)
 
     matching = [language for language in s.community.languages if language.id == und.id]
     assert len(matching) == 1
+    assert append_calls.count(und.id) == 1
+
+
+def test_edit_community_undetermined_language_appended_and_correct_row_selected(
+        app, db_session, monkeypatch):
+    """CRITICAL FIX, per code review of this task's first submission:
+    `:378`'s TRUE arm (`undetermined.id not in discussion_languages`, the
+    ORDINARY case -- 'und' not already requested) was reached by every
+    `from_scratch=False` test in this file, but NONE of them ever asserted
+    that `:379`'s append actually happened: a hand-applied mutant changing
+    `:378` to `if undetermined.id not in discussion_languages and False:`
+    (permanently disabling the append) left all 27 of this task's
+    then-existing tests passing. This test closes that gap directly:
+    `discussion_languages` is empty (the input builder's own default, 'und'
+    trivially not in it), so `:379` must run for `community.languages` to
+    gain 'und' at all.
+
+    A SECOND, independent gap shared the same blind spot: `:377`'s
+    `Language.query.filter(Language.code == 'und').first()` -- every test
+    in this file that reaches `:377` either has 'und' as the ONLY `Language`
+    row, or inserts it before any other, so a mutant dropping the `.filter`
+    predicate entirely (`Language.query.first()`) returns 'und' by
+    insertion-order coincidence rather than by matching the code column --
+    mechanism (c), emptiness with no negative control. `decoy`, a `Language`
+    with a different code inserted BEFORE 'und', is the negative control:
+    a predicate-dropped `.first()` returns `decoy` instead, so this test's
+    assertions (comparing CODES, not merely counting rows) diverge from the
+    correct result in that case too, closing both gaps with the one seed.
+    """
+    s = _seed()
+    decoy = Language(code='xx', name='Decoy, must sort before und')
+    db.session.add(decoy)
+    db.session.commit()
+    und = _seed_und_language()
+    make_community_member(s.user, s.community, is_moderator=True)
+    monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
+    monkeypatch.setattr('app.shared.community.is_image_url', lambda url: False)
+    api_input = _api_input()
+
+    edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+    community_language_codes = {language.code for language in s.community.languages}
+    assert 'und' in community_language_codes
+    assert 'xx' not in community_language_codes
 
 
 def test_edit_community_task_selector_called_with_real_ids_not_literal(
