@@ -112,14 +112,22 @@ invites.py`'s `get_comm_flair_list` did.
 from types import SimpleNamespace
 
 import pytest
+from slugify import slugify
 from sqlalchemy import event, text
 
 from app import db
 from app.constants import SRC_API, SRC_WEB
-from app.models import Community, File, Language
-from app.shared.community import edit_community
+from app.models import Community, File, Language, User
+from app.shared.community import edit_community, make_community
 from app.utils import markdown_to_html, piefed_markdown_to_lemmy_markdown
-from tests.factories import bearer, make_community, make_community_member, make_instance, make_user, web_ctx
+# `make_community` (tests/factories.py:124) is renamed on import here, per
+# this file's own module docstring's naming-trap note: Task 4 needs the
+# BARE name `make_community` for `app.shared.community.make_community`,
+# the production function under test, so the row-builder of the same name
+# is aliased instead. `_seed()`'s two call sites below are updated to
+# match; nothing else in this file (Tasks 1-3) called the factory by name.
+from tests.factories import bearer, make_community as make_community_factory, make_community_member, \
+    make_instance, make_user, web_ctx
 
 
 def _burn_a_seed():
@@ -153,8 +161,8 @@ def _seed():
     _burn_a_seed()
     instance = make_instance('test.piefed.local')
     user = make_user(instance, 'alice', local=True)
-    bystander = make_community('bystander', host='bystander.example')
-    community = make_community()
+    bystander = make_community_factory('bystander', host='bystander.example')
+    community = make_community_factory()
     return SimpleNamespace(instance=instance, user=user, community=community, bystander=bystander)
 
 
@@ -1521,3 +1529,367 @@ def test_edit_community_undetermined_language_missing_raises_attributeerror_regi
 
     with pytest.raises(AttributeError):
         edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+
+# `make_community` (app/shared/community.py:213-251), the source fork, the
+# verification guard, and the two name-collision checks -- Task 4's
+# territory, and the first tests in this file to target `make_community`
+# itself rather than `edit_community`.
+#
+# Task 5 owns `:253-290` (the Community row's own construction, the
+# membership row, the language-population loop, and the two-shape return
+# at :287-290). `make_community` is a single function body: once a test's
+# guard and both existence checks pass, Python runs straight on through
+# that range too -- there is no way to stop mid-call. Every test below
+# that reaches a passing guard therefore incidentally exercises Task 5's
+# territory, exactly as Task 1's `edit_community` fork tests incidentally
+# exercised the field-assignment block below THEIR target range. No test
+# below asserts anything about Task 5's own logic beyond what is needed to
+# observe this task's own locals (the seven/seven keys the `:214` fork
+# reads have no other externally visible trace) and to prove the two
+# existence checks' FALSE arms did not wrongly raise.
+#
+# `make_community` HAS EXACTLY ONE PRODUCTION CALLER --
+# `app/api/alpha/utils/community.py:221` -- and it ALWAYS passes SRC_API
+# (confirmed by this file's own module docstring's grep, run once for the
+# whole file, not repeated per task). The web/`else` arm at `:226-237` is
+# therefore DEAD IN PRODUCTION, exactly like `edit_community`'s own web
+# arm; every test below that reaches it repeats this disclosure in its own
+# docstring, per this round's convention.
+#
+# AUTHORISE_API_USER'S OWN VERIFIED GUARD -- DISCOVERED WHILE WRITING THIS
+# SECTION, NOT IN THE BRIEF: `app/utils.py:3624`'s
+# `if user.ap_id is not None or user.verified is False or user.banned is
+# True or user.deleted is True: raise Exception('incorrect_login')` runs
+# INSIDE `authorise_api_user`, called at `make_community:224` -- BEFORE
+# make_community's OWN `:239` guard ever executes, on the SRC_API arm.
+# A SRC_API test built with `user.verified = False` never reaches `:239`
+# at all: it dies at `:224` with `'incorrect_login'` instead, from a
+# completely different function. The "unverified with a key" test below
+# therefore uses the SRC_WEB arm (`user = current_user` at `:237`, which
+# has no equivalent pre-check) to isolate `:239`'s own guard specifically.
+# The "verified without a key" test safely uses SRC_API, since
+# `authorise_api_user`'s guard never inspects `private_key` at all.
+
+
+def _keyed_user(instance, name):
+    """A local, verified user holding a real RSA keypair -- the one shape
+    that passes make_community's `:239` guard (`user.verified is False or
+    user.private_key is None`). `make_user`'s own defaults leave
+    `private_key` at `None` (`with_keys=False`); `verified` already
+    defaults `True`. `local=True` keeps `ap_id` `None`, which
+    `authorise_api_user` also requires (see this section's header comment)
+    for the SRC_API arm's own, separate guard.
+    """
+    return make_user(instance, name, local=True, with_keys=True)
+
+
+def _existing_user_with_ap_profile_id(app, instance, unique_name, ap_profile_slug):
+    """A `User` row whose `ap_profile_id` exactly matches the `/u/` shape
+    `make_community`'s own existing-user check computes at `:243`
+    (`'https://' + SERVER_NAME + '/u/' + name.lower()`).
+
+    `make_user` never produces this shape itself: a local user
+    (`local=True`) gets `ap_profile_id=None`, and a remote one gets
+    `f'https://{domain}/users/{name}'` -- `/users/`, not `/u/`. Built via
+    `make_user(local=False)` first, purely to satisfy every OTHER NOT NULL
+    column the same way every other test in this suite does, then the one
+    field under test is overwritten directly and re-committed -- the same
+    technique this file already uses for its `File`/`Language` decoy rows.
+    """
+    user = make_user(instance, unique_name, local=False)
+    user.ap_profile_id = f"https://{app.config['SERVER_NAME']}/u/{ap_profile_slug}"
+    db.session.commit()
+    return user
+
+
+def test_make_community_guard_unverified_with_key_raises(app, db_session):
+    """`:239`'s FIRST operand alone: `user.verified is False`, with a real
+    private key present (`with_keys=True`), isolated via the SRC_WEB arm
+    -- see this section's header comment for why the SRC_API arm cannot
+    isolate this operand (`authorise_api_user`'s own, unrelated verified
+    check would raise `'incorrect_login'` first).
+
+    UNREACHABLE IN PRODUCTION -- see this section's header comment:
+    `make_community` has exactly one production caller and it always
+    passes SRC_API. This test reaches the web arm only by calling
+    `make_community` directly with SRC_WEB.
+    """
+    s = _seed()
+    user = _keyed_user(s.instance, 'unverified')
+    user.verified = False
+    db.session.commit()
+    web_input = _web_input(url='newcommunity1')
+
+    with web_ctx(app, user):
+        with pytest.raises(Exception) as exc_info:
+            make_community(web_input, SRC_WEB)
+
+    assert str(exc_info.value) == "You can't create a community until your account is verified."
+
+
+def test_make_community_guard_verified_without_key_raises(app, db_session):
+    """`:239`'s SECOND operand alone: `user.private_key is None`, verified
+    `True` (`make_user`'s own default) -- isolated via the SRC_API arm,
+    which is safe here since `authorise_api_user`'s own guard (see this
+    section's header comment) never inspects `private_key`.
+    """
+    s = _seed()
+    user = make_user(s.instance, 'unkeyed', local=True)
+    api_input = _api_input(name='newcommunity2')
+
+    with pytest.raises(Exception) as exc_info:
+        make_community(api_input, SRC_API, bearer(user))
+
+    assert str(exc_info.value) == "You can't create a community until your account is verified."
+
+
+def test_make_community_guard_verified_with_key_passes_and_creates_community(app, db_session):
+    """The passing case: both `:239` operands `False` (verified `True`,
+    `private_key` set via `with_keys=True`) -- no raise; execution
+    proceeds into this task's own existence checks and on through Task 5's
+    own `:253-290` territory (incidentally; see this section's header
+    comment).
+
+    `plugins.fire_hook` (`:285`) is a real, unpatched call -- it is a
+    no-op for any hook name with no registered handler
+    (`app/plugins/hooks.py:62-63`'s `if hook_name not in _hooks: return
+    data`), and this suite registers none, so it introduces no side
+    effect worth mocking.
+    """
+    s = _seed()
+    _seed_und_language()
+    user = _keyed_user(s.instance, 'creator')
+    api_input = _api_input(name='brandnewcommunity')
+
+    result = make_community(api_input, SRC_API, bearer(user))
+
+    community = Community.query.filter_by(name='brandnewcommunity').one()
+    assert result == (user.id, community.id)
+
+
+def test_make_community_api_arm_slugifies_name_and_reads_seven_keys(app, db_session):
+    """`:214`'s TRUE arm (`src == SRC_API`): `input['name']` is slugified
+    in place at `:215`, and the seven keys at `:215-223` (name, title,
+    nsfw, restricted_to_mods, local_only, discussion_languages,
+    question_answer) are read into locals. `user = authorise_api_user(
+    auth, return_type='model')` (`:224`) resolves the acting user from the
+    bearer token, NOT `current_user` -- the web arm's source, covered by
+    the sibling tests below.
+
+    Every boolean key is set to its NON-default value, and `name` to a
+    value containing spaces and mixed case, so the slugified result and
+    each field assignment are distinct from any coincidental default. The
+    expected slug is produced by calling the real `slugify` helper
+    independently (`separator='_'`, then `.lower()`, matching `:215`
+    exactly), not hand-derived, matching this suite's established
+    convention.
+
+    Execution continues on through Task 5's `:253-290` territory to make
+    these locals observable at all (they have no other externally visible
+    trace) -- this test asserts only the fields this task's own fork
+    reads, not on Task 5's own creation logic beyond that.
+    """
+    s = _seed()
+    _seed_und_language()
+    user = _keyed_user(s.instance, 'apicreator')
+    raw_name = 'My Cool COMMUNITY!'
+    expected_name = slugify(raw_name, separator='_').lower()
+    api_input = _api_input(name=raw_name, title='API Title', nsfw=True,
+                           restricted_to_mods=True, local_only=True,
+                           question_answer=True)
+
+    make_community(api_input, SRC_API, bearer(user))
+
+    community = Community.query.filter_by(name=expected_name).one()
+    assert community.title == 'API Title'
+    assert community.nsfw is True
+    assert community.restricted_to_mods is True
+    assert community.local_only is True
+    assert community.question_answer is True
+
+
+def test_make_community_web_arm_strips_leading_c_prefix_and_reads_seven_attributes(
+        app, db_session):
+    """`:226`'s TRUE arm: `input.url.data` starts with `/c/`
+    (case-/whitespace-insensitively, per `:226`'s own `.strip().lower()`),
+    so `:227` strips exactly its first three characters before `:228`'s
+    slugify. `user = current_user` (`:237`) resolves the acting user from
+    the login context, not a bearer token -- `_web_input`'s shape is read
+    via `.data` on each `_Field`, matching `edit_community`'s identical
+    web arm above; `make_community` reads seven of its eight attributes
+    (url, community_name, nsfw, restricted_to_mods, local_only, languages,
+    question_answer -- not `description`/`rules`, per `_web_input`'s own
+    docstring).
+
+    UNREACHABLE IN PRODUCTION -- see this section's header comment:
+    `make_community` has exactly one production caller and it always
+    passes SRC_API. This test reaches the web arm only by calling
+    `make_community` directly with SRC_WEB.
+    """
+    s = _seed()
+    _seed_und_language()
+    user = _keyed_user(s.instance, 'webcreator1')
+    raw_url = '/c/My Web COMMUNITY!'
+    expected_name = slugify(raw_url[3:].strip(), separator='_').lower()
+    web_input = _web_input(url=raw_url, community_name='Web Title', nsfw=True,
+                           restricted_to_mods=True, local_only=True,
+                           question_answer=True)
+
+    with web_ctx(app, user):
+        make_community(web_input, SRC_WEB)
+
+    community = Community.query.filter_by(name=expected_name).one()
+    assert community.title == 'Web Title'
+    assert community.nsfw is True
+    assert community.restricted_to_mods is True
+    assert community.local_only is True
+    assert community.question_answer is True
+
+
+def test_make_community_web_arm_without_c_prefix_reads_seven_attributes_unchanged(
+        app, db_session):
+    """`:226`'s FALSE arm: `input.url.data` does not start with `/c/`, so
+    `:227`'s strip never runs and `:228`'s slugify operates on the whole,
+    unstripped string.
+
+    UNREACHABLE IN PRODUCTION -- see this section's header comment.
+    """
+    s = _seed()
+    _seed_und_language()
+    user = _keyed_user(s.instance, 'webcreator2')
+    raw_url = 'My Other COMMUNITY!'
+    expected_name = slugify(raw_url.strip(), separator='_').lower()
+    web_input = _web_input(url=raw_url, community_name='Other Web Title', nsfw=True,
+                           restricted_to_mods=True, local_only=True,
+                           question_answer=True)
+
+    with web_ctx(app, user):
+        make_community(web_input, SRC_WEB)
+
+    community = Community.query.filter_by(name=expected_name).one()
+    assert community.title == 'Other Web Title'
+    assert community.nsfw is True
+    assert community.restricted_to_mods is True
+    assert community.local_only is True
+    assert community.question_answer is True
+
+
+def test_make_community_existing_user_with_same_name_raises_exact_message(app, db_session):
+    """`:243-246`'s TRUE arm: a `User` row already holds the exact `/u/`
+    `ap_profile_id` the candidate name would produce. `:246`'s message is
+    asserted EXACTLY, case-sensitively, per this round's disclosure
+    requirement -- it is the only one of this module's three collision
+    messages capitalised `'A User...'`, distinguishing it from `:251`'s
+    and `:268`'s lowercase/capitalised `'community'`/`'Community'`
+    messages.
+    """
+    s = _seed()
+    user = _keyed_user(s.instance, 'namecollider')
+    target_slug = 'takenname'
+    _existing_user_with_ap_profile_id(app, s.instance, 'blocker', target_slug)
+    api_input = _api_input(name=target_slug)
+
+    with pytest.raises(Exception) as exc_info:
+        make_community(api_input, SRC_API, bearer(user))
+
+    assert str(exc_info.value) == \
+        'A User with that name already exists, so it cannot be used for a Community'
+
+
+def test_make_community_no_existing_user_conflict_creates_successfully(app, db_session):
+    """`:243-246`'s FALSE arm, WITH a decoy present: an unrelated `User`
+    already holds a DIFFERENT `/u/` `ap_profile_id`. Mechanism (c):
+    `:244`'s `filter_by(ap_profile_id=...)` is a lookup of exactly the
+    shape a predicate-dropped mutant could satisfy by matching ANY row
+    instead of none -- without a decoy, `User.query.first()` on a
+    near-empty table would have nothing to wrongly return, and a
+    predicate-dropped mutant would be invisible to this test. If `:244`'s
+    filter were reduced to `User.query.first()`, this decoy row (or
+    `_seed()`'s own burn user/`s.user`, both present regardless) would be
+    wrongly returned and this call would incorrectly raise -- this test's
+    plain success assertion diverges from that outcome.
+    """
+    s = _seed()
+    _seed_und_language()
+    user = _keyed_user(s.instance, 'namecollider2')
+    _existing_user_with_ap_profile_id(app, s.instance, 'decoyuser', 'someone-else-entirely')
+    api_input = _api_input(name='freshcommunityname')
+
+    make_community(api_input, SRC_API, bearer(user))
+
+    assert Community.query.filter_by(name='freshcommunityname').one() is not None
+
+
+def test_make_community_existing_community_with_same_name_raises_lowercase_c_message(
+        app, db_session):
+    """`:247-251`'s TRUE arm: `s.community` (from `_seed()`, name
+    'microblogs', hosted on SERVER_NAME) already holds the exact `/c/`
+    `ap_profile_id` a new community named 'microblogs' would collide with.
+    `:251`'s message is asserted EXACTLY, case-sensitively -- LOWERCASE
+    'community', which is what distinguishes this line from Task 5's
+    `:268` (`'Community with that name already exists'`, capital C, the
+    IntegrityError-caught duplicate-insert fallback). A case-insensitive
+    match cannot tell the two apart; this test proves the code took THIS
+    check (`:250`'s pre-emptive lookup), not the DB-level fallback.
+    """
+    s = _seed()
+    user = _keyed_user(s.instance, 'communitycollider')
+    api_input = _api_input(name='microblogs')
+
+    with pytest.raises(Exception) as exc_info:
+        make_community(api_input, SRC_API, bearer(user))
+
+    assert str(exc_info.value) == 'community with that name already exists'
+
+
+def test_make_community_no_existing_community_conflict_creates_successfully(app, db_session):
+    """`:247-251`'s FALSE arm, WITH decoys present: `_seed()`'s own
+    `s.community` ('microblogs', SERVER_NAME host) and `s.bystander`
+    ('bystander', a DIFFERENT host) already give two `Community` rows with
+    two DIFFERENT `ap_profile_id`s in the table before this call --
+    exactly the mechanism (c) negative control the module docstring's
+    id-1 trap note says `.bystander` exists partly for. If `:249`'s
+    `filter_by(ap_profile_id=...)` were reduced to a predicate-dropped
+    `.first()`, one of these two rows would be wrongly returned and this
+    test's plain success assertion would diverge into an unexpected
+    raise.
+    """
+    s = _seed()
+    _seed_und_language()
+    user = _keyed_user(s.instance, 'communitycollider2')
+    api_input = _api_input(name='totallyfreshcommunity')
+
+    make_community(api_input, SRC_API, bearer(user))
+
+    assert Community.query.filter_by(name='totallyfreshcommunity').one() is not None
+
+
+def test_make_community_guard_verified_none_registered_defect_not_blocked(app, db_session):
+    """REGISTERED, NOT FIXED: `:239`'s `user.verified is False` is an `is`
+    identity check, not a truthiness check -- `app/models.py:981`'s
+    `verified = db.Column(db.Boolean, default=False)` carries no
+    `nullable=False`, so `verified=None` is a constructible state, and
+    `None is False` evaluates `False`. Combined with a real private key
+    (`with_keys=True`), `:239`'s guard does NOT raise for a user who was
+    never actually verified -- `None` is neither `True` nor `False`, and
+    only the LATTER is checked. `authorise_api_user`'s own, separate
+    verified check (see this section's header comment) uses the identical
+    `is False` idiom, so it does not block this state either, and the
+    SRC_API arm can be used directly.
+
+    This test pins today's actual, defective behaviour: an unverified
+    (`verified=None`, never through the real verification flow) but keyed
+    user's community creation SUCCEEDS regardless.
+    """
+    s = _seed()
+    _seed_und_language()
+    user = _keyed_user(s.instance, 'nullverified')
+    user.verified = None
+    db.session.commit()
+    assert user.verified is None, 'test setup must produce a genuine None, not a falsy True/False'
+    api_input = _api_input(name='defectcommunity')
+
+    make_community(api_input, SRC_API, bearer(user))
+
+    assert Community.query.filter_by(name='defectcommunity').one() is not None
