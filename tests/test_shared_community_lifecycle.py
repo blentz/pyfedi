@@ -1,5 +1,19 @@
-r"""`edit_community`'s source fork and field extraction
-(app/shared/community.py:294-319), the last uncovered group in this module.
+r"""`app/shared/community.py`'s community lifecycle pair: `make_community`
+(:213-290) and `edit_community` (:293-391), both source arms of each, in full.
+
+SCOPE, REWRITTEN AT THE END OF THE ROUND. This docstring shipped as Task 1's
+and described only Task 1: "`edit_community`'s source fork and field extraction
+(app/shared/community.py:294-319), the last uncovered group in this module."
+That was true of the first commit and false of every later one, and the final
+whole-branch review flagged it under the rule Task 4's own review wrote -- a
+wrong citation in a TEST FILE COMMENT outlives a wrong citation in a report,
+because the next reader checks the code, not the workspace. Three specific
+claims it made are corrected inline below where they appear, and two more
+inside `_api_input`'s docstring and the section comments. The file as it now
+stands covers ALL of `make_community:213-290` and ALL of
+`edit_community:293-391`: both `src` arms of both functions, the permission
+guard, the icon/banner-changed detection, image persistence, the field writes,
+the commit, the language blocks, `task_selector` dispatch and both returns.
 
 STEP 1'S ORACLE CHECK, CONFIRMED BEFORE WRITING ANYTHING ELSE:
 
@@ -29,7 +43,7 @@ AP Update sender for a community's Group actor (that file's own docstring
 says so in its first line), unrelated to this module's `edit_community`
 other than sharing a name.
 
-CONCLUSION: before this task, NEITHER `app.shared.community.make_community`
+CONCLUSION: before this file, NEITHER `app.shared.community.make_community`
 NOR `app.shared.community.edit_community` was exercised by any existing test
 file. This file is the first.
 
@@ -52,25 +66,58 @@ make_community": since make_community's one production caller always passes
 `SRC_API`, the `src` that reaches `edit_community:282`'s pass-through is
 ALSO always `SRC_API`. So `edit_community`'s `:294` else/web arm (:307-317)
 has NO production caller at ANY value of `from_scratch` -- not just the
-`from_scratch=False` combination the brief singles out. The web UI's own
-community-edit form is a separate implementation at
-`app/community/routes.py:1216` that never calls this function at all.
-`_web_input`'s docstring below repeats this, and so does every test that
-uses it, per this round's disclosure requirement.
+`from_scratch=False` combination the brief singles out -- and neither does
+`make_community`'s own else arm (:226-237), for the same reason. The web UI's
+own community-edit form is a separate implementation at
+`app/community/routes.py:1216` that never calls either function.
+`_web_input`'s docstring below repeats this, and so does every one of the
+NINE tests that reach a web arm, per this round's disclosure requirement.
 
-SCOPE, PRECISELY: this task's target is `:294-319` -- the two-arm source
-fork and the `icon_url_changed = banner_url_changed = False` initialiser
-that follows it. `:321-346` (the ownership check and icon/banner-changed
-detection) is Task 2's territory; `:348-391` (image persistence, the final
-field writes, the language block, and the return) is Task 3's and Task 5's.
-Every test below passes `from_scratch=True`, which is what lets a direct
-call to `edit_community` skip straight over `:321-346` without needing a
-`CommunityMember` row granting ownership -- `if not from_scratch:` (:321)
-gates that whole block. Execution still runs on through `:348-391` after the
-fork (Python does not stop at line 319), so those lines are incidentally
-exercised here too, but this file makes no claim on them and asserts nothing
-that depends on their correctness beyond "the call completes and the four
-fields this task's fork sets land on the community row."
+HOW THE FILE IS LAID OUT. The tests follow the two functions in source order:
+`edit_community`'s source fork and field extraction (:294-319) first, then its
+permission guard and icon/banner-changed detection (:321-346), then image
+persistence, the field writes, the commit, the language block, the dispatch
+and the returns (:348-391); then `make_community`'s own source fork
+(:214-237), its guards (:239-251), creation (:253-268), membership and
+languages (:270-280), and its two returns (:287-290). Section comments mark
+each boundary.
+
+`from_scratch`, CORRECTED. This docstring used to say "Every test below
+passes `from_scratch=True`". That was true of the first commit only. Both
+values are exercised deliberately, and the count, re-derived at the fix commit
+with its basis stated: a plain line-grep for the keyword-argument spelling
+returns **26** lines, which is the figure the final whole-branch review quotes,
+but 26 is not the number of call sites -- one of those lines is `_web_input`'s
+docstring prose and two are the `def _spy_edit_community(...)` signatures of
+the two `edit_community` stand-ins further down, where the keyword is a
+PARAMETER and not an argument. **23 real call sites pass it**, 22 of them on
+the same line as the `edit_community(` that consumes it plus one wrapped
+continuation. Same measurement as the review's, counted one level finer. `from_scratch=True` lets a direct call to
+`edit_community` skip `:321-346` without needing a `CommunityMember` row
+granting ownership (`if not from_scratch:` at `:321` gates the whole block);
+`from_scratch=False` is what reaches the guard, the changed-detection, the
+language rebuild at `:371-380`, the `task_selector` dispatch at `:382` and
+the `user.id` return at `:391`. The same docstring also said the file "makes
+no claim on [`:348-391`] and asserts nothing that depends on their
+correctness beyond 'the call completes and the four fields this task's fork
+sets land on the community row'". CORRECTED: the 23 `from_scratch=False`
+call sites exist precisely to make claims on `:321-391`, and so does the
+`from_scratch=True` durability test at the end of this file, which pins
+`:369`'s commit.
+
+A NOTE ON THE "Task N" REFERENCES SCATTERED THROUGH THE COMMENTS BELOW. They
+are this round's own internal task numbering and do not resolve outside the
+workspace that produced them, which the final whole-branch review flagged.
+They are left in place rather than scrubbed -- they record which body of work
+established which claim -- but here is the mapping, so a reader outside that
+workspace can resolve every one of them to a line range:
+
+    Task 1 -> edit_community:294-319   source fork, field extraction
+    Task 2 -> edit_community:321-346   permission guard, changed-detection
+    Task 3 -> edit_community:348-391   images, field writes, languages, returns
+    Task 4 -> make_community:214-251   source fork, guards, name collisions
+    Task 5 -> make_community:253-290   creation, membership, languages, returns
+    Tasks 6-8 wrote no tests (coverage floor, mutation pass, register).
 
 THE id-1 ADMIN TRAP: `app/models.py:1259-1261` makes user id 1 an admin
 unconditionally, and tests/conftest.py:131-132 resets every sequence between
@@ -79,35 +126,36 @@ the FACTORY (tests/factories.py:124, not the production function under test)
 hardcodes `instance_id=1, user_id=1`, so `_burn_a_seed()` below exists to
 supply the row those foreign keys point at, and `_seed()` mints a bystander
 community before the real one so the community under test is never id 1
-either -- a mutant hardcoding `community_id=1` anywhere in this round's
-later tasks would otherwise be invisible to every test built on this seed.
+either -- a mutant hardcoding `community_id=1` anywhere would otherwise be
+invisible to every test built on this seed.
 
 NETWORK HAZARD, WHY icon_url/banner_url STAY FALSY THROUGHOUT THIS FILE:
-`edit_community:348`'s `is_image_url(icon_url)` (reached only via Task 3's
-territory, but reached all the same on every call this file makes) calls
-`mime_type_using_head(url)` for any truthy `url` -- a real HTTP HEAD request.
-This suite's session-scoped `block_outbound_http` fixture (tests/conftest.py:
-263) turns any unmocked request into a hard failure rather than letting it
-reach the network. Every builder and every patched `process_upload` in this
-file is therefore built to keep `icon_url`/`banner_url` at a falsy value
-(`None`) on every path, so `:348`'s guard short-circuits before
-`is_image_url` is ever called.
+`edit_community:348`'s `is_image_url(icon_url)` calls `mime_type_using_head(
+url)` for any truthy `url` -- a real HTTP HEAD request. This suite's
+session-scoped `block_outbound_http` fixture (tests/conftest.py:263) turns any
+unmocked request into a hard failure rather than letting it reach the network.
+Every builder and every patched `process_upload` in this file is therefore
+built to keep `icon_url`/`banner_url` at a falsy value (`None`) on every path,
+so `:348`'s guard short-circuits before `is_image_url` is ever called; the
+tests that do need `:348`'s truthy arm patch `is_image_url` itself with a
+call-recording stand-in.
 
 RULING 1 (progress.md), BINDING OVER THE BRIEF'S SAMPLE CODE WHERE THEY
 DIFFER: `edit_community` reads ten keys/attributes; `make_community` reads a
 DIFFERENT SEVEN, not a subset (it reads `name`, which edit_community never
 touches, and skips `description`, `rules`, `icon_url`, `banner_url`). Rather
-than let Task 4 build a second, competing builder pair for make_community,
+than let a second, competing builder pair grow for make_community,
 `_api_input`/`_web_input` below carry the UNION of both key sets, documented
-per-key in their own docstrings, so Task 4 consumes these unchanged.
+per-key in their own docstrings, and both functions' tests consume them
+unchanged. `_RecordingDict` and `_RecordingInput` wrap them where a test's
+name claims WHICH keys an arm reads.
 
-MEASUREMENT BASIS: every count in this file's task report is measured
+MEASUREMENT BASIS: every count in this file's reports is measured
 THIS-FILE-ALONE (`--cov=app.shared.community` run against only this test
-module). The full-suite figure is Task 6's; per this round's plan, no other
-test file names `make_community` or `edit_community` as production
-functions (the oracle check above), so this file's coverage of `:294-319`
-should not shift between the two bases the way `test_shared_community_
-invites.py`'s `get_comm_flair_list` did.
+module). The full-suite figure is the floor-setting task's; no other test file
+names `make_community` or `edit_community` as production functions (the oracle
+check above), so this file's coverage of them should not shift between the two
+bases the way `test_shared_community_invites.py`'s `get_comm_flair_list` did.
 """
 from types import SimpleNamespace
 
@@ -118,14 +166,19 @@ from sqlalchemy import event, text
 from app import db
 from app.constants import SRC_API, SRC_WEB
 from app.models import Community, CommunityMember, File, Language, User
+# The module object itself, not just the two functions: the final fix round's
+# `authorise_api_user` / `current_user` observations (C2) need the REAL bound
+# function to delegate to before monkeypatch replaces the module global, and
+# `monkeypatch.setattr('app.shared.community.<name>', ...)` cannot hand it back.
+from app.shared import community as community_module
 from app.shared.community import edit_community, make_community
 from app.utils import markdown_to_html, piefed_markdown_to_lemmy_markdown
 # `make_community` (tests/factories.py:124) is renamed on import here, per
-# this file's own module docstring's naming-trap note: Task 4 needs the
-# BARE name `make_community` for `app.shared.community.make_community`,
-# the production function under test, so the row-builder of the same name
-# is aliased instead. `_seed()`'s two call sites below are updated to
-# match; nothing else in this file (Tasks 1-3) called the factory by name.
+# this file's own module docstring's naming-trap note: the
+# `make_community:214-251` tests need the BARE name `make_community` for
+# `app.shared.community.make_community`, the production function under test,
+# so the row-builder of the same name is aliased instead. `_seed()`'s two
+# call sites below are the only places the factory is still called by name.
 from tests.factories import bearer, make_community as make_community_factory, make_community_member, \
     make_instance, make_user, web_ctx
 
@@ -153,7 +206,7 @@ def _seed():
 
     The bystander is minted FIRST, purely to consume Community id 1, so the
     community under test is never id 1 -- see the module docstring's id-1
-    trap note. It is returned as `.bystander` so Tasks 2-5 can reuse it for
+    trap note. It is returned as `.bystander` so later tests can reuse it for
     their own cross-community negative controls without minting a second
     community themselves, matching this round's sibling file's convention
     (tests/test_shared_community_invites.py's `_seed`).
@@ -182,10 +235,15 @@ def _api_input(**overrides):
     edit_community's own tests. `discussion_languages` is read by both
     functions but only ACTED on when `from_scratch=False` (edit_community
     :371-380) or unconditionally inside make_community's own body
-    (:272-279) -- every test in this file passes `from_scratch=True`, which
-    skips edit_community's own use of it entirely; the key is still read at
-    :303 regardless (a plain dict-index, not a branch), so a missing key
-    would raise `KeyError` there even under `from_scratch=True`.
+    (:272-279). CORRECTED BY THE FINAL WHOLE-BRANCH REVIEW: this paragraph
+    used to say "every test in this file passes `from_scratch=True`, which
+    skips edit_community's own use of it entirely", which was true only of
+    the file's first commit -- 23 call sites now pass `from_scratch`
+    as `False` and do reach `:371-380` (see the module docstring for that
+    count's basis). The key is read at `:303` either way (a plain
+    dict-index, not a branch), so a missing key would raise `KeyError` there
+    even under `from_scratch=True`; that the read itself has no other
+    observable effect on that path is what `_RecordingDict` exists for.
 
     `icon_url`/`banner_url` default to `None` deliberately: see the module
     docstring's NETWORK HAZARD note. A truthy value on either key reaches
@@ -208,6 +266,39 @@ def _api_input(**overrides):
     }
     data.update(overrides)
     return data
+
+
+class _RecordingDict(dict):
+    """`_api_input`'s dict, wrapped so that every key the production code
+    INDEXES is recorded.
+
+    Added by the final fix round for C2. `edit_community:303`'s
+    `discussion_languages = input['discussion_languages']` has no observable
+    effect at all under `from_scratch=True` -- the local is used only inside
+    `:371-379`'s `if not from_scratch:` block -- so replacing `:303` with
+    `pass` left every field assertion in
+    `test_edit_community_api_arm_reads_all_ten_keys_and_authorises_user`
+    green, in a test whose NAME claims all ten keys are read. `icon_url`
+    (`:298`) and `banner_url` (`:299`) were observed only as a `NameError`
+    further down, and a crash kill is not a kill.
+
+    Recording the reads themselves moves the observable UPSTREAM of whether
+    the value is ever used -- the same move the commit counter and the
+    `Community.languages` append listeners elsewhere in this file make. A
+    dropped assignment now fails a plain list comparison.
+
+    Only `__getitem__` is intercepted: `make_community:215` ASSIGNS
+    `input['name']` before re-reading it, and that write must keep working
+    unchanged, so `__setitem__` is left alone.
+    """
+
+    def __init__(self, data):
+        super().__init__(data)
+        self.reads = []
+
+    def __getitem__(self, key):
+        self.reads.append(key)
+        return super().__getitem__(key)
 
 
 class _Field:
@@ -266,28 +357,82 @@ def _web_input(**overrides):
     return SimpleNamespace(**{key: _Field(value) for key, value in values.items()})
 
 
+class _RecordingInput:
+    """`_web_input`'s form object, wrapped so that every attribute the
+    production code READS is recorded. The web counterpart of
+    `_RecordingDict` above, added by the final fix round for the same C2
+    reason: `edit_community:315`'s `discussion_languages = input.languages.data`
+    is unobservable under `from_scratch=True`, so replacing `:315` with `pass`
+    left the whole web-arm field test green.
+
+    `__getattr__` fires only for attributes this wrapper does not itself have,
+    so `_form` and `reads` are reached normally and everything the production
+    code asks for is delegated to the wrapped namespace and recorded. The
+    per-field `.data` reads happen on the `_Field` objects themselves and are
+    deliberately NOT recorded here -- what the name claims, and what this
+    records, is which of the form's ATTRIBUTES the arm reads.
+    """
+
+    def __init__(self, form):
+        self._form = form
+        self.reads = []
+
+    def __getattr__(self, name):
+        self.reads.append(name)
+        return getattr(self._form, name)
+
+
 # `edit_community` (app/shared/community.py:293-391), the source fork and
 # field extraction at :294-319.
 
 
-def test_edit_community_api_arm_reads_all_ten_keys_and_authorises_user(app, db_session):
+def test_edit_community_api_arm_reads_all_ten_keys_and_authorises_user(
+        app, db_session, monkeypatch):
     """`:294`'s TRUE arm (`src == SRC_API`): all ten dict keys at :295-304 are
     read into locals, and `:305` resolves the acting user via
     `authorise_api_user(auth, return_type='model')` -- NOT `current_user`,
     the else arm's source, covered by the web-arm tests below.
 
-    `from_scratch=True` is passed here (as in every test in this file)
-    purely to skip `:321-346` -- the ownership check and icon/banner-changed
-    detection, Task 2's territory -- not to change which of `:295-304`'s ten
-    assignments run; those execute unconditionally once `:294` takes the
-    SRC_API arm.
+    `from_scratch=True` is passed here purely to skip `:321-346` -- the
+    ownership check and icon/banner-changed detection -- not to change which
+    of `:295-304`'s ten assignments run; those execute unconditionally once
+    `:294` takes the SRC_API arm. (An earlier version of this sentence said
+    `from_scratch=True` was passed "as in every test in this file". CORRECTED
+    BY THE FINAL REVIEW: 26 call sites in this file pass `from_scratch=False`;
+    it was true only of the file's first task.)
 
-    Every boolean key is set to its NON-default value and every string key
-    to a value distinct from `_api_input`'s own default, so a mutant that
-    dropped one of `:295-304`'s assignments (leaving Python's implicit
-    `None`/`False`, or the community's own factory default) is caught by the
-    matching field assertion below rather than passing on a coincidental
-    default match.
+    ORIGINAL, AND WRONG -- this docstring used to claim: "Every boolean key is
+    set to its NON-default value and every string key to a value distinct from
+    `_api_input`'s own default, so a mutant that dropped one of `:295-304`'s
+    assignments ... IS CAUGHT BY THE MATCHING FIELD ASSERTION BELOW rather
+    than passing on a coincidental default match."
+
+    CORRECTION, AND THE FIX: that was false for three of the ten. The final
+    whole-branch review proved it by execution -- `:303` replaced by
+    `pass  # MUT` left this test green (`1 passed, PYTEST_EXIT=0`) -- because
+    `discussion_languages` is read at `:303` and then used only inside
+    `:371-379`'s `if not from_scratch:` block, which this call skips. There is
+    no matching field assertion for it, and `icon_url` (`:298`) and
+    `banner_url` (`:299`) had only a downstream `NameError` standing behind
+    them, which is a crash, not a kill. The distinct non-default values below
+    are still what pins the OTHER seven; what now pins all ten is
+    `_RecordingDict`, which records each key `:295-304` indexes, so a dropped
+    assignment fails a list comparison with a plain `AssertionError`. The
+    comparison is order-insensitive deliberately: the claim in this test's
+    name is WHICH ten keys are read, not the order the arm happens to read
+    them in.
+
+    AND THE NAME'S SECOND HALF. `authorise_api_user` is wrapped in a spy that
+    delegates to the real function, so `:305`'s call and its
+    `return_type='model'` keyword are asserted directly, and
+    `cache.delete_memoized` is recorded at `:384-386` -- the only place the
+    `user` bound at `:305` is observable at all on the `from_scratch=True`
+    path -- so the test now witnesses that the acting user really is the
+    bearer token's user and not some other row. Before this fix nothing in
+    this test observed `authorise_api_user` in any way (the three
+    `cache.delete_memoized` calls are no-ops under `tests/conftest.py`'s
+    `CACHE_TYPE = 'NullCache'`, which is why the recorder, not the cache, is
+    the observable).
 
     `description` is deliberately a string containing `\\r\\n` after a
     non-whitespace character -- the exact shape `piefed_markdown_to_
@@ -299,12 +444,35 @@ def test_edit_community_api_arm_reads_all_ten_keys_and_authorises_user(app, db_s
     """
     s = _seed()
     raw_description = 'a paragraph\r\nmore text'
-    api_input = _api_input(title='API Title', description=raw_description,
-                           rules='API rules', nsfw=True, restricted_to_mods=True,
-                           local_only=True, question_answer=True)
+    api_input = _RecordingDict(_api_input(title='API Title', description=raw_description,
+                                          rules='API rules', nsfw=True,
+                                          restricted_to_mods=True, local_only=True,
+                                          question_answer=True))
+    auth = bearer(s.user)
 
-    result = edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=True)
+    authorise_calls = []
+    real_authorise_api_user = community_module.authorise_api_user
 
+    def _spy_authorise_api_user(*args, **kwargs):
+        authorise_calls.append((args, kwargs))
+        return real_authorise_api_user(*args, **kwargs)
+
+    monkeypatch.setattr('app.shared.community.authorise_api_user', _spy_authorise_api_user)
+
+    acting_user_ids = []
+    monkeypatch.setattr(
+        'app.shared.community.cache.delete_memoized',
+        lambda *args, **kwargs: acting_user_ids.append(getattr(args[1], 'id', args[1])))
+
+    result = edit_community(api_input, s.community, SRC_API, auth, from_scratch=True)
+
+    assert sorted(api_input.reads) == sorted([
+        'title', 'description', 'rules', 'icon_url', 'banner_url', 'nsfw',
+        'restricted_to_mods', 'local_only', 'discussion_languages', 'question_answer'])
+    assert authorise_calls == [((auth,), {'return_type': 'model'})]
+    # `:384`'s second positional argument is the user object itself; `:385`'s
+    # and `:386`'s is `user.id`. Both are unwrapped to an id by the recorder.
+    assert acting_user_ids == [s.user.id, s.user.id, s.user.id]
     assert result is s.community
     assert s.community.title == 'API Title'
     assert s.community.description == raw_description
@@ -321,6 +489,17 @@ def test_edit_community_web_arm_reads_all_fields_and_converts_description(
     """`:294`'s FALSE arm (any `src != SRC_API`, here `SRC_WEB`): the eight
     form attributes read at `:307-309` and `:312-316`, plus `user =
     current_user` at `:317`.
+
+    CORRECTED BY THE FINAL REVIEW, the same C2 defect as the API sibling
+    above: this docstring's enumeration of "the eight form attributes" was
+    not backed by eight observations. `discussion_languages` (`:315`) was
+    observed by nothing -- `:315` replaced by `pass  # MUT` left this test
+    green (`1 passed, PYTEST_EXIT=0`) -- and `user = current_user` (`:317`)
+    reached only `:384-386`'s `cache.delete_memoized` no-ops. `_RecordingInput`
+    now records each attribute the arm reads, and a recorder on
+    `cache.delete_memoized` captures the acting user's id at call time, so
+    both halves of the name have an assertion that fails when the claim is
+    false.
 
     `:308` additionally runs `piefed_markdown_to_lemmy_markdown` on the raw
     description -- the one transform the SRC_API arm never applies. The
@@ -354,14 +533,27 @@ def test_edit_community_web_arm_reads_all_fields_and_converts_description(
     calls = []
     monkeypatch.setattr('app.shared.community.process_upload',
                         lambda *a, **kw: calls.append((a, kw)))
+    acting_user_ids = []
+    monkeypatch.setattr(
+        'app.shared.community.cache.delete_memoized',
+        lambda *args, **kwargs: acting_user_ids.append(getattr(args[1], 'id', args[1])))
     raw_description = 'a paragraph\r\nmore text'
-    web_input = _web_input(community_name='Web Title', description=raw_description,
-                           rules='Web rules', nsfw=True, restricted_to_mods=True,
-                           local_only=True, question_answer=True)
+    web_input = _RecordingInput(
+        _web_input(community_name='Web Title', description=raw_description,
+                   rules='Web rules', nsfw=True, restricted_to_mods=True,
+                   local_only=True, question_answer=True))
 
     with web_ctx(app, s.user):
         result = edit_community(web_input, s.community, SRC_WEB, from_scratch=True)
 
+    assert sorted(web_input.reads) == sorted([
+        'community_name', 'description', 'rules', 'nsfw', 'restricted_to_mods',
+        'local_only', 'languages', 'question_answer'])
+    # `:317`'s `user = current_user`, observable on this path only through
+    # `:384-386`. The recorder unwraps the LocalProxy to an id AT CALL TIME,
+    # inside `web_ctx`'s request context, because the proxy is unbound by the
+    # time these assertions run.
+    assert acting_user_ids == [s.user.id, s.user.id, s.user.id]
     assert result is s.community
     assert calls == []
     assert s.community.title == 'Web Title'
@@ -455,8 +647,8 @@ def test_edit_community_web_arm_processes_uploaded_banner_via_process_upload(
 
 
 # `edit_community` (app/shared/community.py:321-346), the permission guard
-# and icon/banner-changed detection -- this round's other task, following on
-# from the source-fork tests above. Task 3 owns :348-391.
+# and icon/banner-changed detection, following on from the source-fork tests
+# above. `:348-391` is the next section's subject, further down this file.
 
 
 def _make_site_admin(user):
@@ -542,11 +734,26 @@ def _seed_und_language():
 # (sub-project 46, tests/test_shared_community_moderation.py:94-150), which
 # also notes: NOT cause 6 (cause 6 opens "the only cause on this list that
 # is not about a clause", and `community.is_owner(user) or` IS a clause --
-# a disjunct in a boolean expression); and that this is the DISJUNCTIVE dual
-# of cause 3's catalogued conjunctive text -- `A or B` where the EARLIER
-# disjunct (`is_owner(user)`) implies the LATER one (`is_moderator(user)`),
-# the mirror image of `A and B` where the LATER conjunct implies the
-# EARLIER one.
+# a disjunct in a boolean expression).
+#
+# ORIGINAL, AND AN UNDERSELL OF ITS OWN PROOF: this comment used to add that
+# the shape is "the DISJUNCTIVE dual of cause 3's catalogued conjunctive
+# text -- `A or B` where the EARLIER disjunct implies the LATER one, the
+# mirror image of `A and B` where the LATER conjunct implies the EARLIER
+# one". CORRECTED BY THE FINAL WHOLE-BRANCH REVIEW, which noticed that the
+# register (D644) and this comment were deriving the same citation two
+# different ways, and that the register's is the right one: NO DUAL IS
+# NEEDED. The line is a NEGATED disjunction, and De Morgan turns it into
+# cause 3's catalogued conjunctive text literally -- `if not (A or B or C)`
+# IS `if (not A) and (not B) and (not C)`, whose conjuncts are
+# `not is_owner`, `not is_moderator`, `not is_admin` in that order. Cause 3
+# asks whether a LATER conjunct implies this one, and `not is_moderator(u)`
+# implies `not is_owner(u)`: the contrapositive of the `is_owner =>
+# is_moderator` proved above. So the establisher matches cause 3's
+# enumerated text exactly, fact 252's "where a shape resembles a cause but
+# the establisher does not match its enumerated text, cite the fact rather
+# than the number" does not bite, and citing the number is correct. The
+# earlier "mirror image" framing would have argued the opposite.
 #
 # NO TEST ISOLATES OPERAND ONE ALONE, and none should be written to: doing
 # so would require a CommunityMember row with `is_owner=True` and
@@ -616,24 +823,46 @@ def test_edit_community_permission_guard_admin_not_member_is_admitted(
 def test_edit_community_permission_guard_neither_raises_and_leaves_community_untouched(
         app, db_session):
     """`:322`'s all-three-False case: no CommunityMember row and no admin
-    role. `:323` raises before any of this task's own target lines
-    (`:325-346`) or Task 3's territory run, so `community.title` must
-    survive unchanged from before the call -- a mutant that raised AFTER
-    mutating the row would still satisfy a raise-only assertion.
+    role. `:323` raises before `:325-346` or `:348-391` run, so the community
+    row must survive unchanged from before the call -- a mutant that raised
+    AFTER mutating the row would still satisfy a raise-only assertion.
+
+    WIDENED BY THE FINAL WHOLE-BRANCH REVIEW: this test asserted only
+    `title`, while its name says `leaves_community_untouched`, so a mutant
+    that wrote any of the other seven columns `:361-368` sets before raising
+    would have survived it. All eight are now given non-default values in the
+    input and all eight are compared, as one tuple, against the row as it
+    stood before the call.
     """
     s = _seed()
-    original_title = s.community.title
-    api_input = _api_input(title='Should Not Land')
+
+    def _row_fields():
+        return (s.community.title, s.community.description,
+                s.community.description_html, s.community.rules,
+                s.community.nsfw, s.community.restricted_to_mods,
+                s.community.local_only, s.community.question_answer)
+
+    before = _row_fields()
+    api_input = _api_input(title='Should Not Land', description='Nor should this',
+                           rules='Nor these', nsfw=True, restricted_to_mods=True,
+                           local_only=True, question_answer=True)
 
     with pytest.raises(Exception, match='incorrect_login'):
         edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
 
-    assert s.community.title == original_title
+    assert before[0] != 'Should Not Land'
+    assert _row_fields() == before
 
 
-def test_edit_community_permission_guard_staff_alone_is_refused_unlike_sibling_guards(
-        app, db_session):
-    """`:322` reads `user.is_admin()`, NOT `is_admin_or_staff()` -- the only
+def test_edit_community_permission_guard_staff_alone_is_refused(app, db_session):
+    """NAME NARROWED BY THE FINAL WHOLE-BRANCH REVIEW: this test used to be
+    called `..._staff_alone_is_refused_unlike_sibling_guards`, and nothing in
+    it asserts anything about the sibling guards -- they are named below as
+    context for WHY this site is worth pinning, which is a docstring's job,
+    not a name's. What the body witnesses is exactly what the name now says:
+    a staff-only user is refused here.
+
+    `:322` reads `user.is_admin()`, NOT `is_admin_or_staff()` -- the only
     guard in this module that uses the narrower form. `delete_community:494`,
     `restore_community:523`, `add_mod_to_community:549`, and
     `remove_mod_from_community:617` all use `is_admin_or_staff()`
@@ -1717,10 +1946,24 @@ def test_make_community_api_arm_slugifies_name_and_reads_seven_keys(app, db_sess
     exactly), not hand-derived, matching this suite's established
     convention.
 
-    Execution continues on through Task 5's `:253-290` territory to make
-    these locals observable at all (they have no other externally visible
-    trace) -- this test asserts only the fields this task's own fork
-    reads, not on Task 5's own creation logic beyond that.
+    Execution continues on through `:253-290` to make these locals
+    observable at all (they have no other externally visible trace) -- this
+    test asserts only the fields the `:214` fork reads, not the creation
+    logic below it.
+
+    CORRECTED, PER THE FINAL WHOLE-BRANCH REVIEW: the third and last site of
+    the `.one()` crash-oracle the code review of the web siblings condemned.
+    This test used to discard the return value and re-derive the row with
+    `Community.query.filter_by(name=expected_name).one()`, which makes
+    `sqlalchemy.exc.NoResultFound` -- a crash, not a clean `AssertionError`
+    -- the ONLY oracle behind the `slugifies_name` half of this test's name:
+    a mutation of `:215`'s `slugify(...).lower()` means no row matches
+    `expected_name` at all, and the lookup blows up before any assertion
+    runs. A crash kill is not a kill. The SRC_API arm returns
+    `(user.id, community.id)` at `:288`, so the fix is to capture that tuple,
+    fetch the row by the id the call itself just created (guaranteed to
+    exist), and assert the name as a plain string comparison -- the same
+    shape the two web-arm siblings already carry.
     """
     s = _seed()
     _seed_und_language()
@@ -1731,9 +1974,12 @@ def test_make_community_api_arm_slugifies_name_and_reads_seven_keys(app, db_sess
                            restricted_to_mods=True, local_only=True,
                            question_answer=True)
 
-    make_community(api_input, SRC_API, bearer(user))
+    result = make_community(api_input, SRC_API, bearer(user))
 
-    community = Community.query.filter_by(name=expected_name).one()
+    user_id, community_id = result
+    assert user_id == user.id
+    community = db.session.get(Community, community_id)
+    assert community.name == expected_name
     assert community.title == 'API Title'
     assert community.nsfw is True
     assert community.restricted_to_mods is True
@@ -1799,7 +2045,13 @@ def test_make_community_web_arm_without_c_prefix_reads_seven_attributes_unchange
     `:227`'s strip never runs and `:228`'s slugify operates on the whole,
     unstripped string.
 
-    UNREACHABLE IN PRODUCTION -- see this section's header comment.
+    UNREACHABLE IN PRODUCTION: `make_community`'s only production caller,
+    app/api/alpha/utils/community.py:221, always passes SRC_API, so the web
+    arm this test exercises has no production caller. This test reaches it
+    only by calling `make_community` directly with SRC_WEB. (Restated in
+    full here by the final whole-branch review, which found this a bare
+    pointer to the section header where the register claimed every such test
+    restated the claim itself.)
 
     CORRECTED, PER CODE REVIEW: same fix as the sibling test above --
     `result` is captured and asserted directly against `expected_name`
@@ -2150,6 +2402,15 @@ def test_make_community_genuine_duplicate_raises_capital_c_message_and_rolls_bac
     monkeypatch.undo()
 
     assert str(exc_info.value) == 'Community with that name already exists'
+    # `:267`'s `db.session.rollback()`, WITNESSED rather than assumed, added by
+    # the final whole-branch review: this test's name claims `and_rolls_back`
+    # and nothing here observed it. Removing `:267` was reported (task-7 X24)
+    # as dying by `PendingRollbackError` on the next query -- a crash, and a
+    # crash kill is not a kill. A failed flush leaves the Session deactivated
+    # until something rolls it back, and `Session.is_active` reports exactly
+    # that state, so this is a clean `AssertionError` on the same mutant and it
+    # runs BEFORE the query below that would otherwise crash first.
+    assert db.session.is_active
     surviving = Community.query.filter_by(name='racecommunity').one()
     assert surviving.ap_profile_id == f"https://{app.config['SERVER_NAME']}/c/racecommunity"
 
@@ -2575,7 +2836,14 @@ def test_edit_community_web_arm_restricted_to_mods_and_local_only_are_not_crosse
     """`edit_community:313-314`'s web reads, feeding the same `:366-367`
     writes -- the web mirror of the API test above.
 
-    UNREACHABLE IN PRODUCTION -- see `_web_input`'s docstring.
+    UNREACHABLE IN PRODUCTION: `edit_community`'s only two production callers
+    both resolve to SRC_API -- app/api/alpha/utils/community.py:261 directly,
+    and app/shared/community.py:282 via `make_community`, whose own only
+    caller also always passes SRC_API -- so this arm has no production caller
+    at either value of `from_scratch`. This test reaches it only by calling
+    `edit_community` directly with SRC_WEB. (Restated in full here by the
+    final whole-branch review; `_web_input`'s docstring carries the same
+    chain, but a pointer is not the restatement the register claimed.)
     """
     s = _seed()
     web_input = _web_input(restricted_to_mods=True, local_only=False)
@@ -2634,6 +2902,16 @@ def test_make_community_web_arm_restricted_to_mods_and_local_only_are_not_crosse
         app, db_session, monkeypatch):
     """`make_community:233-234`'s web reads -- the web mirror of the API test
     above, with the same `edit_community` spy and for the same reason.
+
+    UNREACHABLE IN PRODUCTION, added by the final whole-branch review, which
+    found this the one SRC_WEB call site in the file carrying no disclosure of
+    its own: `make_community` has exactly ONE production caller,
+    app/api/alpha/utils/community.py:221, and it always passes SRC_API, so
+    `make_community:225`'s else arm (`:226-237`) has no production caller at
+    all. This test reaches it only by calling `make_community` directly with
+    SRC_WEB. "For the same reason" above refers to the spy's necessity, not to
+    this; a reader landing on this test must not have to find the API sibling
+    to learn the path is dead.
     """
     s = _seed()
     _seed_und_language()
@@ -2714,20 +2992,106 @@ def test_make_community_keypair_halves_are_not_transposed(app, db_session):
 # whichever task next has `:361-369` in its own scope rather than bolted on
 # here where it would duplicate.
 #
-# REGISTERED, NOT TESTED (2 of 2) -- `:369`'s `db.session.commit()` can be
-# removed and all 48 tests pass. This is NOT fact 75 cause 6: the effect is not
-# repeated unconditionally by later code, because `:380`'s commit sits inside
-# `if not from_scratch:` and the `from_scratch=True` path has no later commit
-# at all (removing `:380` alone IS killed, by three tests, so the
-# `from_scratch=False` path is pinned). It survives because every assertion in
-# this file reads the in-session object, and a flushed-but-uncommitted row is
-# visible to the same transaction that flushed it. The honest difficulty is
-# that no clean closing test exists within this harness:
-# `db.session.expire_all()` followed by a re-query does NOT close it (the
-# flushed rows are still visible on the same connection), and a `rollback()`
-# discards the writes whether or not the commit ran, so it cannot distinguish
-# the two. Closing it needs an oracle that crosses a real transaction boundary,
-# which conftest.py's transactional `db_session` fixture does not offer. A test
-# that appeared to close it by any other means would be catching its own
-# scaffolding, not the behaviour -- fact 75's standing rule that a forced kill
-# is worth less than an honest registration.
+# CLOSED BY THE FINAL FIX ROUND -- `:369`'s `db.session.commit()`. This block
+# used to read "REGISTERED, NOT TESTED (2 of 2)", and its central premise was
+# false. The original sentences are kept here beside their correction, per this
+# campaign's convention of leaving a wrong line visible rather than silently
+# replacing it.
+#
+# ORIGINAL, AND WRONG: "a `rollback()` discards the writes whether or not the
+# commit ran, so it cannot distinguish the two. Closing it needs an oracle that
+# crosses a real transaction boundary, which conftest.py's TRANSACTIONAL
+# `db_session` fixture does not offer."
+#
+# CORRECTION: `tests/conftest.py:136-160`'s `db_session` is NOT transactional.
+# Its own docstring says it "[d]eletes every row rather than rolling back a
+# nested transaction: the code under test calls db.session.commit() in several
+# places, which a rollback-based fixture would have to fight", and the
+# DELETE-sweep teardown at `:160-192` is exactly what a rollback-based fixture
+# would not need. There is no `begin_nested` and no connection-bound outer
+# transaction anywhere in it. So `:369` is a REAL commit, and a `rollback()`
+# after the call does NOT discard the writes under both codes: under the
+# unmutated code they are already durable and survive it; under the mutant they
+# are flushed but uncommitted and it throws them away. That asymmetry is the
+# distinguishing oracle, and the test below is built on it.
+#
+# WHY THE EARLIER NON-KILLS HAPPENED: every earlier attempt entered through
+# `make_community`, where `:361-368` rewrite the same values `:265`/`:280` have
+# already committed, so a rollback reverts the row to IDENTICAL data. That is a
+# property of those tests' fixture data, not of the harness. The rest of the
+# original entry stands: this is not fact 75 cause 6 (`:380`'s commit sits
+# inside `if not from_scratch:`, so the `from_scratch=True` path has no later
+# commit to repeat the effect), and the other 54 tests do survive the mutant,
+# because they all read the in-session object and a flushed-but-uncommitted row
+# is visible to the transaction that flushed it.
+#
+# THE CONJOINED `(:280, :369)` SWEEP, run by the same fix round because `:280`'s
+# own cause-6 acceptance rested on `:369` being the unconditional repeater while
+# `:369` was an unpinned survivor, and no conjoined mutant of the pair had ever
+# been applied. Both lines replaced by `pass  # MUT` in ONE conjoined mutant,
+# hand-reverted afterwards: KILLED, `6 failed, 49 passed` over this file, with
+# clean AssertionErrors rather than crashes -- `assert 2 in set()` and
+# `assert 'und' in set()` from the language tests (the appends never reach the
+# association table without a commit) and `assert 'microblogs' == 'Durable
+# Title'` from the test below.
+
+
+def test_edit_community_field_writes_are_committed_not_merely_flushed(app, db_session):
+    """`:369`'s `db.session.commit()`, pinned by TWO independent oracles.
+
+    ORACLE 1, DURABILITY ACROSS A ROLLBACK. `edit_community` is entered
+    DIRECTLY rather than through `make_community`, with a title distinct from
+    the seeded row's, so `:361`'s write is the only thing that can put
+    'Durable Title' in the database -- this is the entry point the earlier,
+    failed attempts did not use (see the correction block above).
+    `db.session.rollback()` after the call discards whatever the call left
+    uncommitted. Verbatim post-mutation failure, `:369` replaced by
+    `pass  # MUT`, this test alone:
+
+        >       assert db.session.get(Community, community_id).title == 'Durable Title'
+        E       AssertionError: assert 'microblogs' == 'Durable Title'
+        E         - Durable Title
+        E         + microblogs
+
+    'microblogs' is `make_community` the FACTORY's own default title
+    (tests/factories.py:124), i.e. the row as `_seed()` committed it -- the
+    rollback really did throw the uncommitted field writes away.
+
+    ORACLE 2, A COMMIT COUNTER UPSTREAM OF THE ORM. `event.listen(db.session,
+    'after_commit', ...)` counts the commits the call itself performs. This is
+    the same "move the observable UPSTREAM of the normalisation" technique this
+    file already uses on `Community.languages`' `append` event at three sites
+    (`:1633`, `:2524`, `:2592` in this file as it now stands), applied to the
+    Session rather than to a collection.
+    On the `from_scratch=True` path `:369` is the only commit: `:351`/`:357`
+    need a truthy icon/banner URL, which this file never supplies (module
+    docstring, NETWORK HAZARD), and `:380` sits inside `if not from_scratch:`.
+    So the count is exactly one, and the same mutant fails this assertion too
+    with `assert 0 == 1`.
+
+    Both oracles are kept because they fail for different reasons -- one says
+    the writes were not made durable, the other says the commit did not happen
+    at all -- and either alone kills the mutant. The durability assertion is
+    ordered first so the failure a future reader sees is the behavioural one.
+    """
+    s = _seed()
+    community_id = s.community.id
+    seeded_title = s.community.title
+    api_input = _api_input(title='Durable Title')
+    commits = []
+
+    def _count_commit(session):
+        commits.append(1)
+
+    event.listen(db.session, 'after_commit', _count_commit)
+    try:
+        edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=True)
+    finally:
+        event.remove(db.session, 'after_commit', _count_commit)
+
+    # The negative control: if the seed ever started life with this title the
+    # durability assertion below would pass under the mutant too.
+    assert seeded_title != 'Durable Title'
+    db.session.rollback()
+    assert db.session.get(Community, community_id).title == 'Durable Title'
+    assert len(commits) == 1
