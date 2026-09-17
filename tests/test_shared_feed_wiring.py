@@ -15,10 +15,10 @@ resolution sub-project 48 used for make_community.
 """
 import pytest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from app import db
-from app.models import Community, CommunityMember, Feed, FeedItem, User
+from app.models import Community, CommunityMember, Feed, FeedItem, Instance, User
 from app.shared.feed import (_feed_add_community, _feed_remove_community,
                              announce_feed_add_remove_to_subscribers,
                              announce_feed_delete_to_subscribers,
@@ -449,4 +449,178 @@ def test_announce_add_remove_closes_the_task_session_on_success(app, db_session)
         patch.stopall()
 
     assert fake_session.return_value.rollback.call_count == 0
+    assert fake_session.return_value.close.call_count == 1
+
+
+def test_announce_delete_builds_a_delete_naming_the_feed_and_actor(app, db_session):
+    """:576-585. The actor is the USER, not the feed -- unlike its twin, whose
+    actor at :514 is the feed. Asserting both halves is what records that.
+
+    instance.inbox must be set or :604's delivery guard is always False and
+    send is never called -- the brief's original version of this test omitted
+    it, which would have left send.call_args None.
+    """
+    s = _seed()
+    s.owner.ap_public_url = 'https://test.piefed.local/u/feedowner'
+    remote = make_user(s.instance, 'remotemember', local=False)
+    s.instance.inbox = 'https://remote.example/inbox'
+    db.session.commit()
+    make_feed_member(remote, s.feed)
+
+    with patch('app.shared.feed.send_post_request') as send:
+        with patch('app.shared.feed.instance_banned', return_value=False):
+            announce_feed_delete_to_subscribers(s.owner.id, s.feed.id)
+
+    activity = send.call_args.args[1]
+    assert activity['type'] == 'Delete'
+    assert activity['actor'] == s.owner.ap_public_url
+    assert activity['object']['type'] == 'Feed'
+    assert activity['object']['id'] == s.feed.ap_public_url
+
+
+def test_announce_delete_skips_the_feed_owner(app, db_session):
+    """:598-599, with an identity oracle rather than a call count.
+
+    FIX, following task-4-report.md's mutant transcript on this function's
+    twin: asserting only send.call_count == 1 holds whether the owner is
+    skipped and the other member is sent to (correct) or the owner is sent to
+    and the other member is skipped instead (the :598 `==`-to-`!=` mutant),
+    because both members would otherwise be remote and share one Instance --
+    exactly one send happens either way. The owner and the other member are
+    placed on two DIFFERENT instances with two different inboxes, so
+    send_post_request's first argument (instance.inbox, :605) discloses WHICH
+    member's Instance row the surviving branch actually reached.
+    """
+    s = _seed()
+    owner_instance = s.instance
+    owner_instance.inbox = 'https://ownerinstance.example/inbox'
+    s.owner.ap_id = 'feedowner@remote.example'
+
+    other_instance = make_instance('deleteotherinstance.example')
+    other_instance.inbox = 'https://deleteotherinstance.example/inbox'
+    other = make_user(other_instance, 'otherremote', local=False)
+    db.session.commit()
+
+    make_feed_member(s.owner, s.feed)
+    make_feed_member(other, s.feed)
+    assert s.feed.user_id == s.owner.id
+    assert owner_instance.id != other_instance.id
+    assert owner_instance.inbox != other_instance.inbox
+
+    with patch('app.shared.feed.send_post_request') as send:
+        with patch('app.shared.feed.instance_banned', return_value=False):
+            announce_feed_delete_to_subscribers(s.owner.id, s.feed.id)
+
+    assert send.call_count == 1
+    assert send.call_args.args[0] == other_instance.inbox
+
+
+def test_announce_delete_skips_local_members_without_subscribing_them(app, db_session):
+    """:600-601. THE DIVERGENCE FROM THE TWIN, asserted rather than described.
+
+    announce_feed_add_remove_to_subscribers:551-556 subscribes local members.
+    This function simply skips them. do_subscribe is patched so that a mutant
+    importing the twin's behaviour here would be caught by the call count,
+    not merely by the absence of a call.
+
+    Local and remote members are placed on two DIFFERENT instances with two
+    different inboxes -- the same fix as the owner-skip test above -- so that
+    a mutant inverting :600's condition (which would skip the remote member
+    instead and let the local member's send through, holding the call count
+    at 1 either way) is caught by WHICH inbox the surviving call carries.
+    """
+    s = _seed()
+    local_instance = make_instance('deletelocalmember.example')
+    local_instance.inbox = 'https://deletelocalmember.example/inbox'
+    local_member = make_user(local_instance, 'localmember', local=True)
+
+    remote_instance = make_instance('deleteremotemember.example')
+    remote_instance.inbox = 'https://deleteremotemember.example/inbox'
+    remote = make_user(remote_instance, 'remotemember', local=False)
+    db.session.commit()
+
+    make_feed_member(local_member, s.feed)
+    make_feed_member(remote, s.feed)
+    assert local_instance.id != remote_instance.id
+    assert local_instance.inbox != remote_instance.inbox
+
+    with patch('app.shared.feed.send_post_request') as send:
+        with patch('app.community.routes.do_subscribe') as subscribe:
+            with patch('app.shared.feed.instance_banned', return_value=False):
+                announce_feed_delete_to_subscribers(s.owner.id, s.feed.id)
+
+    assert send.call_count == 1
+    assert send.call_args.args[0] == remote_instance.inbox
+    assert subscribe.call_count == 0
+
+
+@pytest.mark.parametrize('inbox, online, banned, expect_send', [
+    ('https://remote.example/inbox', True, False, 1),
+    (None, True, False, 0),
+    ('https://remote.example/inbox', False, False, 0),
+    ('https://remote.example/inbox', True, True, 0),
+])
+def test_announce_delete_delivery_guard_isolates_each_operand(
+        app, db_session, inbox, online, banned, expect_send):
+    """:604's three operands, one falsified per row against a passing control.
+
+    Written separately from the twin's identical-looking table at :560
+    because the two functions have already diverged at :548/:598, and a
+    shared helper would hide the next divergence as well.
+    """
+    s = _seed()
+    remote = make_user(s.instance, 'remotemember', local=False)
+    db.session.commit()
+    make_feed_member(remote, s.feed)
+    s.instance.inbox = inbox
+    db.session.commit()
+
+    with patch('app.shared.feed.send_post_request') as send:
+        with patch('app.shared.feed.instance_banned', return_value=banned):
+            with patch.object(type(s.instance), 'online', return_value=online):
+                announce_feed_delete_to_subscribers(s.owner.id, s.feed.id)
+
+    assert send.call_count == expect_send
+
+
+def test_announce_delete_rolls_back_and_re_raises_on_failure(app, db_session):
+    """:606-608, with :609-610's finally proved by the close count.
+
+    :598's fm_user comes from `session.query(User)` -- the TASK session --
+    unlike the twin's :548, which reads the real `User.query`. Mocking
+    get_task_session wholesale therefore also intercepts the member lookup
+    here, not merely the Instance lookup as in the twin's version of this
+    test (registered divergence). A query.side_effect keyed on the model
+    class is required so fm_user resolves to a real, non-owner, non-local
+    User -- otherwise fm_user.is_local() is a truthy MagicMock and the
+    member is skipped before send_post_request is ever reached, and
+    pytest.raises(RuntimeError) would fail with nothing raised.
+    """
+    s = _seed()
+    remote = make_user(s.instance, 'remotemember', local=False)
+    s.instance.inbox = 'https://remote.example/inbox'
+    db.session.commit()
+    make_feed_member(remote, s.feed)
+
+    fake_session = patch('app.shared.feed.get_task_session').start()
+
+    def fake_query(model):
+        query = MagicMock()
+        if model is User:
+            query.get.return_value = remote
+        elif model is Instance:
+            query.get.return_value = s.instance
+        return query
+
+    fake_session.return_value.query.side_effect = fake_query
+
+    try:
+        with patch('app.shared.feed.instance_banned', return_value=False):
+            with patch('app.shared.feed.send_post_request', side_effect=RuntimeError('boom')):
+                with pytest.raises(RuntimeError):
+                    announce_feed_delete_to_subscribers(s.owner.id, s.feed.id)
+    finally:
+        patch.stopall()
+
+    assert fake_session.return_value.rollback.call_count == 1
     assert fake_session.return_value.close.call_count == 1
