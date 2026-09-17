@@ -18,7 +18,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from app import db
-from app.models import Community, CommunityMember, Feed, FeedItem, Instance, User
+from app.models import Community, CommunityJoinRequest, CommunityMember, Feed, FeedItem, Instance, User
 from app.shared.feed import (_feed_add_community, _feed_remove_community,
                              announce_feed_add_remove_to_subscribers,
                              announce_feed_delete_to_subscribers,
@@ -795,3 +795,341 @@ def test_feed_add_community_subscribes_via_ap_id_when_the_community_has_one(app,
     assert first == 'wiring@remote.example'
     assert second == s.bystander_community.name
     assert first != second
+
+
+def test_feed_remove_community_deletes_the_item_and_decrements_the_count(app, db_session):
+    """:440-448, with a bystander item that must survive.
+
+    The bystander sits on a DIFFERENT feed and names a DIFFERENT community
+    (s.bystander_feed / s.bystander_community) than doomed's (s.feed /
+    s.community), so the bystander's community appears nowhere on the feed
+    under test. Reusing s.community for the bystander -- sharing an axis with
+    the row under test instead of being fully orthogonal to it -- is the
+    shape that produced a bystander whose value could not distinguish
+    anything once a later comparison collapsed it (Task 3's Major). This
+    construction proves the delete targets the one row named by BOTH
+    arguments and leaves an unrelated row alone; it does not, and does not
+    claim to, distinguish which single filter_by a mutant might drop, since
+    `:440`'s query has no ORDER BY and this campaign does not assert on
+    query-planner row order.
+
+    num_communities is pre-seeded to 1 so the decrement is visible as 1-to-0,
+    not 0-to-0.
+    """
+    s = _seed()
+    doomed = make_feed_item(s.feed, s.community)
+    survivor = make_feed_item(s.bystander_feed, s.bystander_community)
+    s.feed.num_communities = 1
+    db.session.commit()
+
+    _feed_remove_community(s.community.id, s.feed.id)
+
+    assert db.session.get(FeedItem, doomed.id) is None
+    assert db.session.get(FeedItem, survivor.id) is not None
+    assert s.feed.num_communities == 0
+
+
+@pytest.mark.parametrize('local, auto_leave, joined_via_feed, expect_removed', [
+    (True, True, True, True),
+    (False, True, True, False),
+    (True, False, True, False),
+    (True, True, False, False),
+    (True, True, None, False),
+])
+def test_feed_remove_community_member_guard_isolates_each_operand(
+        app, db_session, local, auto_leave, joined_via_feed, expect_removed):
+    """:456's four operands against a passing control in row 1.
+
+    ON THE THIRD AND FOURTH OPERANDS. `cm.joined_via_feed is not None and
+    cm.joined_via_feed` -- for a Boolean column the truthiness test alone
+    excludes None, so the `is not None` conjunct looks subsumed. It is NOT
+    dropped from this table: rows 4 and 5 separate False from None, which is
+    what a later mutation pass needs in order to decide whether the conjunct
+    is killable. This test only establishes that the two values ARE
+    separately reachable inputs to the guard (row 4 sets False, row 5 sets
+    None, and both reach expect_removed=False); whether a mutant that deletes
+    the `is not None and` conjunct survives is for that later pass to
+    determine and name against fact 75, not for this coverage task to
+    pre-judge -- do not force-fit cause 3 here.
+    """
+    s = _seed()
+    make_feed_item(s.feed, s.community)
+    s.feed.num_communities = 1
+    member = make_user(s.instance, 'member', local=local)
+    member.feed_auto_leave = auto_leave
+    db.session.commit()
+    cm = make_community_member(member, s.community)
+    cm.joined_via_feed = joined_via_feed
+    db.session.commit()
+
+    with patch('app.shared.feed.community_membership', return_value=0):
+        _feed_remove_community(s.community.id, s.feed.id)
+
+    remaining = db.session.query(CommunityMember).filter_by(
+        user_id=member.id, community_id=s.community.id).first()
+    assert (remaining is None) is expect_removed
+
+
+def test_feed_remove_community_never_unsubscribes_a_community_owner(app, db_session):
+    """:458's guard against SUBSCRIPTION_OWNER.
+
+    community_membership is patched on app.shared.feed, where feed.py:20-21
+    bound it. A second, non-owner member is the positive control, so this
+    cannot pass because the loop never ran.
+    """
+    from app.constants import SUBSCRIPTION_OWNER
+
+    s = _seed()
+    make_feed_item(s.feed, s.community)
+    s.feed.num_communities = 1
+    owner_member = make_user(s.instance, 'commowner', local=True)
+    plain_member = make_user(s.instance, 'plainmember', local=True)
+    db.session.commit()
+    for u in (owner_member, plain_member):
+        cm = make_community_member(u, s.community)
+        cm.joined_via_feed = True
+    db.session.commit()
+
+    def membership(user, community):
+        return SUBSCRIPTION_OWNER if user.id == owner_member.id else 0
+
+    with patch('app.shared.feed.community_membership', side_effect=membership):
+        _feed_remove_community(s.community.id, s.feed.id)
+
+    still = {cm.user_id for cm in db.session.query(CommunityMember).filter_by(
+        community_id=s.community.id).all()}
+    assert still == {owner_member.id}
+
+
+def test_feed_remove_community_sends_an_undo_follow_for_a_remote_community(app, db_session):
+    """:461-485. The Undo wraps the Follow it is undoing.
+
+    Asserting the nesting is what makes :470-483 observable; asserting only
+    the outer type would pass under a mutant that sent an empty object. The
+    community is remote and its instance is not gone_forever, so both guards
+    at :461 and :462 take their True arms.
+
+    Community.is_local() (app/models.py:795) reads self.profile_id(), not
+    self.ap_id directly -- profile_id() falls back to ap_profile_id, which
+    make_community sets to a LOCAL host by default. Setting only ap_id to a
+    remote value leaves is_local() reading the still-local ap_profile_id and
+    returning True, so ap_profile_id is overridden here too.
+    """
+    s = _seed()
+    s.community.ap_id = 'wiring@remote.example'
+    s.community.ap_profile_id = 'https://remote.example/c/wiring'
+    s.community.ap_public_url = 'https://remote.example/c/wiring'
+    s.community.ap_inbox_url = 'https://remote.example/inbox'
+    s.instance.gone_forever = False
+    make_feed_item(s.feed, s.community)
+    s.feed.num_communities = 1
+    member = make_user(s.instance, 'member', local=True, with_keys=True)
+    db.session.commit()
+    cm = make_community_member(member, s.community)
+    cm.joined_via_feed = True
+    db.session.commit()
+
+    with patch('app.shared.feed.community_membership', return_value=0):
+        with patch('app.shared.feed.send_post_request') as send:
+            _feed_remove_community(s.community.id, s.feed.id)
+
+    assert send.call_count == 1
+    undo = send.call_args.args[1]
+    assert undo['type'] == 'Undo'
+    assert undo['object']['type'] == 'Follow'
+    assert undo['object']['object'] == s.community.public_url()
+
+
+def test_feed_remove_community_reuses_the_join_request_uuid_for_one_named_instance(app, db_session):
+    """:464-468. A hardcoded instance-domain special case, registered as a hazard.
+
+    The control is the test above, whose instance is not ovo.st and whose
+    follow_id is therefore generated. Here the stored join request's uuid is
+    reused instead, which is the only observable difference between the arms.
+
+    CommunityJoinRequest.uuid is a UUID(as_uuid=True) column defaulting to
+    uuid.uuid4 (app/models.py:3631), NOT a string -- so the row is built by
+    the factory and its generated value is read back, rather than a literal
+    being assigned. gibberish is patched so the generated follow_id can never
+    collide with the uuid and pass this assertion by accident.
+    """
+    s = _seed()
+    s.instance.domain = 'ovo.st'
+    s.community.ap_id = 'wiring@ovo.st'
+    s.community.ap_profile_id = 'https://ovo.st/c/wiring'
+    s.community.ap_public_url = 'https://ovo.st/c/wiring'
+    s.community.ap_inbox_url = 'https://ovo.st/inbox'
+    s.instance.gone_forever = False
+    make_feed_item(s.feed, s.community)
+    s.feed.num_communities = 1
+    member = make_user(s.instance, 'member', local=True, with_keys=True)
+    db.session.commit()
+    cm = make_community_member(member, s.community)
+    cm.joined_via_feed = True
+    db.session.commit()
+    jr = make_community_join_request(member, s.community)
+
+    with patch('app.shared.feed.community_membership', return_value=0):
+        with patch('app.shared.feed.gibberish', return_value='NOTTHEUUID'):
+            with patch('app.shared.feed.send_post_request') as send:
+                _feed_remove_community(s.community.id, s.feed.id)
+
+    undo = send.call_args.args[1]
+    assert undo['object']['id'].endswith(str(jr.uuid))
+    assert 'NOTTHEUUID' not in undo['object']['id']
+
+
+def test_feed_remove_community_generates_a_follow_id_on_ovo_st_with_no_stored_join_request(app, db_session):
+    """:467's False arm -- ovo.st's own special case, but with no row to reuse.
+
+    Same ovo.st setup as the test above, minus the CommunityJoinRequest row.
+    :465-466's lookup then returns None, :467 is False, and :464's generated
+    follow_id (built from the patched gibberish) is what actually reaches the
+    Follow/Undo -- the mirror image of the row-4 test's positive case, and
+    the only way to observe :467's guard rather than just :464's assignment.
+    """
+    s = _seed()
+    s.instance.domain = 'ovo.st'
+    s.community.ap_id = 'wiring@ovo.st'
+    s.community.ap_profile_id = 'https://ovo.st/c/wiring'
+    s.community.ap_public_url = 'https://ovo.st/c/wiring'
+    s.community.ap_inbox_url = 'https://ovo.st/inbox'
+    s.instance.gone_forever = False
+    make_feed_item(s.feed, s.community)
+    s.feed.num_communities = 1
+    member = make_user(s.instance, 'member', local=True, with_keys=True)
+    db.session.commit()
+    cm = make_community_member(member, s.community)
+    cm.joined_via_feed = True
+    db.session.commit()
+    assert db.session.query(CommunityJoinRequest).filter_by(
+        user_id=member.id, community_id=s.community.id).first() is None
+
+    with patch('app.shared.feed.community_membership', return_value=0):
+        with patch('app.shared.feed.gibberish', return_value='GENERATEDID'):
+            with patch('app.shared.feed.send_post_request') as send:
+                _feed_remove_community(s.community.id, s.feed.id)
+
+    undo = send.call_args.args[1]
+    assert undo['object']['id'].endswith('GENERATEDID')
+
+
+def test_feed_remove_community_skips_delivery_to_a_dead_instance(app, db_session):
+    """:462's False arm. The membership row is still removed at :488.
+
+    That second assertion is the point: a mutant that skipped the whole body
+    rather than only the delivery would leave the row in place, so asserting
+    the send count alone would not distinguish them.
+
+    ap_profile_id (not just ap_id) must move off the default local host: :461
+    reads community.is_local(), which reads profile_id() -- ap_profile_id if
+    set, else a SERVER_URL-prefixed fallback -- not ap_id directly.
+    make_community sets ap_profile_id to a local host by default, so setting
+    only ap_id here would leave is_local() reading True, take :461's False
+    arm instead of its True arm, and never reach :462 at all. Caught by the
+    branch-coverage pass: an earlier draft set only ap_id and left the
+    [462, 487] arc (the True arm this test targets) missing.
+    """
+    s = _seed()
+    s.community.ap_id = 'wiring@remote.example'
+    s.community.ap_profile_id = 'https://remote.example/c/wiring'
+    s.community.ap_public_url = 'https://remote.example/c/wiring'
+    s.instance.gone_forever = True
+    make_feed_item(s.feed, s.community)
+    s.feed.num_communities = 1
+    member = make_user(s.instance, 'member', local=True)
+    db.session.commit()
+    cm = make_community_member(member, s.community)
+    cm.joined_via_feed = True
+    db.session.commit()
+
+    with patch('app.shared.feed.community_membership', return_value=0):
+        with patch('app.shared.feed.send_post_request') as send:
+            _feed_remove_community(s.community.id, s.feed.id)
+
+    assert send.call_count == 0
+    assert db.session.query(CommunityMember).filter_by(
+        user_id=member.id, community_id=s.community.id).first() is None
+
+
+def test_feed_remove_community_removes_membership_without_federating_for_a_local_community(app, db_session):
+    """:461's False arm -- a local community needs no Undo.
+
+    subscriptions_count is asserted because :490 decrements it inside the
+    same `if proceed:` body (:487), so a mutant narrowing that body would be
+    caught here.
+
+    :487's `if proceed:` is a TAUTOLOGY: `proceed = True` is set
+    unconditionally at :459 and is never reassigned anywhere in the function,
+    so the False arm is dead code and no test here pretends to reach it. This
+    is the instance that justifies enacting fact 75 cause 9 (D578 -- a
+    tautology's mirror image of fact 75's dead-True-branch shape, proposed
+    but not yet folded into tests/README.md's fact 75 at the time this test
+    was written); cite cause 9 directly once that landing gives it a number.
+    """
+    s = _seed()
+    s.community.ap_id = None
+    s.community.subscriptions_count = 1
+    make_feed_item(s.feed, s.community)
+    s.feed.num_communities = 1
+    member = make_user(s.instance, 'member', local=True)
+    db.session.commit()
+    cm = make_community_member(member, s.community)
+    cm.joined_via_feed = True
+    db.session.commit()
+
+    with patch('app.shared.feed.community_membership', return_value=0):
+        with patch('app.shared.feed.send_post_request') as send:
+            _feed_remove_community(s.community.id, s.feed.id)
+
+    assert send.call_count == 0
+    assert s.community.subscriptions_count == 0
+
+
+@pytest.mark.parametrize('public, expected_calls', [(True, 1), (False, 0)])
+def test_feed_remove_community_announces_only_for_a_public_feed(app, db_session, public, expected_calls):
+    """:497-501, with the debug fork's synchronous arm at :498.
+
+    current_app.debug is FORCED True here (via patch.dict on app.config,
+    which TestConfig never overrides, so it is False without this) to take
+    :498's synchronous arm and land the call on `announce` itself rather than
+    on `announce.delay` -- otherwise the True row's call would arrive on
+    `.delay` and `announce.call_count` would read 0 regardless of `public`.
+    """
+    s = _seed()
+    make_feed_item(s.feed, s.community)
+    s.feed.num_communities = 1
+    s.feed.public = public
+    db.session.commit()
+
+    with patch('app.shared.feed.announce_feed_add_remove_to_subscribers') as announce:
+        with patch.dict(app.config, {'DEBUG': True}):
+            _feed_remove_community(s.community.id, s.feed.id)
+
+    assert announce.call_count == expected_calls
+    if expected_calls:
+        assert announce.call_args.args == ('Remove', s.feed.id, s.community.id)
+
+
+def test_feed_remove_community_dispatches_the_announce_asynchronously_when_not_debugging(app, db_session):
+    """:501's else arm. Asserted as dispatched, never as executed.
+
+    current_app.debug reads app.config['DEBUG']; patch.dict pins it False
+    explicitly rather than relying on TestConfig's default staying that way.
+    `patch.object(app, 'debug', False)` cannot be used here: `debug` is a
+    class-level property on Flask with no deleter, and mock's patch.object
+    always tries to delattr a non-local attribute on __exit__, raising
+    AttributeError: property 'debug' of 'Flask' object has no deleter.
+    """
+    s = _seed()
+    make_feed_item(s.feed, s.community)
+    s.feed.num_communities = 1
+    s.feed.public = True
+    db.session.commit()
+
+    with patch('app.shared.feed.announce_feed_add_remove_to_subscribers') as announce:
+        with patch.dict(app.config, {'DEBUG': False}):
+            _feed_remove_community(s.community.id, s.feed.id)
+
+    assert announce.delay.call_count == 1
+    assert announce.call_count == 0
