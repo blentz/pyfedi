@@ -338,13 +338,16 @@ def feed_add_community():
     # and a community_id
     # it will get those and then add a community to 
     # a feed using the FeedItem model
-    user_id = int(request.args.get('user_id'))
+    user_id = current_user.id
     feed_id = int(request.args.get('new_feed_id'))
     current_feed_id = int(request.args.get('current_feed_id'))
     community_id = int(request.args.get('community_id'))
 
-    # make sure the user owns this feed
+    # make sure the signed-in user owns the feed being added to, and -- when a
+    # community is being moved out of another feed -- the feed it is moving from
     if Feed.query.get(feed_id).user_id != user_id:
+        abort(404)
+    if current_feed_id != 0 and Feed.query.get(current_feed_id).user_id != user_id:
         abort(404)
 
     _feed_add_community(community_id, current_feed_id, feed_id, user_id)
