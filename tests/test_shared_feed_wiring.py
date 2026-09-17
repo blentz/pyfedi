@@ -644,3 +644,154 @@ def test_announce_delete_rolls_back_and_re_raises_on_failure(app, db_session):
 
     assert fake_session.return_value.rollback.call_count == 1
     assert fake_session.return_value.close.call_count == 1
+
+
+def test_feed_add_community_moving_from_another_feed_deletes_the_old_item(app, db_session):
+    """:389-399. current_feed_id != 0 means the community is MOVING.
+
+    Reached in production only through app/feed/routes.py:350, which after
+    this round's authorization fix requires the signed-in user to own BOTH
+    feeds. make_feed:226 and edit_feed:350 always pass current_feed_id=0.
+
+    Both counts are asserted: a mutant decrementing the wrong feed would leave
+    these two numbers swapped, and the ids differ by construction, so the
+    assertion can tell them apart.
+    """
+    s = _seed()
+    old_item = make_feed_item(s.bystander_feed, s.community)
+    s.bystander_feed.num_communities = 1
+    s.feed.num_communities = 0
+    db.session.commit()
+    assert s.bystander_feed.id != s.feed.id
+
+    with patch('app.community.routes.do_subscribe'):
+        _feed_add_community(s.community.id, s.bystander_feed.id, s.feed.id, s.actor.id)
+
+    assert db.session.get(FeedItem, old_item.id) is None
+    assert s.bystander_feed.num_communities == 0
+    assert s.feed.num_communities == 1
+
+
+@pytest.mark.parametrize('public, expected_actions', [
+    (True, ['Remove', 'Add']),
+    (False, []),
+])
+def test_feed_add_community_announces_only_for_public_feeds(app, db_session, public, expected_actions):
+    """:402 and :421, crossed with the move path so both fire in one call.
+
+    Both feeds take the same `public` value here, so the row with True proves
+    BOTH announce sites fire and the row with False proves neither does. The
+    actions are compared in order because they are two calls from one function
+    body, not query-planner rows.
+
+    current_app.debug is FORCED True here (via patch.dict on app.config,
+    which the Flask `debug` property reads/writes -- app.config['DEBUG']
+    has no default override in TestConfig, so it is False without this) to
+    take :404/:423's synchronous arm and land the call directly on `announce`
+    rather than on `announce.delay`. `patch.object(app, 'debug', ...)` cannot
+    be used for this: `debug` is a class-level property with no deleter, and
+    mock's patch.object always tries to delattr a non-local attribute on
+    __exit__, raising AttributeError.
+    """
+    s = _seed()
+    make_feed_item(s.bystander_feed, s.community)
+    s.bystander_feed.num_communities = 1
+    s.bystander_feed.public = public
+    s.feed.public = public
+    db.session.commit()
+
+    with patch('app.shared.feed.announce_feed_add_remove_to_subscribers') as announce:
+        with patch('app.community.routes.do_subscribe'):
+            with patch.dict(app.config, {'DEBUG': True}):
+                _feed_add_community(s.community.id, s.bystander_feed.id, s.feed.id, s.actor.id)
+
+    assert [c.args[0] for c in announce.call_args_list] == expected_actions
+
+
+def test_feed_add_community_dispatches_the_announce_asynchronously_when_not_debugging(app, db_session):
+    """:407 and :426's else arms -- the .delay branch for BOTH announce sites.
+
+    Uses the move path (like the :389 test) so both :404-407 (the old feed's
+    Remove announce) and :421-426 (the new feed's Add announce) fire in one
+    call; a non-move call only ever reaches :426, leaving :407 unmeasured.
+    Asserted as DISPATCHED, not executed: the test observes that .delay was
+    called, with which feed/community pair, and never that the task body ran.
+
+    current_app.debug reads app.config['DEBUG'], which TestConfig never
+    overrides, so it is already False here; patch.dict pins that explicitly
+    so this test does not depend on config staying that way.
+    (patch.object(app, 'debug', False) cannot be used: `debug` is a
+    class-level property with no deleter, and mock always tries to delattr a
+    non-local attribute on __exit__, raising AttributeError: property 'debug'
+    of 'Flask' object has no deleter.)
+    """
+    s = _seed()
+    make_feed_item(s.bystander_feed, s.community)
+    s.bystander_feed.num_communities = 1
+    s.bystander_feed.public = True
+    s.feed.public = True
+    db.session.commit()
+
+    with patch('app.shared.feed.announce_feed_add_remove_to_subscribers') as announce:
+        with patch('app.community.routes.do_subscribe'):
+            with patch.dict(app.config, {'DEBUG': False}):
+                _feed_add_community(s.community.id, s.bystander_feed.id, s.feed.id, s.actor.id)
+
+    assert announce.call_count == 0
+    assert [c.args[0] for c in announce.delay.call_args_list] == ['Remove', 'Add']
+    assert announce.delay.call_args_list[0].args == ('Remove', s.bystander_feed.id, s.community.id)
+    assert announce.delay.call_args_list[1].args == ('Add', s.feed.id, s.community.id)
+
+
+@pytest.mark.parametrize('already_member, auto_follow, expect_subscribe', [
+    (False, True, 1),
+    (True, True, 0),
+    (False, False, 0),
+])
+def test_feed_add_community_subscribe_guard_isolates_both_operands(
+        app, db_session, already_member, auto_follow, expect_subscribe):
+    """:429 and :431's two operands against a passing control.
+
+    Row 1 subscribes. Row 2 falsifies only the membership operand, row 3 only
+    the preference, so neither can pass because of the other -- false-witness
+    mechanism (d).
+
+    :431 reads the preference from the user resolved (at :430) out of the
+    user_id PARAMETER after this round's fix; before it, it read the request
+    global. There is no request context here at all, which is what proves the
+    parameter is the source.
+    """
+    s = _seed()
+    if already_member:
+        make_community_member(s.actor, s.community)
+    s.actor.feed_auto_follow = auto_follow
+    db.session.commit()
+
+    with patch('app.community.routes.do_subscribe') as subscribe:
+        _feed_add_community(s.community.id, 0, s.feed.id, s.actor.id)
+
+    assert subscribe.call_count == expect_subscribe
+
+
+def test_feed_add_community_subscribes_via_ap_id_when_the_community_has_one(app, db_session):
+    """:435's conditional expression -- `community.ap_id if community.ap_id else community.name`.
+
+    Two communities differing only in ap_id, so both arms of the expression are
+    observed and neither is reached by the other's input. This is fact 75
+    cause 7's shape (an arm of a conditional expression) if either proves
+    unkillable, but both are reachable here.
+    """
+    s = _seed()
+    s.community.ap_id = 'wiring@remote.example'
+    s.bystander_community.ap_id = None
+    db.session.commit()
+
+    with patch('app.community.routes.do_subscribe') as subscribe:
+        _feed_add_community(s.community.id, 0, s.feed.id, s.actor.id)
+        first = subscribe.call_args.args[0]
+        _feed_add_community(s.bystander_community.id, 0, s.feed.id, s.actor.id)
+        second = subscribe.call_args.args[0]
+
+    assert first == 'wiring@remote.example'
+    assert second == s.bystander_community.name
+    assert first != second
