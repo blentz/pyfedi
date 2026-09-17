@@ -8120,6 +8120,22 @@ cover it. Same family as fact 268/D638's observability rule, one level
 up: 268 is about what a decoupling *table* may record, this is about
 what a test's *name* may claim. See D647.
 
+**AND THE POSTSCRIPT THAT IS THE MOST USEFUL PART OF THIS FACT: THE
+AUDIT THIS FACT PRESCRIBES WAS NEVER RUN OVER THE FILE THE FACT WAS
+WRITTEN ABOUT.** The renamed test above was the one instance anybody
+went looking for. The final whole-branch review of the same sub-project
+ran the check across the rest of `tests/test_shared_community_
+lifecycle.py` and found the same defect in the file's **two oldest
+tests** -- `..._reads_all_ten_keys_and_authorises_user` and its web
+sibling -- and proved it by execution rather than by reading: three of
+the ten keys the first name claims are read had no assertion behind
+them at all, and `app/shared/community.py:303` replaced by `pass`
+left the test green. Three further names in the same file were broader
+than their bodies. **A rule authored in a round is not self-applying to
+the round that authored it**, and "we wrote the fact" is not evidence
+that the fact was applied. When a round adds a naming rule, the same
+round runs it over its own file, test by test, and says so. See D653.
+
 **274. ASSERTING THE PERSISTED ROW CAN BE A FALSE CLOSURE WHEN A
 DOWNSTREAM CALLEE REWRITES THE SAME COLUMNS -- CHECK WHAT RUNS BETWEEN
 THE READ YOU ARE TESTING AND THE RETURN YOU ARE ASSERTING ON.** A fix
