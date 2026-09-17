@@ -796,6 +796,71 @@ def test_edit_community_icon_block_icon_url_matches_neither_clears_and_deletes(
     assert s.community.icon_id is None
 
 
+def test_edit_community_icon_block_orphaned_icon_id_clears_without_delete(
+        app, db_session, monkeypatch):
+    """`:328-331`'s FALSE arm of `:329`'s `if remove_file:` -- the state the
+    prior four icon-block tests above never reach: `community.icon_id` is a
+    genuinely valid, non-null id, `:325` and `:326` are BOTH True (same
+    inputs as the "matches neither" test above), so `:327-331` runs, but a
+    FRESH `File.query.get(community.icon_id)` (`:328`) finds no row, unlike
+    `community.icon` (`:325`'s `community.icon.source_url` /`:326`'s
+    `.medium_url()`), which is resolved once, eagerly, alongside `community`
+    itself (`icon = db.relationship('File', lazy='joined', ...)`,
+    app/models.py:636) via a JOIN in `community`'s own original query --
+    never through `File.query` at all. This models a fresh lookup finding
+    the row already gone (e.g. a concurrent hard delete) while the
+    already-loaded relationship object this test seeded is still valid and
+    unaffected.
+
+    `File.query` (a Flask-SQLAlchemy class-level query descriptor) is
+    replaced on `File` itself with a stand-in whose `.get` always returns
+    None -- patched only on `File`, so no other model's `.query` is
+    touched, and patched via `monkeypatch.setattr(File, 'query', ...)`
+    (an attribute on the class object itself, not a name imported with
+    `from ... import`, so no rebinding-into-globals concern applies here
+    the way it does for `is_image_url`/`process_upload`/`task_selector`).
+
+    THIS TEST'S ONE DISTINGUISHING ASSERTION FROM THE "MATCHES NEITHER" TEST
+    ABOVE is `delete_calls == []`: `remove_file` is None here, so
+    `:330`'s `remove_file.delete_from_disk()` never runs. `:331`'s
+    `community.icon_id = None` sits OUTSIDE `:329`'s `if remove_file:`
+    block (one indent level back), so it still runs and is asserted
+    unchanged from the sibling test -- a mutant moving `:331` inside
+    `:329`'s `if` would leave `icon_id` uncleared in exactly this state and
+    nothing else, which is what this test exists to catch (see the
+    mutation-verification section of this round's report for the mutant
+    applied by hand and the exact failure it produces).
+    """
+    s = _seed()
+    _seed_und_language()
+    make_community_member(s.user, s.community, is_moderator=True)
+    monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
+    icon_file = File(source_url='https://icon.example/original.png',
+                     file_path='app/static/media/communities/thumb.png')
+    db.session.add(icon_file)
+    db.session.commit()
+    s.community.icon_id = icon_file.id
+    db.session.commit()
+    image_url_calls = []
+    monkeypatch.setattr('app.shared.community.is_image_url',
+                        lambda url: image_url_calls.append(url) or False)
+    delete_calls = []
+    monkeypatch.setattr(File, 'delete_from_disk', lambda self, *a, **kw: delete_calls.append(self.id))
+
+    class _AlwaysMissingQuery:
+        def get(self, ident):
+            return None
+
+    monkeypatch.setattr(File, 'query', _AlwaysMissingQuery())
+    api_input = _api_input(icon_url='https://icon.example/totally-different.png', banner_url=None)
+
+    edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+    assert image_url_calls == ['https://icon.example/totally-different.png']
+    assert delete_calls == []
+    assert s.community.icon_id is None
+
+
 # `edit_community` (app/shared/community.py:334-344), the banner block --
 # structurally the icon block's mirror, PLUS `cache.delete_memoized(
 # Community.header_image, community)` at both `:341` and `:343`. When
@@ -929,6 +994,64 @@ def test_edit_community_banner_block_banner_url_matches_neither_clears_and_delet
 
     assert image_url_calls == ['https://banner.example/totally-different.png']
     assert delete_calls == [banner_file.id]
+    assert s.community.image_id is None
+
+
+def test_edit_community_banner_block_orphaned_image_id_clears_without_delete(
+        app, db_session, monkeypatch):
+    """`:337-340`'s FALSE arm of `:338`'s `if remove_file:` -- the banner
+    mirror of the icon block's identical gap above. `community.image_id` is
+    a genuinely valid id and `:334`/`:335` are BOTH True (same inputs as the
+    "matches neither" test above), so `:336-340` runs, but a FRESH
+    `File.query.get(community.image_id)` (`:337`) finds no row, unlike
+    `community.image` (already eager-loaded alongside `community` via a
+    JOIN, `image = db.relationship('File', foreign_keys=[image_id], ...)`,
+    app/models.py:638 -- no `lazy='joined'` on this one specifically, but
+    the same principle: it is never resolved through `File.query`), which
+    this test seeded as a real, valid row and is unaffected by the patch
+    below.
+
+    See the icon-block sibling test above for the full reasoning on why
+    `File.query` is replaced (patched only on `File`, not a
+    rebound-import name) and why this state does not require breaking any
+    database constraint to construct: it models a fresh lookup racing a
+    concurrent hard delete of the row a stale, already-loaded relationship
+    object still reflects.
+
+    `delete_calls == []` is this test's one distinguishing assertion from
+    the "matches neither" sibling above (`remove_file` is None here, so
+    `:339`'s `delete_from_disk()` never runs); `community.image_id is None`
+    is asserted regardless, since `:340`'s clear sits OUTSIDE `:338`'s `if
+    remove_file:` block and runs either way -- a mutant moving it inside
+    would leave `image_id` uncleared in exactly this state.
+    """
+    s = _seed()
+    _seed_und_language()
+    make_community_member(s.user, s.community, is_moderator=True)
+    monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
+    banner_file = File(source_url='https://banner.example/original.png',
+                       file_path='app/static/media/communities/banner.png')
+    db.session.add(banner_file)
+    db.session.commit()
+    s.community.image_id = banner_file.id
+    db.session.commit()
+    image_url_calls = []
+    monkeypatch.setattr('app.shared.community.is_image_url',
+                        lambda url: image_url_calls.append(url) or False)
+    delete_calls = []
+    monkeypatch.setattr(File, 'delete_from_disk', lambda self, *a, **kw: delete_calls.append(self.id))
+
+    class _AlwaysMissingQuery:
+        def get(self, ident):
+            return None
+
+    monkeypatch.setattr(File, 'query', _AlwaysMissingQuery())
+    api_input = _api_input(icon_url=None, banner_url='https://banner.example/totally-different.png')
+
+    edit_community(api_input, s.community, SRC_API, bearer(s.user), from_scratch=False)
+
+    assert image_url_calls == ['https://banner.example/totally-different.png']
+    assert delete_calls == []
     assert s.community.image_id is None
 
 
