@@ -427,7 +427,8 @@ def _feed_add_community(community_id: int, current_feed_id: int, feed_id: int, u
 
     # subscribe the user to the community if they are not already subscribed
     current_membership = CommunityMember.query.filter_by(user_id=user_id, community_id=community_id).first()
-    if current_membership is None and current_user.feed_auto_follow:
+    acting_user = User.query.get(user_id)
+    if current_membership is None and acting_user.feed_auto_follow:
         # import do_subscribe here, otherwise we get import errors from circular import problems
         from app.community.routes import do_subscribe
         community = Community.query.get(community_id)
@@ -547,7 +548,7 @@ def announce_feed_add_remove_to_subscribers(action: str, feed_id: int, community
             fm_user = User.query.get(fm.user_id)
             if fm_user.id == feed.user_id:
                 continue
-            if fm_user.is_local():
+            if fm_user.is_local() and fm_user.feed_auto_follow:
                 # user is local so lets auto-subscribe them to the community
                 from app.community.routes import do_subscribe
                 actor = community.ap_id if community.ap_id else community.name
