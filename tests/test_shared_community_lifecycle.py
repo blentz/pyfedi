@@ -1558,7 +1558,7 @@ def test_edit_community_undetermined_language_missing_raises_attributeerror_regi
 # docstring, per this round's convention.
 #
 # AUTHORISE_API_USER'S OWN VERIFIED GUARD -- DISCOVERED WHILE WRITING THIS
-# SECTION, NOT IN THE BRIEF: `app/utils.py:3624`'s
+# SECTION, NOT IN THE BRIEF: `app/utils.py:3628`'s
 # `if user.ap_id is not None or user.verified is False or user.banned is
 # True or user.deleted is True: raise Exception('incorrect_login')` runs
 # INSIDE `authorise_api_user`, called at `make_community:224` -- BEFORE
@@ -1726,6 +1726,19 @@ def test_make_community_web_arm_strips_leading_c_prefix_and_reads_seven_attribut
     `make_community` has exactly one production caller and it always
     passes SRC_API. This test reaches the web arm only by calling
     `make_community` directly with SRC_WEB.
+
+    CORRECTED, PER CODE REVIEW: an earlier version of this test discarded
+    `:290`'s own return value (`return community.name`, the SRC_WEB arm's
+    return) and re-derived the row via `Community.query.filter_by(name=
+    expected_name).one()`. That `.one()` converts a `:226` divergence into
+    `sqlalchemy.exc.NoResultFound` -- a crash, not a clean `AssertionError`
+    -- before any field assertion can run, since a wrong slug means no row
+    matches `expected_name` at all. Capturing `result` and asserting it
+    equals `expected_name` DIRECTLY catches that divergence as a plain
+    string-comparison `AssertionError` first; the row is then looked up by
+    `result` itself (guaranteed to exist, since it is the exact name the
+    call just used), not by the independently-computed `expected_name`, so
+    the subsequent field assertions can never spuriously miss.
     """
     s = _seed()
     _seed_und_language()
@@ -1737,9 +1750,10 @@ def test_make_community_web_arm_strips_leading_c_prefix_and_reads_seven_attribut
                            question_answer=True)
 
     with web_ctx(app, user):
-        make_community(web_input, SRC_WEB)
+        result = make_community(web_input, SRC_WEB)
 
-    community = Community.query.filter_by(name=expected_name).one()
+    assert result == expected_name
+    community = Community.query.filter_by(name=result).one()
     assert community.title == 'Web Title'
     assert community.nsfw is True
     assert community.restricted_to_mods is True
@@ -1754,6 +1768,12 @@ def test_make_community_web_arm_without_c_prefix_reads_seven_attributes_unchange
     unstripped string.
 
     UNREACHABLE IN PRODUCTION -- see this section's header comment.
+
+    CORRECTED, PER CODE REVIEW: same fix as the sibling test above --
+    `result` is captured and asserted directly against `expected_name`
+    (a plain `AssertionError` on divergence), and the row is then looked
+    up by `result`, not the independently-computed `expected_name`, so a
+    `:226` mutation cannot turn this test's failure into `NoResultFound`.
     """
     s = _seed()
     _seed_und_language()
@@ -1765,9 +1785,10 @@ def test_make_community_web_arm_without_c_prefix_reads_seven_attributes_unchange
                            question_answer=True)
 
     with web_ctx(app, user):
-        make_community(web_input, SRC_WEB)
+        result = make_community(web_input, SRC_WEB)
 
-    community = Community.query.filter_by(name=expected_name).one()
+    assert result == expected_name
+    community = Community.query.filter_by(name=result).one()
     assert community.title == 'Other Web Title'
     assert community.nsfw is True
     assert community.restricted_to_mods is True
