@@ -186,3 +186,101 @@ def test_feed_add_community_route_refuses_a_source_feed_the_user_does_not_own(ap
 
     assert db.session.get(FeedItem, victim_item.id) is not None
     assert s.bystander_feed.num_communities == 1
+
+
+@pytest.mark.parametrize('raw, expected_lookup', [
+    ('plain', '!plain@test.piefed.local'),
+    ('!withbang', '!withbang@test.piefed.local'),
+    ('withhost@remote.example', '!withhost@remote.example'),
+    ('!both@remote.example', '!both@remote.example'),
+])
+def test_form_communities_to_ids_normalises_each_input_shape(app, db_session, raw, expected_lookup):
+    """:621-624's two independent conditions, crossed.
+
+    :621 prefixes '!' when absent; :623 appends '@' + SERVER_NAME when absent.
+    The four rows are the four combinations, so neither condition can be
+    satisfied by the other's input -- false-witness mechanism (d).
+
+    search_for_community is patched on app.community.util, NOT app.shared.feed:
+    :617 does the import inside the function body to break an import cycle, so a
+    rebind on the importing module is never consulted.
+    """
+    s = _seed()
+    with patch('app.community.util.search_for_community', return_value=s.community) as search:
+        with app.test_request_context('/'):
+            result = form_communities_to_ids(raw)
+
+    assert search.call_args.args[0] == expected_lookup
+    assert result == {s.community.id}
+
+
+def test_form_communities_to_ids_skips_names_that_resolve_to_nothing(app, db_session):
+    """:626's False arm. The positive control is in the same call.
+
+    One name resolves and one does not, so the empty half cannot be produced by
+    the loop never running -- false-witness mechanism (c). Asserting only that a
+    miss yields an empty set would prove nothing.
+    """
+    s = _seed()
+    lookups = {'!found@test.piefed.local': s.community, '!missing@test.piefed.local': None}
+    with patch('app.community.util.search_for_community', side_effect=lambda x: lookups[x]):
+        with app.test_request_context('/'):
+            result = form_communities_to_ids('found\nmissing')
+
+    assert result == {s.community.id}
+
+
+def test_form_communities_to_ids_reads_every_line_and_returns_a_set(app, db_session):
+    """:619 splits on newlines; :618/:627 accumulate into a set.
+
+    Two distinct communities, so a mutant returning only the last would be
+    caught. Compared as a set because the function returns one and the order of
+    a set is not a claim this test makes.
+    """
+    s = _seed()
+    lookups = {'!a@test.piefed.local': s.community,
+               '!b@test.piefed.local': s.bystander_community}
+    with patch('app.community.util.search_for_community', side_effect=lambda x: lookups[x]):
+        with app.test_request_context('/'):
+            result = form_communities_to_ids('a\nb')
+
+    assert result == {s.community.id, s.bystander_community.id}
+    assert s.community.id != s.bystander_community.id
+
+
+def test_form_communities_to_ids_on_empty_input_searches_for_a_bare_host(app, db_session):
+    """:619 on '' yields [''], not [], so the loop runs once.
+
+    ''.strip().split('\\n') is [''], which :621 turns into '!' and :623 into
+    '!@test.piefed.local'. This is not obviously intended; it is registered as a
+    finding rather than repaired, and this test records the behaviour as it is.
+    """
+    with patch('app.community.util.search_for_community', return_value=None) as search:
+        with app.test_request_context('/'):
+            result = form_communities_to_ids('')
+
+    assert search.call_args.args[0] == '!@test.piefed.local'
+    assert result == set()
+
+
+def test_existing_communities_returns_the_feed_s_community_ids(app, db_session):
+    """:613-614. Two items on the feed under test and one on the bystander feed.
+
+    The bystander item is what makes the WHERE clause observable: without it a
+    mutant dropping the feed_id filter would return the same rows and pass.
+    Compared as a set -- these are query-planner rows and their order is not a
+    claim.
+
+    The annotation says `-> List` but the function returns a ScalarResult, a
+    live iterator bound to the session. That divergence is registered, not
+    repaired; this test consumes it as an iterator, which is what callers do.
+    """
+    s = _seed()
+    make_feed_item(s.feed, s.community)
+    make_feed_item(s.feed, s.bystander_community)
+    make_feed_item(s.bystander_feed, s.bystander_community)
+
+    result = set(existing_communities(s.feed.id))
+
+    assert result == {s.community.id, s.bystander_community.id}
+    assert s.feed.id != s.bystander_feed.id
