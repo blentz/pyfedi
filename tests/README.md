@@ -8064,6 +8064,148 @@ an `=`-for-`+=` swap by construction, because the swap's only visible
 effect is something extra being there, never something expected being
 missing. See `tests/test_shared_community_invites.py:1875-1924`.
 
+**272. A FIXTURE THAT MINTS ITS ROWS IN LOCKSTEP MAKES `user.id ==
+community.id` TRUE EVERYWHERE, AND THAT COINCIDENCE IS A PROPERTY OF
+THE SEED HELPER, NOT OF THE SITES WHERE IT BITES -- SO FIX IT AT THE
+SEED OR IT COMES BACK IN A FUNCTION YOU ALREADY "FIXED".**
+`tests/test_shared_community_lifecycle.py`'s `_seed()` burns `User` id 1
+via `_burn_a_seed()` and `Community` id 1 via a bystander community, then
+mints the user under test and the community under test -- so both land
+at id 2, and **every** assertion in the file that pairs a user id with a
+community id is satisfied by a mutant that swaps them. In one round it
+struck **four regions**: `make_community:270`'s `CommunityMember(user_id=,
+community_id=)` construction, `:288`'s `return user.id, community.id`
+tuple, and -- after the first two were fixed -- `edit_community:382`'s
+`task_selector(..., user_id=, community_id=)` kwargs and `:391`'s `return
+user.id`. **The decoy minted for `make_community`'s tests did not reach
+`edit_community`'s**, proved by a diagnostic assertion that fired in one
+function and survived in the other, which is exactly why this is a
+property of the seed rather than three separate mistakes. **The remedy,
+and both halves are load-bearing**: mint a decoy row first so the two
+sequences desynchronise, **and** put a live `assert a.id != b.id` in the
+test body -- not in a docstring, not in a comment -- so that a later
+change to the seed fails loudly instead of silently restoring the
+coincidence. The direct proof that the fix took is in the failure output:
+`{'user_id': 2, 'community_id': 3} != {'user_id': 3, 'community_id': 2}`,
+where the 2 and the 3 are the ids being visibly different. **Any test in
+a file whose seed mints in lockstep inherits this**, so the check to run
+when adding one is not "does my test pass" but "would it still pass if
+the two ids were swapped". Sibling of fact 33 (the factory always
+produces the matching value) one level up: here the factory is fine and
+the *sequence* is what conspires. See D647 and D650, and mechanism (b), fixture
+coincidence.
+
+**273. A TEST WHOSE NAME CLAIMS A PROPERTY IT CANNOT OBSERVE IS WORSE
+THAN NO TEST, BECAUSE IT SPENDS THE REVIEWER'S ATTENTION AS WELL AS
+FAILING TO CATCH THE BUG.** `test_edit_community_task_selector_called_
+with_real_ids_not_literal` asserted the **exact kwargs tuple** --
+`assert calls == [(('edit_community',), {'user_id': s.user.id,
+'community_id': s.community.id})]` -- which is about as strong as an
+assertion looks, and it genuinely did catch the `community_id=1`
+hardcoded-literal mutant its docstring described. It could **not** catch
+an argument swap, because both sides of that comparison moved together
+while `s.user.id == s.community.id` (fact 272). The docstring was not
+wrong; **the name was broader than the docstring**, and a reader
+skimming the file saw a test claiming the ids were real and distinct
+when only "real" was ever checked. It was **renamed in place** to
+`test_edit_community_task_selector_and_return_use_distinct_user_and_
+community_ids` once the fixture was desynchronised and the return value
+asserted too, so the name now states exactly what the body can witness.
+**The check, and it costs one question**: for each claim in a test's
+name, ask which assertion would fail if that claim were false -- and if
+the answer is "none", either strengthen the body or narrow the name
+before the test lands. A wrong name outlives a wrong report, because the
+next reader greps for the property and finds a test that appears to
+cover it. Same family as fact 268/D638's observability rule, one level
+up: 268 is about what a decoupling *table* may record, this is about
+what a test's *name* may claim. See D647.
+
+**274. ASSERTING THE PERSISTED ROW CAN BE A FALSE CLOSURE WHEN A
+DOWNSTREAM CALLEE REWRITES THE SAME COLUMNS -- CHECK WHAT RUNS BETWEEN
+THE READ YOU ARE TESTING AND THE RETURN YOU ARE ASSERTING ON.** A fix
+round set out to close a swapped-reads mutant at `app/shared/
+community.py:220-221` and `:233-234` (`make_community` reading
+`restricted_to_mods` and `local_only`) by asserting the two columns on
+the final persisted `Community` row. **That test would have PASSED with
+the mutant in place, and would have been a false closure**: `:282`
+passes the very same `input` on to `edit_community`, whose own arm
+re-reads the same two keys and **rewrites both columns at `:366-367`**,
+so a swap confined to `make_community`'s reads is corrected before the
+function returns. The only point at which those reads are observable is
+the `Community(...)` construction at `:254-255`, so the closing tests
+patch `edit_community` out on `app.shared.community` and observe what
+was actually constructed: `assert [(False, True)] == [(True, False)]`.
+**This is false-witness mechanism (a) in production form** -- asserting
+on state that something else sets unconditionally -- and it is the same
+blindness fact 271 names for a `=`-versus-`+=` fork, with a whole
+function in place of a single statement. **It was found by EXECUTING the
+fix, not by reasoning to it**, which is the transferable part: a fix
+that is only argued for is a hypothesis, and this one would have shipped
+a green test proving nothing while carrying a name that claimed
+otherwise. **The check: before asserting on a persisted row, list every
+write to that column between the code under test and the assertion --
+including writes inside callees the function invokes on its way out.**
+See D647.
+
+**275. A MUTANT CAN BE CONJOINED-ONLY BY CONSTRUCTION, AND A PATCHED
+HELPER THAT RETURNS A CONSTANT CANNOT WITNESS A CROSSING.**
+`app/shared/community.py:310-311` is a pair of ternaries, `icon_url =
+process_upload(uploaded_icon_file, ...) if uploaded_icon_file else None`
+and the banner's twin. Every single-site variant **dies**: the `:310`
+argument alone, the `:311` argument alone, the `:310` condition alone,
+and each condition blinded to `True` and to `False` -- seven kills. Only
+the **simultaneous** swap, each ternary taking the other's condition
+*and* argument, survives. Two independent reasons, and both must be
+fixed to close it: **each test supplied exactly one file**, so under the
+crossing the icon test's single file is simply consumed by the banner
+ternary and `process_upload` is still called once with the same
+argument; **and the patched `process_upload` returned `None` regardless
+of its input**, so the two resulting locals were indistinguishable even
+in principle. The existing docstring's defence -- that the two tests
+exercise both ternaries at both truth values "with the OTHER ternary
+held at the opposite value each time" -- is true and **still not
+enough**, because holding the other ternary at the opposite value in
+*separate calls* never puts both files in one call, which is what a
+crossing needs to be visible. The closing test supplies **both** files
+in a single call and patches `process_upload` to return a value
+**derived from its argument**
+(`f'https://uploads.example/{uploaded_file}.png'`), so the two `File`
+rows can be told apart: `At index 0 diff: ('FAKE_BANNER_FILE',
+'communities') != ('FAKE_ICON_FILE', 'communities')`. **The general
+rules. (a) When two sites consume two different inputs through the same
+helper, the mutant that matters may exist only as a pair, so an
+exhaustive conjoined sweep is not optional -- this was the campaign's
+seventh mechanism-(e) lockstep gap and, unlike the other six, no
+single-site mutant hints at it. (b) A stub whose return value does not
+depend on its argument erases the very distinction a crossing test
+exists to observe** -- make the stub's output a function of its input,
+or the test is structurally blind however many assertions it carries.
+Note also fact 87: coverage emits no arc for a ternary, so neither
+figure can ever show this. See D647.
+
+**276. MARK EVERY HAND-APPLIED MUTANT WITH A `# MUT` COMMENT, SO A
+WORKING-TREE ARTIFACT IS SELF-IDENTIFYING AND GREPPABLE.** A mutation
+pass edits production files in place and reverts them, and the window
+between those two moments is where this campaign's recurring hazards
+live: a background security scanner raising an alarm against a mutant
+(twenty-two such false positives in a single round, D652), a revert that
+refuses because its replacement text became non-unique, and the worst
+case, a mutant that is never reverted and rides into a commit. Marking
+each mutated line with a trailing `# MUT` costs nothing and turns "is
+the tree clean?" from a question answered only by `git diff` into one
+answerable by a **positive grep for a token that must not exist**:
+`/usr/bin/grep -rn "# MUT" app/` returning nothing is an independent
+second proof alongside `git diff --quiet -- app/` and
+`git show HEAD:<path> | diff - <path>`, and the three fail in different
+ways. The marker also makes a scanner alarm instantly triageable -- a
+flagged line carrying `# MUT` is a mutation-window artifact by
+construction. **This is a convention, not a measurement**: its support
+is that this round's clean-tree proof used it as one of three
+independent checks, not a demonstration that it caught something the
+other two missed. Adopt it for the same reason one-mutant-at-a-time is
+adopted -- a halted batch is recoverable, a stacked or committed mutant
+is not.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
