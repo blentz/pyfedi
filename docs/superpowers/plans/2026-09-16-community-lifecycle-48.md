@@ -48,7 +48,7 @@
 **Both functions' web arms are unreachable from any production caller.** Verified with `/usr/bin/grep -rn` over `app/`:
 
 - `make_community` has **one** caller: `app/api/alpha/utils/community.py:221`, `SRC_API`. Its web arm `:226-237` is dead.
-- `edit_community` has **two**: `app/api/alpha/utils/community.py:261` (`SRC_API`, `from_scratch=False`) and `make_community:282` (`from_scratch=True`). So **"web arm AND `from_scratch=False`"** — the whole icon/banner deletion block at `:325-346` — is unreachable entirely.
+- `edit_community` has **two**: `app/api/alpha/utils/community.py:261` (`SRC_API`, `from_scratch=False`) and `make_community:282` (`from_scratch=True`). **Task 1 established something stronger than this plan first said:** `make_community`'s sole caller passes `SRC_API`, so `:282`'s pass-through resolves to `SRC_API` too — **`edit_community`'s web arm `:307-317` has NO production caller at all, at either value of `from_scratch`.** The icon/banner deletion block at `:325-346` is doubly dead.
 - The web path is a **separate implementation** at `app/community/routes.py:1216` that never calls the shared function and has already drifted.
 
 **Cover the dead arms by calling the functions directly with hand-built input, and disclose it in EVERY affected docstring.** This is the campaign's pattern for `SRC_PLD`-only branches — `tests/test_shared_post_interactions.py:577` is the canonical example. A test that reaches dead code without saying so is how a later round comes to believe the path is live.
