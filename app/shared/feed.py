@@ -289,6 +289,17 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
 
     icon_url_changed = banner_url_changed = False
 
+    # Authorise BEFORE writing anything. This check used to sit nineteen lines
+    # below, after name, machine_name, title, description, description_html,
+    # show_posts_in_children and parent_feed_id had already been assigned on the
+    # live ORM object -- and since the raise does not roll back, the next commit
+    # in the same session persisted the rejected edit. app/api/alpha/utils/
+    # feed.py:202's put_feed has no ownership check of its own, so this is the
+    # only gate on the API path.
+    if not from_scratch:
+        if not (feed.user_id == user.id or user.is_admin()):
+            raise Exception('incorrect_login')
+
     if url:
         url = slugify(url.strip().split('/')[0], separator='_').lower()
         if not public:
@@ -308,9 +319,6 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
     old_banner_id = 0
 
     if not from_scratch:
-        if not (feed.user_id == user.id or user.is_admin()):
-            raise Exception('incorrect_login')
-
         # Store old file IDs before processing new URLs
         old_icon_id = feed.icon_id
         old_banner_id = feed.image_id
