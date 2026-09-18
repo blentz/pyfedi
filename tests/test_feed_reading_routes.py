@@ -40,6 +40,22 @@ def csrf(app, client):
     return token
 
 
+def _verified(user):
+    """feed_create_post is decorated with validation_required and
+    approval_required (app/feed/routes.py:597-598), so a user who is not
+    verified -- or who has no private_key on a site that gates registration --
+    is redirected before the route runs, a 302 where the test expects a 404.
+
+    make_user leaves private_key None, and approval_required
+    (app/utils.py:1892-1899) reads it together with the site's registration
+    mode, so both have to be satisfied here.
+    """
+    user.verified = True
+    user.private_key = 'a-private-key'
+    db.session.commit()
+    return user
+
+
 def _seed(private_instance=False):
     """Two users, the id-1 seat burned, and the site opened by default.
 
@@ -504,3 +520,144 @@ def test_show_feeds_final_abort_is_unreachable(app, db_session):
         g.site = Site.query.get(1)
         with pytest.raises(AttributeError, match='public'):
             show_feed(None)
+
+
+# --------------------------------------------------------------------------
+# Task 4: feed_create_post and show_feed_rss.
+# --------------------------------------------------------------------------
+
+
+def test_the_submit_page_offers_the_feeds_communities_and_its_childrens(app, db_session):
+    """:600-617. Two collections: the feed's own communities and those of its
+    child feeds, kept apart so the template can show them in separate groups.
+
+    The child's community must appear in the SECOND collection and not the
+    first, which is the only thing separating the two loops.
+    """
+    instance, owner, snooper = _seed()
+    feed = _feed(owner, 'submitfeed')
+    child = _feed(owner, 'childfeed', parent_feed_id=feed.id)
+    own = make_community(name='ownsubmit', host='remote.example')
+    childs = make_community(name='childsubmit', host='remote.example')
+    db.session.add_all([FeedItem(feed_id=feed.id, community_id=own.id),
+                        FeedItem(feed_id=child.id, community_id=childs.id)])
+    db.session.commit()
+
+    captured, fake_render = _capture_render()
+    _verified(snooper)
+    with app.test_client() as client:
+        login(client, snooper)
+        with patch('app.feed.routes.render_template', side_effect=fake_render):
+            response = client.get('/f/submitfeed/submit')
+
+    assert response.status_code == 200
+    assert {c.name for c in captured['communities']} == {'ownsubmit'}
+    assert {c.name for c in captured['sub_communities']} == {'childsubmit'}
+    assert captured['feed'].id == feed.id
+
+
+def test_the_submit_page_404s_for_a_feed_that_is_not_there(app, db_session):
+    """:601-602."""
+    instance, owner, snooper = _seed()
+    _verified(snooper)
+    with app.test_client() as client:
+        login(client, snooper)
+        response = client.get('/f/nosuchfeed/submit')
+    assert response.status_code == 404
+
+
+def test_choosing_a_community_on_the_submit_page_redirects_to_it(app, db_session):
+    """:620-622. The POST arm hands off to community.join_then_add, which is
+    where the actual posting happens; the route's job is the redirect."""
+    instance, owner, snooper = _seed()
+    feed = _feed(owner, 'submitfeed')
+    community = make_community(name='chosen', host='remote.example')
+    db.session.add(FeedItem(feed_id=feed.id, community_id=community.id))
+    db.session.commit()
+
+    _verified(snooper)
+    with app.test_client() as client:
+        login(client, snooper)
+        response = client.post('/f/submitfeed/submit', data={
+            'csrf_token': csrf(app, client), 'community_id': str(community.id)})
+
+    assert response.status_code == 302
+    assert community.link() in response.headers['Location']
+
+
+@pytest.mark.parametrize('show_posts_in_children', [True, False])
+def test_the_rss_feed_lists_the_feeds_posts(app, db_session, show_posts_in_children):
+    """:757-805. The RSS document, over both child-feed states.
+
+    The post carries a url whose mimetype is an image, so :796-799's enclosure
+    branch runs; a second post has no url at all, which is the same branch's
+    False arm. The child feed's post appears only when the flag is on.
+    """
+    from tests.factories import make_post
+    instance, owner, snooper = _seed()
+    feed = _feed(owner, 'rssfeed', show_posts_in_children=show_posts_in_children)
+    child = _feed(owner, 'rsschild', parent_feed_id=feed.id)
+    own = make_community(name='rsscommunity', host='remote.example')
+    childs = make_community(name='rsschildcommunity', host='remote.example')
+    db.session.add_all([FeedItem(feed_id=feed.id, community_id=own.id),
+                        FeedItem(feed_id=child.id, community_id=childs.id)])
+    db.session.commit()
+    with_url = make_post(own, owner, 'https://remote.example/p/1',
+                         title='Post with an image')
+    with_url.url = 'https://example.test/picture.png'
+    # A slug on one post and none on the other: :792-795 links by slug when
+    # there is one and by post id when there is not, and the factory leaves it
+    # None, so without this the slug arm never runs.
+    with_url.slug = '/post/slugged-post'
+    without_url = make_post(own, owner, 'https://remote.example/p/2',
+                            title='Post without a url')
+    without_url.url = None
+    make_post(childs, owner, 'https://remote.example/p/3', title='Child feed post')
+    db.session.commit()
+
+    with app.test_client() as client:
+        with patch('app.feed.routes.mimetype_from_url', return_value='image/png') as mime:
+            response = client.get('/f/rssfeed.rss')
+
+    body = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert 'Post with an image' in body
+    assert 'Post without a url' in body
+    assert ('Child feed post' in body) is show_posts_in_children
+    assert mime.call_count >= 1
+    assert 'https://example.test/picture.png' in body
+    assert '/post/slugged-post' in body
+
+
+@pytest.mark.parametrize('mimetype', ['text/html', None])
+def test_the_rss_feed_encloses_only_non_text_urls(app, db_session, mimetype):
+    """:798's two operands. A url whose mimetype is text -- an ordinary link
+    post -- is not an enclosure, and neither is one whose type cannot be
+    determined at all. Both rows are needed: the `type and` half and the
+    `not type.startswith('text/')` half fail on different inputs."""
+    from tests.factories import make_post
+    instance, owner, snooper = _seed()
+    feed = _feed(owner, 'rssfeed')
+    community = make_community(name='rsscommunity', host='remote.example')
+    db.session.add(FeedItem(feed_id=feed.id, community_id=community.id))
+    db.session.commit()
+    post = make_post(community, owner, 'https://remote.example/p/9', title='A link post')
+    post.url = 'https://example.test/article'
+    db.session.commit()
+
+    with app.test_client() as client:
+        with patch('app.feed.routes.mimetype_from_url', return_value=mimetype):
+            response = client.get('/f/rssfeed.rss')
+
+    body = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert 'A link post' in body
+    assert 'enclosure' not in body
+
+
+def test_the_rss_feed_404s_for_a_feed_that_is_not_there(app, db_session):
+    """:810-811's else arm."""
+    _seed()
+    with app.test_client() as client:
+        response = client.get('/f/nosuchfeed.rss')
+    assert response.status_code == 404
