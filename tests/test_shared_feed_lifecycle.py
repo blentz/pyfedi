@@ -980,18 +980,22 @@ def test_join_feed_flashes_only_on_the_web_path(app, db_session, src, expect_fla
     """:94's `success is True and src == SRC_WEB`, and :98's `src == SRC_WEB`
     in the else arm -- both covered by the two rows here.
 
-    THE STRANDED ARM, STATED RATHER THAN CHASED: `success` is assigned True at
-    :39 and never reassigned, so `success is True` is a tautology and its False
-    arm is unreachable. That is fact 75 CAUSE 9, the same shape as D669's
-    `if proceed:` in _feed_remove_community. Nothing here can cover it and no
-    test should pretend to; the arc it strands is reported with the round's
-    coverage figures.
+    THE TAUTOLOGY, STATED PRECISELY: `success` is assigned True at :39 and
+    never reassigned, so `success is True` is a tautology -- fact 75 CAUSE 9,
+    the same shape as D669's `if proceed:`. It strands NO ARC, and that
+    distinction is the point: the compound's False outcome is reachable through
+    the OTHER operand, `src == SRC_WEB`, which the SRC_API row here takes, so
+    branch coverage reads [] with the dead operand still in place. Only the
+    mutation pass sees it -- dropping `success is True` from the conjunction
+    cannot be killed by any test. D669's residual DOES strand an arc because
+    its `if proceed:` has no second operand to rescue it; this one does not,
+    and the round's figures say so rather than claiming a residual it does not
+    have.
     """
     s = _seed()
     local = make_local_feed(name='localjoinfeed', public=True)
     s.member.feed_auto_follow = False
     db.session.commit()
-    member_id = local_id = None
     member_id, local_id = s.member.id, local.id
 
     with web_ctx(app, s.member):
@@ -1052,3 +1056,230 @@ def test_join_feed_subscribes_to_the_feeds_communities_only_when_asked(
         assert {call.args[0] for call in calls} == expected_actors
         assert {call.args[1] for call in calls} == {member_id}
         assert all(call.kwargs == {'joined_via_feed': True} for call in calls)
+
+
+# --------------------------------------------------------------------------
+# Task 8: join_feed's remote arm.
+# --------------------------------------------------------------------------
+
+
+def _remote_feed(name='remotefeed', domain='remote.piefed.local', online=True):
+    """A Feed the remote arm can resolve, on an instance whose online() answer
+    is set deliberately.
+
+    :30 branches on '@' in the actor string and :31 looks the feed up by ap_id,
+    so the ap_id must be the '@'-bearing string the caller passes. Instance
+    .online() is `not (dormant or gone_forever)` (app/models.py:118-119), set
+    here through dormant so the test says which half it is exercising.
+    """
+    instance = make_instance(domain)
+    instance.dormant = not online
+    feed = make_feed_factory(instance, name=name)
+    feed.ap_id = f'{name}@{domain}'
+    feed.ap_inbox_url = f'https://{domain}/f/{name}/inbox'
+    feed.ap_following_url = f'https://{domain}/f/{name}/following'
+    db.session.commit()
+    return feed
+
+
+def test_join_feed_sends_a_signed_follow_for_a_remote_feed(app, db_session):
+    """The remote arm's delivery: a FeedJoinRequest row, then a Follow whose id
+    carries THAT ROW'S uuid, sent with the joining user's signing credentials.
+
+    args[2] and args[3] -- the private key and the key id -- are asserted here
+    deliberately. Sub-project 49's headline finding (D663) was that of three
+    send_post_request call sites at 100% coverage, exactly one asserted the
+    signing identity; this is the fourth site in the same module and it is not
+    joining that tally.
+
+    The uuid is captured from the database BEFORE the assertions, because
+    join_feed's `finally: db.session.remove()` detaches the row object, and
+    sub-project 49 had to fix the same shape in its own test (552bc690).
+    """
+    s = _seed()
+    feed = _remote_feed()
+    s.member.private_key = 'the-members-private-key'
+    s.member.feed_auto_follow = False
+    db.session.commit()
+    feed_id, member_id = feed.id, s.member.id
+
+    with app.test_request_context('/'):
+        # public_url() reads current_app.config, so the expected values are
+        # computed inside the context rather than before it.
+        expected_key_id = s.member.public_url() + '#main-key'
+        expected_actor = s.member.public_url()
+        expected_object = feed.public_url()
+        with patch('app.shared.feed.send_post_request') as send, \
+                patch('app.shared.feed.get_request') as get:
+            get.return_value = SimpleNamespace(json=lambda: {'items': []})
+            join_feed('remotefeed@remote.piefed.local', member_id, SRC_API)
+
+    request_row = FeedJoinRequest.query.filter_by(user_id=member_id, feed_id=feed_id).one()
+    assert FeedMember.query.filter_by(user_id=member_id, feed_id=feed_id).count() == 1
+    assert send.call_count == 1
+    url, activity, private_key, key_id = send.call_args.args
+    assert url == f'https://remote.piefed.local/f/remotefeed/inbox'
+    assert private_key == 'the-members-private-key'
+    assert key_id == expected_key_id
+    assert send.call_args.kwargs == {'timeout': 10}
+    assert activity['type'] == 'Follow'
+    assert activity['actor'] == expected_actor
+    assert activity['object'] == expected_object
+    assert activity['to'] == [expected_object]
+    assert activity['id'].endswith(f'/activities/follow/{request_row.uuid}')
+
+
+def test_join_feed_still_subscribes_when_the_remote_instance_is_offline(app, db_session):
+    """:65's `if feed.instance.online():` False arm.
+
+    The surprising half is asserted rather than left implicit: nothing is sent,
+    but the FeedMember row IS committed and the join request IS written, so the
+    user is locally subscribed to a feed that was never told. That is current
+    behaviour and this test is what pins it for whoever changes it.
+    """
+    s = _seed()
+    feed = _remote_feed(online=False)
+    s.member.feed_auto_follow = False
+    db.session.commit()
+    feed_id, member_id = feed.id, s.member.id
+
+    with app.test_request_context('/'):
+        with patch('app.shared.feed.send_post_request') as send, \
+                patch('app.shared.feed.get_request') as get:
+            join_feed('remotefeed@remote.piefed.local', member_id, SRC_API)
+
+    assert send.call_count == 0
+    assert get.call_count == 0
+    assert FeedMember.query.filter_by(user_id=member_id, feed_id=feed_id).count() == 1
+    assert FeedJoinRequest.query.filter_by(user_id=member_id, feed_id=feed_id).count() == 1
+
+
+@pytest.mark.parametrize('auto_follow', [True, False])
+def test_join_feed_imports_the_remote_following_collection(app, db_session, auto_follow):
+    """:82-92. Three entries, one per outcome of :85's two-operand guard:
+
+    - a real Community        -> a FeedItem is created and (with auto_follow) a
+                                 subscribe fires,
+    - a non-Community object  -> isinstance half False,
+    - None                    -> truthiness half False.
+
+    Both halves are needed: with only the None row, `isinstance(...)` could be
+    deleted and nothing would notice, which is the mechanism-(e) lockstep gap
+    sub-projects 47 and 48 each shipped.
+
+    do_subscribe is patched at app.community.routes -- the deferred import at
+    :38 binds it into the function's locals, so an app.shared.feed rebind does
+    not take -- and the remote arm calls it SYNCHRONOUSLY, unlike the local arm
+    sixty lines above, which honours current_app.debug. That divergence is this
+    round's R3: registered, not fixed, and asserted here as current behaviour.
+    """
+    s = _seed()
+    feed = _remote_feed()
+    s.member.feed_auto_follow = auto_follow
+    db.session.commit()
+    feed_id, member_id = feed.id, s.member.id
+    resolved = make_community(name='fromcollection')
+    resolved.ap_id = 'fromcollection@far.piefed.local'
+    db.session.commit()
+    resolved_id = resolved.id
+
+    subscribe = MagicMock()
+    with app.test_request_context('/'):
+        with patch('app.shared.feed.send_post_request'), \
+                patch('app.shared.feed.get_request') as get, \
+                patch('app.community.routes.do_subscribe', subscribe), \
+                patch('app.shared.feed.find_actor_or_create') as resolver:
+            get.return_value = SimpleNamespace(json=lambda: {'items': [
+                'https://far.piefed.local/c/fromcollection',
+                'https://far.piefed.local/u/notacommunity',
+                'https://far.piefed.local/c/missing',
+            ]})
+            resolver.side_effect = [resolved, s.member, None]
+            join_feed('remotefeed@remote.piefed.local', member_id, SRC_API)
+
+    assert [call.args[0] for call in resolver.call_args_list] == [
+        'https://far.piefed.local/c/fromcollection',
+        'https://far.piefed.local/u/notacommunity',
+        'https://far.piefed.local/c/missing',
+    ]
+    assert all(call.kwargs == {'community_only': True} for call in resolver.call_args_list)
+    items = FeedItem.query.filter_by(feed_id=feed_id).all()
+    assert [item.community_id for item in items] == [resolved_id]
+    assert subscribe.call_count == (1 if auto_follow else 0)
+    assert subscribe.delay.call_count == 0
+    if auto_follow:
+        assert subscribe.call_args.args == ('fromcollection@far.piefed.local', member_id)
+        assert subscribe.call_args.kwargs == {'joined_via_feed': True}
+
+
+def test_join_feed_raises_on_a_following_collection_that_is_an_ordered_collection(app, db_session):
+    """PIN (R2, registered and NOT fixed): :82 reads
+    following_collection['items'] with no fallback, so an OrderedCollection
+    reply -- 'orderedItems' -- raises KeyError.
+
+    The consequence is what makes this worth pinning rather than shrugging at:
+    the membership and the join request are committed at :45 and :64, BEFORE
+    the read, so the user is left subscribed to a feed whose communities were
+    never imported and whose caller saw a 500. Both rows are asserted present
+    after the raise.
+
+    The rollback at :107 does not undo them: they were committed, and rollback
+    only discards what is pending.
+    """
+    s = _seed()
+    feed = _remote_feed()
+    s.member.feed_auto_follow = False
+    db.session.commit()
+    feed_id, member_id = feed.id, s.member.id
+
+    with app.test_request_context('/'):
+        with patch('app.shared.feed.send_post_request'), \
+                patch('app.shared.feed.get_request') as get:
+            get.return_value = SimpleNamespace(json=lambda: {'orderedItems': []})
+            with pytest.raises(KeyError, match='items'):
+                join_feed('remotefeed@remote.piefed.local', member_id, SRC_API)
+
+    assert FeedMember.query.filter_by(user_id=member_id, feed_id=feed_id).count() == 1
+    assert FeedJoinRequest.query.filter_by(user_id=member_id, feed_id=feed_id).count() == 1
+
+
+def test_join_feed_rolls_back_and_re_raises_what_the_remote_call_raised(app, db_session):
+    """:106-108. The except arm rolls back and re-raises, so the caller sees
+    the ORIGINAL exception type rather than a wrapped one.
+
+    A bespoke exception class is used rather than a builtin, so "the same
+    exception" is provable: a handler that swallowed this and raised something
+    of its own would fail the match.
+    """
+    class RemoteExploded(Exception):
+        pass
+
+    s = _seed()
+    feed = _remote_feed()
+    s.member.feed_auto_follow = False
+    db.session.commit()
+    member_id = s.member.id
+
+    with app.test_request_context('/'):
+        with patch('app.shared.feed.send_post_request'), \
+                patch('app.shared.feed.get_request', side_effect=RemoteExploded('boom')):
+            with pytest.raises(RemoteExploded, match='boom'):
+                join_feed('remotefeed@remote.piefed.local', member_id, SRC_API)
+
+
+def test_join_feed_does_not_flash_to_an_api_caller_who_is_already_subscribed(app, db_session):
+    """:98's False arm -- the already-subscribed message is web-only. Without
+    this row the else arm is covered only on the SRC_WEB path and `if src ==
+    SRC_WEB` at :98 is never observed False."""
+    s = _seed()
+    local = make_local_feed(name='localjoinfeed', public=True)
+    make_feed_member(s.member, local)
+    db.session.commit()
+    member_id, feed_id = s.member.id, local.id
+
+    with app.test_request_context('/'):
+        with patch('app.shared.feed.flash') as flash_stub:
+            join_feed('localjoinfeed', member_id, SRC_API)
+
+    assert flash_stub.call_count == 0
+    assert FeedMember.query.filter_by(user_id=member_id, feed_id=feed_id).count() == 1
