@@ -120,8 +120,20 @@ def test_announce_add_remove_honours_feed_auto_follow_for_local_members(app, db_
     """Was a PIN; INVERTED once :550 was fixed.
 
     ORIGINAL PINNED CLAIM, now false: "every local feed member is subscribed
-    unconditionally." The fix matches the federated twin at
-    app/activitypub/routes.py:1440.
+    unconditionally." ~~The fix matches the federated twin at
+    app/activitypub/routes.py:1440.~~
+
+    CORRECTED AT THE FINAL WHOLE-BRANCH REVIEW (D670). The fix matches the
+    twin's CONDITION and NOT its control flow. The twin at
+    app/activitypub/routes.py:1436-1444 guards with the same
+    `if fm_user.is_local() and fm_user.feed_auto_follow:` -- but its loop body
+    ENDS at :1444: no `continue`, no delivery block, nothing to fall through
+    to. Here :556's `continue` sits INSIDE :551's body, so narrowing :551
+    routed an opted-OUT local member past the `continue` and into the
+    remote-delivery block at :559-561. That fall-through is pinned as CURRENT
+    behaviour by
+    test_announce_add_remove_delivers_to_an_opted_out_local_member at the end
+    of this file; read its docstring before changing either site.
 
     Two members, differing only in the preference, are the control: one is
     subscribed and one is not, so this cannot pass by the call simply never
@@ -901,9 +913,20 @@ def test_feed_remove_community_deletes_the_item_and_decrements_the_count(app, db
     (True, True, False, False),
     (True, True, None, False),
 ])
-def test_feed_remove_community_member_guard_isolates_each_operand(
+def test_feed_remove_community_member_guard_isolates_every_isolatable_operand(
         app, db_session, local, auto_leave, joined_via_feed, expect_removed):
     """:456's four operands against a passing control in row 1.
+
+    RENAMED AT THE FINAL WHOLE-BRANCH REVIEW, per fact 273 ("either
+    strengthen the body or narrow the name"). It was
+    ~~test_feed_remove_community_member_guard_isolates_each_operand~~, which
+    claimed more than any row can witness: operand 3
+    (`cm.joined_via_feed is not None`) is PROVABLY SUBSUMED by operand 4
+    (fact 75 cause 3; D662), so no row isolates it and none ever could. The
+    body is unchanged and still correct -- rows 2, 3 and 4 isolate operands
+    1, 2 and 4 -- and rows 4 and 5 still separate False from None, which is
+    what kills the operand-3-and-4 PAIR drop. The name now states exactly
+    that.
 
     ON THE THIRD AND FOURTH OPERANDS. `cm.joined_via_feed is not None and
     cm.joined_via_feed` -- for a Boolean column the truthiness test alone
@@ -1157,6 +1180,15 @@ def test_feed_remove_community_removes_membership_without_federating_for_a_local
     same `if proceed:` body (:487), so a mutant narrowing that body would be
     caught here.
 
+    BODY STRENGTHENED AT THE FINAL WHOLE-BRANCH REVIEW, per fact 273. The
+    name says "removes membership" and, until now, nothing here witnessed
+    :488's CommunityMember delete -- only send.call_count and
+    subscriptions_count. Three OTHER tests happened to witness the delete,
+    which is exactly the shape fact 273 warns about: the next reader greps
+    for the property and lands on the test whose name claims it. The row
+    assertion below is added rather than the name narrowed, because the body
+    CAN witness the claim.
+
     :487's `if proceed:` is a TAUTOLOGY: `proceed = True` is set
     unconditionally at :459 and is never reassigned anywhere in the function,
     so the False arm is dead code and no test here pretends to reach it. This
@@ -1182,6 +1214,8 @@ def test_feed_remove_community_removes_membership_without_federating_for_a_local
 
     assert send.call_count == 0
     assert s.community.subscriptions_count == 0
+    assert db.session.query(CommunityMember).filter_by(
+        user_id=member.id, community_id=s.community.id).first() is None
 
 
 @pytest.mark.parametrize('public, expected_calls', [(True, 1), (False, 0)])
@@ -1231,3 +1265,69 @@ def test_feed_remove_community_dispatches_the_announce_asynchronously_when_not_d
 
     assert announce.delay.call_count == 1
     assert announce.call_count == 0
+
+
+def test_announce_add_remove_delivers_to_an_opted_out_local_member(app, db_session):
+    """PINS CURRENT BEHAVIOUR, NOT DESIRED BEHAVIOUR. Read this before
+    "fixing" anything it asserts.
+
+    WHAT THIS RECORDS. :556's `continue` sits INSIDE :551's body. Before this
+    round's P2 fix (D656) :551 read `if fm_user.is_local():`, so EVERY local
+    member hit the `continue` and no local member could reach the
+    remote-delivery block. P2 narrowed the condition to
+    `is_local() and feed_auto_follow`, which suppresses the unwanted
+    do_subscribe for an opted-out local member -- and also routes that member
+    PAST the `continue` and into :559-561, so the task attempts a federated
+    Announce POST aimed at a local user's own instance. This test asserts
+    that fall-through happens, because it does.
+
+    DESIRED BEHAVIOUR IS THE OPPOSITE, and the remedy is structural rather
+    than another condition: hoist the skip, so that
+    `if fm_user.is_local(): <consent gate around do_subscribe>; continue` --
+    every local member skips remote delivery unconditionally while the
+    feed_auto_follow gate P2 added stays exactly where it is. That shape is
+    what the federated twin implies: app/activitypub/routes.py:1436-1444
+    carries the SAME condition but its loop body simply ENDS at :1444, with
+    no `continue` and no delivery block, so there is nothing to fall into.
+
+    THE REMEDY WAS DEFERRED DELIBERATELY, NOT OVERLOOKED. It was found by the
+    final whole-branch review, after the round's three production changes had
+    each been pinned, inverted, reviewed and measured. A fourth production
+    edit at that point reopens both the coverage measurement and the 105-mutant
+    pass with no review budget left, on a host that could not run the full
+    suite. Registered at D670 for the module's rounds B and C to act on;
+    change this test's assertions only together with that repair.
+
+    IT IS LATENT IN PRODUCTION, WHICH IS WHY DEFERRING IT IS AFFORDABLE.
+    app/cli.py:142-143 creates the local instance as
+    `Instance(domain=app.config['SERVER_NAME'], software='PieFed')` with no
+    `inbox`, and the only writers of Instance.inbox sit inside
+    new_instance_profile_task, which runs only for a newly-discovered REMOTE
+    server. So instance.inbox is NULL for instance 1 and :560 short-circuits
+    before send_post_request. This test sets `inbox` BY HAND -- that
+    assignment is the whole reason the path is visible here and invisible
+    everywhere else in this file, including
+    test_announce_add_remove_honours_feed_auto_follow_for_local_members,
+    whose members sit on a make_instance(...) row that leaves inbox NULL.
+
+    The do_subscribe assertion is the control that keeps this from being an
+    emptiness claim: the member is genuinely opted out (subscribe is never
+    called), and the delivery still happens.
+    """
+    s = _seed()
+    optout = make_user(s.instance, 'optoutlocal', local=True)
+    optout.feed_auto_follow = False
+    s.instance.inbox = 'https://optout.piefed.local/inbox'
+    db.session.commit()
+    make_feed_member(optout, s.feed)
+    assert optout.is_local() is True
+    assert optout.id != s.feed.user_id
+
+    with patch('app.community.routes.do_subscribe') as subscribe:
+        with patch('app.shared.feed.send_post_request') as send:
+            with patch('app.shared.feed.instance_banned', return_value=False):
+                announce_feed_add_remove_to_subscribers('Add', s.feed.id, s.community.id)
+
+    assert subscribe.call_count == 0
+    assert send.call_count == 1
+    assert send.call_args.args[0] == 'https://optout.piefed.local/inbox'
