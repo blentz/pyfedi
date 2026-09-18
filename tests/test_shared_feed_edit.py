@@ -297,3 +297,148 @@ def test_edit_feed_from_scratch_skips_the_ownership_check_entirely(app, db_sessi
             edit_feed(_form(title='No check at all'), s.feed, SRC_WEB, from_scratch=True)
 
     assert Feed.query.get(s.feed.id).title == 'No check at all'
+
+
+# --------------------------------------------------------------------------
+# Task 3: the field-copy half -- :261-316.
+# --------------------------------------------------------------------------
+
+
+def _api_payload(**overrides):
+    """The dict shape edit_feed's SRC_API arm reads at app/shared/feed.py:262-273.
+
+    Every key is read unconditionally -- no .get() anywhere in that arm -- so a
+    payload missing one raises KeyError. app/api/alpha/utils/feed.py:186-200 is
+    where the real one is built.
+    """
+    payload = {'url': 'editablefeed', 'title': 'Edited', 'public': True, 'description': '',
+               'icon_url': None, 'banner_url': None, 'nsfw': False, 'nsfl': False,
+               'communities': '', 'is_instance_feed': False, 'show_child_posts': False,
+               'parent_feed_id': None}
+    payload.update(overrides)
+    return payload
+
+
+def test_edit_feed_api_arm_writes_every_derived_field(app, db_session):
+    """The SRC_API arm end to end, asserting the fields that are not straight
+    copies.
+
+    The description is carried through with a CRLF so the markdown conversion
+    is observable: the API arm hands edit_feed the RAW description and :310 is
+    the only conversion on that path, unlike the web arm where :279 has already
+    converted it.
+
+    show_child_posts False, nsfw True and nsfl False: three flags with three
+    different values, so a hardcoded constant or a swapped pair is visible.
+    """
+    from app.utils import piefed_markdown_to_lemmy_markdown
+    s = _seed()
+    raw = 'first line\r\nsecond line'
+
+    with app.test_request_context('/'):
+        g.site = Site.query.get(1)
+        # Site.enable_nsfw and enable_nsfl default False on the row make_site()
+        # mints, and :365/:367 guard the writes on them, so a test that wants to
+        # observe the flags has to turn the site's own switches on first. Both
+        # arms of those guards are covered separately below.
+        g.site.enable_nsfw = g.site.enable_nsfl = True
+        with patch('app.shared.feed.authorise_api_user', return_value=s.owner), \
+                patch('app.shared.feed.form_communities_to_ids', return_value=set()):
+            edit_feed(_api_payload(title='API edit', description=raw, nsfw=True,
+                                   show_child_posts=False), s.feed, SRC_API, auth='Bearer x')
+
+    edited = Feed.query.get(s.feed.id)
+    assert edited.title == 'API edit'
+    assert edited.description == piefed_markdown_to_lemmy_markdown(raw) != raw
+    assert edited.description_html is not None
+    assert edited.show_posts_in_children is False
+    assert edited.nsfw is True and edited.nsfl is False
+
+
+@pytest.mark.parametrize('url_value, public, expected_name, rewritten', [
+    ('RenamedFeed', True, 'renamedfeed', True),
+    ('Renamed/ignored', True, 'renamed', True),
+    ('RenamedFeed', False, 'renamedfeed/feedowner', True),
+    ('', True, 'editablefeed', False),
+    (None, True, 'editablefeed', False),
+])
+def test_edit_feed_slugifies_the_url_and_only_when_one_is_given(app, db_session, url_value,
+                                                                public, expected_name,
+                                                                rewritten):
+    """:303-308. Five rows, each isolating one decision:
+
+    - a mixed-case url is lowercased and slugified;
+    - anything after the first '/' is dropped, which is what keeps a private
+      feed's 'name/owner' form from growing a second suffix on re-edit;
+    - a PRIVATE feed gets '/' + the owner's user_name appended, and the owner's
+      name is not a substring of the url, so the composite is distinguishable
+      from either half;
+    - an empty url and None both leave the name alone, which is the case the
+      web route relies on when it disables the field
+      (app/feed/routes.py:142-143).
+
+    The last two rows also keep `if url:` observable as False; without them a
+    mutant deleting the guard passes.
+    """
+    s = _seed()
+    assert 'feedowner' not in 'renamedfeed'
+
+    with _site_ctx(app, s.owner):
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
+            edit_feed(_form(url=url_value, public=public), s.feed, SRC_WEB)
+
+    edited = Feed.query.get(s.feed.id)
+    assert edited.name == expected_name
+    # machine_name is written from the same url at :308 and is left alone
+    # otherwise. The factory never sets it, so "left alone" is None -- asserted
+    # rather than skipped, because a mutant that wrote machine_name
+    # unconditionally would otherwise pass the two no-url rows.
+    assert edited.machine_name == (expected_name if rewritten else None)
+
+
+@pytest.mark.parametrize('parent_given', [True, False, 'zero'])
+def test_edit_feed_sets_parent_feed_id_only_when_one_is_given(app, db_session, parent_given):
+    """:313-316. The else arm assigns None explicitly, and the 'zero' row is
+    what makes that observable: 0 is falsy, so it takes the else arm, and an
+    implementation that wrote the given value there would store 0."""
+    s = _seed()
+    parent = s.other_feed if parent_given is True else None
+    given = parent.id if parent else (0 if parent_given == 'zero' else None)
+
+    with _site_ctx(app, s.owner):
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
+            edit_feed(_form(parent_feed_id=given), s.feed, SRC_WEB)
+
+    edited = Feed.query.get(s.feed.id)
+    if parent_given is True:
+        assert edited.parent_feed_id == parent.id != edited.id
+    else:
+        assert edited.parent_feed_id is None
+
+
+def test_edit_feed_renaming_leaves_the_activitypub_identity_behind(app, db_session):
+    """PINNED, REGISTERED AND NOT FIXED (R2): a rename rewrites name and
+    machine_name and touches none of the five ap_* urls, so the feed's actor id
+    keeps pointing at the old name.
+
+    Not repaired here because rewriting an actor's id mid-life either orphans
+    remote followers or needs a Move, and this module has no precedent for
+    either -- a federation decision rather than a coverage one.
+
+    THIS ALSO CORRECTS D685, which said Group C "rebuilds these fields in
+    edit_feed(from_scratch=True)". It does not rebuild them at all, on any
+    value of from_scratch, and no caller passes True.
+    """
+    s = _seed()
+    before = (s.feed.ap_profile_id, s.feed.ap_public_url, s.feed.ap_followers_url)
+
+    with _site_ctx(app, s.owner):
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
+            edit_feed(_form(url='renamedfeed'), s.feed, SRC_WEB)
+
+    edited = Feed.query.get(s.feed.id)
+    assert edited.name == 'renamedfeed'
+    assert edited.ap_profile_id == before[0]
+    assert edited.ap_public_url == before[1]
+    assert edited.ap_followers_url == before[2]
+    assert 'editablefeed' in edited.ap_profile_id
