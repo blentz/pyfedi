@@ -952,6 +952,14 @@ def test_feed_remove_community_reuses_the_join_request_uuid_for_one_named_instan
     the factory and its generated value is read back, rather than a literal
     being assigned. gibberish is patched so the generated follow_id can never
     collide with the uuid and pass this assertion by accident.
+
+    expected_uuid is captured BEFORE the call, not read off `jr` afterward:
+    :489 deletes this same CommunityJoinRequest row inside
+    _feed_remove_community, so reading `jr.uuid` post-call touches an expired
+    ORM object and raises sqlalchemy.orm.exc.ObjectDeletedError instead of
+    ever reaching the comparison -- a crash, not a kill, for a mutant on
+    :464's 'ovo.st' literal. Capturing the value first lets that mutant die
+    by a clean AssertionError on the endswith check below.
     """
     s = _seed()
     s.instance.domain = 'ovo.st'
@@ -968,6 +976,7 @@ def test_feed_remove_community_reuses_the_join_request_uuid_for_one_named_instan
     cm.joined_via_feed = True
     db.session.commit()
     jr = make_community_join_request(member, s.community)
+    expected_uuid = str(jr.uuid)
 
     with patch('app.shared.feed.community_membership', return_value=0):
         with patch('app.shared.feed.gibberish', return_value='NOTTHEUUID'):
@@ -975,7 +984,7 @@ def test_feed_remove_community_reuses_the_join_request_uuid_for_one_named_instan
                 _feed_remove_community(s.community.id, s.feed.id)
 
     undo = send.call_args.args[1]
-    assert undo['object']['id'].endswith(str(jr.uuid))
+    assert undo['object']['id'].endswith(expected_uuid)
     assert 'NOTTHEUUID' not in undo['object']['id']
 
 
