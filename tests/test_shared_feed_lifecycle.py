@@ -123,6 +123,12 @@ def test_leave_feed_only_leaves_communities_the_user_joined_via_the_feed(app, db
     via = make_community_member(s.member, joined_via_feed)
     via.joined_via_feed = True
     make_community_member(s.member, joined_alone)  # joined_via_feed defaults False
+    # Another user, joined via the feed to the community OURS never joined.
+    # Without this row the probe's user_id filter is free: a mutant dropping it
+    # finds nothing for never_joined and behaves identically.
+    bystander = make_user(s.instance, 'someoneelseinthefeed')
+    bystander_membership = make_community_member(bystander, never_joined)
+    bystander_membership.joined_via_feed = True
     s.member.feed_auto_leave = True
     db.session.commit()
 
@@ -137,6 +143,11 @@ def test_leave_feed_only_leaves_communities_the_user_joined_via_the_feed(app, db
 
     assert leave.call_count == 1
     assert leave.call_args.kwargs['community_id'] == joined_via_feed.id
+    # The flag is forwarded, not re-derived: leave_community reads it to decide
+    # whether to flash, so a hardcoded True would silence the per-community
+    # message on an ordinary unsubscribe.
+    assert leave.call_args.kwargs['bulk_leave'] is False
+    assert leave.call_args.kwargs['src'] == SRC_WEB
 
 
 def test_leave_feed_deletes_the_join_request_row(app, db_session):
@@ -515,8 +526,14 @@ def test_delete_feed_removes_the_feed_and_its_items(app, db_session, num_communi
     s = _seed()
     make_feed_item(s.feed, s.community)
     make_feed_member(s.member, s.feed)
+    # A membership of a DIFFERENT feed. :408 filters the delete by feed id;
+    # without a second feed's row that filter is free and a mutant dropping it
+    # wipes every subscription on the instance unnoticed.
+    other_feed = make_local_feed(name='unrelatedfeed', public=True)
+    make_feed_member(s.member, other_feed)
     s.feed.num_communities = num_communities
     db.session.commit()
+    other_feed_id = other_feed.id
 
     with web_ctx(app, s.owner):
         delete_feed(s.feed.id, SRC_WEB)
@@ -524,6 +541,7 @@ def test_delete_feed_removes_the_feed_and_its_items(app, db_session, num_communi
     assert Feed.query.get(s.feed.id) is None
     assert FeedItem.query.filter_by(feed_id=s.feed.id).count() == 0
     assert FeedMember.query.filter_by(feed_id=s.feed.id).count() == 0
+    assert FeedMember.query.filter_by(feed_id=other_feed_id).count() == 1
 
 
 # --------------------------------------------------------------------------
@@ -543,6 +561,14 @@ def test_leave_feed_accepts_a_feed_id_as_well_as_a_feed(app, db_session):
     """
     s = _seed()
     make_feed_member(s.member, s.feed)
+    # Two bystanders, each making one filter load-bearing: another user
+    # subscribed to the SAME feed (so :122's .one() raises without its user_id
+    # filter) and this user subscribed to ANOTHER feed (so :127's delete takes
+    # the wrong row without its feed_id filter).
+    other_user = make_user(s.instance, 'anothersubscriber')
+    make_feed_member(other_user, s.feed)
+    other_feed = make_local_feed(name='unrelatedfeed', public=True)
+    make_feed_member(s.member, other_feed)
     s.feed.subscriptions_count = 7
     s.member.feed_auto_leave = False
     db.session.commit()
@@ -552,6 +578,8 @@ def test_leave_feed_accepts_a_feed_id_as_well_as_a_feed(app, db_session):
             leave_feed(s.feed.id, SRC_WEB)
 
     assert FeedMember.query.filter_by(user_id=s.member.id, feed_id=s.feed.id).count() == 0
+    assert FeedMember.query.filter_by(user_id=other_user.id, feed_id=s.feed.id).count() == 1
+    assert FeedMember.query.filter_by(user_id=s.member.id, feed_id=other_feed.id).count() == 1
     assert Feed.query.get(s.feed.id).subscriptions_count == 6
 
 
@@ -706,8 +734,12 @@ def test_make_feed_api_arm_writes_every_derived_field(app, db_session):
     this test would otherwise pay for and never assert.
     """
     s = _seed()
-    payload = _api_feed_payload(url='MixedCase', title='Mixed', description='hello',
-                                show_child_posts=True, nsfw=True, nsfl=True)
+    # show_child_posts False, nsfw True and nsfl False: three flags with three
+    # different values, so a hardcoded True or a swapped pair is visible. All
+    # True would have made every one of them free.
+    payload = _api_feed_payload(url='MixedCase', title='Mixed',
+                                description='first line\r\nsecond line',
+                                show_child_posts=False, nsfw=True, nsfl=False)
 
     with app.test_request_context('/'):
         with patch('app.shared.feed.authorise_api_user', return_value=s.member), \
@@ -722,8 +754,14 @@ def test_make_feed_api_arm_writes_every_derived_field(app, db_session):
     assert made.user_id == s.member.id
     assert made.private_key == 'the-private-key'
     assert made.public_key == 'the-public-key'
-    assert made.show_posts_in_children is True
-    assert made.nsfw is True and made.nsfl is True
+    assert made.show_posts_in_children is False
+    assert made.nsfw is True and made.nsfl is False
+    # The API arm hands make_feed the RAW description, so the conversion at
+    # :215 is the only one that runs on this path -- unlike the web arm, where
+    # :191 has already converted it and :215 is a second, inert pass.
+    from app.utils import piefed_markdown_to_lemmy_markdown
+    assert made.description == piefed_markdown_to_lemmy_markdown('first line\r\nsecond line')
+    assert made.description != 'first line\r\nsecond line'
     assert made.public is True
     assert made.subscriptions_count == 1
     assert made.instance_id == 1
@@ -751,15 +789,19 @@ def test_make_feed_gives_the_creator_an_owner_membership(app, db_session):
     assert membership.is_owner is True
 
 
-@pytest.mark.parametrize('parent_given', [True, False])
+@pytest.mark.parametrize('parent_given', [True, False, 'zero'])
 def test_make_feed_sets_parent_feed_id_only_when_one_is_given(app, db_session, parent_given):
     """:229-232. The else arm assigns None explicitly, so both arms are
     observable on the row. The parent used is a real Feed the seed already
     minted, and its id is asserted distinct from the new feed's, so a mutant
     assigning the wrong id is distinguishable."""
     s = _seed()
-    parent = s.feed if parent_given else None
-    payload = _api_feed_payload(parent_feed_id=parent.id if parent else None)
+    # The 'zero' row is what makes the else arm's explicit `= None` observable:
+    # 0 is falsy, so it takes the else arm, and an implementation that wrote
+    # the given value there would store 0 rather than None.
+    parent = s.feed if parent_given is True else None
+    given = parent.id if parent else (0 if parent_given == 'zero' else None)
+    payload = _api_feed_payload(parent_feed_id=given)
 
     with app.test_request_context('/'):
         with patch('app.shared.feed.authorise_api_user', return_value=s.member), \
@@ -767,7 +809,7 @@ def test_make_feed_sets_parent_feed_id_only_when_one_is_given(app, db_session, p
             make_feed(payload, SRC_API, auth='Bearer x')
 
     made = Feed.query.filter_by(name='apifeed').one()
-    if parent_given:
+    if parent_given is True:
         assert made.parent_feed_id == parent.id != made.id
     else:
         assert made.parent_feed_id is None
@@ -779,6 +821,7 @@ def test_make_feed_sets_parent_feed_id_only_when_one_is_given(app, db_session, p
 ])
 @pytest.mark.parametrize('url_value, is_image, expect_file', [
     (None, False, False),
+    (None, True, False),
     ('https://example.test/not-an-image', False, False),
     ('https://example.test/picture.png', True, True),
 ])
@@ -788,11 +831,13 @@ def test_make_feed_stores_an_image_only_when_the_url_is_one(app, db_session, fie
     """:234-245, both blocks, each in three states: no url at all, a url that
     is not an image, and a url that is.
 
-    The middle state is what isolates the second operand of the conjunction;
-    without it `url and is_image_url(url)` is covered by two rows that never
-    disagree. is_image_url is patched rather than fed a real url, so the test
-    says which answer it is testing instead of depending on that function's
-    rules.
+    Four rows, not three, and the two middle ones isolate one operand each:
+    a url that is not an image isolates is_image_url, and a MISSING url with
+    is_image_url answering True isolates the truthiness half -- without that
+    row a mutant dropping `url and` behaves identically, because the only
+    no-url row also answers False. is_image_url is patched rather than fed a
+    real url, so the test says which answer it is testing instead of depending
+    on that function's rules.
 
     A decoy File is minted first so the row under test cannot land on id 1 and
     make a wrong-id assertion pass by coincidence. make_image_sizes is asserted
@@ -1037,6 +1082,11 @@ def test_join_feed_subscribes_to_the_feeds_communities_only_when_asked(
     assert local_community.ap_id is None
     make_feed_item(local, remote_community)
     make_feed_item(local, local_community)
+    # A third community, in a DIFFERENT feed. :50 filters the items by
+    # feed_id; without this row that filter is free, and a mutant dropping it
+    # subscribes the user to every feed's communities and no test notices.
+    elsewhere = make_community(name='someoneelsesfeedcommunity')
+    make_feed_item(s.feed, elsewhere)
     s.member.feed_auto_follow = auto_follow
     db.session.commit()
     member_id = s.member.id
@@ -1122,6 +1172,10 @@ def test_join_feed_sends_a_signed_follow_for_a_remote_feed(app, db_session):
     assert private_key == 'the-members-private-key'
     assert key_id == expected_key_id
     assert send.call_args.kwargs == {'timeout': 10}
+    # The collection comes from the following url, not the inbox: two
+    # different fields on the same feed, and nothing else in this test
+    # distinguishes them.
+    assert get.call_args.args == (f'https://remote.piefed.local/f/remotefeed/following',)
     assert activity['type'] == 'Follow'
     assert activity['actor'] == expected_actor
     assert activity['object'] == expected_object
@@ -1283,3 +1337,42 @@ def test_join_feed_does_not_flash_to_an_api_caller_who_is_already_subscribed(app
 
     assert flash_stub.call_count == 0
     assert FeedMember.query.filter_by(user_id=member_id, feed_id=feed_id).count() == 1
+
+
+@pytest.mark.parametrize('src, bulk_leave, expect_flash', [
+    (SRC_WEB, False, 1),
+    (SRC_WEB, True, 0),
+    (SRC_API, False, 0),
+    (SRC_API, True, 0),
+])
+def test_leave_feed_flashes_only_on_an_ordinary_web_unsubscribe(app, db_session, src,
+                                                                bulk_leave, expect_flash):
+    """:155's `src == SRC_WEB and not bulk_leave`, swept over both operands.
+
+    All four combinations are needed and each kills a different mutant:
+    dropping the src operand is caught by the (SRC_API, False) row, dropping
+    the bulk_leave operand by the (SRC_WEB, True) row, and `and` -> `or` by
+    either of the API rows. Three rows would leave one of those free, which is
+    the mechanism-(e) lockstep gap sub-projects 47 and 48 both shipped.
+
+    The bulk rows matter for a reason beyond coverage: a bulk leave is the
+    leave-all path, and flashing once per feed there would bury the page in
+    messages.
+    """
+    s = _seed()
+    make_feed_member(s.member, s.feed)
+    s.member.feed_auto_leave = False
+    db.session.commit()
+    member_id = s.member.id
+
+    # The web rows need a logged-in request (:120 reads current_user.id on
+    # that path); the API rows must NOT have one, or the test would not show
+    # which source the guard is reading.
+    context = web_ctx(app, s.member) if src == SRC_WEB else app.test_request_context('/')
+    with context:
+        with patch('app.shared.feed.authorise_api_user', return_value=member_id), \
+                patch('app.shared.feed.task_selector'), \
+                patch('app.shared.feed.flash') as flash_stub:
+            leave_feed(s.feed, src, auth='Bearer x', bulk_leave=bulk_leave)
+
+    assert flash_stub.call_count == expect_flash
