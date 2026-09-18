@@ -350,7 +350,12 @@ def test_edit_feed_api_arm_writes_every_derived_field(app, db_session):
     edited = Feed.query.get(s.feed.id)
     assert edited.title == 'API edit'
     assert edited.description == piefed_markdown_to_lemmy_markdown(raw) != raw
-    assert edited.description_html is not None
+    # description_html is built from the RAW description (:311 passes
+    # `description`, not `feed.description`), so the two differ for any input
+    # the markdown conversion touches. Asserting "not None" left that free.
+    from app.utils import markdown_to_html
+    assert edited.description_html == markdown_to_html(raw)
+    assert markdown_to_html(raw) != markdown_to_html(edited.description)
     assert edited.show_posts_in_children is False
     assert edited.nsfw is True and edited.nsfl is False
 
@@ -773,6 +778,9 @@ def test_edit_feed_lets_only_an_admin_change_the_instance_feed_flag(app, db_sess
     if is_admin:
         _make_admin(editor)
     assert editor.is_admin() is is_admin
+    # The feed starts True in the second half of this test so the admin arm has
+    # to be able to CLEAR the flag as well as set it; a hardcoded True passes
+    # every set-only test.
 
     with _site_ctx(app, editor):
         with patch('app.shared.feed.form_communities_to_ids', return_value=set()), \
@@ -786,6 +794,16 @@ def test_edit_feed_lets_only_an_admin_change_the_instance_feed_flag(app, db_sess
     from app.utils import menu_instance_feeds
     busted = [call.args[0] for call in bust.call_args_list]
     assert (menu_instance_feeds in busted) is is_admin
+
+    # Second half: the same editor submitting False. Only the admin arm can
+    # clear it, and a hardcoded True would keep it set.
+    feed = Feed.query.get(s.feed.id)
+    feed.is_instance_feed = True
+    db.session.commit()
+    with _site_ctx(app, editor):
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
+            edit_feed(_form(is_instance_feed=False), feed, SRC_WEB)
+    assert Feed.query.get(s.feed.id).is_instance_feed is not is_admin
 
 
 def test_edit_feed_adds_and_removes_communities_by_the_set_difference(app, db_session):
@@ -814,3 +832,50 @@ def test_edit_feed_adds_and_removes_communities_by_the_set_difference(app, db_se
     assert remover.call_count == 1
     assert remover.call_args.args == (61, s.feed.id)
     assert len({61, 62, 63, s.feed.id, s.owner.id}) == 5
+
+
+@pytest.mark.parametrize('is_image', [True, False])
+def test_edit_feed_stores_a_banner_only_when_the_url_is_one(app, db_session, is_image):
+    """:362's third operand, `is_image_url(banner_url)`, isolated the way the
+    icon's is. Written out rather than folded into the icon test: these two
+    blocks have already diverged twice -- the banner busts Feed.header_image
+    and deletes its old row by id, the icon does neither -- and a shared
+    parametrisation would hide the next divergence."""
+    s = _seed()
+    with _api_ctx(app, s.owner):
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()), \
+                patch('app.shared.feed.is_image_url', return_value=is_image), \
+                patch('app.shared.feed.make_image_sizes'), \
+                patch('app.models.File.delete_from_disk'):
+            edit_feed(_api_payload(banner_url='https://example.test/thing'), s.feed,
+                      SRC_API, auth='Bearer x')
+
+    assert (Feed.query.get(s.feed.id).image_id is not None) is is_image
+
+
+def test_edit_feed_from_scratch_keeps_the_old_banner_row(app, db_session):
+    """:369's `not from_scratch` operand, isolated.
+
+    The banner block still deletes its old row by id, so from_scratch is the
+    only thing keeping the previous File alive on this path -- unlike the icon
+    block, where the cascade removes it whatever from_scratch says. That
+    asymmetry is this round's R6 and is asserted here rather than smoothed
+    over: after a from_scratch banner replacement the old row survives,
+    unreferenced, and nothing ever deletes it.
+    """
+    s = _seed()
+    existing = _attach_banner(s.feed)
+    old_id = existing.id
+
+    with _api_ctx(app, s.owner):
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()), \
+                patch('app.shared.feed.is_image_url', return_value=True), \
+                patch('app.shared.feed.make_image_sizes'), \
+                patch('app.models.File.delete_from_disk') as unlink:
+            edit_feed(_api_payload(banner_url='https://example.test/scratch-banner.png'),
+                      s.feed, SRC_API, auth='Bearer x', from_scratch=True)
+
+    edited = Feed.query.get(s.feed.id)
+    assert edited.image_id != old_id
+    assert File.query.get(old_id) is not None
+    assert unlink.call_count == 0

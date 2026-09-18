@@ -315,12 +315,13 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
     else:
         feed.parent_feed_id = None
 
-    old_icon_id = 0
     old_banner_id = 0
 
     if not from_scratch:
-        # Store old file IDs before processing new URLs
-        old_icon_id = feed.icon_id
+        # Store the old banner id before processing new URLs. The icon has no
+        # equivalent any more: since the new icon is attached through the
+        # relationship, the delete-orphan cascade removes the old row and there
+        # is nothing left to look up by id.
         old_banner_id = feed.image_id
         icon_url_changed = banner_url_changed = False
 
