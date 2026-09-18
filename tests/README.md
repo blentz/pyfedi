@@ -8644,6 +8644,38 @@ the file parts even when it is testing something else entirely. Send them empty:
 copy tests posted urlencoded and got 400s that looked like validation failures.
 See D718.
 
+**299. A ROUTE'S DECORATORS RUN BEFORE ITS BRANCHES, INCLUDING WHEN YOU CALL
+THE FUNCTION DIRECTLY.** `show_feed` is decorated with
+`login_required_if_private_instance`, which reads the SAME `CONTENT_WARNING`
+setting the route branches on -- so setting it in `app.config` to reach those
+branches makes the decorator redirect to `/content_warning` first, and calling
+`show_feed(feed)` from a test does not help, because the decorators live on the
+function object. **Patch the config at the ROUTE MODULE'S binding**
+(`patch('app.feed.routes.current_app', SimpleNamespace(config=..., debug=...))`),
+which leaves the decorator's view of the setting alone. Three other decorator
+facts from the same round: `Site.private_instance` defaults **True**, so an
+anonymous route test measures the login redirect unless the fixture opens the
+instance; `validation_required` needs `user.verified`; and `approval_required`
+needs a non-None `user.private_key`. See D729.
+
+**300. THIS TEST CLIENT DELIVERS NO COOKIES.** Neither
+`client.set_cookie(...)` nor a `Cookie:` request header reaches
+`request.cookies` -- a throwaway probe route that echoed `dict(request.cookies)`
+returned `{}` for both. Any route branch gated on a cookie (`low_bandwidth`,
+`warned`) therefore cannot be reached through the client, and the branch has to
+be driven another way: patch what the route reads, or patch the module-level
+object it reads it from. Do not spend an afternoon on the cookie. See D729.
+
+**301. AN UNTESTED ROUTE IS WHERE THE CHEAP DEFECTS LIVE.** `feed_list` is
+twelve statements and carried three: it filtered on a `user_id` taken from the
+query string with no ownership check and no `public` filter, so any logged-in
+account could read any other account's private feed titles; three unguarded
+`int()` calls made a request without arguments a 500; and a user-supplied feed
+title went into returned HTML unescaped. **A route that builds its own HTML and
+reads its own query parameters is worth reading line by line before writing a
+single test** -- all three were visible in the first five lines, and all three
+had been there since the route was written. See D725, D726, D727.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
