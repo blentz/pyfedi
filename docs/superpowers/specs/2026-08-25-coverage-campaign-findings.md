@@ -14173,7 +14173,51 @@ instance, since the join condition is a constant predicate. It does not: four
 feeds and two items copied **2 items, 2 distinct communities,
 num_communities 2**. Measured, not reasoned.
 
-**Next free number: D723.**
+**Next free number: D723.** (**D723-D732 were taken by sub-project 54, below;
+the free number is now D733.**)
+
+## Sub-project 54: `app/feed/routes.py` Group C -- a dropdown that served other people's private feeds, and the module's close
+
+**The round in one line: the five reading routes close, the module reaches
+**99.017** and **TAKES ITS FIRST FLOOR AT 99 -- 29 floors**; the suite is green
+at **5459 passed, 3 skipped, 6 subtests passed in 465.71s**; THREE production
+defects were repaired, all three in one twelve-statement route that nothing had
+ever executed -- it served any user's private feed titles to any logged-in
+caller, 500'd without its arguments, and returned an unescaped user-supplied
+title as HTML; and a 33-mutant pass killed **33 of 33**, the campaign's second
+clean pass.**
+
+### 0. THE MEASUREMENT AND THE FLOOR
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D723 | `app/feed/routes.py`; `coverage_floors.ini` | **THE MODULE CLOSES AT 99.017 AND TAKES ITS FIRST FLOOR AT 99.** Per route on the full-suite JSON: `feed_list` `[]`/`[]`, `show_feed` `[584]`/`[[504, 584]]`, `get_all_child_feed_ids` `[]`/`[]`, `feed_create_post` `[]`/`[]`, `show_feed_rss` `[]`/`[]`. The module's whole residual is **three statements and four arcs, every one proved unreachable**: `:57` and `:239`, the two `/f/` prefix strips (**D705** and its Group B twin, both dead because the shared form validator rejects a slash); `:584`, `show_feed`'s closing `abort(404)`, proved below; and `[[675, 703]]`, `feed_unsubscribe`'s `if proceed:` tautology (**D706**). **BASIS: the full suite, `5459 passed, 3 skipped, 6459 warnings, 6 subtests passed in 465.71s`.** The floor is the measured figure ROUNDED DOWN, `coverage_floors.ini` gains exactly one line, and the checker was re-run with it in place: **`All 29 module floors met.`** | **module closed and floored; four proved residuals** | The `&&` chain; the checker re-run after the floor line landed |
+| D724 | `show_feed:502-504`, `:583-584` | **`show_feed`'s CLOSING `abort(404)` CANNOT RUN.** `current_feed` is assigned `feed` at `:502` and never reassigned, so `if current_feed:` is false only when `feed` is falsy -- and a falsy `feed` has already raised at `:438`, `if not feed.public`, a hundred and fifty lines earlier. Demonstrated by calling `show_feed(None)` and watching `AttributeError: public` at the FIRST access rather than a 404 at the last. Fact 75 **cause 9**'s shape, with the discrimination removed by an earlier statement rather than by a constant. | **residual, proved by execution** | `test_show_feeds_final_abort_is_unreachable` |
+
+### 1. THE THREE REPAIRS, ALL IN ONE UNTESTED ROUTE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D725 | `feed_list:411`, `:417` | **THE FEED DROPDOWN SERVED ANY USER'S FEEDS TO ANY LOGGED-IN CALLER, PRIVATE ONES INCLUDED.** The route is `@login_required` and nothing more: it filtered on a `user_id` taken from the **query string**, and the query has no `public` filter. Probe -- a second account fetching the first's list: `PROBE list status: 200` / `PROBE list body: <li><a class="dropdown-item" href="...">Owner secret feed</li>`, where that feed is `public=False`. **Repaired by taking the acting user from the session**; the parameter survives only in the links the route builds, which is what it is for. The inverted test asserts the caller's OWN feed still appears, or a repair returning nothing would pass. | **fixed at `7dc0cbee`** | Probe output; the inverted test run against the unrepaired tree |
+| D726 | `feed_list:411-415` | **A REQUEST WITHOUT ARGUMENTS WAS A 500.** Three `int(request.args.get(...))` calls with no default: `PROBE args exception: TypeError int() argument must be a string, a bytes-like object or a real number, not 'NoneType'`. Repaired with `request.args.get(name, 0, type=int)` -- the idiom `show_feed:459` already uses in the same file. | **fixed at `7dc0cbee`** | Probe output; the inverted test asserts a usable body, not merely the absence of a raise |
+| D727 | `feed_list:433` | **THE USER-SUPPLIED FEED TITLE WENT INTO RETURNED HTML UNESCAPED.** The route hand-builds `<li><a ...>{feed.title}</li>` in an f-string and returns it for the caller's page to splice into a dropdown. Probe: `PROBE xss raw tag present: True` for a feed titled `<img src=x onerror=alert(1)>`. Repaired with `markupsafe.escape` at the one interpolation that is not an integer. The inverted test asserts **both** that the payload is escaped and that the surrounding anchor is still real markup, since escaping the whole line would pass the first half and break the feature. | **fixed at `7dc0cbee`** | Probe output; both halves asserted |
+
+### 2. THE MUTATION PASS, AND WHAT THE HARNESS COST
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D728 | The five routes | **33 MUTANTS APPLIED, 30 KILLED AND THREE SURVIVING ON THE MEASURING PASS; 33 OF 33 AFTER THE FIX ROUND -- THE CAMPAIGN'S SECOND CLEAN PASS** (sub-project 49's conjoined sweep was the first). Scoped as D602 requires. All three survivors were missing ROWS rather than missing assertions: a user whose page-length preference is larger than the site's (the guard is `<`), a submit url carrying display capitalisation (the lookup lower-cases), and a nested RSS path (the feed is the last segment). | **33/33 killed** | Every mutant applied singly and restored with the restoration proved; both passes' logs kept |
+| D729 | `tests/test_feed_reading_routes.py`; `app/utils.py:1925-1935`, `:1881-1899`; `app/models.py:4000` | **FIVE DECORATOR AND FIXTURE FACTS THAT COST THIS ROUND MORE THAN THE TESTS DID, RECORDED SO THE NEXT ROUTE ROUND DOES NOT PAY AGAIN.** (1) `Site.private_instance` defaults **True**, so every anonymous route test measures `login_required_if_private_instance` rather than the route unless the seed opens the instance. (2) **The CONTENT_WARNING branches cannot be reached by setting the config**: the same decorator reads the same setting and redirects to `/content_warning` first. Patching `app.feed.routes.current_app` leaves the decorator's view alone and gives the route the value under test -- calling the function directly does NOT work, because the decorators are on the function object. (3) **This test client delivers no cookies at all**, by `set_cookie` or by header; a probe confirmed both return `{}`. (4) `feed_create_post` sits behind `validation_required` AND `approval_required`, so its user needs `verified` **and** a `private_key`. (5) A community with `total_subscriptions_count` 0 never reaches `show_feed`'s template however its feed is wired. | **registered as harness findings** | Each established by a failing test and then fixed; the cookie one by a throwaway probe route |
+
+### 3. REGISTERED, NOT FIXED
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D730 | `feed_list:426`, `:433` | **The route hand-builds HTML in Python and returns it as a bare string**, with `<li>` never closed on the anchor. D727 escapes the one interpolated value; the shape stays. | **registered** | The two lines quoted |
+| D731 | `show_feed:485-494` | **The breadcrumb trail builds a namedtuple CLASS per entry and assigns attributes to it** rather than instantiating, which works only because each iteration makes a fresh class; and `existing_url` is initialised to `/f` and never appended to -- an accumulator that accumulates nothing. Both are harmless under the flat url scheme. | **registered so neither is mistaken for a bug, and so a move to nested urls knows to look here** | The block quoted |
+| D732 | `feed_create_post:605`, `:614`; `show_feed_rss:772`; `feed_copy:289` | **The same odd `FeedItem.query.join(Feed, FeedItem.feed_id == <id>)` at four sites**, whose ON clause is a constant predicate rather than a join key. Sub-project 53 measured it and it does not duplicate rows. | **registered with 53's measurement attached** | The four sites listed |
+
+**Next free number: D733.**
 
 ## Ratchet gotchas
 
