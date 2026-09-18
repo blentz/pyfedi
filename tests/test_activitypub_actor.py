@@ -1237,3 +1237,144 @@ def test_the_unbanned_copy_lookup_can_never_find_anything(app, db_session):
     db.session.rollback()
 
     assert find_remote_actor(url) is None
+
+
+# --------------------------------------------------------------------------
+# Rows added to close mutation survivors
+# --------------------------------------------------------------------------
+
+
+def test_a_url_with_a_refused_netloc_does_not_get_a_host_from_its_at_sign(app, db_session):
+    """THE GUARD'S REASON, ASSERTED. `if not server and '://' not in actor_url`
+    resolves a HANDLE's host through normalise_actor_string but refuses a URL
+    whose netloc urlparse would not read. Dropping the second operand lets the
+    url take the handle path -- and this string is what makes that dangerous:
+    everything before the '@' becomes the "name" and `evil.example` becomes the
+    server, so an actor id pointing at a broken host is validated against an
+    instance that never served it.
+    """
+    _seed()
+    make_instance('evil.example', software='lemmy')
+
+    with app.test_request_context('/'):
+        assert validate_remote_actor('https://[oops/u/alice@evil.example') is False
+
+
+def test_a_webfinger_reply_with_the_wrong_content_type_is_not_read(app, db_session):
+    """The content-type half of the acceptance check. The reply carries usable
+    links, so a mutant dropping the check would follow them -- which is the
+    point: an HTML page that happens to contain JSON is not a webfinger answer.
+    """
+    _seed()
+    links = [{'rel': 'self', 'href': 'https://remote.example/u/alice'}]
+    response = _Resp(payload={'links': links}, content_type='text/html')
+
+    result, request, slept = _webfinger_fetch([response])
+
+    assert result is None
+    assert request.call_count == 1
+
+
+def test_a_webfinger_reply_with_a_bad_status_is_not_read(app, db_session):
+    """The status half of the same check, with links present for the same
+    reason.
+    """
+    _seed()
+    links = [{'rel': 'self', 'href': 'https://remote.example/u/alice'}]
+    response = _Resp(status_code=404, payload={'links': links})
+
+    result, request, slept = _webfinger_fetch([response])
+
+    assert result is None
+    assert request.call_count == 1
+
+
+def test_a_plain_http_address_is_fetched_directly_too(app, db_session):
+    """`startswith('https://') or startswith('http://')` -- the second operand
+    is what keeps a plain-http peer off the webfinger path, where its address
+    would be read as a handle.
+    """
+    _seed()
+    model = object()
+
+    with patch('app.activitypub.actor.fetch_remote_actor_data', return_value={'type': 'Person'}) as direct, \
+         patch('app.activitypub.actor.fetch_actor_from_webfinger') as webfinger, \
+         patch('app.activitypub.actor.actor_json_to_model', return_value=model):
+        assert create_actor_from_remote('http://remote.example/u/alice') is model
+
+    assert direct.call_count == 1
+    assert webfinger.call_count == 0
+
+
+def test_a_url_in_capitals_finds_the_same_actor(app, db_session):
+    """`actor_url.strip().lower()` -- peers and users both send mixed case, and
+    every lookup below compares against stored lower-case values.
+    """
+    _seed()
+    peer = make_instance('remote.example', software='lemmy')
+    actor = make_user(peer, 'alice', local=False)
+    # make_user publishes /users/<name>; the lookup under test is the /u/ one
+    actor.ap_profile_id = 'https://remote.example/u/alice'
+    db.session.commit()
+
+    with app.test_request_context('/'):
+        assert find_actor_by_url('  HTTPS://REMOTE.EXAMPLE/U/ALICE  ').id == actor.id
+
+
+def test_the_empty_host_guard_is_defence_in_depth_rather_than_the_refusal(app, db_session):
+    """ONE OF THE ROUND'S FIVE EQUIVALENT MUTANTS, PROVED.
+
+    `if not server: return False` cannot be observed, because the gate below it
+    already fails closed on an empty host: a probe gives
+    `instance_banned('') -> True`, `instance_banned(None) -> True` and
+    `instance_allowed('') -> False`, so both the banlist and the allowlist mode
+    refuse a hostless actor whether or not the guard is there.
+
+    Recorded rather than deleted: the guard is what makes the refusal explicit
+    at the point a reader looks for it, and it stops depending on a behaviour
+    of two other functions. Both halves are asserted here, so a change to
+    either helper's fail-closed behaviour shows up as a failure in this file.
+    """
+    from app.utils import instance_allowed, instance_banned
+    _seed()
+
+    with app.test_request_context('/'):
+        assert instance_banned('') is True
+        assert instance_banned(None) is True
+        assert instance_allowed('') is False
+        assert validate_remote_actor('https://[oops/u/alice') is False
+
+
+@pytest.mark.parametrize('url, kind', [
+    ('https://remote.example/u/alice', 'user'),
+    ('https://remote.example/c/news', 'community'),
+    ('https://remote.example/f/feed', 'feed'),
+])
+def test_the_url_shape_fast_paths_change_nothing_but_the_query_order(app, db_session, url, kind):
+    """THE ROUND'S OTHER FOUR EQUIVALENT MUTANTS, PROVED.
+
+    find_remote_actor's `/u/`, `/c/`, `/m/` and `/f/` tests exist "to optimize
+    database queries" (its own comment). Each of the four can be broken -- the
+    marker misspelt, the `/p/` and `/t/` exclusions dropped -- without any
+    observable change, because the fallback below repeats every one of the
+    three queries unconditionally. That is what this row asserts directly: the
+    right actor comes back for each url shape EVEN THOUGH the actor is stored
+    at a url whose marker names a different table, so the fast path cannot be
+    what answered.
+
+    So the four mutants are equivalent, and the fast paths are an optimisation
+    with no behaviour of their own. Registered as D774.
+    """
+    _seed()
+    peer = make_instance('remote.example', software='lemmy')
+    # the actor is always a Feed, whatever the url's marker says
+    feed = Feed(user_id=1, name='thing', title='thing', machine_name='thing',
+                instance_id=peer.id, ap_id='thing@remote.example',
+                ap_profile_id=url, ap_public_url=url)
+    db.session.add(feed)
+    db.session.commit()
+
+    found = find_remote_actor(url)
+
+    assert isinstance(found, Feed)
+    assert found.id == feed.id
