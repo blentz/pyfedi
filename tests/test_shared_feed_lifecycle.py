@@ -883,3 +883,172 @@ def test_make_feed_web_arm_converts_the_description_exactly_once(app, db_session
     made = Feed.query.filter_by(name='webfeed').one()
     assert made.description == once
     assert made.description_html is not None
+
+
+# --------------------------------------------------------------------------
+# Task 7: join_feed's local arm.
+#
+# Every test below re-queries after the call. join_feed ends with
+# `finally: db.session.remove()` (:109-110), which detaches every object the
+# caller holds; a scoping probe that read a seed row afterwards got
+# DetachedInstanceError.
+# --------------------------------------------------------------------------
+
+
+def test_join_feed_aborts_404_when_no_feed_matches(app, db_session):
+    """:104-105. The lookup at :34 filters name AND ap_id None, so a remote
+    feed's name does not resolve on the local arm -- which is why the seed's
+    factory feed (ap_id set) is used here rather than an invented name: it
+    proves the ap_id half of the filter is doing something."""
+    from werkzeug.exceptions import NotFound
+    s = _seed()
+    assert Feed.query.filter_by(name='lifecyclefeed').one().ap_id is not None
+
+    with web_ctx(app, s.member):
+        with pytest.raises(NotFound):
+            join_feed('lifecyclefeed', s.member.id)
+
+
+def test_join_feed_subscribes_a_local_user_to_a_local_feed(app, db_session):
+    """The local arm's happy path: a FeedMember row, the subscriptions_count
+    incremented, and the three memoized entries deleted.
+
+    subscriptions_count starts at 7 so `+= 1` is distinguishable from `= 1`,
+    which is the value make_feed writes and therefore the mutant most likely to
+    pass unnoticed.
+
+    The cache.delete_memoized calls are asserted as CALLS: tests/conftest.py
+    sets CACHE_TYPE = 'NullCache', so their effect is unobservable by
+    construction (D602, D589), and asserting the effect would prove nothing.
+    """
+    s = _seed()
+    local = make_local_feed(name='localjoinfeed', public=True)
+    local.subscriptions_count = 7
+    s.member.feed_auto_follow = False
+    db.session.commit()
+    feed_id, member_id = local.id, s.member.id
+
+    with web_ctx(app, s.member):
+        with patch('app.shared.feed.cache.delete_memoized') as bust:
+            join_feed('localjoinfeed', member_id)
+
+    assert FeedMember.query.filter_by(user_id=member_id, feed_id=feed_id).count() == 1
+    assert Feed.query.get(feed_id).subscriptions_count == 8
+    assert bust.call_count == 3
+
+
+def test_join_feed_strips_the_actor_it_is_given(app, db_session):
+    """:28. Without the strip, ' localjoinfeed ' misses the exact-match lookup
+    at :34 and the call aborts 404, so this is a behaviour with a live
+    consequence rather than tidiness."""
+    s = _seed()
+    local = make_local_feed(name='localjoinfeed', public=True)
+    s.member.feed_auto_follow = False
+    db.session.commit()
+    feed_id, member_id = local.id, s.member.id
+
+    with web_ctx(app, s.member):
+        join_feed('  localjoinfeed  ', member_id)
+
+    assert FeedMember.query.filter_by(user_id=member_id, feed_id=feed_id).count() == 1
+
+
+def test_join_feed_does_nothing_twice_for_an_existing_member(app, db_session):
+    """:96-99, the else arm. The membership count is asserted to stay at 1 and
+    the count NOT to move: an implementation that added a second row would
+    still flash the same message.
+
+    feed_membership is not patched -- Feed.subscribed does the real lookup --
+    so this also pins that an existing FeedMember is what makes the arm fire.
+    """
+    s = _seed()
+    local = make_local_feed(name='localjoinfeed', public=True)
+    local.subscriptions_count = 7
+    make_feed_member(s.member, local)
+    db.session.commit()
+    feed_id, member_id = local.id, s.member.id
+
+    with web_ctx(app, s.member):
+        join_feed('localjoinfeed', member_id)
+
+    assert FeedMember.query.filter_by(user_id=member_id, feed_id=feed_id).count() == 1
+    assert Feed.query.get(feed_id).subscriptions_count == 7
+
+
+@pytest.mark.parametrize('src, expect_flash', [(SRC_WEB, True), (SRC_API, False)])
+def test_join_feed_flashes_only_on_the_web_path(app, db_session, src, expect_flash):
+    """:94's `success is True and src == SRC_WEB`, and :98's `src == SRC_WEB`
+    in the else arm -- both covered by the two rows here.
+
+    THE STRANDED ARM, STATED RATHER THAN CHASED: `success` is assigned True at
+    :39 and never reassigned, so `success is True` is a tautology and its False
+    arm is unreachable. That is fact 75 CAUSE 9, the same shape as D669's
+    `if proceed:` in _feed_remove_community. Nothing here can cover it and no
+    test should pretend to; the arc it strands is reported with the round's
+    coverage figures.
+    """
+    s = _seed()
+    local = make_local_feed(name='localjoinfeed', public=True)
+    s.member.feed_auto_follow = False
+    db.session.commit()
+    member_id = local_id = None
+    member_id, local_id = s.member.id, local.id
+
+    with web_ctx(app, s.member):
+        with patch('app.shared.feed.flash') as flash_stub:
+            join_feed('localjoinfeed', member_id, src)
+
+    assert flash_stub.call_count == (1 if expect_flash else 0)
+    assert FeedMember.query.filter_by(user_id=member_id, feed_id=local_id).count() == 1
+
+
+@pytest.mark.parametrize('auto_follow, debug, expect_inline, expect_delayed', [
+    (True, True, 2, 0),
+    (True, False, 0, 2),
+    (False, True, 0, 0),
+    (False, False, 0, 0),
+])
+def test_join_feed_subscribes_to_the_feeds_communities_only_when_asked(
+        app, db_session, auto_follow, debug, expect_inline, expect_delayed):
+    """:49-57. Two guards, two arms each: feed_auto_follow, then
+    current_app.debug choosing between an inline call and a dispatch.
+
+    TWO FeedItem communities, not one, so the loop is a loop and a mutant that
+    subscribed to only the first is visible in the call count. One of them has
+    ap_id set and one does not, because :53 chooses between community.ap_id and
+    community.name -- with a single community that ternary is covered but never
+    observed to differ.
+
+    do_subscribe is patched at app.community.routes, where the deferred import
+    at :38 resolves it; a rebind on app.shared.feed would not take.
+    """
+    s = _seed()
+    local = make_local_feed(name='localjoinfeed', public=True)
+    remote_community = make_community(name='remotecommunity', host='far.piefed.local')
+    # make_community leaves ap_id None whatever host it is given -- measured,
+    # not assumed: without this line both communities took the .name arm of
+    # :53's ternary and the two arms were never observed to differ.
+    remote_community.ap_id = 'remotecommunity@far.piefed.local'
+    local_community = make_community(name='localcommunity')
+    assert local_community.ap_id is None
+    make_feed_item(local, remote_community)
+    make_feed_item(local, local_community)
+    s.member.feed_auto_follow = auto_follow
+    db.session.commit()
+    member_id = s.member.id
+    expected_actors = {'remotecommunity@far.piefed.local', 'localcommunity'}
+
+    subscribe = MagicMock()
+    with web_ctx(app, s.member):
+        with patch('app.community.routes.do_subscribe', subscribe), \
+                patch('app.shared.feed.current_app') as current_app_stub:
+            current_app_stub.debug = debug
+            join_feed('localjoinfeed', member_id, SRC_API)
+
+    assert subscribe.call_count == expect_inline
+    assert subscribe.delay.call_count == expect_delayed
+    calls = subscribe.call_args_list if expect_inline else subscribe.delay.call_args_list
+    if calls:
+        assert {call.args[0] for call in calls} == expected_actors
+        assert {call.args[1] for call in calls} == {member_id}
+        assert all(call.kwargs == {'joined_via_feed': True} for call in calls)
