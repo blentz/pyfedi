@@ -212,3 +212,35 @@ def test_going_private_counts_only_this_feeds_members(app, db_session):
 
     assert Feed.query.get(s.feed.id).subscriptions_count == 1
     assert FeedMember.query.filter_by(feed_id=s.other_feed.id).count() == 2
+
+
+# --------------------------------------------------------------------------
+# Task 2: P4 -- the ownership check that runs after the writes.
+# --------------------------------------------------------------------------
+
+
+def test_edit_feed_rewrites_the_feed_before_it_checks_who_is_asking(app, db_session):
+    """PIN (P4): :292-305 assign name, machine_name, title, description,
+    description_html, show_posts_in_children and parent_feed_id; :311 then
+    decides whether the caller may edit the feed at all and raises
+    Exception('incorrect_login').
+
+    The raise does not roll back, so the rejected values sit on the live ORM
+    object and the NEXT commit in the same session writes them. That last
+    assertion is the defect: asserting only the raise passes against a correct
+    implementation too.
+
+    The API path reaches this with an arbitrary caller's data --
+    app/api/alpha/utils/feed.py:202's put_feed has no ownership check of its
+    own, so :311 is the only gate there is.
+    """
+    s = _seed()
+    stored_title = Feed.query.get(s.feed.id).title
+
+    with _site_ctx(app, s.stranger):
+        with pytest.raises(Exception, match='incorrect_login'):
+            edit_feed(_form(title='Hijacked'), s.feed, SRC_WEB)
+        assert s.feed.title == 'Hijacked'
+        db.session.commit()
+
+    assert Feed.query.get(s.feed.id).title == 'Hijacked' != stored_title
