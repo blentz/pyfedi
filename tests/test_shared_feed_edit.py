@@ -219,20 +219,20 @@ def test_going_private_counts_only_this_feeds_members(app, db_session):
 # --------------------------------------------------------------------------
 
 
-def test_edit_feed_rewrites_the_feed_before_it_checks_who_is_asking(app, db_session):
-    """PIN (P4): :292-305 assign name, machine_name, title, description,
-    description_html, show_posts_in_children and parent_feed_id; :311 then
-    decides whether the caller may edit the feed at all and raises
-    Exception('incorrect_login').
+def test_edit_feed_refuses_a_stranger_without_writing_anything(app, db_session):
+    """Was a PIN; INVERTED once the ownership check moved above the writes.
 
-    The raise does not roll back, so the rejected values sit on the live ORM
-    object and the NEXT commit in the same session writes them. That last
-    assertion is the defect: asserting only the raise passes against a correct
-    implementation too.
+    ORIGINAL PINNED CLAIM, now false: ":292-305 assign name, machine_name,
+    title, description, description_html, show_posts_in_children and
+    parent_feed_id; :311 then decides whether the caller may edit the feed at
+    all", so the rejected values sat on the live ORM object and the next commit
+    in the same session wrote them.
 
-    The API path reaches this with an arbitrary caller's data --
+    The commit after the refusal is the assertion that matters: a check that
+    raised late would still raise, and only the stored value tells the two
+    apart. The API path reaches this with an arbitrary caller's data --
     app/api/alpha/utils/feed.py:202's put_feed has no ownership check of its
-    own, so :311 is the only gate there is.
+    own, so this is the only gate there is.
     """
     s = _seed()
     stored_title = Feed.query.get(s.feed.id).title
@@ -240,7 +240,60 @@ def test_edit_feed_rewrites_the_feed_before_it_checks_who_is_asking(app, db_sess
     with _site_ctx(app, s.stranger):
         with pytest.raises(Exception, match='incorrect_login'):
             edit_feed(_form(title='Hijacked'), s.feed, SRC_WEB)
-        assert s.feed.title == 'Hijacked'
+        assert s.feed.title == stored_title
         db.session.commit()
 
-    assert Feed.query.get(s.feed.id).title == 'Hijacked' != stored_title
+    assert Feed.query.get(s.feed.id).title == stored_title
+
+
+def test_edit_feed_lets_the_owner_through(app, db_session):
+    """The positive control for the check above. Without it, a "fix" that
+    refused everybody would pass every assertion in the refusal test."""
+    s = _seed()
+    with _site_ctx(app, s.owner):
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
+            edit_feed(_form(title='Owner edit'), s.feed, SRC_WEB)
+
+    assert Feed.query.get(s.feed.id).title == 'Owner edit'
+
+
+def test_edit_feed_lets_an_admin_through(app, db_session):
+    """:311's second disjunct, `user.is_admin()`.
+
+    REGISTERED DIVERGENCE (R4), asserted here as current behaviour rather than
+    corrected: the web route refuses anyone who is not the owner
+    (app/feed/routes.py:133 aborts 404, admin or not), so an admin can edit
+    another user's feed through the API and not through the UI. Neither
+    behaviour is obviously the intended one, so this round pins what is there.
+    """
+    s = _seed()
+    _make_admin(s.stranger)
+    assert s.stranger.is_admin() and s.feed.user_id != s.stranger.id
+
+    with _site_ctx(app, s.stranger):
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
+            edit_feed(_form(title='Admin edit'), s.feed, SRC_WEB)
+
+    assert Feed.query.get(s.feed.id).title == 'Admin edit'
+
+
+def test_edit_feed_from_scratch_skips_the_ownership_check_entirely(app, db_session):
+    """PINNED, REGISTERED AND NOT FIXED (R1): `from_scratch=True` skips the
+    check, so a caller that passes it edits any feed.
+
+    Latent: no caller passes True. `/usr/bin/grep -rn "from_scratch" app/`
+    finds the True-passing call sites only in app/shared/post.py:243 and
+    app/shared/community.py:282, whose make_* functions delegate to their
+    edit_* twin; make_feed does not delegate, it duplicates, which is the same
+    divergence that left make_feed accepting is_instance_feed from anyone
+    (D675) while edit_feed has always gated it.
+
+    Pinned rather than repaired so that a future caller which starts passing
+    True fails a test rather than a review.
+    """
+    s = _seed()
+    with _site_ctx(app, s.stranger):
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
+            edit_feed(_form(title='No check at all'), s.feed, SRC_WEB, from_scratch=True)
+
+    assert Feed.query.get(s.feed.id).title == 'No check at all'
