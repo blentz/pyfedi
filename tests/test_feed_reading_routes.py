@@ -40,12 +40,23 @@ def csrf(app, client):
     return token
 
 
-def _seed():
+def _seed(private_instance=False):
+    """Two users, the id-1 seat burned, and the site opened by default.
+
+    Site.private_instance defaults TRUE (app/models.py:4000), and
+    login_required_if_private_instance -- which decorates show_feed -- redirects
+    an anonymous reader to the login page on a private instance. Every
+    anonymous test here would be measuring that decorator instead of the route,
+    so the seed opens the instance and each test that cares says so.
+    """
     instance = make_instance('test.piefed.local', software='piefed')
     burn = make_user(instance, 'burnseat', local=True)
     assert burn.id == 1
     owner = make_user(instance, 'feedowner', local=True)
     snooper = make_user(instance, 'snooper', local=True)
+    site = Site.query.get(1)
+    site.private_instance = private_instance
+    db.session.commit()
     return instance, owner, snooper
 
 
@@ -196,3 +207,158 @@ def test_the_feed_dropdown_omits_the_none_entry_when_the_community_has_no_feed(a
     body = response.get_data(as_text=True)
     assert 'None</li>' not in body
     assert 'Other feed' in body
+
+
+# --------------------------------------------------------------------------
+# Task 3: show_feed, reached through /f/<name> (the route lives in
+# app/activitypub/routes.py:2644 and calls this function for HTML requests).
+# --------------------------------------------------------------------------
+
+
+def _capture_render():
+    captured = {}
+
+    def fake_render(template, **kwargs):
+        captured['template'] = template
+        captured.update(kwargs)
+        return 'rendered'
+
+    return captured, fake_render
+
+
+def test_showing_a_public_feed_renders_it(app, db_session):
+    """The ordinary path, and the anonymous cache header at :578.
+
+    The response is asserted for its Cache-Control as well as its status: an
+    anonymous reader gets a 30-second public cache and a logged-in one does
+    not, which is the difference the two arms exist for.
+    """
+    instance, owner, snooper = _seed()
+    feed = _feed(owner, 'publicfeed')
+
+    captured, fake_render = _capture_render()
+    with app.test_client() as client:
+        with patch('app.feed.routes.render_template', side_effect=fake_render):
+            response = client.get('/f/publicfeed')
+
+    assert response.status_code == 200
+    assert captured['feed'].id == feed.id
+    assert response.headers['Cache-Control'] == 'public, max-age=30'
+
+
+def test_showing_a_public_feed_to_a_member_uses_a_private_cache(app, db_session):
+    """:579-580, the logged-in arm of the same fork."""
+    instance, owner, snooper = _seed()
+    _feed(owner, 'publicfeed')
+
+    with app.test_client() as client:
+        login(client, snooper)
+        with patch('app.feed.routes.render_template', return_value='rendered'):
+            response = client.get('/f/publicfeed')
+
+    assert response.status_code == 200
+    assert response.headers['Cache-Control'] == 'private, max-age=15, must-revalidate'
+
+
+def test_a_private_feed_is_hidden_from_a_stranger(app, db_session):
+    """:438-445. A private feed redirects a stranger to the feed list with a
+    flash; the owner and a subscriber fall through to the render.
+
+    The three arms are separate tests rather than one parametrisation because
+    the two `...` arms at :440 and :442 are no-ops -- their only observable
+    effect is that the request does NOT redirect -- and folding them together
+    would hide which one ran.
+    """
+    instance, owner, snooper = _seed()
+    _feed(owner, 'privatefeed', public=False)
+
+    with app.test_client() as client:
+        login(client, snooper)
+        with patch('app.feed.routes.flash') as flash_stub:
+            response = client.get('/f/privatefeed')
+
+    assert response.status_code == 302
+    assert flash_stub.call_count == 1
+
+
+def test_a_private_feed_is_visible_to_its_owner(app, db_session):
+    """:439-440, the owner arm."""
+    instance, owner, snooper = _seed()
+    _feed(owner, 'privatefeed', public=False)
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', return_value='rendered'):
+            response = client.get('/f/privatefeed')
+
+    assert response.status_code == 200
+
+
+def test_a_private_feed_is_visible_to_a_subscriber(app, db_session):
+    """:441-442, the subscriber arm -- the one that needs a FeedMember row
+    rather than ownership, and the only difference between it and the stranger
+    test above."""
+    from app.models import FeedMember
+    instance, owner, snooper = _seed()
+    feed = _feed(owner, 'privatefeed', public=False)
+    db.session.add(FeedMember(feed_id=feed.id, user_id=snooper.id))
+    db.session.commit()
+
+    with app.test_client() as client:
+        login(client, snooper)
+        with patch('app.feed.routes.render_template', return_value='rendered'):
+            response = client.get('/f/privatefeed')
+
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize('content_warning, nsfw, nsfl, expect_redirect', [
+    (True, False, True, True),
+    (True, True, False, False),
+    (False, True, False, True),
+    (False, False, True, True),
+    (False, False, False, False),
+])
+def test_an_anonymous_reader_is_sent_to_log_in_for_adult_feeds(app, db_session,
+                                                               content_warning, nsfw,
+                                                               nsfl, expect_redirect):
+    """:447-457, both CONTENT_WARNING arms.
+
+    With CONTENT_WARNING on, only NSFL is hidden; with it off, either flag
+    hides the feed. The (True, True, False) row is what separates the two arms:
+    an NSFW feed is visible anonymously under CONTENT_WARNING and not without
+    it.
+
+    THE CONFIG IS PATCHED AT THE ROUTE'S OWN BINDING, not in app.config, and
+    that is the only way to reach these branches at all: show_feed is decorated
+    with login_required_if_private_instance, which reads the SAME
+    CONTENT_WARNING setting and redirects an unwarned visitor to
+    /content_warning first (app/utils.py:1930-1931). Setting it globally --
+    through app.config, a cookie, or calling the function directly, all of
+    which this test tried -- measures the decorator instead. Patching
+    app.feed.routes.current_app leaves the decorator's view of the setting
+    alone while giving the route the value under test. (The cookie route is
+    closed anyway: this client delivers no cookies at all, by header or by
+    set_cookie.)
+    """
+    from types import SimpleNamespace
+    instance, owner, snooper = _seed()
+    _feed(owner, 'adultfeed', nsfw=nsfw, nsfl=nsfl)
+    stub_config = dict(app.config)
+    stub_config['CONTENT_WARNING'] = content_warning
+    stub_app = SimpleNamespace(config=stub_config, debug=False)
+
+    with app.test_client() as client:
+        with patch('app.feed.routes.current_app', stub_app), \
+                patch('app.feed.routes.render_template', return_value='rendered'), \
+                patch('app.feed.routes.flash') as flash_stub:
+            result = client.get('/f/adultfeed')
+
+    if expect_redirect:
+        assert result.status_code == 302
+        assert '/auth/login' in result.headers['Location']
+        assert f'next=/f/adultfeed' in result.headers['Location']
+        assert flash_stub.call_count == 1
+    else:
+        assert flash_stub.call_count == 0
+        assert result.status_code == 200
