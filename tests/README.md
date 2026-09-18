@@ -8572,6 +8572,46 @@ row's own switches also default off (`enable_nsfw`, `enable_nsfl`), so a test
 that wants to observe a guarded write has to turn them on and say which way it
 is testing. See D688 and D698.
 
+**292. A ROUTE TEST CANNOT RENDER THESE TEMPLATES -- PATCH `render_template`
+AND ASSERT ON THE FORM IT WAS HANDED.** Any GET that re-renders a feed form
+raises `jinja2.exceptions.UndefinedError: 'app.feed.forms.AddCopyFeedForm
+object' has no attribute 'csrf_token'`, because the test config disables CSRF
+for forms while the template asks for the field. Patch
+`app.<blueprint>.routes.render_template`, keep the `form` kwarg, and assert on
+its fields. **That is not a workaround, it is the only way to see a whole class
+of defect**: sub-project 52's NSFL pre-fill bug lives entirely in the form
+object a GET hands the template, and no assertion on a response body would have
+caught which column it read. See D701.
+
+**293. A POST ROUTE TEST NEEDS A REAL CSRF TOKEN, AND A DISABLED INPUT SUBMITS
+NOTHING AT ALL.** `app.utils.login_required` calls flask_wtf's `validate_csrf`
+directly on every POST and ignores `WTF_CSRF_ENABLED`, so a POST test mints a
+token/session pair (`tests/test_redirect_back.py:37-48` is the helper). And
+when a route disables a widget, the browser omits the field entirely: the form
+sees `None`, not `''`. `EditFeedForm.validate` guards its required-field check
+with `if self.url.data is not None` for exactly that reason, so a test that
+posts an empty STRING gets 'This field is required.' and never reaches the
+route's branch. Post the field ABSENT to exercise the disabled-widget path. See
+D700.
+
+**294. A FORM FIELD THAT IS REQUIRED CAN DRAG A NETWORK CALL INTO A ROUTE
+TEST.** `AddCopyFeedForm.communities` is required, and a real value sends
+`form_communities_to_ids` into `search_for_community`, which attempts a live
+webfinger and trips respx with `AllMockedAssertionError`. Patch
+`app.shared.feed.form_communities_to_ids`. **The general rule: before writing a
+POST test, read the form's own validate() -- what it demands decides what the
+test has to stub, and a required field is a dependency the route never
+mentions.**
+
+**295. `render_kw = {'disabled': True}` IS NOT A SERVER-SIDE RULE, AND THIS
+CAMPAIGN HAS NOW FOUND THREE.** D675 (`is_instance_feed` on create), D696 (the
+rename guard) and D702 (NSFW/NSFL on create) are the same defect three times: a
+route disables a widget for users who may not set a field, and nothing checks
+the submitted value. **When a route sets `render_kw` for a permission or a
+policy, look for the matching check in the handler; when writing one, put the
+rule in the handler and let the widget follow it.** The test that catches it is
+a POST carrying the field the widget would have hidden.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
