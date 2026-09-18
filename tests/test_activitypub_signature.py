@@ -424,7 +424,9 @@ def test_a_transport_failure_is_logged_and_not_retried(app, db_session):
     db.session.expire_all()
     log = _log()
     assert log.result == 'failure'
-    assert log.exception_message.startswith('could not send:')
+    # the exception's own text, not merely the prefix: a mutant dropping
+    # str(e) leaves an operator with 'could not send:' and nothing else
+    assert log.exception_message == 'could not send:connection refused'
     assert SendQueue.query.count() == 0
 
 
@@ -1019,3 +1021,83 @@ def test_debug_logging_names_the_destination(app, db_session, scenario):
         assert '451' in message
     else:
         assert message.startswith('Exception while sending post to')
+
+
+# --------------------------------------------------------------------------
+# Rows added to close mutation survivors
+# --------------------------------------------------------------------------
+
+
+def test_a_date_an_hour_and_a_half_in_the_FUTURE_is_refused(app):
+    """precheck's window is `abs(...) > 3600`, and without a future date the
+    abs() is load-bearing for nothing -- a clock-skewed or forged peer sending
+    tomorrow's date passes a one-sided comparison.
+    """
+    from datetime import datetime, timedelta, timezone
+    from email.utils import format_datetime
+    from flask import request
+    from app.activitypub.signature import HttpSignature, VerificationFormatError
+    ahead = format_datetime(datetime.now(timezone.utc) + timedelta(minutes=90))
+
+    with _inbox_request(app, {'Date': ahead}):
+        with pytest.raises(VerificationFormatError, match='Date is too far away'):
+            HttpSignature.precheck(request)
+
+
+def test_a_debug_server_sends_in_process_even_when_a_task_was_asked_for(app):
+    """`if current_app.debug or new_task is False:` -- the debug operand only
+    shows with new_task left TRUE, which is what a normal caller passes.
+    """
+    from unittest.mock import patch
+    from app.activitypub.signature import send_post_request
+
+    app.debug = True
+    try:
+        with patch('app.activitypub.signature.post_request') as task:
+            send_post_request('https://remote.example/inbox', {'id': 'x'}, 'k', 'kid',
+                              new_task=True)
+    finally:
+        app.debug = False
+
+    assert task.call_count == 1
+    assert task.delay.call_count == 0
+
+
+def test_the_ban_handler_runs_only_for_a_400(app, db_session):
+    """`elif result.status_code == 400 and 'person_is_banned_from_site' in ...`
+    -- the same body under a 403 must NOT reach the handler, or the status
+    operand is load-bearing for nothing.
+    """
+    from unittest.mock import patch
+    from app import db
+
+    with patch('app.activitypub.util.process_banned_message') as processor:
+        _deliver(_Response(status_code=403, text='{"error":"person_is_banned_from_site"}',
+                           payload={'error': 'person_is_banned_from_site'}))
+
+    db.session.expire_all()
+    assert processor.call_count == 0
+    assert _log().result == 'failure'
+
+
+def test_a_client_error_on_a_GET_is_returned_rather_than_raised(app):
+    """signed_request raises for a 4xx only when the method is POST
+    (signature.py:520-523). A GET that 400s comes back as a response for the
+    caller to read, which is what a webfinger lookup against a hostile peer
+    looks like.
+    """
+    from unittest.mock import patch
+    from app.activitypub.signature import HttpSignature, RsaKeys
+
+    private_key, _ = RsaKeys.generate_keypair()
+
+    class _Resp:
+        status_code = 400
+        content = b'nope'
+
+    with patch('app.activitypub.signature.httpx_client') as client:
+        client.request.return_value = _Resp()
+        result = HttpSignature.signed_request('https://remote.example/u/bob', None,
+                                              private_key, 'kid', method='get')
+
+    assert result.status_code == 400
