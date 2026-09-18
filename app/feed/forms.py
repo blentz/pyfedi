@@ -27,7 +27,10 @@ class AddCopyFeedForm(FlaskForm):
     def validate(self, extra_validators=None):
         if not super().validate():
             return False
-        if self.url.data.strip() == '':
+        # url.data is None when the input is absent or disabled, not '' -- the
+        # same case EditFeedForm.validate guards below, and calling .strip() on
+        # it made a POST without the field a 500 rather than a form error.
+        if self.url.data is None or self.url.data.strip() == '':
             self.url.errors.append(_l('Url is required.'))
             return False
         else:

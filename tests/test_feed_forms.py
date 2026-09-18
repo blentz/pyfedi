@@ -34,13 +34,17 @@ def _form_data(**overrides):
     return MultiDict({k: v for k, v in data.items() if v is not None})
 
 
-def test_the_create_form_crashes_when_the_url_field_is_absent(app, db_session):
-    """PIN (P1): :30 calls .strip() on url.data, which is None whenever the
-    input is absent or disabled -- not '' (fact 293).
+def test_the_create_form_rejects_an_absent_url_field(app, db_session):
+    """Was a PIN; INVERTED once AddCopyFeedForm gained EditFeedForm's guard.
 
-    EditFeedForm.validate:82 guards exactly this with `if self.url.data is not
-    None:`; AddCopyFeedForm does not, so a POST without the field is a 500 on
-    /feed/new and /feed/<id>/copy.
+    ORIGINAL PINNED CLAIM, now false: ":30 calls .strip() on url.data, which is
+    None whenever the input is absent or disabled -- not '' (fact 293)", so a
+    POST without the field was a 500 on /feed/new and /feed/<id>/copy.
+
+    EditFeedForm.validate has guarded this since before the campaign started;
+    its twin did not. The error message is asserted, not merely the False:
+    a guard that returned False silently would leave the user with a form that
+    refuses and says nothing.
     """
     instance, owner = _seed()
 
@@ -51,5 +55,5 @@ def test_the_create_form_crashes_when_the_url_field_is_absent(app, db_session):
         # 'Choices cannot be None.' from super().validate() before the code
         # under test runs.
         form.parent_feed_id.choices = [(0, 'None')]
-        with pytest.raises(AttributeError, match='strip'):
-            form.validate()
+        assert form.validate() is False
+        assert 'Url is required.' in [str(e) for e in form.url.errors]
