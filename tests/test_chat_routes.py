@@ -32,7 +32,7 @@ from flask_wtf.csrf import generate_csrf
 from app import db
 from app.constants import NOTIF_MESSAGE
 from app.models import ChatMessage, Conversation, Notification, Site, User, utcnow
-from tests.factories import make_conversation, make_instance, make_user
+from tests.factories import make_conversation, make_instance, make_user, make_user_block
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -505,3 +505,205 @@ def test_opening_a_conversation_clears_only_that_conversations_notifications(app
     assert Notification.query.get(elsewhere.id).read is False
     assert Notification.query.get(someone_elses.id).read is False
     assert User.query.get(alice.id).unread_notifications == 1
+
+
+# --------------------------------------------------------------------------
+# new_message
+# --------------------------------------------------------------------------
+
+
+def test_a_sender_who_may_not_send_pms_is_denied(app, db_session):
+    """routes.py:86 asks can_send_pm_to, which refuses an account created
+    within the DAY (app/models.py:1654-1664). alice is aged past
+    trustworthy_account_required's seven days but her reputation is put below
+    -10, so the decorator passes and the route's own guard is what refuses --
+    otherwise this would measure the decorator.
+    """
+    instance, alice, bob, carol = _seed()
+    _aged(alice)
+    alice.reputation = -20
+    db.session.commit()
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.chat.routes.render_template', return_value='rendered'):
+        response = client.get(f'/chat/{bob.id}/new')
+
+    assert response.status_code == 302
+    assert response.headers['Location'] == '/chat/denied'
+
+
+@pytest.mark.parametrize('direction', ['recipient_blocked_sender', 'sender_blocked_recipient'])
+def test_a_block_in_either_direction_stops_a_new_message(app, db_session, direction):
+    """routes.py:89 is an `or` over the two directions, and one row would leave
+    the other operand load-bearing for nothing.
+    """
+    instance, alice, bob, carol = _seed()
+    _aged(alice)
+    if direction == 'recipient_blocked_sender':
+        make_user_block(bob, alice)
+    else:
+        make_user_block(alice, bob)
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.chat.routes.render_template', return_value='rendered'):
+        response = client.get(f'/chat/{bob.id}/new')
+
+    assert response.status_code == 302
+    assert response.headers['Location'] == '/chat/blocked'
+    assert Conversation.query.count() == 0
+
+
+def test_the_new_message_form_renders_when_there_is_no_conversation(app, db_session):
+    instance, alice, bob, carol = _seed()
+    _aged(alice)
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.chat.routes.render_template', return_value='rendered') as render:
+        response = client.get(f'/chat/{bob.id}/new')
+
+    assert response.status_code == 200
+    assert render.call_args.kwargs['recipient'].id == bob.id
+    assert render.call_args.args[0] == 'chat/new_message.html'
+    assert Conversation.query.count() == 0
+
+
+def test_sending_a_first_message_creates_the_conversation(app, db_session):
+    """Both members are appended (routes.py:103-104), so the assertion is on
+    the membership rows rather than on the row count: a conversation missing
+    either row is invisible to find_existing_conversation and to the chat index.
+    """
+    instance, alice, bob, carol = _seed()
+    _aged(alice)
+    client = app.test_client()
+    login(client, alice)
+    token = csrf(app, client)
+
+    with patch('app.chat.routes.render_template', return_value='rendered'), \
+         patch('app.chat.util.publish_sse_event'):
+        response = client.post(f'/chat/{bob.id}/new',
+                               data={'message': 'first contact',
+                                     'csrf_token': token, 'submit': 'Send'})
+
+    conversation = Conversation.query.one()
+    assert response.status_code == 302
+    assert response.headers['Location'] == f'/chat/{conversation.id}#message'
+    assert conversation.user_id == alice.id
+    assert sorted(member.id for member in conversation.members) == sorted([alice.id, bob.id])
+    assert [(m.sender_id, m.recipient_id, m.body) for m in ChatMessage.query.all()] == \
+        [(alice.id, bob.id, 'first contact')]
+
+
+def test_a_recipient_who_has_left_still_takes_the_redirect(app, db_session):
+    """find_existing_conversation (app/models.py:254-273) joins the membership
+    rows without looking at `joined`, and the id set at :96 comes from a query
+    that DOES filter on it -- so a conversation the recipient has left is found
+    but its member set holds only the sender, and the guard at :97 is false.
+
+    The route therefore falls through to the form and a SECOND conversation is
+    created for the pair. Recorded as behaviour rather than asserted as
+    correct: see D744.
+    """
+    instance, alice, bob, carol = _seed()
+    _aged(alice)
+    conversation = make_conversation(alice, bob)
+    db.session.execute(db.text(
+        "UPDATE conversation_member SET joined = :state WHERE user_id = :person_id "
+        "AND conversation_id = :conversation_id"),
+        {"state": False, "person_id": bob.id, "conversation_id": conversation.id})
+    db.session.commit()
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.chat.routes.render_template', return_value='rendered') as render:
+        response = client.get(f'/chat/{bob.id}/new')
+
+    assert response.status_code == 200
+    assert render.call_args.args[0] == 'chat/new_message.html'
+
+
+def test_a_new_message_to_an_unknown_user_is_a_404(app, db_session):
+    instance, alice, bob, carol = _seed()
+    _aged(alice)
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.chat.routes.render_template', return_value='rendered'):
+        response = client.get('/chat/999/new')
+
+    assert response.status_code == 404
+
+
+# --------------------------------------------------------------------------
+# chat_conversation, the htmx refresh
+# --------------------------------------------------------------------------
+
+
+def test_the_refresh_marks_only_the_readers_own_messages_read(app, db_session):
+    """P4, found by this test rather than by the scoping probe: the route set
+    `read = True` and never committed, so every mark it made was discarded at
+    teardown and the htmx refresh -- whose whole job is to show a conversation
+    the reader has just opened -- left the messages unread. chat_home makes the
+    same assignment and survives only because the notification sweep below it
+    commits (routes.py:70).
+
+    Before the repair this failed at the first assertion:
+    `assert False is True where False = <ChatMessage 1>.read`.
+    """
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    to_alice = _message(conversation, bob, alice, 'for alice')
+    from_alice = _message(conversation, alice, bob, 'from alice')
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.chat.routes.render_template', return_value='rendered') as render:
+        response = client.get(f'/chat/refresh-conversation/{conversation.id}')
+
+    assert response.status_code == 200
+    assert render.call_args.args[0] == 'chat/_messages.html'
+    db.session.expire_all()
+    assert ChatMessage.query.get(to_alice.id).read is True
+    assert ChatMessage.query.get(from_alice.id).read is False
+
+
+def test_an_admin_may_refresh_a_conversation_they_are_not_in(app, db_session):
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    _make_admin(carol)
+    client = app.test_client()
+    login(client, carol)
+
+    with patch('app.chat.routes.render_template', return_value='rendered'):
+        response = client.get(f'/chat/refresh-conversation/{conversation.id}')
+
+    assert response.status_code == 200
+
+
+def test_the_refresh_gives_a_stranger_an_empty_body(app, db_session):
+    """routes.py:263 returns '' rather than falling off the end, which is what
+    chat_options and chat_report do in the same position -- and those two are a
+    500 for it (D745).
+    """
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    _message(conversation, bob, alice, 'private')
+    client = app.test_client()
+    login(client, carol)
+
+    response = client.get(f'/chat/refresh-conversation/{conversation.id}')
+
+    assert response.status_code == 200
+    assert response.get_data(as_text=True) == ''
+
+
+def test_refreshing_an_unknown_conversation_is_a_404(app, db_session):
+    instance, alice, bob, carol = _seed()
+    client = app.test_client()
+    login(client, alice)
+
+    response = client.get('/chat/refresh-conversation/999')
+
+    assert response.status_code == 404

@@ -257,6 +257,9 @@ def chat_conversation(conversation_id):
         for message in messages:
             if message.recipient_id == current_user.id:
                 message.read = True
+        # chat_home gets away without this because the notification sweep below it
+        # commits; here nothing else does, and the marks would be discarded
+        db.session.commit()
 
         return render_template('chat/_messages.html', messages=messages, current_user=current_user)
     else:
