@@ -111,17 +111,25 @@ def _capture_form():
 # --------------------------------------------------------------------------
 
 
-def test_copying_a_feed_lets_a_non_admin_mint_an_instance_feed(app, db_session):
-    """PIN (P1): :254 takes is_instance_feed straight from the form, with only
-    the widget disabled at :234-235.
+@pytest.mark.parametrize('is_admin', [False, True])
+def test_copying_a_feed_lets_only_an_admin_mint_an_instance_feed(app, db_session, is_admin):
+    """Was a PIN; INVERTED once the copy route gained the admin check.
 
-    THIS IS D675 AGAIN. Sub-project 50 repaired it in make_feed; feed_copy
+    ORIGINAL PINNED CLAIM, now false: ":254 takes is_instance_feed straight from
+    the form, with only the widget disabled at :234-235."
+
+    THIS WAS D675 AGAIN. Sub-project 50 repaired it in make_feed; feed_copy
     builds its Feed(...) inline and never reaches that code, so the defect
-    survived the repair.
+    survived the repair by nine commits and two rounds.
+
+    The admin row is the control: without it, a fix that cleared the flag for
+    everybody would pass.
     """
     instance, owner = _seed()
     source = _feed(owner)
-    assert not owner.is_admin()
+    if is_admin:
+        _make_admin(owner)
+    assert owner.is_admin() is is_admin
 
     with app.test_client() as client:
         login(client, owner)
@@ -130,21 +138,31 @@ def test_copying_a_feed_lets_a_non_admin_mint_an_instance_feed(app, db_session):
                                    data=_copy_payload(app, client, is_instance_feed='y'))
 
     assert response.status_code == 302
-    assert Feed.query.filter_by(name='copiedfeed').one().is_instance_feed is True
+    assert Feed.query.filter_by(name='copiedfeed').one().is_instance_feed is is_admin
 
 
-def test_copying_a_feed_accepts_nsfw_flags_the_site_has_disabled(app, db_session):
-    """PIN (P2): :251 takes both flags from the form with no check.
+@pytest.mark.parametrize('site_nsfw, site_nsfl', [
+    (False, False),
+    (True, True),
+    (True, False),
+])
+def test_copying_a_feed_honours_the_sites_nsfw_switches(app, db_session,
+                                                        site_nsfw, site_nsfl):
+    """Was a PIN; INVERTED once the copy route gained the site check.
 
-    THIS IS D702 AGAIN. Sub-project 52 repaired it in feed_new one commit range
-    ago; this route does not even disable the widgets on the way in -- it
-    disables them only on the GET re-render at :318-323.
+    ORIGINAL PINNED CLAIM, now false: ":251 takes both flags from the form with
+    no check." THIS WAS D702 AGAIN -- repaired in feed_new one round earlier,
+    and this route does not even disable the widgets on the way in; it disables
+    them only on the GET re-render.
+
+    Three rows for the reason sub-project 52 gave: a repair that cleared both
+    flags whenever either switch was off passes a two-row test.
     """
     instance, owner = _seed()
     source = _feed(owner)
     site = Site.query.get(1)
-    site.enable_nsfw = False
-    site.enable_nsfl = False
+    site.enable_nsfw = site_nsfw
+    site.enable_nsfl = site_nsfl
     db.session.commit()
 
     with app.test_client() as client:
@@ -155,22 +173,29 @@ def test_copying_a_feed_accepts_nsfw_flags_the_site_has_disabled(app, db_session
 
     assert response.status_code == 302
     made = Feed.query.filter_by(name='copiedfeed').one()
-    assert made.nsfw is True and made.nsfl is True
+    assert made.nsfw is site_nsfw
+    assert made.nsfl is site_nsfl
 
 
-def test_the_copy_form_prefills_nsfl_from_the_nsfw_column(app, db_session):
-    """PIN (P3): :325 assigns copy_feed_form.nsfw.data = feed_to_copy.nsfw
-    inside the NSFL branch.
+@pytest.mark.parametrize('site_nsfl, expected_nsfl', [(True, True), (False, False)])
+def test_the_copy_form_prefills_nsfl_from_the_nsfl_column(app, db_session, site_nsfl,
+                                                          expected_nsfl):
+    """Was a PIN; INVERTED once the pre-fill read the right column.
 
-    THIS IS D701 AGAIN, VERBATIM -- the same two-word slip sub-project 52
-    repaired in feed_edit, in a function neither round opened. The source feed's
-    two columns differ, asserted first, because with both equal no test can tell
-    which was read.
+    ORIGINAL PINNED CLAIM, now false: ":325 assigns copy_feed_form.nsfw.data =
+    feed_to_copy.nsfw inside the NSFL branch." THIS WAS D701 AGAIN, VERBATIM --
+    the same two-word slip, in a function neither round opened.
+
+    Both site arms are rows, for the reason sub-project 52's version of this
+    test had to learn the hard way: with the switch off the route takes the
+    render_kw arm, the field keeps BooleanField's unbound default False, and a
+    test run only in that state proves nothing.
     """
     instance, owner = _seed()
     source = _feed(owner, nsfw=False, nsfl=True)
     site = Site.query.get(1)
-    site.enable_nsfw = site.enable_nsfl = True
+    site.enable_nsfw = True
+    site.enable_nsfl = site_nsfl
     db.session.commit()
     assert source.nsfw is not source.nsfl
 
@@ -182,21 +207,23 @@ def test_the_copy_form_prefills_nsfl_from_the_nsfw_column(app, db_session):
 
     assert response.status_code == 200
     assert captured['form'].nsfw.data is False
-    assert captured['form'].nsfl.data is False
+    assert captured['form'].nsfl.data is expected_nsfl
 
 
-def test_a_copied_feed_has_no_outbox_url(app, db_session):
-    """PIN (P4): :255-262 builds ap_profile_id, ap_public_url, ap_followers_url
-    and ap_following_url -- and stops.
+def test_a_copied_feed_carries_the_same_five_urls_as_a_new_one(app, db_session):
+    """Was a PIN; INVERTED once the copy route built the outbox url.
 
-    make_feed:226 sets ap_outbox_url as well, and
-    app/activitypub/routes.py:2770 serves it as the "id" of the feed's outbox
-    document, so a copied feed publishes an outbox whose id is null. The other
-    four urls are asserted present in the same test, so this is a statement
-    about the one that is missing rather than about the row being empty.
+    ORIGINAL PINNED CLAIM, now false: ":255-262 builds ap_profile_id,
+    ap_public_url, ap_followers_url and ap_following_url -- and stops", so a
+    copied feed published an outbox document whose id was null
+    (app/activitypub/routes.py:2770 serves that value).
+
+    All five are asserted as exact strings rather than as non-None: the whole
+    defect was one url missing from a block that built four correctly.
     """
     instance, owner = _seed()
     source = _feed(owner)
+    server = app.config['SERVER_NAME']
 
     with app.test_client() as client:
         login(client, owner)
@@ -204,6 +231,9 @@ def test_a_copied_feed_has_no_outbox_url(app, db_session):
             client.post(f'/feed/{source.id}/copy', data=_copy_payload(app, client))
 
     made = Feed.query.filter_by(name='copiedfeed').one()
-    assert made.ap_profile_id and made.ap_public_url
-    assert made.ap_followers_url and made.ap_following_url
-    assert made.ap_outbox_url is None
+    assert made.ap_profile_id == f'https://{server}/f/copiedfeed'
+    assert made.ap_public_url == f'https://{server}/f/copiedfeed'
+    assert made.ap_followers_url == f'https://{server}/f/copiedfeed/followers'
+    assert made.ap_following_url == f'https://{server}/f/copiedfeed/following'
+    assert made.ap_outbox_url == f'https://{server}/f/copiedfeed/outbox'
+    assert made.ap_domain == server
