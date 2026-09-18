@@ -8700,6 +8700,35 @@ answering with nothing, which needs the remote row to be the ONLY one with that
 name. **Read the model's constraints before designing the decoy**; the campaign
 has now built the impossible fixture twice. See D737.
 
+**305. `.all()` ON A RAW `db.session.execute` RETURNS `Row` TUPLES, SO
+`some_id in rows` IS ALWAYS FALSE.** `app/chat/routes.py`'s `new_message`
+compared `current_user.id` against rows like `(2,)`, so the guard that existed
+to redirect a pair back into the conversation they already had could never be
+true, and every visit to the form made another conversation. The probe is one
+line -- `PROBE p2 rows: [(2,), (3,)] alice.id in rows: False`. **Take the column
+off the row (`{row.user_id for row in rows}` or `.scalars().all()`) before
+comparing**, and treat any `in` test against a raw-SQL result as suspect until
+the element type is checked. See D742.
+
+**306. A FLASK VIEW THAT FALLS OFF THE END RETURNS `None`, WHICH IS A 500 AND
+NOT A REFUSAL.** `TypeError: The view function ... did not return a valid
+response. The function either returned None or ended without a return
+statement.` Three routes in `app/chat/routes.py` guard with
+`if current_user.is_admin() or conversation.is_member(current_user):` and have
+no `else`: `chat_conversation` returns `''`, and `chat_options` and
+`chat_report` return nothing at all. **A test that only asserts "not 200" will
+pass on both**, so assert the status the refusal is meant to have. See D745.
+
+**307. `trustworthy_account_required` FAILS A FRESHLY BUILT FIXTURE USER.**
+`User.trustworthy()` is false for an account created within 7 days whose
+reputation is under 100 (`app/models.py:1286-1291`), and `make_user` creates
+the account now -- so a test of any route carrying that decorator measures the
+redirect to `/auth/not_trustworthy` rather than the route. **Age the account**
+(`user.created = utcnow() - timedelta(days=30)`) or give it reputation 100. The
+sibling `can_send_pm_to` uses `created_very_recently`, one DAY, so the same
+ageing satisfies both -- which is why a test of the `can_send_pm_to` refusal
+has to reach for something else, such as reputation at or below -10. See D741.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
