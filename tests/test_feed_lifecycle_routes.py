@@ -610,3 +610,84 @@ def test_saving_an_edit_redirects_by_whether_the_url_changed(app, db_session, ne
     assert response.status_code == 302
     assert response.headers['Location'] == expected_location
     assert Feed.query.get(feed.id).name == new_url
+
+
+# --------------------------------------------------------------------------
+# Task 6: feed_delete's cache bust, feed_notification, feed_unsubscribe's tail.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize('is_instance_feed', [True, False])
+def test_deleting_an_instance_feed_busts_the_instance_menu(app, db_session,
+                                                           is_instance_feed):
+    """:216-218. The only part of feed_delete tests/test_redirect_back.py's
+    TestFeedDeleteRedirect leaves uncovered.
+
+    The bust is identified by its ARGUMENT rather than a call count, and the
+    row that is not an instance feed is what keeps the guard load-bearing.
+
+    Worth recording: :217 reads feed.is_instance_feed AFTER delete_feed has
+    committed the deletion. That works -- the attribute was loaded before the
+    delete and the instance is not refreshed -- and this test is what pins it,
+    because a change to expire_on_commit anywhere would turn it into an
+    ObjectDeletedError.
+    """
+    instance, owner, stranger = _seed()
+    feed = _feed(owner, is_instance_feed=is_instance_feed)
+    from app.utils import menu_instance_feeds
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.cache.delete_memoized') as bust:
+            response = client.post(f'/feed/{feed.id}/delete',
+                                   data={'csrf_token': csrf(app, client)})
+
+    assert response.status_code == 302
+    assert Feed.query.get(feed.id) is None
+    busted = [call.args[0] for call in bust.call_args_list]
+    assert (menu_instance_feeds in busted) is is_instance_feed
+
+
+def test_the_notification_toggle_creates_then_removes_a_subscription(app, db_session):
+    """:334-349, both arms of the toggle, in one test because the second arm's
+    precondition is the first arm's result.
+
+    A second user's subscription to the same feed is the control for the
+    filters: the lookup names entity_id, user_id AND type, and a delete that
+    dropped the user_id filter would take the bystander's row.
+
+    REGISTERED, NOT FIXED (R3): this is a GET with a side effect and no CSRF
+    token. The subscription is the caller's own, so it is not a privilege bug;
+    it is a CSRF-able state change, and changing the method is a template change
+    across the app rather than a coverage one.
+    """
+    from app.constants import NOTIF_FEED
+    instance, owner, stranger = _seed()
+    feed = _feed(owner)
+    db.session.add(NotificationSubscription(name=feed.name, user_id=stranger.id,
+                                            entity_id=feed.id, type=NOTIF_FEED))
+    db.session.commit()
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', return_value='toggled'):
+            first = client.get(f'/feed/{feed.id}/notification')
+            created = NotificationSubscription.query.filter_by(
+                user_id=owner.id, entity_id=feed.id, type=NOTIF_FEED).one()
+            assert created.name == feed.name
+            second = client.get(f'/feed/{feed.id}/notification')
+
+    assert first.status_code == 200 and second.status_code == 200
+    assert NotificationSubscription.query.filter_by(
+        user_id=owner.id, entity_id=feed.id, type=NOTIF_FEED).count() == 0
+    assert NotificationSubscription.query.filter_by(
+        user_id=stranger.id, entity_id=feed.id, type=NOTIF_FEED).count() == 1
+
+
+def test_the_notification_toggle_404s_on_a_feed_that_is_not_there(app, db_session):
+    """:336's get_or_404."""
+    instance, owner, stranger = _seed()
+    with app.test_client() as client:
+        login(client, owner)
+        response = client.get('/feed/999/notification')
+    assert response.status_code == 404
