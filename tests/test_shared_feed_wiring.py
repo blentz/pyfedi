@@ -94,6 +94,16 @@ def test_feed_add_community_uses_its_user_id_parameter_not_the_request_global(ap
     raises AttributeError." The fix resolves the acting user from the user_id
     parameter, so the call completes with no request user at all and
     do_subscribe receives the id that was passed in.
+
+    FIX (mutation round): :436's joined_via_feed=True was asserted nowhere, so
+    flipping it to False survived the whole file. That keyword is not
+    decoration -- it is the value written into CommunityMember.joined_via_feed,
+    which is precisely the column _feed_remove_community:456 reads to decide
+    whether to auto-unfollow a member when the community leaves the feed. Both
+    halves of that feature were wired through a constant no test observed, so
+    they could have drifted apart silently. Asserted here rather than in the
+    subscribe-guard table below because that table's other two rows expect no
+    call at all, and call_args would be None for them.
     """
     s = _seed()
     with app.test_request_context('/'):
@@ -102,6 +112,7 @@ def test_feed_add_community_uses_its_user_id_parameter_not_the_request_global(ap
 
     assert subscribe.call_count == 1
     assert subscribe.call_args.args[1] == s.actor.id
+    assert subscribe.call_args.kwargs['joined_via_feed'] is True
     assert s.actor.id != s.community.id and s.actor.id != s.feed.id
 
 
@@ -116,6 +127,14 @@ def test_announce_add_remove_honours_feed_auto_follow_for_local_members(app, db_
     subscribed and one is not, so this cannot pass by the call simply never
     firing. That control is what makes the assertion a kill rather than an
     emptiness claim -- false-witness mechanism (c).
+
+    FIX (mutation round): :555's joined_via_feed=True was asserted nowhere --
+    the same survivor as :436's, at the task's own do_subscribe call. See
+    test_feed_add_community_uses_its_user_id_parameter_not_the_request_global
+    for why the keyword is load-bearing. Asserted as a LIST rather than with
+    all(), so the assertion cannot be satisfied vacuously by an empty
+    call_args_list under some future mutant that stops calling do_subscribe
+    altogether.
     """
     s = _seed()
     optout = make_user(s.instance, 'optout', local=True)
@@ -131,6 +150,7 @@ def test_announce_add_remove_honours_feed_auto_follow_for_local_members(app, db_
 
     subscribed = {c.args[1] for c in subscribe.call_args_list}
     assert subscribed == {optin.id}
+    assert [c.kwargs['joined_via_feed'] for c in subscribe.call_args_list] == [True]
 
 
 def test_feed_add_community_route_acts_only_as_the_signed_in_user(app, db_session):
@@ -313,13 +333,35 @@ def test_announce_add_remove_builds_an_announce_wrapping_the_action(app, db_sess
     Instance :559 fetches through it is the genuine row -- unlike the
     rollback/close tests below, where get_task_session is mocked and the
     guard is satisfied by a Mock regardless of the real row's inbox.
+
+    FIX (mutation round): this test inspected only the payload (args[1]) and
+    never the signing credentials at :561, so BOTH credential mutants
+    survived -- feed.private_key -> fm_user.private_key and
+    feed.ap_profile_id -> fm_user.ap_profile_id. That is the identical gap
+    Task 5 found and fixed at the sibling call :605, with the operands
+    reversed: the FEED signs here, the USER signs there. The construction is
+    :605's, deliberately: distinct non-None private_key values assigned by
+    hand (no real RSA material is needed; send_post_request is mocked) and
+    ap_profile_id values already distinct by construction (make_feed's
+    '/f/<name>' vs make_user's '/users/<name>'), with both separations pinned
+    by a live assert BEFORE the code runs. Without that pin a coincidence
+    (e.g. both None) would satisfy the credential assertions under the mutant
+    too, degrading them into an inert control that fails silently rather than
+    at setup.
     """
     s = _seed()
     s.feed.ap_following_url = 'https://test.piefed.local/f/wiringfeed/following'
+    s.feed.private_key = 'feedprivatekeymaterial'
     remote = make_user(s.instance, 'remotemember', local=False)
+    remote.private_key = 'memberprivatekeymaterial'
     s.instance.inbox = 'https://remote.example/inbox'
     db.session.commit()
     make_feed_member(remote, s.feed)
+
+    assert s.feed.private_key is not None and remote.private_key is not None
+    assert s.feed.private_key != remote.private_key
+    assert s.feed.ap_profile_id is not None and remote.ap_profile_id is not None
+    assert s.feed.ap_profile_id != remote.ap_profile_id
 
     with patch('app.shared.feed.send_post_request') as send:
         with patch('app.shared.feed.instance_banned', return_value=False):
@@ -331,6 +373,8 @@ def test_announce_add_remove_builds_an_announce_wrapping_the_action(app, db_sess
     assert activity['object']['type'] == 'Remove'
     assert activity['object']['object']['id'] == s.community.ap_public_url
     assert activity['object']['target']['id'] == s.feed.ap_following_url
+    assert send.call_args.args[2] == s.feed.private_key
+    assert send.call_args.args[3] == s.feed.ap_profile_id + '#main-key'
 
 
 def test_announce_add_remove_skips_the_feed_owner(app, db_session):
@@ -656,6 +700,22 @@ def test_feed_add_community_moving_from_another_feed_deletes_the_old_item(app, d
     Both counts are asserted: a mutant decrementing the wrong feed would leave
     these two numbers swapped, and the ids differ by construction, so the
     assertion can tell them apart.
+
+    FIX (mutation round): nothing in this file asserted that :410-412 ever
+    creates the new FeedItem. Replacing all three statements -- the
+    FeedItem(), the db.session.add and the commit -- with `pass` left all 51
+    tests passing, because the only add-path effect anything checked was
+    num_communities, which :415-418 writes through a DIFFERENT object. The
+    function's primary side effect was unobserved. The new row is asserted by
+    BOTH its ids rather than by existence alone, so a mutant attaching it to
+    the wrong feed (feed_id=current_feed_id) or naming the wrong community
+    also dies here.
+
+    The two ids are re-derived live rather than assumed: _seed's own
+    assertion keeps {community.id, feed.id, actor.id, bystander_feed.id}
+    four distinct values, and the pair below pins the two this assertion
+    depends on, so a seed that ever let them coincide fails loudly at setup
+    instead of making the filter_by match for the wrong reason.
     """
     s = _seed()
     old_item = make_feed_item(s.bystander_feed, s.community)
@@ -663,11 +723,16 @@ def test_feed_add_community_moving_from_another_feed_deletes_the_old_item(app, d
     s.feed.num_communities = 0
     db.session.commit()
     assert s.bystander_feed.id != s.feed.id
+    assert s.community.id != s.feed.id
 
     with patch('app.community.routes.do_subscribe'):
         _feed_add_community(s.community.id, s.bystander_feed.id, s.feed.id, s.actor.id)
 
     assert db.session.get(FeedItem, old_item.id) is None
+    new_item = db.session.query(FeedItem).filter_by(
+        feed_id=s.feed.id, community_id=s.community.id).first()
+    assert new_item is not None
+    assert new_item.id != old_item.id
     assert s.bystander_feed.num_communities == 0
     assert s.feed.num_communities == 1
 
@@ -914,6 +979,22 @@ def test_feed_remove_community_sends_an_undo_follow_for_a_remote_community(app, 
     make_community sets to a LOCAL host by default. Setting only ap_id to a
     remote value leaves is_local() reading the still-local ap_profile_id and
     returning True, so ap_profile_id is overridden here too.
+
+    FIX (mutation round): this test inspected only the payload (args[1]), so
+    THREE mutants on :484-485 survived -- the destination
+    (community.ap_inbox_url -> community.ap_public_url) and both signing
+    credentials (user.private_key -> user.public_key, user.public_url() ->
+    community.public_url()). This is the third of the module's three
+    send_post_request call sites and the only one no task had examined; the
+    same gap was closed at :605 by Task 5 and at :561 in this round.
+
+    Note this site's destination is community.ap_inbox_url, NOT the
+    instance.inbox the two announce tasks send to -- so the destination is
+    asserted here as well as the credentials. The three separations are
+    pinned live before the call: ap_inbox_url vs ap_public_url (both set
+    above to deliberately different paths on the same host), the member's
+    private_key vs public_key (distinct because with_keys=True generates a
+    real RSA pair), and the member's public_url() vs the community's.
     """
     s = _seed()
     s.community.ap_id = 'wiring@remote.example'
@@ -929,6 +1010,11 @@ def test_feed_remove_community_sends_an_undo_follow_for_a_remote_community(app, 
     cm.joined_via_feed = True
     db.session.commit()
 
+    assert s.community.ap_inbox_url != s.community.ap_public_url
+    assert member.private_key is not None and member.public_key is not None
+    assert member.private_key != member.public_key
+    assert member.public_url() != s.community.public_url()
+
     with patch('app.shared.feed.community_membership', return_value=0):
         with patch('app.shared.feed.send_post_request') as send:
             _feed_remove_community(s.community.id, s.feed.id)
@@ -938,6 +1024,9 @@ def test_feed_remove_community_sends_an_undo_follow_for_a_remote_community(app, 
     assert undo['type'] == 'Undo'
     assert undo['object']['type'] == 'Follow'
     assert undo['object']['object'] == s.community.public_url()
+    assert send.call_args.args[0] == s.community.ap_inbox_url
+    assert send.call_args.args[2] == member.private_key
+    assert send.call_args.args[3] == member.public_url() + '#main-key'
 
 
 def test_feed_remove_community_reuses_the_join_request_uuid_for_one_named_instance(app, db_session):
