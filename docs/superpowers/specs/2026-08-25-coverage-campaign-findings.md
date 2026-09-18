@@ -7186,8 +7186,20 @@ is headed "TWO UNREACHABLE ITEMS" and does not carry the qualification.** It is
 not wrong -- it says "cannot raise for a bare local name", which is the
 input-scoped claim -- but it is weaker than what sub-project 19 established, and
 the register states the stronger form so the two do not drift. **This is the
-SECOND instance of the shape, in a second module**, so fact 75's cause 4(c) now
-has a pattern rather than a one-off.
+SECOND instance of the shape, in a second module**, so fact 75's cause ~~4(c)~~
+**8 ("Unreachable handler")** now has a pattern rather than a one-off.
+**CORRECTED IN PLACE BY SUB-PROJECT 49 (D577), REVERSING THIS ROUND'S OWN
+"DELIBERATELY NOT EDITED" RULING.** D577 left this line alone on the ground that
+rewriting a prior round's entry text was not that round's to do, and recorded
+itself as the correction of record instead. Sub-project 49 corrected it here as
+well, because the label is a *citation* rather than a finding: the argument in
+this paragraph was right in every particular and only the number was wrong, and
+a citation left wrong for provenance's sake is one a future reader follows. The
+struck original is kept visible per this campaign's convention. The label never
+named the tautology shape -- **`tests/README.md` fact 75 still has no cause
+4(c)**, and the cause 9 sub-project 49 enacted is a different shape entirely
+(the mirror of 4(b), stranding a *False* arm), so neither number would have
+rescued this line. See fact 251 and fact 75's cause 9.
 
 **THE TEST HARNESS WAS REWRITTEN IN THE MIDDLE OF THIS SUB-PROJECT, AT THE
 USER'S DIRECTION, AND IT CHANGED WHAT A COVERAGE RUN COSTS.** Commit `ec98595c`

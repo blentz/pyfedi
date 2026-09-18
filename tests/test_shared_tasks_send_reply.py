@@ -1581,11 +1581,20 @@ def test_a_mentioned_recipient_on_an_already_sent_domain_gets_no_second_copy(
 # miss, not an exception. The remote half of the same scan (:102 onward) is
 # where a raise is possible, and it has its own handler.
 #
-# tests/README.md fact 75, cause 4(c) -- a handler for an exception the callee
-# cannot raise on this path. Already registered by sub-project 19, which found
-# the identical shape at tests/test_shared_tasks_send_post.py:322 (`send_post`'s
-# :107-108). This is the SECOND instance of that shape, in a second module, so
-# it is a pattern rather than a one-off.
+# tests/README.md fact 75, cause 8 ("Unreachable handler") -- a handler for an
+# exception the callee cannot raise on this path. Already registered by
+# sub-project 19, which found the identical shape at
+# tests/test_shared_tasks_send_post.py:322 (`send_post`'s :107-108). This is the
+# SECOND instance of that shape, in a second module, so it is a pattern rather
+# than a one-off.
+#
+# CORRECTED BY SUB-PROJECT 49 (D577): this line originally cited a sub-shape of
+# cause 4 that fact 75 does not contain and never has -- see tests/README.md
+# fact 251, which is titled for that nonexistent label and whose origin is THIS
+# line. The substance above was right all along; only the number was wrong. The
+# cause that stands is 8. Do not now force-fit cause 8 elsewhere either: it is
+# scoped to a try/except, and a bare `if <cond>: raise` is not cause 8 however
+# unreachable it is (D587).
 #
 # (2) :217's `instance.online()` CONJUNCT.
 #
