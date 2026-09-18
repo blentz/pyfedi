@@ -20,8 +20,17 @@ from app.utils import render_template, login_required, trustworthy_account_requi
 def chat_home(conversation_id=None):
     form = AddReply()
     if form.validate_on_submit():
+        if conversation_id is None:
+            # this view is registered on /chat as well as /chat/<id>, and send_message
+            # cannot look up a conversation that was never named
+            return redirect(url_for('chat.empty'))
         if current_user.banned or not current_user.verified or not current_user.can_send_pm:
             return redirect(url_for('chat.denied'))
+        conversation = Conversation.query.get_or_404(conversation_id)
+        if not conversation.is_member(current_user):
+            # unlike the GET path below, an admin may not write into a conversation
+            # they are not part of
+            abort(400)
         send_message(form.message.data, conversation_id)
         return redirect(url_for('chat.chat_home', conversation_id=conversation_id, _anchor='message'))
     else:
@@ -83,7 +92,9 @@ def new_message(to):
     if existing_conversation:
         members = db.session.execute(text("SELECT user_id FROM conversation_member WHERE joined = :state AND conversation_id = :conversation_id"),
                                          {"state": True, "conversation_id": existing_conversation.id}).all()
-        if current_user.id in members and recipient.id in members:
+        # .all() gives Row tuples, so these have to be compared as ids
+        member_ids = {row.user_id for row in members}
+        if current_user.id in member_ids and recipient.id in member_ids:
             return redirect(url_for('chat.chat_home', conversation_id=existing_conversation.id, _anchor='message'))
     form = AddReply()
     form.submit.label.text = _('Send')
