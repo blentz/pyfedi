@@ -103,19 +103,40 @@ def _capture_form():
 # --------------------------------------------------------------------------
 
 
-def test_edit_form_prefills_nsfl_from_the_nsfw_column(app, db_session):
-    """PIN (P1): :178-181's else arm assigns `edit_feed_form.nsfw.data =
-    feed_to_edit.nsfw` -- inside the NSFL branch. `nsfl.data` is therefore never
-    populated, so the edit form renders the NSFL box unchecked whatever the feed
-    says, and because the form round-trips, saving any edit to an NSFL feed
-    clears the flag.
+@pytest.mark.parametrize('site_nsfl, expected_nsfl', [(True, True), (False, False)])
+def test_edit_form_prefills_nsfl_from_the_nsfl_column(app, db_session, site_nsfl,
+                                                      expected_nsfl):
+    """Was a PIN; INVERTED once the pre-fill read the right column.
 
-    The row carries DIFFERENT values for the two columns, asserted before the
-    request: with both equal, a test cannot tell which column the pre-fill read.
+    ORIGINAL PINNED CLAIM, now false: ":178-181's else arm assigns
+    `edit_feed_form.nsfw.data = feed_to_edit.nsfw` -- inside the NSFL branch",
+    so nsfl.data was never populated, the NSFL box rendered unchecked whatever
+    the feed said, and saving any edit cleared the flag.
+
+    THE FIRST VERSION OF THIS PIN PASSED FOR THE WRONG REASON, and correcting it
+    is why the parametrisation exists. `Site.enable_nsfl` defaults False on the
+    row the `site` fixture mints (fact 291), so the route took the render_kw arm
+    and never reached the assignment at all -- the pin asserted `nsfl.data is
+    False` against an untouched field and would have passed against the repair
+    too. The site switch is now set explicitly, and both arms are rows:
+
+    - switch ON  -> the else arm runs and nsfl.data is the feed's nsfl (True);
+    - switch OFF -> the widget is disabled and nsfl.data keeps BooleanField's
+      unbound default, False, which is exactly the value the defect produced on
+      every path. That is why the switch-ON row is the one that catches it, and
+      why the original pin -- run with the switch at its default OFF -- proved
+      nothing.
+
+    The feed's two columns carry DIFFERENT values, asserted before the request:
+    with both equal no test can tell which column was read.
     """
     instance, owner, stranger = _seed()
     feed = _feed(owner, nsfw=False, nsfl=True)
     assert feed.nsfw is not feed.nsfl
+    site = Site.query.get(1)
+    site.enable_nsfw = True
+    site.enable_nsfl = site_nsfl
+    db.session.commit()
 
     captured, fake_render = _capture_form()
     with app.test_client() as client:
@@ -126,7 +147,7 @@ def test_edit_form_prefills_nsfl_from_the_nsfw_column(app, db_session):
     assert response.status_code == 200
     form = captured['form']
     assert form.nsfw.data is False
-    assert form.nsfl.data is False
+    assert form.nsfl.data is expected_nsfl
 
 
 # --------------------------------------------------------------------------
@@ -142,14 +163,24 @@ def _create_payload(app, client, **overrides):
     return {k: v for k, v in data.items() if v is not None}
 
 
-def test_creating_a_feed_accepts_nsfw_flags_the_site_has_disabled(app, db_session):
-    """PIN (P2): :46-49 disable the two widgets when the site has NSFW or NSFL
-    off. That is a browser-side hint -- nothing checks the submitted values, and
-    make_feed writes them unconditionally, unlike edit_feed:377-380, which
-    guards both writes behind g.site.
+@pytest.mark.parametrize('site_nsfw, site_nsfl', [
+    (False, False),
+    (True, True),
+    (True, False),
+])
+def test_creating_a_feed_honours_the_sites_nsfw_switches(app, db_session,
+                                                         site_nsfw, site_nsfl):
+    """Was a PIN; INVERTED once the route enforced the site's switches.
 
-    The same shape as D675 and D696: the third time this campaign has found
+    ORIGINAL PINNED CLAIM, now false: ":46-49 disable the two widgets when the
+    site has NSFW or NSFL off. That is a browser-side hint -- nothing checks the
+    submitted values, and make_feed writes them unconditionally." The same shape
+    as D675 and D696, the third time this campaign has found
     `render_kw = {'disabled': True}` standing in for a server-side rule.
+
+    Three rows, and the mixed one is the reason: a repair that cleared BOTH
+    flags whenever either switch was off would pass a two-row test. The POST
+    always submits both flags, so each row asserts which of them survived.
 
     form_communities_to_ids is patched because the form requires a communities
     value and a real one reaches search_for_community, which attempts a live
@@ -157,8 +188,8 @@ def test_creating_a_feed_accepts_nsfw_flags_the_site_has_disabled(app, db_sessio
     """
     instance, owner, stranger = _seed()
     site = Site.query.get(1)
-    site.enable_nsfw = False
-    site.enable_nsfl = False
+    site.enable_nsfw = site_nsfw
+    site.enable_nsfl = site_nsfl
     db.session.commit()
 
     with app.test_client() as client:
@@ -169,8 +200,8 @@ def test_creating_a_feed_accepts_nsfw_flags_the_site_has_disabled(app, db_sessio
 
     assert response.status_code == 302
     made = Feed.query.filter_by(name='spicy').one()
-    assert made.nsfw is True
-    assert made.nsfl is True
+    assert made.nsfw is site_nsfw
+    assert made.nsfl is site_nsfl
 
 
 # --------------------------------------------------------------------------
@@ -178,23 +209,27 @@ def test_creating_a_feed_accepts_nsfw_flags_the_site_has_disabled(app, db_sessio
 # --------------------------------------------------------------------------
 
 
-def test_creating_a_feed_from_a_missing_topic_raises(app, db_session):
-    """PIN (P3): :67-68 does Topic.query.get(request.args.get('topic_id')) and
-    reads topic.communities with no check, so a topic id that resolves to
-    nothing is a 500.
+def test_creating_a_feed_from_a_missing_topic_is_a_404(app, db_session):
+    """Was a PIN; INVERTED once the lookup became get_or_404.
 
-    The exception is asserted rather than a status code: the test client
-    re-raises by default, so the 500 never reaches a response object. The query
-    string is user-supplied, and the link carrying it comes from a page that may
-    have been open while the topic was deleted.
+    ORIGINAL PINNED CLAIM, now false: ":67-68 reads topic.communities with no
+    check, so a topic id that resolves to nothing is a 500" --
+    `AttributeError: 'NoneType' object has no attribute 'communities'`, asserted
+    as an exception because the test client re-raises and no response is
+    produced.
+
+    A 404 is the right answer for a user-supplied query string whose link may
+    have been opened before the topic was deleted, and it is what the rest of
+    this file does for a missing feed.
     """
     instance, owner, stranger = _seed()
     assert Topic.query.get(999) is None
 
     with app.test_client() as client:
         login(client, owner)
-        with pytest.raises(AttributeError, match='communities'):
-            client.get('/feed/new?topic_id=999')
+        response = client.get('/feed/new?topic_id=999')
+
+    assert response.status_code == 404
 
 
 # --------------------------------------------------------------------------
@@ -232,26 +267,49 @@ def _subscribed_feed_with_community(owner, member, joined_via_feed=True,
     return feed, community
 
 
-def test_unsubscribing_drops_the_community_without_telling_it(app, db_session):
-    """PIN (P4): :640-641 deletes the CommunityMember row by hand. The shared
-    leave_community (app/shared/community.py:57-84) dispatches
-    task_selector('leave_community', ...) -- which federates the Undo Follow --
-    and the route does not.
+def test_unsubscribing_leaves_each_community_through_the_shared_function(app, db_session):
+    """Was a PIN; INVERTED once the route called leave_community.
 
-    So the membership disappears locally, the remote community is never told,
-    and its subscriptions_count is left one too high. The count is seeded to 5
-    rather than 1 so "unchanged" is a value rather than a coincidence.
+    ORIGINAL PINNED CLAIM, now false: ":640-641 deletes the CommunityMember row
+    by hand", so the membership disappeared locally, the remote community was
+    never told, and its subscriptions_count was left one too high --
+    `send calls: 0` with the count still at its seeded 5.
+
+    leave_community is asserted as DISPATCHED rather than by its effects: it
+    goes through task_selector, whose delivery is another module's covered
+    ground, and this test is about which function the route calls.
     """
     instance, owner, member = _seed()
     feed, community = _subscribed_feed_with_community(owner, member)
 
     with app.test_client() as client:
         login(client, member)
-        with patch('app.feed.routes.send_post_request') as send:
+        with patch('app.feed.routes.leave_community') as leave:
             response = client.get(f'/feed/{feed.name}/unsubscribe')
 
     assert response.status_code == 302
+    assert leave.call_count == 1
+    assert leave.call_args.kwargs['community_id'] == community.id
+    assert FeedMember.query.filter_by(user_id=member.id, feed_id=feed.id).count() == 0
+
+
+def test_unsubscribing_leaves_alone_a_community_the_user_joined_themselves(app, db_session):
+    """D673's guard, which the repaired route inherits: a community the user
+    joined on their own -- joined_via_feed False -- is not left when the feed
+    is.
+
+    Without this control the repair is indistinguishable from one that leaves
+    every community in the feed.
+    """
+    instance, owner, member = _seed()
+    feed, community = _subscribed_feed_with_community(owner, member,
+                                                      joined_via_feed=False)
+
+    with app.test_client() as client:
+        login(client, member)
+        with patch('app.feed.routes.leave_community') as leave:
+            client.get(f'/feed/{feed.name}/unsubscribe')
+
+    assert leave.call_count == 0
     assert CommunityMember.query.filter_by(user_id=member.id,
-                                           community_id=community.id).count() == 0
-    assert send.call_count == 0
-    assert Community.query.get(community.id).subscriptions_count == 5
+                                           community_id=community.id).count() == 1

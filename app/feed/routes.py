@@ -24,6 +24,7 @@ from app.feed.util import feeds_for_form, search_for_feed, actor_to_feed, feed_c
 from app.inoculation import inoculation
 from app.models import Feed, FeedMember, FeedItem, Community, NotificationSubscription, \
     CommunityMember, User, FeedJoinRequest, Instance, Topic, CommunityJoinRequest
+from app.shared.community import leave_community
 from app.shared.feed import join_feed, _feed_add_community, announce_feed_delete_to_subscribers, edit_feed, \
     form_communities_to_ids, make_feed, delete_feed
 from app.utils import back, show_ban_message, piefed_markdown_to_lemmy_markdown, markdown_to_html, render_template, \
@@ -58,6 +59,17 @@ def feed_new():
         if not form.public.data:
             form.url.data = slugify(form.url.data.strip(), separator='_').lower() + '/' + current_user.user_name.lower()
 
+        # The disabled widgets at :46-49 are a browser-side hint and constrain
+        # nothing, so the site's own switches are enforced here, where g.site is
+        # already being read. make_feed writes both flags unconditionally --
+        # unlike edit_feed, which guards them -- and it is floored and closed, so
+        # the check lives in the route. The API create path has the same hole and
+        # is registered rather than repaired here (R1).
+        if g.site.enable_nsfw is False:
+            form.nsfw.data = False
+        if g.site.enable_nsfl is False:
+            form.nsfl.data = False
+
         make_feed(form, SRC_WEB, None, form.icon_file.data, form.banner_file.data)
 
         flash(_('Your new Feed has been created.'))
@@ -65,7 +77,10 @@ def feed_new():
 
     # Create Feed from a topic
     if request.args.get('topic_id'):
-        topic = Topic.query.get(request.args.get('topic_id'))
+        # A 404 rather than an AttributeError: the id comes from a query string,
+        # and the link carrying it may have been opened before the topic was
+        # deleted. The rest of this file uses get_or_404 for the same reason.
+        topic = Topic.query.get_or_404(request.args.get('topic_id'))
         community_apids = []
         for community in topic.communities:
             community_apids.append(community.lemmy_link().replace('!', ''))
@@ -178,7 +193,10 @@ def feed_edit(feed_id: int):
     if g.site.enable_nsfl is False:
         edit_feed_form.nsfl.render_kw = {'disabled': True}
     else:
-        edit_feed_form.nsfw.data = feed_to_edit.nsfw
+        # nsfl, from the nsfl column. This read the nsfw column into nsfw.data,
+        # so the NSFL box rendered unchecked whatever the feed said -- and since
+        # the form round-trips, saving any edit to an NSFL feed cleared the flag.
+        edit_feed_form.nsfl.data = feed_to_edit.nsfl
     edit_feed_form.public.data = feed_to_edit.public
     edit_feed_form.is_instance_feed.data = feed_to_edit.is_instance_feed
 
@@ -637,8 +655,15 @@ def feed_unsubscribe(actor):
                             membership = CommunityMember.query.filter_by(user_id=current_user.id,
                                                                          community_id=feed_item.community_id).first()
                             if membership and membership.joined_via_feed:
-                                db.session.query(CommunityMember).filter_by(user_id=current_user.id,
-                                                                            community_id=feed_item.community_id).delete()
+                                # Through leave_community, not a hand-rolled
+                                # delete: the shared function dispatches the
+                                # Undo Follow and does the counter work, and
+                                # deleting the row here left the remote
+                                # community believing the user still followed it
+                                # with its subscriber count one too high. Same
+                                # guard as leave_feed's, per D673.
+                                leave_community(community_id=feed_item.community_id, src=SRC_WEB,
+                                                bulk_leave=True)
                             db.session.query(CommunityJoinRequest).filter_by(user_id=current_user.id,
                                                                              community_id=feed_item.community_id).delete()
                             cache.delete_memoized(community_membership, current_user,
