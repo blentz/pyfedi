@@ -32,7 +32,8 @@ from flask_wtf.csrf import generate_csrf
 from app import db
 from app.constants import NOTIF_MESSAGE
 from app.models import ChatMessage, Conversation, Notification, Site, User, utcnow
-from tests.factories import make_conversation, make_instance, make_user, make_user_block
+from tests.factories import (make_community, make_conversation, make_instance, make_user,
+                             make_user_block)
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -768,3 +769,208 @@ def test_refreshing_an_unknown_conversation_is_a_404(app, db_session):
     response = client.get('/chat/refresh-conversation/999')
 
     assert response.status_code == 404
+
+
+# --------------------------------------------------------------------------
+# Group B, P2: ban_from_mod showed the VIEWER's ban history, to anyone
+# --------------------------------------------------------------------------
+
+
+def _moderator(user, community):
+    from app.models import CommunityMember
+    member = CommunityMember(user_id=user.id, community_id=community.id,
+                             is_moderator=True)
+    db.session.add(member)
+    db.session.commit()
+    return member
+
+
+def _mod_log(community, user, action='ban_user', actor=None):
+    from app.models import ModLog
+    entry = ModLog(community_id=community.id, link='u/' + user.user_name,
+                   action=action, user_id=(actor or user).id)
+    db.session.add(entry)
+    db.session.commit()
+    return entry
+
+
+def test_the_ban_view_shows_the_bans_of_the_user_the_url_names(app, db_session):
+    """Before the repair the filter read `'u/' + current_user.user_name`, so
+    the page showed the VIEWER's history under someone else's name:
+
+        PROBE b2 status: 200
+        PROBE b2 past_bans links: ['u/carol'] (url named bob, viewer is carol)
+
+    Both rows exist here, so a repair that simply returned nothing would fail:
+    bob's must appear and the moderator's own must not.
+    """
+    instance, alice, bob, carol = _seed()
+    community = make_community('testcomm')
+    _moderator(alice, community)
+    _mod_log(community, bob, actor=alice)
+    _mod_log(community, alice, actor=alice)
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.chat.routes.render_template', return_value='rendered') as render:
+        response = client.get(f'/chat/ban_from_mod/{bob.id}/{community.id}')
+
+    assert response.status_code == 200
+    assert [entry.link for entry in render.call_args.kwargs['past_bans'].all()] == \
+        ['u/' + bob.user_name]
+
+
+def test_a_non_moderator_cannot_open_the_ban_view(app, db_session):
+    """The route carried nothing but login_required, so carol -- who moderates
+    nothing -- got a 200 on any community in the probe above.
+    """
+    instance, alice, bob, carol = _seed()
+    community = make_community('testcomm')
+    _mod_log(community, bob, actor=alice)
+    client = app.test_client()
+    login(client, carol)
+
+    with patch('app.chat.routes.render_template', return_value='rendered'):
+        response = client.get(f'/chat/ban_from_mod/{bob.id}/{community.id}')
+
+    assert response.status_code == 401
+
+
+def test_an_admin_may_open_the_ban_view(app, db_session):
+    """The other half of the gate: the moderator arm is not the only true arm,
+    so a repair that admitted moderators alone would fail here.
+    """
+    instance, alice, bob, carol = _seed()
+    community = make_community('testcomm')
+    _mod_log(community, bob, actor=alice)
+    _make_admin(carol)
+    client = app.test_client()
+    login(client, carol)
+
+    with patch('app.chat.routes.render_template', return_value='rendered'):
+        response = client.get(f'/chat/ban_from_mod/{bob.id}/{community.id}')
+
+    assert response.status_code == 200
+
+
+# --------------------------------------------------------------------------
+# Group B, P3: two routes that were a 500 instead of a refusal
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize('path', ['options', 'report'])
+def test_a_stranger_is_refused_rather_than_crashing(app, db_session, path):
+    """Before the repair both fell off the end returning None:
+
+        PROBE p4 /chat/1/options exception: TypeError The view function for
+        'chat.chat_options' did not return a valid response.
+
+    400 is chat_home's refusal, so the blueprint now has one shape. See fact 306.
+    """
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    client = app.test_client()
+    login(client, carol)
+
+    with patch('app.chat.routes.render_template', return_value='rendered'):
+        response = client.get(f'/chat/{conversation.id}/{path}')
+
+    assert response.status_code == 400
+
+
+@pytest.mark.parametrize('path', ['options', 'report'])
+def test_a_member_still_gets_the_page(app, db_session, path):
+    """The other half of P3's inversion: a repair that refused everyone would
+    pass the test above.
+    """
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.chat.routes.render_template', return_value='rendered') as render:
+        response = client.get(f'/chat/{conversation.id}/{path}')
+
+    assert response.status_code == 200
+    assert render.call_args.kwargs['conversation'].id == conversation.id
+
+
+# --------------------------------------------------------------------------
+# Group B, P4: block_instance without htmx's optional current-url header
+# --------------------------------------------------------------------------
+
+
+def test_blocking_an_instance_without_a_current_url_still_answers(app, db_session):
+    """HX-Current-Url is optional and htmx omits it when the page has no url to
+    report. Before the repair:
+
+        PROBE b1 exception: TypeError argument of type 'NoneType' is not iterable
+
+    -- and by then the block had already been written, so the user's block was
+    applied and the response was a 500. The block is asserted here as well as
+    the redirect, since that is the part the crash was hiding.
+    """
+    from app.models import InstanceBlock
+    instance, alice, bob, carol = _seed()
+    remote = make_instance('remote.example', software='lemmy')
+    client = app.test_client()
+    login(client, alice)
+    token = csrf(app, client)
+
+    response = client.post(f'/chat/{remote.id}/block_instance',
+                           data={'csrf_token': token},
+                           headers={'HX-Request': 'true'})
+
+    assert response.status_code == 200
+    assert response.headers['HX-Redirect'] == '/home'
+    assert InstanceBlock.query.filter_by(user_id=alice.id,
+                                         instance_id=remote.id).count() == 1
+
+
+def test_blocking_an_instance_from_a_chat_page_sends_the_reader_home(app, db_session):
+    instance, alice, bob, carol = _seed()
+    remote = make_instance('remote.example', software='lemmy')
+    client = app.test_client()
+    login(client, alice)
+    token = csrf(app, client)
+
+    response = client.post(f'/chat/{remote.id}/block_instance',
+                           data={'csrf_token': token},
+                           headers={'HX-Request': 'true',
+                                    'HX-Current-Url': 'https://test.piefed.local/chat/1'})
+
+    assert response.status_code == 200
+    assert response.headers['HX-Redirect'] == '/home'
+
+
+def test_blocking_an_instance_from_elsewhere_returns_the_reader_there(app, db_session):
+    """The true arm of the same guard: a current url that is not a chat page
+    comes back unchanged, which is what keeps the `/chat/` test load-bearing.
+    """
+    instance, alice, bob, carol = _seed()
+    remote = make_instance('remote.example', software='lemmy')
+    client = app.test_client()
+    login(client, alice)
+    token = csrf(app, client)
+
+    response = client.post(f'/chat/{remote.id}/block_instance',
+                           data={'csrf_token': token},
+                           headers={'HX-Request': 'true',
+                                    'HX-Current-Url': 'https://test.piefed.local/u/bob'})
+
+    assert response.status_code == 200
+    assert response.headers['HX-Redirect'] == 'https://test.piefed.local/u/bob'
+
+
+def test_blocking_an_instance_without_htmx_redirects_to_chat(app, db_session):
+    instance, alice, bob, carol = _seed()
+    remote = make_instance('remote.example', software='lemmy')
+    client = app.test_client()
+    login(client, alice)
+    token = csrf(app, client)
+
+    response = client.post(f'/chat/{remote.id}/block_instance',
+                           data={'csrf_token': token})
+
+    assert response.status_code == 302
+    assert response.headers['Location'] == '/chat'

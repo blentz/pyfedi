@@ -155,3 +155,48 @@ def test_the_remote_message_is_stored_and_addressed(app, db_session):
     assert stored.body == 'hello over there'
     assert stored.ap_id.endswith(f'/private_message/{stored.id}')
     assert stored.conversation_id == conversation.id
+
+
+# --------------------------------------------------------------------------
+# P1: an edited message federated as a NEW message
+# --------------------------------------------------------------------------
+
+
+def _edited(sender, recipient, conversation, ap_id='https://test.piefed.local/private_message/1'):
+    from app.models import utcnow
+    reply = ChatMessage(sender_id=sender.id, recipient_id=recipient.id,
+                        conversation_id=conversation.id, body='edited',
+                        body_html='<p>edited</p>', ap_id=ap_id,
+                        edited_at=utcnow())
+    db.session.add(reply)
+    db.session.commit()
+    return reply
+
+
+def test_an_edited_message_federates_as_an_update(app, db_session):
+    """Before the repair the wrapper said Create while the activity id said
+    update, so a peer saw a second message rather than an edit:
+
+        PROBE b3 activity id: https://test.piefed.local/activities/update/odDGXrwdMmJXBH4
+        PROBE b3 activity type: Create
+        PROBE b3 object type: Note
+
+    app/shared/tasks/notes.py:187 and app/shared/tasks/pages.py:252 both read
+    `type = 'Create' if not edit else 'Update'`, and update_message is only ever
+    called on an edit (app/api/alpha/utils/private_message.py:193).
+
+    The inner type is asserted too: changing both would be a different bug.
+    """
+    from app.chat.util import update_message
+    sender, recipient = _seed('piefed')
+    conversation = make_conversation(sender, recipient)
+    reply = _edited(sender, recipient, conversation)
+
+    with app.test_request_context():
+        with patch('app.chat.util.send_post_request') as delivery:
+            update_message(reply)
+
+    payload = delivery.call_args.args[1]
+    assert payload['type'] == 'Update'
+    assert payload['object']['type'] == 'Note'
+    assert '/activities/update/' in payload['id']

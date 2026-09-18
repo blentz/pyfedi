@@ -114,7 +114,9 @@ def update_message(reply: ChatMessage):
                 "type": ap_type
             },
             "to": [recipient.public_url()],
-            "type": "Create"
+            # an edit is an Update, as app/shared/tasks/notes.py:187 and
+            # app/shared/tasks/pages.py:252 both have it
+            "type": "Update"
         }
         if recipient.instance.software != "lemmy" and recipient.instance.software != "piefed":
             reply_json['object']['tag'] = [
