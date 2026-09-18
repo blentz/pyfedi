@@ -8305,6 +8305,171 @@ other two missed. Adopt it for the same reason one-mutant-at-a-time is
 adopted -- a halted batch is recoverable, a stacked or committed mutant
 is not.
 
+**277. A FUNCTION THAT TAKES AN ID PARAMETER AND ALSO READS THE REQUEST
+GLOBAL FOR THE SAME USER IS BROKEN ON EVERY NON-REQUEST CALLER. THE
+PARAMETER IS THE ONLY VALUE IT MAY TRUST.** `_feed_add_community`
+(`app/shared/feed.py:386`) takes `user_id`, uses it correctly at `:429`
+(`CommunityMember.query.filter_by(user_id=user_id, ...)`), and then read
+`current_user.feed_auto_follow` on the very next line. Two statements one
+line apart disagreed about whose subscription was being decided. **This is
+not a style point, it is a reachable 500**: the shared layer's `SRC_API`
+arm resolves its user through `authorise_api_user(auth)` and never
+establishes a `current_user`, so on that path `current_user` is an
+`AnonymousUserMixin`, which has no `feed_auto_follow`, and the call raises
+`AttributeError`. **The test that exposes it needs a request context with
+NO logged-in user** -- `app.test_request_context('/')` supplies the
+context; what must be absent is the user, and a test that logs someone in
+"to make the fixture work" destroys the very condition it is testing.
+**How to find the outlier rather than assert it**: grep the module for the
+attribute and for `current_user` together, and separate the legitimate
+reads from the defect by their position -- a read inside an
+`if src == SRC_API: ... else:` dispatch is the web arm's proper source,
+while a read in a function that has already been handed the id is the bug.
+In `feed.py` that grep put the preference reads at `:49`, `:87`, `:135`,
+`:456` and `:551` off resolved user objects and the remaining
+`current_user` reads at `:120`, `:180`, `:257` and `:360` inside src
+dispatches, leaving exactly one site unaccounted for. See D655.
+
+**278. A GUARD THAT COMPARES TWO CALLER-SUPPLIED VALUES TO EACH OTHER HAS
+NO AUTHORIZATION CHECK IN IT, HOWEVER MUCH IT LOOKS LIKE ONE.**
+`app/feed/routes.py`'s `feed_add_community` read `user_id` from the query
+string and then checked `if Feed.query.get(feed_id).user_id != user_id:
+abort(404)` under a comment reading "make sure the user owns this feed".
+Both sides are attacker-controlled, so the check constrains only their
+relationship to each other, and an attacker supplying both can always
+satisfy it: a victim's id plus one of that victim's own feed ids passes.
+`@login_required` establishes only that *someone* is signed in. **The
+diagnostic question is not "does this compare an identity?" but "how many
+of these values could the caller choose?" -- if the answer is all of them,
+there is no check present at any strength.** The repair is not a stronger
+comparison but a different operand: stop reading the identity from the
+request at all (`user_id = current_user.id`), so the route has no
+caller-supplied identity left to be confused by, and then check every
+OTHER caller-supplied id against it -- the bypass here had a second half,
+a `current_feed_id` that was never ownership-checked at all and that
+deleted `FeedItem` rows from feeds the caller did not own. **Two test
+consequences.** (a) The inverted test must sign in as the LEGITIMATE
+owner, so the first guard passes and the second one is actually reached;
+signing in as the attacker makes the test pass for the wrong reason, which
+is false-witness mechanism (d). (b) Note separately whether the route is a
+`GET` -- if it is, everything above is also reachable by CSRF, and closing
+the spoofing half does not close that. See D657, D664.
+
+**279. TWIN FUNCTIONS THAT HAVE ALREADY DIVERGED MUST BE COVERED BY
+SEPARATE TESTS, NEVER BY A SHARED HELPER -- AND THE DIVERGENCE CAN EXTEND
+TO HOW THEY MUST BE *MOCKED*, NOT MERELY TO HOW THEY READ.** A shared
+helper over a diverged pair hides the NEXT divergence, which is the whole
+argument for writing two tests that look almost identical. `feed.py`'s two
+announce tasks are the worked example:
+`announce_feed_add_remove_to_subscribers:548` reads
+`User.query.get(fm.user_id)` off the request session, while
+`announce_feed_delete_to_subscribers:597` reads
+`session.query(User).get(fm.user_id)` off the task session the function
+itself opened. **The second-order consequence is the part that surprises,
+and it is a stronger argument than the readability one**: a rollback test
+that fully mocks `get_task_session` is harmless in the twin that reads its
+user off the real session, but in the twin that reads through the mocked
+session it makes `fm_user` a generic `MagicMock` whose `is_local()` is
+truthy -- so the member is skipped, the delivery is never reached, and the
+`pytest.raises` the test exists for cannot fire. The test passes and
+proves nothing. The fix is a `query.side_effect` keyed on model class,
+returning a real row per model. **So when covering a twin pair, do not
+only ask whether the two read the same way; ask what each one's mock does
+to the path under test, because a mock that is correct for one can be
+silently path-destroying in the other.** See D663.
+
+**280. ASSERT A `.delay` ARM AS *DISPATCHED*, NEVER AS EXECUTED.** A
+function that forks on `current_app.debug` -- calling the task inline on
+one arm and `task.delay(...)` on the other -- has two arms that must be
+told apart, and under this suite's eager Celery `.delay()` RUNS THE TASK
+INLINE. So an oracle that asserts the task's effects cannot distinguish
+the arms: it holds on both, and the fork the test is named for is
+unwitnessed. Patch the task object and assert the DISPATCH -- the full
+argument tuple on `.delay`, plus `task.call_count == 0` to prove the
+synchronous arm was not taken -- and drive each arm explicitly with
+`patch.dict(app.config, {'DEBUG': ...})` rather than relying on the
+default. **Two traps this round hit around exactly this.** (a) `DEBUG` is
+NOT set in the test config; it appears in neither `tests/conftest.py` nor
+`config.py`, so Flask's default `False` applies and any test relying on
+the synchronous arm being the default relies on the opposite of the truth.
+(b) `patch.object(app, 'debug', False)` DOES NOT WORK: `Flask.debug` is a
+class property with no deleter and mock always `delattr`s a non-local
+attribute on cleanup, so the context manager raises on exit. Use
+`patch.dict(app.config, ...)`. **And count the arms before trusting a
+test's name** -- a function with two `.delay` sites needs both driven, and
+per-function coverage is what says so: a single dispatch test here left
+`missing_lines=[407]` until the test was rewritten to drive the move path
+as well. See D660, and facts 87 and 276 for the neighbouring measurement
+traps.
+
+**281. A COUNTING ORACLE CANNOT WITNESS IDENTITY: `call_count == 1` HOLDS
+WHETHER THE RIGHT PARTY OR THE WRONG ONE WAS REACHED.** This was the
+dominant test-authoring defect of sub-project 49 and it has a clean
+exhibit. `announce_feed_add_remove_to_subscribers:549` skips the feed's
+owner; inverting its `==` to `!=` leaves a test asserting only
+`send.call_count == 1` PASSING in isolation, because both members are
+remote and exactly one send happens under either reading -- owner skipped
+and non-owner sent (correct), or owner sent and non-owner skipped (the
+bug). The mutant dies only when the whole file runs, caught by unrelated
+tests, which is fix-catching and not a unique kill. **The exhibit:** after
+the repair, under the same mutant, the isolated run fails at
+`send.call_args.args[0] == other_instance.inbox` while the line
+immediately above it, `send.call_count == 1`, SILENTLY PASSES. Two
+adjacent lines, one run, one verdict each. **The rule: whenever a test's
+name contains "skips", "only", "for the right", or any other word naming a
+PARTY rather than a QUANTITY, the assertion must name that party too.**
+**And make the discrimination structural rather than lucky**: insert two
+rows with distinct hardcoded values and live-assert both their ids and
+their distinguishing fields differ BEFORE exercising the code, so a
+fixture change that collapses them fails loudly at setup instead of
+degrading the test quietly back into a counting oracle. See D658, and fact
+272 for the lockstep-fixture version of the same blindness.
+
+**282. ASSERT THE CREDENTIALS, NOT ONLY THE PAYLOAD.** A federated
+delivery call carries its signing identity in arguments that are not the
+body -- `send_post_request(inbox, activity_json, private_key, key_id,
+...)` -- and a test that inspects only `activity_json` leaves `args[2]`
+and `args[3]` free. Sub-project 49 found all three of `feed.py`'s
+`send_post_request` sites covered to `[]`/`[]` with the credentials
+asserted at exactly ONE: swapping `feed.private_key` for `user.private_key`
+and `feed.ap_profile_id` for `user.ap_profile_id` survived at two of them,
+and at the third the destination inbox survived being swapped too. **The
+sharpest form of the defect is a test whose own docstring names the
+distinction it fails to check** -- one there stressed "the actor is the
+USER, not the feed" and then asserted only the JSON body, which is the
+very place that distinction is NOT carried. A regression signs an activity
+with the wrong key and ships silently under a 100%-in-range coverage
+figure. **This is the assertion-strength gap the campaign holds to be more
+dangerous than an execution gap, precisely because the coverage number
+says covered.** Two working rules. (a) For every outbound call, enumerate
+the arguments and ask which are asserted -- destination, body, key, key
+id -- rather than assuming the interesting one is the body. (b) **A gap
+found at one member of a diverged twin pair is a hypothesis about the
+other member**: when `:605`'s gap was found, the prediction that `:561`
+carried it with the operands reversed was written into the next task's
+brief rather than chased immediately, and the mutation pass confirmed it
+and found the same gap at an unexamined third site. Pin the control by
+construction -- both factories default `private_key` to `None`, so the
+test must set both sides to distinct non-`None` literals and live-assert
+they differ before patching. See D658.
+
+**283. `all([])` IS `True`, SO AN `all(...)` ASSERTION OVER A CALL LIST
+PASSES VACUOUSLY WHEN NO CALL WAS MADE -- COMPARE THE LIST INSTEAD.**
+`assert all(c.kwargs['joined_via_feed'] for c in sub.call_args_list)`
+holds when `call_args_list` is empty, so it passes both when every call
+was right and when the code never ran at all -- the two outcomes a
+mutation-hunting assertion most needs to separate. Write
+`assert [c.kwargs['joined_via_feed'] for c in sub.call_args_list] ==
+[True]`, which pins the value AND the number of calls in one comparison
+and fails informatively on either. The same trap shape covers `any()`
+(`False` on empty, so a negative assertion built on it is the vacuous
+one), a `for` loop whose body holds the only assertion, and a generator
+expression passed to `assert` at all. **The general form: an aggregate
+over an empty sequence has a defined value, and it is usually the value
+that makes your assertion pass.** Reach for a list comparison, or assert
+the length first. See D659, and fact 281 for the neighbouring case where
+the count is present but names no party.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
