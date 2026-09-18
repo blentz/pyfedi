@@ -226,6 +226,8 @@ def fetch_actor_from_webfinger(address: str, server: str):
 
         for link in webfinger_json.get('links', []):
             if link.get('rel') == 'self':
+                if 'href' not in link:  # a peer may advertise several, so keep walking
+                    continue
                 type_header = link.get('type', 'application/activity+json')
                 try:
                     actor_data = get_request(link['href'], headers={'Accept': type_header})
@@ -243,6 +245,8 @@ def fetch_actor_from_webfinger(address: str, server: str):
                         return actor_json
                     except Exception:
                         actor_data.close()
+    else:
+        webfinger_data.close()
 
     return None
 
@@ -285,17 +289,13 @@ def find_actor_by_url(actor_url, community_only=False, feed_only=False, allow_ba
     # Check for local actors first
     if f"{server_name}/c/" in actor_url and "/p/" not in actor_url:
         actor = find_local_community(actor_url)
-        if actor and community_only:
-            return actor
-        elif actor and not community_only:
+        if actor and not feed_only:
             return actor
         return None
 
     if f"{server_name}/f/" in actor_url:
         actor = find_local_feed(actor_url)
-        if actor and feed_only:
-            return actor
-        elif actor and not feed_only:
+        if actor and not community_only:
             return actor
         return None
 

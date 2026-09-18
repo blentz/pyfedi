@@ -77,6 +77,8 @@ def search_for_feed(address: str, allow_fetch: bool = True):
             webfinger_json = webfinger_data.json()
             for links in webfinger_json['links']:
                 if 'rel' in links and links['rel'] == 'self':  # this contains the URL of the activitypub profile
+                    if 'href' not in links:  # a peer may advertise several, so keep walking
+                        continue
                     type = links['type'] if 'type' in links else 'application/activity+json'
                     # retrieve the activitypub profile
                     feed_data = get_request(links['href'], headers={'Accept': type})
