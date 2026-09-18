@@ -342,9 +342,14 @@ def test_copying_a_feed_privately_appends_the_owner_exactly_once(app, db_session
     assert Feed.query.filter_by(name=expected_name).count() == 1
 
 
-@pytest.mark.parametrize('with_parent', [True, False])
+@pytest.mark.parametrize('with_parent', [True, False, 'zero'])
 def test_copying_a_feed_sets_its_parent_only_when_one_is_given(app, db_session, with_parent):
-    """:264-267, whose else arm assigns None explicitly."""
+    """:264-267, whose else arm assigns None explicitly.
+
+    The 'zero' row makes that explicit assignment observable: 0 is falsy, so it
+    takes the else arm, and an implementation that stored the given value there
+    would write 0 rather than None.
+    """
     instance, owner = _seed()
     source = _feed(owner)
     parent = _feed(owner, name='parentfeed')
@@ -352,16 +357,16 @@ def test_copying_a_feed_sets_its_parent_only_when_one_is_given(app, db_session, 
     with app.test_client() as client:
         login(client, owner)
         with patch('app.feed.routes.feeds_for_form',
-                   return_value=[(parent.id, parent.title)]), \
+                   return_value=[(parent.id, parent.title), (0, 'none')]), \
                 patch('app.feed.routes.render_template', return_value='rendered'):
+            given = {True: str(parent.id), 'zero': '0', False: None}[with_parent]
             response = client.post(
                 f'/feed/{source.id}/copy',
-                data=_copy_payload(app, client,
-                                   parent_feed_id=str(parent.id) if with_parent else None))
+                data=_copy_payload(app, client, parent_feed_id=given))
 
     assert response.status_code == 302
     made = Feed.query.filter_by(name='copiedfeed').one()
-    if with_parent:
+    if with_parent is True:
         assert made.parent_feed_id == parent.id != made.id
     else:
         assert made.parent_feed_id is None
@@ -404,6 +409,28 @@ def test_copying_a_feed_attaches_an_uploaded_icon_only_when_it_saves(app, db_ses
     assert save_icon.call_args.kwargs == {'directory': 'feeds'}
     assert (made.icon_id == icon.id) is saved
     assert (made.image_id == banner.id) is saved
+
+
+def test_copying_a_feed_with_empty_file_parts_saves_nothing(app, db_session):
+    """:290 and :295's FILENAME operands. A browser posts both parts whether or
+    not the user picked anything, with an empty filename when they did not, so
+    this is the ordinary case -- and without it, dropping `and
+    icon_file.filename != ''` passes every test, because the truthiness half is
+    satisfied by the empty part object."""
+    instance, owner = _seed()
+    source = _feed(owner)
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', return_value='rendered'), \
+                patch('app.feed.routes.save_icon_file') as save_icon, \
+                patch('app.feed.routes.save_banner_file') as save_banner:
+            client.post(f'/feed/{source.id}/copy', data=_copy_payload(app, client))
+
+    assert save_icon.call_count == 0
+    assert save_banner.call_count == 0
+    made = Feed.query.filter_by(name='copiedfeed').one()
+    assert made.icon_id is None and made.image_id is None
 
 
 def test_copying_a_feed_brings_its_communities_and_counts_them(app, db_session):
@@ -458,6 +485,11 @@ def test_copying_a_feed_subscribes_to_communities_the_user_is_not_in(
     community = make_community(name='alpha', host='remote.example')
     community.ap_id = 'alpha@remote.example'
     db.session.add(FeedItem(feed_id=source.id, community_id=community.id))
+    # ANOTHER user's membership of the same community. :312's probe filters by
+    # user_id; without this row that filter is free, and a mutant dropping it
+    # concludes the copier is already a member and skips the subscribe.
+    bystander = make_user(instance, 'someoneelse', local=True)
+    db.session.add(CommunityMember(user_id=bystander.id, community_id=community.id))
     if already_member:
         db.session.add(CommunityMember(user_id=owner.id, community_id=community.id))
     owner.feed_auto_follow = auto_follow
@@ -492,6 +524,9 @@ def test_copying_a_feed_makes_the_copier_its_owner_and_redirects(app, db_session
             response = client.post(f'/feed/{source.id}/copy', data=_copy_payload(app, client))
 
     made = Feed.query.filter_by(name='copiedfeed').one()
+    # The title comes from the form's title field, not its url -- they carry
+    # different values here for exactly that reason.
+    assert made.title == 'Copied' != made.name
     membership = FeedMember.query.filter_by(feed_id=made.id, user_id=owner.id).one()
     assert membership.is_owner is True
     assert flash_stub.call_count == 1
@@ -576,6 +611,9 @@ def _remote_feed(name='remotefeed', domain='remote.example', banned=False):
     ('~remotefeed@remote.example', '~remotefeed@remote.example'),
     ('remotefeed@remote.example', '~remotefeed@remote.example'),
     ('https://remote.example/f/remotefeed', '~remotefeed@remote.example'),
+    # MIXED CASE, which is what makes :103's .lower() load-bearing: without it
+    # the lookup string keeps the capitals and finds nothing.
+    ('~RemoteFeed@Remote.Example', '~remotefeed@remote.example'),
 ])
 def test_searching_for_a_remote_feed_normalises_every_address_shape(app, db_session,
                                                                     address,
@@ -602,6 +640,24 @@ def test_searching_for_a_remote_feed_normalises_every_address_shape(app, db_sess
     assert response.status_code == 200
     assert search.call_args.args == (expected_lookup,)
     assert captured['new_feed'] is found
+
+
+def test_a_tilde_address_without_a_host_is_not_a_search(app, db_session):
+    """:105's second operand. '~name' with no '@' is not an address: the arm
+    requires BOTH, and without this row dropping the '@' test changes nothing,
+    because every other address in this file carries one."""
+    instance, owner = _seed()
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', return_value='rendered'), \
+                patch('app.feed.routes.search_for_feed') as search, \
+                patch('app.feed.routes.flash') as flash_stub:
+            client.post('/feed/add_remote', data={
+                'csrf_token': csrf(app, client), 'address': '~remotefeed'})
+
+    assert search.call_count == 0
+    assert flash_stub.call_count == 2
 
 
 def test_searching_for_a_person_does_nothing_yet(app, db_session):
