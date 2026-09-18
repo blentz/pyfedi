@@ -237,11 +237,15 @@ def feed_copy(feed_id: int):
     if copy_feed_form.validate_on_submit():
         if copy_feed_form.url.data.strip().lower().startswith('/f/'):
             copy_feed_form.url.data = copy_feed_form.url.data[3:]
-        if copy_feed_form.public.data:
-            copy_feed_form.url.data = slugify(copy_feed_form.url.data, separator='_').lower()
-        else:
-            copy_feed_form.url.data = slugify(copy_feed_form.url.data.strip(),
-                                              separator='_').lower() + '/' + current_user.user_name.lower()
+        # split('/')[0] first, as feed_new:57 does. apply_feed_url_rules has
+        # already rewritten a private feed's url to '<slug>/<owner>' during form
+        # validation, so slugifying the whole string turned the '/' into '_' and
+        # the append below added the owner a second time:
+        # 'privatecopy' -> 'privatecopy_feedowner/feedowner'.
+        copy_feed_form.url.data = slugify(copy_feed_form.url.data.strip().split('/')[0],
+                                          separator='_').lower()
+        if not copy_feed_form.public.data:
+            copy_feed_form.url.data = copy_feed_form.url.data + '/' + current_user.user_name.lower()
         # feed_copy builds its Feed inline, so it reaches neither make_feed's
         # admin check (D675) nor feed_new's site-switch check (D702). Both are
         # enforced here, on the same terms: only an admin may publish an
