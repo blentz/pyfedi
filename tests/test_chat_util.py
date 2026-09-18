@@ -200,3 +200,97 @@ def test_an_edited_message_federates_as_an_update(app, db_session):
     assert payload['type'] == 'Update'
     assert payload['object']['type'] == 'Note'
     assert '/activities/update/' in payload['id']
+
+
+def _local_pair():
+    """A local sender and a LOCAL recipient, for update_message's other arm."""
+    local = make_instance('test.piefed.local', software='piefed')
+    burn = make_user(local, 'burnseat', local=True)
+    assert burn.id == 1
+    sender = make_user(local, 'sender', local=True)
+    sender.private_key = 'a-private-key'
+    recipient = make_user(local, 'recipient', local=True)
+    site = Site.query.get(1)
+    site.private_instance = False
+    db.session.commit()
+    return sender, recipient
+
+
+def test_editing_a_message_notifies_a_local_recipient(app, db_session):
+    """util.py:84-96. The notification's title says Updated rather than New,
+    which is the only thing separating this arm from send_message's, and the
+    recipient's badge is incremented.
+    """
+    from app.chat.util import update_message
+    from app.models import Notification, User
+    sender, recipient = _local_pair()
+    conversation = make_conversation(sender, recipient)
+    reply = _edited(sender, recipient, conversation)
+
+    with app.test_request_context():
+        update_message(reply)
+
+    notification = Notification.query.one()
+    assert notification.user_id == recipient.id
+    assert notification.author_id == sender.id
+    assert notification.title.startswith('Updated message from ')
+    assert notification.url == f'/chat/{conversation.id}#message_{reply.id}'
+    assert notification.targets == {'gen': '0', 'conversation_id': conversation.id,
+                                    'message_id': reply.id}
+    assert User.query.get(recipient.id).unread_notifications == 1
+
+
+@pytest.mark.parametrize('software, ap_type, tagged', [
+    ('lemmy', 'ChatMessage', False),
+    ('mbin', 'ChatMessage', True),
+    ('piefed', 'Note', False),
+    ('mastodon', 'Note', True),
+])
+def test_the_edited_object_matches_the_recipients_software(app, db_session, software,
+                                                           ap_type, tagged):
+    """The same two guards send_message carries (util.py:98, :119), repeated in
+    update_message rather than shared -- so they need their own four rows.
+    """
+    from app.chat.util import update_message
+    sender, recipient = _seed(software)
+    conversation = make_conversation(sender, recipient)
+    reply = _edited(sender, recipient, conversation)
+
+    with app.test_request_context():
+        with patch('app.chat.util.send_post_request') as delivery:
+            update_message(reply)
+
+    payload = delivery.call_args.args[1]
+    assert payload['object']['type'] == ap_type
+    assert ('tag' in payload['object']) is tagged
+    if tagged:
+        assert payload['object']['tag'][0]['href'] == recipient.public_url()
+
+
+def test_the_edit_carries_both_timestamps_and_the_senders_key(app, db_session):
+    """`published` is the message's ORIGINAL created_at and `updated` is its
+    edited_at (util.py:110-111), so a fixture whose two timestamps are equal
+    could not tell a mutant swapping them apart.
+    """
+    from app.chat.util import update_message
+    from app.models import utcnow
+    from datetime import timedelta
+    sender, recipient = _seed('piefed')
+    conversation = make_conversation(sender, recipient)
+    reply = _edited(sender, recipient, conversation)
+    reply.created_at = utcnow() - timedelta(days=3)
+    db.session.commit()
+
+    with app.test_request_context():
+        with patch('app.chat.util.send_post_request') as delivery:
+            update_message(reply)
+
+    inbox, payload, private_key, key_id = delivery.call_args.args
+    assert inbox == recipient.ap_inbox_url
+    assert private_key == 'a-private-key'
+    assert key_id == sender.public_url() + '#main-key'
+    assert payload['object']['published'] == reply.created_at.isoformat() + 'Z'
+    assert payload['object']['updated'] == reply.edited_at.isoformat() + 'Z'
+    assert payload['object']['id'] == reply.ap_id
+    assert payload['object']['content'] == reply.body_html
+    assert payload['actor'] == sender.public_url()
