@@ -57,3 +57,176 @@ def test_the_create_form_rejects_an_absent_url_field(app, db_session):
         form.parent_feed_id.choices = [(0, 'None')]
         assert form.validate() is False
         assert 'Url is required.' in [str(e) for e in form.url.errors]
+
+
+def _validate(app, user, **overrides):
+    """Build AddCopyFeedForm with formdata and run its validate().
+
+    The SelectField's choices are assigned here for the reason the first test
+    records: the routes assign them, and wtforms raises 'Choices cannot be
+    None.' out of super().validate() without them.
+    """
+    with web_ctx(app, user):
+        form = AddCopyFeedForm(formdata=_form_data(**overrides))
+        form.parent_feed_id.choices = [(0, 'None')]
+        valid = form.validate()
+        return valid, form
+
+
+def test_an_empty_url_is_refused(app, db_session):
+    """:30-32's other half: the field is present and blank."""
+    instance, owner = _seed()
+    valid, form = _validate(app, owner, url='   ')
+    assert valid is False
+    assert 'Url is required.' in [str(e) for e in form.url.errors]
+
+
+def test_a_url_the_rules_reject_is_refused(app, db_session):
+    """:34-35. apply_feed_url_rules owns the character rules; this asserts the
+    form honours its answer rather than re-implementing it."""
+    instance, owner = _seed()
+    valid, form = _validate(app, owner, url='has-a-hyphen')
+    assert valid is False
+    assert form.url.errors
+
+
+def test_a_url_that_collides_with_a_local_community_is_refused(app, db_session):
+    """:36-40. A LOCAL community only: ap_id must be None, so a remote
+    community of the same name is not a collision -- which the second half of
+    this test asserts, because without it the filter is free.
+    """
+    instance, owner = _seed()
+    make_community(name='taken', host='test.piefed.local')
+    remote = make_community(name='remotetaken', host='remote.example')
+    remote.ap_id = 'remotetaken@remote.example'
+    db.session.commit()
+
+    valid, form = _validate(app, owner, url='taken')
+    assert valid is False
+    assert 'A community with this url already exists.' in [str(e) for e in form.url.errors]
+
+    valid, form = _validate(app, owner, url='remotetaken')
+    assert valid is True
+
+
+@pytest.mark.parametrize('deleted, expected', [
+    (False, 'This name is in use already.'),
+    (True, 'This name was used in the past and cannot be reused.'),
+])
+def test_a_url_that_collides_with_a_user_is_refused(app, db_session, deleted, expected):
+    """:41-48. Two messages, and the deleted one is the stricter claim: the
+    name cannot be reused at all.
+
+    The comparison is case-insensitive on both sides, so the url here differs
+    in case from the user name -- without that, the func.lower() pair is free.
+    """
+    instance, owner = _seed()
+    clash = make_user(instance, 'TakenName', local=True)
+    clash.deleted = deleted
+    db.session.commit()
+
+    valid, form = _validate(app, owner, url='takenname')
+    assert valid is False
+    assert expected in [str(e) for e in form.url.errors]
+
+
+def test_communities_must_carry_a_host(app, db_session):
+    """:50-58. Every non-blank line needs an '@'; blank lines are skipped by
+    the `continue` at :53, which the second row exercises with a trailing
+    newline the first would fail on."""
+    instance, owner = _seed()
+
+    valid, form = _validate(app, owner, communities='justaname')
+    assert valid is False
+    assert form.communities.errors
+
+    valid, form = _validate(app, owner,
+                            communities='one@remote.example\n\n  \ntwo@remote.example\n')
+    assert valid is True
+
+
+def test_a_private_feed_url_gets_the_owner_appended_by_the_rules(app, db_session):
+    """apply_feed_url_rules rewrites url.data in place for a private feed, and
+    the form is where that happens -- which is why feed_copy's own append made
+    the suffix appear twice (D716)."""
+    instance, owner = _seed()
+
+    valid, form = _validate(app, owner, url='privateone', public=None)
+    assert valid is True
+    assert form.url.data == f'privateone/{owner.user_name.lower()}'
+
+
+def test_the_create_form_refuses_a_missing_title(app, db_session):
+    """:28-29, super().validate()'s False arm. title carries DataRequired, so
+    a form without it never reaches this class's own checks -- which is what
+    the arm is for."""
+    instance, owner = _seed()
+    valid, form = _validate(app, owner, title=None)
+    assert valid is False
+    assert form.title.errors
+    assert not form.url.errors
+
+
+def _validate_edit(app, user, **overrides):
+    """EditFeedForm's twin of _validate. Its `public` field has no default,
+    unlike AddCopyFeedForm's, so the rows below pass it explicitly."""
+    with web_ctx(app, user):
+        form = EditFeedForm(formdata=_form_data(**overrides))
+        form.parent_feed_id.choices = [(0, 'None')]
+        valid = form.validate()
+        return valid, form
+
+
+def test_the_edit_form_accepts_an_absent_url(app, db_session):
+    """:85's guard, and the reason it exists: the route disables the url input
+    once a feed has subscribers (app/feed/routes.py:157-158), so the field is
+    absent from the POST and url.data is None.
+
+    This is the guard AddCopyFeedForm was missing (D733), asserted here as the
+    behaviour the other form now matches.
+    """
+    instance, owner = _seed()
+    valid, form = _validate_edit(app, owner, url=None)
+    assert valid is True
+    assert not form.url.errors
+
+
+def test_the_edit_form_refuses_a_blank_url(app, db_session):
+    """:86-88. Present and blank is a different case from absent, and it gets
+    a different message from AddCopyFeedForm's -- 'This field is required.'
+    rather than 'Url is required.', a divergence between the twins that is
+    registered rather than unified."""
+    instance, owner = _seed()
+    valid, form = _validate_edit(app, owner, url='  ')
+    assert valid is False
+    assert 'This field is required.' in [str(e) for e in form.url.errors]
+
+
+def test_the_edit_form_applies_the_url_rules(app, db_session):
+    """:90-91."""
+    instance, owner = _seed()
+    valid, form = _validate_edit(app, owner, url='has-a-hyphen')
+    assert valid is False
+    assert form.url.errors
+
+
+def test_the_edit_form_refuses_a_missing_title(app, db_session):
+    """:83-84, super().validate()'s False arm in this twin."""
+    instance, owner = _seed()
+    valid, form = _validate_edit(app, owner, title=None)
+    assert valid is False
+    assert form.title.errors
+
+
+def test_the_edit_form_checks_every_community_line(app, db_session):
+    """:93-101, the same loop AddCopyFeedForm carries, in its own copy -- blank
+    lines skipped, a line without a host refused."""
+    instance, owner = _seed()
+
+    valid, form = _validate_edit(app, owner, communities='justaname')
+    assert valid is False
+    assert form.communities.errors
+
+    valid, form = _validate_edit(app, owner,
+                                 communities='one@remote.example\n\n  \ntwo@remote.example\n')
+    assert valid is True
