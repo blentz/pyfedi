@@ -65,46 +65,67 @@ def _feed(user, name, title=None, **kwargs):
 # --------------------------------------------------------------------------
 
 
-def test_the_feed_dropdown_serves_another_users_private_feeds(app, db_session):
-    """PIN (P1): :407 takes user_id from the QUERY STRING and :413 filters on
-    it, with no `public` filter and no check that the caller is that user. The
-    route is @login_required and nothing else.
+def test_the_feed_dropdown_lists_only_the_callers_own_feeds(app, db_session):
+    """Was a PIN; INVERTED once the acting user came from the session.
 
-    So any logged-in account can read any other account's feed titles,
-    including the titles of feeds that account made private.
+    ORIGINAL PINNED CLAIM, now false: ":407 takes user_id from the QUERY STRING
+    and :413 filters on it, with no `public` filter and no check that the
+    caller is that user", so any logged-in account could read any other
+    account's feed titles, private ones included.
+
+    The snooper has a feed of their own, and it must appear: a repair that
+    returned nothing at all would pass an assertion that only checked the
+    owner's title was gone.
     """
     instance, owner, snooper = _seed()
     _feed(owner, 'secretfeed', title='Owner secret feed', public=False)
+    _feed(snooper, 'snoopersfeed', title='Snoopers own feed')
 
     with app.test_client() as client:
         login(client, snooper)
         response = client.get(
             f'/feed/list?user_id={owner.id}&community_id=1&current_feed_id=0')
 
+    body = response.get_data(as_text=True)
     assert response.status_code == 200
-    assert 'Owner secret feed' in response.get_data(as_text=True)
+    assert 'Owner secret feed' not in body
+    assert 'Snoopers own feed' in body
 
 
-def test_the_feed_dropdown_is_a_500_without_its_arguments(app, db_session):
-    """PIN (P2): :407-411 call int() on three query parameters with no default,
-    so a request without them raises TypeError before anything else runs.
+def test_the_feed_dropdown_survives_a_request_without_arguments(app, db_session):
+    """Was a PIN; INVERTED once the three reads gained defaults.
 
-    Asserted as the exception rather than a status code: the test client
-    re-raises, so no response is produced.
+    ORIGINAL PINNED CLAIM, now false: ":407-411 call int() on three query
+    parameters with no default", so a request without them raised TypeError
+    before anything else ran.
+
+    The caller's own feed still appears, so this asserts the route WORKS
+    without its arguments rather than merely not raising -- and the generated
+    link carries the zeros, which is what the defaults mean.
     """
     instance, owner, snooper = _seed()
+    _feed(snooper, 'snoopersfeed', title='Snoopers own feed')
 
     with app.test_client() as client:
         login(client, snooper)
-        with pytest.raises(TypeError, match='int'):
-            client.get('/feed/list')
+        response = client.get('/feed/list')
+
+    body = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert 'Snoopers own feed' in body
+    assert 'current_feed_id=0' in body and 'community_id=0' in body
 
 
-def test_the_feed_dropdown_interpolates_the_title_unescaped(app, db_session):
-    """PIN (P3): :427 builds HTML in an f-string and drops feed.title into it
-    verbatim. The title is user-supplied -- it is the create form's title field
-    -- and the route returns raw HTML for the caller's page to splice into a
-    dropdown.
+def test_the_feed_dropdown_escapes_the_title(app, db_session):
+    """Was a PIN; INVERTED once the title was escaped.
+
+    ORIGINAL PINNED CLAIM, now false: ":427 builds HTML in an f-string and
+    drops feed.title into it verbatim", so a title carrying markup was returned
+    as markup for the caller's page to splice into a dropdown.
+
+    Both halves are asserted: the payload appears ESCAPED, and the surrounding
+    anchor is still real markup -- a repair that escaped the whole line would
+    pass the first assertion and break the feature.
     """
     instance, owner, snooper = _seed()
     _feed(owner, 'xssfeed', title='<img src=x onerror=alert(1)>')
@@ -114,4 +135,7 @@ def test_the_feed_dropdown_interpolates_the_title_unescaped(app, db_session):
         response = client.get(
             f'/feed/list?user_id={owner.id}&community_id=1&current_feed_id=0')
 
-    assert '<img src=x onerror=alert(1)>' in response.get_data(as_text=True)
+    body = response.get_data(as_text=True)
+    assert '<img src=x onerror=alert(1)>' not in body
+    assert '&lt;img src=x onerror=alert(1)&gt;' in body
+    assert body.startswith('<li><a class="dropdown-item"')

@@ -6,7 +6,7 @@ from typing import List
 
 from feedgen.feed import FeedGenerator
 from flask import g, current_app, request, redirect, url_for, flash, abort, make_response
-from markupsafe import Markup
+from markupsafe import Markup, escape
 from flask_babel import _
 from flask_login import current_user
 from slugify import slugify
@@ -403,12 +403,16 @@ def feed_list():
     # this takes a user id, community id, and current_feed id, 
     # and returns a set of html entries of the users feeds 
 
-    # get the user id
-    user_id = int(request.args.get('user_id'))
-    # get the community id
-    community_id = int(request.args.get('community_id'))
-    # get the current_feed
-    current_feed_id = int(request.args.get('current_feed_id'))
+    # The acting user comes from the SESSION, not the query string. This used to
+    # filter on `int(request.args.get('user_id'))`, so any logged-in account
+    # could read any other account's feed titles -- including feeds that account
+    # had made private, since the query has no `public` filter. The parameter
+    # survives only in the links built below, which is what it is for.
+    user_id = current_user.id
+    # Defaults, as show_feed:459 reads its own arguments: three unguarded int()
+    # calls made a request without them a 500 rather than an empty dropdown.
+    community_id = request.args.get('community_id', 0, type=int)
+    current_feed_id = request.args.get('current_feed_id', 0, type=int)
     # get the user's feeds
     user_feeds = Feed.query.filter_by(user_id=user_id).all()
 
@@ -424,7 +428,9 @@ def feed_list():
         # skip the current_feed if it has one
         if feed.id == current_feed_id:
             continue
-        options_html = options_html + f'<li><a class="dropdown-item" href="/feed/add_community?user_id={user_id}&new_feed_id={feed.id}&current_feed_id={current_feed_id}&community_id={community_id}">{feed.title}</li>'
+        # escape(): this is hand-built HTML and the title is user-supplied, so
+        # the one interpolated value that is not an integer is escaped here.
+        options_html = options_html + f'<li><a class="dropdown-item" href="/feed/add_community?user_id={user_id}&new_feed_id={feed.id}&current_feed_id={current_feed_id}&community_id={community_id}">{escape(feed.title)}</li>'
 
     return options_html
 
