@@ -188,7 +188,7 @@ def test_leave_feed_deletes_the_join_request_row(app, db_session):
 
 
 def _api_feed_payload(**overrides):
-    """The dict shape make_feed's SRC_API arm reads, at app/shared/feed.py:153-165.
+    """The dict shape make_feed's SRC_API arm reads, at app/shared/feed.py:173-185.
 
     Every key is read unconditionally -- there is no .get() anywhere in that
     arm -- so a payload missing one raises KeyError rather than defaulting.
@@ -203,7 +203,7 @@ def _api_feed_payload(**overrides):
 
 
 def _web_feed_form(**overrides):
-    """The form shape make_feed's SRC_WEB arm reads, at app/shared/feed.py:167-180.
+    """The form shape make_feed's SRC_WEB arm reads, at app/shared/feed.py:187-199.
 
     A stub rather than the real AddCopyFeedForm: the production arm only ever
     reads `.data` off each field, and building the real form would drag in
@@ -588,7 +588,8 @@ def test_leave_feed_rejects_an_argument_that_is_neither_a_feed_nor_an_int(app, d
     name that was never assigned.
 
     Tested as a CONTRACT rather than declared unreachable. No caller produces
-    it today -- app/api/alpha/utils/feed.py:137 and :189 pass a Feed, and
+    it today -- app/api/alpha/utils/feed.py:137 and app/api/alpha/utils/community.py:189 pass a
+    Feed, and
     app/community/routes.py:2578 passes a Feed -- but the signature types the
     parameter `int | Feed`, so the third path is reachable by anyone honouring
     the annotation, and an UnboundLocalError is a worse answer than a TypeError.
@@ -641,10 +642,10 @@ def test_leave_feed_refuses_the_owner_on_the_web_path_without_raising(app, db_se
 
 @pytest.mark.parametrize('bulk_leave', [True, False])
 def test_leave_feed_skips_the_community_sweep_during_a_bulk_leave(app, db_session, bulk_leave):
-    """`if not bulk_leave:` at :141 guards the whole community sweep; the
+    """`if not bulk_leave:` at :136 guards the whole community sweep; the
     caller that passes it -- app/api/alpha/utils/community.py:189, the
     leave-all path -- handles community memberships itself, which is what the
-    comment at :142-143 claims.
+    comment at :137-138 claims.
 
     The user here IS a member of the feed's community, joined via the feed, so
     the non-bulk row must call leave_community and the bulk row must not. A
@@ -668,7 +669,7 @@ def test_leave_feed_skips_the_community_sweep_during_a_bulk_leave(app, db_sessio
 
 
 def test_leave_feed_does_not_sweep_communities_when_feed_auto_leave_is_off(app, db_session):
-    """`if user.feed_auto_leave:` at :144. The column defaults True
+    """`if user.feed_auto_leave:` at :140. The column defaults True
     (app/models.py:1043), so this is the arm a test has to opt into, and the
     user is otherwise identical to the one in the sweep test above: same
     membership, same joined_via_feed, same feed item."""
@@ -723,8 +724,8 @@ def test_make_feed_api_arm_writes_every_derived_field(app, db_session):
     copies of the input.
 
     url appears in six columns with three different treatments: name and
-    machine_name verbatim, ap_profile_id LOWERCASED (:221), and the other four
-    ap_* urls verbatim (:222-226). That divergence is registered as R6 in this
+    machine_name verbatim, ap_profile_id LOWERCASED (:222), and the other four
+    ap_* urls verbatim (:223-226). That divergence is registered as R6 in this
     round's design and is latent today only because both callers slugify and
     .lower() before calling; it is asserted here as CURRENT behaviour so Group
     C, which rebuilds these fields in edit_feed(from_scratch=True), inherits a
@@ -902,7 +903,7 @@ def test_make_feed_adds_every_community_the_form_resolved(app, db_session):
 
 def test_make_feed_web_arm_converts_the_description_exactly_once(app, db_session):
     """The web arm converts the description at :191 and Feed(...) converts it
-    again at :204, so the conversion is applied twice to the same string.
+    again at :215, so the conversion is applied twice to the same string.
 
     That is inert, and this test is what says so by execution rather than by
     reading the regex: piefed_markdown_to_lemmy_markdown turns `(\\S)(\\r\\n)`
