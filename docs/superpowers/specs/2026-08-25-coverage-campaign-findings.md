@@ -14120,7 +14120,60 @@ assignment a later call overwrites and an operand subsumed by its neighbour.**
 | D710 | `app/feed/routes.py:649` | **`feed.subscriptions_count -= 1` HAS NO FLOOR**, so a count that has drifted below 1 goes negative -- the same shape as `leave_feed`'s, which this campaign covered without repairing. Registered so the eventual repair fixes both sites at once. | **registered, not fixed** | The line quoted; `leave_feed`'s twin |
 | D711 | `app/feed/routes.py:161-169`, against `app/shared/feed.py:303-308` | **THE ROUTE RE-IMPLEMENTS `edit_feed`'s SLUG HANDLING AND ITS COPY IS INERT.** Both derive the url, append the owner suffix for a private feed, and assign `name`/`machine_name`; `edit_feed` runs second and wins. That is why D707's `machine_name` mutant is equivalent, and why the route's `if not edit_feed_form.public.data:` arm can be flipped without effect on the stored row. Registered rather than deleted: the route's copy also decides `url_changed`, which drives the redirect, so removing it is a behaviour question rather than a tidy-up. | **registered, not fixed** | D707's two equivalent mutants; both code sites quoted |
 
-**Next free number: D712.**
+**Next free number: D712.** (**D712-D722 were taken by sub-project 53, below;
+the free number is now D723.**)
+
+## Sub-project 53: `app/feed/routes.py` Group B -- three defects this campaign had already fixed, living on in a fourth copy of feed creation
+
+**The round in one line: `feed_add_remote` and `lookup` close at `[]`/`[]` and
+`feed_copy` at `[239]`/`[[238, 239]]`, its one residual proved dead; the module
+rises from **58.143** to **82.303** and takes no floor; the suite is green at
+**5426 passed, 3 skipped, 6 subtests passed in 383.71s** with **All 28 module
+floors met.**; FIVE production defects were repaired, THREE of them defects
+sub-projects 50 and 52 had already repaired at other sites; and a 42-mutant pass
+killed 40, the two survivors proved equivalent by reading werkzeug's source in
+the container.**
+
+### 0. THE PROCESS FINDING THIS ROUND EXISTS TO RECORD
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D712 | `app/feed/routes.py:226-352` (`feed_copy`), against `app/shared/feed.py:172` (`make_feed`), `:260` (`edit_feed`) and `app/feed/routes.py:42` (`feed_new`) | **REPAIRING A DEFECT DOES NOT REPAIR ITS COPIES, AND THIS CAMPAIGN HAS NOW MET THE SAME THREE DEFECTS TWICE EACH.** `feed_copy` is the **fourth** implementation of "create a feed" in this codebase. It builds its `Feed(...)` inline and reaches none of the shared code, so three defects closed elsewhere were still live in it: **D675**'s `is_instance_feed` taken from the caller (repaired in `make_feed`, sub-project 50), **D702**'s NSFW/NSFL taken past the site's switches (repaired in `feed_new`, sub-project 52 -- one round earlier), and **D701**'s NSFL pre-fill reading the NSFW column (repaired in `feed_edit`, same round, **and here it is the same two-word slip verbatim**). Each was reproduced by execution before being written down: `PROBE copy feed: (True, True, True, None, ...)` for the first two, and `PROBE copy prefill source: False True` against `PROBE copy prefill form: False False` for the third. **THE RULE, WRITTEN INTO THE RECORD RATHER THAN LEFT AS A LESSON LEARNED: a round that repairs a defect owes a grep for the SHAPE, not only a fix at the line.** The shapes here were greppable in every case -- `is_instance_feed=`, `nsfw=`/`nsfl=` written without a `g.site` read nearby, and `.nsfl` beside `.nsfw` on the same line. The campaign's own dominant failure mode is a false explanation; this is its second: **a repair believed to be complete because the site it was found at is fixed.** | **registered as a process finding, with the three instances** | The three probes; the four creation sites listed by grep |
+
+### 1. THE FIVE REPAIRS AND THE MEASUREMENT
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D713 | `app/feed/routes.py:97-141`, `:226-352`, `:711-750` | **THE THREE ROUTES CLOSE, WITH ONE PROVED-DEAD RESIDUAL.** `feed_add_remote` `[]`/`[]`; `lookup` `[]`/`[]`; `feed_copy` `[239]`/`[[238, 239]]`, the `/f/` prefix strip, dead for the reason **D705** gives about `feed_new`'s identical lines -- the shared `AddCopyFeedForm` validator rejects any url with a slash on both arms. Fact 75 **cause 5**, and the second copy of that dead branch, which is itself the round's theme. The module reads **82.303**, up from 58.143. **BASIS: the full suite, `5426 passed, 3 skipped, 6339 warnings, 6 subtests passed in 383.71s`, `All 28 module floors met.`** **No floor**: Group C (`show_feed`, `feed_list`, `feed_create_post`, `show_feed_rss`, `get_all_child_feed_ids`) closes the module and takes it. | **two routes closed, one residual proved; no floor by design** | The `&&` chain; per-route figures filtered from the JSON |
+| D714 | `feed_copy:270`, `:267`, `:348` | **THE THREE REPEATED DEFECTS, REPAIRED HERE ON THE SAME TERMS AS THEIR TWINS**: only an admin may publish an instance feed; the site's NSFW and NSFL switches win over the form; the NSFL pre-fill reads the nsfl column. Each inverted test names the entry it repeats and carries the control its twin's round established -- the admin row, the mixed site-switch row, and the disabled-widget row. | **fixed at `3a5014d2`** | Probe output for each; all inverted tests run against the unrepaired tree |
+| D715 | `feed_copy:271-282`, against `make_feed:226`; `app/activitypub/routes.py:2770` | **A COPIED FEED HAD NO `ap_outbox_url`.** The block builds `ap_profile_id`, `ap_public_url`, `ap_followers_url` and `ap_following_url` and stops, and the outbox endpoint serves that column as the `"id"` of the feed's outbox document -- so every copied feed published an outbox with a null id. Probe: `ap_outbox_url` `None` on the copied row. Repaired as `make_feed` builds it; the test asserts all five urls as exact strings, because the defect was one url missing from a block that built four correctly. | **fixed at `3a5014d2`** | Probe output; the outbox route quoted |
+| D716 | `feed_copy:240-248`; `app/utils.py:4744-4745` | **A PRIVATELY COPIED FEED GOT THE OWNER SUFFIX TWICE -- FOUND BY WRITING THE TEST, NOT BY READING THE ROUTE.** `apply_feed_url_rules` already rewrites a private feed's url to `<slug>/<owner>` during form validation. The route then slugified that whole string, turning the `/` into `_`, and appended the owner again: `privatecopy` became **`privatecopy_feedowner/feedowner`**, which is the feed's ActivityPub identity as well as its url. `feed_new` never had the bug because its private arm slugifies `split('/')[0]` first; `feed_copy` skipped the split. Repaired to `feed_new`'s shape, with the public row as the control. | **fixed at `ec0e470a`** | The name the probe printed; both routes' arms quoted |
+
+### 2. THE MUTATION PASS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D717 | The three routes | **42 MUTANTS APPLIED, 35 KILLED AND SEVEN SURVIVING ON THE MEASURING PASS; 40 KILLED AFTER THE FIX ROUND.** Scoped as D602 requires. The five closed survivors were fixtures that agreed with themselves -- no mixed-case address (so the route's `.lower()` was free), no `~name` without a host (so the arm's second operand was free), no falsy-but-not-None parent id, no assertion on the copied feed's title, and no second user's `CommunityMember` row (so the subscribe probe's `user_id` filter was free). **The two survivors are EQUIVALENT, and the proof was read out of the library rather than argued**: `werkzeug.datastructures.FileStorage.__bool__` returns `bool(self.filename)`, verified in the container --
+`FileStorage(filename='')` is `False`, `FileStorage(filename='x.png')` is `True` -- so `icon_file and icon_file.filename != ''` has a second operand that cannot change the answer, at both file blocks. Fact 75 **cause 6**. | **40/42 killed; both survivors proved equivalent** | Every mutant applied singly and restored with the restoration proved; the `__bool__` source quoted from the container |
+
+### 3. REGISTERED, NOT FIXED
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D718 | `feed_copy:290`, `:295` | **A NON-MULTIPART POST IS A BARE 400.** `request.files['icon_file']` raises `BadRequestKeyError` when the part is absent, so a client posting urlencoded gets a 400 with no form errors. Probed before the tests switched to multipart: `PROBE files status: 400`. Not repaired: the fix is an error-contract decision (`request.files.get`, plus what to tell the user). | **registered, not fixed** | The probe; the two lines quoted |
+| D719 | `feed_copy:320`, against `join_feed:54-57` | **`do_subscribe` IS CALLED SYNCHRONOUSLY** where `join_feed` honours `current_app.debug` and otherwise dispatches -- **D683**'s shape, at a third site. Copying a feed with many communities runs every subscribe inline in the request. Asserted as current behaviour (`subscribe.delay.call_count == 0`) so a later round changing it sees a test fail. | **registered, not fixed** | The test's two counters |
+| D720 | `feed_add_remote:108-110`; `lookup:728-730` | **AN EXCEPTION THAT IS NOT "is blocked." IS SWALLOWED, IN BOTH COPIES** -- not re-raised, not logged, not shown -- and the user is told the feed was not found, so a remote server that is timing out and one that has no such feed are indistinguishable. **Pinned in BOTH**, because pinning one is how a repair reaches one copy and forgets the other, which is D712. | **pinned in both copies, not fixed** | The two tests |
+| D721 | `feed_copy:331` | Copying redirects to `main.index`; `feed_new` redirects to the owner's feed list. A divergence between two routes that do the same job, neither obviously right. | **registered** | The redirect asserted through `url_for` in the test |
+| D722 | `feed_copy:271-274` | **THE SPLIT ACTOR IDENTITY, AT A THIRD SITE**: `ap_profile_id` lowercases the url and `ap_public_url` does not -- **D685** in `make_feed`, **D695** in `edit_feed`, and here. Latent for the same reason: the route slugifies and lowercases first. | **registered as the third site** | The three sites listed |
+
+**And one candidate the probe KILLED**, recorded so nobody re-raises it:
+`feed_copy:283`'s `FeedItem.query.join(Feed, FeedItem.feed_id == feed_to_copy.id)`
+reads like it would multiply the copied items by the number of feeds on the
+instance, since the join condition is a constant predicate. It does not: four
+feeds and two items copied **2 items, 2 distinct communities,
+num_communities 2**. Measured, not reasoned.
+
+**Next free number: D723.**
 
 ## Ratchet gotchas
 
