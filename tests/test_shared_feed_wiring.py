@@ -1369,6 +1369,17 @@ def test_announce_add_remove_delivers_to_an_opted_out_local_member(app, db_sessi
 # wrong as written. These are the remaining seven, executed rather than
 # trusted: each test below was run against the unmutated tree first, then
 # against the mutant it names, which must fail.
+#
+# LINE NUMBERS IN THESE DOCSTRINGS ARE D661's, WHICH ARE SUB-PROJECT 49's TREE.
+# Sub-project 50's repairs added 31 lines above Group A, so every site moved.
+# The mapping, derived by locating each site by content at 1668391e:
+#   D661 :405 -> :436   :424 -> :455   :429 -> :460   :451 -> :482
+#         :455 -> :487  :481 -> :512   :488 -> :519   :489 -> :520
+#         :501 -> :532  :514 -> :545   :515 -> :546   :522 -> :553
+#         :538 -> :569  :554 -> :585   :588 -> :619   :620 -> :651
+#         :626 -> :657
+# The register's rule applies as always: locate the code by its content -- the
+# function name, the guard, the header string quoted -- never by the number.
 # ==========================================================================
 
 
