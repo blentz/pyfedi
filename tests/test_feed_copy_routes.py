@@ -292,9 +292,16 @@ def test_the_copy_form_disables_the_instance_feed_box_for_non_admins(
     assert choices.call_args.args == (0, owner.id)
 
 
-def test_copying_a_feed_privately_appends_the_owner_twice(app, db_session):
-    """PIN (P5), found by writing this test rather than by reading the route:
-    a privately copied feed gets the owner suffix TWICE.
+@pytest.mark.parametrize('public, expected_name', [
+    (True, 'privatecopy'),
+    (False, 'privatecopy/feedowner'),
+])
+def test_copying_a_feed_privately_appends_the_owner_exactly_once(app, db_session, public,
+                                                                 expected_name):
+    """Was a PIN; INVERTED once the route split the url before re-appending.
+
+    ORIGINAL PINNED CLAIM, now false: a privately copied feed got the owner
+    suffix TWICE --
 
     apply_feed_url_rules (app/utils.py:4744-4745) already rewrites a private
     feed's url to '<slug>/<owner>' during form validation. :242-244 then
@@ -306,7 +313,11 @@ def test_copying_a_feed_privately_appends_the_owner_twice(app, db_session):
     the validator added before re-appending it. feed_copy skips the split.
 
     The name is the feed's ActivityPub identity as well as its url, so the
-    owner gets an actor at /f/privatecopy_feedowner/feedowner.
+    owner got an actor at /f/privatecopy_feedowner/feedowner.
+
+    The public row is the control: the split must not disturb a public feed's
+    url, and the owner's name is not a substring of the slug, so the composite
+    is distinguishable from either half.
     """
     instance, owner = _seed()
     source = _feed(owner)
@@ -317,10 +328,10 @@ def test_copying_a_feed_privately_appends_the_owner_twice(app, db_session):
         with patch('app.feed.routes.render_template', return_value='rendered'):
             response = client.post(f'/feed/{source.id}/copy',
                                    data=_copy_payload(app, client, url='privatecopy',
-                                                      public=None))
+                                                      public='y' if public else None))
 
     assert response.status_code == 302
-    assert Feed.query.filter_by(name='privatecopy_feedowner/feedowner').count() == 1
+    assert Feed.query.filter_by(name=expected_name).count() == 1
 
 
 @pytest.mark.parametrize('with_parent', [True, False])
