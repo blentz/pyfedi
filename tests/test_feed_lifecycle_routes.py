@@ -77,10 +77,12 @@ def _seed():
 
 
 def _feed(user, name='lifecyclefeed', **kwargs):
+    kwargs.setdefault('public', True)
+    kwargs.setdefault('subscriptions_count', 1)
     feed = Feed(user_id=user.id, title=name, name=name, machine_name=name,
                 ap_profile_id=f'https://test.piefed.local/f/{name}',
                 ap_public_url=f'https://test.piefed.local/f/{name}',
-                instance_id=1, public=True, subscriptions_count=1, **kwargs)
+                instance_id=1, **kwargs)
     db.session.add(feed)
     db.session.commit()
     return feed
@@ -615,6 +617,22 @@ def test_saving_an_edit_redirects_by_whether_the_url_changed(app, db_session, ne
 # --------------------------------------------------------------------------
 # Task 6: feed_delete's cache bust, feed_notification, feed_unsubscribe's tail.
 # --------------------------------------------------------------------------
+#
+# THE TWO RESIDUALS THIS ROUND LEAVES, both with proofs and neither chased:
+#
+# :57 and the arc [56, 57] -- `form.url.data = form.url.data[3:]`, the '/f/'
+#   prefix strip. apply_feed_url_rules (app/utils.py:4750-4762) rejects any url
+#   containing a slash before validate_on_submit returns, on the public arm
+#   (`^[a-zA-Z0-9_]+$`) and the private one (`^[a-zA-Z0-9_]+(?:/<owner>)?$`,
+#   where the slash may only precede the owner's own name). Probed on both:
+#   {'url': ['Feed urls can only contain letters, numbers, and underscores.']}.
+#   Fact 75 CAUSE 5, unreachable data.
+#
+# The arc [646, 674] -- `if proceed:`. `proceed` is assigned True at :618 and
+#   never reassigned, so the False arm cannot be taken. Fact 75 CAUSE 9, the
+#   same tautology D669 registered in _feed_remove_community and D679 in
+#   join_feed. Unlike join_feed's, this one DOES strand an arc, because the
+#   condition has no second operand to reach its False outcome through.
 
 
 @pytest.mark.parametrize('is_instance_feed', [True, False])
@@ -691,3 +709,234 @@ def test_the_notification_toggle_404s_on_a_feed_that_is_not_there(app, db_sessio
         login(client, owner)
         response = client.get('/feed/999/notification')
     assert response.status_code == 404
+
+
+def test_saving_a_private_edit_appends_the_owner_to_the_url(app, db_session):
+    """:163-164, the edit route's own private-url composite -- the twin of the
+    create route's at :58-60, and asserted separately because the two have
+    already diverged once: this one runs on a feed that may already carry the
+    suffix, and :162's split('/')[0] is what stops it being appended twice.
+
+    The feed starts as 'lifecyclefeed/feedowner' precisely to exercise that.
+    """
+    instance, owner, stranger = _seed()
+    feed = _feed(owner, name='lifecyclefeed/feedowner', public=False)
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()), \
+                patch('app.shared.feed.existing_communities', return_value=[]):
+            response = client.post(f'/feed/{feed.id}/edit',
+                                   data=_edit_payload(app, client,
+                                                      url='lifecyclefeed/feedowner',
+                                                      public=None),
+                                   headers={'Referer': 'https://test.piefed.local/x'})
+
+    assert response.status_code == 302
+    assert Feed.query.get(feed.id).name == 'lifecyclefeed/feedowner'
+
+
+def _remote_feed_membership(member, domain='remote.example', name='remotefeed',
+                            gone_forever=False):
+    """A remote feed the member subscribes to, on an instance whose
+    gone_forever answer is set deliberately."""
+    remote_instance = make_instance(domain, software='piefed')
+    remote_instance.gone_forever = gone_forever
+    feed = Feed(user_id=None, title=name, name=name, machine_name=name,
+                instance_id=remote_instance.id, public=True, subscriptions_count=3,
+                ap_id=f'{name}@{domain}',
+                ap_profile_id=f'https://{domain}/f/{name}',
+                ap_public_url=f'https://{domain}/f/{name}',
+                ap_inbox_url=f'https://{domain}/f/{name}/inbox')
+    db.session.add(feed)
+    db.session.commit()
+    db.session.add(FeedMember(feed_id=feed.id, user_id=member.id))
+    member.private_key = 'the-members-private-key'
+    member.feed_auto_leave = False
+    db.session.commit()
+    return feed, remote_instance
+
+
+def test_unsubscribing_from_a_remote_feed_sends_a_signed_undo(app, db_session):
+    """:620-643. The Undo wrapping a Follow, delivered to the feed's inbox and
+    signed with the LEAVING USER's credentials.
+
+    args[2] and args[3] -- the private key and the key id -- are asserted here
+    for the reason D663 gives: of three send_post_request call sites this
+    campaign found at 100% coverage, exactly one asserted the signing identity.
+
+    The Undo's own id and the Follow's are asserted DIFFERENT: they come from
+    separate gibberish() calls under different path prefixes, so an Undo reusing
+    the Follow's id is a distinguishable wrong answer.
+    """
+    instance, owner, member = _seed()
+    feed, remote_instance = _remote_feed_membership(member)
+
+    with app.test_client() as client:
+        login(client, member)
+        with patch('app.feed.routes.send_post_request') as send:
+            response = client.get(f'/feed/{feed.ap_id}/unsubscribe')
+
+    assert response.status_code == 302
+    assert send.call_count == 1
+    url, activity, private_key, key_id = send.call_args.args
+    assert url == 'https://remote.example/f/remotefeed/inbox'
+    assert private_key == 'the-members-private-key'
+    assert key_id.endswith('#main-key')
+    assert activity['type'] == 'Undo'
+    assert activity['object']['type'] == 'Follow'
+    assert '/activities/undo/' in activity['id']
+    assert '/activities/follow/' in activity['object']['id']
+    assert activity['id'] != activity['object']['id']
+    assert FeedMember.query.filter_by(user_id=member.id, feed_id=feed.id).count() == 0
+
+
+def test_unsubscribing_from_a_dead_remote_instance_sends_nothing(app, db_session):
+    """:621's False arm. The membership still goes -- the local state is
+    cleaned up whether or not the remote can be told, which is the same
+    behaviour join_feed has when an instance is offline."""
+    instance, owner, member = _seed()
+    feed, remote_instance = _remote_feed_membership(member, gone_forever=True)
+
+    with app.test_client() as client:
+        login(client, member)
+        with patch('app.feed.routes.send_post_request') as send:
+            response = client.get(f'/feed/{feed.ap_id}/unsubscribe')
+
+    assert response.status_code == 302
+    assert send.call_count == 0
+    assert FeedMember.query.filter_by(user_id=member.id, feed_id=feed.id).count() == 0
+
+
+@pytest.mark.parametrize('with_join_request', [True, False])
+def test_unsubscribing_from_ovo_st_reuses_the_stored_follow_id(app, db_session,
+                                                               with_join_request):
+    """:623-627, the one instance singled out by domain.
+
+    ovo.st matches Follow activities by the id we first sent, so the Undo has
+    to carry that id rather than a fresh one -- and only when the row is still
+    there. The two rows are the stored uuid and the fallback, and the uuid is
+    read from the database before the call, because the row is deleted by the
+    time the assertions run.
+    """
+    instance, owner, member = _seed()
+    feed, remote_instance = _remote_feed_membership(member, domain='ovo.st')
+    stored_uuid = None
+    if with_join_request:
+        request_row = FeedJoinRequest(user_id=member.id, feed_id=feed.id)
+        db.session.add(request_row)
+        db.session.commit()
+        stored_uuid = request_row.uuid
+
+    with app.test_client() as client:
+        login(client, member)
+        with patch('app.feed.routes.send_post_request') as send:
+            client.get(f'/feed/{feed.ap_id}/unsubscribe')
+
+    follow_id = send.call_args.args[1]['object']['id']
+    if with_join_request:
+        assert follow_id.endswith(f'/activities/follow/{stored_uuid}')
+    else:
+        assert '/activities/follow/' in follow_id
+        assert stored_uuid is None
+
+
+def test_a_feed_owner_is_refused_and_keeps_their_membership(app, db_session):
+    """:678-679. The owner arm: a flash, no deletion, and -- asserted here
+    because nothing else would notice -- the subscriptions_count untouched."""
+    instance, owner, stranger = _seed()
+    feed = _feed(owner)
+    db.session.add(FeedMember(feed_id=feed.id, user_id=owner.id, is_owner=True))
+    feed.subscriptions_count = 7
+    db.session.commit()
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.flash') as flash_stub:
+            response = client.get(f'/feed/{feed.name}/unsubscribe')
+
+    assert response.status_code == 302
+    assert flash_stub.call_count == 1
+    assert FeedMember.query.filter_by(user_id=owner.id, feed_id=feed.id).count() == 1
+    assert Feed.query.get(feed.id).subscriptions_count == 7
+
+
+def test_unsubscribing_from_a_feed_that_is_not_there_is_a_404(app, db_session):
+    """:676-677's else arm -- actor_to_feed returning None."""
+    instance, owner, stranger = _seed()
+    with app.test_client() as client:
+        login(client, stranger)
+        response = client.get('/feed/nosuchfeed/unsubscribe')
+    assert response.status_code == 404
+
+
+def test_an_admin_sees_the_instance_feed_box_enabled_on_the_edit_form(app, db_session):
+    """:154's False arm. The create route's twin is covered above; this one is
+    separate because the two forms are different classes and the campaign has
+    already watched a copy-pasted pair diverge inside this very function."""
+    from app.models import Role, user_role
+    instance, owner, stranger = _seed()
+    feed = _feed(owner)
+    role = Role(name='Admin', weight=0)
+    db.session.add(role)
+    db.session.commit()
+    db.session.execute(user_role.insert().values(user_id=owner.id, role_id=role.id))
+    db.session.commit()
+    assert owner.is_admin()
+
+    captured, fake_render = _capture_form()
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', side_effect=fake_render):
+            client.get(f'/feed/{feed.id}/edit')
+
+    assert captured['form'].is_instance_feed.render_kw is None
+
+
+def test_saving_an_edit_with_no_url_leaves_the_name_alone(app, db_session):
+    """:161's False arm -- the case the route's own widget guard produces.
+
+    A disabled input submits NOTHING, so the field is absent from the POST
+    entirely and wtforms leaves `url.data` as None. That distinction is
+    load-bearing twice over: EditFeedForm.validate:82 guards its
+    required-field check with `if self.url.data is not None` for exactly this
+    reason (its comment says so), and a test that posted an empty STRING
+    instead gets 'This field is required.' and never reaches the route's
+    branch. The first version of this test did that.
+
+    url_changed stays False as well, which is why the redirect is the plain
+    `back()` rather than the renamed-feed arm.
+    """
+    instance, owner, stranger = _seed()
+    feed = _feed(owner, subscriptions_count=5)
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()), \
+                patch('app.shared.feed.existing_communities', return_value=[]):
+            response = client.post(f'/feed/{feed.id}/edit',
+                                   data=_edit_payload(app, client, url=None),
+                                   headers={'Referer': 'https://test.piefed.local/x'})
+
+    assert response.status_code == 302
+    assert response.headers['Location'] == 'https://test.piefed.local/x'
+    assert Feed.query.get(feed.id).name == 'lifecyclefeed'
+
+
+def test_unsubscribing_when_you_were_never_subscribed_does_nothing(app, db_session):
+    """:616's False arm: feed_membership returns SUBSCRIPTION_NONMEMBER, which
+    is falsy, so the route falls straight through to the redirect.
+
+    The feed's subscriptions_count is asserted untouched -- without that, "no
+    exception" is satisfied by a route that decremented it anyway.
+    """
+    instance, owner, stranger = _seed()
+    feed = _feed(owner, subscriptions_count=4)
+
+    with app.test_client() as client:
+        login(client, stranger)
+        response = client.get(f'/feed/{feed.name}/unsubscribe')
+
+    assert response.status_code == 302
+    assert Feed.query.get(feed.id).subscriptions_count == 4
+    assert FeedMember.query.filter_by(feed_id=feed.id).count() == 0
