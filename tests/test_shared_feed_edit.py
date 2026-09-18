@@ -442,3 +442,227 @@ def test_edit_feed_renaming_leaves_the_activitypub_identity_behind(app, db_sessi
     assert edited.ap_public_url == before[1]
     assert edited.ap_followers_url == before[2]
     assert 'editablefeed' in edited.ap_profile_id
+
+
+# --------------------------------------------------------------------------
+# Task 4: the image half -- :318-363.
+# --------------------------------------------------------------------------
+
+
+def _attach_icon(feed, source_url='https://example.test/old-icon.png'):
+    """Give `feed` a real File as its icon, and return it.
+
+    :327-328 read feed.icon.source_url and feed.icon.medium_url(), so the
+    icon-set arms need a row rather than a bare id: an icon_id pointing at
+    nothing raises AttributeError on a None relationship.
+    """
+    file = File(source_url=source_url, file_path='app/static/media/feeds/old-icon.png')
+    db.session.add(file)
+    db.session.commit()
+    feed.icon_id = file.id
+    db.session.commit()
+    return file
+
+
+def _attach_banner(feed, source_url='https://example.test/old-banner.png'):
+    """The banner twin of _attach_icon. Written out rather than shared with a
+    flag, because :327-331 and :332-337 have already diverged -- the banner arm
+    busts Feed.header_image at :336 and the icon arm busts nothing -- and a
+    shared helper is what hides the next divergence."""
+    file = File(source_url=source_url, file_path='app/static/media/feeds/old-banner.png')
+    db.session.add(file)
+    db.session.commit()
+    feed.image_id = file.id
+    db.session.commit()
+    return file
+
+
+@contextmanager
+def _api_ctx(app, user):
+    """A request context with g.site and authorise_api_user bound to `user`.
+
+    The image tests go through the SRC_API arm on purpose: the web arm derives
+    icon_url from `process_upload(uploaded_icon_file) if uploaded_icon_file
+    else None` (:280-281), so without an upload it is always None and the
+    icon/banner blocks are unreachable from that arm. The API arm takes the url
+    straight from the payload, which is the shape under test.
+    """
+    with app.test_request_context('/'):
+        g.site = Site.query.get(1)
+        g.site.enable_nsfw = g.site.enable_nsfl = True
+        with patch('app.shared.feed.authorise_api_user', return_value=user):
+            yield
+
+
+@pytest.mark.parametrize('attach, incoming, expect_replaced', [
+    (None, 'https://example.test/new-icon.png', True),
+    ('source', 'https://example.test/old-icon.png', False),
+    ('medium', 'MEDIUM', False),
+    ('source', 'https://example.test/new-icon.png', True),
+])
+def test_edit_feed_replaces_the_icon_only_when_the_url_really_changed(
+        app, db_session, attach, incoming, expect_replaced):
+    """:327-331 and :339-344, the icon change detector and the block it gates.
+
+    Four rows, one per state the detector can be in:
+
+    - no icon at all -> :330's `if not feed.icon_id:` sets changed;
+    - an icon whose source_url matches the incoming url -> not changed;
+    - an icon whose medium_url() matches -> not changed, which is the inner
+      :328 test and the only thing that separates it from :327;
+    - an icon that matches neither -> changed.
+
+    The third row is the one a three-row version drops, and it is the only row
+    where :327 is True and :328 is False.
+
+    make_image_sizes is patched and asserted with its full argument tuple: the
+    40/250 pair is the only thing distinguishing this block from the banner
+    block sixteen lines below.
+    """
+    s = _seed()
+    existing = _attach_icon(s.feed) if attach else None
+    if incoming == 'MEDIUM':
+        incoming = existing.medium_url()
+    before_icon_id = s.feed.icon_id
+
+    with _api_ctx(app, s.owner):
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()), \
+                patch('app.shared.feed.is_image_url', return_value=True), \
+                patch('app.shared.feed.make_image_sizes') as sizer, \
+                patch('app.models.File.delete_from_disk') as unlink:
+            edit_feed(_api_payload(icon_url=incoming), s.feed, SRC_API, auth='Bearer x')
+
+    edited = Feed.query.get(s.feed.id)
+    if expect_replaced and attach:
+        # PIN (P5): replacing an icon the feed ALREADY had loses it. :343 sets
+        # the FK attribute while the loaded `icon` relationship still points at
+        # the old File, and :350's explicit delete of that old row makes the
+        # relationship win at flush: the feed ends with icon_id None and the
+        # newly created File row orphaned. The banner arm sixteen lines below
+        # does NOT do this, which is what makes it a defect rather than a
+        # property of the cascade.
+        assert edited.icon_id is None
+        assert File.query.get(before_icon_id) is None
+        assert File.query.filter_by(source_url=incoming).count() == 1
+        assert unlink.call_count == 1
+    elif expect_replaced:
+        assert edited.icon_id != before_icon_id
+        assert File.query.get(edited.icon_id).source_url == incoming
+        assert sizer.call_args.args == (edited.icon_id, 40, 250, 'feeds', False)
+        assert unlink.call_count == 0
+    else:
+        assert edited.icon_id == before_icon_id
+        assert sizer.call_count == 0
+        assert unlink.call_count == 0
+
+
+@pytest.mark.parametrize('attach, incoming, expect_replaced', [
+    (None, 'https://example.test/new-banner.png', True),
+    ('source', 'https://example.test/old-banner.png', False),
+    ('medium', 'MEDIUM', False),
+    ('source', 'https://example.test/new-banner.png', True),
+])
+def test_edit_feed_replaces_the_banner_only_when_the_url_really_changed(
+        app, db_session, attach, incoming, expect_replaced):
+    """:332-337 and :351-363, the banner twin -- written out separately rather
+    than shared with the icon test, because the two have already diverged:
+    :336 busts Feed.header_image when there is no banner and :363 busts it
+    again after deleting the old one, while the icon arm busts nothing at
+    either point. A shared helper would hide the next divergence.
+
+    The size pair asserted here is 878/1600, the banner's own.
+    """
+    s = _seed()
+    existing = _attach_banner(s.feed) if attach else None
+    if incoming == 'MEDIUM':
+        incoming = existing.medium_url()
+    before_image_id = s.feed.image_id
+
+    with _api_ctx(app, s.owner):
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()), \
+                patch('app.shared.feed.is_image_url', return_value=True), \
+                patch('app.shared.feed.make_image_sizes') as sizer, \
+                patch('app.models.File.delete_from_disk') as unlink:
+            edit_feed(_api_payload(banner_url=incoming), s.feed, SRC_API, auth='Bearer x')
+
+    edited = Feed.query.get(s.feed.id)
+    if expect_replaced:
+        assert edited.image_id != before_image_id
+        assert File.query.get(edited.image_id).source_url == incoming
+        assert sizer.call_args.args == (edited.image_id, 878, 1600, 'feeds', False)
+        assert unlink.call_count == (1 if attach else 0)
+        if attach:
+            assert File.query.get(before_image_id) is None
+    else:
+        assert edited.image_id == before_image_id
+        assert sizer.call_count == 0
+        assert unlink.call_count == 0
+
+
+@pytest.mark.parametrize('is_image', [True, False])
+def test_edit_feed_stores_an_icon_only_when_the_url_is_one(app, db_session, is_image):
+    """:339's third operand, `is_image_url(icon_url)`, isolated from the first
+    two: the url is present and the change detector says changed, so only the
+    image test can decide the outcome."""
+    s = _seed()
+    with _api_ctx(app, s.owner):
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()), \
+                patch('app.shared.feed.is_image_url', return_value=is_image), \
+                patch('app.shared.feed.make_image_sizes'), \
+                patch('app.models.File.delete_from_disk'):
+            edit_feed(_api_payload(icon_url='https://example.test/thing'), s.feed,
+                      SRC_API, auth='Bearer x')
+
+    assert (Feed.query.get(s.feed.id).icon_id is not None) is is_image
+
+
+def test_edit_feed_from_scratch_stores_the_icon_without_consulting_the_detector(app, db_session):
+    """:339's `(from_scratch or icon_url_changed)` disjunct, reached through
+    from_scratch rather than through the detector.
+
+    With from_scratch=True the whole :321-337 block is skipped, so
+    icon_url_changed stays False from :290 and the disjunct is the only thing
+    that can let the write through. This is also the arm that proves the
+    disjunct is not dead weight -- and R1 records that no production caller
+    reaches it.
+
+    old_icon_id also stays 0, so :346's `not from_scratch` guard is what keeps
+    the old file alive here: asserted by the surviving row.
+    """
+    s = _seed()
+    existing = _attach_icon(s.feed)
+    with _api_ctx(app, s.owner):
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()), \
+                patch('app.shared.feed.is_image_url', return_value=True), \
+                patch('app.shared.feed.make_image_sizes'), \
+                patch('app.models.File.delete_from_disk') as unlink:
+            edit_feed(_api_payload(icon_url='https://example.test/scratch.png'), s.feed,
+                      SRC_API, auth='Bearer x', from_scratch=True)
+
+    edited = Feed.query.get(s.feed.id)
+    assert edited.icon_id != existing.id
+    assert File.query.get(existing.id) is not None
+    assert unlink.call_count == 0
+
+
+def test_edit_feed_cannot_be_given_an_old_file_id_whose_row_has_vanished(app, db_session):
+    """:348's `if remove_file:` False arm is UNREACHABLE, and this test is the
+    proof rather than an assertion about edit_feed.
+
+    Feed.icon is declared with `single_parent=True, cascade="all,
+    delete-orphan"` (app/models.py:4137), so deleting the File row also clears
+    feed.icon_id in the same flush -- the state :348 guards against, an
+    icon_id naming a row that is gone, cannot be reached through the ORM at
+    all. Demonstrated here by deleting the row and reading the feed back.
+
+    Registered as fact 75 CAUSE 5, unreachable data: the arc stays missing and
+    no test pretends to cover it.
+    """
+    s = _seed()
+    existing = _attach_icon(s.feed)
+    stale_id = existing.id
+    db.session.delete(existing)
+    db.session.commit()
+
+    assert File.query.get(stale_id) is None
+    assert Feed.query.get(s.feed.id).icon_id is None
