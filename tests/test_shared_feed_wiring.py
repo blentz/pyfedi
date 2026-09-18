@@ -475,7 +475,16 @@ def test_announce_add_remove_rolls_back_and_re_raises_on_failure(app, db_session
     remote = make_user(s.instance, 'remotemember', local=False)
     db.session.commit()
     make_feed_member(remote, s.feed)
-    fake_session = patch('app.shared.feed.get_task_session').start()
+    # NOT patch(...).start() + patch.stopall(): stopall() stops EVERY patcher in
+    # unittest.mock's global registry, including the ones respx starts for
+    # tests/conftest.py's session-scoped block_outbound_http. That silently
+    # unblocked outbound HTTP for the whole rest of the session -- this file
+    # sorts immediately before tests/test_shared_post_edit.py, whose
+    # test_the_domain_block_is_skipped_for_a_hostless_url then failed with
+    # "DID NOT RAISE Exception" and cascaded into 130 failures and 209 errors,
+    # every one of which passed in isolation. Stop only what this test started.
+    _task_session_patcher = patch('app.shared.feed.get_task_session')
+    fake_session = _task_session_patcher.start()
 
     try:
         with patch('app.shared.feed.instance_banned', return_value=False):
@@ -483,7 +492,7 @@ def test_announce_add_remove_rolls_back_and_re_raises_on_failure(app, db_session
                 with pytest.raises(RuntimeError):
                     announce_feed_add_remove_to_subscribers('Add', s.feed.id, s.community.id)
     finally:
-        patch.stopall()
+        _task_session_patcher.stop()
 
     assert fake_session.return_value.rollback.call_count == 1
     assert fake_session.return_value.close.call_count == 1
@@ -497,12 +506,21 @@ def test_announce_add_remove_closes_the_task_session_on_success(app, db_session)
     but a mutant moving close into the except arm would not.
     """
     s = _seed()
-    fake_session = patch('app.shared.feed.get_task_session').start()
+    # NOT patch(...).start() + patch.stopall(): stopall() stops EVERY patcher in
+    # unittest.mock's global registry, including the ones respx starts for
+    # tests/conftest.py's session-scoped block_outbound_http. That silently
+    # unblocked outbound HTTP for the whole rest of the session -- this file
+    # sorts immediately before tests/test_shared_post_edit.py, whose
+    # test_the_domain_block_is_skipped_for_a_hostless_url then failed with
+    # "DID NOT RAISE Exception" and cascaded into 130 failures and 209 errors,
+    # every one of which passed in isolation. Stop only what this test started.
+    _task_session_patcher = patch('app.shared.feed.get_task_session')
+    fake_session = _task_session_patcher.start()
 
     try:
         announce_feed_add_remove_to_subscribers('Add', s.feed.id, s.community.id)
     finally:
-        patch.stopall()
+        _task_session_patcher.stop()
 
     assert fake_session.return_value.rollback.call_count == 0
     assert fake_session.return_value.close.call_count == 1
@@ -678,7 +696,16 @@ def test_announce_delete_rolls_back_and_re_raises_on_failure(app, db_session):
     db.session.commit()
     make_feed_member(remote, s.feed)
 
-    fake_session = patch('app.shared.feed.get_task_session').start()
+    # NOT patch(...).start() + patch.stopall(): stopall() stops EVERY patcher in
+    # unittest.mock's global registry, including the ones respx starts for
+    # tests/conftest.py's session-scoped block_outbound_http. That silently
+    # unblocked outbound HTTP for the whole rest of the session -- this file
+    # sorts immediately before tests/test_shared_post_edit.py, whose
+    # test_the_domain_block_is_skipped_for_a_hostless_url then failed with
+    # "DID NOT RAISE Exception" and cascaded into 130 failures and 209 errors,
+    # every one of which passed in isolation. Stop only what this test started.
+    _task_session_patcher = patch('app.shared.feed.get_task_session')
+    fake_session = _task_session_patcher.start()
 
     def fake_query(model):
         query = MagicMock()
@@ -696,7 +723,7 @@ def test_announce_delete_rolls_back_and_re_raises_on_failure(app, db_session):
                 with pytest.raises(RuntimeError):
                     announce_feed_delete_to_subscribers(s.owner.id, s.feed.id)
     finally:
-        patch.stopall()
+        _task_session_patcher.stop()
 
     assert fake_session.return_value.rollback.call_count == 1
     assert fake_session.return_value.close.call_count == 1
