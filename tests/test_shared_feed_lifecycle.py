@@ -683,3 +683,203 @@ def test_leave_feed_dispatches_the_leave_task_with_both_ids(app, db_session):
     assert task.call_count == 1
     assert task.call_args.args == ('leave_feed',)
     assert task.call_args.kwargs == {'user_id': s.member.id, 'feed_id': s.feed.id}
+
+
+# --------------------------------------------------------------------------
+# Task 6: make_feed.
+# --------------------------------------------------------------------------
+
+
+def test_make_feed_api_arm_writes_every_derived_field(app, db_session):
+    """The API arm end to end, asserting the fields that are NOT straight
+    copies of the input.
+
+    url appears in six columns with three different treatments: name and
+    machine_name verbatim, ap_profile_id LOWERCASED (:221), and the other four
+    ap_* urls verbatim (:222-226). That divergence is registered as R6 in this
+    round's design and is latent today only because both callers slugify and
+    .lower() before calling; it is asserted here as CURRENT behaviour so Group
+    C, which rebuilds these fields in edit_feed(from_scratch=True), inherits a
+    statement of what they are rather than an assumption.
+
+    The keypair is patched: RsaKeys.generate_keypair() is seconds of entropy
+    this test would otherwise pay for and never assert.
+    """
+    s = _seed()
+    payload = _api_feed_payload(url='MixedCase', title='Mixed', description='hello',
+                                show_child_posts=True, nsfw=True, nsfl=True)
+
+    with app.test_request_context('/'):
+        with patch('app.shared.feed.authorise_api_user', return_value=s.member), \
+                patch('app.shared.feed.RsaKeys.generate_keypair',
+                      return_value=('the-private-key', 'the-public-key')):
+            make_feed(payload, SRC_API, auth='Bearer x')
+
+    made = Feed.query.filter_by(name='MixedCase').one()
+    server = app.config['SERVER_NAME']
+    assert made.machine_name == 'MixedCase'
+    assert made.title == 'Mixed'
+    assert made.user_id == s.member.id
+    assert made.private_key == 'the-private-key'
+    assert made.public_key == 'the-public-key'
+    assert made.show_posts_in_children is True
+    assert made.nsfw is True and made.nsfl is True
+    assert made.public is True
+    assert made.subscriptions_count == 1
+    assert made.instance_id == 1
+    assert made.ap_domain == server
+    assert made.ap_profile_id == f'https://{server}/f/mixedcase'
+    assert made.ap_public_url == f'https://{server}/f/MixedCase'
+    assert made.ap_followers_url == f'https://{server}/f/MixedCase/followers'
+    assert made.ap_following_url == f'https://{server}/f/MixedCase/following'
+    assert made.ap_outbox_url == f'https://{server}/f/MixedCase/outbox'
+
+
+def test_make_feed_gives_the_creator_an_owner_membership(app, db_session):
+    """:250's FeedMember carries is_owner=True, and that flag is what
+    leave_feed's owner refusal reads. Asserted explicitly: a membership row
+    created with the flag defaulted False would let the creator leave their own
+    feed, and the row's mere existence would not show it."""
+    s = _seed()
+    with app.test_request_context('/'):
+        with patch('app.shared.feed.authorise_api_user', return_value=s.member), \
+                patch('app.shared.feed.RsaKeys.generate_keypair', return_value=('a', 'b')):
+            make_feed(_api_feed_payload(), SRC_API, auth='Bearer x')
+
+    made = Feed.query.filter_by(name='apifeed').one()
+    membership = FeedMember.query.filter_by(feed_id=made.id, user_id=s.member.id).one()
+    assert membership.is_owner is True
+
+
+@pytest.mark.parametrize('parent_given', [True, False])
+def test_make_feed_sets_parent_feed_id_only_when_one_is_given(app, db_session, parent_given):
+    """:229-232. The else arm assigns None explicitly, so both arms are
+    observable on the row. The parent used is a real Feed the seed already
+    minted, and its id is asserted distinct from the new feed's, so a mutant
+    assigning the wrong id is distinguishable."""
+    s = _seed()
+    parent = s.feed if parent_given else None
+    payload = _api_feed_payload(parent_feed_id=parent.id if parent else None)
+
+    with app.test_request_context('/'):
+        with patch('app.shared.feed.authorise_api_user', return_value=s.member), \
+                patch('app.shared.feed.RsaKeys.generate_keypair', return_value=('a', 'b')):
+            make_feed(payload, SRC_API, auth='Bearer x')
+
+    made = Feed.query.filter_by(name='apifeed').one()
+    if parent_given:
+        assert made.parent_feed_id == parent.id != made.id
+    else:
+        assert made.parent_feed_id is None
+
+
+@pytest.mark.parametrize('field, url_key, sizes, id_attr', [
+    ('icon', 'icon_url', (40, 250), 'icon_id'),
+    ('banner', 'banner_url', (878, 1600), 'image_id'),
+])
+@pytest.mark.parametrize('url_value, is_image, expect_file', [
+    (None, False, False),
+    ('https://example.test/not-an-image', False, False),
+    ('https://example.test/picture.png', True, True),
+])
+def test_make_feed_stores_an_image_only_when_the_url_is_one(app, db_session, field, url_key,
+                                                            sizes, id_attr, url_value,
+                                                            is_image, expect_file):
+    """:234-245, both blocks, each in three states: no url at all, a url that
+    is not an image, and a url that is.
+
+    The middle state is what isolates the second operand of the conjunction;
+    without it `url and is_image_url(url)` is covered by two rows that never
+    disagree. is_image_url is patched rather than fed a real url, so the test
+    says which answer it is testing instead of depending on that function's
+    rules.
+
+    A decoy File is minted first so the row under test cannot land on id 1 and
+    make a wrong-id assertion pass by coincidence. make_image_sizes is asserted
+    with its full argument tuple, including the size pair, which is the only
+    thing that distinguishes the icon block from the banner block.
+    """
+    from app.models import File
+    s = _seed()
+    decoy = File(source_url='https://example.test/decoy.png')
+    db.session.add(decoy)
+    db.session.commit()
+
+    payload = _api_feed_payload(**{url_key: url_value})
+    with app.test_request_context('/'):
+        with patch('app.shared.feed.authorise_api_user', return_value=s.member), \
+                patch('app.shared.feed.RsaKeys.generate_keypair', return_value=('a', 'b')), \
+                patch('app.shared.feed.is_image_url', return_value=is_image), \
+                patch('app.shared.feed.make_image_sizes') as sizer:
+            make_feed(payload, SRC_API, auth='Bearer x')
+
+    made = Feed.query.filter_by(name='apifeed').one()
+    stored_id = getattr(made, id_attr)
+    if expect_file:
+        stored = File.query.get(stored_id)
+        assert stored.source_url == url_value
+        assert stored.id != decoy.id
+        assert sizer.call_args.args == (stored_id, sizes[0], sizes[1], 'feeds', False)
+    else:
+        assert stored_id is None
+        assert sizer.call_count == 0
+
+
+def test_make_feed_adds_every_community_the_form_resolved(app, db_session):
+    """:254-257. form_communities_to_ids and _feed_add_community are Group A's,
+    covered by tests/test_shared_feed_wiring.py, so they are patched here and
+    this test asserts DISPATCH: one call per resolved id, with all four
+    positional arguments.
+
+    The current_feed_id argument is the literal 0, which _feed_add_community
+    reads as "not a move" (app/shared/feed.py:420). The ids are decoys chosen
+    to collide with nothing the seed minted, and feed.id, user.id and both
+    community ids are asserted pairwise distinct, because this call passes four
+    ids adjacently and D653 is the entry about exactly that.
+    """
+    s = _seed()
+    with app.test_request_context('/'):
+        with patch('app.shared.feed.authorise_api_user', return_value=s.member), \
+                patch('app.shared.feed.RsaKeys.generate_keypair', return_value=('a', 'b')), \
+                patch('app.shared.feed.form_communities_to_ids', return_value={71, 82}) as resolver, \
+                patch('app.shared.feed._feed_add_community') as adder:
+            make_feed(_api_feed_payload(communities='!a@b\n!c@d'), SRC_API, auth='Bearer x')
+
+    made = Feed.query.filter_by(name='apifeed').one()
+    assert resolver.call_args.args == ('!a@b\n!c@d',)
+    assert adder.call_count == 2
+    assert {call.args for call in adder.call_args_list} == {
+        (71, 0, made.id, s.member.id),
+        (82, 0, made.id, s.member.id),
+    }
+    assert len({71, 82, made.id, s.member.id}) == 4
+
+
+def test_make_feed_web_arm_converts_the_description_exactly_once(app, db_session):
+    """The web arm converts the description at :191 and Feed(...) converts it
+    again at :204, so the conversion is applied twice to the same string.
+
+    That is inert, and this test is what says so by execution rather than by
+    reading the regex: piefed_markdown_to_lemmy_markdown turns `(\\S)(\\r\\n)`
+    into `\\1  \\2`, so the second pass sees a space before the newline and
+    matches nothing. The input carries a CRLF precisely so a non-idempotent
+    conversion would show.
+
+    description_html is asserted too, because the two arms feed it differently:
+    the web arm passes the already-converted string and the API arm passes the
+    raw one.
+    """
+    from app.utils import piefed_markdown_to_lemmy_markdown
+    s = _seed()
+    raw = 'first line\r\nsecond line'
+    once = piefed_markdown_to_lemmy_markdown(raw)
+    assert once != raw
+    assert piefed_markdown_to_lemmy_markdown(once) == once
+
+    with web_ctx(app, s.member):
+        with patch('app.shared.feed.RsaKeys.generate_keypair', return_value=('a', 'b')):
+            make_feed(_web_feed_form(description=raw), SRC_WEB)
+
+    made = Feed.query.filter_by(name='webfeed').one()
+    assert made.description == once
+    assert made.description_html is not None
