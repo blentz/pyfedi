@@ -8612,6 +8612,38 @@ policy, look for the matching check in the handler; when writing one, put the
 rule in the handler and let the widget follow it.** The test that catches it is
 a POST carrying the field the widget would have hidden.
 
+**296. A REPAIR REACHES ONE SITE; THE DEFECT MAY HAVE COPIES.** Sub-project 53
+found three defects still live in `feed_copy` that this campaign had already
+repaired elsewhere -- `is_instance_feed` taken from the caller (D675, fixed in
+`make_feed`), NSFW/NSFL taken past the site's switches (D702, fixed in
+`feed_new` one round earlier), and an NSFL pre-fill reading the NSFW column
+(D701, fixed in `feed_edit` -- the same two-word slip, verbatim). `feed_copy` is
+the FOURTH implementation of "create a feed" in this codebase and reaches none
+of the shared code. **When you repair a defect, grep for its SHAPE before
+closing it**: the field name (`is_instance_feed=`), the pair that should have
+been guarded (`nsfw=` with no `g.site` read nearby), the two columns that look
+alike (`.nsfl` beside `.nsfw`). Then say in the register which sites you
+checked, so the next round knows whether "fixed" meant one site or all of them.
+See D712.
+
+**297. A FILE INPUT IS FALSY WHEN NOTHING WAS PICKED, SO THE FILENAME TEST
+BESIDE IT IS USUALLY REDUNDANT.** `werkzeug.datastructures.FileStorage.__bool__`
+returns `bool(self.filename)`, so `if part and part.filename != '':` has a
+second operand that can never change the answer -- an equivalent mutant at every
+such site, and this codebase has several. A browser posts the part whether or
+not the user picked anything, so the empty-filename case is the ORDINARY one and
+still needs a test; what it cannot do is kill a mutant that drops the redundant
+half. Assert `save_*_file` was not called, and record the equivalence rather
+than chasing it. See D717.
+
+**298. A ROUTE THAT READS `request.files[...]` DIRECTLY DEMANDS A MULTIPART
+BODY.** A urlencoded POST to such a route is a bare 400 from
+`BadRequestKeyError`, before any form logic runs -- so a route test has to send
+the file parts even when it is testing something else entirely. Send them empty:
+`{'icon_file': (io.BytesIO(b''), '')}`. The first version of sub-project 53's
+copy tests posted urlencoded and got 400s that looked like validation failures.
+See D718.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
