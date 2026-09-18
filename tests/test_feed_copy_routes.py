@@ -20,6 +20,14 @@ HARNESS FACTS (fact 292-294 apply, plus one of this round's own):
 - render_template must be patched for every GET and for any POST that falls
   through to a re-render.
 - search_for_feed is patched on app.feed.routes, where it is imported.
+
+THE ROUND'S ONE RESIDUAL. feed_copy's '/f/' prefix strip -- the statement at
+:239 and its arc [238, 239] -- is DEAD CODE, for the same reason D705 recorded
+about feed_new's identical lines: this route uses the same AddCopyFeedForm,
+whose validate() calls apply_feed_url_rules (app/utils.py:4750-4762), and that
+rejects any url containing a slash on both the public and the private arm
+before validate_on_submit returns. Fact 75 CAUSE 5, unreachable data, and the
+second copy of it in this file -- which is itself the round's theme.
 """
 import io
 import pytest
@@ -745,3 +753,119 @@ def test_a_banned_user_cannot_search_for_remote_feeds(app, db_session):
 
     assert response.status_code == 200
     assert ban.call_count == 1
+
+
+# --------------------------------------------------------------------------
+# Task 4: lookup.
+# --------------------------------------------------------------------------
+
+
+def test_looking_up_a_local_feed_redirects_to_it(app, db_session):
+    """:689-690. The local shortcut, taken before any lookup: the domain in the
+    url is this server's, so there is nothing remote to search for."""
+    instance, owner = _seed()
+    server = app.config['SERVER_NAME']
+
+    with app.test_client() as client:
+        response = client.get(f'/feed/lookup/localfeed/{server}')
+
+    assert response.status_code == 302
+    assert response.headers['Location'] == '/f/localfeed'
+
+
+def test_looking_up_a_known_remote_feed_redirects_to_it(app, db_session):
+    """:692-697. The ap_id lookup, and the lower-casing that precedes it: the
+    request uses MIXED case, and without :692-693 the filter_by would miss the
+    row and fall through to a remote search."""
+    instance, owner = _seed()
+    found = _remote_feed()
+
+    with app.test_client() as client:
+        with patch('app.feed.routes.search_for_feed') as search:
+            response = client.get('/feed/lookup/RemoteFeed/Remote.Example')
+
+    assert search.call_count == 0
+    assert response.status_code == 302
+    assert response.headers['Location'] == '/f/remotefeed@remote.example'
+
+
+def test_looking_up_an_unknown_feed_anonymously_asks_for_a_login(app, db_session):
+    """:721-724. The anonymous arm: a flash and back('/'), with no search at
+    all -- searching is what costs an outbound request, which is why it is
+    behind a login."""
+    _seed()
+
+    with app.test_client() as client:
+        with patch('app.feed.routes.search_for_feed') as search, \
+                patch('app.feed.routes.flash') as flash_stub:
+            response = client.get('/feed/lookup/unknown/remote.example')
+
+    assert search.call_count == 0
+    assert flash_stub.call_count == 1
+    assert response.status_code == 302
+
+
+@pytest.mark.parametrize('enable_nsfw', [True, False])
+def test_looking_up_an_unknown_feed_while_logged_in_searches_for_it(app, db_session,
+                                                                    enable_nsfw):
+    """:698-713. The authenticated arm, its search, and the two not-found
+    messages -- the same pair feed_add_remote carries, in a second copy."""
+    instance, owner = _seed()
+    site = Site.query.get(1)
+    site.enable_nsfw = enable_nsfw
+    db.session.commit()
+
+    captured, fake_render = _capture_form()
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', side_effect=fake_render), \
+                patch('app.feed.routes.search_for_feed', return_value=None) as search, \
+                patch('app.feed.routes.flash') as flash_stub:
+            response = client.get('/feed/lookup/unknown/remote.example')
+
+    assert response.status_code == 200
+    assert search.call_args.args == ('~unknown@remote.example',)
+    assert captured['new_feed'] is None
+    assert captured['subscribed'] is False
+    message = str(flash_stub.call_args.args[0])
+    assert ('nsfw' in message.lower()) is not enable_nsfw
+
+
+@pytest.mark.parametrize('banned', [True, False])
+def test_looking_up_a_feed_warns_when_it_is_banned_here(app, db_session, banned):
+    """:714-716. A found feed that this instance has banned still renders, with
+    a warning -- the row is the difference between 'here is the feed' and 'here
+    is the feed, and you cannot have it'."""
+    instance, owner = _seed()
+    # One remote feed, minted once: _remote_feed also mints its instance, and
+    # Instance.domain is unique, so a second call for the same domain is an
+    # IntegrityError rather than a second fixture.
+    fresh = _remote_feed(name='newlyfound', banned=banned)
+
+    captured, fake_render = _capture_form()
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', side_effect=fake_render), \
+                patch('app.feed.routes.search_for_feed', return_value=fresh), \
+                patch('app.feed.routes.flash') as flash_stub:
+            client.get('/feed/lookup/unknown/remote.example')
+
+    assert captured['new_feed'] is fresh
+    assert flash_stub.call_count == (1 if banned else 0)
+
+
+def test_looking_up_a_blocked_instance_says_so(app, db_session):
+    """:705-707, lookup's copy of feed_add_remote's except arm -- and R4's
+    silent half lives here too: a message without 'is blocked.' is dropped."""
+    instance, owner = _seed()
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', return_value='rendered'), \
+                patch('app.feed.routes.search_for_feed',
+                      side_effect=Exception('remote.example is blocked.')), \
+                patch('app.feed.routes.flash') as flash_stub:
+            response = client.get('/feed/lookup/unknown/remote.example')
+
+    assert response.status_code == 200
+    assert flash_stub.call_count == 2
