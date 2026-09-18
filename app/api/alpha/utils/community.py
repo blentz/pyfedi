@@ -162,6 +162,11 @@ def post_community_leave_all(auth):
     if not user:
         raise Exception('incorrect login')
 
+    # Bound before the loops below, which are the only other places it is
+    # assigned: an account that has joined no community and no feed used to
+    # reach the return at the end of this function with the name never bound.
+    user_id = user.id
+
     all_communities = Community.query.filter_by(banned=False)
     user_joined_communities = joined_communities(user_id=user.id)
 

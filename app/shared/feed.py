@@ -162,6 +162,12 @@ def leave_feed(feed: int | Feed, src, auth=None, bulk_leave=False):
             flash(_('You cannot leave your own feed'), 'warning')
             return
 
+    # Match leave_community's contract (app/shared/community.py:78-80): the API
+    # callers assign both to the same local, so returning nothing here silently
+    # overwrote a real id with None -- app/api/alpha/utils/community.py:189.
+    if src == SRC_API:
+        return user_id
+
 
 def make_feed(input, src, auth=None, uploaded_icon_file=None, uploaded_banner_file=None):
     if src == SRC_API:
