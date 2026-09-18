@@ -405,3 +405,122 @@ def test_leave_feed_still_returns_nothing_on_the_web_path(app, db_session):
     with web_ctx(app, s.member):
         with patch('app.shared.feed.task_selector'):
             assert leave_feed(s.feed, SRC_WEB) is None
+
+
+# --------------------------------------------------------------------------
+# Task 4: delete_feed.
+# --------------------------------------------------------------------------
+
+
+def test_delete_feed_aborts_404_for_a_user_who_does_not_own_the_feed(app, db_session):
+    """delete_feed's only authorization is `feed.user_id != user_id` -> abort(404).
+
+    The surviving row is asserted as well as the abort: a check that fired
+    AFTER the deletes would still raise NotFound and still have destroyed the
+    feed. The factory does not set user_id (tests/factories.py:156), so _seed
+    assigns it explicitly -- without that the comparison is None != id, which
+    is true for everyone and makes the test pass for the wrong reason.
+    """
+    from werkzeug.exceptions import NotFound
+    s = _seed()
+    assert s.feed.user_id == s.owner.id != s.member.id
+
+    with web_ctx(app, s.member):
+        with pytest.raises(NotFound):
+            delete_feed(s.feed.id, SRC_WEB)
+
+    assert Feed.query.get(s.feed.id) is not None
+
+
+def test_delete_feed_resolves_the_api_caller_through_authorise_api_user(app, db_session):
+    """The SRC_API arm reads its user id from authorise_api_user rather than
+    current_user, and that id is what the ownership check uses.
+
+    Two assertions, because one of them alone is satisfiable by accident: the
+    owner's id gets the feed deleted, and a different id gets a 404 out of the
+    same call with no request user logged in at all.
+    """
+    from werkzeug.exceptions import NotFound
+    s = _seed()
+
+    with app.test_request_context('/'):
+        with patch('app.shared.feed.authorise_api_user', return_value=s.member.id):
+            with pytest.raises(NotFound):
+                delete_feed(s.feed.id, SRC_API, auth='Bearer x')
+    assert Feed.query.get(s.feed.id) is not None
+
+    with app.test_request_context('/'):
+        with patch('app.shared.feed.authorise_api_user', return_value=s.owner.id):
+            delete_feed(s.feed.id, SRC_API, auth='Bearer x')
+    assert Feed.query.get(s.feed.id) is None
+
+
+@pytest.mark.parametrize('public, debug, expect_inline, expect_delayed', [
+    (True, True, 1, 0),
+    (True, False, 0, 1),
+    (False, True, 0, 0),
+    (False, False, 0, 0),
+])
+def test_delete_feed_announces_only_for_a_public_feed(app, db_session, public, debug,
+                                                      expect_inline, expect_delayed):
+    """The announce fork at app/shared/feed.py:401-405: `if feed.public:` then
+    `if current_app.debug:` inline else `.delay`.
+
+    Four rows rather than two: the public guard and the debug guard are
+    separate branches, and a parametrisation over debug alone would leave
+    `feed.public` never observed False. The .delay arm is asserted as
+    DISPATCHED, not executed -- a test that let it run would be testing the
+    broker.
+
+    The announce is dispatched with (user_id, feed.id), and owner.id != feed.id
+    is asserted in _seed, so an implementation that passed the feed id twice
+    would be caught.
+    """
+    s = _seed()
+    s.feed.public = public
+    db.session.commit()
+
+    announce = MagicMock()
+    with web_ctx(app, s.owner):
+        with patch('app.shared.feed.announce_feed_delete_to_subscribers', announce), \
+                patch('app.shared.feed.current_app') as current_app_stub:
+            current_app_stub.debug = debug
+            delete_feed(s.feed.id, SRC_WEB)
+
+    assert announce.call_count == expect_inline
+    assert announce.delay.call_count == expect_delayed
+    if expect_inline:
+        assert announce.call_args.args == (s.owner.id, s.feed.id)
+    if expect_delayed:
+        assert announce.delay.call_args.args == (s.owner.id, s.feed.id)
+
+
+@pytest.mark.parametrize('num_communities', [1, 0])
+def test_delete_feed_removes_the_feed_and_its_items(app, db_session, num_communities):
+    """The `if feed.num_communities > 0:` guard at :409 decides whether the
+    FeedItem rows are deleted EXPLICITLY -- it does not decide whether they
+    survive.
+
+    Both rows assert zero surviving FeedItem rows, because the ORM removes them
+    with the feed either way: a scoping probe with num_communities forced to 0
+    and a real FeedItem present reported `orphan FeedItem rows: 0`. The guard
+    is therefore covered here for its arcs, and this docstring says plainly
+    that it is not load-bearing for the outcome, rather than implying a
+    stale counter leaks rows.
+
+    The FeedMember row is asserted gone as well: :407 deletes it before the
+    feed, and it is the row the announce task reads, which is why the ordering
+    comment at :399-400 exists.
+    """
+    s = _seed()
+    make_feed_item(s.feed, s.community)
+    make_feed_member(s.member, s.feed)
+    s.feed.num_communities = num_communities
+    db.session.commit()
+
+    with web_ctx(app, s.owner):
+        delete_feed(s.feed.id, SRC_WEB)
+
+    assert Feed.query.get(s.feed.id) is None
+    assert FeedItem.query.filter_by(feed_id=s.feed.id).count() == 0
+    assert FeedMember.query.filter_by(feed_id=s.feed.id).count() == 0
