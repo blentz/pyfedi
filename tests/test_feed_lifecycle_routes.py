@@ -240,7 +240,7 @@ def test_creating_a_feed_from_a_missing_topic_is_a_404(app, db_session):
 
 
 def _subscribed_feed_with_community(owner, member, joined_via_feed=True,
-                                    subscriptions_count=5):
+                                    subscriptions_count=5, bystanders=True):
     """A feed the member subscribes to, carrying one REMOTE community the
     member joined through it.
 
@@ -249,6 +249,12 @@ def _subscribed_feed_with_community(owner, member, joined_via_feed=True,
     point of P4 is that this route never does.
     """
     feed = _feed(owner, name='subscribedfeed')
+    # Decoys first: Feed and Community have separate sequences, so without them
+    # the feed and the community under test both land on id 1 -- which is
+    # exactly why a mutant handing leave_community the FEED id survived this
+    # file's first mutation pass (D653, fact 272).
+    make_community(name='iddecoy1', host='remote.example')
+    make_community(name='iddecoy2', host='remote.example')
     remote_instance = make_instance('remote.example', software='lemmy')
     community = Community(name='inthefeed', title='In the feed',
                           instance_id=remote_instance.id,
@@ -263,9 +269,20 @@ def _subscribed_feed_with_community(owner, member, joined_via_feed=True,
     db.session.add(FeedMember(feed_id=feed.id, user_id=member.id))
     db.session.add(CommunityMember(user_id=member.id, community_id=community.id,
                                    joined_via_feed=joined_via_feed))
+    if bystanders:
+        # A SECOND feed this member also subscribes to, and a community in the
+        # feed the member never joined. The first keeps :647's feed_id filter
+        # load-bearing; the second keeps :657's `membership and ...` operand
+        # load-bearing, since without it the mutant that drops the operand finds
+        # a row every time and never dereferences None.
+        other = _feed(owner, name='anotherfeed')
+        db.session.add(FeedMember(feed_id=other.id, user_id=member.id))
+        never_joined = make_community(name='neverjoined', host='remote.example')
+        db.session.add(FeedItem(feed_id=feed.id, community_id=never_joined.id))
     feed.subscriptions_count = 2
     member.feed_auto_leave = True
     db.session.commit()
+    assert community.id != feed.id       # D653: these two travel together below
     return feed, community
 
 
@@ -291,8 +308,12 @@ def test_unsubscribing_leaves_each_community_through_the_shared_function(app, db
 
     assert response.status_code == 302
     assert leave.call_count == 1
-    assert leave.call_args.kwargs['community_id'] == community.id
+    assert leave.call_args.kwargs['community_id'] == community.id != feed.id
     assert FeedMember.query.filter_by(user_id=member.id, feed_id=feed.id).count() == 0
+    # The member's OTHER subscription survives -- :647's delete names this feed.
+    assert FeedMember.query.filter_by(user_id=member.id).count() == 1
+    # And the feed's own counter goes DOWN, from the 2 the fixture seeded.
+    assert Feed.query.get(feed.id).subscriptions_count == 1
 
 
 def test_unsubscribing_leaves_alone_a_community_the_user_joined_themselves(app, db_session):
@@ -315,6 +336,47 @@ def test_unsubscribing_leaves_alone_a_community_the_user_joined_themselves(app, 
     assert leave.call_count == 0
     assert CommunityMember.query.filter_by(user_id=member.id,
                                            community_id=community.id).count() == 1
+
+
+def test_unsubscribing_with_auto_leave_off_keeps_every_community(app, db_session):
+    """:653's False arm. The member IS in a community they joined through the
+    feed, so the only thing keeping it is the preference -- without a real
+    via-feed membership here, a mutant that ignored the preference would behave
+    identically."""
+    instance, owner, member = _seed()
+    feed, community = _subscribed_feed_with_community(owner, member)
+    member.feed_auto_leave = False
+    db.session.commit()
+
+    with app.test_client() as client:
+        login(client, member)
+        with patch('app.feed.routes.leave_community') as leave:
+            client.get(f'/feed/{feed.name}/unsubscribe')
+
+    assert leave.call_count == 0
+    assert CommunityMember.query.filter_by(user_id=member.id,
+                                           community_id=community.id).count() == 1
+
+
+def test_unsubscribing_busts_the_three_memoized_entries(app, db_session):
+    """:674-676. CACHE_TYPE is NullCache in tests (D602, D589), so the effect is
+    unobservable by construction and the CALLS are what is asserted -- by their
+    first argument, since the route busts Feed.header_image elsewhere on other
+    paths."""
+    from app.utils import feed_membership, joined_communities, menu_subscribed_feeds
+    instance, owner, member = _seed()
+    feed, community = _subscribed_feed_with_community(owner, member)
+
+    with app.test_client() as client:
+        login(client, member)
+        with patch('app.feed.routes.leave_community'), \
+                patch('app.feed.routes.cache.delete_memoized') as bust:
+            client.get(f'/feed/{feed.name}/unsubscribe')
+
+    busted = [call.args[0] for call in bust.call_args_list]
+    assert feed_membership in busted
+    assert menu_subscribed_feeds in busted
+    assert joined_communities in busted
 
 
 # --------------------------------------------------------------------------
@@ -586,17 +648,22 @@ def _edit_payload(app, client, **overrides):
      'https://test.piefed.local/elsewhere'),
     ('lifecyclefeed', 'https://test.piefed.local/elsewhere',
      'https://test.piefed.local/elsewhere'),
+    ('lifecyclefeed', 'https://test.piefed.local/f/lifecyclefeed',
+     'https://test.piefed.local/f/lifecyclefeed'),
 ])
 def test_saving_an_edit_redirects_by_whether_the_url_changed(app, db_session, new_url,
                                                              referer, expected_location):
     """:161-180. The POST arm: the slug rewrite, the url_changed/old_url
     bookkeeping, and the three redirect arms.
 
-    The rows are the three outcomes: a rename whose referrer names the OLD url
-    (the only case that cannot simply go back, because that page is gone), a
-    rename from somewhere else, and an edit that changed no url at all. The
-    first row is the one that distinguishes :175's `referrer().endswith(old_url)`
-    from the plain `back()` the other two take.
+    Four rows, and the fourth exists because of the mutation pass: a rename
+    whose referrer names the OLD url (the only case that cannot simply go back,
+    because that page is gone), a rename from somewhere else, an edit that
+    changed no url at all, and -- the one the first three missed -- an edit that
+    changed no url whose referrer DOES name the feed. Without that row,
+    hardcoding `url_changed = True` changes nothing observable, because the
+    referrer test then fails anyway and both paths redirect to the referrer.
+    The fourth row separates `/f/<name>` from the absolute referrer url.
     """
     instance, owner, stranger = _seed()
     feed = _feed(owner)
@@ -771,6 +838,14 @@ def test_unsubscribing_from_a_remote_feed_sends_a_signed_undo(app, db_session):
     """
     instance, owner, member = _seed()
     feed, remote_instance = _remote_feed_membership(member)
+    # A stored join request on an instance that is NOT ovo.st. Its uuid must be
+    # ignored: only ovo.st reuses it (:623-627), and without this row a mutant
+    # that ran the ovo.st branch for everyone behaves identically, because
+    # there is no row for it to find.
+    stored = FeedJoinRequest(user_id=member.id, feed_id=feed.id)
+    db.session.add(stored)
+    db.session.commit()
+    stored_uuid = stored.uuid
 
     with app.test_client() as client:
         login(client, member)
@@ -779,6 +854,7 @@ def test_unsubscribing_from_a_remote_feed_sends_a_signed_undo(app, db_session):
 
     assert response.status_code == 302
     assert send.call_count == 1
+    assert str(stored_uuid) not in send.call_args.args[1]['object']['id']
     url, activity, private_key, key_id = send.call_args.args
     assert url == 'https://remote.example/f/remotefeed/inbox'
     assert private_key == 'the-members-private-key'
