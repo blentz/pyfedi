@@ -37,7 +37,14 @@ def feeds_for_form_children(feeds, current_feed: int, depth: int) -> List[Tuple[
 
 def search_for_feed(address: str, allow_fetch: bool = True):
     if address.startswith('~'):
-        name, server = address[1:].split('@')
+        # Exactly two parts, or the address is not one: '~a@b@c' used to raise
+        # ValueError out of this unpacking, and feed_add_remote's first arm
+        # accepts any '~...@...' string, so that was a 500 from the add-remote
+        # box. The callers already have a not-found path for None.
+        parts = address[1:].split('@')
+        if len(parts) != 2:
+            return None
+        name, server = parts
 
         banned = BannedInstances.query.filter_by(domain=server).first()
         if banned:
