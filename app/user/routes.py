@@ -2025,7 +2025,7 @@ def user_preview(user_id):
 
 
 def return_to_or_401(actor: str) -> str:
-    """`?return_to=` for the follow / unfollow / bot-challenge routes.
+    r"""`?return_to=` for the follow / unfollow / bot-challenge routes.
 
     Two rules, in THIS ORDER, and the order is the whole point.
 
