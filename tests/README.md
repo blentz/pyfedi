@@ -8470,6 +8470,60 @@ that makes your assertion pass.** Reach for a list comparison, or assert
 the length first. See D659, and fact 281 for the neighbouring case where
 the count is present but names no party.
 
+**284. A TEST FILE NAMED AFTER A MODULE IS NOT EVIDENCE IT COVERS IT, AND
+PARTIAL COVERAGE IS A BETTER DISGUISE THAN NONE -- MEASURE THE ORACLE WITH
+PER-TEST CONTEXTS.** Before sub-project 50, `join_feed` showed 23 executed
+lines and `delete_feed` 9, which reads as "partly tested". Every one of those
+lines was executed by `tests/test_redirect_back.py`, whose subject is `back()`'s
+referrer policy; not one of its eleven tests asserts anything about feeds.
+`leave_feed` and `make_feed` had never been executed at all. Ten test files
+carry "feed" in the name and none of them touched the module. **The recipe,
+since `.coveragerc` is tracked and must not gain `dynamic_context`:** write an
+untracked `.coveragerc.ctx` with `dynamic_context = test_function` under
+`[run]` and `show_contexts = True` under `[json]`, give its `[json] output` a
+path that is **not** `coverage.json` (or it overwrites the report the floors
+check reads), run `./run_tests.sh tests/ -q --cov=app.shared.<module>
+--cov-context=test --cov-config=.coveragerc.ctx --cov-report=json`, and read
+`files[<path>]["contexts"]` per line. Delete the config afterwards. The tests
+that turn up incidentally are also the round's regression tripwire: run that
+file on its own at the end rather than trusting the full suite to surface it.
+See D677.
+
+**285. A MUTANT THAT WIDENS A QUERY IS OFTEN INVISIBLE IN THE ROWS AND VISIBLE
+ONLY IN A COUNTER.** Dropping the `community_id` filter from
+`_feed_remove_community`'s member sweep makes it iterate every
+`CommunityMember` row in the database -- and changes nothing about which rows
+are deleted, because the delete inside the loop names the community explicitly.
+The closing test D661 prescribed asserted memberships and survived. What the
+wider sweep actually changes is `community.subscriptions_count`, decremented
+once per qualifying member, so the counter is the assertion that kills it.
+**The general form: when a filter drop looks equivalent, look for the
+per-iteration SIDE EFFECTS -- counters, cache busts, dispatched tasks -- rather
+than only the rows the statement names.** See D680.
+
+**286. A CLOSING TEST CARRIED FORWARD FROM ANOTHER ROUND IS A HYPOTHESIS UNTIL
+IT HAS BEEN RUN.** Sub-project 49 registered twenty surviving mutants with a
+closing test written out for each, derived from the mutant rather than guessed.
+Seven of the eight were never executed, and when sub-project 50 ran them,
+**three were wrong**: one (item K) failed against the unmutated tree, three
+needed a `local=True` user because `make_user` leaves `ap_id` set and the guard
+under test opens with `user.is_local()`, and one survived its own mutant (fact
+285). The author of a recipe is exactly the person who cannot see what it
+assumes. **Run every inherited recipe against the unmutated tree first, then
+against its mutant, before recording it as closed.** See D680.
+
+**287. A FUNCTION THAT ENDS IN `finally: db.session.remove()` DETACHES
+EVERYTHING ITS CALLER HOLDS -- RE-QUERY, AND EXPECT THE ROLLBACK ABOVE IT TO BE
+UNTESTABLE.** `app/shared/feed.py`'s `join_feed` does this. A test that reads a
+factory row after calling it gets `DetachedInstanceError`, so every assertion
+has to go through a fresh query and any value needed afterwards (an id, a
+`public_url()`) must be captured before the call, inside the request context
+that `current_app.config` lookups need. The same `finally` also makes the
+`db.session.rollback()` in the `except` arm unobservable from outside: the
+session is discarded on every path, so pending state is gone whether or not the
+rollback ran, and its mutant is unkillable rather than merely unkilled. See
+D679.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
