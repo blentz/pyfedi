@@ -440,7 +440,7 @@ def signing_peer(db_session):
 
 @pytest.fixture
 def redis_double(monkeypatch):
-    """Patch get_redis_connection so app code reaches a fakeredis instance.
+    r"""Patch get_redis_connection so app code reaches a fakeredis instance.
 
     What matters is WHERE THE NAME IS BOUND, not when it is called. `from
     app.utils import get_redis_connection` creates a NEW name in the importing
