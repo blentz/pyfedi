@@ -310,34 +310,64 @@ def test_make_feed_web_arm_still_honours_is_instance_feed_for_an_admin(app, db_s
 # --------------------------------------------------------------------------
 
 
-def test_leave_all_raises_unbound_local_error_for_an_account_that_joined_nothing(app, db_session):
-    """PIN (P4, the caller): app/api/alpha/utils/community.py:159-191 binds
-    user_id ONLY inside its two loops, then reads it at :191. An account that
-    has joined no community and no feed reaches the return with the name never
-    bound.
+def test_leave_all_completes_for_an_account_that_joined_nothing(app, db_session):
+    """Was a PIN; INVERTED once user_id was bound before the loops.
 
-    This is pinned in this file rather than an API one because leave_feed is
-    half of the fix: it is the only one of the two loop bodies that returns
-    nothing, so even an account that DOES have feeds comes out with user_id
-    None (see the companion pin below).
+    ORIGINAL PINNED CLAIM, now false: "app/api/alpha/utils/community.py binds
+    user_id ONLY inside its two loops, then reads it, so an account that has
+    joined no community and no feed raises UnboundLocalError."
+
+    user_view is patched and its user_id argument asserted, rather than the
+    returned document inspected: the defect was always about WHICH id reaches
+    the view, and a test that only checked "no exception" would pass against a
+    fix that bound user_id to None.
     """
-    from app.api.alpha.utils.community import post_community_leave_all
+    from app.api.alpha.utils import community as community_api
     s = _seed()
 
     with app.test_request_context('/'):
-        with patch('app.api.alpha.utils.community.authorise_api_user', return_value=s.member):
-            with pytest.raises(UnboundLocalError):
-                post_community_leave_all('Bearer x')
+        with patch.object(community_api, 'authorise_api_user', return_value=s.member), \
+                patch.object(community_api, 'user_view') as view:
+            community_api.post_community_leave_all('Bearer x')
+
+    assert view.call_args.kwargs['user_id'] == s.member.id
 
 
-def test_leave_feed_returns_nothing_where_leave_community_returns_the_user_id(app, db_session):
-    """PIN (P4, the asymmetry): leave_community returns user_id on the API path
-    (app/shared/community.py:78-80) and leave_feed returns None on every path.
+def test_leave_all_keeps_the_real_user_id_for_an_account_that_has_a_feed(app, db_session):
+    """The silent half of P4, which no exception ever marked.
 
-    Both halves are asserted in one test so the asymmetry itself is the claim.
-    The callers treat the two as interchangeable -- app/api/alpha/utils/
-    community.py:179 and :189 assign both to the same local -- so the feed loop
-    silently overwrites a real id with None.
+    Before the repair the feed loop overwrote user_id with leave_feed's None,
+    so any account subscribed to a feed reached user_view with user_id None
+    while an account with only communities reached it with a real id. This test
+    is the one that fails against a fix that only bound the variable up front
+    and left leave_feed returning None -- the loop would overwrite it again.
+    """
+    from app.api.alpha.utils import community as community_api
+    s = _seed()
+    make_feed_member(s.member, s.feed)
+    s.member.feed_auto_leave = False
+    db.session.commit()
+
+    with app.test_request_context('/'):
+        with patch.object(community_api, 'authorise_api_user', return_value=s.member), \
+                patch.object(community_api, 'user_view') as view, \
+                patch('app.shared.feed.authorise_api_user', return_value=s.member.id), \
+                patch('app.shared.feed.task_selector'):
+            community_api.post_community_leave_all('Bearer x')
+
+    assert view.call_args.kwargs['user_id'] == s.member.id
+    assert FeedMember.query.filter_by(user_id=s.member.id, feed_id=s.feed.id).count() == 0
+
+
+def test_leave_feed_returns_the_user_id_on_the_api_path_like_leave_community(app, db_session):
+    """Was a PIN; INVERTED once leave_feed gained its SRC_API return.
+
+    ORIGINAL PINNED CLAIM, now false: "leave_community returns user_id on the
+    API path and leave_feed returns None on every path."
+
+    Both halves stay in one test so the contract, not one function, is what is
+    asserted: the callers assign both to the same local
+    (app/api/alpha/utils/community.py:179 and :189).
     """
     s = _seed()
     make_feed_member(s.member, s.feed)
@@ -358,5 +388,20 @@ def test_leave_feed_returns_nothing_where_leave_community_returns_the_user_id(ap
             community_return = production_leave_community(community_member_of.id, SRC_API,
                                                           auth='Bearer x')
 
-    assert feed_return is None
+    assert feed_return == s.member.id
     assert community_return == s.member.id
+
+
+def test_leave_feed_still_returns_nothing_on_the_web_path(app, db_session):
+    """The SRC_WEB half of the same return, which must NOT change: the web
+    callers (app/community/routes.py:2578, app/feed/routes.py) ignore the
+    return and leave_community's own web arm returns None. Without this row the
+    new `if src == SRC_API` is satisfied by an unconditional return."""
+    s = _seed()
+    make_feed_member(s.member, s.feed)
+    s.member.feed_auto_leave = False
+    db.session.commit()
+
+    with web_ctx(app, s.member):
+        with patch('app.shared.feed.task_selector'):
+            assert leave_feed(s.feed, SRC_WEB) is None
