@@ -242,6 +242,18 @@ def feed_copy(feed_id: int):
         else:
             copy_feed_form.url.data = slugify(copy_feed_form.url.data.strip(),
                                               separator='_').lower() + '/' + current_user.user_name.lower()
+        # feed_copy builds its Feed inline, so it reaches neither make_feed's
+        # admin check (D675) nor feed_new's site-switch check (D702). Both are
+        # enforced here, on the same terms: only an admin may publish an
+        # instance feed, and the site's own NSFW/NSFL switches win over whatever
+        # the form carries, since the disabled widgets are a browser-side hint.
+        if not current_user.is_admin():
+            copy_feed_form.is_instance_feed.data = False
+        if g.site.enable_nsfw is False:
+            copy_feed_form.nsfw.data = False
+        if g.site.enable_nsfl is False:
+            copy_feed_form.nsfl.data = False
+
         private_key, public_key = RsaKeys.generate_keypair()
         feed = Feed(user_id=current_user.id, title=copy_feed_form.title.data, name=copy_feed_form.url.data,
                     machine_name=copy_feed_form.url.data,
@@ -259,6 +271,11 @@ def feed_copy(feed_id: int):
                         'SERVER_NAME'] + '/f/' + copy_feed_form.url.data + '/followers',
                     ap_following_url='https://' + current_app.config[
                         'SERVER_NAME'] + '/f/' + copy_feed_form.url.data + '/following',
+                    # As make_feed:226 builds it. Without this the feed's outbox
+                    # document is served with a null id
+                    # (app/activitypub/routes.py:2770).
+                    ap_outbox_url='https://' + current_app.config[
+                        'SERVER_NAME'] + '/f/' + copy_feed_form.url.data + '/outbox',
                     ap_domain=current_app.config['SERVER_NAME'],
                     subscriptions_count=1, instance_id=1)
         if copy_feed_form.parent_feed_id.data:
@@ -322,7 +339,9 @@ def feed_copy(feed_id: int):
     if g.site.enable_nsfl is False:
         copy_feed_form.nsfl.render_kw = {'disabled': True}
     else:
-        copy_feed_form.nsfw.data = feed_to_copy.nsfw
+        # nsfl, from the nsfl column -- D701's twin, which read the nsfw column
+        # into nsfw.data and left the NSFL box unchecked whatever the feed said.
+        copy_feed_form.nsfl.data = feed_to_copy.nsfl
     copy_feed_form.public.data = feed_to_copy.public
     copy_feed_form.is_instance_feed.data = feed_to_copy.is_instance_feed
 
