@@ -362,3 +362,145 @@ def test_an_anonymous_reader_is_sent_to_log_in_for_adult_feeds(app, db_session,
     else:
         assert flash_stub.call_count == 0
         assert result.status_code == 200
+
+
+def test_a_scaled_sort_collapses_to_the_default(app, db_session):
+    """:467-468. 'scaled' is a post sort the feed page does not implement, and
+    the route turns it into '' rather than passing it down -- asserted through
+    the sort the template is handed."""
+    instance, owner, snooper = _seed()
+    _feed(owner, 'publicfeed')
+
+    captured, fake_render = _capture_render()
+    with app.test_client() as client:
+        with patch('app.feed.routes.render_template', side_effect=fake_render):
+            response = client.get('/f/publicfeed?sort=scaled')
+
+    assert response.status_code == 200
+    assert captured['sort'] == ''
+
+
+@pytest.mark.parametrize('layout, user_page_length, expected', [
+    (None, None, 100),
+    (None, 5, 5),
+    ('masonry', None, 200),
+    ('masonry_wide', None, 300),
+])
+def test_the_page_length_ladder(app, db_session, layout, user_page_length, expected):
+    """:472-479. Four rows, one per rung: the site default, a user whose own
+    page_length is SMALLER (the guard is `<`, so an equal or larger one is
+    ignored), and the two masonry layouts.
+
+    The default row expects the site's PAGE_LENGTH (100), not the
+    low-bandwidth 20: :472's ternary picks 20 only when the low_bandwidth
+    cookie is set. The user's preference is 5 so it cannot be confused with
+    either, and the two masonry values differ from each other so a swapped pair
+    is visible.
+    """
+    instance, owner, snooper = _seed()
+    _feed(owner, 'publicfeed')
+    if user_page_length:
+        snooper.page_length = user_page_length
+        db.session.commit()
+
+    captured, fake_render = _capture_render()
+    with app.test_client() as client:
+        login(client, snooper)
+        with patch('app.feed.routes.render_template', side_effect=fake_render), \
+                patch('app.feed.routes.paginate_post_ids',
+                      side_effect=lambda ids, page, page_length: ids) as paginate:
+            url = '/f/publicfeed' + (f'?layout={layout}' if layout else '')
+            response = client.get(url)
+
+    assert response.status_code == 200
+    assert paginate.call_args.kwargs['page_length'] == expected
+
+
+def test_a_nested_feed_gets_a_breadcrumb_for_every_ancestor(app, db_session):
+    """:484-500. The trail is built by walking parent_feed_id UP and then
+    reversing, so a grandchild's breadcrumbs read grandparent, parent, self.
+
+    Three generations are the minimum that proves the reversal: with two, a
+    trail built in the wrong order still ends with the feed itself.
+    """
+    instance, owner, snooper = _seed()
+    grandparent = _feed(owner, 'grandparentfeed', title='Grandparent')
+    parent = _feed(owner, 'parentfeed', title='Parent', parent_feed_id=grandparent.id)
+    _feed(owner, 'childfeed', title='Child', parent_feed_id=parent.id)
+
+    captured, fake_render = _capture_render()
+    with app.test_client() as client:
+        with patch('app.feed.routes.render_template', side_effect=fake_render):
+            response = client.get('/f/childfeed')
+
+    assert response.status_code == 200
+    assert [crumb.text for crumb in captured['breadcrumbs']] == [
+        'Grandparent', 'Parent', 'Child']
+    assert captured['breadcrumbs'][-1].url == ''
+
+
+@pytest.mark.parametrize('show_posts_in_children', [True, False])
+def test_a_feed_includes_its_childrens_posts_only_when_asked(app, db_session,
+                                                             show_posts_in_children):
+    """:506-509, and with it get_all_child_feed_ids at :587-592.
+
+    The child feed carries a community of its own, and the assertion is the
+    community list the template is handed: with the flag off it holds only the
+    parent's, with it on both. That also covers the recursion -- the child has a
+    child of its own, so `extend` has to flatten more than one level.
+    """
+    instance, owner, snooper = _seed()
+    parent = _feed(owner, 'parentfeed', show_posts_in_children=show_posts_in_children)
+    child = _feed(owner, 'childfeed', parent_feed_id=parent.id)
+    grandchild = _feed(owner, 'grandchildfeed', parent_feed_id=child.id)
+    own = make_community(name='ownpostcommunity', host='remote.example')
+    childs = make_community(name='childcommunity', host='remote.example')
+    grandchilds = make_community(name='grandchildcommunity', host='remote.example')
+    # :527 filters on total_subscriptions_count > 0, so a community with none
+    # never reaches the template however its feed is wired -- the factory
+    # leaves it at 0 and the first version of this test asserted against an
+    # empty set for that reason alone.
+    for community in (own, childs, grandchilds):
+        community.total_subscriptions_count = 1
+    db.session.commit()
+    db.session.add_all([FeedItem(feed_id=parent.id, community_id=own.id),
+                        FeedItem(feed_id=child.id, community_id=childs.id),
+                        FeedItem(feed_id=grandchild.id, community_id=grandchilds.id)])
+    db.session.commit()
+
+    captured, fake_render = _capture_render()
+    with app.test_client() as client:
+        with patch('app.feed.routes.render_template', side_effect=fake_render):
+            response = client.get('/f/parentfeed')
+
+    assert response.status_code == 200
+    names = {community.name for community in captured['feed_communities']}
+    if show_posts_in_children:
+        assert names == {'ownpostcommunity', 'childcommunity', 'grandchildcommunity'}
+    else:
+        assert names == {'ownpostcommunity'}
+
+
+def test_show_feeds_final_abort_is_unreachable(app, db_session):
+    """THE ROUND'S RESIDUAL IN show_feed: `:583-584`'s `else: abort(404)` can
+    never run, and this test is the proof rather than an assertion about the
+    route.
+
+    `current_feed` is assigned `feed` at `:502` and never reassigned, so the
+    `if current_feed:` at `:504` is false only when `feed` is falsy -- and a
+    falsy `feed` has already raised at `:438`, `if not feed.public`, a hundred
+    and fifty lines earlier. Demonstrated here by calling the function with
+    None and watching it raise AttributeError at the FIRST access, not the
+    last.
+
+    Fact 75 CAUSE 9's shape -- a guard that cannot discriminate -- with the
+    discrimination removed by an earlier statement rather than by a constant.
+    """
+    from app.feed.routes import show_feed
+    instance, owner, snooper = _seed()
+
+    with app.test_request_context('/f/nothing'):
+        from flask import g
+        g.site = Site.query.get(1)
+        with pytest.raises(AttributeError, match='public'):
+            show_feed(None)
