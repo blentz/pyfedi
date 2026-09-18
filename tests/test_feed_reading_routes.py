@@ -139,3 +139,60 @@ def test_the_feed_dropdown_escapes_the_title(app, db_session):
     assert '<img src=x onerror=alert(1)>' not in body
     assert '&lt;img src=x onerror=alert(1)&gt;' in body
     assert body.startswith('<li><a class="dropdown-item"')
+
+
+def test_the_feed_dropdown_offers_a_none_entry_when_the_community_is_in_a_feed(app, db_session):
+    """:419-420's guard, and the loop's skip at :425-426, in one test because
+    the skip's precondition is the guard's.
+
+    Three feeds: the one the community is currently in (skipped), and two
+    others (listed). The href is asserted as a WHOLE STRING rather than by
+    fragment -- it carries four ids, and this campaign has watched adjacent ids
+    swap without a test noticing (D653).
+    """
+    instance, owner, snooper = _seed()
+    # Decoys first: Feed and Community have separate sequences, so without them
+    # the feed ids, the community id and the user ids collide and an assertion
+    # on a four-id href proves nothing (D653, fact 272).
+    for n in range(3):
+        _feed(owner, f'feediddecoy{n}')
+    current = _feed(owner, 'currentfeed', title='Current feed')
+    other = _feed(owner, 'otherfeed', title='Other feed')
+    third = _feed(owner, 'thirdfeed', title='Third feed')
+    # Community decoys AFTER the feeds, and counted: the three users take 1-3
+    # and the six feeds take 1-6, so the community under test has to land above
+    # 6 for the four-id href assertion to mean anything (D653, fact 272).
+    for n in range(6):
+        make_community(name=f'iddecoy{n}', host='remote.example')
+    community = make_community(name='somecommunity', host='remote.example')
+    assert len({current.id, other.id, third.id, community.id, owner.id}) == 5
+
+    with app.test_client() as client:
+        login(client, owner)
+        response = client.get(f'/feed/list?user_id={owner.id}'
+                              f'&community_id={community.id}&current_feed_id={current.id}')
+
+    body = response.get_data(as_text=True)
+    assert (f'<li><a class="dropdown-item" href="/feed/remove_community?user_id={owner.id}'
+            f'&new_feed_id=0&current_feed_id={current.id}'
+            f'&community_id={community.id}">None</li>') in body
+    assert (f'<li><a class="dropdown-item" href="/feed/add_community?user_id={owner.id}'
+            f'&new_feed_id={other.id}&current_feed_id={current.id}'
+            f'&community_id={community.id}">Other feed</li>') in body
+    assert 'Third feed' in body
+    assert 'Current feed' not in body
+
+
+def test_the_feed_dropdown_omits_the_none_entry_when_the_community_has_no_feed(app, db_session):
+    """:419's False arm -- current_feed_id 0, which is what the caller passes
+    for a community that is in no feed of theirs."""
+    instance, owner, snooper = _seed()
+    _feed(owner, 'otherfeed', title='Other feed')
+
+    with app.test_client() as client:
+        login(client, owner)
+        response = client.get(f'/feed/list?user_id={owner.id}&community_id=7&current_feed_id=0')
+
+    body = response.get_data(as_text=True)
+    assert 'None</li>' not in body
+    assert 'Other feed' in body
