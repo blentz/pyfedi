@@ -222,9 +222,15 @@ class RsaKeys:
 
 # Get a piece of the signature string. Similar to parse_signature except unencumbered by needing to return a HttpSignatureDetails
 def signature_part(signature, key):
+    if not signature:
+        return ''
     parts = signature.split(',')
     for part in parts:
-        part_parts = part.split('=')
+        # maxsplit=1, or a base64 value loses its padding and a keyId loses its
+        # query string
+        part_parts = part.split('=', 1)
+        if len(part_parts) < 2:
+            continue
         part_parts[0] = part_parts[0].strip()
         if part_parts[0] == key:
             return part_parts[1].strip().replace('"', '')
@@ -390,7 +396,14 @@ class HttpSignature:
 
         if "date" not in request.headers:
             raise VerificationFormatError("No date header present")
-        header_date = parse_http_date(request.headers["date"])
+        try:
+            header_date = parse_http_date(request.headers["date"])
+        except (TypeError, ValueError):
+            # a peer's malformed date is the caller's 400, not a traceback
+            raise VerificationFormatError("Date is not a valid HTTP date")
+        if header_date.tzinfo is None:
+            # RFC 7231 requires the timezone; a peer that omits it means UTC
+            header_date = header_date.replace(tzinfo=timezone.utc)
         if abs((datetime.now(timezone.utc) - header_date).total_seconds()) > 3600:
             raise VerificationFormatError("Date is too far away")
 
