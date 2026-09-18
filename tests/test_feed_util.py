@@ -232,3 +232,183 @@ def test_a_feed_the_actor_model_refuses_is_not_returned(app, db_session):
             assert search_for_feed('~remotefeed@remote.example') is None
 
     assert initialise.call_count == 0
+
+
+def test_the_form_choices_list_every_feed_but_the_current_one(app, db_session):
+    """feeds_for_form and feeds_for_form_children, over a three-level tree.
+
+    Three levels are the minimum that shows the depth prefix growing: the
+    children carry '--' and the grandchildren '----', and a recursion that
+    passed the same depth down would give both the same.
+
+    The current feed is excluded at the CHILD level here, not the top, because
+    that exclusion is a separate statement in the recursive function and the
+    top-level one cannot reach it.
+    """
+    instance, owner = _seed()
+    top = _feed(owner, 'topfeed', title='Top')
+    child = _feed(owner, 'childfeed', title='Child', parent_feed_id=top.id)
+    _feed(owner, 'grandchildfeed', title='Grandchild', parent_feed_id=child.id)
+
+    with app.test_request_context('/'):
+        choices = feeds_for_form(child.id, owner.id)
+
+    labels = [label for _, label in choices]
+    assert labels[0] == 'None'
+    assert 'Top' in labels
+    assert '---- Grandchild' in labels
+    assert not any(label.endswith('Child') and 'Grand' not in label
+                   for label in labels[1:])
+
+
+def test_the_form_choices_skip_the_current_feed_at_the_top_level(app, db_session):
+    """The same exclusion in the non-recursive half, which is a different
+    statement."""
+    instance, owner = _seed()
+    top = _feed(owner, 'topfeed', title='Top')
+    _feed(owner, 'otherfeed', title='Other')
+
+    with app.test_request_context('/'):
+        labels = [label for _, label in feeds_for_form(top.id, owner.id)]
+
+    assert 'Top' not in labels
+    assert 'Other' in labels
+
+
+@pytest.mark.parametrize('actor, expected', [
+    ('remotefeed@remote.example', 'remote'),
+    ('localfeed', 'local'),
+    ('LocalFeed', 'local'),
+    ('  localfeed  ', 'local'),
+])
+def test_actor_to_feed_resolves_both_address_shapes(app, db_session, actor, expected):
+    """Both arms, plus the case-insensitive comparison and the strip.
+
+    The mixed-case row is what makes func.lower() on both sides load-bearing,
+    and a REMOTE feed named 'localfeed' exists in the fixture so the bare-name
+    arm's `ap_id=None` filter is load-bearing too: without it the remote row
+    could answer a local lookup.
+    """
+    instance, owner = _seed()
+    make_instance('remote.example', software='piefed')
+    local = _feed(owner, 'localfeed')
+    remote = _feed(owner, 'remotefeed', ap_id='remotefeed@remote.example')
+    decoy = _feed(owner, 'localfeed-remote', ap_id='localfeed@elsewhere.example')
+
+    with app.test_request_context('/'):
+        found = actor_to_feed(actor)
+
+    assert found.id == (remote.id if expected == 'remote' else local.id)
+
+
+def test_actor_to_feed_returns_nothing_for_an_unknown_name(app, db_session):
+    """The None path, which the routes turn into a 404."""
+    _seed()
+    with app.test_request_context('/'):
+        assert actor_to_feed('nosuchfeed') is None
+
+
+def test_the_edit_form_lists_a_feeds_communities_sorted_and_qualified(app, db_session):
+    """feed_communities_for_edit: local communities get '@SERVER_NAME'
+    appended, remote ones already carry a host, banned ones are excluded, and
+    the result is sorted.
+
+    The fixture adds them in reverse alphabetical order precisely so the sort
+    is observable, and the banned one shares a feed with the others so its
+    exclusion is the only thing keeping it out.
+    """
+    instance, owner = _seed()
+    feed = _feed(owner, 'listfeed')
+    server = app.config['SERVER_NAME']
+    remote = make_community(name='zulu', host='remote.example')
+    remote.ap_id = 'zulu@remote.example'
+    local = make_community(name='alpha', host=server)
+    banned = make_community(name='mike', host=server)
+    banned.banned = True
+    db.session.add_all([FeedItem(feed_id=feed.id, community_id=remote.id),
+                        FeedItem(feed_id=feed.id, community_id=local.id),
+                        FeedItem(feed_id=feed.id, community_id=banned.id)])
+    db.session.commit()
+
+    with app.test_request_context('/'):
+        result = feed_communities_for_edit(feed.id)
+
+    lines = result.split('\n')
+    assert lines == sorted(lines)
+    # Community.link() returns the bare 'name@host' for a local community --
+    # no '!' prefix -- and the function appends the server only when the link
+    # carries no host at all. Asserted as measured rather than as assumed.
+    assert f'alpha@{server}' in lines
+    assert any(line.endswith('@remote.example') for line in lines)
+    assert not any('mike' in line for line in lines)
+
+
+def test_a_feed_with_no_communities_initialises_nothing(app, db_session):
+    """initialise_new_communities' early return at :109-110."""
+    instance, owner = _seed()
+    feed = _feed(owner, 'emptyfeed')
+    feed.num_communities = 0
+    db.session.commit()
+
+    with patch('app.feed.util.retrieve_mods_and_backfill') as backfill:
+        initialise_new_communities(feed)
+
+    assert backfill.call_count == 0
+
+
+@pytest.mark.parametrize('debug, expected_inline, expected_delayed', [
+    (True, 1, 0),
+    (False, 0, 2),
+])
+def test_new_communities_are_backfilled_once_in_debug_and_all_of_them_otherwise(
+        app, db_session, debug, expected_inline, expected_delayed):
+    """:112-118. The debug arm BREAKS after the first community -- deliberately,
+    per its comment -- and the other dispatches for every one.
+
+    Two empty communities are what make that visible, and a THIRD with posts is
+    the control for `community.post_count == 0`: it must be skipped in both
+    states.
+    """
+    instance, owner = _seed()
+    feed = _feed(owner, 'newfeed')
+    first = make_community(name='alpha', host='remote.example')
+    second = make_community(name='bravo', host='remote.example')
+    already_full = make_community(name='charlie', host='remote.example')
+    already_full.post_count = 5
+    db.session.add_all([FeedItem(feed_id=feed.id, community_id=first.id),
+                        FeedItem(feed_id=feed.id, community_id=second.id),
+                        FeedItem(feed_id=feed.id, community_id=already_full.id)])
+    feed.num_communities = 3
+    db.session.commit()
+
+    backfill = MagicMock()
+    with app.test_request_context('/'):
+        with patch('app.feed.util.retrieve_mods_and_backfill', backfill), \
+                patch('app.feed.util.current_app') as current_app_stub:
+            current_app_stub.debug = debug
+            initialise_new_communities(feed)
+
+    assert backfill.call_count == expected_inline
+    assert backfill.delay.call_count == expected_delayed
+    calls = backfill.call_args_list if debug else backfill.delay.call_args_list
+    assert all(call.args[0] != already_full.id for call in calls)
+
+
+def test_searching_for_an_address_without_a_tilde_returns_nothing(app, db_session):
+    """:38's False arm, which falls off the end of the function and returns
+    None implicitly.
+
+    feed_add_remote prefixes the '~' itself for the shapes it accepts
+    (app/feed/routes.py:115, :118), so this is the arm a caller reaches by
+    passing an address it has not normalised -- and the answer is None rather
+    than a crash or a bare-name lookup.
+    """
+    instance, owner = _seed()
+    _feed(owner, 'localfeed')
+
+    with app.test_request_context('/'):
+        with patch('app.feed.util.get_request') as get:
+            assert search_for_feed('localfeed') is None
+            assert search_for_feed('localfeed@remote.example') is None
+
+    assert get.call_count == 0
