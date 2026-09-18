@@ -303,3 +303,60 @@ def test_make_feed_web_arm_still_honours_is_instance_feed_for_an_admin(app, db_s
             make_feed(_web_feed_form(is_instance_feed=True), SRC_WEB)
 
     assert Feed.query.filter_by(name='webfeed').one().is_instance_feed is True
+
+
+# --------------------------------------------------------------------------
+# Task 3: P4 -- the UnboundLocalError, and the asymmetric return.
+# --------------------------------------------------------------------------
+
+
+def test_leave_all_raises_unbound_local_error_for_an_account_that_joined_nothing(app, db_session):
+    """PIN (P4, the caller): app/api/alpha/utils/community.py:159-191 binds
+    user_id ONLY inside its two loops, then reads it at :191. An account that
+    has joined no community and no feed reaches the return with the name never
+    bound.
+
+    This is pinned in this file rather than an API one because leave_feed is
+    half of the fix: it is the only one of the two loop bodies that returns
+    nothing, so even an account that DOES have feeds comes out with user_id
+    None (see the companion pin below).
+    """
+    from app.api.alpha.utils.community import post_community_leave_all
+    s = _seed()
+
+    with app.test_request_context('/'):
+        with patch('app.api.alpha.utils.community.authorise_api_user', return_value=s.member):
+            with pytest.raises(UnboundLocalError):
+                post_community_leave_all('Bearer x')
+
+
+def test_leave_feed_returns_nothing_where_leave_community_returns_the_user_id(app, db_session):
+    """PIN (P4, the asymmetry): leave_community returns user_id on the API path
+    (app/shared/community.py:78-80) and leave_feed returns None on every path.
+
+    Both halves are asserted in one test so the asymmetry itself is the claim.
+    The callers treat the two as interchangeable -- app/api/alpha/utils/
+    community.py:179 and :189 assign both to the same local -- so the feed loop
+    silently overwrites a real id with None.
+    """
+    s = _seed()
+    make_feed_member(s.member, s.feed)
+    s.member.feed_auto_leave = False
+    community_member_of = make_community(name='leftbyapi')
+    make_community_member(s.member, community_member_of)
+    db.session.commit()
+
+    with app.test_request_context('/'):
+        with patch('app.shared.feed.authorise_api_user', return_value=s.member.id), \
+                patch('app.shared.feed.task_selector'):
+            feed_return = leave_feed(s.feed, SRC_API, auth='Bearer x')
+
+    from app.shared.community import leave_community as production_leave_community
+    with app.test_request_context('/'):
+        with patch('app.shared.community.authorise_api_user', return_value=s.member.id), \
+                patch('app.shared.community.task_selector'):
+            community_return = production_leave_community(community_member_of.id, SRC_API,
+                                                          auth='Bearer x')
+
+    assert feed_return is None
+    assert community_return == s.member.id
