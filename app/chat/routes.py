@@ -20,8 +20,17 @@ from app.utils import render_template, login_required, trustworthy_account_requi
 def chat_home(conversation_id=None):
     form = AddReply()
     if form.validate_on_submit():
+        if conversation_id is None:
+            # this view is registered on /chat as well as /chat/<id>, and send_message
+            # cannot look up a conversation that was never named
+            return redirect(url_for('chat.empty'))
         if current_user.banned or not current_user.verified or not current_user.can_send_pm:
             return redirect(url_for('chat.denied'))
+        conversation = Conversation.query.get_or_404(conversation_id)
+        if not conversation.is_member(current_user):
+            # unlike the GET path below, an admin may not write into a conversation
+            # they are not part of
+            abort(400)
         send_message(form.message.data, conversation_id)
         return redirect(url_for('chat.chat_home', conversation_id=conversation_id, _anchor='message'))
     else:
