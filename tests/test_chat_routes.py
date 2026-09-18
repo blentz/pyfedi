@@ -1137,3 +1137,289 @@ def test_reporting_an_unknown_conversation_is_a_404(app, db_session):
         response = client.get('/chat/999/report')
 
     assert response.status_code == 404
+
+
+# --------------------------------------------------------------------------
+# chat_options, chat_delete, chat_leave
+# --------------------------------------------------------------------------
+
+
+def _joined(conversation, user):
+    row = db.session.execute(db.text(
+        "SELECT joined FROM conversation_member WHERE user_id = :person_id "
+        "AND conversation_id = :conversation_id"),
+        {"person_id": user.id, "conversation_id": conversation.id}).first()
+    return row[0] if row else None
+
+
+def test_the_options_page_is_a_404_for_an_unknown_conversation(app, db_session):
+    instance, alice, bob, carol = _seed()
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.chat.routes.render_template', return_value='rendered'):
+        response = client.get('/chat/999/options')
+
+    assert response.status_code == 404
+
+
+def test_an_admin_may_open_the_options_of_a_conversation_they_are_not_in(app, db_session):
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    _make_admin(carol)
+    client = app.test_client()
+    login(client, carol)
+
+    with patch('app.chat.routes.render_template', return_value='rendered') as render:
+        response = client.get(f'/chat/{conversation.id}/options')
+
+    assert response.status_code == 200
+    assert render.call_args.args[0] == 'chat/chat_options.html'
+
+
+def test_deleting_a_conversation_takes_its_messages_and_its_reports(app, db_session):
+    """routes.py:163 deletes the Report rows naming the conversation before
+    deleting the conversation itself, so the fixture needs a report or that
+    line proves nothing -- and the messages go with the cascade.
+    """
+    from app.constants import REPORT_TYPE_MESSAGE
+    from app.models import Report
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    _message(conversation, bob, alice, 'inside')
+    report = Report(reasons='Spam', type=REPORT_TYPE_MESSAGE, reporter_id=alice.id,
+                    suspect_conversation_id=conversation.id, source_instance_id=1)
+    db.session.add(report)
+    db.session.commit()
+    client = app.test_client()
+    login(client, alice)
+
+    response = client.post(f'/chat/{conversation.id}/delete',
+                           data={'csrf_token': csrf(app, client)})
+
+    assert response.status_code == 302
+    assert response.headers['Location'] == '/chat'
+    assert Conversation.query.count() == 0
+    assert ChatMessage.query.count() == 0
+    assert Report.query.count() == 0
+
+
+def test_an_admin_may_delete_a_conversation_they_are_not_in(app, db_session):
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    _make_admin(carol)
+    client = app.test_client()
+    login(client, carol)
+
+    response = client.post(f'/chat/{conversation.id}/delete',
+                           data={'csrf_token': csrf(app, client)})
+
+    assert response.status_code == 302
+    assert Conversation.query.count() == 0
+
+
+def test_a_stranger_deleting_a_conversation_is_a_silent_no_op(app, db_session):
+    """D758: the stranger is redirected exactly like the member, with no flash
+    and no deletion --
+
+        PROBE b6 delete status: 302 conversation survives: True
+
+    Recorded as behaviour rather than asserted as correct.
+    """
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    client = app.test_client()
+    login(client, carol)
+
+    response = client.post(f'/chat/{conversation.id}/delete',
+                           data={'csrf_token': csrf(app, client)})
+
+    assert response.status_code == 302
+    assert Conversation.query.count() == 1
+
+
+def test_deleting_an_unknown_conversation_is_a_404(app, db_session):
+    instance, alice, bob, carol = _seed()
+    client = app.test_client()
+    login(client, alice)
+
+    response = client.post('/chat/999/delete', data={'csrf_token': csrf(app, client)})
+
+    assert response.status_code == 404
+
+
+def test_leaving_a_conversation_flips_only_the_leavers_row(app, db_session):
+    """The conversation survives because bob is still joined and local, which
+    is delete_if_abandoned's keep_convo arm (app/models.py:221-238).
+    """
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    client = app.test_client()
+    login(client, alice)
+
+    response = client.post(f'/chat/{conversation.id}/leave',
+                           data={'csrf_token': csrf(app, client)})
+
+    assert response.status_code == 302
+    assert _joined(conversation, alice) is False
+    assert _joined(conversation, bob) is True
+    assert Conversation.query.count() == 1
+
+
+def test_the_last_local_member_leaving_deletes_the_conversation(app, db_session):
+    """delete_if_abandoned keeps a conversation only while a LOCAL member is
+    still joined, so the other party here is remote: alice leaving takes the
+    conversation with her.
+    """
+    instance, alice, bob, carol = _seed()
+    remote_instance = make_instance('remote.example', software='lemmy')
+    remote = make_user(remote_instance, 'remote', local=False)
+    conversation = make_conversation(alice, remote)
+    client = app.test_client()
+    login(client, alice)
+
+    response = client.post(f'/chat/{conversation.id}/leave',
+                           data={'csrf_token': csrf(app, client)})
+
+    assert response.status_code == 302
+    assert Conversation.query.count() == 0
+
+
+def test_a_stranger_leaving_a_conversation_changes_nothing(app, db_session):
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    client = app.test_client()
+    login(client, carol)
+
+    response = client.post(f'/chat/{conversation.id}/leave',
+                           data={'csrf_token': csrf(app, client)})
+
+    assert response.status_code == 302
+    assert _joined(conversation, alice) is True
+    assert _joined(conversation, bob) is True
+    assert Conversation.query.count() == 1
+
+
+def test_leaving_an_unknown_conversation_is_a_404(app, db_session):
+    instance, alice, bob, carol = _seed()
+    client = app.test_client()
+    login(client, alice)
+
+    response = client.post('/chat/999/leave', data={'csrf_token': csrf(app, client)})
+
+    assert response.status_code == 404
+
+
+# --------------------------------------------------------------------------
+# ban_from_mod's remaining arms, and the three template stubs
+# --------------------------------------------------------------------------
+
+
+def test_an_active_ban_hides_the_most_recent_log_entry(app, db_session):
+    """routes.py:148-149: with an active ban the newest mod-log row IS that
+    ban, so the list of PAST bans skips it with `offset(1)`. The two rows have
+    to differ in age or the offset could drop either one.
+    """
+    from app.models import CommunityBan
+    instance, alice, bob, carol = _seed()
+    community = make_community('testcomm')
+    _moderator(alice, community)
+    older = _mod_log(community, bob, action='ban_user', actor=alice)
+    newer = _mod_log(community, bob, action='unban_user', actor=alice)
+    older.created_at = utcnow() - timedelta(days=2)
+    newer.created_at = utcnow()
+    db.session.add(CommunityBan(user_id=bob.id, community_id=community.id,
+                                banned_by=alice.id))
+    db.session.commit()
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.chat.routes.render_template', return_value='rendered') as render:
+        response = client.get(f'/chat/ban_from_mod/{bob.id}/{community.id}')
+
+    assert response.status_code == 200
+    assert render.call_args.kwargs['active_ban'] is not None
+    assert [entry.id for entry in render.call_args.kwargs['past_bans'].all()] == [older.id]
+
+
+def test_without_an_active_ban_every_log_entry_is_shown(app, db_session):
+    """The false arm of the same guard, and the row that keeps the `or_` at
+    routes.py:146 load-bearing: one ban_user and one unban_user, both listed.
+    """
+    instance, alice, bob, carol = _seed()
+    community = make_community('testcomm')
+    _moderator(alice, community)
+    banned = _mod_log(community, bob, action='ban_user', actor=alice)
+    unbanned = _mod_log(community, bob, action='unban_user', actor=alice)
+    db.session.commit()
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.chat.routes.render_template', return_value='rendered') as render:
+        response = client.get(f'/chat/ban_from_mod/{bob.id}/{community.id}')
+
+    assert response.status_code == 200
+    assert render.call_args.kwargs['active_ban'] is None
+    assert sorted(entry.id for entry in render.call_args.kwargs['past_bans'].all()) == \
+        sorted([banned.id, unbanned.id])
+
+
+def test_the_ban_view_ignores_log_entries_of_other_actions(app, db_session):
+    """The `or_` covers ban_user and unban_user and nothing else, so a
+    delete_post entry against the same user must not appear.
+    """
+    instance, alice, bob, carol = _seed()
+    community = make_community('testcomm')
+    _moderator(alice, community)
+    banned = _mod_log(community, bob, action='ban_user', actor=alice)
+    _mod_log(community, bob, action='delete_post', actor=alice)
+    db.session.commit()
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.chat.routes.render_template', return_value='rendered') as render:
+        client.get(f'/chat/ban_from_mod/{bob.id}/{community.id}')
+
+    assert [entry.id for entry in render.call_args.kwargs['past_bans'].all()] == [banned.id]
+
+
+def test_the_ban_view_is_a_404_for_an_unknown_community(app, db_session):
+    instance, alice, bob, carol = _seed()
+    _make_admin(alice)
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.chat.routes.render_template', return_value='rendered'):
+        response = client.get(f'/chat/ban_from_mod/{bob.id}/999')
+
+    assert response.status_code == 404
+
+
+def test_the_ban_view_is_a_404_for_an_unknown_user(app, db_session):
+    instance, alice, bob, carol = _seed()
+    community = make_community('testcomm')
+    _moderator(alice, community)
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.chat.routes.render_template', return_value='rendered'):
+        response = client.get(f'/chat/ban_from_mod/999/{community.id}')
+
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize('path, template', [
+    ('denied', 'chat/denied.html'),
+    ('blocked', 'chat/blocked.html'),
+    ('empty', 'chat/empty.html'),
+])
+def test_the_template_stubs_render(app, db_session, path, template):
+    instance, alice, bob, carol = _seed()
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.chat.routes.render_template', return_value='rendered') as render:
+        response = client.get(f'/chat/{path}')
+
+    assert response.status_code == 200
+    assert render.call_args.args[0] == template
