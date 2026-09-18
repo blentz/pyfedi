@@ -938,3 +938,29 @@ def test_looking_up_a_blocked_instance_says_so(app, db_session):
 
     assert response.status_code == 200
     assert flash_stub.call_count == 2
+
+
+def test_a_lookup_search_that_fails_for_another_reason_says_nothing(app, db_session):
+    """:729's False arm -- lookup's half of R4, and the twin of the
+    add_remote test above.
+
+    An exception whose message does not contain 'is blocked.' is caught and
+    dropped: not re-raised, not logged, not shown. The user gets 'Feed not
+    found.' and nothing else, so a remote server that is timing out and one
+    that genuinely has no such feed are indistinguishable. Pinned in BOTH
+    copies, because that is what stops one of them being repaired while the
+    other is forgotten -- which is this round's whole theme.
+    """
+    instance, owner = _seed()
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', return_value='rendered'), \
+                patch('app.feed.routes.search_for_feed',
+                      side_effect=Exception('the remote server exploded')), \
+                patch('app.feed.routes.flash') as flash_stub:
+            response = client.get('/feed/lookup/unknown/remote.example')
+
+    assert response.status_code == 200
+    assert flash_stub.call_count == 1
+    assert 'not found' in str(flash_stub.call_args.args[0]).lower()
