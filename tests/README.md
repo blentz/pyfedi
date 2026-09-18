@@ -8750,6 +8750,28 @@ both. The `assert source.count(old) == 1` in the harness is what catches it;
 anchor the pattern with a leading newline when two copies differ only by
 indentation. Three of this campaign's mutation rounds have now hit it.
 
+**310. A MUTANT THAT NOTHING CAN KILL IS AN EQUIVALENT MUTANT, AND THE ANSWER
+IS A PROOF, NOT A TEST.** Three of sub-project 58's survivors could not be
+killed by any fixture: `http_status_code = 404` on a path whose retry gate
+rejects both `None` and `404`, and two header-name branches that werkzeug's
+case- and underscore-tolerant lookup makes indistinguishable (`CONTENT_LENGTH`,
+`Content-Length` and `content-length` all returned `'2'` from the same
+request). **Before writing a test to kill a survivor, ask whether the two
+programs differ at all**; if they cannot, register the equivalence with the
+probe that shows it, the way a proved-unreachable arc is registered. Chasing an
+equivalent mutant with a fixture produces a test that asserts an
+implementation detail and nothing else. See D766.
+
+**311. THE INBOX'S FIRST GATE CATCHES ONE EXCEPTION TYPE, SO ANYTHING ELSE
+RAISED INSIDE IT IS A 500 TO A REMOTE HOST.** `app/activitypub/routes.py:687-691`
+wraps `HttpSignature.precheck` in `except VerificationFormatError`. Any other
+exception a helper raises there -- `ValueError` from a date parser, `TypeError`
+from a naive-vs-aware comparison -- escapes as a traceback. **When covering a
+function called from a gate like that, test what it raises for a peer's
+malformed input, not only what it returns for well-formed input**, and assert
+the exception TYPE: the unrepaired code raises too, so a `pytest.raises(
+Exception)` pin proves nothing. See D762.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not

@@ -14317,7 +14317,41 @@ campaign's sixth clean pass and its first that needed no fix round.**
 | D760 | `app/utils.py:1979`; `app/chat/routes.py:161`, `:173`, `:187` | **THE FORM-LESS POST ROUTES ARE NOT CSRF-EXPOSED, AND THE REASON IS NOT WHERE ONE LOOKS FOR IT.** There is no `CSRFProtect` anywhere in `app/`, which invites exactly the wrong conclusion; `login_required` validates the token itself on every POST. A probe without one raises `wtforms.validators.ValidationError: The CSRF token is missing.` **What IS registered: that raise is unhandled, so a missing or expired token is a 500 where a 400 belongs -- for every POST route in the application, not only chat's.** | **checked and refuted; the error handling registered as cross-cutting** | The probe; the decorator quoted |
 | D761 | `app/chat/util.py:81`; `app/chat/routes.py:161-167`, `:173-182`; `:213-221` | **THREE SHAPES CARRIED FORWARD.** (1) `update_message` raises `NoResultFound` when `recipient_id` is NULL -- `PROBE b5 exception: NoResultFound No row was found when one was required` -- and the column is nullable. (2) `chat_delete` and `chat_leave` are a silent no-op for a stranger, `PROBE b6 delete status: 302 conversation survives: True`, with the same answer whether the delete happened or not; covered as behaviour. (3) `chat_report` hardcodes `source_instance_id=1` and its `report_remote` branch is a bare `...`, so the checkbox the form offers does nothing -- asserted as "the report count is unchanged", which is what it means today. | **registered** | Probe output; the tests that record each behaviour |
 
-**Next free number: D762.**
+**Next free number: D762.** (**D762-D768 were taken by sub-project 58, below;
+the free number is now D769.**)
+
+## Sub-project 58: `app/activitypub/signature.py` -- three inbox 500s any host could trigger, and the campaign's first module closed from a single file
+
+**The round in one line: the module reaches **100.0** with no missing lines and
+no missing arcs and takes a floor of 100 -- 35 floors; the suite is green at
+**5668 passed, 3 skipped, 6872 warnings in 389.30s**; TWO defect families were
+repaired, the first of them three remote-triggerable 500s on the inbox's first
+gate; and a 63-mutant pass killed **60 of 63, with the other three PROVED
+EQUIVALENT** rather than left as survivors.**
+
+### 0. THE TWO REPAIRS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D762 | `app/activitypub/signature.py:392-401`, against `app/activitypub/routes.py:687-691` | **THREE DATE HEADERS TURNED THE INBOX'S FIRST GATE INTO A 500, FROM ANY HOST THAT COULD REACH IT.** `precheck`'s caller catches `VerificationFormatError` only. Probes: `PROBE s1 exception: ValueError Invalid date value or format "not a date"`; `PROBE s3` the same for an EMPTY header; and `PROBE s2 exception: TypeError can't subtract offset-naive and offset-aware datetimes` for a **well-formed date carrying no timezone**. The third is the one worth keeping: RFC 7231 requires the timezone, so a naive date is the peer's bug -- and the answer to a peer's bug is the 400 the caller already knows how to log. Repaired by parsing inside a `try` that raises the format error, and by reading a naive date as UTC. | **fixed at `4d03b3c6a`** | Three probes; the inverted tests assert the exception TYPE, since the unrepaired code raises too |
+| D763 | `app/activitypub/signature.py:224-234` | **`signature_part` TRUNCATED VALUES AND CRASHED ON A MALFORMED HEADER.** `part.split('=')` with no maxsplit: `PROBE s4 padded signature: 'YWJj'` for an input of `signature="YWJj=="`, so a base64 value lost its padding and a keyId would lose its query string. `PROBE s4 no equals exception: IndexError list index out of range` for a part with no `=` at all -- and a peer's `Signature` header is attacker-controlled, so a single stray comma reached it. `PROBE s4 header absent exception: AttributeError 'NoneType' object has no attribute 'split'` when there is no header. Repaired in all three: split once, skip an unsplittable part, and treat an absent header as the `''` the function already returns for a key it cannot find. | **fixed at `4d03b3c6a`** | Three probes; six rows including the whitespace strips on both sides |
+
+### 1. THE MEASUREMENT AND THE FLOOR
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D764 | `app/activitypub/signature.py`; `coverage_floors.ini` | **THE MODULE CLOSES AT 100.0 AND TAKES A FLOOR OF 100 -- 35 FLOORS.** `missing_lines []` / `missing_branches []` on the full-suite run, AND on `tests/test_activitypub_signature.py` alone: **the campaign's first module closed from a single file**, which matters because the rest of the suite exercises this one incidentally on almost every federation test and a file-only measurement is the only way to know the coverage is the file's own. **BASIS: the full suite on the delivered tree, `5668 passed, 3 skipped, 6872 warnings in 389.30s`**, and `All 35 module floors met.` | **module closed and floored** | The `&&` chain; the file-only run at 100.0 |
+| D765 | The module | **63 MUTANTS APPLIED, 55 KILLED AND EIGHT SURVIVING ON THE MEASURING PASS; 60 OF 63 AFTER THE FIX ROUND, AND THE OTHER THREE PROVED EQUIVALENT.** Four survivors were missing rows -- a date in the FUTURE (without which `abs()` is load-bearing for nothing and a forged date passes a one-sided comparison), a debug server with `new_task` left true, the banned-sender body under a 403, and a GET that 400s. One was a weak assertion: `'could not send:'` asserted by PREFIX, so a mutant dropping `str(e)` survived -- **fact 303's shape in a new place**. | **60/63 killed, 3 equivalent** | Every mutant applied singly and restored with the restoration proved by sha256 |
+| D766 | `app/activitypub/signature.py:146`, `:320`, `:328` | **THE THREE EQUIVALENT MUTANTS, PROVED RATHER THAN ACCEPTED.** (1) `http_status_code = 404` in the transport-failure handler is **dead**: the retry gate is `http_status_code is not None and (== 429 or >= 500)`, and `None` fails the first operand while `404` fails the second, so removing the assignment cannot be observed -- which also means a connection failure can never retry no matter what that line says (see **D767**). (2) and (3) `content-length`'s explicit branch and the generic branch's `.replace("-", "_").upper()` are both indistinguishable under Flask, because werkzeug's header lookup is case- and underscore-tolerant: a probe returned `'2'` for `CONTENT_LENGTH`, `Content-Length` AND `content-length`, and `'test.piefed.local'` for both spellings of `host`. | **registered as equivalent, with the probe** | The probe output; the retry gate quoted |
+
+### 2. REGISTERED, NOT FIXED
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D767 | `:141-147`, `:157-166` | **A CONNECTION FAILURE NEVER RETRIES, WHILE A 502 IS RETRIED FOR FOUR HOURS.** The inner handler sets `http_status_code = 404` -- a status no peer sent -- and the retry gate admits only `429` and `>= 500`. So the peer that is hardest to reach is the one given up on first. D766 shows the assignment is inert either way; the asymmetry is in the gate. | **registered -- the retry policy is a federation decision** | Both paths quoted; `test_a_transport_failure_is_logged_and_not_retried` records the behaviour |
+| D768 | `:100`, `:102`; `:162`; `:319` | **THREE SHAPES CARRIED FORWARD.** (1) `post_request` crashes on a body that is None or carries no `id` -- `PROBE s5 exception: TypeError argument of type 'NoneType' is not iterable`, `PROBE s6 exception: KeyError 'id'` -- although its own type hint says `body: dict | None`; the second escapes the outer handler, so the task dies with no log row, which `test_a_task_that_cannot_log_rolls_back_and_reraises` records. (2) `SendQueue.send_after` is written from naive `datetime.utcnow()` while the rest of the module is timezone-aware, which is exactly what D762's `TypeError` was made of. (3) The comment at `:319` says the author avoided `parse_signature` for the pseudo-headers because "changing HttpSignatureDetails changes everything & I don't have the spoons for that ATM" -- so the module has two parsers for one header by acknowledged accident, and D763 repaired the weaker one rather than removing it. | **registered** | The probes; the lines quoted |
+
+**Next free number: D769.**
 
 ## Ratchet gotchas
 

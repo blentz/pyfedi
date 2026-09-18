@@ -412,7 +412,7 @@ def test_a_gone_instance_is_marked_and_its_queue_emptied(app, db_session, status
 def test_a_transport_failure_is_logged_and_not_retried(app, db_session):
     """The inner handler sets http_status_code = 404 (signature.py:146), which
     the retry block below it treats as un-retryable -- so a peer refusing
-    connections is dropped after one attempt. That asymmetry is D765; this row
+    connections is dropped after one attempt. That asymmetry is D767; this row
     records it.
     """
     import httpx
@@ -956,7 +956,7 @@ def test_an_unknown_instance_returning_gone_logs_without_a_row_to_flag(app, db_s
 def test_a_task_that_cannot_log_rolls_back_and_reraises(app, db_session):
     """The outer handler (signature.py:168-170). A body with no `id` is the
     cheapest way to reach it -- ActivityPubLog.activity_id is read straight off
-    the body -- and it is also D764, registered rather than repaired.
+    the body -- and it is also D768, registered rather than repaired.
     """
     from app.models import ActivityPubLog
 
