@@ -8676,6 +8676,30 @@ reads its own query parameters is worth reading line by line before writing a
 single test** -- all three were visible in the first five lines, and all three
 had been there since the route was written. See D725, D726, D727.
 
+**302. PATCH `sleep` WHEREVER A RETRY LOOP CAN REACH IT.**
+`app/feed/util.py`'s `search_for_feed` retries a failed webfinger after
+`sleep(randint(3, 10))` -- on the request thread -- so a test that reaches that
+path pays up to ten seconds unless it patches `app.<module>.sleep`. Patch it in
+every test that can reach the loop, not only the one that tests the retry: the
+give-up path runs the same sleep. See D738.
+
+**303. A `pytest.raises(..., match=...)` IS A REGEX SEARCH, SO A PREFIX
+MATCHES.** `match='quiet.example is blocked.'` passes against
+`'quiet.example is blocked. Reason: None'`, which is exactly what a mutant that
+always appends the reason produces -- so the assertion could not tell the two
+apart and the mutant survived. **When the difference between right and wrong is
+a SUFFIX, assert the string, not a match**: capture with
+`pytest.raises(Exception) as exc` and compare `str(exc.value)`. See D736.
+
+**304. A UNIQUE COLUMN DECIDES WHICH FIXTURES ARE POSSIBLE, AND THEREFORE HOW A
+FILTER CAN BE TESTED.** `Feed.name` is unique, so the obvious fixture for
+"a lookup filtered on `ap_id=None` must not return a remote feed" -- a local
+feed and a remote feed with the same name -- is an `IntegrityError`. The filter
+is observable only as the difference between answering with the remote row and
+answering with nothing, which needs the remote row to be the ONLY one with that
+name. **Read the model's constraints before designing the decoy**; the campaign
+has now built the impossible fixture twice. See D737.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
