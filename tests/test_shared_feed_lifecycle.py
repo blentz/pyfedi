@@ -728,8 +728,14 @@ def test_make_feed_api_arm_writes_every_derived_field(app, db_session):
     ap_* urls verbatim (:223-226). That divergence is registered as R6 in this
     round's design and is latent today only because both callers slugify and
     .lower() before calling; it is asserted here as CURRENT behaviour so Group
-    C, which rebuilds these fields in edit_feed(from_scratch=True), inherits a
-    statement of what they are rather than an assumption.
+    C inherits a statement of what they are rather than an assumption.
+
+    CORRECTED BY SUB-PROJECT 51 (D695): this docstring used to say Group C
+    "rebuilds these fields in edit_feed(from_scratch=True)". It does not
+    rebuild them on any value of from_scratch, and no caller passes
+    from_scratch=True. What Group C actually found is the opposite -- renaming
+    a feed rewrites name and machine_name and leaves every ap_* url pointing at
+    the old name.
 
     The keypair is patched: RsaKeys.generate_keypair() is seconds of entropy
     this test would otherwise pay for and never assert.
