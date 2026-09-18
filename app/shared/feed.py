@@ -125,6 +125,11 @@ def leave_feed(feed: int | Feed, src, auth=None, bulk_leave=False):
         task_selector('leave_feed', user_id=user_id, feed_id=feed_id)
         
         db.session.query(FeedMember).filter_by(user_id=user_id, feed_id=feed_id).delete()
+        # A surviving join request reads as SUBSCRIPTION_PENDING (Feed.subscribed,
+        # app/models.py:4235-4237), and join_feed only acts on NONMEMBER, so leaving
+        # the row behind locks the user out of ever rejoining this feed. The web
+        # twin deletes it alongside the membership: app/feed/routes.py:630.
+        db.session.query(FeedJoinRequest).filter_by(user_id=user_id, feed_id=feed_id).delete()
         feed.subscriptions_count -= 1
         db.session.commit()
 
@@ -135,8 +140,17 @@ def leave_feed(feed: int | Feed, src, auth=None, bulk_leave=False):
             if user.feed_auto_leave:
                 feed_items = db.session.query(FeedItem).filter_by(feed_id=feed_id).all()
                 for feed_item in feed_items:
-                    # Send the community unsub requests to celery - it will handle all the db commits and cache busting
-                    leave_community(community_id=feed_item.community_id, src=src, auth=auth, bulk_leave=bulk_leave)
+                    # Only leave communities this user actually joined, and only the
+                    # ones they joined through a feed. leave_community opens with
+                    # .one() (app/shared/community.py:59), so an unguarded call
+                    # raises NoResultFound for any community the user never joined.
+                    # Same guard as the web twin: app/feed/routes.py:637-639.
+                    membership = db.session.query(CommunityMember).filter_by(
+                        user_id=user_id, community_id=feed_item.community_id).first()
+                    if membership and membership.joined_via_feed:
+                        # Send the community unsub requests to celery - it will handle all the db commits and cache busting
+                        leave_community(community_id=feed_item.community_id, src=src, auth=auth,
+                                        bulk_leave=bulk_leave)
 
         if src == SRC_WEB and not bulk_leave:
             flash(_('You have unsubscribed from the %(feed_name)s feed, '

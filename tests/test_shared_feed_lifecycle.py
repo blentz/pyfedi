@@ -90,48 +90,73 @@ def _seed():
 # --------------------------------------------------------------------------
 
 
-def test_leave_feed_crashes_on_a_community_the_user_never_joined(app, db_session):
-    """PIN (P1): leave_feed calls leave_community for every community in the
-    feed, including ones the user never joined, and leave_community opens with
-    .one() (app/shared/community.py:59), which raises when there is no row.
+def test_leave_feed_only_leaves_communities_the_user_joined_via_the_feed(app, db_session):
+    """Was a PIN; INVERTED once the membership guard landed.
 
-    feed_auto_leave defaults True (app/models.py:1043), so this is the ordinary
-    path for anyone who joined the feed with feed_auto_follow off or who left
-    one of its communities by hand.
+    ORIGINAL PINNED CLAIM, now false: "leave_feed calls leave_community for
+    every community in the feed, so an ordinary unsubscribe raises
+    NoResultFound (leave_community opens with .one(),
+    app/shared/community.py:59) for any community the user never joined."
 
-    The web twin guards exactly this at app/feed/routes.py:637-639:
-    `membership = CommunityMember.query.filter_by(...).first()` then
-    `if membership and membership.joined_via_feed:`.
+    The three communities here are the whole point, and each one distinguishes
+    a different half of the guard:
+
+    - never joined  -> the .first() half. Under the old code this row alone
+      raised; under the new code it is skipped.
+    - joined via the feed -> the call that must STILL fire. Without it "no
+      exception" would be satisfied by a loop that called nothing at all.
+    - joined on their own (joined_via_feed False) -> the joined_via_feed half.
+      It is the only row that tells the two halves apart, and it is the
+      behaviour change this fix deliberately makes: leave_feed no longer
+      unsubscribes a user from communities they chose for themselves.
+
+    feed_auto_leave is set explicitly rather than left to its True default
+    (app/models.py:1043), so the test says which way it is testing.
     """
     s = _seed()
+    never_joined = s.community
+    joined_via_feed = make_community(name='joinedviafeed')
+    joined_alone = make_community(name='joinedalone')
     make_feed_member(s.member, s.feed)
-    make_feed_item(s.feed, s.community)
+    for community in (never_joined, joined_via_feed, joined_alone):
+        make_feed_item(s.feed, community)
+    via = make_community_member(s.member, joined_via_feed)
+    via.joined_via_feed = True
+    make_community_member(s.member, joined_alone)  # joined_via_feed defaults False
     s.member.feed_auto_leave = True
     db.session.commit()
+
     assert CommunityMember.query.filter_by(user_id=s.member.id,
-                                           community_id=s.community.id).first() is None
+                                           community_id=never_joined.id).first() is None
+    assert len({never_joined.id, joined_via_feed.id, joined_alone.id, s.member.id}) == 4
 
     with web_ctx(app, s.member):
-        with patch('app.shared.feed.task_selector'):
-            with pytest.raises(NoResultFound):
-                leave_feed(s.feed, SRC_WEB)
+        with patch('app.shared.feed.task_selector'), \
+                patch('app.shared.feed.leave_community') as leave:
+            leave_feed(s.feed, SRC_WEB)
+
+    assert leave.call_count == 1
+    assert leave.call_args.kwargs['community_id'] == joined_via_feed.id
 
 
-def test_leave_feed_leaves_the_join_request_row_behind(app, db_session):
-    """PIN (P2): leave_feed deletes the FeedMember row and nothing else, so a
-    FeedJoinRequest survives -- and Feed.subscribed() (app/models.py:4224-4239)
-    reads a surviving request as SUBSCRIPTION_PENDING.
+def test_leave_feed_deletes_the_join_request_row(app, db_session):
+    """Was a PIN; INVERTED once the FeedJoinRequest delete landed.
 
-    join_feed:37 only acts when feed_membership(...) == SUBSCRIPTION_NONMEMBER,
-    so the stale row locks the user out of ever rejoining that feed. The
-    consequence is asserted here, not just the residue: a stray row is untidy,
-    a permanent PENDING is a user-facing defect.
+    ORIGINAL PINNED CLAIM, now false: "the request row survives, so
+    Feed.subscribed() (app/models.py:4224-4239) reports SUBSCRIPTION_PENDING
+    and join_feed:37, which only acts on SUBSCRIPTION_NONMEMBER, refuses every
+    later attempt to rejoin."
 
-    The web twin deletes it at app/feed/routes.py:630.
+    The second user's request row is the control. A delete missing its user_id
+    filter passes any single-user version of this test, and that filter is the
+    difference between unsubscribing one person and unsubscribing everybody
+    waiting on the feed.
     """
     s = _seed()
+    bystander = make_user(s.instance, 'otherpending')
     make_feed_member(s.member, s.feed)
     make_feed_join_request(s.member, s.feed)
+    make_feed_join_request(bystander, s.feed)
     s.member.feed_auto_leave = False
     db.session.commit()
 
@@ -140,5 +165,7 @@ def test_leave_feed_leaves_the_join_request_row_behind(app, db_session):
             leave_feed(s.feed, SRC_WEB)
 
     assert FeedJoinRequest.query.filter_by(user_id=s.member.id,
+                                           feed_id=s.feed.id).count() == 0
+    assert FeedJoinRequest.query.filter_by(user_id=bystander.id,
                                            feed_id=s.feed.id).count() == 1
-    assert Feed.query.get(s.feed.id).subscribed(s.member.id) == SUBSCRIPTION_PENDING
+    assert Feed.query.get(s.feed.id).subscribed(s.member.id) != SUBSCRIPTION_PENDING
