@@ -169,3 +169,84 @@ def test_leave_feed_deletes_the_join_request_row(app, db_session):
     assert FeedJoinRequest.query.filter_by(user_id=bystander.id,
                                            feed_id=s.feed.id).count() == 1
     assert Feed.query.get(s.feed.id).subscribed(s.member.id) != SUBSCRIPTION_PENDING
+
+
+# --------------------------------------------------------------------------
+# Task 2: P3 -- make_feed accepts is_instance_feed from anyone.
+# --------------------------------------------------------------------------
+
+
+def _api_feed_payload(**overrides):
+    """The dict shape make_feed's SRC_API arm reads, at app/shared/feed.py:153-165.
+
+    Every key is read unconditionally -- there is no .get() anywhere in that
+    arm -- so a payload missing one raises KeyError rather than defaulting.
+    app/api/alpha/utils/feed.py:145-164 is where the real one is built.
+    """
+    payload = {'url': 'apifeed', 'title': 'API feed', 'public': True, 'description': '',
+               'icon_url': None, 'banner_url': None, 'nsfw': False, 'nsfl': False,
+               'communities': '', 'is_instance_feed': False, 'show_child_posts': False,
+               'parent_feed_id': None}
+    payload.update(overrides)
+    return payload
+
+
+def _web_feed_form(**overrides):
+    """The form shape make_feed's SRC_WEB arm reads, at app/shared/feed.py:167-180.
+
+    A stub rather than the real AddCopyFeedForm: the production arm only ever
+    reads `.data` off each field, and building the real form would drag in
+    wtforms validation this round is not testing. The icon/banner uploads are
+    passed as separate arguments, not form fields, so they are absent here.
+    """
+    fields = {'url': 'webfeed', 'title': 'Web feed', 'public': True, 'description': '',
+              'nsfw': False, 'nsfl': False, 'communities': '', 'is_instance_feed': False,
+              'show_child_posts': False, 'parent_feed_id': None}
+    fields.update(overrides)
+    return SimpleNamespace(**{k: SimpleNamespace(data=v) for k, v in fields.items()})
+
+
+def test_make_feed_api_arm_lets_a_non_admin_mint_an_instance_feed(app, db_session):
+    """PIN (P3, API arm): is_instance_feed is copied straight out of the
+    payload at app/shared/feed.py:163 and into the row at :190, with no check
+    on the caller anywhere between.
+
+    An instance feed is surfaced in the instance-wide menu (menu_instance_feeds),
+    so this is a privilege escalation into shared UI -- the same shape as
+    sub-project 49's D657, an authorization check that existed nowhere.
+
+    not-an-admin is asserted live rather than assumed: _burn_a_seat consumes id
+    1, which app/models.py:1259-1261 treats as an admin.
+    """
+    s = _seed()
+    assert not s.member.is_admin()
+
+    with app.test_request_context('/'):
+        with patch('app.shared.feed.authorise_api_user', return_value=s.member), \
+                patch('app.shared.feed.RsaKeys.generate_keypair', return_value=('priv', 'pub')):
+            make_feed(_api_feed_payload(is_instance_feed=True), SRC_API, auth='Bearer x')
+
+    made = Feed.query.filter_by(name='apifeed').one()
+    assert made.is_instance_feed is True
+    assert made.user_id == s.member.id
+
+
+def test_make_feed_web_arm_lets_a_non_admin_mint_an_instance_feed(app, db_session):
+    """PIN (P3, web arm): the only gate on the web side is
+    app/feed/routes.py:51, `form.is_instance_feed.render_kw = {'disabled':
+    True}` for non-admins. That disables the widget in the browser and
+    constrains nothing on the server: a POST carrying the field is honoured.
+
+    This test is what says that in executable form. It matters because a reader
+    of the route would reasonably conclude the field is gated.
+    """
+    s = _seed()
+    assert not s.member.is_admin()
+
+    with web_ctx(app, s.member):
+        with patch('app.shared.feed.RsaKeys.generate_keypair', return_value=('priv', 'pub')):
+            make_feed(_web_feed_form(is_instance_feed=True), SRC_WEB)
+
+    made = Feed.query.filter_by(name='webfeed').one()
+    assert made.is_instance_feed is True
+    assert made.user_id == s.member.id
