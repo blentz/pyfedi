@@ -2975,20 +2975,34 @@ was a reviewer reading the fact. **If you change a guard, the list of
 mutations to re-run is derivable from the diff; derive it before you write the
 commit message, not after someone asks.**
 
-**75. The five catalogued causes of an unkillable CLAUSE, TWO of an unkillable
-STATEMENT, and one of an unkillable ARM OF A CONDITIONAL EXPRESSION. Name which
-one you have and prove it; never invent a test to fake a kill.** Causes 4 and 5
-were added by sub-project 14 and are the two that most often get mis-filed as
-ordinary fixture gaps. **The list is organised by SYNTACTIC UNIT, and reading
-the unit first is what keeps a survivor from being mis-filed: causes 1-5 are
-causes of an unkillable *clause*; causes 6 and 8, added by sub-projects 16 and
-19, are the statement-level cases; cause 7, added by sub-project 17, is the
-expression-arm case. Each was numbered separately rather than folded into 4(a)
-for the same reason -- force-fitting one unit into another unit's taxonomy is
-what produces a mis-filed survivor.** Read the scope of the item before you
-claim it: if the mutant you are explaining deleted or narrowed a whole
-statement rather than dropping a conjunct, 1-5 do not apply to it; if it
-collapsed one arm of an `a if c else b`, neither 1-5, 6 nor 8 do.
+**75. The ~~five~~ SIX catalogued causes of an unkillable CLAUSE, TWO of an
+unkillable STATEMENT, and one of an unkillable ARM OF A CONDITIONAL EXPRESSION.
+Name which one you have and prove it; never invent a test to fake a kill.**
+Causes 4 and 5 were added by sub-project 14 and are the two that most often get
+mis-filed as ordinary fixture gaps. **The list is organised by SYNTACTIC UNIT,
+and reading the unit first is what keeps a survivor from being mis-filed -- but
+THE NUMBER DOES NOT ENCODE THE UNIT, so read the unit off this sentence rather
+than off the ordinal:**
+
+- **clause-scoped: 1, 2, 3, 4(a), 4(b), 5 and 9;**
+- **statement-scoped: 6 and 8;**
+- **arm of a conditional expression: 7.**
+
+**Numbers were assigned in the order the shapes were met, not in unit order.**
+~~causes 1-5 are causes of an unkillable *clause*; causes 6 and 8, added by
+sub-projects 16 and 19, are the statement-level cases; cause 7, added by
+sub-project 17, is the expression-arm case.~~ **That grouping held only while
+the highest number was 8, and it was rewritten when cause 9 -- clause-scoped,
+added by sub-project 49 -- landed after two statement-scoped causes and one
+expression-arm one. A contiguous "1-5 are clauses" reading is now WRONG, and
+nobody should read "9 > 8" as "a new syntactic unit".** 6 and 8 came from
+sub-projects 16 and 19, 7 from sub-project 17, 9 from sub-project 49. Each was
+numbered separately rather than folded into 4(a) for the same reason --
+force-fitting one unit into another unit's taxonomy is what produces a mis-filed
+survivor. Read the scope of the item before you claim it: if the mutant you are
+explaining deleted or narrowed a whole statement rather than dropping a
+conjunct, the clause-scoped causes do not apply to it; if it collapsed one arm
+of an `a if c else b`, neither the clause-scoped causes nor 6 nor 8 do.
 
 1. **The factory always produces the matching value** (fact 33) -- the clause is
    fine, the fixture cannot vary what it tests. Fixable.
@@ -3109,6 +3123,70 @@ collapsed one arm of an `a if c else b`, neither 1-5, 6 nor 8 do.
    shape is force-fitting it into 6 or manufacturing a `raise` the call site
    cannot produce -- sub-project 19 met it, argued it in a committed comment
    block in `tests/test_shared_tasks_send_post.py`, and wrote no test for it.
+9. **Tautology stranding the FALSE arm** -- **the mirror image of 4(b), and a
+   CLAUSE-scoped cause despite following two statement-scoped ones.** 4(b)'s
+   invariant *falsifies* the condition, so its **True** branch is dead. Here the
+   invariant *satisfies* it: the condition is **always true when reached**, and
+   the dead code is the **False** arm -- the `elif` chain's fall-through, the
+   absent `else`, the path not taken. The proof obligation is 4(b)'s exactly:
+   **name the construct that establishes the invariant and prove it against
+   EVERY branch of that construct, not against a sample.** The verdict is 4(b)'s
+   too: not fixable, and no test should be written for the dead arm.
+   **Four instances, three of them registered as D578 and unenacted for three
+   sub-projects.** `app/shared/auth.py:54`, `:74` and `:111`: `:21-39` is an
+   exhaustive `if src == SRC_WEB / elif src == SRC_API / else: return None` and
+   `src` is a parameter **never reassigned anywhere in the body**, so every line
+   after `:39` runs with `src` provably in `{SRC_WEB, SRC_API}`; each later
+   `elif src == SRC_API:` is reached only when its paired `if src == SRC_WEB:`
+   was false, is therefore always true when reached, and its fall-through
+   (`[[54,57]]`, `[[74,77]]`, `[[111,-18]]`) is dead. Note the establisher there
+   is **an exhaustive earlier dispatch whose `else` returns** -- neither a caller
+   nor an enclosing guard, which is why 4(b)'s own establisher clause does not
+   describe it either. The fourth instance, and **the first outside
+   `auth.py`**, is `app/shared/feed.py:487`: `proceed = True` at `:459` and
+   **nothing between `:459` and `:487` reassigns it** -- `:461-485` only builds
+   and sends an Undo -- so `if proceed:` is a tautology and its False arm, which
+   would skip the `CommunityMember` delete, the `CommunityJoinRequest` delete,
+   the `subscriptions_count` decrement and the commit, is unreachable. That
+   establisher is **an unconditional assignment in the same block**, the same
+   category as the second one the note below enumerates.
+   Discriminate it from its neighbours by each one's own text: **not 4(b)**, on
+   polarity -- and note that the first draft of D578's ruling filed it there by
+   quoting 4(b) with a bracketed "[non-matching]" substituted for the source's
+   literal "True", a bent quotation that concealed exactly this mismatch (fact
+   252); **not 3**, because subsumption is a later conjunct implying an earlier
+   one inside the same clause and here the establisher sits outside the
+   condition entirely; **not 5**, because the value is not one the column cannot
+   hold; **not 6, 7 or 8**, which are scoped to a statement, an expression arm
+   and a `try`/`except` respectively.
+   **WHY THIS IS 9 AND NOT 4(c), WHICH IS WHERE IT TAXONOMICALLY BELONGS.** It
+   is a second mirror-shape under cause 4 and the obvious label for it is 4(c).
+   That label was rejected deliberately, and the reason is recorded here so it is
+   not re-litigated. Fact 251 is *titled* **"FACT 75 HAS NO CAUSE 4(c), AND THE
+   LABEL THAT DOES NOT EXIST WAS CITED…"**, and the nonexistence is asserted in
+   passing at further sites throughout this file and the findings register.
+   **Enacting 4(c) would not amend fact 251; it would falsify it** -- and it
+   would do something worse than a stale fact. **A stale `4(c)` citation must
+   keep looking wrong rather than start looking valid.** Today a reader who meets
+   `4(c)` in an old artifact knows on sight that it is an error and goes looking
+   for what was meant. Had 4(c) been created, that citation would look plausible
+   while pointing at **this** shape -- when every recorded `4(c)` citation
+   actually meant **cause 8**, the unreachable handler. **All of those assertions
+   stand and remain true: there is still no cause 4(c), and none of them is
+   amended by this item.**
+   **What this enactment settles elsewhere, and what it does not.** Fact 252
+   registered this shape while it was unenacted; its "not yet folded into fact
+   75" clause is struck there and points here. Facts 266 and 269 each list
+   fact 252/D578 among "registered-but-unenacted taxonomy extensions" --
+   **that one element of each list is now spent; the rest of each list is not.**
+   D589 (configuration-scoped unkillability), fact 266/D616 (cause 3's
+   disjunctive dual) and fact 269/D628 (a callee invoked at the guard site) all
+   still stand uncatalogued, and fact 269's "none of the **eight** catalogued
+   causes fits" should now be read as nine with its argument unchanged: **cause 9
+   does not fit D628 either**, whose unsatisfiable guard strands its *True* arm,
+   not its False one. And **D589 was proposed as "a possible ninth cause": the
+   number 9 is now taken by this shape.** That proposal is untouched on its
+   merits and needs a different number if it is ever enacted.
 
 **NAME THE ESTABLISHER, NOT ONLY THE CAUSE.** Every entry above answers *what
 kind* of survivor you have; a checkable entry also answers **what makes it
@@ -7591,8 +7669,13 @@ bent quotation that concealed the polarity mismatch, caught in review. **Filing
 this shape under 4(b) as written is a mis-shelving; filing it under cause 8 is
 worse** (there is no handler); **and there is no 4(c) to file it under** (fact
 251). Registered as **D578** with a proposed amendment -- a new sub-shape under
-cause 4, or an explicit note extending 4(b) to its mirror -- **which has NOT yet
-been folded into fact 75**, so until it is, cite this fact rather than a number.
+cause 4, or an explicit note extending 4(b) to its mirror -- ~~**which has NOT
+yet been folded into fact 75**, so until it is, cite this fact rather than a
+number.~~ **ENACTED BY SUB-PROJECT 49 AS FACT 75's CAUSE 9, on a fourth instance
+and the first outside `auth.py` (`app/shared/feed.py:487`). Cite the number now:
+cause 9. It is NOT numbered 4(c), and the reason -- that a stale `4(c)` citation
+must keep looking wrong rather than start looking valid -- is recorded in cause
+9's own text; fact 251 is unamended and still true.**
 The proof obligations are 4(b)'s either way: name the construct that establishes
 the invariant and prove it **against every branch of that construct**, not
 against a sample. And note what this is NOT: a third `src` value genuinely can
