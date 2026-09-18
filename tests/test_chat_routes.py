@@ -469,6 +469,32 @@ def test_the_alone_flag_counts_joined_members(app, db_session, leavers, alone):
     assert render.call_args.kwargs['alone'] is alone
 
 
+def test_the_alone_flag_reads_the_joined_rows_not_every_row(app, db_session):
+    """The third member is what makes the query's `joined = :state` parameter
+    load-bearing. In a two-member conversation with one leaver, the joined rows
+    and the left rows both number one, so a mutant flipping the parameter
+    agrees with the original and survives. With three members and one leaver
+    they are two against one.
+    """
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    conversation.members.append(carol)
+    db.session.commit()
+    db.session.execute(db.text(
+        "UPDATE conversation_member SET joined = :state WHERE user_id = :person_id "
+        "AND conversation_id = :conversation_id"),
+        {"state": False, "person_id": bob.id, "conversation_id": conversation.id})
+    db.session.commit()
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.chat.routes.render_template', return_value='rendered') as render:
+        response = client.get(f'/chat/{conversation.id}')
+
+    assert response.status_code == 200
+    assert render.call_args.kwargs['alone'] is False
+
+
 def _notification(user, url, author):
     notification = Notification(title='New message', url=url, user_id=user.id,
                                 author_id=author.id, notif_type=NOTIF_MESSAGE,
@@ -492,6 +518,9 @@ def test_opening_a_conversation_clears_only_that_conversations_notifications(app
     other = make_conversation(alice, carol)
     mine = _notification(alice, f'/chat/{conversation.id}#message_1', bob)
     elsewhere = _notification(alice, f'/chat/{other.id}#message_2', carol)
+    # a second unread elsewhere, so the recount (read=False) and its mutant
+    # (read=True) cannot agree: two remain unread, one has just been read
+    also_elsewhere = _notification(alice, f'/chat/{other.id}#message_4', carol)
     someone_elses = _notification(bob, f'/chat/{conversation.id}#message_3', alice)
     client = app.test_client()
     login(client, alice)
@@ -503,8 +532,9 @@ def test_opening_a_conversation_clears_only_that_conversations_notifications(app
     db.session.expire_all()
     assert Notification.query.get(mine.id).read is True
     assert Notification.query.get(elsewhere.id).read is False
+    assert Notification.query.get(also_elsewhere.id).read is False
     assert Notification.query.get(someone_elses.id).read is False
-    assert User.query.get(alice.id).unread_notifications == 1
+    assert User.query.get(alice.id).unread_notifications == 2
 
 
 # --------------------------------------------------------------------------
@@ -624,6 +654,33 @@ def test_a_recipient_who_has_left_still_takes_the_redirect(app, db_session):
     assert render.call_args.args[0] == 'chat/new_message.html'
 
 
+def test_a_sender_who_has_left_gets_the_form_not_the_redirect(app, db_session):
+    """The other half of the repaired guard at routes.py:97.
+
+    find_existing_conversation looks the conversation up regardless of
+    `joined`, while the id set comes from a query that filters on it. When the
+    SENDER is the one who left, the set holds only the recipient -- so a mutant
+    dropping `current_user.id in member_ids` would redirect alice back into a
+    conversation she has left, and the original hands her the form.
+    """
+    instance, alice, bob, carol = _seed()
+    _aged(alice)
+    conversation = make_conversation(alice, bob)
+    db.session.execute(db.text(
+        "UPDATE conversation_member SET joined = :state WHERE user_id = :person_id "
+        "AND conversation_id = :conversation_id"),
+        {"state": False, "person_id": alice.id, "conversation_id": conversation.id})
+    db.session.commit()
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.chat.routes.render_template', return_value='rendered') as render:
+        response = client.get(f'/chat/{bob.id}/new')
+
+    assert response.status_code == 200
+    assert render.call_args.args[0] == 'chat/new_message.html'
+
+
 def test_a_new_message_to_an_unknown_user_is_a_404(app, db_session):
     instance, alice, bob, carol = _seed()
     _aged(alice)
@@ -676,10 +733,14 @@ def test_an_admin_may_refresh_a_conversation_they_are_not_in(app, db_session):
     client = app.test_client()
     login(client, carol)
 
-    with patch('app.chat.routes.render_template', return_value='rendered'):
+    with patch('app.chat.routes.render_template', return_value='rendered') as render:
         response = client.get(f'/chat/refresh-conversation/{conversation.id}')
 
     assert response.status_code == 200
+    # a mutant dropping the is_admin half returns '' here, which is also a 200 --
+    # the render is what separates the two
+    assert render.call_args.args[0] == 'chat/_messages.html'
+    assert response.get_data(as_text=True) == 'rendered'
 
 
 def test_the_refresh_gives_a_stranger_an_empty_body(app, db_session):
