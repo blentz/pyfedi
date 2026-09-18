@@ -168,15 +168,26 @@ def test_an_admin_who_is_not_a_member_cannot_post(app, db_session):
 
 
 def _make_admin(user):
-    """User.is_admin() (app/models.py:1259-1265) is id == 1 or a role literally
-    named 'Admin'. The id-1 seat is burned by the seed, so an admin here is the
-    role, written through the plain `user_role` table -- there is no UserRole
-    model (see tests/factories.py:365-381).
+    """THIS CODEBASE HAS TWO NOTIONS OF ADMIN AND A TEST NEEDS BOTH.
+
+    `User.is_admin()` (app/models.py:1259-1265) is id == 1 or a role literally
+    NAMED 'Admin'. `Site.admins()` (app/models.py:4007-4012) and the
+    `g.admin_ids` the request hook computes (app/request_hooks.py:99-106) ask
+    instead for a role whose ID is `ROLE_ADMIN`, which is the constant 4 -- the
+    name is never read. A role satisfying only the first leaves `Site.admins()`
+    returning the id-1 seat alone, which is what chat_report notifies.
+
+    So the role here carries both: the name and the id. The id-1 seat is burned
+    by the seed, and the assignment row goes through the plain `user_role`
+    table -- there is no UserRole model (see tests/factories.py:365-381).
     """
+    from app.constants import ROLE_ADMIN
     from app.models import Role, user_role
-    role = Role(name='Admin', weight=0)
-    db.session.add(role)
-    db.session.commit()
+    role = Role.query.get(ROLE_ADMIN)
+    if role is None:
+        role = Role(id=ROLE_ADMIN, name='Admin', weight=0)
+        db.session.add(role)
+        db.session.commit()
     db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
     db.session.commit()
     return role
@@ -974,3 +985,155 @@ def test_blocking_an_instance_without_htmx_redirects_to_chat(app, db_session):
 
     assert response.status_code == 302
     assert response.headers['Location'] == '/chat'
+
+
+# --------------------------------------------------------------------------
+# chat_report
+# --------------------------------------------------------------------------
+
+
+def _report_post(app, client, conversation_id, **overrides):
+    data = {'reasons': ['7'], 'description': 'they will not stop',
+            'submit': 'Report'}
+    data.update(overrides)
+    data['csrf_token'] = csrf(app, client)
+    with patch('app.chat.routes.render_template', return_value='rendered'):
+        return client.post(f'/chat/{conversation_id}/report', data=data)
+
+
+def test_the_report_form_arrives_with_the_remote_box_ticked(app, db_session):
+    """routes.py:250-251: the GET arm pre-ticks report_remote, which the POST
+    arm must not do -- the two are different branches of the same `elif`.
+    """
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.chat.routes.render_template', return_value='rendered') as render:
+        response = client.get(f'/chat/{conversation.id}/report')
+
+    assert response.status_code == 200
+    assert render.call_args.args[0] == 'chat/report.html'
+    assert render.call_args.kwargs['form'].report_remote.data is True
+    assert render.call_args.kwargs['conversation'].id == conversation.id
+
+
+def test_reporting_a_conversation_writes_the_report_and_notifies_every_admin(app, db_session):
+    """Two admins, so the loop at routes.py:233 runs more than once and each
+    admin's own counter is visibly incremented -- with one admin, a mutant that
+    incremented some other user's counter could still pass.
+    """
+    from app.constants import REPORT_TYPE_MESSAGE
+    from app.models import Report
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    _make_admin(carol)
+    dave = make_user(instance, 'dave', local=True)
+    _make_admin(dave)
+    client = app.test_client()
+    login(client, alice)
+
+    response = _report_post(app, client, conversation.id)
+
+    assert response.status_code == 302
+    assert response.headers['Location'] == f'/chat/{conversation.id}'
+    report = Report.query.one()
+    assert report.reporter_id == alice.id
+    assert report.suspect_conversation_id == conversation.id
+    assert report.type == REPORT_TYPE_MESSAGE
+    assert report.reasons == 'Spam'
+    assert report.description == 'they will not stop'
+    assert report.targets == {'gen': '0', 'suspect_conversation_id': conversation.id,
+                              'reporter_id': alice.id}
+    db.session.expire_all()
+    notified = Notification.query.filter_by(subtype='chat_conversation_reported').all()
+    # user 1 is an admin by id alone (app/request_hooks.py:100), so the seed's
+    # burnt seat is notified along with the two roles
+    assert sorted(n.user_id for n in notified) == sorted([1, carol.id, dave.id])
+    assert all(n.url == '/admin/reports' and n.author_id == alice.id for n in notified)
+    assert User.query.get(carol.id).unread_notifications == 1
+    assert User.query.get(dave.id).unread_notifications == 1
+
+
+def test_reporting_joins_the_reasons_in_the_order_they_were_submitted(app, db_session):
+    """reasons_to_string (forms.py:33-39) loops over the SUBMITTED ids
+    outermost and the form's choices innermost, so the stored string follows
+    the submission's order, not the form's. Submitting them backwards is what
+    tells the two apart -- and the first version of this test asserted the
+    other way round and failed.
+    """
+    from app.models import Report
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    client = app.test_client()
+    login(client, alice)
+
+    _report_post(app, client, conversation.id, reasons=['14', '2'])
+
+    assert Report.query.one().reasons == 'Other, Harassment'
+
+
+def test_a_report_that_fails_validation_writes_nothing(app, db_session):
+    """The false arm of validate_on_submit on a POST, which is a different arc
+    from the GET at :250. description is capped at 256 characters (forms.py:29).
+    """
+    from app.models import Report
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    client = app.test_client()
+    login(client, alice)
+
+    data = {'reasons': ['7'], 'description': 'x' * 300, 'submit': 'Report',
+            'csrf_token': csrf(app, client)}
+    with patch('app.chat.routes.render_template', return_value='rendered') as render:
+        response = client.post(f'/chat/{conversation.id}/report', data=data)
+
+    assert response.status_code == 200
+    assert render.call_args.args[0] == 'chat/report.html'
+    assert Report.query.count() == 0
+    # the POST arm must NOT re-tick the box, which is the GET arm's job
+    assert render.call_args.kwargs['form'].report_remote.data is False
+
+
+def test_ticking_the_remote_box_changes_nothing_yet(app, db_session):
+    """routes.py:245-246 is `if form.report_remote.data: ...` -- a branch whose
+    body is a bare Ellipsis. The report is written either way, and that is what
+    D757 records: the checkbox the form offers does nothing.
+    """
+    from app.models import Report
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    _make_admin(carol)
+    client = app.test_client()
+    login(client, alice)
+
+    _report_post(app, client, conversation.id, report_remote='y')
+
+    assert Report.query.count() == 1
+    assert Notification.query.filter_by(subtype='chat_conversation_reported').count() == 2
+
+
+def test_an_admin_may_report_a_conversation_they_are_not_in(app, db_session):
+    from app.models import Report
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    _make_admin(carol)
+    client = app.test_client()
+    login(client, carol)
+
+    response = _report_post(app, client, conversation.id)
+
+    assert response.status_code == 302
+    assert Report.query.one().reporter_id == carol.id
+
+
+def test_reporting_an_unknown_conversation_is_a_404(app, db_session):
+    instance, alice, bob, carol = _seed()
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.chat.routes.render_template', return_value='rendered'):
+        response = client.get('/chat/999/report')
+
+    assert response.status_code == 404
