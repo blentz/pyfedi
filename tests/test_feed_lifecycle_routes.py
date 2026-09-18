@@ -478,3 +478,135 @@ def test_creating_a_feed_from_a_topic_prefills_the_form(app, db_session):
     assert set(form.communities.data.split('\n')) == {
         first.lemmy_link().replace('!', ''), second.lemmy_link().replace('!', '')}
     assert '!' not in form.communities.data
+
+
+def test_editing_someone_elses_feed_is_a_404(app, db_session):
+    """:148-149. The route's own ownership check, which is stricter than
+    edit_feed's: the shared function admits an admin (D697), this route does
+    not, and that divergence is registered rather than resolved."""
+    instance, owner, stranger = _seed()
+    feed = _feed(owner)
+
+    with app.test_client() as client:
+        login(client, stranger)
+        response = client.get(f'/feed/{feed.id}/edit')
+
+    assert response.status_code == 404
+
+
+def test_editing_a_feed_that_is_not_there_is_a_404(app, db_session):
+    """:147's get_or_404, reached before the ownership check."""
+    instance, owner, stranger = _seed()
+    with app.test_client() as client:
+        login(client, owner)
+        response = client.get('/feed/999/edit')
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize('subscriptions_count, expect_disabled', [(2, True), (1, False)])
+def test_the_edit_form_disables_the_url_box_once_a_feed_has_subscribers(
+        app, db_session, subscriptions_count, expect_disabled):
+    """:157-158, and D696's register entry is the reason this is worth a test:
+    the guard exists only in the browser. A crafted POST renames a feed with
+    subscribers anyway, and D695 then leaves its actor url on the old name.
+
+    Both rows are needed: with one, a mutant deleting the guard is invisible.
+    """
+    instance, owner, stranger = _seed()
+    feed = _feed(owner)
+    feed.subscriptions_count = subscriptions_count
+    db.session.commit()
+
+    captured, fake_render = _capture_form()
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', side_effect=fake_render):
+            client.get(f'/feed/{feed.id}/edit')
+
+    form = captured['form']
+    assert (form.url.render_kw == {'disabled': True}) is expect_disabled
+
+
+def test_the_edit_form_prefills_every_field_from_the_feed(app, db_session):
+    """:167-183's pre-fill block, the part P1 lives in.
+
+    Seven fields are copied here and nothing asserted any of them before this
+    round -- which is how the NSFL line came to read the NSFW column. Each value
+    is distinct from the others so a mis-wired assignment cannot pass by
+    coincidence, and feed_communities_for_edit is patched to a sentinel for the
+    same reason.
+    """
+    instance, owner, stranger = _seed()
+    feed = _feed(owner, nsfw=True, nsfl=False)
+    parent = _feed(owner, name='parentfeed')
+    feed.title = 'A distinctive title'
+    feed.description = 'A distinctive description'
+    feed.show_posts_in_children = True
+    feed.parent_feed_id = parent.id
+    feed.public = False
+    feed.is_instance_feed = True
+    site = Site.query.get(1)
+    site.enable_nsfw = site.enable_nsfl = True
+    db.session.commit()
+
+    captured, fake_render = _capture_form()
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', side_effect=fake_render), \
+                patch('app.feed.routes.feed_communities_for_edit',
+                      return_value='!a@b') as communities:
+            client.get(f'/feed/{feed.id}/edit')
+
+    form = captured['form']
+    assert form.title.data == 'A distinctive title'
+    assert form.url.data == 'lifecyclefeed'
+    assert form.description.data == 'A distinctive description'
+    assert form.communities.data == '!a@b'
+    assert communities.call_args.args == (feed.id,)
+    assert form.show_child_posts.data is True
+    assert form.parent_feed_id.data == parent.id != feed.id
+    assert form.public.data is False
+    assert form.is_instance_feed.data is True
+    assert form.nsfw.data is True and form.nsfl.data is False
+
+
+def _edit_payload(app, client, **overrides):
+    data = {'csrf_token': csrf(app, client), 'title': 'Edited', 'url': 'lifecyclefeed',
+            'description': '', 'communities': 'somecommunity@remote.example',
+            'public': 'y'}
+    data.update(overrides)
+    return {k: v for k, v in data.items() if v is not None}
+
+
+@pytest.mark.parametrize('new_url, referer, expected_location', [
+    ('renamedfeed', 'https://test.piefed.local/f/lifecyclefeed', '/f/renamedfeed'),
+    ('renamedfeed', 'https://test.piefed.local/elsewhere',
+     'https://test.piefed.local/elsewhere'),
+    ('lifecyclefeed', 'https://test.piefed.local/elsewhere',
+     'https://test.piefed.local/elsewhere'),
+])
+def test_saving_an_edit_redirects_by_whether_the_url_changed(app, db_session, new_url,
+                                                             referer, expected_location):
+    """:161-180. The POST arm: the slug rewrite, the url_changed/old_url
+    bookkeeping, and the three redirect arms.
+
+    The rows are the three outcomes: a rename whose referrer names the OLD url
+    (the only case that cannot simply go back, because that page is gone), a
+    rename from somewhere else, and an edit that changed no url at all. The
+    first row is the one that distinguishes :175's `referrer().endswith(old_url)`
+    from the plain `back()` the other two take.
+    """
+    instance, owner, stranger = _seed()
+    feed = _feed(owner)
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()), \
+                patch('app.shared.feed.existing_communities', return_value=[]):
+            response = client.post(f'/feed/{feed.id}/edit',
+                                   data=_edit_payload(app, client, url=new_url),
+                                   headers={'Referer': referer})
+
+    assert response.status_code == 302
+    assert response.headers['Location'] == expected_location
+    assert Feed.query.get(feed.id).name == new_url
