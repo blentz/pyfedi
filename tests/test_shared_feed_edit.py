@@ -533,23 +533,22 @@ def test_edit_feed_replaces_the_icon_only_when_the_url_really_changed(
             edit_feed(_api_payload(icon_url=incoming), s.feed, SRC_API, auth='Bearer x')
 
     edited = Feed.query.get(s.feed.id)
-    if expect_replaced and attach:
-        # PIN (P5): replacing an icon the feed ALREADY had loses it. :343 sets
-        # the FK attribute while the loaded `icon` relationship still points at
-        # the old File, and :350's explicit delete of that old row makes the
-        # relationship win at flush: the feed ends with icon_id None and the
-        # newly created File row orphaned. The banner arm sixteen lines below
-        # does NOT do this, which is what makes it a defect rather than a
-        # property of the cascade.
-        assert edited.icon_id is None
-        assert File.query.get(before_icon_id) is None
-        assert File.query.filter_by(source_url=incoming).count() == 1
-        assert unlink.call_count == 1
-    elif expect_replaced:
-        assert edited.icon_id != before_icon_id
-        assert File.query.get(edited.icon_id).source_url == incoming
+    if expect_replaced:
+        # Was a PIN; INVERTED once the assignment moved to the relationship.
+        #
+        # ORIGINAL PINNED CLAIM, now false: "replacing an icon the feed ALREADY
+        # had loses it -- the feed ends with icon_id None and the new File row
+        # orphaned", because the FK attribute was assigned while the loaded
+        # `icon` relationship still pointed at the old File and won at flush.
+        #
+        # The old row is gone either way; what changed is that the feed now
+        # keeps the icon it was given. The old row's disk file is unlinked
+        # exactly when there was an old row.
+        assert edited.icon_id == File.query.filter_by(source_url=incoming).one().id
         assert sizer.call_args.args == (edited.icon_id, 40, 250, 'feeds', False)
-        assert unlink.call_count == 0
+        assert unlink.call_count == (1 if attach else 0)
+        if attach:
+            assert File.query.get(before_icon_id) is None
     else:
         assert edited.icon_id == before_icon_id
         assert sizer.call_count == 0
@@ -626,8 +625,13 @@ def test_edit_feed_from_scratch_stores_the_icon_without_consulting_the_detector(
     disjunct is not dead weight -- and R1 records that no production caller
     reaches it.
 
-    old_icon_id also stays 0, so :346's `not from_scratch` guard is what keeps
-    the old file alive here: asserted by the surviving row.
+    THE OLD ROW IS REMOVED HERE TOO, AND THAT IS A DELIBERATE CHANGE THIS ROUND
+    MADE RATHER THAN AN ACCIDENT. Before the icon repair, from_scratch kept the
+    previous File row and its disk file. Attaching the new icon through the
+    relationship makes the delete-orphan cascade drop the old row on every
+    path, so the repair unlinks the disk file on every path too -- leaving it
+    would orphan a file nothing references. Nothing in production changes,
+    because no caller passes from_scratch=True (R1).
     """
     s = _seed()
     existing = _attach_icon(s.feed)
@@ -641,8 +645,8 @@ def test_edit_feed_from_scratch_stores_the_icon_without_consulting_the_detector(
 
     edited = Feed.query.get(s.feed.id)
     assert edited.icon_id != existing.id
-    assert File.query.get(existing.id) is not None
-    assert unlink.call_count == 0
+    assert File.query.get(existing.id) is None
+    assert unlink.call_count == 1
 
 
 def test_edit_feed_cannot_be_given_an_old_file_id_whose_row_has_vanished(app, db_session):

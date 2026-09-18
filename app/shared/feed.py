@@ -340,14 +340,25 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
         file = File(source_url=icon_url)
         db.session.add(file)
         db.session.commit()
-        feed.icon_id = file.id
+        # Assign through the RELATIONSHIP, not the FK attribute. Feed.icon is
+        # declared single_parent with cascade="all, delete-orphan"
+        # (app/models.py:4137), so the loaded relationship still pointed at the
+        # old File and won at flush: setting feed.icon_id alone and then
+        # deleting the old row left the feed with icon_id None and the new File
+        # orphaned -- the feed lost the icon it had just been given. The old
+        # row's disk file is removed first, because the delete-orphan cascade
+        # removes the row itself as soon as the new one is attached.
+        # Unlinked regardless of from_scratch, and that is a DELIBERATE change:
+        # attaching the new File makes the delete-orphan cascade drop the old
+        # ROW on every path, so the old `not from_scratch` guard would now leave
+        # a file on disk that nothing references. No caller passes
+        # from_scratch=True (see R1), so nothing in production changes.
+        old_icon = feed.icon
+        if old_icon is not None and old_icon.id != file.id:
+            old_icon.delete_from_disk()
+        feed.icon = file
+        db.session.commit()
         make_image_sizes(feed.icon_id, 40, 250, 'feeds', False)
-        # Only delete old icon after new one is successfully saved
-        if not from_scratch and old_icon_id and old_icon_id != feed.icon_id:
-            remove_file = File.query.get(old_icon_id)
-            if remove_file:
-                remove_file.delete_from_disk()
-                db.session.delete(remove_file)
     if banner_url and (from_scratch or banner_url_changed) and is_image_url(banner_url):
         file = File(source_url=banner_url)
         db.session.add(file)
