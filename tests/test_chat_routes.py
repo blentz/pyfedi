@@ -634,7 +634,7 @@ def test_a_recipient_who_has_left_still_takes_the_redirect(app, db_session):
 
     The route therefore falls through to the form and a SECOND conversation is
     created for the pair. Recorded as behaviour rather than asserted as
-    correct: see D744.
+    correct: see D748.
     """
     instance, alice, bob, carol = _seed()
     _aged(alice)
@@ -746,7 +746,7 @@ def test_an_admin_may_refresh_a_conversation_they_are_not_in(app, db_session):
 def test_the_refresh_gives_a_stranger_an_empty_body(app, db_session):
     """routes.py:263 returns '' rather than falling off the end, which is what
     chat_options and chat_report do in the same position -- and those two are a
-    500 for it (D745).
+    500 for it (D747).
     """
     instance, alice, bob, carol = _seed()
     conversation = make_conversation(alice, bob)
