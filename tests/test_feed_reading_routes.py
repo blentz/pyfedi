@@ -399,6 +399,9 @@ def test_a_scaled_sort_collapses_to_the_default(app, db_session):
 @pytest.mark.parametrize('layout, user_page_length, expected', [
     (None, None, 100),
     (None, 5, 5),
+    # A preference LARGER than the site's is ignored: :473's guard is `<`, and
+    # without this row dropping that comparison changes nothing.
+    (None, 500, 100),
     ('masonry', None, 200),
     ('masonry_wide', None, 300),
 ])
@@ -554,6 +557,54 @@ def test_the_submit_page_offers_the_feeds_communities_and_its_childrens(app, db_
     assert {c.name for c in captured['communities']} == {'ownsubmit'}
     assert {c.name for c in captured['sub_communities']} == {'childsubmit'}
     assert captured['feed'].id == feed.id
+
+
+def test_the_submit_page_finds_a_feed_whatever_case_the_url_uses(app, db_session):
+    """:600 lower-cases the name before the lookup, and machine_name is stored
+    lower-cased, so a link that carries the display capitalisation still
+    resolves. Without this row the .lower() is free."""
+    instance, owner, snooper = _seed()
+    _verified(snooper)
+    feed = _feed(owner, 'submitfeed')
+
+    captured, fake_render = _capture_render()
+    with app.test_client() as client:
+        login(client, snooper)
+        with patch('app.feed.routes.render_template', side_effect=fake_render):
+            response = client.get('/f/SubmitFeed/submit')
+
+    assert response.status_code == 200
+    assert captured['feed'].id == feed.id
+
+
+def test_the_rss_url_names_the_feed_in_its_last_path_segment(app, db_session):
+    """:758-759. The route accepts a nested path -- /f/<parent>/<child>.rss --
+    and the feed it serves is the LAST segment, not the first.
+
+    Two feeds whose posts differ are what make that observable: with the first
+    segment taken instead, the parent's post would appear and the child's would
+    not.
+    """
+    from tests.factories import make_post
+    instance, owner, snooper = _seed()
+    parent = _feed(owner, 'parentrss')
+    child = _feed(owner, 'childrss', parent_feed_id=parent.id)
+    parent_community = make_community(name='parentcommunity', host='remote.example')
+    child_community = make_community(name='childcommunity', host='remote.example')
+    db.session.add_all([FeedItem(feed_id=parent.id, community_id=parent_community.id),
+                        FeedItem(feed_id=child.id, community_id=child_community.id)])
+    db.session.commit()
+    make_post(parent_community, owner, 'https://remote.example/p/10', title='Parent post')
+    make_post(child_community, owner, 'https://remote.example/p/11', title='Child post')
+    db.session.commit()
+
+    with app.test_client() as client:
+        response = client.get('/f/parentrss/childrss.rss')
+
+    body = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert 'Child post' in body
+    assert 'Parent post' not in body
 
 
 def test_the_submit_page_404s_for_a_feed_that_is_not_there(app, db_session):
