@@ -313,3 +313,168 @@ def test_unsubscribing_leaves_alone_a_community_the_user_joined_themselves(app, 
     assert leave.call_count == 0
     assert CommunityMember.query.filter_by(user_id=member.id,
                                            community_id=community.id).count() == 1
+
+
+# --------------------------------------------------------------------------
+# Task 5: the rest of feed_new and feed_edit.
+# --------------------------------------------------------------------------
+
+
+def test_a_banned_user_cannot_reach_the_create_form(app, db_session):
+    """:43-44. show_ban_message runs before the form is even built, so a banned
+    user never reaches feeds_for_form or the widget arms below it."""
+    instance, owner, stranger = _seed()
+    owner.banned = True
+    db.session.commit()
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.show_ban_message', return_value='banned') as ban, \
+                patch('app.feed.routes.render_template') as render:
+            response = client.get('/feed/new')
+
+    assert response.status_code == 200
+    assert ban.call_count == 1
+    assert render.call_count == 0
+
+
+def test_a_banned_user_cannot_reach_the_edit_form(app, db_session):
+    """:143-144, feed_edit's twin of the arm above -- and it runs BEFORE the
+    feed is loaded, so a banned user editing a feed that does not exist gets the
+    ban message rather than a 404."""
+    instance, owner, stranger = _seed()
+    feed = _feed(owner)
+    owner.banned = True
+    db.session.commit()
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.show_ban_message', return_value='banned') as ban:
+            response = client.get(f'/feed/{feed.id}/edit')
+
+    assert response.status_code == 200
+    assert ban.call_count == 1
+
+
+@pytest.mark.parametrize('is_admin, expect_disabled', [(False, True), (True, False)])
+def test_the_create_form_disables_the_instance_feed_box_for_non_admins(
+        app, db_session, is_admin, expect_disabled):
+    """:50-51. The widget arm only -- D675 is the register entry for the fact
+    that this constrains nothing on the server, and sub-project 50 repaired
+    make_feed rather than the widget.
+
+    feeds_for_form is asserted with its arguments in the same test: :52 passes
+    (0, current_user.id), and the 0 is what tells make's form from edit's, which
+    passes the feed id.
+    """
+    instance, owner, stranger = _seed()
+    if is_admin:
+        from app.models import Role, user_role
+        role = Role(name='Admin', weight=0)
+        db.session.add(role)
+        db.session.commit()
+        db.session.execute(user_role.insert().values(user_id=owner.id, role_id=role.id))
+        db.session.commit()
+
+    captured, fake_render = _capture_form()
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', side_effect=fake_render), \
+                patch('app.feed.routes.feeds_for_form', return_value=[]) as choices:
+            client.get('/feed/new')
+
+    form = captured['form']
+    assert (form.is_instance_feed.render_kw == {'disabled': True}) is expect_disabled
+    assert choices.call_args.args == (0, owner.id)
+
+
+@pytest.mark.parametrize('site_nsfw, site_nsfl', [(False, False), (True, True)])
+def test_the_create_form_disables_the_nsfw_boxes_the_site_forbids(app, db_session,
+                                                                  site_nsfw, site_nsfl):
+    """:46-49, both widget arms. Separate from the POST test above, which is
+    about the server-side rule this round added: these two are the browser-side
+    hint, and covering them says which is which."""
+    instance, owner, stranger = _seed()
+    site = Site.query.get(1)
+    site.enable_nsfw = site_nsfw
+    site.enable_nsfl = site_nsfl
+    db.session.commit()
+
+    captured, fake_render = _capture_form()
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', side_effect=fake_render):
+            client.get('/feed/new')
+
+    form = captured['form']
+    assert (form.nsfw.render_kw == {'disabled': True}) is not site_nsfw
+    assert (form.nsfl.render_kw == {'disabled': True}) is not site_nsfl
+
+
+def test_creating_a_private_feed_appends_the_owner_to_its_url(app, db_session):
+    """:58-60. A private feed's url becomes '<slug>/<owner>', which is what
+    keeps two users' private feeds from colliding on Feed.name's unique index.
+
+    The owner's name is not a substring of the slug, asserted live, so the
+    composite is distinguishable from either half.
+    """
+    instance, owner, stranger = _seed()
+    assert 'feedowner' not in 'secretfeed'
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
+            response = client.post('/feed/new', data=_create_payload(
+                app, client, url='secretfeed', public=None))
+
+    assert response.status_code == 302
+    assert Feed.query.filter_by(name='secretfeed/feedowner').count() == 1
+
+
+def test_creating_a_feed_redirects_to_the_owners_feed_list(app, db_session):
+    """:63-64, the success arm's flash and redirect. The Location is asserted in
+    full: `back()` is not used here, so a regression that copied the redirect
+    from a neighbouring route would send the user somewhere else entirely."""
+    instance, owner, stranger = _seed()
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()), \
+                patch('app.feed.routes.flash') as flash_stub:
+            response = client.post('/feed/new', data=_create_payload(app, client))
+
+    assert response.status_code == 302
+    assert response.headers['Location'].endswith(f'/u/{owner.user_name}/myfeeds')
+    assert flash_stub.call_count == 1
+
+
+def test_creating_a_feed_from_a_topic_prefills_the_form(app, db_session):
+    """:83-89, the topic pre-fill, which is the block P3's 404 now guards.
+
+    Two communities, so the join is a join: the field is built by '\\n'.join
+    over lemmy_link() with the leading '!' stripped, and a single community
+    cannot show either the separator or the strip.
+    """
+    instance, owner, stranger = _seed()
+    topic = Topic(name='Gardening', machine_name='gardening', num_communities=2)
+    db.session.add(topic)
+    db.session.commit()
+    first = make_community(name='seeds', host='remote.example')
+    second = make_community(name='soil', host='remote.example')
+    first.topic_id = topic.id
+    second.topic_id = topic.id
+    db.session.commit()
+
+    captured, fake_render = _capture_form()
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', side_effect=fake_render):
+            response = client.get(f'/feed/new?topic_id={topic.id}')
+
+    assert response.status_code == 200
+    form = captured['form']
+    assert form.title.data == 'Gardening'
+    assert form.url.data == 'gardening'
+    assert set(form.communities.data.split('\n')) == {
+        first.lemmy_link().replace('!', ''), second.lemmy_link().replace('!', '')}
+    assert '!' not in form.communities.data
