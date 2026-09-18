@@ -360,9 +360,20 @@ def edit_feed(input, feed, src, auth=None, uploaded_icon_file=None, uploaded_ban
         feed.nsfl = nsfl
     # unsubscribe every feed member except owner when moving from public to private
     if feed.public and not public:
-        db.session.query(FeedMember).filter(FeedMember.is_owner == False).delete()
-        db.session.query(FeedJoinRequest).filter_by(user_id=user.id, feed_id=feed.id).delete()
-        feed.subscriptions_count = db.session.query(FeedMember).filter(FeedMember.is_owner == False).count()
+        # All three statements are scoped to THIS feed. Before this repair the
+        # delete carried no feed_id filter at all, so making one feed private
+        # unsubscribed every non-owner member of every feed on the instance; the
+        # join-request delete named the EDITOR rather than the feed, removing the
+        # wrong row and leaving the feed's pending requests; and the count was
+        # global too, reading 0 only because the delete above had just emptied
+        # the table.
+        db.session.query(FeedMember).filter(FeedMember.feed_id == feed.id,
+                                            FeedMember.is_owner == False).delete()
+        db.session.query(FeedJoinRequest).filter_by(feed_id=feed.id).delete()
+        # This feed's remaining rows, owner included, which is what make_feed:228
+        # writes for a feed that has only its owner.
+        feed.subscriptions_count = db.session.query(FeedMember).filter(
+            FeedMember.feed_id == feed.id).count()
     feed.public = public
     if user.is_admin():
         feed.is_instance_feed = is_instance_feed

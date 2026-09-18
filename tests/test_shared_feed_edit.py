@@ -121,16 +121,17 @@ def _form(**overrides):
 # --------------------------------------------------------------------------
 
 
-def test_going_private_deletes_every_other_feeds_members(app, db_session):
-    """PIN (P1): :363's delete filters on is_owner alone, with NO feed_id, so
-    making one feed private unsubscribes every non-owner member of every feed
-    on the instance.
+def test_going_private_unsubscribes_only_this_feeds_members(app, db_session):
+    """Was a PIN; INVERTED once the delete was scoped.
 
-    The second feed belongs to a third party and has its own owner and member.
-    Both ids are captured before the call because reading a deleted instance
-    afterwards raises ObjectDeletedError -- which is how scoping found this.
+    ORIGINAL PINNED CLAIM, now false: ":363's delete filters on is_owner alone,
+    with NO feed_id, so making one feed private unsubscribes every non-owner
+    member of every feed on the instance."
 
-    Nothing logs the deletion and the other feed's owner is never told.
+    The second feed is the control and it is the whole point: a one-feed
+    fixture cannot distinguish a scoped delete from a global one, which is why
+    nothing caught this. Its member row must survive, its owner row must
+    survive, and this feed's own owner must survive while its member goes.
     """
     s = _seed()
     make_feed_member(s.owner, s.feed, is_owner=True)
@@ -138,60 +139,76 @@ def test_going_private_deletes_every_other_feeds_members(app, db_session):
     make_feed_member(s.stranger, s.other_feed, is_owner=True)
     make_feed_member(s.member, s.other_feed)
     db.session.commit()
-    other_feed_id = s.other_feed.id
+    feed_id, other_feed_id = s.feed.id, s.other_feed.id
 
     with _site_ctx(app, s.owner):
         with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
             edit_feed(_form(public=False), s.feed, SRC_WEB)
 
-    assert FeedMember.query.filter_by(feed_id=other_feed_id, is_owner=False).count() == 0
+    assert FeedMember.query.filter_by(feed_id=other_feed_id, is_owner=False).count() == 1
     assert FeedMember.query.filter_by(feed_id=other_feed_id, is_owner=True).count() == 1
+    assert FeedMember.query.filter_by(feed_id=feed_id, is_owner=False).count() == 0
+    assert FeedMember.query.filter_by(feed_id=feed_id, is_owner=True).count() == 1
 
 
-def test_going_private_deletes_the_editors_join_request_not_the_feeds(app, db_session):
-    """PIN (P2): :364 filters FeedJoinRequest by the EDITOR's user id, so it
-    removes the row belonging to the person doing the editing and leaves the
-    feed's pending requests in place.
+def test_going_private_clears_this_feeds_pending_requests(app, db_session):
+    """Was a PIN; INVERTED once the join-request delete was re-filtered.
 
-    Both rows are on the same feed, so the only thing separating them is the
-    user_id filter this test pins as wrong.
+    ORIGINAL PINNED CLAIM, now false: ":364 filters FeedJoinRequest by the
+    EDITOR's user id, so it removes the row belonging to the person doing the
+    editing and leaves the feed's pending requests in place."
+
+    Three rows, one per thing that has to be true: the member's request on this
+    feed is cleared, the editor's own row on this feed is cleared too (it is
+    this feed's row, whoever it belongs to), and a THIRD user's request on
+    ANOTHER feed survives, which is what keeps the new feed_id filter
+    load-bearing.
+
+    Clearing a pending request leaves that user at SUBSCRIPTION_NONMEMBER
+    rather than SUBSCRIPTION_PENDING, which D674 established is the correct
+    state for someone with no membership -- so this repair and D674's agree.
     """
     s = _seed()
     make_feed_member(s.owner, s.feed, is_owner=True)
     make_feed_join_request(s.member, s.feed)
     make_feed_join_request(s.owner, s.feed)
+    make_feed_join_request(s.member, s.other_feed)
     db.session.commit()
+    feed_id, other_feed_id = s.feed.id, s.other_feed.id
 
     with _site_ctx(app, s.owner):
         with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
             edit_feed(_form(public=False), s.feed, SRC_WEB)
 
+    assert FeedJoinRequest.query.filter_by(feed_id=feed_id).count() == 0
     assert FeedJoinRequest.query.filter_by(user_id=s.member.id,
-                                           feed_id=s.feed.id).count() == 1
-    assert FeedJoinRequest.query.filter_by(user_id=s.owner.id,
-                                           feed_id=s.feed.id).count() == 0
+                                           feed_id=other_feed_id).count() == 1
 
 
-def test_going_private_counts_every_feeds_members(app, db_session):
-    """PIN (P3): :365 assigns subscriptions_count from a GLOBAL count of
-    non-owner memberships.
+def test_going_private_counts_only_this_feeds_members(app, db_session):
+    """Was a PIN; INVERTED once the count was scoped.
 
-    It reads 0 today only because :363's delete has just emptied the table, so
-    the pin has to distinguish the query rather than the number. The other
-    feed's OWNER row survives the delete (it is an owner), and this feed keeps
-    its owner too, so a correctly scoped count would read 1 -- this feed's rows
-    -- while the global non-owner count reads 0. Asserting 0 pins the global
-    query specifically.
+    ORIGINAL PINNED CLAIM, now false: ":365 assigns subscriptions_count from a
+    GLOBAL count of non-owner memberships", which read 0 only because the
+    delete above it had just emptied the table.
+
+    1, not 0, is the number that distinguishes the two queries: after the
+    scoped delete this feed has exactly its owner, and subscriptions_count
+    counts the owner elsewhere in this module -- make_feed:228 writes 1 for a
+    feed that has only its owner. The other feed keeps two rows, so a count
+    that had stayed global would read 2 and a count that excluded owners would
+    read 0.
     """
     s = _seed()
     make_feed_member(s.owner, s.feed, is_owner=True)
     make_feed_member(s.member, s.feed)
     make_feed_member(s.stranger, s.other_feed, is_owner=True)
+    make_feed_member(s.member, s.other_feed)
     db.session.commit()
 
     with _site_ctx(app, s.owner):
         with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
             edit_feed(_form(public=False), s.feed, SRC_WEB)
 
-    assert FeedMember.query.filter_by(feed_id=s.feed.id).count() == 1
-    assert Feed.query.get(s.feed.id).subscriptions_count == 0
+    assert Feed.query.get(s.feed.id).subscriptions_count == 1
+    assert FeedMember.query.filter_by(feed_id=s.other_feed.id).count() == 2
