@@ -81,10 +81,18 @@ def test_a_banned_instance_is_refused_with_its_reason(app, db_session):
     db.session.commit()
 
     with app.test_request_context('/'):
-        with pytest.raises(Exception, match='blocked.example is blocked. Reason: spam'):
+        with pytest.raises(Exception) as with_reason:
             search_for_feed('~afeed@blocked.example')
-        with pytest.raises(Exception, match='quiet.example is blocked.'):
+        with pytest.raises(Exception) as without_reason:
             search_for_feed('~afeed@quiet.example')
+
+    # EXACT messages, not a regex search: 'quiet.example is blocked.' is a
+    # prefix of the message a mutant that always appends the reason produces
+    # (' Reason: None'), and a prefix match cannot tell the two apart. The
+    # domains differ between the two rows for the same reason -- a lookup that
+    # dropped its domain filter would answer both with the first row's ban.
+    assert str(with_reason.value) == 'blocked.example is blocked. Reason: spam'
+    assert str(without_reason.value) == 'quiet.example is blocked.'
 
 
 def test_a_known_remote_feed_is_returned_without_fetching(app, db_session):
@@ -190,6 +198,8 @@ def test_a_webfinger_failure_is_retried_once_after_a_sleep(app, db_session):
 @pytest.mark.parametrize('webfinger_status, links, actor_status, actor_type, description', [
     (404, None, 200, 'Feed', 'webfinger says no'),
     (200, [{'href': 'https://remote.example/f/remotefeed'}], 200, 'Feed', 'no rel'),
+    (200, [{'rel': 'alternate', 'type': 'text/html',
+            'href': 'https://remote.example/f/remotefeed'}], 200, 'Feed', 'wrong rel'),
     (200, None, 404, 'Feed', 'actor fetch fails'),
     (200, None, 200, 'Person', 'not a feed'),
 ])
@@ -200,9 +210,11 @@ def test_the_webfinger_walk_gives_up_at_each_step(app, db_session, webfinger_sta
     entry with no `rel`, an actor fetch that fails, and an actor that is not a
     Feed.
 
-    Four rows because each is a different statement's False arm, and the
+    Five rows because each is a different statement's False arm, and the
     function returns None from all of them -- so only the call counts and the
-    description tell them apart.
+    description tell them apart. The 'wrong rel' row is the one that keeps
+    :79's SECOND operand load-bearing: an entry with a rel that is not 'self'
+    passes the `'rel' in links` half.
     """
     _seed()
 
@@ -214,7 +226,7 @@ def test_the_webfinger_walk_gives_up_at_each_step(app, db_session, webfinger_sta
                 patch('app.feed.util.actor_json_to_model') as to_model:
             assert search_for_feed('~remotefeed@remote.example') is None
 
-    if description in ('webfinger says no', 'no rel'):
+    if description in ('webfinger says no', 'no rel', 'wrong rel'):
         assert to_model.call_count == 0
 
 
@@ -293,12 +305,38 @@ def test_actor_to_feed_resolves_both_address_shapes(app, db_session, actor, expe
     make_instance('remote.example', software='piefed')
     local = _feed(owner, 'localfeed')
     remote = _feed(owner, 'remotefeed', ap_id='remotefeed@remote.example')
-    decoy = _feed(owner, 'localfeed-remote', ap_id='localfeed@elsewhere.example')
 
     with app.test_request_context('/'):
         found = actor_to_feed(actor)
 
     assert found.id == (remote.id if expected == 'remote' else local.id)
+
+
+@pytest.mark.parametrize('lookup', ['bare', 'local-shortcut'])
+def test_a_remote_feed_does_not_answer_a_local_name_lookup(app, db_session, lookup):
+    """The `ap_id=None` filter in both lookups that carry one -- actor_to_feed's
+    bare-name arm and search_for_feed's local shortcut.
+
+    THE FIXTURE HAS TO BE THE ONLY FEED WITH THAT NAME, and that is a fact
+    about the schema rather than a choice: `Feed.name` is unique
+    (app/models.py:4093), so a local and a remote feed cannot share one. The
+    filter is therefore observable only as the difference between finding the
+    remote row and finding nothing -- which is what a bare-name lookup for a
+    feed this server does not host must answer.
+    """
+    instance, owner = _seed()
+    make_instance('remote.example', software='piefed')
+    _feed(owner, 'onlyremote', ap_id='onlyremote@remote.example')
+    server = app.config['SERVER_NAME']
+
+    with app.test_request_context('/'):
+        with patch('app.feed.util.get_request') as get, \
+                patch('app.feed.util.sleep'):
+            if lookup == 'bare':
+                assert actor_to_feed('onlyremote') is None
+            else:
+                assert search_for_feed(f'~onlyremote@{server}') is None
+    assert get.call_count == 0
 
 
 def test_actor_to_feed_returns_nothing_for_an_unknown_name(app, db_session):
@@ -354,6 +392,31 @@ def test_a_feed_with_no_communities_initialises_nothing(app, db_session):
         initialise_new_communities(feed)
 
     assert backfill.call_count == 0
+
+
+def test_a_stale_community_count_stops_the_backfill(app, db_session):
+    """:109-110's early return is decided by the COUNTER, not by the rows: a
+    feed whose num_communities is 0 but which has member_communities anyway --
+    a counter that has drifted -- backfills nothing.
+
+    That is what makes the early return observable at all, and it is worth
+    knowing: the counter is maintained by _feed_add_community and
+    _feed_remove_community, and anything that writes FeedItem rows without them
+    leaves this function blind.
+    """
+    instance, owner = _seed()
+    feed = _feed(owner, 'stalefeed')
+    community = make_community(name='alpha', host='remote.example')
+    db.session.add(FeedItem(feed_id=feed.id, community_id=community.id))
+    feed.num_communities = 0
+    db.session.commit()
+
+    with app.test_request_context('/'):
+        with patch('app.feed.util.retrieve_mods_and_backfill') as backfill:
+            initialise_new_communities(feed)
+
+    assert backfill.call_count == 0
+    assert backfill.delay.call_count == 0
 
 
 @pytest.mark.parametrize('debug, expected_inline, expected_delayed', [
