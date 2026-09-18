@@ -8,8 +8,8 @@ from app.chat import bp
 from app.chat.forms import AddReply, ReportConversationForm
 from app.chat.util import send_message
 from app.constants import NOTIF_REPORT, SRC_WEB, REPORT_TYPE_MESSAGE
-from app.models import Site, User, Report, ChatMessage, Notification, Conversation, conversation_member, CommunityBan, \
-    ModLog
+from app.models import Site, User, Report, ChatMessage, Notification, Conversation, conversation_member, \
+    Community, CommunityBan, ModLog
 from app.shared.site import block_remote_instance
 from app.utils import render_template, login_required, trustworthy_account_required
 
@@ -134,9 +134,13 @@ def empty():
 @bp.route('/chat/ban_from_mod/<int:user_id>/<int:community_id>', methods=['GET'])
 @login_required
 def ban_from_mod(user_id, community_id):
+    community = Community.query.get_or_404(community_id)
+    if not (community.is_moderator() or community.is_owner() or current_user.is_admin()):
+        abort(401)
+    banned_user = User.query.get_or_404(user_id)
     active_ban = CommunityBan.query.filter_by(user_id=user_id, community_id=community_id).order_by(
         desc(CommunityBan.created_at)).first()
-    user_link = 'u/' + current_user.user_name
+    user_link = 'u/' + banned_user.user_name
     past_bans = ModLog.query.filter(ModLog.community_id == community_id, ModLog.link == user_link,
                                     or_(ModLog.action == 'ban_user', ModLog.action == 'unban_user')).order_by(
         desc(ModLog.created_at))
@@ -151,8 +155,9 @@ def ban_from_mod(user_id, community_id):
 @login_required
 def chat_options(conversation_id):
     conversation = Conversation.query.get_or_404(conversation_id)
-    if current_user.is_admin() or conversation.is_member(current_user):
-        return render_template('chat/chat_options.html', conversation=conversation)
+    if not (current_user.is_admin() or conversation.is_member(current_user)):
+        abort(400)
+    return render_template('chat/chat_options.html', conversation=conversation)
 
 
 @bp.route('/chat/<int:conversation_id>/delete', methods=['POST'])
@@ -192,7 +197,9 @@ def block_instance(instance_id):
         resp = make_response()
         curr_url = request.headers.get('HX-Current-Url')
 
-        if "/chat/" in curr_url:
+        # HX-Current-Url is optional; a caller who did not say where they are
+        # cannot be sent back there
+        if curr_url is None or "/chat/" in curr_url:
             resp.headers["HX-Redirect"] = url_for("main.index")
         else:
             resp.headers["HX-Redirect"] = curr_url
@@ -206,45 +213,46 @@ def block_instance(instance_id):
 @login_required
 def chat_report(conversation_id):
     conversation = Conversation.query.get_or_404(conversation_id)
-    if current_user.is_admin() or conversation.is_member(current_user):
-        form = ReportConversationForm()
+    if not (current_user.is_admin() or conversation.is_member(current_user)):
+        abort(400)
+    form = ReportConversationForm()
 
-        if form.validate_on_submit():
-            targets_data = {'gen': '0', 'suspect_conversation_id': conversation.id, 'reporter_id': current_user.id}
-            report = Report(reasons=form.reasons_to_string(form.reasons.data),
-                            description=form.description.data,
-                            type=REPORT_TYPE_MESSAGE,
-                            reporter_id=current_user.id,
-                            suspect_conversation_id=conversation_id,
-                            source_instance_id=1,
-                            targets=targets_data)
-            db.session.add(report)
+    if form.validate_on_submit():
+        targets_data = {'gen': '0', 'suspect_conversation_id': conversation.id, 'reporter_id': current_user.id}
+        report = Report(reasons=form.reasons_to_string(form.reasons.data),
+                        description=form.description.data,
+                        type=REPORT_TYPE_MESSAGE,
+                        reporter_id=current_user.id,
+                        suspect_conversation_id=conversation_id,
+                        source_instance_id=1,
+                        targets=targets_data)
+        db.session.add(report)
 
-            # Notify site admin
-            already_notified = set()
-            for admin in Site.admins():
-                if admin.id not in already_notified:
-                    notify = Notification(title='Reported conversation with user', url='/admin/reports',
-                                          user_id=admin.id,
-                                          author_id=current_user.id, notif_type=NOTIF_REPORT,
-                                          subtype='chat_conversation_reported',
-                                          targets=targets_data)
-                    db.session.add(notify)
-                    admin.unread_notifications += 1
-            db.session.commit()
+        # Notify site admin
+        already_notified = set()
+        for admin in Site.admins():
+            if admin.id not in already_notified:
+                notify = Notification(title='Reported conversation with user', url='/admin/reports',
+                                      user_id=admin.id,
+                                      author_id=current_user.id, notif_type=NOTIF_REPORT,
+                                      subtype='chat_conversation_reported',
+                                      targets=targets_data)
+                db.session.add(notify)
+                admin.unread_notifications += 1
+        db.session.commit()
 
-            # todo: federate report to originating instance
-            if form.report_remote.data:
-                ...
+        # todo: federate report to originating instance
+        if form.report_remote.data:
+            ...
 
-            flash(_('This conversation has been reported, thank you!'))
-            return redirect(url_for('chat.chat_home', conversation_id=conversation_id))
-        elif request.method == 'GET':
-            form.report_remote.data = True
+        flash(_('This conversation has been reported, thank you!'))
+        return redirect(url_for('chat.chat_home', conversation_id=conversation_id))
+    elif request.method == 'GET':
+        form.report_remote.data = True
 
-        return render_template('chat/report.html', title=_('Report conversation'), form=form, conversation=conversation,
+    return render_template('chat/report.html', title=_('Report conversation'), form=form, conversation=conversation,
 
-                               )
+                           )
 
 
 @bp.route('/chat/refresh-conversation/<int:conversation_id>')
