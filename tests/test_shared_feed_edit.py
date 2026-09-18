@@ -650,23 +650,167 @@ def test_edit_feed_from_scratch_stores_the_icon_without_consulting_the_detector(
 
 
 def test_edit_feed_cannot_be_given_an_old_file_id_whose_row_has_vanished(app, db_session):
-    """:348's `if remove_file:` False arm is UNREACHABLE, and this test is the
-    proof rather than an assertion about edit_feed.
+    """THE ROUND'S ONE RESIDUAL ARC, WITH ITS PROOF: the banner block's
+    `if remove_file:` False arm at :371 is UNREACHABLE.
 
-    Feed.icon is declared with `single_parent=True, cascade="all,
-    delete-orphan"` (app/models.py:4137), so deleting the File row also clears
-    feed.icon_id in the same flush -- the state :348 guards against, an
-    icon_id naming a row that is gone, cannot be reached through the ORM at
-    all. Demonstrated here by deleting the row and reading the feed back.
+    The arm guards against an image_id naming a File row that is gone, and the
+    two columns make that state unreachable by two DIFFERENT mechanisms, which
+    is why they are demonstrated separately rather than in one delete:
 
-    Registered as fact 75 CAUSE 5, unreachable data: the arc stays missing and
-    no test pretends to cover it.
+    - Feed.icon carries `backref='feed'` as well as single_parent and
+      delete-orphan (app/models.py:4137), so deleting the File row makes the
+      ORM null feed.icon_id in the same flush.
+    - Feed.image has no backref (`:4138`), so the ORM does not null it, and the
+      database refuses the delete outright: ForeignKeyViolation on
+      feed_image_id_fkey.
+
+    Either way the guarded state cannot be produced. Registered as fact 75
+    CAUSE 5, unreachable data; the arc [371, 376] stays missing and no test
+    pretends to cover it.
+
+    The icon block no longer has the equivalent arc at all: this round's repair
+    attaches the new File through the relationship and lets the cascade remove
+    the old row, so no `File.query.get(old_id)` remains on that path.
+    """
+    from sqlalchemy.exc import IntegrityError
+    s = _seed()
+
+    icon = _attach_icon(s.feed)
+    icon_id = icon.id
+    db.session.delete(icon)
+    db.session.commit()
+    assert File.query.get(icon_id) is None
+    assert Feed.query.get(s.feed.id).icon_id is None
+
+    banner = _attach_banner(s.feed)
+    banner_id = banner.id
+    db.session.delete(banner)
+    with pytest.raises(IntegrityError, match='feed_image_id_fkey'):
+        db.session.commit()
+    db.session.rollback()
+    assert File.query.get(banner_id) is not None
+
+
+# --------------------------------------------------------------------------
+# Task 5: the tail -- :376-414.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize('site_nsfw, site_nsfl', [(True, True), (False, False)])
+def test_edit_feed_writes_the_nsfw_flags_only_when_the_site_allows_them(
+        app, db_session, site_nsfw, site_nsfl):
+    """:376-379. Both guards read g.site, and both are covered in both states.
+
+    REGISTERED, NOT FIXED (R5): the guards protect the SET direction and strand
+    the CLEAR direction. A feed flagged nsfw keeps the flag after an admin
+    turns NSFW off site-wide, and its owner cannot clear it -- the edit that
+    would clear it is exactly the edit the guard skips. Pinned here by starting
+    the feed at True and submitting False: with the site switch off the stored
+    value stays True.
     """
     s = _seed()
-    existing = _attach_icon(s.feed)
-    stale_id = existing.id
-    db.session.delete(existing)
+    s.feed.nsfw = True
+    s.feed.nsfl = True
     db.session.commit()
 
-    assert File.query.get(stale_id) is None
-    assert Feed.query.get(s.feed.id).icon_id is None
+    with _site_ctx(app, s.owner):
+        g.site.enable_nsfw = site_nsfw
+        g.site.enable_nsfl = site_nsfl
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
+            edit_feed(_form(nsfw=False, nsfl=False), s.feed, SRC_WEB)
+
+    edited = Feed.query.get(s.feed.id)
+    assert edited.nsfw is (False if site_nsfw else True)
+    assert edited.nsfl is (False if site_nsfl else True)
+
+
+@pytest.mark.parametrize('was_public, now_public, expect_block', [
+    (True, False, True),
+    (True, True, False),
+    (False, True, False),
+    (False, False, False),
+])
+def test_edit_feed_clears_the_members_only_on_the_public_to_private_transition(
+        app, db_session, was_public, now_public, expect_block):
+    """:370's `feed.public and not public`, swept over both operands.
+
+    Four rows, and each kills a different mutant: dropping the first operand is
+    caught by (False, False), dropping the second by (True, True), and `and` ->
+    `or` by either row where exactly one side is true. Three rows would leave
+    one of them free -- the lockstep gap sub-project 50 shipped at leave_feed's
+    flash guard.
+
+    The member row is the observable: it survives every row but the transition.
+    """
+    s = _seed()
+    s.feed.public = was_public
+    make_feed_member(s.owner, s.feed, is_owner=True)
+    make_feed_member(s.member, s.feed)
+    db.session.commit()
+
+    with _site_ctx(app, s.owner):
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()):
+            edit_feed(_form(public=now_public), s.feed, SRC_WEB)
+
+    remaining = FeedMember.query.filter_by(feed_id=s.feed.id, is_owner=False).count()
+    assert remaining == (0 if expect_block else 1)
+    assert Feed.query.get(s.feed.id).public is now_public
+
+
+@pytest.mark.parametrize('is_admin', [True, False])
+def test_edit_feed_lets_only_an_admin_change_the_instance_feed_flag(app, db_session, is_admin):
+    """:386-388. The admin gate edit_feed has always had, and make_feed did not
+    until sub-project 50 added it (D675) -- the drift that duplication rather
+    than delegation produced.
+
+    The feed starts with is_instance_feed False and the edit submits True, so
+    the stored value names which arm ran. The menu cache bust beside it is
+    asserted as a CALL: CACHE_TYPE is NullCache in tests, so its effect is
+    unobservable by construction (D602).
+    """
+    s = _seed()
+    editor = s.owner
+    if is_admin:
+        _make_admin(editor)
+    assert editor.is_admin() is is_admin
+
+    with _site_ctx(app, editor):
+        with patch('app.shared.feed.form_communities_to_ids', return_value=set()), \
+                patch('app.shared.feed.cache.delete_memoized') as bust:
+            edit_feed(_form(is_instance_feed=True), s.feed, SRC_WEB)
+
+    assert Feed.query.get(s.feed.id).is_instance_feed is is_admin
+    # The menu bust is identified by its ARGUMENT, not by a call count: :335's
+    # `if not feed.image_id:` fires delete_memoized(Feed.header_image, feed) on
+    # every row here, so a count assertion would be measuring that instead.
+    from app.utils import menu_instance_feeds
+    busted = [call.args[0] for call in bust.call_args_list]
+    assert (menu_instance_feeds in busted) is is_admin
+
+
+def test_edit_feed_adds_and_removes_communities_by_the_set_difference(app, db_session):
+    """:401-414. existing_communities and form_communities_to_ids are Group A's
+    and already covered, so both are patched and this test asserts DISPATCH.
+
+    One id in both sets is the control: it must be neither added nor removed,
+    which is what makes this a set difference rather than "add everything
+    submitted and remove everything stored". The ids are decoys chosen to
+    collide with no row in the fixture, and feed.id and user.id are asserted
+    distinct from them, because this call passes four ids adjacently (D653).
+    """
+    s = _seed()
+    with _site_ctx(app, s.owner):
+        with patch('app.shared.feed.existing_communities', return_value=[61, 62]) as existing, \
+                patch('app.shared.feed.form_communities_to_ids',
+                      return_value={62, 63}) as resolver, \
+                patch('app.shared.feed._feed_add_community') as adder, \
+                patch('app.shared.feed._feed_remove_community') as remover:
+            edit_feed(_form(communities='!a@b\n!c@d'), s.feed, SRC_WEB)
+
+    assert existing.call_args.args == (s.feed.id,)
+    assert resolver.call_args.args == ('!a@b\n!c@d',)
+    assert adder.call_count == 1
+    assert adder.call_args.args == (63, 0, s.feed.id, s.owner.id)
+    assert remover.call_count == 1
+    assert remover.call_args.args == (61, s.feed.id)
+    assert len({61, 62, 63, s.feed.id, s.owner.id}) == 5
