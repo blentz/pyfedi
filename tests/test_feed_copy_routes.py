@@ -237,3 +237,301 @@ def test_a_copied_feed_carries_the_same_five_urls_as_a_new_one(app, db_session):
     assert made.ap_following_url == f'https://{server}/f/copiedfeed/following'
     assert made.ap_outbox_url == f'https://{server}/f/copiedfeed/outbox'
     assert made.ap_domain == server
+
+
+# --------------------------------------------------------------------------
+# Task 2: the rest of feed_copy.
+# --------------------------------------------------------------------------
+
+
+def test_a_banned_user_cannot_copy_a_feed(app, db_session):
+    """:227-228, and it runs before the feed is loaded, so a banned user copying
+    a feed that does not exist gets the ban message rather than a 404."""
+    instance, owner = _seed()
+    source = _feed(owner)
+    owner.banned = True
+    db.session.commit()
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.show_ban_message', return_value='banned') as ban:
+            response = client.get(f'/feed/{source.id}/copy')
+
+    assert response.status_code == 200
+    assert ban.call_count == 1
+
+
+def test_copying_a_feed_that_is_not_there_is_a_404(app, db_session):
+    """:230's get_or_404."""
+    instance, owner = _seed()
+    with app.test_client() as client:
+        login(client, owner)
+        response = client.get('/feed/999/copy')
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize('is_admin, expect_disabled', [(False, True), (True, False)])
+def test_the_copy_form_disables_the_instance_feed_box_for_non_admins(
+        app, db_session, is_admin, expect_disabled):
+    """:234-235's widget arm, which D675 established constrains nothing on the
+    server -- the check this round added at :237 is what does. Covered so the
+    two are visibly separate things."""
+    instance, owner = _seed()
+    source = _feed(owner)
+    if is_admin:
+        _make_admin(owner)
+
+    captured, fake_render = _capture_form()
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', side_effect=fake_render), \
+                patch('app.feed.routes.feeds_for_form', return_value=[]) as choices:
+            client.get(f'/feed/{source.id}/copy')
+
+    assert (captured['form'].is_instance_feed.render_kw == {'disabled': True}) is expect_disabled
+    assert choices.call_args.args == (0, owner.id)
+
+
+def test_copying_a_feed_privately_appends_the_owner_twice(app, db_session):
+    """PIN (P5), found by writing this test rather than by reading the route:
+    a privately copied feed gets the owner suffix TWICE.
+
+    apply_feed_url_rules (app/utils.py:4744-4745) already rewrites a private
+    feed's url to '<slug>/<owner>' during form validation. :242-244 then
+    slugifies that whole string -- turning the '/' into '_' -- and appends the
+    owner again, so 'privatecopy' becomes 'privatecopy_feedowner/feedowner'.
+
+    feed_new does not do this: its private arm slugifies
+    `form.url.data.strip().split('/')[0]` first (:57), which drops the suffix
+    the validator added before re-appending it. feed_copy skips the split.
+
+    The name is the feed's ActivityPub identity as well as its url, so the
+    owner gets an actor at /f/privatecopy_feedowner/feedowner.
+    """
+    instance, owner = _seed()
+    source = _feed(owner)
+    assert 'feedowner' not in 'privatecopy'
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', return_value='rendered'):
+            response = client.post(f'/feed/{source.id}/copy',
+                                   data=_copy_payload(app, client, url='privatecopy',
+                                                      public=None))
+
+    assert response.status_code == 302
+    assert Feed.query.filter_by(name='privatecopy_feedowner/feedowner').count() == 1
+
+
+@pytest.mark.parametrize('with_parent', [True, False])
+def test_copying_a_feed_sets_its_parent_only_when_one_is_given(app, db_session, with_parent):
+    """:264-267, whose else arm assigns None explicitly."""
+    instance, owner = _seed()
+    source = _feed(owner)
+    parent = _feed(owner, name='parentfeed')
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.feeds_for_form',
+                   return_value=[(parent.id, parent.title)]), \
+                patch('app.feed.routes.render_template', return_value='rendered'):
+            response = client.post(
+                f'/feed/{source.id}/copy',
+                data=_copy_payload(app, client,
+                                   parent_feed_id=str(parent.id) if with_parent else None))
+
+    assert response.status_code == 302
+    made = Feed.query.filter_by(name='copiedfeed').one()
+    if with_parent:
+        assert made.parent_feed_id == parent.id != made.id
+    else:
+        assert made.parent_feed_id is None
+
+
+@pytest.mark.parametrize('saved', [True, False])
+def test_copying_a_feed_attaches_an_uploaded_icon_only_when_it_saves(app, db_session, saved):
+    """:268-277. Two guards per file: a filename must be present, and
+    save_icon_file must return something.
+
+    The False row is the one a single-state test drops, and it is not
+    hypothetical -- save_icon_file returns None for a file it will not accept.
+    The banner arm is asserted in the same test because the two blocks are
+    copies of each other and a divergence between them is what this campaign
+    keeps finding.
+    """
+    from app.models import File
+    instance, owner = _seed()
+    source = _feed(owner)
+    icon = File(source_url='https://example.test/icon.png')
+    banner = File(source_url='https://example.test/banner.png')
+    db.session.add_all([icon, banner])
+    db.session.commit()
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', return_value='rendered'), \
+                patch('app.feed.routes.save_icon_file',
+                      return_value=icon if saved else None) as save_icon, \
+                patch('app.feed.routes.save_banner_file',
+                      return_value=banner if saved else None) as save_banner:
+            response = client.post(f'/feed/{source.id}/copy', data=_copy_payload(
+                app, client,
+                icon_file=(io.BytesIO(b'icon-bytes'), 'icon.png'),
+                banner_file=(io.BytesIO(b'banner-bytes'), 'banner.png')))
+
+    assert response.status_code == 302
+    made = Feed.query.filter_by(name='copiedfeed').one()
+    assert save_icon.call_count == 1 and save_banner.call_count == 1
+    assert save_icon.call_args.kwargs == {'directory': 'feeds'}
+    assert (made.icon_id == icon.id) is saved
+    assert (made.image_id == banner.id) is saved
+
+
+def test_copying_a_feed_brings_its_communities_and_counts_them(app, db_session):
+    """:283-287 and :301. The bystander feed's item must NOT come across, which
+    is what keeps the query's feed_to_copy.id load-bearing, and
+    num_communities is asserted against the number copied rather than against
+    a constant."""
+    instance, owner = _seed()
+    source = _feed(owner)
+    bystander = _feed(owner, name='bystanderfeed')
+    first = make_community(name='alpha', host='remote.example')
+    second = make_community(name='beta', host='remote.example')
+    elsewhere = make_community(name='gamma', host='remote.example')
+    db.session.add_all([FeedItem(feed_id=source.id, community_id=first.id),
+                        FeedItem(feed_id=source.id, community_id=second.id),
+                        FeedItem(feed_id=bystander.id, community_id=elsewhere.id)])
+    owner.feed_auto_follow = False
+    db.session.commit()
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', return_value='rendered'):
+            client.post(f'/feed/{source.id}/copy', data=_copy_payload(app, client))
+
+    made = Feed.query.filter_by(name='copiedfeed').one()
+    copied = FeedItem.query.filter_by(feed_id=made.id).all()
+    assert {item.community_id for item in copied} == {first.id, second.id}
+    assert len(copied) == 2
+    assert made.num_communities == 2
+    assert FeedItem.query.filter_by(feed_id=bystander.id).count() == 1
+
+
+@pytest.mark.parametrize('auto_follow, already_member, expect_subscribe', [
+    (True, False, True),
+    (True, True, False),
+    (False, False, False),
+])
+def test_copying_a_feed_subscribes_to_communities_the_user_is_not_in(
+        app, db_session, auto_follow, already_member, expect_subscribe):
+    """:290-299, both operands of `item.community_id not in member_of_ids and
+    current_user.feed_auto_follow` isolated.
+
+    do_subscribe is patched at app.community.routes, where :296's deferred
+    import resolves it, and the actor is asserted: :298 chooses between ap_id
+    and name, and the community here has an ap_id that differs from its name.
+
+    REGISTERED, NOT FIXED: this call is synchronous, where join_feed honours
+    current_app.debug and otherwise dispatches (D683's shape).
+    """
+    instance, owner = _seed()
+    source = _feed(owner)
+    community = make_community(name='alpha', host='remote.example')
+    community.ap_id = 'alpha@remote.example'
+    db.session.add(FeedItem(feed_id=source.id, community_id=community.id))
+    if already_member:
+        db.session.add(CommunityMember(user_id=owner.id, community_id=community.id))
+    owner.feed_auto_follow = auto_follow
+    db.session.commit()
+
+    subscribe_target = 'app.community.routes.do_subscribe'
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', return_value='rendered'), \
+                patch(subscribe_target) as subscribe:
+            client.post(f'/feed/{source.id}/copy', data=_copy_payload(app, client))
+
+    assert subscribe.call_count == (1 if expect_subscribe else 0)
+    if expect_subscribe:
+        assert subscribe.call_args.args == ('alpha@remote.example', owner.id)
+        assert subscribe.call_args.kwargs == {'joined_via_feed': True}
+        assert subscribe.delay.call_count == 0
+
+
+def test_copying_a_feed_makes_the_copier_its_owner_and_redirects(app, db_session):
+    """:305-310. is_owner is asserted explicitly -- it is what feed_unsubscribe
+    reads to refuse the owner -- and the redirect is asserted in full, because
+    it differs from feed_new's (that one goes to the owner's feed list; this one
+    goes to the index, registered as a divergence)."""
+    instance, owner = _seed()
+    source = _feed(owner)
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', return_value='rendered'), \
+                patch('app.feed.routes.flash') as flash_stub:
+            response = client.post(f'/feed/{source.id}/copy', data=_copy_payload(app, client))
+
+    made = Feed.query.filter_by(name='copiedfeed').one()
+    membership = FeedMember.query.filter_by(feed_id=made.id, user_id=owner.id).one()
+    assert membership.is_owner is True
+    assert flash_stub.call_count == 1
+    # main.index is '/home' in this app, not '/'. Asserted as the resolved url
+    # rather than a literal guess, and asserted at all because it DIFFERS from
+    # feed_new's redirect (the owner's feed list) -- a divergence between two
+    # routes that do the same job, registered rather than resolved.
+    with app.test_request_context():
+        from flask import url_for
+        assert response.headers['Location'] == url_for('main.index')
+
+
+def test_the_copy_form_prefills_every_field_from_the_source_feed(app, db_session):
+    """:313-327, the GET pre-fill -- the block P3's slip lives in. Every field
+    gets a distinctive value so a mis-wired assignment cannot pass by
+    coincidence."""
+    instance, owner = _seed()
+    source = _feed(owner, nsfw=True, nsfl=False, public=False)
+    source.title = 'A distinctive title'
+    source.description = 'A distinctive description'
+    source.show_posts_in_children = True
+    source.is_instance_feed = True
+    site = Site.query.get(1)
+    site.enable_nsfw = site.enable_nsfl = True
+    db.session.commit()
+
+    captured, fake_render = _capture_form()
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', side_effect=fake_render), \
+                patch('app.feed.routes.feed_communities_for_edit',
+                      return_value='!a@b') as communities:
+            client.get(f'/feed/{source.id}/copy')
+
+    form = captured['form']
+    assert form.title.data == 'A distinctive title'
+    assert form.url.data == 'sourcefeed'
+    assert form.description.data == 'A distinctive description'
+    assert form.communities.data == '!a@b'
+    assert communities.call_args.args == (source.id,)
+    assert form.show_child_posts.data is True
+    assert form.public.data is False
+    assert form.is_instance_feed.data is True
+    assert form.nsfw.data is True and form.nsfl.data is False
+
+
+@pytest.mark.parametrize('site_nsfw', [True, False])
+def test_the_copy_form_disables_the_nsfw_box_the_site_forbids(app, db_session, site_nsfw):
+    """:318-321's widget arm, the twin of :322-325's NSFL one."""
+    instance, owner = _seed()
+    source = _feed(owner)
+    site = Site.query.get(1)
+    site.enable_nsfw = site_nsfw
+    db.session.commit()
+
+    captured, fake_render = _capture_form()
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', side_effect=fake_render):
+            client.get(f'/feed/{source.id}/copy')
+
+    assert (captured['form'].nsfw.render_kw == {'disabled': True}) is not site_nsfw
