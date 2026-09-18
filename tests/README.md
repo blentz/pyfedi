@@ -8524,6 +8524,54 @@ session is discarded on every path, so pending state is gone whether or not the
 rollback ran, and its mutant is unkillable rather than merely unkilled. See
 D679.
 
+**288. A GREP FOR A FUNCTION'S NAME IS NOT AN ORACLE -- THE MENTION-ONLY TRAP.**
+Before sub-project 51, `/usr/bin/grep -rln "edit_feed" tests/` returned four
+files and **none of them called it**: three mentioned it in prose inside
+docstrings about neighbouring functions, and the fourth was about `feed_edit`,
+the route with a similar name. Per-test coverage contexts reported **zero**
+contexts for the whole function. The previous trap shape (fact 284) was a test
+file named after a module; this one is worse, because the grep that would
+normally correct that mistake produces hits too. **The rule: an oracle is a
+test that EXECUTES the code, and only a contexts run or a deliberate deletion
+proves one exists.** See D688.
+
+**289. AN UNFILTERED `.delete()` IS INVISIBLE TO A FIXTURE THAT HOLDS ONE ROW,
+AND THAT IS THE SHAPE THAT DESTROYS OTHER PEOPLE'S DATA.**
+`edit_feed` ran `db.session.query(FeedMember).filter(FeedMember.is_owner ==
+False).delete()` with no `feed_id` filter, so making one feed private
+unsubscribed every non-owner member of **every** feed on the instance. Every
+test that could have caught it would have needed a second feed in the fixture,
+and none existed. The companion lines were the same shape: a delete filtered by
+the wrong id, and a `count()` that was global and read `0` only because the
+delete above it had just emptied the table. **Three working rules.** (a) For any
+`delete()` or bulk `update()`, name the rows it must NOT touch and put one in
+the fixture. (b) A count assigned to a row's own column is part of the same
+statement -- scope both or neither, because scoping one alone turns a
+globally-wrong number into another row's number. (c) When the delete and the
+count read the same table, a test that asserts only the count can pass while the
+delete is wrong, and vice versa: assert both. See D689.
+
+**290. ASSIGNING A FOREIGN KEY ATTRIBUTE LOSES TO A LOADED RELATIONSHIP AT
+FLUSH.** `feed.icon_id = file.id` followed by `db.session.delete(old_file)` left
+the feed with `icon_id` **None** and the new `File` orphaned, because
+`Feed.icon` is declared `single_parent=True, cascade="all, delete-orphan"` and
+the loaded relationship still pointed at the old row. The banner arm, declared
+without a `backref`, survived the identical sequence -- so the two arms of one
+function disagreed. **Assign through the relationship (`feed.icon = file`) when
+one exists, and do any disk cleanup BEFORE the assignment, because the
+delete-orphan cascade removes the old row as soon as the new one is attached.**
+The defect was found by a test asserting the new file's `source_url` and
+getting `AttributeError: 'NoneType' object has no attribute 'source_url'`; no
+amount of reading the block would have shown it. See D691.
+
+**291. `g.site` IS NOT POPULATED INSIDE A BARE `test_request_context`.**
+`before_request` -- which sets it in the real app -- does not run there, so any
+production code reading `g.site` raises unless the test assigns it:
+`make_site()` first, then `g.site = Site.query.get(1)` inside the context. The
+row's own switches also default off (`enable_nsfw`, `enable_nsfl`), so a test
+that wants to observe a guarded write has to turn them on and say which way it
+is testing. See D688 and D698.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
