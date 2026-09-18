@@ -1099,7 +1099,7 @@ def test_a_report_that_fails_validation_writes_nothing(app, db_session):
 def test_ticking_the_remote_box_changes_nothing_yet(app, db_session):
     """routes.py:245-246 is `if form.report_remote.data: ...` -- a branch whose
     body is a bare Ellipsis. The report is written either way, and that is what
-    D757 records: the checkbox the form offers does nothing.
+    D761 records: the checkbox the form offers does nothing.
     """
     from app.models import Report
     instance, alice, bob, carol = _seed()
@@ -1219,7 +1219,7 @@ def test_an_admin_may_delete_a_conversation_they_are_not_in(app, db_session):
 
 
 def test_a_stranger_deleting_a_conversation_is_a_silent_no_op(app, db_session):
-    """D758: the stranger is redirected exactly like the member, with no flash
+    """D761: the stranger is redirected exactly like the member, with no flash
     and no deletion --
 
         PROBE b6 delete status: 302 conversation survives: True
@@ -1438,7 +1438,7 @@ def test_the_report_loops_already_notified_set_can_never_be_true(app, db_session
     and nothing ever adds to `already_notified` -- the set is created, tested
     and abandoned. The false arm of that `if`, which is the arc that loops back
     to :233 without notifying, therefore requires an id the set already holds,
-    and the set is empty on every iteration. D759's shape: a guard that cannot
+    and the set is empty on every iteration. D758's shape: a guard that cannot
     fire.
 
     Demonstrated rather than asserted by construction: three admins produce

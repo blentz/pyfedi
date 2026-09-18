@@ -14280,7 +14280,44 @@ survivors were closed.**
 | D751 | `app/chat/util.py:12` | **`send_message`'s `user: User = current_user` DEFAULT IS BOUND AT IMPORT**, so the parameter is a `LocalProxy` rather than a `User` for every web caller. It works; the annotation is a lie, and a caller outside a request context would get the proxy's error rather than a `User`. | **registered so the annotation is not trusted** | The signature quoted |
 | D752 | `app/chat/routes.py:49-51` | **`conversation.read = True` IS ASSIGNED BEFORE THE MEMBERSHIP CHECK**, so an outsider's request mutates the object before it is refused. Nothing on that path commits and the session is discarded -- `PROBE p5 status: 400 conversation.read now: False` -- so this is NOT a defect. Recorded so the ordering is not re-litigated, and so a commit added between those two lines is known to be one. | **checked and dismissed** | Probe output |
 
-**Next free number: D753.**
+**Next free number: D753.** (**D753-D761 were taken by sub-project 57, below;
+the free number is now D762.**)
+
+## Sub-project 57: `app/chat` Group B -- an edit that federated as a new message, a moderator page that showed the viewer to himself, and the package's close
+
+**The round in one line: `app/chat` IS COMPLETE at 34 floors -- `util.py` and
+`forms.py` at 100.0, `routes.py` at 99.588 with a single arc proved
+unreachable; the suite is green at **5593 passed, 3 skipped, 6860 warnings in
+455.12s**; FOUR production defects were repaired, including one that made every
+edited private message arrive on remote instances as a second message; and a
+45-mutant pass killed **45 of 45 WITH NO SURVIVORS ON THE MEASURING PASS**, the
+campaign's sixth clean pass and its first that needed no fix round.**
+
+### 0. THE FOUR REPAIRS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D753 | `app/chat/util.py:117` | **AN EDITED PRIVATE MESSAGE FEDERATED AS A NEW MESSAGE.** `update_message` built an activity whose id says `/activities/update/` and whose wrapper says `"type": "Create"`, so a peer had no way to know anything had been edited and showed a second message in the conversation. Probe: `PROBE b3 activity id: .../activities/update/odDGXrwdMmJXBH4` / `PROBE b3 activity type: Create`. **The codebase settles this itself**: `app/shared/tasks/notes.py:187` and `app/shared/tasks/pages.py:252` both read `type = 'Create' if not edit else 'Update'`, and `update_message`'s ONE caller (`app/api/alpha/utils/private_message.py:193`) only ever calls it on an edit -- so the type was unconditionally wrong. The inverted test asserts the wrapper AND the software-appropriate inner type, since changing both would be a different bug. | **fixed at `7ec14a177`** | Probe output; the four-software matrix run against the repair |
+| D754 | `app/chat/routes.py:136-140` | **`ban_from_mod` SHOWED THE VIEWER'S OWN BAN HISTORY UNDER ANOTHER USER'S NAME, TO ANYONE.** The route takes `user_id` in its url and then filtered the mod log on `'u/' + current_user.user_name`; it also carried nothing but `login_required`. Probe -- carol, who moderates nothing, opening bob's page: `PROBE b2 status: 200` / `PROBE b2 past_bans links: ['u/carol'] (url named bob, viewer is carol)`. Repaired in both halves: the link is built from the user the url names, and the page is gated to the community's moderators, its owner and admins, the shape `app/community/routes.py:1063` already uses. The community and the user are now loaded with `get_or_404`, so two unknown-id paths stop being pages of empty results. | **fixed at `7ec14a177`** | Probe output; three inverted tests -- the right user's rows appear, the moderator's own do not, and a non-moderator gets 401 |
+| D755 | `app/chat/routes.py:153-155`, `:215-217` | **`chat_options` AND `chat_report` WERE A 500 FOR A NON-MEMBER.** Both guarded with `if is_admin() or is_member():` and had no `else`, so a refused caller fell off the end: `TypeError The view function for 'chat.chat_options' did not return a valid response`. Registered as **D747** last round and repaired here with `abort(400)`, which is `chat_home`'s refusal -- the blueprint now has one shape. Now fact 306. | **fixed at `7ec14a177`** | The probe from sub-project 56; both routes asserted refused, and a member asserted still served |
+| D756 | `app/chat/routes.py:191-198` | **`block_instance` CRASHED ON AN HTMX REQUEST THAT OMITTED THE OPTIONAL CURRENT-URL HEADER**, after the block had already been written: `PROBE b1 exception: TypeError argument of type 'NoneType' is not iterable`. `HX-Current-Url` is optional. An absent header now takes the same branch as a chat url -- a caller who did not say where they are cannot be sent back there. The test asserts the block landed as well as the redirect, since that is the part the crash was hiding. | **fixed at `7ec14a177`** | Probe output; four rows covering both header states and the non-htmx path |
+
+### 1. THE MEASUREMENT AND THE FLOORS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D757 | `app/chat/*`; `coverage_floors.ini` | **`app/chat` IS COMPLETE -- THREE FLOORS, 34 IN ALL.** `util.py` and `forms.py` reach **100.0** with no missing lines and no missing arcs; `routes.py` reaches **99.588**, its whole residual being ONE arc proved unreachable (**D758**), and its floor rises from 65 to 99 in the same round that set it. The checker was re-run with all three lines in place: **`All 34 module floors met.`** **BASIS: the full suite on the delivered tree, `5593 passed, 3 skipped, 6860 warnings in 455.12s`.** | **package closed and floored** | The `&&` chain; the checker re-run after the floors landed |
+| D758 | `app/chat/routes.py:232-241` | **`chat_report`'s `already_notified` SET IS CREATED, TESTED AND NEVER ADDED TO**, so the guard it forms is always true and the arc that skips an admin -- `234->233` -- cannot run. **D742's shape a second time in the same package**: a guard that cannot fire. Proved rather than asserted by construction: `Site.admins()` draws its ids from a UNION over the user table's primary key (`app/request_hooks.py:100-105`), so no fixture can produce the duplicate the other arm needs. Registered rather than removed -- deleting the set is a tidy-up, and the round's diff is already four repairs. | **residual, proved unreachable** | `test_the_report_loops_already_notified_set_can_never_be_true` |
+| D759 | The nine functions | **45 MUTANTS APPLIED AND 45 KILLED ON THE MEASURING PASS -- NO SURVIVORS, AND NO FIX ROUND.** Scoped as D602 requires, and the campaign's first pass to need no second attempt. The reason is worth recording: this round's tests were written AFTER sub-project 56 had paid for the four survivor shapes, and three of its fixtures (two admins rather than one, mod-log rows of different ages, timestamps three days apart) exist only because those shapes were already known. | **45/45 killed** | Every mutant applied singly and restored with the restoration proved by sha256 |
+
+### 2. REGISTERED, NOT FIXED
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D760 | `app/utils.py:1979`; `app/chat/routes.py:161`, `:173`, `:187` | **THE FORM-LESS POST ROUTES ARE NOT CSRF-EXPOSED, AND THE REASON IS NOT WHERE ONE LOOKS FOR IT.** There is no `CSRFProtect` anywhere in `app/`, which invites exactly the wrong conclusion; `login_required` validates the token itself on every POST. A probe without one raises `wtforms.validators.ValidationError: The CSRF token is missing.` **What IS registered: that raise is unhandled, so a missing or expired token is a 500 where a 400 belongs -- for every POST route in the application, not only chat's.** | **checked and refuted; the error handling registered as cross-cutting** | The probe; the decorator quoted |
+| D761 | `app/chat/util.py:81`; `app/chat/routes.py:161-167`, `:173-182`; `:213-221` | **THREE SHAPES CARRIED FORWARD.** (1) `update_message` raises `NoResultFound` when `recipient_id` is NULL -- `PROBE b5 exception: NoResultFound No row was found when one was required` -- and the column is nullable. (2) `chat_delete` and `chat_leave` are a silent no-op for a stranger, `PROBE b6 delete status: 302 conversation survives: True`, with the same answer whether the delete happened or not; covered as behaviour. (3) `chat_report` hardcodes `source_instance_id=1` and its `report_remote` branch is a bare `...`, so the checkbox the form offers does nothing -- asserted as "the report count is unchanged", which is what it means today. | **registered** | Probe output; the tests that record each behaviour |
+
+**Next free number: D762.**
 
 ## Ratchet gotchas
 

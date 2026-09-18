@@ -8729,6 +8729,27 @@ sibling `can_send_pm_to` uses `created_very_recently`, one DAY, so the same
 ageing satisfies both -- which is why a test of the `can_send_pm_to` refusal
 has to reach for something else, such as reputation at or below -10. See D741.
 
+**308. THIS CODEBASE HAS TWO NOTIONS OF ADMIN AND A ROUTE TEST OFTEN NEEDS
+BOTH.** `User.is_admin()` (`app/models.py:1259-1265`) is id == 1 or a role
+literally NAMED `'Admin'`. `Site.admins()` (`app/models.py:4007-4012`) and the
+`g.admin_ids` the request hook computes (`app/request_hooks.py:99-106`) ask
+instead for a role whose ID is `ROLE_ADMIN`, the constant 4, and never read the
+name. A fixture role satisfying only the first passes an `is_admin()` gate and
+then leaves `Site.admins()` returning the id-1 seat alone -- so a test of a
+route that notifies admins silently measures one notification instead of three.
+**Build the role with both**: `Role(id=ROLE_ADMIN, name='Admin')`. And remember
+user 1 is an admin by id alone, so a seed that burns the id-1 seat has an admin
+in it whether it meant to or not. See D753.
+
+**309. A MUTANT PATTERN THAT IS A SUBSTRING OF A DEEPER-INDENTED COPY MATCHES
+TWICE, AND THE HARNESS MUST REFUSE IT.** `app/chat/util.py` carries the same
+guard at eight spaces in `update_message` and at sixteen in `send_message`, and
+the eight-space text is a substring of the sixteen-space line -- so a mutation
+harness replacing "the" occurrence silently mutates the wrong function, or
+both. The `assert source.count(old) == 1` in the harness is what catches it;
+anchor the pattern with a leading newline when two copies differ only by
+indentation. Three of this campaign's mutation rounds have now hit it.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
