@@ -1423,3 +1423,43 @@ def test_the_template_stubs_render(app, db_session, path, template):
 
     assert response.status_code == 200
     assert render.call_args.args[0] == template
+
+
+def test_the_report_loops_already_notified_set_can_never_be_true(app, db_session):
+    """THE MODULE'S ONE RESIDUAL ARC, 234->233, PROVED UNREACHABLE.
+
+    routes.py:232-241 reads
+
+        already_notified = set()
+        for admin in Site.admins():
+            if admin.id not in already_notified:
+                ...
+
+    and nothing ever adds to `already_notified` -- the set is created, tested
+    and abandoned. The false arm of that `if`, which is the arc that loops back
+    to :233 without notifying, therefore requires an id the set already holds,
+    and the set is empty on every iteration. D759's shape: a guard that cannot
+    fire.
+
+    Demonstrated rather than asserted by construction: three admins produce
+    three notifications, one per admin and none skipped, which is what an
+    always-true guard means. A duplicate admin id cannot be built -- the ids
+    come from a UNION over the user table's primary key
+    (app/request_hooks.py:100-105) -- so no fixture can reach the other arm.
+    """
+    instance, alice, bob, carol = _seed()
+    conversation = make_conversation(alice, bob)
+    _make_admin(carol)
+    dave = make_user(instance, 'dave', local=True)
+    _make_admin(dave)
+    client = app.test_client()
+    login(client, alice)
+
+    _report_post(app, client, conversation.id)
+
+    from app.models import Site
+    with app.test_request_context():
+        admin_ids = sorted(admin.id for admin in Site.admins())
+    notified = Notification.query.filter_by(subtype='chat_conversation_reported').all()
+    assert len(admin_ids) == len(set(admin_ids)) == 3
+    assert sorted(n.user_id for n in notified) == admin_ids
