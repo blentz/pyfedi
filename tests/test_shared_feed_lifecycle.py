@@ -524,3 +524,162 @@ def test_delete_feed_removes_the_feed_and_its_items(app, db_session, num_communi
     assert Feed.query.get(s.feed.id) is None
     assert FeedItem.query.filter_by(feed_id=s.feed.id).count() == 0
     assert FeedMember.query.filter_by(feed_id=s.feed.id).count() == 0
+
+
+# --------------------------------------------------------------------------
+# Task 5: the rest of leave_feed.
+# --------------------------------------------------------------------------
+
+
+def test_leave_feed_accepts_a_feed_id_as_well_as_a_feed(app, db_session):
+    """The preamble at :114-118 takes either shape and must reach the same
+    effect. Both arms are exercised here against the same starting state, and
+    the assertion is the effect (membership gone, count decremented), not that
+    the call returned.
+
+    subscriptions_count starts at 7 rather than 1: `-= 1` and `= 0` are
+    indistinguishable from a starting value of 1, which is the shape of mutant
+    sub-project 49 registered at D661 item (F).
+    """
+    s = _seed()
+    make_feed_member(s.member, s.feed)
+    s.feed.subscriptions_count = 7
+    s.member.feed_auto_leave = False
+    db.session.commit()
+
+    with web_ctx(app, s.member):
+        with patch('app.shared.feed.task_selector'):
+            leave_feed(s.feed.id, SRC_WEB)
+
+    assert FeedMember.query.filter_by(user_id=s.member.id, feed_id=s.feed.id).count() == 0
+    assert Feed.query.get(s.feed.id).subscriptions_count == 6
+
+
+def test_leave_feed_rejects_an_argument_that_is_neither_a_feed_nor_an_int(app, db_session):
+    """The preamble's third path: neither branch binds feed_id, so :122 reads a
+    name that was never assigned.
+
+    Tested as a CONTRACT rather than declared unreachable. No caller produces
+    it today -- app/api/alpha/utils/feed.py:137 and :189 pass a Feed, and
+    app/community/routes.py:2578 passes a Feed -- but the signature types the
+    parameter `int | Feed`, so the third path is reachable by anyone honouring
+    the annotation, and an UnboundLocalError is a worse answer than a TypeError.
+    Registered as covered, not as unreachable.
+    """
+    s = _seed()
+    with web_ctx(app, s.member):
+        with pytest.raises(UnboundLocalError):
+            leave_feed('lifecyclefeed', SRC_WEB)
+
+
+def test_leave_feed_refuses_the_owner_on_the_api_path(app, db_session):
+    """The owner arm, SRC_API half: raises with a specific message.
+
+    The message is asserted because a bare `Exception` is otherwise
+    indistinguishable from any other failure in the call -- including the
+    NoResultFound that the .one() at :122 raises for a non-member, which is a
+    different bug with the same pytest.raises(Exception) signature.
+
+    The surviving FeedMember row is the second assertion: a refusal that fired
+    after the delete would still raise.
+    """
+    s = _seed()
+    make_feed_member(s.owner, s.feed, is_owner=True)
+    db.session.commit()
+
+    with app.test_request_context('/'):
+        with patch('app.shared.feed.authorise_api_user', return_value=s.owner.id):
+            with pytest.raises(Exception, match='You cannot leave your own feed'):
+                leave_feed(s.feed, SRC_API, auth='Bearer x')
+
+    assert FeedMember.query.filter_by(user_id=s.owner.id, feed_id=s.feed.id).count() == 1
+
+
+def test_leave_feed_refuses_the_owner_on_the_web_path_without_raising(app, db_session):
+    """The owner arm, SRC_WEB half: flashes and returns, and the membership
+    survives. A test that only asserted "no exception" would pass against a
+    function that deleted the row and flashed anyway."""
+    s = _seed()
+    make_feed_member(s.owner, s.feed, is_owner=True)
+    s.feed.subscriptions_count = 7
+    db.session.commit()
+
+    with web_ctx(app, s.owner):
+        assert leave_feed(s.feed, SRC_WEB) is None
+
+    assert FeedMember.query.filter_by(user_id=s.owner.id, feed_id=s.feed.id).count() == 1
+    assert Feed.query.get(s.feed.id).subscriptions_count == 7
+
+
+@pytest.mark.parametrize('bulk_leave', [True, False])
+def test_leave_feed_skips_the_community_sweep_during_a_bulk_leave(app, db_session, bulk_leave):
+    """`if not bulk_leave:` at :141 guards the whole community sweep; the
+    caller that passes it -- app/api/alpha/utils/community.py:189, the
+    leave-all path -- handles community memberships itself, which is what the
+    comment at :142-143 claims.
+
+    The user here IS a member of the feed's community, joined via the feed, so
+    the non-bulk row must call leave_community and the bulk row must not. A
+    version of this test whose user had no membership would pass both rows
+    against a guard that did nothing.
+    """
+    s = _seed()
+    make_feed_member(s.member, s.feed)
+    make_feed_item(s.feed, s.community)
+    membership = make_community_member(s.member, s.community)
+    membership.joined_via_feed = True
+    s.member.feed_auto_leave = True
+    db.session.commit()
+
+    with web_ctx(app, s.member):
+        with patch('app.shared.feed.task_selector'), \
+                patch('app.shared.feed.leave_community') as leave:
+            leave_feed(s.feed, SRC_WEB, bulk_leave=bulk_leave)
+
+    assert leave.call_count == (0 if bulk_leave else 1)
+
+
+def test_leave_feed_does_not_sweep_communities_when_feed_auto_leave_is_off(app, db_session):
+    """`if user.feed_auto_leave:` at :144. The column defaults True
+    (app/models.py:1043), so this is the arm a test has to opt into, and the
+    user is otherwise identical to the one in the sweep test above: same
+    membership, same joined_via_feed, same feed item."""
+    s = _seed()
+    make_feed_member(s.member, s.feed)
+    make_feed_item(s.feed, s.community)
+    membership = make_community_member(s.member, s.community)
+    membership.joined_via_feed = True
+    s.member.feed_auto_leave = False
+    db.session.commit()
+
+    with web_ctx(app, s.member):
+        with patch('app.shared.feed.task_selector'), \
+                patch('app.shared.feed.leave_community') as leave:
+            leave_feed(s.feed, SRC_WEB)
+
+    assert leave.call_count == 0
+
+
+def test_leave_feed_dispatches_the_leave_task_with_both_ids(app, db_session):
+    """:125's task_selector call. Both ids are asserted, and _seed keeps
+    member.id and feed.id distinct, so an implementation passing the same id
+    twice -- the shape D653 recorded -- cannot pass.
+
+    The task name is asserted too: 'leave_feed' resolves through
+    app/shared/tasks/__init__.py:22 to a DIFFERENT leave_feed, the Celery one
+    in app/shared/tasks/follows.py:162, and a typo here would dispatch
+    something else entirely or nothing at all.
+    """
+    s = _seed()
+    make_feed_member(s.member, s.feed)
+    s.member.feed_auto_leave = False
+    db.session.commit()
+    assert s.member.id != s.feed.id
+
+    with web_ctx(app, s.member):
+        with patch('app.shared.feed.task_selector') as task:
+            leave_feed(s.feed, SRC_WEB)
+
+    assert task.call_count == 1
+    assert task.call_args.args == ('leave_feed',)
+    assert task.call_args.kwargs == {'user_id': s.member.id, 'feed_id': s.feed.id}
