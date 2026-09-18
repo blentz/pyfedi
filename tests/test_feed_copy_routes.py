@@ -546,3 +546,202 @@ def test_the_copy_form_disables_the_nsfw_box_the_site_forbids(app, db_session, s
             client.get(f'/feed/{source.id}/copy')
 
     assert (captured['form'].nsfw.render_kw == {'disabled': True}) is not site_nsfw
+
+
+# --------------------------------------------------------------------------
+# Task 3: feed_add_remote.
+# --------------------------------------------------------------------------
+
+
+def _remote_feed(name='remotefeed', domain='remote.example', banned=False):
+    remote_instance = make_instance(domain, software='piefed')
+    feed = Feed(title=name, name=name, machine_name=name, instance_id=remote_instance.id,
+                public=True, banned=banned, ap_id=f'{name}@{domain}',
+                ap_profile_id=f'https://{domain}/f/{name}',
+                ap_public_url=f'https://{domain}/f/{name}')
+    db.session.add(feed)
+    db.session.commit()
+    return feed
+
+
+@pytest.mark.parametrize('address, expected_lookup', [
+    ('~remotefeed@remote.example', '~remotefeed@remote.example'),
+    ('remotefeed@remote.example', '~remotefeed@remote.example'),
+    ('https://remote.example/f/remotefeed', '~remotefeed@remote.example'),
+])
+def test_searching_for_a_remote_feed_normalises_every_address_shape(app, db_session,
+                                                                    address,
+                                                                    expected_lookup):
+    """:105-118's four-way fork, three of whose arms reach search_for_feed.
+
+    The assertion is what search_for_feed was HANDED, because that is the only
+    observable difference between the arms: all three end at the same lookup
+    string by different routes -- the '~' form passes it through, the bare
+    'name@host' form prefixes it, and the url form goes through
+    extract_domain_and_actor first.
+    """
+    instance, owner = _seed()
+    found = _remote_feed()
+
+    captured, fake_render = _capture_form()
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', side_effect=fake_render), \
+                patch('app.feed.routes.search_for_feed', return_value=found) as search:
+            response = client.post('/feed/add_remote', data={
+                'csrf_token': csrf(app, client), 'address': address})
+
+    assert response.status_code == 200
+    assert search.call_args.args == (expected_lookup,)
+    assert captured['new_feed'] is found
+
+
+def test_searching_for_a_person_does_nothing_yet(app, db_session):
+    """:111-113, the `...` branch: an @person@host address is recognised and
+    then deliberately ignored, so no search happens and the not-found flash
+    fires. Covered because a statement that does nothing is still a statement,
+    and because a later round adding person search will want the pin."""
+    instance, owner = _seed()
+
+    captured, fake_render = _capture_form()
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', side_effect=fake_render), \
+                patch('app.feed.routes.search_for_feed') as search, \
+                patch('app.feed.routes.flash') as flash_stub:
+            client.post('/feed/add_remote', data={
+                'csrf_token': csrf(app, client), 'address': '@someone@remote.example'})
+
+    assert search.call_count == 0
+    assert captured['new_feed'] is None
+    assert flash_stub.call_count == 1
+
+
+def test_an_unrecognised_address_gets_the_format_help(app, db_session):
+    """:119-122's else arm, and then :123's not-found flash on top of it -- two
+    flashes, which is what distinguishes this arm from the ones that search."""
+    instance, owner = _seed()
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', return_value='rendered'), \
+                patch('app.feed.routes.search_for_feed') as search, \
+                patch('app.feed.routes.flash') as flash_stub:
+            client.post('/feed/add_remote', data={
+                'csrf_token': csrf(app, client), 'address': 'justsomewords'})
+
+    assert search.call_count == 0
+    assert flash_stub.call_count == 2
+
+
+@pytest.mark.parametrize('message, expect_flash', [
+    ('remote.example is blocked.', 2),
+    ('the remote server exploded', 1),
+])
+def test_a_failed_search_flashes_once_or_twice(app, db_session, message, expect_flash):
+    """:106-110's except arm.
+
+    REGISTERED, NOT FIXED: an exception whose message does not contain
+    'is blocked.' is caught and then dropped -- not re-raised, not logged, not
+    shown -- and the user is told 'Feed not found.' The two rows are the two
+    outcomes: the blocked message adds its own flash on top of the not-found
+    one, and anything else is silent.
+    """
+    instance, owner = _seed()
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', return_value='rendered'), \
+                patch('app.feed.routes.search_for_feed', side_effect=Exception(message)), \
+                patch('app.feed.routes.flash') as flash_stub:
+            response = client.post('/feed/add_remote', data={
+                'csrf_token': csrf(app, client), 'address': '~remotefeed@remote.example'})
+
+    assert response.status_code == 200
+    assert flash_stub.call_count == expect_flash
+
+
+@pytest.mark.parametrize('enable_nsfw', [True, False])
+def test_the_not_found_message_mentions_nsfw_only_when_the_site_blocks_it(app, db_session,
+                                                                          enable_nsfw):
+    """:123-128. The two messages differ, and which one fires depends on the
+    site's NSFW switch -- a feed that exists remotely but is NSFW is invisible
+    to a site with NSFW off, so the second message explains that."""
+    instance, owner = _seed()
+    site = Site.query.get(1)
+    site.enable_nsfw = enable_nsfw
+    db.session.commit()
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', return_value='rendered'), \
+                patch('app.feed.routes.search_for_feed', return_value=None), \
+                patch('app.feed.routes.flash') as flash_stub:
+            client.post('/feed/add_remote', data={
+                'csrf_token': csrf(app, client), 'address': '~remotefeed@remote.example'})
+
+    message = str(flash_stub.call_args.args[0])
+    assert ('nsfw' in message.lower()) is not enable_nsfw
+
+
+def test_finding_a_feed_busts_its_membership_cache_and_reports_subscription(app, db_session):
+    """:129-130 and the render's `subscribed` argument at :134.
+
+    The member row is what makes `subscribed` True rather than the default, and
+    the bust is asserted as a CALL because CACHE_TYPE is NullCache (D602).
+    """
+    from app.utils import feed_membership as feed_membership_fn
+    instance, owner = _seed()
+    found = _remote_feed()
+    db.session.add(FeedMember(feed_id=found.id, user_id=owner.id))
+    db.session.commit()
+
+    captured, fake_render = _capture_form()
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', side_effect=fake_render), \
+                patch('app.feed.routes.search_for_feed', return_value=found), \
+                patch('app.feed.routes.cache.delete_memoized') as bust:
+            client.post('/feed/add_remote', data={
+                'csrf_token': csrf(app, client), 'address': '~remotefeed@remote.example'})
+
+    # By membership, not by an exact list: something else in the request also
+    # busts get_setting, so a list comparison measures that instead.
+    assert feed_membership_fn in [call.args[0] for call in bust.call_args_list]
+    assert captured['subscribed'] is True
+
+
+def test_the_add_remote_page_renders_for_a_get_with_nothing_found(app, db_session):
+    """The GET arm, and the reason it does not raise: feed_membership(user,
+    None) returns False (app/utils.py:1677-1678), and `False >=
+    SUBSCRIPTION_MEMBER` is a legal comparison that answers False. Asserted
+    here rather than discovered by a later reader."""
+    from app.utils import feed_membership as feed_membership_fn
+    instance, owner = _seed()
+    assert feed_membership_fn(owner, None) is False
+    assert (feed_membership_fn(owner, None) >= SUBSCRIPTION_MEMBER) is False
+
+    captured, fake_render = _capture_form()
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', side_effect=fake_render):
+            response = client.get('/feed/add_remote')
+
+    assert response.status_code == 200
+    assert captured['new_feed'] is None
+    assert captured['subscribed'] is False
+
+
+def test_a_banned_user_cannot_search_for_remote_feeds(app, db_session):
+    """:98-99."""
+    instance, owner = _seed()
+    owner.banned = True
+    db.session.commit()
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.show_ban_message', return_value='banned') as ban:
+            response = client.get('/feed/add_remote')
+
+    assert response.status_code == 200
+    assert ban.call_count == 1
