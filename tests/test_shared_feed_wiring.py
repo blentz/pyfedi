@@ -1358,3 +1358,332 @@ def test_announce_add_remove_delivers_to_an_opted_out_local_member(app, db_sessi
     assert subscribe.call_count == 0
     assert send.call_count == 1
     assert send.call_args.args[0] == 'https://optout.piefed.local/inbox'
+
+
+# ==========================================================================
+# Sub-project 50, Task 11: D661's eight carried-forward recipes, EXECUTED.
+#
+# Sub-project 49 registered twenty surviving mutants across eight findings
+# (D661 items D-K), each with a closing test written out but -- for seven of
+# the eight -- never run. Item (K) was run at 49's final review and found to be
+# wrong as written. These are the remaining seven, executed rather than
+# trusted: each test below was run against the unmutated tree first, then
+# against the mutant it names, which must fail.
+# ==========================================================================
+
+
+def test_announce_add_remove_names_the_feed_at_both_levels_and_carries_two_ids(app, db_session):
+    """D661 item (D): the Announce's actor and id were asserted nowhere.
+
+    Three mutants survived 49: swapping feed.ap_public_url to
+    community.ap_public_url at the activity's actor, the same swap at the
+    embedded object's actor, and replacing the activity id with a literal.
+
+    The feed's and the community's ap_public_url are asserted distinct BEFORE
+    the call, or the swap mutants would be satisfied by a coincidence rather
+    than by the code. The two ids are asserted distinct from each other as
+    well: they come from separate gibberish() calls under different path
+    prefixes, and a mutant reusing one for the other would otherwise pass.
+
+    Registered divergence, from D661: the DELETE twin does assert its actor;
+    this add/remove twin did not.
+    """
+    s = _seed()
+    s.feed.ap_following_url = 'https://test.piefed.local/f/wiringfeed/following'
+    s.feed.private_key = 'feedprivatekeymaterial'
+    remote = make_user(s.instance, 'remotemember', local=False)
+    s.instance.inbox = 'https://remote.example/inbox'
+    db.session.commit()
+    make_feed_member(remote, s.feed)
+
+    assert s.feed.ap_public_url and s.community.ap_public_url
+    assert s.feed.ap_public_url != s.community.ap_public_url
+
+    with patch('app.shared.feed.send_post_request') as send:
+        with patch('app.shared.feed.instance_banned', return_value=False):
+            announce_feed_add_remove_to_subscribers('Add', s.feed.id, s.community.id)
+
+    activity = send.call_args.args[1]
+    assert activity['actor'] == s.feed.ap_public_url
+    assert activity['object']['actor'] == s.feed.ap_public_url
+    assert '/activities/announce/' in activity['id']
+    assert '/activities/feedadd/' in activity['object']['id']
+    assert activity['id'] != activity['object']['id']
+
+
+@pytest.mark.parametrize('community_has_ap_id', [True, False])
+def test_announce_add_remove_subscribes_a_local_member_through_the_right_actor(
+        app, db_session, community_has_ap_id):
+    """D661 item (E): the ternary choosing the subscribe actor was unasserted,
+    and BOTH collapses survived.
+
+    D661 recorded that this is NOT fact 75 cause 7 -- the arms are genuinely
+    distinguishable -- and that the identical expression in
+    _feed_add_community has a dedicated test whose collapses both die. This is
+    the plain assertion gap that was left.
+
+    The two rows differ only in whether the community carries an ap_id, and the
+    name and the ap_id are deliberately different strings, so neither collapse
+    can pass as the other.
+    """
+    s = _seed()
+    s.community.ap_id = 'wiring@far.piefed.local' if community_has_ap_id else None
+    local_member = make_user(s.instance, 'localmember', local=True)
+    local_member.feed_auto_follow = True
+    db.session.commit()
+    make_feed_member(local_member, s.feed)
+    assert s.community.name != 'wiring@far.piefed.local'
+
+    with patch('app.community.routes.do_subscribe') as subscribe:
+        with patch('app.shared.feed.send_post_request'):
+            announce_feed_add_remove_to_subscribers('Add', s.feed.id, s.community.id)
+
+    assert subscribe.call_count == 1
+    expected = 'wiring@far.piefed.local' if community_has_ap_id else s.community.name
+    assert subscribe.call_args.args[0] == expected
+
+
+def test_announce_add_remove_delivers_only_to_this_feeds_members(app, db_session):
+    """D661 item (G), the :538 filter_by drop: the FeedMember lookup's feed_id
+    filter was free because no fixture ever had a member of a second feed.
+
+    The bystander here is a remote member of s.bystander_feed. Under the
+    mutant every feed's members are announced to, so the send count rises from
+    one to two and the delivery is addressed on behalf of the wrong feed.
+    """
+    s = _seed()
+    s.feed.private_key = 'feedprivatekeymaterial'
+    ours = make_user(s.instance, 'ourmember', local=False)
+    theirs = make_user(s.instance, 'theirmember', local=False)
+    s.instance.inbox = 'https://remote.example/inbox'
+    db.session.commit()
+    make_feed_member(ours, s.feed)
+    make_feed_member(theirs, s.bystander_feed)
+
+    with patch('app.shared.feed.send_post_request') as send:
+        with patch('app.shared.feed.instance_banned', return_value=False):
+            announce_feed_add_remove_to_subscribers('Add', s.feed.id, s.community.id)
+
+    assert send.call_count == 1
+
+
+def test_announce_delete_delivers_only_to_this_feeds_members(app, db_session):
+    """D661 item (G), the :588 filter_by drop -- the delete twin of the test
+    above. Both twins are covered separately rather than by a shared helper,
+    because a shared helper is what hides the next divergence between them."""
+    s = _seed()
+    s.owner.private_key = 'ownerprivatekeymaterial'
+    ours = make_user(s.instance, 'ourmember', local=False)
+    theirs = make_user(s.instance, 'theirmember', local=False)
+    s.instance.inbox = 'https://remote.example/inbox'
+    db.session.commit()
+    make_feed_member(ours, s.feed)
+    make_feed_member(theirs, s.bystander_feed)
+
+    with patch('app.shared.feed.send_post_request') as send:
+        with patch('app.shared.feed.instance_banned', return_value=False):
+            announce_feed_delete_to_subscribers(s.owner.id, s.feed.id)
+
+    assert send.call_count == 1
+
+
+def test_feed_add_community_subscribe_probe_is_scoped_to_this_user_and_community(app, db_session):
+    """D661 item (G), the two :429 filter_by drops on the membership probe.
+
+    Two bystander memberships, one per filter: another user in the SAME
+    community kills the user_id drop, and this user in ANOTHER community kills
+    the community_id drop. Either mutant finds a row, concludes the acting user
+    is already a member, and skips the subscribe that must happen.
+    """
+    s = _seed()
+    other_user = make_user(s.instance, 'someoneelse')
+    make_community_member(other_user, s.community)
+    make_community_member(s.actor, s.bystander_community)
+    s.actor.feed_auto_follow = True
+    db.session.commit()
+
+    with app.test_request_context('/'):
+        with patch('app.community.routes.do_subscribe') as subscribe:
+            _feed_add_community(s.community.id, 0, s.feed.id, s.actor.id)
+
+    assert subscribe.call_count == 1
+    assert subscribe.call_args.args[1] == s.actor.id
+
+
+def test_feed_add_community_announces_with_both_ids_on_each_arm(app, db_session):
+    """D661 item (F): the announce ids at :405 and :424 were unasserted -- the
+    action literal was checked and the two ids that follow it were not -- and
+    :501's whole .delay argument tuple was free, its test asserting only
+    call_count == 1.
+
+    One test covers all three sites because they are the same argument tuple in
+    three places: the move's Remove, the add's Add, and the remove function's
+    dispatched Remove. The feed ids and the community id are asserted pairwise
+    distinct first, so a mutant passing the wrong one of them cannot coincide.
+    """
+    s = _seed()
+    make_feed_item(s.bystander_feed, s.community)
+    s.bystander_feed.public = True
+    s.bystander_feed.num_communities = 1
+    s.feed.public = True
+    db.session.commit()
+    assert len({s.feed.id, s.bystander_feed.id, s.community.id}) == 3
+
+    with app.test_request_context('/'):
+        with patch('app.shared.feed.announce_feed_add_remove_to_subscribers') as announce, \
+                patch('app.shared.feed.current_app') as current_app_stub:
+            current_app_stub.debug = True
+            _feed_add_community(s.community.id, s.bystander_feed.id, s.feed.id, s.actor.id)
+
+    assert [call.args for call in announce.call_args_list] == [
+        ('Remove', s.bystander_feed.id, s.community.id),
+        ('Add', s.feed.id, s.community.id),
+    ]
+
+    make_feed_item(s.feed, s.community)
+    s.feed.num_communities = 1
+    db.session.commit()
+
+    with app.test_request_context('/'):
+        with patch('app.shared.feed.announce_feed_add_remove_to_subscribers') as announce, \
+                patch('app.shared.feed.current_app') as current_app_stub:
+            current_app_stub.debug = False
+            _feed_remove_community(s.community.id, s.feed.id)
+
+    assert announce.delay.call_args.args == ('Remove', s.feed.id, s.community.id)
+
+
+def test_feed_remove_community_only_sweeps_members_of_that_community(app, db_session):
+    """D661 item (G), the :451 filter_by drop on the member sweep.
+
+    The bystander is a member of s.bystander_community who satisfies every
+    operand of the guard -- local, feed_auto_leave, joined_via_feed -- so the
+    only thing keeping their membership is the community_id filter the mutant
+    drops.
+    """
+    s = _seed()
+    make_feed_item(s.feed, s.community)
+    s.feed.num_communities = 1
+    # The sweeping member must be LOCAL: :455's first operand is
+    # user.is_local(), and make_user leaves ap_id set unless local=True, so a
+    # seed actor never enters the loop body at all.
+    sweeper = make_user(s.instance, 'localsweeper', local=True)
+    sweeper.feed_auto_leave = True
+    swept = make_community_member(sweeper, s.community)
+    swept.joined_via_feed = True
+    bystander_user = make_user(s.instance, 'elsewheremember', local=True)
+    bystander_user.feed_auto_leave = True
+    spared = make_community_member(bystander_user, s.bystander_community)
+    spared.joined_via_feed = True
+    s.community.subscriptions_count = 5
+    db.session.commit()
+
+    _feed_remove_community(s.community.id, s.feed.id)
+
+    assert CommunityMember.query.filter_by(user_id=sweeper.id,
+                                           community_id=s.community.id).count() == 0
+    assert CommunityMember.query.filter_by(user_id=bystander_user.id,
+                                           community_id=s.bystander_community.id).count() == 1
+    # The counter is the assertion that actually catches the dropped filter.
+    # A sweep over EVERY CommunityMember row still deletes only rows named by
+    # the community being removed -- :488's delete names it explicitly -- so
+    # the bystander's membership survives either way, and the visible
+    # difference is that the bystander's iteration decrements this community's
+    # subscriptions_count a second time. Found by running the mutant: the
+    # first version of this test asserted only the two memberships and the
+    # mutant survived it.
+    assert Community.query.get(s.community.id).subscriptions_count == 4
+
+
+def test_feed_remove_community_unsubscribes_only_the_member_it_is_processing(app, db_session):
+    """D661 item (G), the :488 filter_by drop on the membership delete, and
+    item (H), the CommunityJoinRequest delete that `pass` replaced unnoticed.
+
+    The spared member is remote, so the guard's is_local() operand keeps them
+    out of the sweep, and their membership and join request must both survive.
+    Under the user_id drop every member of the community loses their row; under
+    item (H)'s mutant the join request rows stay behind, which is the same
+    stale-request shape that locks a user out in leave_feed.
+    """
+    s = _seed()
+    make_feed_item(s.feed, s.community)
+    s.feed.num_communities = 1
+    sweeper = make_user(s.instance, 'localsweeper', local=True)
+    sweeper.feed_auto_leave = True
+    swept = make_community_member(sweeper, s.community)
+    swept.joined_via_feed = True
+    make_community_join_request(sweeper, s.community)
+    remote_member = make_user(s.instance, 'remoteholdout', local=False)
+    spared = make_community_member(remote_member, s.community)
+    spared.joined_via_feed = True
+    make_community_join_request(remote_member, s.community)
+    db.session.commit()
+
+    _feed_remove_community(s.community.id, s.feed.id)
+
+    assert CommunityMember.query.filter_by(user_id=sweeper.id,
+                                           community_id=s.community.id).count() == 0
+    assert CommunityJoinRequest.query.filter_by(user_id=sweeper.id,
+                                                community_id=s.community.id).count() == 0
+    assert CommunityMember.query.filter_by(user_id=remote_member.id,
+                                           community_id=s.community.id).count() == 1
+    assert CommunityJoinRequest.query.filter_by(user_id=remote_member.id,
+                                                community_id=s.community.id).count() == 1
+
+
+def test_feed_remove_community_undo_carries_an_id_of_its_own(app, db_session):
+    """D661 item (I): the Undo's id was unasserted, so the wrapper could carry
+    the inner Follow's own id and nothing noticed.
+
+    Both ids are asserted, and asserted DIFFERENT: they come from separate
+    gibberish() calls under different path prefixes, so an Undo reusing the
+    Follow's id is a distinguishable wrong answer rather than a cosmetic one.
+    """
+    s = _seed()
+    remote_instance = make_instance('undo.piefed.local')
+    remote_community = make_community(name='undocommunity', host='undo.piefed.local')
+    remote_community.ap_id = 'undocommunity@undo.piefed.local'
+    remote_community.ap_inbox_url = 'https://undo.piefed.local/c/undocommunity/inbox'
+    remote_community.instance_id = remote_instance.id
+    make_feed_item(s.feed, remote_community)
+    s.feed.num_communities = 1
+    sweeper = make_user(s.instance, 'localsweeper', local=True)
+    sweeper.feed_auto_leave = True
+    sweeper.private_key = 'actorprivatekeymaterial'
+    member = make_community_member(sweeper, remote_community)
+    member.joined_via_feed = True
+    db.session.commit()
+
+    with patch('app.shared.feed.send_post_request') as send:
+        _feed_remove_community(remote_community.id, s.feed.id)
+
+    assert send.call_count == 1
+    undo = send.call_args.args[1]
+    assert undo['type'] == 'Undo'
+    assert '/activities/undo/' in undo['id']
+    assert '/activities/follow/' in undo['object']['id']
+    assert undo['id'] != undo['object']['id']
+
+
+@pytest.mark.parametrize('raw, expected_lookup', [
+    ('  spaced  ', '!spaced@test.piefed.local'),
+    ('trailing@remote.example \nsecond@remote.example', '!trailing@remote.example'),
+])
+def test_form_communities_to_ids_strips_whitespace_at_both_sites(app, db_session, raw,
+                                                                 expected_lookup):
+    """D661 item (J): both .strip() calls were unasserted, because no fixture
+    supplied leading or trailing whitespace.
+
+    One row per site. The first row exercises the strip on the whole input:
+    without it the lookup string carries the spaces inside the '!' prefix and
+    the '@host' suffix. The second row exercises the per-entry strip, which
+    only shows on a line that is NOT the last one -- the outer strip would
+    otherwise have removed the same whitespace, which is why a single-line
+    fixture cannot distinguish the two sites.
+    """
+    s = _seed()
+    with patch('app.community.util.search_for_community', return_value=s.community) as search:
+        with app.test_request_context('/'):
+            form_communities_to_ids(raw)
+
+    assert search.call_args_list[0].args[0] == expected_lookup
