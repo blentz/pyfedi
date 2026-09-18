@@ -412,11 +412,24 @@ def test_copying_a_feed_attaches_an_uploaded_icon_only_when_it_saves(app, db_ses
 
 
 def test_copying_a_feed_with_empty_file_parts_saves_nothing(app, db_session):
-    """:290 and :295's FILENAME operands. A browser posts both parts whether or
-    not the user picked anything, with an empty filename when they did not, so
-    this is the ordinary case -- and without it, dropping `and
-    icon_file.filename != ''` passes every test, because the truthiness half is
-    satisfied by the empty part object."""
+    """:290 and :295's empty-filename case -- the ORDINARY one, since a browser
+    posts both parts whether or not the user picked anything.
+
+    AND THE FILENAME OPERAND IS PROVABLY REDUNDANT, which the mutation pass
+    found and this docstring records rather than pretending a test could kill
+    it: `werkzeug.datastructures.FileStorage.__bool__` returns
+    `bool(self.filename)`, verified in the container --
+
+        def __bool__(self) -> bool:
+            return bool(self.filename)
+
+        FileStorage(filename='')      -> False
+        FileStorage(filename='x.png') -> True
+
+    -- so `icon_file and icon_file.filename != ''` has a second operand that
+    can never change the answer. Dropping it is an equivalent mutant, fact 75
+    cause 6, at both file blocks.
+    """
     instance, owner = _seed()
     source = _feed(owner)
 
