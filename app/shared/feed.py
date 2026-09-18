@@ -193,6 +193,17 @@ def make_feed(input, src, auth=None, uploaded_icon_file=None, uploaded_banner_fi
         parent_feed_id = input.parent_feed_id.data
         user = current_user
 
+    # An instance feed is published in the instance-wide menu (menu_instance_feeds),
+    # so only an admin may mint one. Nothing checked this before: the web form's
+    # disabled widget (app/feed/routes.py:51) is a browser-side hint, and the API
+    # forwarded the flag verbatim (app/api/alpha/utils/feed.py:157). One predicate,
+    # two policies -- the API caller is told it asked for something it may not have,
+    # while a web POST carrying a field the form never offered is simply ignored.
+    if is_instance_feed and not user.is_admin():
+        if src == SRC_API:
+            raise Exception('is_instance_feed requires an admin account')
+        is_instance_feed = False
+
     private_key, public_key = RsaKeys.generate_keypair()
     feed = Feed(user_id=user.id, title=title, name=url, machine_name=url,
                 description=piefed_markdown_to_lemmy_markdown(description),

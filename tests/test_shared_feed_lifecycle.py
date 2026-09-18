@@ -29,7 +29,7 @@ from sqlalchemy.orm.exc import NoResultFound
 from app import db
 from app.constants import SRC_API, SRC_WEB, SUBSCRIPTION_PENDING
 from app.models import (Community, CommunityMember, Feed, FeedItem, FeedJoinRequest,
-                        FeedMember, User)
+                        FeedMember, Role, User, user_role)
 from app.shared.feed import delete_feed, join_feed, leave_feed, make_feed
 from tests.factories import (make_community, make_community_member, make_feed_item,
                              make_feed_join_request, make_feed_member, make_instance,
@@ -206,20 +206,55 @@ def _web_feed_form(**overrides):
     return SimpleNamespace(**{k: SimpleNamespace(data=v) for k, v in fields.items()})
 
 
-def test_make_feed_api_arm_lets_a_non_admin_mint_an_instance_feed(app, db_session):
-    """PIN (P3, API arm): is_instance_feed is copied straight out of the
-    payload at app/shared/feed.py:163 and into the row at :190, with no check
-    on the caller anywhere between.
+def _make_admin(user: User) -> Role:
+    """Give `user` a role named exactly 'Admin'.
 
-    An instance feed is surfaced in the instance-wide menu (menu_instance_feeds),
-    so this is a privilege escalation into shared UI -- the same shape as
-    sub-project 49's D657, an authorization check that existed nowhere.
+    app/models.py:1258-1264 is_admin() returns True for id 1 OR for any role
+    named 'Admin'. The id-1 seat is burned by _burn_a_seed, so an admin control
+    in this file has to come by the role, and the name has to be exact --
+    grant_permission's f'role-{permission}' naming would not satisfy it.
+    """
+    role = Role(name='Admin', weight=0)
+    db.session.add(role)
+    db.session.commit()
+    db.session.execute(user_role.insert().values(user_id=user.id, role_id=role.id))
+    db.session.commit()
+    return role
 
-    not-an-admin is asserted live rather than assumed: _burn_a_seat consumes id
+
+def test_make_feed_api_arm_refuses_an_instance_feed_from_a_non_admin(app, db_session):
+    """Was a PIN; INVERTED once the admin check landed.
+
+    ORIGINAL PINNED CLAIM, now false: "is_instance_feed is copied straight out
+    of the payload at app/shared/feed.py:163 and into the row, with no check on
+    the caller anywhere between."
+
+    The API arm refuses loudly rather than coercing, because an API client can
+    be told it asked for something it may not have. The refusal is asserted to
+    happen BEFORE the row is written -- a check that raised after the commit
+    would leave the instance feed in place and still pass a bare pytest.raises.
+
+    not-an-admin is asserted live rather than assumed: _burn_a_seed consumes id
     1, which app/models.py:1259-1261 treats as an admin.
     """
     s = _seed()
     assert not s.member.is_admin()
+
+    with app.test_request_context('/'):
+        with patch('app.shared.feed.authorise_api_user', return_value=s.member), \
+                patch('app.shared.feed.RsaKeys.generate_keypair', return_value=('priv', 'pub')):
+            with pytest.raises(Exception, match='is_instance_feed requires an admin account'):
+                make_feed(_api_feed_payload(is_instance_feed=True), SRC_API, auth='Bearer x')
+
+    assert Feed.query.filter_by(name='apifeed').first() is None
+
+
+def test_make_feed_api_arm_still_honours_is_instance_feed_for_an_admin(app, db_session):
+    """The control without which the fix is indistinguishable from deleting the
+    feature. Same payload, same arm, an admin caller: the flag is honoured."""
+    s = _seed()
+    _make_admin(s.member)
+    assert s.member.is_admin()
 
     with app.test_request_context('/'):
         with patch('app.shared.feed.authorise_api_user', return_value=s.member), \
@@ -231,14 +266,19 @@ def test_make_feed_api_arm_lets_a_non_admin_mint_an_instance_feed(app, db_sessio
     assert made.user_id == s.member.id
 
 
-def test_make_feed_web_arm_lets_a_non_admin_mint_an_instance_feed(app, db_session):
-    """PIN (P3, web arm): the only gate on the web side is
-    app/feed/routes.py:51, `form.is_instance_feed.render_kw = {'disabled':
-    True}` for non-admins. That disables the widget in the browser and
-    constrains nothing on the server: a POST carrying the field is honoured.
+def test_make_feed_web_arm_coerces_an_instance_feed_from_a_non_admin(app, db_session):
+    """Was a PIN; INVERTED once the admin check landed.
 
-    This test is what says that in executable form. It matters because a reader
-    of the route would reasonably conclude the field is gated.
+    ORIGINAL PINNED CLAIM, now false: "the only gate on the web side is
+    app/feed/routes.py:51's render_kw disabled widget, which constrains nothing
+    on the server, so a POST carrying the field is honoured."
+
+    The web arm coerces rather than raising: the form genuinely does not offer
+    the field to a non-admin, so a POST carrying it is a forgery and the feed
+    is still created -- without the flag. The assertion is therefore that the
+    row EXISTS and reads False, not that creation failed. Both halves matter:
+    a fix that aborted the whole creation would also pass "is_instance_feed is
+    not True".
     """
     s = _seed()
     assert not s.member.is_admin()
@@ -248,5 +288,18 @@ def test_make_feed_web_arm_lets_a_non_admin_mint_an_instance_feed(app, db_sessio
             make_feed(_web_feed_form(is_instance_feed=True), SRC_WEB)
 
     made = Feed.query.filter_by(name='webfeed').one()
-    assert made.is_instance_feed is True
+    assert made.is_instance_feed is False
     assert made.user_id == s.member.id
+
+
+def test_make_feed_web_arm_still_honours_is_instance_feed_for_an_admin(app, db_session):
+    """The web arm's half of the same control: an admin's flag survives."""
+    s = _seed()
+    _make_admin(s.member)
+    assert s.member.is_admin()
+
+    with web_ctx(app, s.member):
+        with patch('app.shared.feed.RsaKeys.generate_keypair', return_value=('priv', 'pub')):
+            make_feed(_web_feed_form(is_instance_feed=True), SRC_WEB)
+
+    assert Feed.query.filter_by(name='webfeed').one().is_instance_feed is True
