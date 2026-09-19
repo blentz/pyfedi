@@ -1054,3 +1054,117 @@ def test_an_nsfw_parameter_nobody_defined_falls_through_the_chain(app, db_sessio
 
     assert response.status_code == 200
     assert _titles(render) == ['plain article']
+
+
+# --------------------------------------------------------------------------
+# Rows added to close mutation survivors
+# --------------------------------------------------------------------------
+
+
+def test_a_community_field_beside_a_real_query_is_a_filter_not_a_redirect(app, db_session):
+    """`if q == '' and search_for == 'communities'` -- the shortcut exists for
+    someone who typed a community name and nothing else. With a query as well,
+    the field is what it says it is: a filter on the results.
+    """
+    instance, alice, bob = _seed()
+    wanted = make_community('microblogs')
+    _post(wanted, alice, 'wanted article')
+    client = app.test_client()
+
+    response = client.get('/search?q=wanted&community=microblogs&search_for=communities')
+
+    assert response.status_code == 302
+    # the redirect carries the QUERY, not the community field -- a mutant
+    # dropping the empty-q operand sends the community name instead
+    assert 'search=wanted' in response.headers['Location']
+
+
+def test_the_community_lookup_never_fetches_a_remote_community(app, db_session):
+    """`allow_fetch=False` is what stops a search box reaching out to another
+    server for a name nobody here has heard of -- a lookup that fetched would
+    make every mistyped community a federation request.
+    """
+    instance, alice, bob = _seed()
+    community = make_community('microblogs')
+    _post(community, alice, 'an article')
+    client = app.test_client()
+
+    with patch('app.search.routes.render_template', return_value='rendered'), \
+         patch('app.search.routes.search_for_community', return_value=community) as lookup:
+        client.get('/search?q=article&community=microblogs')
+
+    assert lookup.call_args.kwargs['allow_fetch'] is False
+
+
+def test_a_community_id_alone_is_enough_to_run_a_search(app, db_session):
+    """The gate's community_id operand, which the parametrized row above cannot
+    reach: `community_id` is read from its own parameter, not from the
+    community NAME field.
+    """
+    instance, alice, bob = _seed()
+    wanted = make_community('microblogs')
+    other = make_community('othercomm')
+    _post(wanted, alice, 'wanted article')
+    _post(other, alice, 'other article')
+    client = app.test_client()
+
+    with patch('app.search.routes.render_template', return_value='rendered') as render:
+        response = client.get(f'/search?community_id={wanted.id}')
+
+    assert response.status_code == 200
+    assert render.call_args.args[0] == 'search/results.html'
+    assert _titles(render) == ['wanted article']
+
+
+def test_a_reader_who_hides_nsfl_does_not_see_it(app, db_session):
+    """The authenticated nsfl filter, which is separate from the nsfw chain
+    beside it and from the anonymous filter below -- so it needs its own row.
+    """
+    instance, alice, bob = _seed()
+    alice.hide_nsfl = 1
+    db.session.commit()
+    community = make_community('microblogs')
+    _post(community, alice, 'plain article')
+    _post(community, alice, 'grim article', nsfl=True)
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.search.routes.render_template', return_value='rendered') as render:
+        client.get('/search?q=article')
+
+    assert _titles(render) == ['plain article']
+
+
+def test_an_unsorted_search_ranks_by_relevance(app, db_session):
+    """`sort=True if sort_by == '' else False` -- with no sort asked for, the
+    search ranks by how well each row matches. The fixture puts the better
+    match LAST by arrival, so only the ranking can put it first.
+    """
+    instance, alice, bob = _seed()
+    community = make_community('microblogs')
+    _post(community, alice, 'passing mention of gardening')
+    strong = _post(community, alice, 'gardening gardening gardening')
+    strong.body = 'gardening gardening gardening'
+    db.session.commit()
+    client = app.test_client()
+
+    with patch('app.search.routes.render_template', return_value='rendered') as render:
+        client.get('/search?q=gardening')
+
+    assert _titles(render)[0] == 'gardening gardening gardening'
+
+
+def test_an_ordinary_reader_is_not_offered_the_admin_controls(app, db_session):
+    """`is_authenticated and is_admin()` -- an ANONYMOUS reader fails the first
+    operand, so the row that makes the second load-bearing is a logged-in
+    reader who is not an admin.
+    """
+    instance, alice, bob = _seed()
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.search.routes.render_template', return_value='rendered') as render:
+        client.get('/search')
+
+    assert render.call_args.kwargs['is_admin'] is False
+    assert render.call_args.kwargs['is_staff'] is False
