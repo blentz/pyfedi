@@ -353,7 +353,7 @@ def test_an_anonymous_search_never_returns_bot_or_nsfl_posts(app, db_session):
 ])
 def test_an_anonymous_search_never_returns_nsfw_posts_whatever_is_asked(app, db_session,
                                                                         nsfw, expected):
-    """D791: the anonymous block builds the same exclude/only/include chain the
+    """D798: the anonymous block builds the same exclude/only/include chain the
     authenticated arm has and then appends `filter(Post.nsfw == False)`
     UNCONDITIONALLY -- so `only` asks for `nsfw = true AND nsfw = false` and can
     only ever return nothing, and `include` is silently overridden.
@@ -1024,7 +1024,7 @@ def test_the_query_can_never_be_none(app, db_session):
     the posts branch and the comments branch are both unreachable.
 
     What the guard hides is that `.search('')` runs on every filter-only
-    search, which the empty-query rows above already exercise. D794.
+    search, which the empty-query rows above already exercise. D795.
     """
     instance, alice, bob = _seed()
 
@@ -1041,7 +1041,7 @@ def test_the_query_can_never_be_none(app, db_session):
 def test_an_nsfw_parameter_nobody_defined_falls_through_the_chain(app, db_session):
     """The anonymous chain is exclude / only / include and has no else, so a
     value naming none of them falls past all three -- and then meets the
-    unconditional filter that makes D791 what it is.
+    unconditional filter that makes D798 what it is.
     """
     instance, alice, bob = _seed()
     community = make_community('microblogs')

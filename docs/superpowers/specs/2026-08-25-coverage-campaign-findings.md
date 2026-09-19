@@ -14457,7 +14457,50 @@ expression is load-bearing in another module and not in this one.**
 | D789 | `app/domain/routes.py:135` | **The feed's `self` link points at `/c/<id>/feed`** -- a COMMUNITY url -- while its `alternate` link points at `/d/<id>`. A reader following the self link gets another page or a 404. | Registered with the line quoted rather than fixed by eye: the campaign repairs what it probes, and this was found by reading. |
 | D790 | `app/domain/routes.py:29`, `:111`; `:107`, `:164` | **Two shapes recorded so they are not mistaken for defects.** (1) Both public routes wrap their whole body in `with limiter.limit('60/minute')` rather than decorating, which works and is invisible here because the suite disables the limiter. (2) The two `else: abort(404)` arms ARE reachable -- through the name lookup, which returns None for an unknown name -- unlike D787's dead guards two functions below them. | **registered** | The lines quoted |
 
-**Next free number: D791.**
+**Next free number: D791.** (**D791-D800 were taken by sub-project 62, below;
+the free number is now D801.**)
+
+## Sub-project 62: `app/search/routes.py` -- the round that had to repair the harness before it could test anything
+
+**The round in one line: the module goes from **6.485** -- the lowest the
+campaign has taken -- to **99.322**, takes a floor of 99 and **closes
+`app/search` at 39 floors**; the suite is green at **5961 passed, 3 skipped,
+7585 warnings in 564.23s**; THREE defects were repaired; a 64-mutant pass
+killed **64 of 64**, the campaign's seventh clean pass; and the round's first
+act was to fix a harness gap that had made **every full-text search path in the
+application** untestable.**
+
+### 0. THE HARNESS GAP
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D791 | `tests/conftest.py`; `app/__init__.py:82` | **NO `.search()` CALL IN THE APPLICATION COULD RUN IN THIS SUITE.** `make_searchable` registers sqlalchemy_searchable's SQL helpers as a `before_create` DDL listener, so a database built by `create_all` has `parse_websearch` and **a database built by MIGRATIONS does not** -- and this suite's database is built by migrations. `\df parse_websearch` returned no rows, and every search died with `psycopg2.errors.UndefinedFunction: function parse_websearch(unknown) does not exist`, which reads as a database fault rather than as a missing fixture. **This blocked far more than this module**: community search, user search and this route all share it. `conftest.py` now executes `sql_expressions` once per session, which is what production gets at create_all time; the statements are CREATE OR REPLACE, so a database that already has them is unaffected. **The campaign's first change to `conftest.py`, declared in the design rather than made quietly.** | **fixed at `437ab60c4`; fact 317** | `\df` before; `Post.query.search('hello').count()` returning 0 after |
+
+### 1. THE THREE REPAIRS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D792 | `app/search/routes.py:126-127`, `:180-183` | **AN UNKNOWN `search_for` WAS A 500 ON A PUBLIC ROUTE.** `next_url` and `prev_url` are assigned inside the posts branch and again inside the comments branch; `communities` and `people` return redirects; **anything else reached the render with both names unbound**: `PROBE e1 exception: UnboundLocalError cannot access local variable 'next_url' where it is not associated with a value`. Repaired by initialising them beside the `posts = None` and `replies = None` that already say what the page does with a `search_for` it does not know. | **fixed at `437ab60c4`** | Probe output; the inverted test asserts all four values, not merely a 200 |
+| D793 | `app/search/routes.py:41`, `:99` | **A NON-NUMERIC `minimum_upvote` WAS A 500.** The value came off the query string and went to `int()` unguarded: `PROBE e2 exception: ValueError invalid literal for int() with base 10: 'lots'` -- so a link with a typo in it crashed. Read with `type=int` now, as D726 and D777 did; the raw string survives only for the form field the template re-renders. | **fixed at `437ab60c4`** | Probe output; both halves, since a repair that ignored the parameter would pass the first |
+| D794 | `app/search/routes.py:46`, `:187`, `:190` | **A CRAFTED QUERY INJECTED PARAMETERS INTO THREE REDIRECTS.** All three were built by f-string, so the user's own text became part of the url: `PROBE e5 redirect: 302 /communities?search=cats&language_id=99&language_id=0` -- the injected `language_id` arriving BEFORE the route's own. The targets are this site's pages, so the harm is a confusing result rather than an open redirect; it is still a url built by concatenation. All three now go through `url_for`, which percent-encodes. | **fixed at `437ab60c4`** | Probe output; the inverted test asserts the encoded term AND that the route's own parameter appears once |
+
+### 2. THE MEASUREMENT, THE FLOOR, AND A FLAKY TEST CAUGHT BY THE SUITE
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D795 | `app/search/routes.py:113`, `:166`; `coverage_floors.ini` | **THE MODULE CLOSES AT 99.322 AND TAKES A FLOOR OF 99 -- `app/search` IS COMPLETE at 39 floors.** Every line is covered. The residual is `if q is not None:` in both branches, which **cannot be false**: `q = (request.args.get('q') or '').strip()` is a `str` on every path. What the guard hides is that `.search('')` runs on every filter-only search. **BASIS: the full suite on the delivered tree, `5961 passed, 3 skipped, 7585 warnings in 564.23s`**, and `All 39 module floors met.` | **package closed and floored** | `test_the_query_can_never_be_none`, asserted on the expression |
+| D796 | The module | **64 MUTANTS APPLIED AND 64 KILLED after one fix round -- the campaign's seventh clean pass.** Ten survived the measuring pass, every one a missing row, and two are worth keeping: `allow_fetch=False` on the community lookup, without which every mistyped community name in a search box becomes a federation request; and `community_id` as its own operand of the six-way gate, which no other parameter can reach because the id has a separate query parameter from the community NAME field. | **64/64 killed** | Every mutant applied singly and restored with the restoration proved by sha256 |
+| D797 | `tests/test_search_routes.py` | **A TEST THAT PASSED ALONE AND FAILED IN THE FULL SUITE, AND WHAT IT TEACHES.** The row covering `sort=True if sort_by == '' else False` first built a strongly-matching post and a weak one and asserted which came back first. It passed in isolation and failed on the full-suite run: **two documents containing the same lexeme can rank EQUAL**, and the tie then breaks by id, so the assertion was measuring insertion order about as often as ranking. Rewritten to spy on the ARGUMENT -- the route's own decision, which is deterministic -- with one row per branch of the conditional. The mutant it exists for still dies. **The full-suite run is what caught it**, which is the argument for running it even when the scoped run is green. | **fixed before delivery; registered as fact 318** | Both runs quoted in the commit that rewrote it |
+
+### 3. REGISTERED, NOT FIXED
+
+| ID | Where | What | Status |
+|---|---|---|---|
+| D798 | `:89-97` | **THE ANONYMOUS NSFW BLOCK CONTRADICTS ITSELF.** It builds the same `exclude`/`only`/`include` chain the authenticated arm has and then appends `posts.filter(Post.nsfw == False)` **unconditionally** -- so `nsfw=only` asks for `nsfw = true AND nsfw = false` and returns **nothing at all**, not even the safe posts, and `include` is silently overridden. Either the chain is dead code or the trailing filter is wrong, and which one is a product decision about what a logged-out reader may see. Covered as behaviour, exactly: the parametrized row records `only -> []`. | **registered** |
+| D799 | `:58` | `SET work_mem = '100MB'` is executed on every search request against whichever connection the request holds. A performance decision, recorded so it is not mistaken for test scaffolding. | **registered** |
+| D800 | `:127`, `:182` | `has_prev and page != 1`, 1-based here and therefore redundant -- fact 316's shape, registered by reference rather than re-proved. | **registered** |
+
+**Next free number: D801.**
 
 ## Ratchet gotchas
 
