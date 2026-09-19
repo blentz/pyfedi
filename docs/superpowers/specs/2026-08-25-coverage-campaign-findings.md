@@ -14422,7 +14422,42 @@ cookies, through the jar, when the jar's domain is the app's SERVER_NAME.**
 | D782 | `app/topic/routes.py:161`, `:164-168`; `:289-291` | **Two shapes in the same file.** (1) The comments tab hands a 0-based page to flask-sqlalchemy's 1-based `paginate()`: `PROBE t4 page=0 -> page attr 1` and `page=1 -> page attr 1`, so the first two pages are identical, and `prev_url` is separately suppressed for `page != 1`. (2) **The notification toggle mutates state on GET** -- `PROBE t2 GET status: 200 subscriptions now: 1` -- so any `<img src>` toggles a logged-in reader's subscription; the template's `href` is the no-JS fallback while `hx-post` is the path a browser with JS takes. | **registered -- both refusals are product decisions**; both covered as behaviour | The probes; the rows recording each |
 | D783 | `app/topic/routes.py:56-63`; `:180`, `:190` | **D731's namedtuple-class-per-entry breadcrumb shape, in a second module**, and `user_filters_posts(current_user.id)` called twice per request for the same value. | Registered so the first is not mistaken for a bug and the second is found by whoever profiles this page. |
 
-**Next free number: D784.**
+**Next free number: D784.** (**D784-D790 were taken by sub-project 61, below;
+the free number is now D791.**)
+
+## Sub-project 61: `app/domain/routes.py` -- a 500 any crawler could reach, a feed entry built and then abandoned, and D756 in a second module
+
+**The round in one line: the module goes from **18.107** -- the lowest the
+campaign has taken whole -- to **99.203**, takes a floor of 99 and **closes
+`app/domain` at 38 floors**, with its residual two arcs behind a guard that
+cannot be false; the suite is green at **5886 passed, 3 skipped, 7390 warnings
+in 406.60s**; THREE defects were repaired; and a 47-mutant pass killed **45 of
+47 with the other two proved redundant** -- and the proof turns on why the SAME
+expression is load-bearing in another module and not in this one.**
+
+### 0. THE THREE REPAIRS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D784 | `app/domain/routes.py:33`, `:115` | **A DOT-LESS, NON-NUMERIC DOMAIN ID WAS A 500 ON A PUBLIC ROUTE.** `/d/<domain_id>` carries no converter, so the id arrives as a string: one with a dot is read as a NAME, anything else goes to `get_or_404`, which hands it to the database as a primary key. Probe: `PROBE d1 exception: DataError (psycopg2.errors.InvalidTextRepresentation) invalid input syntax for type integer: "notanumber"`. **Both the page and the feed carry the same two lines**, so both were 500s, and the route is unauthenticated -- any crawler following a mangled link reached it. Repaired in both copies with the 404 `get_or_404` was reaching for. | **fixed at `1609ec867`** | Probe output; both paths pinned, and the numeric and name branches asserted still to work |
+| D785 | `app/domain/routes.py:139-152` | **THE FEED'S DE-DUPLICATION BUILT AN ENTRY AND THEN ABANDONED IT.** `fe = fg.add_entry()` runs before the `if post.url in already_added: continue`, so a second post sharing a url left an `<item>` carrying a title and a link and no description, guid or date. Probe: `PROBE d2 entries: 2 guids: 1 authors: 0`. Repaired by deciding BEFORE the entry is created, which is what the `already_added` set was built to do. The test counts the PARTS of an entry, not the entries: a repair emitting two complete items would also give two. | **fixed at `1609ec867`** | Probe output; both halves, since the dedupe must not swallow distinct articles either |
+| D786 | `app/domain/routes.py:255` | **`domain_unblock` READ THE OPTIONAL `HX-Current-Url` HEADER WITHOUT A GUARD** and crashed after the unblock had already been written: `PROBE d3 exception: TypeError argument of type 'NoneType' is not iterable`. **This is D756 exactly** -- same header, same read, same crash -- repaired in `app/chat/routes.py` by sub-project 57 four rounds ago. Fixed here with that round's decision, so the two copies agree. | **fixed at `1609ec867`** | Probe output; all three header states covered |
+
+### 1. THE MEASUREMENT AND THE FLOOR
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D787 | `app/domain/routes.py:271`, `:284`; `coverage_floors.ini` | **THE MODULE CLOSES AT 99.203 AND TAKES A FLOOR OF 99 -- `app/domain` IS COMPLETE at 38 floors.** Every line is covered; the residual is two arcs, both behind `if domain:` after `get_or_404` in `domain_ban` and `domain_unban`. `get_or_404` **raises** for a missing row rather than returning a falsy one, so the guard cannot be false -- and the implicit `None` return it hides would be a 500 rather than a refusal (fact 306). Registered rather than deleted, following D758 and D773. **BASIS: the full suite on the delivered tree, `5886 passed, 3 skipped, 7390 warnings in 406.60s`**, and `All 38 module floors met.` | **package closed and floored** | `test_the_guards_after_get_or_404_can_never_be_false`, asserted on the call since no request can reach the arc |
+| D788 | The module | **47 MUTANTS APPLIED, 42 KILLED AND FIVE SURVIVING ON THE MEASURING PASS; 45 OF 47 AFTER THE FIX ROUND, AND THE OTHER TWO PROVED REDUNDANT.** The three real survivors were missing rows -- a deleted post in the authenticated query, a search asked in the wrong case, and a logged-in reader who is neither admin nor staff (an anonymous one fails a different operand). **The two that remain are the round's most useful result**: `has_prev and page != 1` appears three times here and the second operand can never decide anything, because flask-sqlalchemy's paginator is 1-based and this module hands it the page the url carries. **The identical expression IS load-bearing in `app/topic/routes.py`**, where a 0-based page reaches the same 1-based paginator -- which is D782. The same line is redundant in one module and part of a defect in another, and only the page's base tells them apart. | **45/47 killed, 2 redundant** | Every mutant applied singly and restored with the restoration proved by sha256; the proof asserts the paginator directly |
+
+### 2. REGISTERED, NOT FIXED
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D789 | `app/domain/routes.py:135` | **The feed's `self` link points at `/c/<id>/feed`** -- a COMMUNITY url -- while its `alternate` link points at `/d/<id>`. A reader following the self link gets another page or a 404. | Registered with the line quoted rather than fixed by eye: the campaign repairs what it probes, and this was found by reading. |
+| D790 | `app/domain/routes.py:29`, `:111`; `:107`, `:164` | **Two shapes recorded so they are not mistaken for defects.** (1) Both public routes wrap their whole body in `with limiter.limit('60/minute')` rather than decorating, which works and is invisible here because the suite disables the limiter. (2) The two `else: abort(404)` arms ARE reachable -- through the name lookup, which returns None for an unknown name -- unlike D787's dead guards two functions below them. | **registered** | The lines quoted |
+
+**Next free number: D791.**
 
 ## Ratchet gotchas
 

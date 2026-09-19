@@ -983,7 +983,7 @@ def test_the_guards_after_get_or_404_can_never_be_false(app, db_session):
     Demonstrated on the call itself rather than argued, since no request can
     reach the arc: get_or_404 raises NotFound, and a real row is truthy.
 
-    Registered as D784 rather than deleted, following D758 and D773.
+    Registered as D787 rather than deleted, following D758 and D773.
     """
     from werkzeug.exceptions import NotFound
     instance, alice, bob = _seed()
