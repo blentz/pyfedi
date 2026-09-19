@@ -116,8 +116,11 @@ def test_a_topic_that_still_has_communities_is_kept_and_counted_separately(app, 
     fixture needs both or the message's two halves cannot be told apart.
     """
     instance, alice = _seed()
-    empty = _topic('dev_Topic_00')
-    occupied = _topic('dev_Topic_01')
+    # TWO deletable and ONE occupied, so the two numbers in the message differ
+    # and a mutant swapping them is visible
+    _topic('dev_Topic_00')
+    _topic('dev_Topic_01')
+    occupied = _topic('dev_Topic_02')
     community = make_community('microblogs')
     community.topic_id = occupied.id
     db.session.commit()
@@ -128,10 +131,10 @@ def test_a_topic_that_still_has_communities_is_kept_and_counted_separately(app, 
         _submit(app, client, 'delete_topics_submit')
 
     remaining = [t.name for t in Topic.query.all()]
-    assert remaining == ['dev_Topic_01']
+    assert remaining == ['dev_Topic_02']
     message = str(flashed.call_args.args[0])
-    assert '1' in message
-    assert 'remain' in message
+    assert message.startswith('2 Dev Topics Deleted.')
+    assert '1 Dev Topics remain' in message
 
 
 def test_topics_that_are_not_dev_topics_are_left_alone(app, db_session, dev_mode):
@@ -184,15 +187,32 @@ def test_populating_topics_with_communities_present_still_works(app, db_session,
     client = app.test_client()
     login(client, alice)
 
-    with patch('app.dev.routes.flash'):
+    # random.choice picks WITH replacement, so left alone the ten picks can
+    # repeat and two topics can land on one community. Cycling makes the
+    # assignment one-to-one, which is what lets the per-topic assertions below
+    # say anything at all.
+    picks = iter([])
+
+    def cycling_choice(population):
+        nonlocal picks
+        try:
+            return next(picks)
+        except StopIteration:
+            picks = iter(list(population))
+            return next(picks)
+
+    with patch('app.dev.routes.flash'), \
+         patch('app.dev.routes.random.choice', side_effect=cycling_choice):
         response = _submit(app, client, 'topics_submit')
 
     assert response.status_code == 302
     assert Topic.query.count() == 10
     assert sorted(t.machine_name for t in Topic.query.all())[0] == 'dev-topic-00'
-    # every generated topic is assigned to at least one community, and the
-    # counts are written back
-    assert Community.query.filter(Community.topic_id.isnot(None)).count() >= 1
+    # each of the ten topics got its own community, and each topic's count was
+    # written back rather than left at the zero it was created with
+    assigned = Community.query.filter(Community.topic_id.isnot(None)).all()
+    assert len({c.topic_id for c in assigned}) == 10
+    assert sorted(t.num_communities for t in Topic.query.all()) == [1] * 10
 
 
 # --------------------------------------------------------------------------
@@ -423,3 +443,76 @@ def test_invalid_json_is_refused_without_reaching_the_inbox(app, db_session, dev
     assert replay.call_count == 0
     assert 'Invalid json' in str(flashed.call_args.args[0])
     assert flashed.call_args.args[1] == 'error'
+
+
+# --------------------------------------------------------------------------
+# Rows added to close mutation survivors
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize('field, expected_rows', [
+    ('communities_submit', 'communities'),
+    ('topics_submit', 'topics'),
+])
+def test_a_button_pressed_without_a_valid_token_does_nothing(app, db_session, dev_mode,
+                                                             field, expected_rows):
+    """`form.<button>.data and form.validate()` -- the second operand is the
+    CSRF check, and these forms carry nothing else to validate. Without it, a
+    forged POST creates thirty communities or ten topics.
+    """
+    instance, alice = _seed()
+    if expected_rows == 'topics':
+        make_community('microblogs')
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.dev.routes.render_template', return_value='rendered') as render:
+        response = client.post('/dev/tools', data={field: 'Go', 'csrf_token': 'forged'})
+
+    assert response.status_code == 200
+    assert render.call_args.args[0] == 'dev/tools.html'
+    assert Topic.query.count() == 0
+    assert Community.query.filter(Community.name.like('dev_%')).count() == 0
+
+
+def test_a_banned_community_does_not_count_as_something_to_assign_topics_to(app, db_session,
+                                                                            dev_mode):
+    """The empty-database guard counts UNBANNED communities, because a banned
+    one cannot take a topic -- so a database holding only banned communities is
+    still the empty case.
+    """
+    instance, alice = _seed()
+    banned = make_community('bannedcomm')
+    banned.banned = True
+    db.session.commit()
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.dev.routes.flash') as flashed:
+        response = _submit(app, client, 'topics_submit')
+
+    assert response.status_code == 302
+    assert Topic.query.count() == 0
+    assert 'communit' in str(flashed.call_args.args[0]).lower()
+
+
+def test_an_already_banned_dev_community_is_not_deleted_again(app, db_session, dev_mode):
+    """The delete query asks for unbanned communities, so a dev community
+    somebody has already banned is left alone -- without that operand it would
+    be handed to the unsubscribe-and-delete a second time.
+    """
+    instance, alice = _seed()
+    live = make_community('dev_Community_00')
+    live.local_only = True
+    already = make_community('dev_Community_01')
+    already.local_only = True
+    already.banned = True
+    db.session.commit()
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.dev.routes.unsubscribe_everyone_then_delete') as deleter, \
+         patch('app.dev.routes.flash'):
+        _submit(app, client, 'delete_communities_submit')
+
+    assert [call.args[0] for call in deleter.call_args_list] == [live.id]
