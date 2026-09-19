@@ -309,6 +309,10 @@ def test_a_reader_who_wants_bots_sees_them(app, db_session):
     community = make_community('microblogs')
     _post_on(domain, community, alice, title='good')
     _post_on(domain, community, alice, title='bot', from_bot=True)
+    # the authenticated query keeps its own deleted and status filters, and
+    # only a deleted post separates them from the bot filter it drops
+    _post_on(domain, community, alice, title='deleted', deleted=True)
+    _post_on(domain, community, alice, title='reviewing', status=POST_STATUS_REVIEWING)
     client = app.test_client()
     login(client, alice)
 
@@ -780,7 +784,8 @@ def test_the_banned_list_can_be_searched(app, db_session):
     login(client, alice)
 
     with patch('app.domain.routes.render_template', return_value='rendered') as render:
-        client.get('/domains/banned?search=spam')
+        # asked in the wrong case, so `ilike` is what answers it
+        client.get('/domains/banned?search=SPAM')
 
     assert [d.name for d in render.call_args.kwargs['domains'].items] == ['spam.test']
 
@@ -988,3 +993,45 @@ def test_the_guards_after_get_or_404_can_never_be_false(app, db_session):
         with pytest.raises(NotFound):
             Domain.query.get_or_404(9999)
         assert bool(Domain.query.get_or_404(domain.id)) is True
+
+
+def test_an_ordinary_reader_does_not_see_the_ban_controls(app, db_session):
+    """`is_admin_or_staff()` decides the flag, and an ANONYMOUS reader would
+    fail the `is_authenticated` half instead -- so the row that makes the
+    second operand load-bearing is a logged-in reader who is neither.
+    """
+    instance, alice, bob = _seed()
+    _domain()
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.domain.routes.render_template', return_value='rendered') as render:
+        client.get('/domains')
+
+    assert render.call_args.kwargs['ban_visibility_permission'] is False
+
+
+def test_the_page_one_guard_on_the_previous_link_is_redundant(app, db_session):
+    """THE ROUND'S TWO EQUIVALENT MUTANTS, PROVED.
+
+    Three routes write `if ... has_prev and page != 1`, and the second operand
+    can never decide anything: flask-sqlalchemy's paginator is 1-BASED, so
+    `has_prev` is already False on page 1 and True on every page above it. The
+    pair is redundant wherever the page number handed to `paginate()` is the
+    one the url carries -- which is the case in this module, and is NOT the
+    case in app/topic/routes.py, where a 0-based page reaches a 1-based
+    paginator and the same expression is part of D782.
+
+    Asserted on the paginator rather than through the routes, since no request
+    can tell the two readings apart.
+    """
+    instance, alice, bob = _seed()
+    for index in range(101):
+        _domain(f'domain{index}.test')
+
+    with app.test_request_context('/'):
+        first = Domain.query.paginate(page=1, per_page=100, error_out=False)
+        second = Domain.query.paginate(page=2, per_page=100, error_out=False)
+
+    assert first.has_prev is False
+    assert second.has_prev is True
