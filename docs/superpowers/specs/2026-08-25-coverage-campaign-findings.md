@@ -14386,7 +14386,43 @@ behaviour of its own.**
 |---|---|---|---|---|
 | D775 | `:213`, `:236`, `:177`, `:190`; `:39-41`; `:332` | **THREE SHAPES CARRIED FORWARD.** (1) **Four `time.sleep(randint(3, 10))` calls on the request thread**, reachable from the inbox through `create_actor_from_remote` -- D738's shape in a second module, and every test here patches `app.activitypub.actor.time.sleep` (fact 302). (2) `validate_remote_actor`'s docstring sits AFTER its first `return`, so it is a bare expression rather than a docstring and `help()` shows nothing. (3) `find_actor_by_url` ends with a `return None` after an if/else whose both arms return -- unreachable by inspection, D724's shape. | **registered** | The lines quoted |
 
-**Next free number: D776.**
+**Next free number: D776.** (**D776-D783 were taken by sub-project 60, below;
+the free number is now D784.**)
+
+## Sub-project 60: `app/topic/routes.py` -- a next-page link into an empty page, written four times, and a correction to fact 300
+
+**The round in one line: the module reaches **99.346** and takes a floor of 99 --
+37 floors, and `app/topic` IS COMPLETE -- with its whole residual one `abort(404)`
+proved unreachable; the suite is green at **5833 passed, 3 skipped, 7168
+warnings in 410.25s**; TWO defects were repaired, one of them in two modules at
+once; a 55-mutant pass killed **52 of 55 with the other three proved
+redundant**; and **fact 300 is corrected** -- this test client does deliver
+cookies, through the jar, when the jar's domain is the app's SERVER_NAME.**
+
+### 0. THE TWO REPAIRS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D776 | `app/topic/routes.py:103`; `app/feed/routes.py:522` | **THE "NEXT PAGE" LINK POINTED INTO AN EMPTY PAGE, AND THE LINE IS WRITTEN FOUR TIMES.** `has_next_page = len(post_ids) > page + 1 * page_length` -- `*` binds tighter than `+`, so the test is "more than `page + page_length` posts" where `paginate_post_ids` slices by `(page + 1) * page_length`. Probe: `PROBE t1 page=1 total=30 actual_next=True intended_next=False`. **Page 0 agrees under both readings**, which is why it survived: the first page is the one anyone looks at. Repaired in the two modules that are covered; `app/main/routes.py:144` and `app/api/alpha/utils/post.py:537` carry the same line at 22.8% and 14.9% coverage and are registered as **D780**. **The feed module's copy had NO test at all** -- the mutation pass restoring the bug there survived until a row was written for it, which is the round's sharpest process finding. | **fixed at `1e433bb16`** | The probe; three rows over the boundary, and a row in the feed module's own file |
+| D777 | `app/topic/routes.py:280-282` | **A CRAFTED `community_id` WAS A 500.** `int(request.form.get('community_id'))` with no guard: `PROBE t3 exception: ValueError invalid literal for int() with base 10: 'not-a-number'`. Repaired with `type=int`, the idiom D726 adopted, so a non-integer reads as absent and lands on the chooser the route already renders. | **fixed at `1e433bb16`** | Probe output; both arms asserted |
+
+### 1. THE MEASUREMENT, THE FLOOR, AND A CORRECTED FACT
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D778 | `app/topic/routes.py:211`; `coverage_floors.ini` | **THE MODULE CLOSES AT 99.346 AND TAKES A FLOOR OF 99 -- `app/topic` IS COMPLETE at 37 floors.** The whole residual is `show_topic`'s closing `abort(404)` and the arc into it, **proved unreachable**: `current_topic` is the loop variable, the loop runs over `topic_path.split('/')`, and **`str.split` never returns an empty list** -- the emptiest answer is `['']`, one iteration, which either finds a topic or aborts inside the loop. **BASIS: the full suite on the delivered tree, `5833 passed, 3 skipped, 7168 warnings in 410.25s`**, and `All 37 module floors met.` | **package closed and floored** | `test_the_closing_abort_is_unreachable`, which asserts the split's shape rather than arguing it |
+| D779 | `tests/README.md` fact 300 | **FACT 300 IS CORRECTED: THIS TEST CLIENT DOES DELIVER COOKIES.** Sub-project 54 recorded that it "delivers no cookies at all, by `set_cookie` or by header". The header half is right and the jar half is not: `set_cookie('low_bandwidth', '1', domain='test.piefed.local')` arrives, because the client requests the host in `config['SERVER_NAME']` and werkzeug's jar matches on domain -- the earlier probe used the default, `localhost`, which never matches. Measured both ways in one request: `{'cookie_header': 'low_bandwidth=1', 'cookies': {'low_bandwidth': '1'}, 'host': 'test.piefed.local'}` for the jar, and `{'cookie_header': None, 'cookies': {}}` for a `Cookie:` header or an `environ_base` injection. **This unblocks every low-bandwidth branch the campaign has been unable to reach.** | **fact 300 corrected; fact 314 written** | The probe, both spellings in one test |
+| D780 | The module | **55 MUTANTS APPLIED, 45 KILLED AND TEN SURVIVING ON THE MEASURING PASS; 52 OF 55 AFTER THE FIX ROUND, AND THE OTHER THREE PROVED REDUNDANT.** Six survivors were missing rows, and one of those matters beyond this round: **the pagination repair in `app/feed/routes.py` had no test**, so a mutant restoring the bug there passed the whole feed suite. The three that remain are duplicated filters: `show_topic`'s SQL asks for `banned is false` and `private is false` and then hands the surviving ids to `get_deduped_post_ids`, which asks **both again** -- so dropping either from the route changes nothing the page sees, and the `[0, 0]` placeholder is unobservable because `IN (0)` selects the same nothing as `IN (0, 0)`. The test written for them asserts the OUTCOME the duplication guarantees, so it fails if the util's filters ever move. | **52/55 killed, 3 redundant** | Every mutant applied singly and restored with the restoration proved by sha256 |
+
+### 2. REGISTERED, NOT FIXED
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D781 | `app/main/routes.py:144`; `app/api/alpha/utils/post.py:537` | **The other two copies of D776's precedence bug**, in modules at 22.8% and 14.9%. | Registered with D776 named as the precedent, so whichever round covers them repairs with evidence rather than by copying. |
+| D782 | `app/topic/routes.py:161`, `:164-168`; `:289-291` | **Two shapes in the same file.** (1) The comments tab hands a 0-based page to flask-sqlalchemy's 1-based `paginate()`: `PROBE t4 page=0 -> page attr 1` and `page=1 -> page attr 1`, so the first two pages are identical, and `prev_url` is separately suppressed for `page != 1`. (2) **The notification toggle mutates state on GET** -- `PROBE t2 GET status: 200 subscriptions now: 1` -- so any `<img src>` toggles a logged-in reader's subscription; the template's `href` is the no-JS fallback while `hx-post` is the path a browser with JS takes. | **registered -- both refusals are product decisions**; both covered as behaviour | The probes; the rows recording each |
+| D783 | `app/topic/routes.py:56-63`; `:180`, `:190` | **D731's namedtuple-class-per-entry breadcrumb shape, in a second module**, and `user_filters_posts(current_user.id)` called twice per request for the same value. | Registered so the first is not mistaken for a bug and the second is found by whoever profiles this page. |
+
+**Next free number: D784.**
 
 ## Ratchet gotchas
 
