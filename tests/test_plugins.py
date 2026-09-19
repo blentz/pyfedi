@@ -366,7 +366,10 @@ def test_files_and_underscored_directories_are_not_plugins(app, clean_registry, 
     """
     plugins = clean_registry
     (tmp_path / 'notaplugin.py').write_text('raise RuntimeError("should not run")')
-    _write_plugin(tmp_path, '_private', 'raise RuntimeError("should not run")')
+    # a PERFECTLY GOOD plugin in an underscored directory: if it raised, the
+    # loader's own exception handler would skip it for the wrong reason and the
+    # underscore check would be load-bearing for nothing
+    _write_plugin(tmp_path, '_private', 'def plugin_info():\n    return {"name": "Private"}\n')
     _write_plugin(tmp_path, 'real_plugin', 'def plugin_info():\n    return {"name": "Real"}\n')
 
     loaded = plugins.load_plugins(str(tmp_path))
@@ -710,3 +713,123 @@ def test_a_hook_registers_even_when_its_attribution_fails(app, clean_hooks):
 
     assert hooks.get_registered_hooks()['attribution_fails'] == ['handler']
     assert hooks.get_plugin_hooks() == {}
+
+
+# --------------------------------------------------------------------------
+# Rows added to close mutation survivors
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize('value, logs', [
+    ('1', True), ('true', True), ('True', True), ('YES', True), ('on', True),
+    ('0', False), ('false', False), ('nonsense', False), ('', False),
+])
+def test_the_debug_flag_decides_whether_registration_is_logged(app, clean_hooks, caplog,
+                                                               value, logs):
+    """What the flag actually CONTROLS is the logging, and the rows above only
+    asserted that registration still happens -- which it does either way, so
+    every mutant narrowing the accepted spellings survived behind them.
+
+    `.lower()` is what makes 'True' and 'YES' work, and the two lists here are
+    what keep it and the set's four members load-bearing.
+    """
+    caplog.set_level('INFO', logger='app.plugins.hooks')
+
+    with patch.dict(os.environ, {'FLASK_DEBUG': value}):
+        @hooks.hook('logged_hook')
+        def handler(data):
+            return data
+
+    logged = any("Registered hook 'logged_hook'" in record.message for record in caplog.records)
+    assert logged is logs
+
+
+def test_the_loader_says_which_plugin_has_no_init_file(app, clean_registry, tmp_path, caplog):
+    """The skip and the message are one decision: without the guard the loader
+    would reach spec_from_file_location for a file that is not there and report
+    a failed IMPORT rather than a missing __init__.py, which is a different
+    thing for whoever reads the log.
+    """
+    plugins = clean_registry
+    caplog.set_level('WARNING', logger='app.plugins')
+    (tmp_path / 'empty_plugin').mkdir()
+
+    assert plugins.load_plugins(str(tmp_path)) == {}
+
+    assert any('missing __init__.py' in record.message for record in caplog.records)
+    assert not any('Failed to load plugin' in record.message for record in caplog.records)
+
+
+def test_the_loader_says_when_a_spec_cannot_be_built(app, clean_registry, tmp_path, caplog):
+    """Same shape: both paths end in "this plugin did not load", and only the
+    message says whether the import machinery refused or the plugin's own code
+    raised.
+    """
+    plugins = clean_registry
+    caplog.set_level('ERROR', logger='app.plugins')
+    _write_plugin(tmp_path, 'unspeccable_plugin', 'VALUE = 1\n')
+
+    with patch('app.plugins.importlib.util.spec_from_file_location', return_value=None):
+        assert plugins.load_plugins(str(tmp_path)) == {}
+
+    assert any('Could not load plugin spec' in record.message for record in caplog.records)
+    assert not any('Failed to load plugin' in record.message for record in caplog.records)
+
+
+def test_a_reload_whose_spec_cannot_be_built_says_nothing_about_a_failure(app, clean_registry,
+                                                                          tmp_path, caplog):
+    """reload_plugin's copy of the same guard: it returns False WITHOUT logging
+    an error, because nothing went wrong in the plugin -- and dropping the
+    guard turns that into a logged failure.
+    """
+    plugins = clean_registry
+    _write_plugin(tmp_path, 'unspeccable_plugin', 'VALUE = 1\n')
+    plugins.load_plugins(str(tmp_path))
+    caplog.set_level('ERROR', logger='app.plugins')
+
+    with patch('app.plugins.importlib.util.spec_from_file_location', return_value=None):
+        assert plugins.reload_plugin('unspeccable_plugin') is False
+
+    assert not any('Failed to reload plugin' in record.message for record in caplog.records)
+
+
+def test_four_guards_in_this_package_are_belt_and_braces(app, clean_registry, tmp_path):
+    """THE ROUND'S FOUR EQUIVALENT MUTANTS, PROVED TOGETHER.
+
+    Each of these guards has a second line of defence that produces the same
+    OBSERVABLE answer, so no fixture can tell the two programs apart:
+
+    1. `module_name.count('.') >= 2` beside `startswith('app.plugins.')` --
+       the shortest string passing the first test is `'app.plugins.'`, which
+       already contains two dots, so the second can never be the one that
+       refuses.
+    2. `not plugin_dir.is_dir()` beside the underscore test -- a path that is
+       not a directory cannot contain an `__init__.py`, so the check below
+       skips it anyway.
+    3. `if plugin_name not in _loaded_plugins: return False` in reload_plugin --
+       without it the next line raises KeyError, which the function's own
+       `except Exception` turns into the same `False`.
+    4. `debug_logging_enabled() and post_data` in the example plugin's
+       after-create handler -- with the flag on and no data, the `hasattr`
+       below is false and nothing is printed either way.
+
+    Asserted as the behaviour each guard is there to produce, so the rows still
+    fail if a second line of defence is ever removed.
+    """
+    plugins = clean_registry
+
+    # 1: a module name with the prefix always has the dots
+    assert 'app.plugins.'.count('.') == 2
+
+    # 2: a file is skipped, and it has no __init__.py to be found either way
+    (tmp_path / 'notaplugin.py').write_text('VALUE = 1\n')
+    assert plugins.load_plugins(str(tmp_path)) == {}
+    assert not (tmp_path / 'notaplugin.py' / '__init__.py').exists()
+
+    # 3: reloading something absent is False, by the guard or by the handler
+    assert plugins.reload_plugin('never_loaded') is False
+
+    # 4: the after-create handler tolerates no data with the flag on
+    from app.plugins import example_plugin
+    with patch.dict(os.environ, {'FLASK_DEBUG': '1'}):
+        assert example_plugin.example_after_post_creation(None) is None
