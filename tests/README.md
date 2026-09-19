@@ -8878,6 +8878,32 @@ or a 500 in the row that "kills" it is the signal to look. See D818, and
 fact 320's neighbourhood: both are about assertions that measure something
 other than the code under test.
 
+**322. A SECOND REQUEST IN THE SAME TEST IS ANSWERED AS THE FIRST REQUEST'S
+USER.** `tests/conftest.py`'s `app` fixture yields inside
+`with application.app_context()`, so an app context is pushed for the whole
+session, and Flask reuses an already-pushed context rather than making a fresh
+one per request. `g` therefore outlives the request -- and flask_login caches
+the authenticated user in `g._login_user`. A row that logs in, requests a page,
+then builds a **brand new `test_client` with no cookies** and requests the same
+page anonymously gets the LOGGED-IN answer: measured in sub-project 66, where
+the anonymous half of a moderation-ids row returned the moderator's `[1]` until
+`del g._login_user` preceded it. It does not leak BETWEEN tests -- `g` is clean
+at the start of the next one -- so the fix is to **split the two requests into
+two tests**, which is what that round did. Reach for `del g._login_user` only
+when one test genuinely has to see both.
+
+**323. FEEDGEN PRINTS ENTRIES IN THE REVERSE OF THE ORDER THEY ARE ADDED, AND
+DROPS A NAME-ONLY AUTHOR.** `fg.add_entry()` PREPENDS by default, so a route
+that queries `desc(posted_at)` and adds entries in that order publishes its
+channel oldest-first. Every RSS route in this repo has the shape. A row
+asserting "the newest post is first in the body" therefore fails against
+correct code; assert instead on **which** posts the query selected -- with more
+than the limit in the database, so an `asc` mutant drops the newest ones -- and
+on relative order only if you have accounted for the reversal. Separately,
+RSS 2.0's `<author>` is an email address: `fe.author(name=...)` with no email
+produces **no output at all**, so nothing a route does with the author is
+observable to a subscriber and no assertion can pin it. See D823.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
