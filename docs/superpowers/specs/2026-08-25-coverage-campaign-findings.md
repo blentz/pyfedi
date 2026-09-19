@@ -14641,7 +14641,46 @@ places and the anchors matched all of them.**
 | (D822) | `:90-93`, `:279`, `:400` | **`FeedItem.query.join(Feed, FeedItem.feed_id == fid)` is not a join.** The condition names no `Feed` column, so it is a cross join of every `Feed` row against one feed's `FeedItem`s: the community ids come out right and come out once per feed on the instance. | **registered — the duplicates change no answer, so there is no observable to assert on** |
 | (D822) | `:64`, `:66`, `:80` | **`category` and `category_id` are trusted as a pair.** `category=topic` with no id silently drops the filter, and `category=nonsense&category_id=1` renders the unfiltered tag. | **registered — a product decision about a query string the UI does not produce** |
 
-**Next free number: D826.**
+**Next free number: D826.** (**D826-D833 were taken by sub-project 67,
+below; the free number is now D834.**)
+
+## Sub-project 67: `app/tag/routes.py` — a ban that 500s, a list that pages into a different list, and a post feed with no access control
+
+**The round in one line: the five functions that are not the tag cloud go from
+**47.688** to `[]`/`[]` and the module to **81.714** (floor 81), FIVE defects are repaired —
+one of them an access-control hole that served invite-only communities to
+anonymous readers — and a 59-mutant pass killed **58 of 59**, with every
+anchor checked for uniqueness BEFORE the pass rather than after it, which is
+D824's lesson applied.**
+
+### 0. THE FIVE REPAIRS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D826 | `app/tag/routes.py:220-238` | **BANNING OR UNBANNING A TAG THAT IS NOT THERE WAS A 500.** Neither half of the pair has an `else`, so a miss falls off the end of the view and returns `None`: `TypeError The view function for 'tag.tag_ban' did not return a valid response.` Both routes are POST-only behind `permission_required('manage users')`, so the request comes from a moderator's own page — and a tag another moderator banned a moment earlier is the ordinary way to produce the miss. Repaired with `abort(404)`, which is what every other lookup in this module does. | **fixed** | `PROBE k2` and `PROBE n1`, one per half; the inversion asserts the pair still acts on a tag that exists |
+| D827 | `app/tag/routes.py:210-211` | **PAGING THE BANNED LIST DROPPED THE ADMIN INTO THE UNBANNED ONE.** `tags_blocked_list`'s two links were copied from `tags()` and never re-pointed: `PROBE k3 next_url: /tags?page=2`. Page 2 of "tags blocked on this instance" was page 2 of "all known tags" — a different query, different contents, and nothing on the page saying so. An admin auditing bans past the hundredth silently read the wrong list. | **fixed** | The probe; the inversion FOLLOWS the repaired link and asserts the tag it lands on is a banned one, since a prefix assertion alone would accept any string |
+| D828 | `app/tag/routes.py:358-359`, `:378-384` | **THE TAG'S POST LIST HAD NO ACCESS CONTROL AT ALL.** `show_tag` filters `Community.private` against the reader's memberships and `Post.private` outright; `tag_posts` — the same tag's posts, served to the same readers — filtered **neither**. An anonymous request for `/tags/posts/<id>` was served posts from invite-only communities: `PROBE k4 posts: ['post 0']` for a community with `private = True`. `Community.private` is real access control, not a marker (`tests/README.md`, "Three different tables have a `private` column and they mean three different things"). Repaired with the two filters the sibling already applies. | **fixed** | The probe; membership parametrized both ways, so a repair that hid the community from its own members would fail |
+| D829 | `app/tag/routes.py:387`, `:391`, `:405` | **THREE CRAFTED QUERY PARAMETERS WERE THREE 500s.** `community_id` reached `int()` bare (`PROBE n3 exception: ValueError invalid literal for int() with base 10: 'abc'`), and `topic_id` and `feed_id` reached `.get()` followed immediately by an attribute access (`PROBE k7` / `PROBE n4 exception: AttributeError 'NoneType' object has no attribute 'show_posts_in_children'`). `show_tag` reads `category_id` through `type=int` and uses `get_or_404` for both lookups; this function is the same code with the guards left out. | **fixed** | Three probes; the repair is the sibling's own spelling, so the two functions now answer a crafted request the same way |
+| D830 | `app/tag/routes.py:224-231` | **THE BAN TOLD THE MODERATOR THE CONTENT WAS DELETED, AND IT WAS NOT.** `# tag.purge_content()` is commented out. The flash saying "and all content deleted" was not. `PROBE n2 tag banned: True` beside `PROBE n2 post still there: True`. This is worse than D813's stale counter, because the reader ACTS on it: a moderator who believes the posts are gone does not go and delete them. The message now says only what the ban does; whether banning should purge is R2, a product decision, and the commented call is left exactly as it was. | **fixed** | The probe; the covering row asserts the post survives AND that the word "deleted" is gone, so a repair that only reworded would fail |
+
+### 1. THE MEASUREMENT, AND THE ONE SURVIVOR
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D831 | `app/tag/routes.py`; `coverage_floors.ini` | **ALL FIVE FUNCTIONS CLOSE AT `[]`/`[]` AND THE FLOOR RISES 47 -> 81.** `tags`, `tags_blocked_list`, `tag_ban`, `tag_unban` and `tag_posts` carry no missing lines and no missing arcs; everything left in the file is `tag_cloud`, which is 68 and closes the package. The delta reconciles exactly this round -- 6159 passed before, 55 rows added, **6214 passed** after -- which is the check D823 could not make. **BASIS: the full suite, `6214 passed, 3 skipped, 8186 warnings, 6 subtests passed in 655.51s`**, and `All 45 module floors met.` **The run took 655s against `pytest.ini`'s 1200s budget**, up from 439s for the same suite four hours earlier with 55 fewer tests; the budget D817 re-measured is holding, but the spread between two runs of nearly the same suite is now wider than the margin D817 left, and 68 should re-measure rather than assume. | **floored at 81** | The `&&` chain; the checker re-run after the floor landed |
+| D832 | `app/tag/routes.py:226`; `tests/conftest.py:163-188` | **58 OF 59 KILLED, AND THE SURVIVOR IS D602's REGISTERED CLASS RATHER THAN A WEAK ROW.** Deleting `db.session.commit()` from `tag_ban` survives, and the cause was checked rather than assumed: `db_session`'s own docstring says it "deletes every row rather than rolling back a nested transaction: the code under test calls db.session.commit() in several places", so every assertion reads the SAME session that made the write and sees it whether or not it was committed. Detecting a missing commit needs a second connection, which this harness does not give a test. **D602 registered exactly this** (ten `db.session.commit()` sites left unmutated for the same reason) and **D589** named the general shape: configuration-scoped unkillability. Recorded as a survivor rather than quietly dropped from the denominator. | **58/59; one registered as unkillable under this harness** | `tests/conftest.py`'s docstring; D602, D589 |
+| D833 | The pass itself | **EVERY ANCHOR WAS CHECKED FOR UNIQUENESS BEFORE THE PASS RAN, AND ONE FAILED.** D824's lesson, applied as a step rather than as a hope: of 59 anchors, `t54`'s matched **two** sites -- the feed-item loop, which `show_tag` and `tag_posts` share verbatim. Caught before a single mutant was applied, at a cost of one command; under the previous round's order it would have surfaced only after 30 minutes of running, and under a runner that silently took the first match it would not have surfaced at all, having mutated `show_tag` while reporting on `tag_posts`. | **pass clean; 0 unapplied** | The pre-flight check's output, `non-unique anchors: [('t54', 2)]`, then `none` |
+
+### 2. REGISTERED, NOT FIXED
+
+| ID | Where | What | Status |
+|---|---|---|---|
+| (D830) | `:186-187`, `:210-211` | **Both lists drop `search` from their pagination links**, so page 2 of a search is page 2 of everything. Same family as D827 but a different decision: D827 pointed a link at the wrong ENDPOINT, this one drops a filter the endpoint still accepts. | **registered — one decision for the whole module, and `tag_cloud` drops `view` from its own links the same way; 68 settles both** |
+| (D830) | `:224` | **`# tag.purge_content()`** — whether banning a tag deletes the posts carrying it. | **registered — a moderation decision. D830 only stops the message claiming it already happened** |
+| (D830) | `:176`, `:200` | **The search term is interpolated into an `ilike` pattern**, so `%` and `_` from the query string are wildcards: `PROBE n5 wildcard hits: ['rain', 'solarstorm']` for `search=%`. The value is still bound, so this is not injection — the user controls the PATTERN, not the SQL. | **registered — it is a search box, and a wildcard reaching the pattern is arguably the feature** |
+| (D830) | `:353` | **`tag_posts` never checks the tag exists or is unbanned.** `/tags/posts/999999` renders an empty list with a 200, and a banned tag's posts are still listed by id — `show_tag` refuses a banned tag only by never linking it. | **registered — whether a banned tag's posts stay reachable by id is the same decision as the purge** |
+
+**Next free number: D834.**
 
 ## Ratchet gotchas
 
