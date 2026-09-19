@@ -216,16 +216,22 @@ def test_a_filter_given_once_is_kept(app, db_session):
 
 
 @pytest.mark.parametrize('filter_name, wanted', [
-    ('trusted', 'trusted.example'),
-    ('silenced', 'silenced.example'),
-    ('online', 'online.example'),
-    ('dormant', 'dormant.example'),
-    ('gone_forever', 'gone.example'),
+    ('trusted', ['trusted.example']),
+    ('silenced', ['silenced.example']),
+    # online and dormant BOTH exclude the gone -- 'gone.example' is not dormant
+    # and 'trusted'/'silenced' are, so each of those operands has a row that
+    # separates it
+    # the local instance is online too -- make_instance leaves dormant and
+    # gone_forever false, which is what a live server looks like
+    ('online', ['online.example', 'test.piefed.local']),
+    ('dormant', ['dormant.example']),
+    ('gone_forever', ['gone.example', 'silenced.example', 'trusted.example']),
 ])
 def test_each_state_filter_narrows_the_list(app, db_session, filter_name, wanted):
     """Five filters, each its own row, against one fixture that holds an
-    instance in every state -- so a filter that stopped working returns the
-    others rather than nothing.
+    instance in every state. The assertion is EQUALITY rather than membership:
+    with `in`, a filter that stopped excluding things passed, and four mutants
+    dropping half a filter survived because of it.
     """
     instance, alice, bob = _seed()
     _instance('trusted.example', trusted=True, dormant=True, gone_forever=True)
@@ -238,7 +244,7 @@ def test_each_state_filter_narrows_the_list(app, db_session, filter_name, wanted
     with patch('app.instance.routes.render_template', return_value='rendered') as render:
         client.get(f'/instances?filters={filter_name}')
 
-    assert wanted in _domains(render)
+    assert sorted(_domains(render)) == sorted(wanted)
 
 
 def test_the_federated_filter_excludes_this_server(app, db_session):
@@ -1081,3 +1087,76 @@ def test_the_warning_about_disabled_filters_always_names_one_of_the_two(app, db_
 
     assert 'allowed' not in filters_to_remove
     assert 'blocked' not in filters_to_remove
+
+
+def test_a_logged_in_reader_who_is_not_an_admin_takes_the_ordinary_branch(app, db_session):
+    """`is_authenticated and is_admin()` -- an anonymous reader fails the first
+    operand, so the row that makes the second load-bearing is a logged-in
+    reader who is not an admin: they still cannot see people who asked not to
+    be listed.
+    """
+    instance, alice, bob = _seed()
+    peer = _instance('peer.example')
+    _person(peer, 'visible')
+    _person(peer, 'private', searchable=False)
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.instance.routes.render_template', return_value='rendered') as render:
+        client.get('/instance/peer.example/people')
+
+    assert [u.user_name for u in render.call_args.kwargs['people'].items] == ['visible']
+
+
+def test_adding_people_sends_the_reader_back_where_they_came_from(app, db_session):
+    """`redirect(referrer())`, and the comment above it explains why the form's
+    own referrer field is not passed as the default -- so the header is what
+    this row supplies.
+    """
+    instance, alice, bob = _seed()
+    _submitter(alice)
+    client = app.test_client()
+    login(client, alice)
+    token = csrf(app, client)
+
+    with patch('app.instance.routes.render_template', return_value='rendered'), \
+         patch('app.instance.routes.bulk_follow'):
+        response = client.post('/instance/add_people',
+                               data={'csrf_token': token, 'people': '@alice@example.test'},
+                               headers={'Referer': 'https://test.piefed.local/instances'})
+
+    assert response.status_code == 302
+    assert response.headers['Location'] == 'https://test.piefed.local/instances'
+
+
+def test_the_state_filters_cannot_survive_alongside_allowed_or_blocked(app, db_session):
+    """WHAT `and not allowed_or_blocked` ACTUALLY PROTECTS.
+
+    This row was written expecting the second operand to be redundant -- the
+    block above strips every state filter and redirects, so by the time the
+    guard runs, `filters` holds only 'allowed' and/or 'blocked' and none of the
+    six `in filters` tests can match. That reasoning is right about the
+    FILTERS and wrong about the QUERY: in allowed/blocked mode the query is
+    over `AllowedInstances` or `BannedInstances`, tables that have no
+    `trusted`, `silenced`, `dormant` or `gone_forever` column at all. Dropping
+    the operand does not merely admit a filter that cannot match -- it lets
+    `Instance.trusted == True` be applied to a query over another table.
+
+    The mutant dropping it dies here, which is why this is a covering row and
+    not a proof of equivalence. Asserted end to end, following the redirect the
+    way a browser does.
+    """
+    instance, alice, bob = _seed()
+    db.session.add(AllowedInstances(domain='allowed.example'))
+    db.session.commit()
+    client = app.test_client()
+
+    with patch('app.instance.routes.render_template', return_value='rendered') as render, \
+         patch('app.instance.routes.flash'):
+        first = client.get('/instances?filters=allowed&filters=trusted')
+        assert first.status_code == 302
+        assert 'trusted' not in first.headers['Location']
+
+        client.get(first.headers['Location'])
+
+    assert _domains(render) == ['allowed.example']
