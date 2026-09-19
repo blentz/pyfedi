@@ -172,7 +172,7 @@ def test_firing_a_hook_nobody_registered_returns_the_data_unchanged(app, clean_h
 
 
 def test_a_handler_that_raises_is_swallowed_and_the_chain_continues(app, clean_hooks):
-    """D808, recorded rather than repaired: isolation is the point of a plugin
+    """D811, recorded rather than repaired: isolation is the point of a plugin
     system, but the caller cannot tell that a plugin failed -- the value simply
     carries on from the last handler that worked.
 
@@ -194,7 +194,7 @@ def test_a_handler_that_raises_is_swallowed_and_the_chain_continues(app, clean_h
 
 
 def test_a_handler_that_returns_nothing_nulls_the_data_for_everyone_after_it(app, clean_hooks):
-    """D809: `result = handler(result, **kwargs)` takes whatever comes back,
+    """D811's other half: `result = handler(result, **kwargs)` takes whatever comes back,
     including None -- so one handler forgetting to return hands None to the
     next and to the caller.
 
@@ -420,7 +420,7 @@ def test_asking_about_a_plugin_that_is_not_loaded_gives_nothing(app, clean_regis
 
 
 def test_the_loaded_plugin_list_is_handed_out_as_a_copy(app, clean_registry, tmp_path):
-    """get_loaded_plugins copies -- and load_plugins does NOT, which is D810.
+    """get_loaded_plugins copies -- and load_plugins does NOT, which is D812.
     Both halves are asserted here so the asymmetry is recorded rather than
     inferred.
     """
@@ -436,7 +436,7 @@ def test_the_loaded_plugin_list_is_handed_out_as_a_copy(app, clean_registry, tmp
 
 
 def test_loading_twice_accumulates_rather_than_replacing(app, clean_registry, tmp_path):
-    """D810's other half: the registry is added to, never reset, so a second
+    """D812's other half: the registry is added to, never reset, so a second
     directory's plugins join the first's.
     """
     plugins = clean_registry

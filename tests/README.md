@@ -8854,6 +8854,18 @@ whenever the point of the code under test is to leave something out. Doing so
 usually forces the fixture to become honest too: here it had to admit that the
 LOCAL instance is online as well. See D803.
 
+**320. WHEN THE CODE UNDER TEST DECIDES WHAT IS LOGGED, THE LOG IS THE
+OBSERVABLE.** Sub-project 64's rows for a debug flag asserted that a hook still
+registered under each spelling of `FLASK_DEBUG` -- and it does, whatever the
+flag says, because the flag controls **logging**. Four mutants narrowing the
+accepted spellings survived behind that single misplaced assertion, and three
+more survived where two code paths differ only in the message they log
+("this plugin has no __init__.py" versus "this plugin failed to import"): both
+end in the same return value, and only the log says which happened.
+**Use `caplog`** -- `caplog.set_level('WARNING', logger='app.plugins')` and
+assert the message -- whenever the branch under test chooses between messages
+or decides whether to log at all. See D809.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not

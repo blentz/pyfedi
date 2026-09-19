@@ -14534,7 +14534,41 @@ was found to be hiding four of them.**
 | D805 | `:220-224` | **A CSV THAT IS NOT UTF-8 IS A 500.** `form.mastodon_csv.data.read().decode('utf-8')` with no guard: `PROBE f4 exception: UnicodeDecodeError 'utf-8' codec can't decode byte 0xff in position 0`. A Mastodon export is always UTF-8, so a file that is not one is the wrong file -- but the answer to the wrong file is a message, and what it should say is a product decision. Covered as behaviour, asserting the exception. | **registered by decision** |
 | D806 | `:146-156`; `:249-255`; `:301-313`; `:99`, `:163`, `:199` | **Four shapes.** (1) The admin and non-admin branches of `instance_people` are identical except for `searchable=True`, written out twice. (2) `instance_posts` filters no `Post.private`, while `app/search/routes.py` and `app/domain/routes.py` both exclude it -- and `Post.private` is the microblog marker rather than a privacy flag, so including microblogs in an instance feed may be deliberate; registered with the three call sites named so someone decides rather than drifts. (3) D731's namedtuple-class-per-entry breadcrumb shape, in a third module. (4) `has_prev and page != 1`, 1-based and therefore redundant, in three more places -- fact 316 by reference. | **registered** |
 
-**Next free number: D807.**
+**Next free number: D807.** (**D807-D812 were taken by sub-project 64, below;
+the free number is now D813.**)
+
+## Sub-project 64: `app/plugins` -- a debug flag that silently switched every plugin off, and the round where the assertions tested the wrong thing
+
+**The round in one line: all three files reach **100.0** with no missing lines
+and no missing arcs and take floors of 100, and **`app/plugins` IS COMPLETE at
+43 floors**; the suite is green at **6084 passed, 3 skipped, 7768 warnings in
+435.60s**; ONE defect was repaired in NINE places; and a 46-mutant pass killed
+**42 of 46, with the other four proved equivalent by one test** -- after seven
+survivors revealed that the round's first assertions were testing registration
+when the code under test decided logging.**
+
+### 0. THE REPAIR
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D807 | `app/plugins/hooks.py` x2, `app/plugins/__init__.py` x2, `app/plugins/example_plugin/__init__.py` x7 | **`FLASK_DEBUG=true` SILENTLY SWITCHED EVERY PLUGIN OFF.** `int(os.environ.get('FLASK_DEBUG', '0'))` raises for anything that is not a number -- `PROBE g1 registration exception: ValueError invalid literal for int() with base 10: 'true'` -- and **hook registration runs while a plugin is being IMPORTED**, so `load_plugins`' own `except Exception` caught it, logged `Failed to load plugin <name>`, and carried on. The system did not crash; the plugins simply were not there, and the log named the plugin rather than the cause. Flask's own documentation uses `true`; this repo's `compose.dev.yaml` uses `1`, which is why the documented configuration works and nobody met it. Repaired with one `debug_logging_enabled()` accepting `1`, `true`, `yes`, `on` in any case. **The example plugin's seven copies are included deliberately: it is the file plugin authors copy from**, so a bug left there ships to every plugin written afterwards. | **fixed at `66419a4c4`** | The probe; nine call sites; the end-to-end row that loads the example plugin with the flag in a word |
+
+### 1. THE MEASUREMENT, THE FLOORS, AND A ROUND THAT ASSERTED THE WRONG THING
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D808 | All three files; `coverage_floors.ini` | **THE PACKAGE CLOSES AT 100.0 -- THREE FLOORS OF 100, AND `app/plugins` IS COMPLETE at 43 floors.** `missing_lines []` / `missing_branches []` for all three. Two arcs had to be BUILT rather than arranged: the reload's skip of a hook that `_plugin_hooks` remembers and `_hooks` no longer holds, which needs the two registries made to disagree on purpose; and the attribution's `except Exception`, which **a callable with an angry `__module__` cannot reach** -- `functools.wraps` reads the same attribute a few lines later, outside the try -- so the registration call inside it is made to fail instead. **BASIS: the full suite, `6084 passed, 3 skipped, 7768 warnings in 435.60s`**, and `All 43 module floors met.` | **package closed and floored** | The `&&` chain; the checker re-run after the three lines landed |
+| D809 | `tests/test_plugins.py` | **SEVEN OF THE ELEVEN SURVIVORS CAME FROM ASSERTING THE WRONG THING, AND FOUR OF THOSE WERE ONE MISTAKE.** The rows pinning D807 asserted that a hook still REGISTERS under each spelling of the flag -- which it does whatever the flag says, because the flag decides **logging**. Every mutant narrowing the accepted spellings, and the one dropping `.lower()`, survived behind that. Three more survivors differed only in the log MESSAGE: a directory with no `__init__.py`, a spec the import machinery refuses, and the same guard in `reload_plugin` -- in each case both programs answer "this plugin did not load", and only the message says whether the machinery refused or the plugin's own code raised. **Fact 320**: when the code under test decides what is LOGGED, the log is the observable, and a test asserting the surrounding behaviour proves nothing about it. | **all seven closed** | Every mutant re-run after the rows were rewritten with `caplog` |
+| D810 | The package | **46 MUTANTS APPLIED, 35 KILLED AND ELEVEN SURVIVING ON THE MEASURING PASS; 42 OF 46 AFTER THE FIX ROUND, AND THE OTHER FOUR PROVED EQUIVALENT BY ONE TEST.** Each of the four guards has a second line of defence producing the same observable answer: `count('.') >= 2` beside `startswith('app.plugins.')` (the shortest string passing the first already has two dots); `not plugin_dir.is_dir()` beside the underscore test (a path that is not a directory cannot hold an `__init__.py`); `reload_plugin`'s early return (its own `except Exception` produces the same `False`); and `debug_logging_enabled() and post_data` (the `hasattr` below is false anyway). One more fixture fault was found on the way: the underscore-skip row's plugin RAISED, so the loader's exception handler skipped it for the wrong reason. | **42/46 killed, 4 equivalent** | Every mutant applied singly and restored with the restoration proved by sha256 |
+
+### 2. REGISTERED, NOT FIXED
+
+| ID | Where | What | Status |
+|---|---|---|---|
+| D811 | `hooks.py:78-82`; `hooks.py:80`; `app/api/alpha/utils/post.py:1472`; `app/community/routes.py:1085` | **TWO HALVES OF ONE UNKEPT CONTRACT.** (1) `fire_hook` swallows every handler exception and continues with the PREVIOUS result -- `PROBE g3 result: ['first', 'last']` -- so a caller cannot tell a plugin failed; deliberate isolation, registered as the D720 family. (2) A handler returning `None` nulls the data for every later handler and for the caller (`PROBE g4 result: None`), **and both `before_post_create` call sites discard `fire_hook`'s return value** although its docstring promises "modified data after all handlers have processed it". So a before-hook cannot do what it documents, and a broken one cannot break anything either. | **registered -- whether a plugin may rewrite a post is a product and security decision** |
+| D812 | `__init__.py:85`, `:88`; `:113-124` | **Two shapes.** (1) `load_plugins` returns the module global ITSELF while `get_loaded_plugins` returns a copy, and the registry is added to rather than reset -- `PROBE g5 same object: True`, and a second call over another directory accumulates. (2) `reload_plugin` removes a plugin's hooks by matching `func.__module__` against `app.plugins.<name>`, which couples the cleanup to the module name `load_plugins` happens to give the spec. | **registered** |
+
+**Next free number: D813.**
 
 ## Ratchet gotchas
 
