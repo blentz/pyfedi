@@ -437,7 +437,7 @@ def test_a_banned_remote_community_is_not_returned(app, db_session):
     scoping probe proved it with an IntegrityError -- so the re-query for a
     non-banned copy of the SAME url can only ever answer None, and a banned
     community is therefore always None. Recorded as behaviour; the dead
-    re-query itself is D771.
+    re-query itself is D773.
     """
     _seed()
     peer = make_instance('remote.example', software='lemmy')
@@ -459,7 +459,7 @@ def test_a_banned_remote_community_is_not_returned(app, db_session):
 def _fetch(responses, **kwargs):
     """Run the fetch with get_request doubled and the retry sleep patched.
 
-    The sleep is `time.sleep(randint(3, 10))` on the request thread (D770), so
+    The sleep is `time.sleep(randint(3, 10))` on the request thread (D775), so
     an unpatched retry row costs the suite up to ten seconds. Fact 302.
     """
     with patch('app.activitypub.actor.get_request', side_effect=responses) as request:
@@ -1217,7 +1217,7 @@ def test_the_unbanned_copy_lookup_can_never_find_anything(app, db_session):
     always answers None, the `return None` above always fires, and the two
     assignments are dead -- twice over, since the block is written out twice.
 
-    Registered as D771 rather than deleted, following D758.
+    Registered as D773 rather than deleted, following D758.
     """
     from sqlalchemy.exc import IntegrityError
     _seed()
@@ -1363,7 +1363,7 @@ def test_the_url_shape_fast_paths_change_nothing_but_the_query_order(app, db_ses
     what answered.
 
     So the four mutants are equivalent, and the fast paths are an optimisation
-    with no behaviour of their own. Registered as D774.
+    with no behaviour of their own. Registered as D774's equivalence finding.
     """
     _seed()
     peer = make_instance('remote.example', software='lemmy')
