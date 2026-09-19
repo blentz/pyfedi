@@ -8915,6 +8915,31 @@ neighbouring decorators disagree with each other and with this one:
 inside a view body (`tags_blocked_list`) calls `abort(404)` so the page does
 not admit it exists. Read the decorator before writing the assertion.
 
+**325. A SURVIVING MUTANT MAY BE REPORTING A DEFECT IN THE CODE, NOT A GAP IN
+THE SUITE.** Sub-project 68 wrote a row specifically to kill a mutant that
+dropped an access-control term from a subquery, and the mutant **still**
+survived. The equivalence write-off was available and would have been wrong:
+the term could only matter in one of three branches, and that branch's output
+was **always empty** because of a separate, unnoticed bug (`community_ids` was
+a one-shot `.scalars()` cursor read twice -- see fact 326). Fixing the bug
+killed the mutant. **When a mutant survives a row aimed straight at it, ask why
+the mutated line cannot matter before concluding the two programs agree** --
+instrument the three cases and compare, which is what found it here. Equivalence
+is a claim about the code and needs the same evidence as any other. See D840,
+D839, and fact 321's neighbourhood -- all three are about a mutation result that
+means something other than what it first looks like.
+
+**326. `.scalars()` IS A ONE-SHOT CURSOR; `list()` IT IF IT IS READ TWICE.**
+`db.session.execute(text(...)).scalars()` returns a `ScalarResult`, which is
+consumed by the first thing that iterates it. A function that passes it to two
+different queries gets the right answer once and an **empty `IN`** the second
+time, with no error anywhere. In `app/tag/routes.py` that silently emptied a
+whole feature -- a topic's tag cloud drew no relationships at all, while the
+community and feed clouds, which build real lists, drew them correctly. The
+same `.scalars()` shape is still present in `show_tag` and `tag_posts`, where
+each reads it exactly once; both are one added read away from the same bug.
+See D839.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
