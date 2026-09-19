@@ -257,7 +257,9 @@ def tag_cloud(type, category_id: int):
     feed = None
     community_ids = []
     view = request.args.get('view', 'cloud')
-    page = int(request.args.get('page', 1))
+    # type=int, as the rest of this module reads it: int() bare was a 500 on a
+    # crafted page.
+    page = request.args.get('page', 1, type=int)
 
     if type == 'community':
         community = Community.query.get_or_404(category_id)
@@ -269,9 +271,15 @@ def tag_cloud(type, category_id: int):
             topic_ids = get_all_child_topic_ids(topic)
         else:
             topic_ids = [topic.id]
-        community_ids = db.session.execute(
+        # list(), not the ScalarResult itself: it is a one-shot cursor, and this
+        # function reads community_ids TWICE -- once for the counting query and
+        # again for the co-occurrence subquery. The second read saw an exhausted
+        # iterator and rendered an empty IN, so a topic's cloud never drew a
+        # single relationship. The community and feed branches build real lists,
+        # which is why only the topic branch was affected.
+        community_ids = list(db.session.execute(
             text('SELECT id FROM community WHERE banned is false AND topic_id IN :topic_ids'),
-            {'topic_ids': tuple(topic_ids)}).scalars()
+            {'topic_ids': tuple(topic_ids)}).scalars())
     elif type == 'feed':
         feed = Feed.query.get_or_404(category_id)
         # get the feed_ids
@@ -286,13 +294,34 @@ def tag_cloud(type, category_id: int):
             feed_items = FeedItem.query.join(Feed, FeedItem.feed_id == fid).all()
             for item in feed_items:
                 community_ids.append(item.community_id)
+    else:
+        # A category this route does not understand used to fall through the
+        # chain and render an empty cloud with a 200, which looks like a real
+        # one. The three types it does understand each 404 on a bad id above.
+        abort(404)
+
+    # A private community is invite-only, so its tags belong to its members.
+    if current_user.is_authenticated:
+        readable_communities = or_(Community.private == False,
+                                   Community.id.in_(community_membership_private(current_user.id)))
+    else:
+        readable_communities = Community.private == False
 
     # Get tags with post counts
+    # The cloud is a navigation surface, so it must count exactly the posts
+    # show_tag will show: a tag whose only posts are hidden leads to an empty
+    # page, and a count inflated by them draws the word at the wrong size.
+    # Joining Community here rather than filtering in the three branches above
+    # applies the access control to all three category types at once.
     tags_query = db.session.query(Tag, db.func.count(Post.id).label('num_posts')). \
         filter(Tag.banned == False). \
         join(post_tag, post_tag.c.tag_id == Tag.id). \
         join(Post, Post.id == post_tag.c.post_id). \
-        filter(Post.community_id.in_(community_ids), Post.deleted == False). \
+        join(Community, Community.id == Post.community_id). \
+        filter(Post.community_id.in_(community_ids), Post.deleted == False,
+               Post.status > POST_STATUS_REVIEWING, Post.private == False,
+               Community.banned == False). \
+        filter(readable_communities). \
         group_by(Tag.id)
     
     tag_list_results = tags_query.paginate(page=page, per_page=50, error_out=False)
@@ -324,9 +353,14 @@ def tag_cloud(type, category_id: int):
             # Find posts that contain this tag
             posts_with_tag1 = db.session.query(post_tag.c.post_id).filter(
                 post_tag.c.tag_id == tag1_id
-            ).join(Post, Post.id == post_tag.c.post_id).filter(
+            ).join(Post, Post.id == post_tag.c.post_id). \
+                join(Community, Community.id == Post.community_id).filter(
                 Post.community_id.in_(community_ids),
-                Post.deleted == False
+                Post.deleted == False,
+                Post.status > POST_STATUS_REVIEWING,
+                Post.private == False,
+                Community.banned == False,
+                readable_communities
             ).subquery()
             
             # Find other tags that appear in the same posts
