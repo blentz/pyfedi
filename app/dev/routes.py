@@ -73,6 +73,11 @@ def tools():
     elif topics_form.topics_submit.data and topics_form.validate():
         # get the list of communities in the db
         communities = Community.query.filter_by(banned=False)
+        if communities.count() == 0:
+            # a fresh dev instance has none, and the button above this one is
+            # what makes them -- random.choice would raise IndexError here
+            flash(_('Populate some communities first - dev topics are assigned to them.'))
+            return redirect(url_for('dev.tools'))
         
         # pick 10 random communities from the communities list
         rand_communities = []
@@ -172,15 +177,17 @@ def tools():
             if topic.num_communities == 0:
                 db.session.delete(topic)
                 db.session.commit()
+                deleted_topics += 1
             else:
                 topics_with_communities += 1
 
         if topics_with_communities > 0:
-            flash(_(f'{deleted_topics} Dev Topics Deleted. {topics_with_communities} Dev Topics remain as they still have communities'))
-            return redirect(url_for('main.list_topics')) 
+            flash(_('%(deleted)d Dev Topics Deleted. %(remaining)d Dev Topics remain as they still have communities',
+                    deleted=deleted_topics, remaining=topics_with_communities))
+            return redirect(url_for('main.list_topics'))
         else:
-            flash(_(f'{deleted_topics} Dev Topics Deleted.'))
-            return redirect(url_for('main.list_topics')) 
+            flash(_('%(deleted)d Dev Topics Deleted.', deleted=deleted_topics))
+            return redirect(url_for('main.list_topics'))
 
     else:
         return render_template('dev/tools.html', 
