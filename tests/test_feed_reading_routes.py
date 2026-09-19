@@ -712,3 +712,35 @@ def test_the_rss_feed_404s_for_a_feed_that_is_not_there(app, db_session):
     with app.test_client() as client:
         response = client.get('/f/nosuchfeed.rss')
     assert response.status_code == 404
+
+
+def test_the_feeds_next_link_appears_only_when_a_next_page_exists(app, db_session):
+    """show_feed's pagination, and the reason this row exists at all.
+
+    `has_next_page = len(post_ids) > page + 1 * page_length` reads as `page +
+    page_length`, because `*` binds tighter than `+` -- so from page 1 on the
+    reader was offered a next page that renders nothing. Sub-project 60 found
+    it in app/topic/routes.py, where the same line is written; this file's
+    module carries the second of the four copies, and the repair landed in both
+    at once. Without this row the feed's copy had no test at all and a mutation
+    pass restoring the bug survived.
+    """
+    from tests.factories import make_post
+    instance, owner, snooper = _seed()
+    feed = _feed(owner, 'newsfeed', public=True)
+    community = make_community('microblogs')
+    community.total_subscriptions_count = 1
+    db.session.add(FeedItem(feed_id=feed.id, community_id=community.id))
+    db.session.commit()
+    for index in range(30):
+        make_post(community, owner, ap_id=f'https://test.piefed.local/post/feedpage{index}',
+                  title=f'feedpage {index}')
+    app.config['PAGE_LENGTH'] = 20
+
+    with app.test_client() as client:
+        login(client, owner)
+        with patch('app.feed.routes.render_template', return_value='rendered') as render:
+            client.get(f'/f/{feed.name}?page=0')
+            assert render.call_args.kwargs['next_url'] is not None
+            client.get(f'/f/{feed.name}?page=1')
+            assert render.call_args.kwargs['next_url'] is None
