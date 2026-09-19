@@ -702,3 +702,375 @@ def test_an_anonymous_reader_gets_no_voting_history(app, db_session):
 
     assert render.call_args.kwargs['recently_upvoted'] == []
     assert render.call_args.kwargs['content_filters'] == {}
+
+
+# --------------------------------------------------------------------------
+# show_topic_rss
+# --------------------------------------------------------------------------
+
+
+def test_the_feed_carries_the_topics_posts(app, db_session):
+    """The feed is built by hand, entry by entry, so the assertions read the
+    XML rather than the route's arguments -- there is no render call to inspect.
+    """
+    instance, alice, bob = _seed()
+    topic = _topic()
+    community = _community_in(topic)
+    _posts(community, alice, 2, prefix='news')
+    client = app.test_client()
+
+    response = client.get(f'/topic/{topic.machine_name}.rss')
+    body = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert response.headers['Content-Type'] == 'application/rss+xml'
+    assert 'ETag' in response.headers
+    assert response.headers['Cache-Control'] == 'no-cache, max-age=600, must-revalidate'
+    assert '<title>news 0</title>' in body
+    assert '<title>news 1</title>' in body
+    assert f'{topic.name} on ' in body
+
+
+def test_a_feed_entry_links_to_the_posts_slug_or_its_id(app, db_session):
+    """Both arms of `if post.slug`. The two posts differ only in whether they
+    carry one, and the urls they produce are different shapes.
+    """
+    instance, alice, bob = _seed()
+    topic = _topic()
+    community = _community_in(topic)
+    with_slug, without = _posts(community, alice, 2, prefix='slugtest')
+    with_slug.slug = '/post/slugged-one'
+    without.slug = None
+    db.session.commit()
+    client = app.test_client()
+
+    body = client.get(f'/topic/{topic.machine_name}.rss').get_data(as_text=True)
+
+    assert 'https://test.piefed.local/post/slugged-one' in body
+    assert f'https://test.piefed.local/post/{without.id}' in body
+
+
+def test_a_feed_entry_encloses_a_media_url_but_not_a_web_page(app, db_session):
+    """`if type and not type.startswith('text/')` -- three posts, one linking to
+    an image, one to an HTML page and one with no url at all, so both operands
+    of the guard are separated.
+    """
+    instance, alice, bob = _seed()
+    topic = _topic()
+    community = _community_in(topic)
+    image_post, page_post, plain_post = _posts(community, alice, 3, prefix='enclosure')
+    image_post.url = 'https://example.test/picture.jpg'
+    page_post.url = 'https://example.test/article.html'
+    plain_post.url = None
+    db.session.commit()
+    client = app.test_client()
+
+    body = client.get(f'/topic/{topic.machine_name}.rss').get_data(as_text=True)
+
+    assert 'https://example.test/picture.jpg' in body
+    assert 'enclosure' in body
+    assert 'article.html' not in body
+
+
+def test_the_feed_gathers_child_topics_when_the_topic_says_so(app, db_session):
+    instance, alice, bob = _seed()
+    parent = _topic('technology', show_posts_in_children=True)
+    child = _topic('fediverse', parent=parent)
+    _posts(_community_in(child, 'childcomm'), alice, 1, prefix='child')
+    client = app.test_client()
+
+    body = client.get('/topic/technology.rss').get_data(as_text=True)
+
+    assert '<title>child 0</title>' in body
+
+
+def test_the_feed_of_a_topic_that_keeps_to_itself_omits_child_posts(app, db_session):
+    instance, alice, bob = _seed()
+    parent = _topic('technology', show_posts_in_children=False)
+    child = _topic('fediverse', parent=parent)
+    _posts(_community_in(child, 'childcomm'), alice, 1, prefix='child')
+    client = app.test_client()
+
+    body = client.get('/topic/technology.rss').get_data(as_text=True)
+
+    assert '<title>child 0</title>' not in body
+
+
+def test_the_feed_never_carries_a_private_communitys_posts(app, db_session):
+    """The feed's own SQL has no membership parameter at all -- it is public by
+    construction -- so a private community's post must not appear even for a
+    member, and there is no logged-in variant of this route to try.
+    """
+    instance, alice, bob = _seed()
+    topic = _topic()
+    private = _community_in(topic, 'privatecomm', private=True)
+    _posts(private, alice, 1, prefix='secret')
+    client = app.test_client()
+
+    body = client.get(f'/topic/{topic.machine_name}.rss').get_data(as_text=True)
+
+    assert 'secret 0' not in body
+
+
+def test_a_feed_for_no_topic_is_a_404(app, db_session):
+    instance, alice, bob = _seed()
+    client = app.test_client()
+
+    assert client.get('/topic/nosuchtopic.rss').status_code == 404
+
+
+# --------------------------------------------------------------------------
+# topic_create_post, topic_notification, suggest_topics, suggestion_denied
+# --------------------------------------------------------------------------
+
+
+def test_the_submit_page_lists_the_topics_communities_and_its_childrens(app, db_session):
+    """The two lists are built separately -- the topic's own communities and
+    those of its children -- and each is ordered by title, so the fixture
+    creates them in the wrong order.
+    """
+    instance, alice, bob = _seed()
+    _submitter(alice)
+    parent = _topic('technology')
+    child = _topic('fediverse', parent=parent)
+    _community_in(parent, 'zebra')
+    _community_in(parent, 'antelope')
+    _community_in(child, 'childcomm')
+    _community_in(parent, 'bannedcomm', banned=True)
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.topic.routes.render_template', return_value='rendered') as render:
+        response = client.get('/topic/technology/submit')
+
+    assert response.status_code == 200
+    assert [c.name for c in render.call_args.kwargs['communities']] == ['antelope', 'zebra']
+    assert [c.name for c in render.call_args.kwargs['sub_communities']] == ['childcomm']
+
+
+def test_submitting_to_an_unknown_topic_is_a_404(app, db_session):
+    instance, alice, bob = _seed()
+    _submitter(alice)
+    client = app.test_client()
+    login(client, alice)
+
+    assert client.get('/topic/nosuchtopic/submit').status_code == 404
+
+
+def test_submitting_to_an_unknown_community_is_a_404(app, db_session):
+    instance, alice, bob = _seed()
+    _submitter(alice)
+    topic = _topic()
+    client = app.test_client()
+    login(client, alice)
+    token = csrf(app, client)
+
+    response = client.post(f'/topic/{topic.machine_name}/submit',
+                           data={'community_id': '9999', 'csrf_token': token})
+
+    assert response.status_code == 404
+
+
+def test_the_notification_toggle_subscribes_and_unsubscribes(app, db_session):
+    """The route is a toggle, so both directions are one test -- and the second
+    POST proves the delete arm rather than a second row being created.
+    """
+    instance, alice, bob = _seed()
+    topic = _topic()
+    client = app.test_client()
+    login(client, alice)
+    token = csrf(app, client)
+
+    with patch('app.topic.routes.render_template', return_value='rendered') as render:
+        response = client.post(f'/topic/{topic.id}/notification',
+                               data={'csrf_token': token})
+        assert response.status_code == 200
+        assert render.call_args.args[0] == 'topic/_notification_toggle.html'
+        subscription = NotificationSubscription.query.one()
+        assert subscription.user_id == alice.id
+        assert subscription.entity_id == topic.id
+        assert subscription.name == topic.name
+
+        client.post(f'/topic/{topic.id}/notification', data={'csrf_token': token})
+        assert NotificationSubscription.query.count() == 0
+
+
+def test_the_notification_toggle_fires_on_a_GET_as_well(app, db_session):
+    """D778: the route accepts GET and mutates on it, so any <img src> pointed
+    at this url toggles a logged-in reader's subscription. The template's href
+    is the no-JS fallback and hx-post is the path a browser with JS takes.
+    Recorded as behaviour; the refusal is a product decision.
+    """
+    instance, alice, bob = _seed()
+    topic = _topic()
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.topic.routes.render_template', return_value='rendered'):
+        response = client.get(f'/topic/{topic.id}/notification')
+
+    assert response.status_code == 200
+    assert NotificationSubscription.query.count() == 1
+
+
+def test_a_notification_for_an_unknown_topic_is_a_404(app, db_session):
+    instance, alice, bob = _seed()
+    client = app.test_client()
+    login(client, alice)
+
+    assert client.get('/topic/9999/notification').status_code == 404
+
+
+def test_a_suggestion_is_sent_to_the_site_contact(app, db_session):
+    instance, alice, bob = _seed()
+    _aged(alice)
+    site = Site.query.get(1)
+    site.contact_email = 'admin@test.piefed.local'
+    db.session.commit()
+    client = app.test_client()
+    login(client, alice)
+    token = csrf(app, client)
+
+    with patch('app.topic.routes.send_topic_suggestion') as sender, \
+         patch('app.topic.routes.render_template', return_value='rendered'):
+        response = client.post('/topics/new',
+                               data={'topic_name': 'Gardening',
+                                     'communities_for_topic': 'a\nb',
+                                     'csrf_token': token})
+
+    assert response.status_code == 302
+    assert response.headers['Location'] == '/topics'
+    assert sender.call_count == 1
+    assert sender.call_args.args[0] == 'a\nb'
+    assert sender.call_args.args[2] == 'admin@test.piefed.local'
+    assert sender.call_args.args[4] == 'Gardening'
+
+
+def test_the_suggestion_form_renders_for_a_trustworthy_reader(app, db_session):
+    instance, alice, bob = _seed()
+    _aged(alice)
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.topic.routes.render_template', return_value='rendered') as render:
+        response = client.get('/topics/new')
+
+    assert response.status_code == 200
+    assert render.call_args.args[0] == 'topic/suggest_topics.html'
+
+
+def test_a_new_account_cannot_suggest_topics(app, db_session):
+    """trustworthy() is false for an account created within 7 days whose
+    reputation is under 100 (fact 307), which is what every fresh fixture user
+    is -- so this row needs no setup at all, and the row above needs ageing.
+    """
+    instance, alice, bob = _seed()
+    client = app.test_client()
+    login(client, alice)
+
+    response = client.get('/topics/new')
+
+    assert response.status_code == 302
+    assert response.headers['Location'] == '/topic/suggestion-denied'
+
+
+def test_a_suggestion_that_fails_validation_sends_nothing(app, db_session):
+    instance, alice, bob = _seed()
+    _aged(alice)
+    client = app.test_client()
+    login(client, alice)
+    token = csrf(app, client)
+
+    with patch('app.topic.routes.send_topic_suggestion') as sender, \
+         patch('app.topic.routes.render_template', return_value='rendered') as render:
+        response = client.post('/topics/new', data={'topic_name': '', 'csrf_token': token})
+
+    assert response.status_code == 200
+    assert render.call_args.args[0] == 'topic/suggest_topics.html'
+    assert sender.call_count == 0
+
+
+def test_the_denial_page_renders(app, db_session):
+    instance, alice, bob = _seed()
+    client = app.test_client()
+    login(client, alice)
+
+    with patch('app.topic.routes.render_template', return_value='rendered') as render:
+        response = client.get('/topic/suggestion-denied')
+
+    assert response.status_code == 200
+    assert render.call_args.args[0] == 'topic/suggestion_denied.html'
+
+
+def test_an_unrecognised_comment_sort_leaves_the_order_to_the_database(app, db_session):
+    """The sort chain has no else, so a sort nobody defined falls through it
+    and the query is paginated unordered. That fall-through is its own arc.
+    """
+    instance, alice, bob = _seed()
+    topic = _topic()
+    community = _community_in(topic)
+    post = _posts(community, alice, 1)[0]
+    _reply(community, bob, post, 'whatever')
+    client = app.test_client()
+
+    with patch('app.topic.routes.render_template', return_value='rendered') as render:
+        response = client.get(f'/topic/{topic.machine_name}?content_type=comments&sort=nonsense')
+
+    assert response.status_code == 200
+    assert [c.body for c in render.call_args.kwargs['comments'].items] == ['whatever']
+
+
+def test_a_content_warning_site_hides_only_bots_and_deletions_from_anonymous_readers(app, db_session):
+    """The CONTENT_WARNING arm of the anonymous comment filter drops the nsfw
+    predicate -- a site that shows a warning interstitial has already asked the
+    reader about it. The config is patched at the MODULE's current_app, since
+    setting it on the app would also arm whatever else reads it.
+    """
+    instance, alice, bob = _seed()
+    topic = _topic()
+    community = _community_in(topic)
+    post = _posts(community, alice, 1)[0]
+    _reply(community, bob, post, 'nsfw one', nsfw=True)
+    _reply(community, bob, post, 'bot one', from_bot=True)
+    _reply(community, bob, post, 'plain one')
+    client = app.test_client()
+
+    # Setting the config itself arms login_required_if_private_instance, which
+    # reads the same key and redirects to /content_warning before the route runs
+    # (fact 299's shape). Patching the MODULE's current_app leaves the
+    # decorator's own view of the config alone and gives the route the value
+    # under test.
+    from unittest.mock import MagicMock
+    module_app = MagicMock()
+    module_app.config = dict(app.config, CONTENT_WARNING='this site contains adult content')
+    with patch('app.topic.routes.render_template', return_value='rendered') as render, \
+         patch('app.topic.routes.current_app', module_app):
+        response = client.get(f'/topic/{topic.machine_name}?content_type=comments')
+
+    assert response.status_code == 200
+    bodies = sorted(c.body for c in render.call_args.kwargs['comments'].items)
+    assert bodies == ['nsfw one', 'plain one']
+
+
+def test_the_closing_abort_is_unreachable(app, db_session):
+    """THE MODULE'S ONE RESIDUAL, PROVED.
+
+    show_topic ends `if current_topic: ... else: abort(404)` at :211, and
+    `current_topic` is the loop variable `topic` assigned at :66. The loop runs
+    over `topic_path.split('/')`, and **str.split never returns an empty list**
+    -- the emptiest answer is `['']`, one iteration. That iteration either
+    finds a topic or aborts at :63. So reaching :211 with a falsy
+    `current_topic` is impossible: the only path that leaves it falsy has
+    already raised.
+
+    Demonstrated on the value rather than argued: the empty path gives one
+    part, and the route answers 404 from the loop's abort -- the flask 404, not
+    the closing one, which nothing can distinguish from the outside, hence the
+    split assertion below as the actual proof.
+    """
+    instance, alice, bob = _seed()
+    client = app.test_client()
+
+    assert ''.split('/') == ['']
+    assert len(''.split('/')) == 1
+    assert client.get('/topic/').status_code == 404
