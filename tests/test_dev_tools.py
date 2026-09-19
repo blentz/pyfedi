@@ -191,15 +191,19 @@ def test_populating_topics_with_communities_present_still_works(app, db_session,
     # repeat and two topics can land on one community. Cycling makes the
     # assignment one-to-one, which is what lets the per-topic assertions below
     # say anything at all.
-    picks = iter([])
+    cursors = {}
 
     def cycling_choice(population):
-        nonlocal picks
-        try:
-            return next(picks)
-        except StopIteration:
-            picks = iter(list(population))
-            return next(picks)
+        # keyed by the population's CONTENTS: the route calls random.choice over
+        # communities and then over topics, and one shared cursor hands the
+        # second call a community. The key cannot read `.id` either -- patching
+        # `app.dev.routes.random.choice` patches the random MODULE, so every
+        # other caller inside the request arrives here too, including ones
+        # choosing from lists of strings.
+        key = tuple(str(item) for item in population)
+        index = cursors.get(key, 0)
+        cursors[key] = index + 1
+        return population[index % len(population)]
 
     with patch('app.dev.routes.flash'), \
          patch('app.dev.routes.random.choice', side_effect=cycling_choice):
@@ -450,29 +454,32 @@ def test_invalid_json_is_refused_without_reaching_the_inbox(app, db_session, dev
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize('field, expected_rows', [
-    ('communities_submit', 'communities'),
-    ('topics_submit', 'topics'),
-])
-def test_a_button_pressed_without_a_valid_token_does_nothing(app, db_session, dev_mode,
-                                                             field, expected_rows):
-    """`form.<button>.data and form.validate()` -- the second operand is the
-    CSRF check, and these forms carry nothing else to validate. Without it, a
-    forged POST creates thirty communities or ten topics.
+def test_the_buttons_own_validate_call_is_belt_and_braces(app, db_session, dev_mode):
+    """TWO EQUIVALENT MUTANTS, PROVED.
+
+    Each button reads `form.<button>.data and form.validate()`, and these forms
+    carry nothing but a submit field and a CSRF token -- so `validate()` can
+    only ever fail on the token. **It never gets the chance**: `login_required`
+    (app/utils.py:1968-1980) validates the same token itself, on every POST,
+    and raises before the view runs. A request with a bad token therefore never
+    reaches the button at all, and dropping `and form.validate()` cannot be
+    observed.
+
+    Asserted as the behaviour that makes it so: a POST carrying a forged token
+    raises out of the decorator, and nothing is created.
     """
+    from wtforms.validators import ValidationError
     instance, alice = _seed()
-    if expected_rows == 'topics':
-        make_community('microblogs')
     client = app.test_client()
     login(client, alice)
 
-    with patch('app.dev.routes.render_template', return_value='rendered') as render:
-        response = client.post('/dev/tools', data={field: 'Go', 'csrf_token': 'forged'})
+    with patch('app.dev.routes.render_template', return_value='rendered'):
+        with pytest.raises(ValidationError):
+            client.post('/dev/tools',
+                        data={'communities_submit': 'Go', 'csrf_token': 'forged'})
 
-    assert response.status_code == 200
-    assert render.call_args.args[0] == 'dev/tools.html'
+    assert Community.query.count() == 0
     assert Topic.query.count() == 0
-    assert Community.query.filter(Community.name.like('dev_%')).count() == 0
 
 
 def test_a_banned_community_does_not_count_as_something_to_assign_topics_to(app, db_session,
