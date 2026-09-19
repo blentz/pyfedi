@@ -354,7 +354,7 @@ def test_a_private_community_is_hidden_from_a_stranger(app, db_session):
     client's `current_user.get_id()` reads None inside the route although the
     session it was given holds `_user_id`. Flask-Login's session protection is
     'basic' here, so that is not the cause and the cause is not established;
-    what is established is the shape. Fact 314.
+    what is established is the shape. Fact 315.
     """
     topic, alice = _private_community_fixture()
 
@@ -901,7 +901,7 @@ def test_the_notification_toggle_subscribes_and_unsubscribes(app, db_session):
 
 
 def test_the_notification_toggle_fires_on_a_GET_as_well(app, db_session):
-    """D778: the route accepts GET and mutates on it, so any <img src> pointed
+    """D782: the route accepts GET and mutates on it, so any <img src> pointed
     at this url toggles a logged-in reader's subscription. The template's href
     is the no-JS fallback and hx-post is the path a browser with JS takes.
     Recorded as behaviour; the refusal is a product decision.

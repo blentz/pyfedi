@@ -8658,7 +8658,9 @@ anonymous route test measures the login redirect unless the fixture opens the
 instance; `validation_required` needs `user.verified`; and `approval_required`
 needs a non-None `user.private_key`. See D729.
 
-**300. THIS TEST CLIENT DELIVERS NO COOKIES.** Neither
+**300. THIS TEST CLIENT DELIVERS NO COOKIES.** *(CORRECTED by fact 314 --
+the jar works when its domain is the app's SERVER_NAME. The rest of this entry
+stands.)* Neither
 `client.set_cookie(...)` nor a `Cookie:` request header reaches
 `request.cookies` -- a throwaway probe route that echoed `dict(request.cookies)`
 returned `{}` for both. Any route branch gated on a cookie (`low_bandwidth`,
@@ -8789,6 +8791,25 @@ set it and do the work" does the work every time and its de-duplication cannot
 be observed. **Patch the module's `cache` to test it**, and assert the WRITE as
 well as the read -- a guard that reads a flag nothing ever sets passes the
 read-only half of the test. See D772 and fact 276's neighbourhood.
+
+**314. THE TEST CLIENT'S COOKIE JAR WORKS -- WITH THE RIGHT DOMAIN. CORRECTS
+FACT 300.** `client.set_cookie('low_bandwidth', '1')` defaults the domain to
+`localhost`, while the client requests the host in `config['SERVER_NAME']`,
+`test.piefed.local` -- so the cookie never matches and `request.cookies` is
+empty, which is what fact 300 recorded. **Pass the domain**:
+`client.set_cookie('low_bandwidth', '1', domain='test.piefed.local')` and the
+route sees it. A `Cookie:` header and an `environ_base={'HTTP_COOKIE': ...}`
+injection are both still dropped -- the jar overwrites them -- so the jar is
+the only way in. See D779.
+
+**315. A MANUAL SESSION LOGIN DOES NOT TAKE AFTER AN ANONYMOUS REQUEST IN THE
+SAME TEST.** Give each authorisation phase its own TEST. Measured: two
+logged-in clients in one test are fine, and a login-first client is fine, but
+once an anonymous request has been served, a client created afterwards and
+given `sess['_user_id']` still reads `current_user.get_id() is None` inside the
+route -- and the test then measures the anonymous path twice while looking
+like it measures both. Flask-Login's `session_protection` is `'basic'` here, so
+that is not the cause and the cause is not established; the shape is. See D778.
 
 ## Known noise
 
