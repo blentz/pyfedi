@@ -110,7 +110,34 @@ def app():
     )
 
     with application.app_context():
+        _install_search_expressions(application)
         yield application
+
+
+def _install_search_expressions(application):
+    """Create sqlalchemy_searchable's SQL helpers in the test database.
+
+    `make_searchable` (app/__init__.py:82) registers these as a `before_create`
+    DDL listener, so a database built by `create_all` has them and a database
+    built by MIGRATIONS does not -- and this one is built by migrations
+    (`run_tests.sh` runs `flask db upgrade`). Without them every `.search()`
+    call in the application raises
+
+        psycopg2.errors.UndefinedFunction: function parse_websearch(unknown)
+        does not exist
+
+    which reads as a database fault rather than as a missing fixture. Installing
+    them once per session is what production gets at create_all time; the
+    statements are CREATE OR REPLACE, so running them against a database that
+    already has them is a no-op. See fact 317.
+    """
+    from sqlalchemy import text
+    from sqlalchemy_searchable import sql_expressions
+    from app import db
+
+    with application.app_context():
+        db.session.execute(text(str(sql_expressions)))
+        db.session.commit()
 
 
 _TEARDOWN_SQL_CACHE = []

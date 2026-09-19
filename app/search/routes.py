@@ -39,11 +39,14 @@ def run_search():
     search_for = request.args.get('search_for', 'posts')
     nsfw = request.args.get('nsfw', '')
     minimum_upvote = request.args.get('minimum_upvote', '')
+    # the template re-renders the raw string, so the parsed value is its own
+    # name; a value that is not a number filters nothing rather than crashing
+    minimum_upvote_value = request.args.get('minimum_upvote', type=int)
 
     community_id = request.args.get('community_id', 0, int)
     if community_id == 0 and community:
         if q == '' and search_for == 'communities':     # when trying to find a community, people go to the search and then type stuff into the field labelled 'Community'. This is wrong.
-            return redirect(f'/communities?search={community}&language_id={language_id}')
+            return redirect(url_for('main.list_communities', search=community, language_id=language_id))
         else:
             if not community.startswith('!'):
                 community = f'!{community}'
@@ -55,6 +58,9 @@ def run_search():
 
     if q != '' or type != 0 or language_id != 0 or community_id != 0 or nsfw != '' or minimum_upvote != '':
         posts = None
+        # set beside posts and replies, or a search_for naming neither branch
+        # reaches the render with both names unbound
+        next_url = prev_url = None
         db.session.execute(text("SET work_mem = '100MB';"))
         if search_for == 'posts':
             posts = Post.query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING, Post.private == False)
@@ -99,8 +105,8 @@ def run_search():
                     pass
                 posts = posts.filter(Post.nsfw == False)
 
-            if minimum_upvote:
-                posts = posts.filter(Post.up_votes - Post.down_votes >= int(minimum_upvote))
+            if minimum_upvote_value is not None:
+                posts = posts.filter(Post.up_votes - Post.down_votes >= minimum_upvote_value)
             posts = posts.filter(Post.indexable == True)
             if user_id != 0:
                 posts = posts.filter(Post.user_id == user_id)
@@ -184,10 +190,10 @@ def run_search():
 
         communities = None
         if search_for == 'communities':
-            return redirect(f'/communities?search={q}&language_id={language_id}')
+            return redirect(url_for('main.list_communities', search=q, language_id=language_id))
 
         if search_for == 'people':
-            return redirect(f'/instance/all/people?q={q}')
+            return redirect(url_for('instance.instance_people', instance_domain='all', q=q))
 
         # Voting history
         if current_user.is_authenticated:
