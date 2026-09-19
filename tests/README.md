@@ -8843,6 +8843,17 @@ passes) rather than the order the database chose, unless the fixture makes the
 ranks provably different. The full-suite run is what caught this; the scoped
 run was green. See D797.
 
+**319. `assert wanted in results` TESTS THAT A FILTER ADMITS, NEVER THAT IT
+EXCLUDES.** Sub-project 63's five state-filter rows each asserted that the
+right instance was among the results. Four mutants dropping half a filter
+(`online` and `dormant` each losing `gone_forever == False`, `gone_forever`
+losing its condition entirely) survived behind that single weakness: the wanted
+row was still there, alongside everything the filter should have removed.
+**Assert the whole result set** -- `sorted(results) == sorted(expected)` --
+whenever the point of the code under test is to leave something out. Doing so
+usually forces the fixture to become honest too: here it had to admit that the
+LOCAL instance is online as well. See D803.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not

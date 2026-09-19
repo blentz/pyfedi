@@ -931,7 +931,7 @@ def test_a_debug_server_follows_in_process(app, db_session):
 
 
 def test_a_csv_that_is_not_utf8_is_a_500(app, db_session):
-    """D803, recorded rather than repaired: the upload is decoded as UTF-8 with
+    """D805, recorded rather than repaired: the upload is decoded as UTF-8 with
     no guard, so any other encoding is a traceback. A Mastodon export is always
     UTF-8, which is why this has survived -- but the answer to the wrong file
     is a message, and what that message should say is a product decision.
