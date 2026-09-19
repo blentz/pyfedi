@@ -33,6 +33,8 @@ def show_domain(domain_id):
         if '.' in domain_id:
             domain = Domain.query.filter_by(name=domain_id, banned=False).first()
         else:
+            if not domain_id.isdigit():  # neither a name nor an id, so nothing to find
+                abort(404)
             domain = Domain.query.get_or_404(domain_id)
             if domain.banned:
                 domain = None
@@ -115,6 +117,8 @@ def show_domain_rss(domain_id):
         if '.' in domain_id:
             domain = Domain.query.filter_by(name=domain_id, banned=False).first()
         else:
+            if not domain_id.isdigit():  # neither a name nor an id, so nothing to find
+                abort(404)
             domain = Domain.query.get_or_404(domain_id)
             if domain.banned:
                 domain = None
@@ -231,7 +235,9 @@ def domain_unblock(domain_id):
         resp = make_response()
         curr_url = request.headers.get("HX-Current-Url")
 
-        if "/d/" in curr_url:
+        # HX-Current-Url is optional; a caller who did not say where they are
+        # cannot be sent back there (D756)
+        if curr_url is None or "/d/" in curr_url:
             resp.headers["HX-Redirect"] = url_for("domain.show_domain", domain_id=domain.id)
         else:
             resp.headers["HX-Redirect"] = curr_url
