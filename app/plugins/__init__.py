@@ -10,7 +10,8 @@ from typing import Dict, List, Any
 import logging
 import traceback
 
-from .hooks import fire_hook, get_registered_hooks, register_plugin_hook, get_plugin_hooks
+from .hooks import (debug_logging_enabled, fire_hook, get_registered_hooks,
+                    register_plugin_hook, get_plugin_hooks)
 
 logger = logging.getLogger(__name__)
 
@@ -74,12 +75,12 @@ def load_plugins(plugins_dir: str = None) -> Dict[str, Any]:
             }
             
             loaded_count += 1
-            if int(os.environ.get('FLASK_DEBUG', '0')):
+            if debug_logging_enabled():
                 logger.info(f"Loaded plugin: {plugin_name}")
             
         except Exception as e:
             logger.error(f"Failed to load plugin {plugin_name}: {e}\n{traceback.format_exc()}")
-    if int(os.environ.get('FLASK_DEBUG', '0')):
+    if debug_logging_enabled():
         logger.info(f"Successfully loaded {loaded_count} plugins")
     return _loaded_plugins
 
