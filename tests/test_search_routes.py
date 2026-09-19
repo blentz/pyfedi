@@ -1135,23 +1135,35 @@ def test_a_reader_who_hides_nsfl_does_not_see_it(app, db_session):
     assert _titles(render) == ['plain article']
 
 
-def test_an_unsorted_search_ranks_by_relevance(app, db_session):
-    """`sort=True if sort_by == '' else False` -- with no sort asked for, the
-    search ranks by how well each row matches. The fixture puts the better
-    match LAST by arrival, so only the ranking can put it first.
+@pytest.mark.parametrize('sort_by, ranked', [('', True), ('date', False), ('top', False)])
+def test_relevance_ranking_is_asked_for_only_when_no_sort_was(app, db_session, sort_by, ranked):
+    """`sort=True if sort_by == '' else False`.
+
+    Asserted on the ARGUMENT rather than on the order that comes back. An
+    earlier version of this row built one strongly-matching post and one weak
+    one and asserted which came first; it passed alone and failed in the full
+    suite, because two documents containing the same lexeme can rank EQUAL and
+    the tie then breaks by id. The route's decision is the thing the sort
+    parameter names, and it is deterministic.
     """
+    from sqlalchemy_searchable import SearchQueryMixin
     instance, alice, bob = _seed()
     community = make_community('microblogs')
-    _post(community, alice, 'passing mention of gardening')
-    strong = _post(community, alice, 'gardening gardening gardening')
-    strong.body = 'gardening gardening gardening'
-    db.session.commit()
+    _post(community, alice, 'an article')
     client = app.test_client()
+    real_search = SearchQueryMixin.search
+    seen = {}
 
-    with patch('app.search.routes.render_template', return_value='rendered') as render:
-        client.get('/search?q=gardening')
+    def spy(self, term, **kwargs):
+        seen.update(kwargs)
+        return real_search(self, term, **kwargs)
 
-    assert _titles(render)[0] == 'gardening gardening gardening'
+    with patch('app.search.routes.render_template', return_value='rendered'), \
+         patch.object(SearchQueryMixin, 'search', spy):
+        response = client.get(f'/search?q=article&sort_by={sort_by}')
+
+    assert response.status_code == 200
+    assert seen['sort'] is ranked
 
 
 def test_an_ordinary_reader_is_not_offered_the_admin_controls(app, db_session):
