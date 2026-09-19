@@ -8811,6 +8811,18 @@ route -- and the test then measures the anonymous path twice while looking
 like it measures both. Flask-Login's `session_protection` is `'basic'` here, so
 that is not the cause and the cause is not established; the shape is. See D778.
 
+**316. THE SAME PAGINATION GUARD IS REDUNDANT IN ONE MODULE AND LOAD-BEARING IN
+ANOTHER, AND ONLY THE PAGE'S BASE TELLS THEM APART.** `if paginated.has_prev and
+page != 1` appears in several route modules. flask-sqlalchemy's paginator is
+**1-based**, so where the page handed to `paginate()` is the one the url
+carries, `has_prev` is already False on page 1 and the second operand decides
+nothing (`app/domain/routes.py`, proved in sub-project 61). Where a **0-based**
+page reaches the same paginator, page 0 and page 1 both render page 1 and the
+guard suppresses a link that should exist (`app/topic/routes.py`, D782).
+**Before writing a test for that expression -- or a mutant against it -- find
+out which base the route uses**; a fixture built for the wrong one proves
+nothing either way. See D788.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
