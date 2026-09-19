@@ -9,6 +9,19 @@ import traceback
 
 logger = logging.getLogger(__name__)
 
+# Values people actually write for FLASK_DEBUG. Flask's own documentation uses
+# `true`, this repo's compose.dev.yaml uses `1`, and int() accepts only the
+# second -- which used to raise ValueError while a plugin was being imported,
+# so load_plugins' own exception handler swallowed it and the plugin silently
+# did not load.
+_DEBUG_VALUES = {'1', 'true', 'yes', 'on'}
+
+
+def debug_logging_enabled() -> bool:
+    """Whether the plugin system should log what it is doing."""
+    return os.environ.get('FLASK_DEBUG', '0').strip().lower() in _DEBUG_VALUES
+
+
 # Global hook registry
 _hooks: Dict[str, List[Callable]] = {}
 # Track which plugin registered which hooks
@@ -30,7 +43,7 @@ def hook(hook_name: str):
             _hooks[hook_name] = []
         
         _hooks[hook_name].append(func)
-        if int(os.environ.get('FLASK_DEBUG', '0')):
+        if debug_logging_enabled():
             logger.info(f"Registered hook '{hook_name}' -> {func.__name__}")
         
         # Try to determine which plugin this hook belongs to from the function's module
@@ -41,7 +54,7 @@ def hook(hook_name: str):
             if module_name and module_name.startswith('app.plugins.') and module_name.count('.') >= 2:
                 plugin_name = module_name.split('.')[2]
                 register_plugin_hook(plugin_name, hook_name, func.__name__)
-                if int(os.environ.get('FLASK_DEBUG', '0')):
+                if debug_logging_enabled():
                     logger.info(f"Auto-registered hook {hook_name} -> {func.__name__} for plugin {plugin_name}")
         except Exception as e:
             logger.debug(f"Could not determine plugin for hook {hook_name}: {e}")
