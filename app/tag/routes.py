@@ -206,8 +206,11 @@ def tags_blocked_list():
     tags = tags.order_by(Tag.name)
     tags = tags.paginate(page=page, per_page=100, error_out=False)
 
-    next_url = url_for('tag.tags', page=tags.next_num) if tags.has_next else None
-    prev_url = url_for('tag.tags', page=tags.prev_num) if tags.has_prev and page != 1 else None
+    # tag.tags_blocked_list, not tag.tags: these were copied from tags() and
+    # never re-pointed, so page 2 of the banned list was page 2 of the unbanned
+    # one -- a different list, with no way for the reader to tell.
+    next_url = url_for('tag.tags_blocked_list', page=tags.next_num) if tags.has_next else None
+    prev_url = url_for('tag.tags_blocked_list', page=tags.prev_num) if tags.has_prev and page != 1 else None
 
     return render_template('tag/tags_blocked.html', title='Tags blocked on this instance', tags=tags,
                            next_url=next_url, prev_url=prev_url, search=search)
@@ -222,8 +225,14 @@ def tag_ban(tag):
         tag.banned = True
         db.session.commit()
         # tag.purge_content()
-        flash(_('%(name)s banned for all users and all content deleted.', name=tag.name))
+        # The message says only what the ban does. purge_content() above is
+        # commented out, so the posts carrying the tag survive; the flash used
+        # to claim they had been deleted, and a moderator who believed it did
+        # not go and delete them.
+        flash(_('%(name)s banned for all users.', name=tag.name))
         return redirect(url_for('tag.tags'))
+    else:
+        abort(404)
 
 
 @bp.route('/tag/<tag>/unban', methods=['POST'])
@@ -236,6 +245,8 @@ def tag_unban(tag):
         db.session.commit()
         flash(_('%(name)s un-banned for all users.', name=tag.name))
         return redirect(url_for('tag.show_tag', tag=tag.name))
+    else:
+        abort(404)
 
 
 @bp.route('/tags/cloud/<type>/<int:category_id>', methods=['GET'])
@@ -344,7 +355,8 @@ def tag_cloud(type, category_id: int):
 def tag_posts(tag_id):
     posts = Post.query.join(Community, Community.id == Post.community_id). \
         join(post_tag, post_tag.c.post_id == Post.id).filter(post_tag.c.tag_id == tag_id). \
-        filter(Community.banned == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING)
+        filter(Community.banned == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
+               Post.private == False)
 
     if current_user.is_authenticated:
         # filter domains and instances
@@ -367,11 +379,21 @@ def tag_posts(tag_id):
         if current_user.read_language_ids:
             posts = posts.filter(Post.language_id.in_(tuple(current_user.read_language_ids)))
 
-    if community_id := request.args.get('community_id'):
-        posts = posts.filter(Post.community_id == int(community_id))
+        # A private community is invite-only, so its posts belong to its members
+        # -- the same filter show_tag applies. Without it this route served them
+        # to anyone who knew the tag's id.
+        posts = posts.filter(or_(Community.private == False,
+                                 Community.id.in_(community_membership_private(current_user.id))))
+    else:
+        posts = posts.filter(Community.private == False)
+
+    # type=int, as show_tag reads the same idea: a crafted community_id used to
+    # reach int() bare and was a 500.
+    if community_id := request.args.get('community_id', type=int):
+        posts = posts.filter(Post.community_id == community_id)
 
     if topic_id := request.args.get('topic_id'):
-        topic = Topic.query.get(topic_id)
+        topic = Topic.query.get_or_404(topic_id)
         # get posts from communities in that topic
         if topic.show_posts_in_children:  # include posts from child topics
             topic_ids = get_all_child_topic_ids(topic)
@@ -382,7 +404,7 @@ def tag_posts(tag_id):
         posts = posts.filter(Post.community_id.in_(community_ids))
 
     if feed_id := request.args.get('feed_id'):
-        feed = Feed.query.get(feed_id)
+        feed = Feed.query.get_or_404(feed_id)
         # get the feed_ids
         if feed.show_posts_in_children:  # include posts from child feeds
             feed_ids = get_all_child_feed_ids(feed)
