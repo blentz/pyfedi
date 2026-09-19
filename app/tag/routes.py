@@ -98,9 +98,12 @@ def show_tag(tag):
 
         # pagination
         posts = posts.paginate(page=page, per_page=100, error_out=False)
-        next_url = url_for('tag.show_tag', tag=tag, page=posts.next_num,
+        # tag.name, not tag: `tag` is the Tag row from the lookup above, and the
+        # URL builder has nothing but str() for a model -- which wrote
+        # /tag/%3CTag%201%3E into both links and made page 2 unreachable.
+        next_url = url_for('tag.show_tag', tag=tag.name, page=posts.next_num,
                            category=category, category_id=category_id) if posts.has_next else None
-        prev_url = url_for('tag.show_tag', tag=tag, page=posts.prev_num,
+        prev_url = url_for('tag.show_tag', tag=tag.name, page=posts.prev_num,
                            category=category, category_id=category_id) if posts.has_prev and page != 1 else None
 
         return render_template('tag/tag.html', tag=tag, title=tag.name, posts=posts,
@@ -123,27 +126,20 @@ def show_tag_rss(tag):
     if tag:
         posts = Post.query.join(Community, Community.id == Post.community_id). \
             join(post_tag, post_tag.c.post_id == Post.id).filter(post_tag.c.tag_id == tag.id). \
-            filter(Community.banned == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING)
+            filter(Community.banned == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
+                   Post.private == False)
 
         if current_user.is_anonymous or current_user.ignore_bots == 1:
             posts = posts.filter(Post.from_bot == False)
         posts = posts.filter(Community.private == False)
         posts = posts.order_by(desc(Post.posted_at)).limit(20).all()
 
-        description = None
-        og_image = None
         fg = FeedGenerator()
         fg.id(f"{current_app.config['SERVER_URL']}/tag/{tag.name}")
         fg.title(f'#{tag.display_as} on {g.site.name}')
         fg.link(href=f"{current_app.config['SERVER_URL']}/tag/{tag.name}", rel='alternate')
-        if og_image:
-            fg.logo(og_image)
-        else:
-            fg.logo(f"{current_app.config['SERVER_URL']}{g.site.logo_152 if g.site.logo_152 else '/static/images/apple-touch-icon.png'}")
-        if description:
-            fg.subtitle(description)
-        else:
-            fg.subtitle(' ')
+        fg.logo(f"{current_app.config['SERVER_URL']}{g.site.logo_152 if g.site.logo_152 else '/static/images/apple-touch-icon.png'}")
+        fg.subtitle(' ')
         fg.link(href=f"{current_app.config['SERVER_URL']}/tag/{tag.name}/feed", rel='self')
         fg.language('en')
 
