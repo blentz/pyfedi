@@ -14568,7 +14568,44 @@ when the code under test decided logging.**
 | D811 | `hooks.py:78-82`; `hooks.py:80`; `app/api/alpha/utils/post.py:1472`; `app/community/routes.py:1085` | **TWO HALVES OF ONE UNKEPT CONTRACT.** (1) `fire_hook` swallows every handler exception and continues with the PREVIOUS result -- `PROBE g3 result: ['first', 'last']` -- so a caller cannot tell a plugin failed; deliberate isolation, registered as the D720 family. (2) A handler returning `None` nulls the data for every later handler and for the caller (`PROBE g4 result: None`), **and both `before_post_create` call sites discard `fire_hook`'s return value** although its docstring promises "modified data after all handlers have processed it". So a before-hook cannot do what it documents, and a broken one cannot break anything either. | **registered -- whether a plugin may rewrite a post is a product and security decision** |
 | D812 | `__init__.py:85`, `:88`; `:113-124` | **Two shapes.** (1) `load_plugins` returns the module global ITSELF while `get_loaded_plugins` returns a copy, and the registry is added to rather than reset -- `PROBE g5 same object: True`, and a second call over another directory accumulates. (2) `reload_plugin` removes a plugin's hooks by matching `func.__module__` against `app.plugins.<name>`, which couples the cleanup to the module name `load_plugins` happens to give the spec. | **registered** |
 
-**Next free number: D813.**
+**Next free number: D813.** (**D813-D819 were taken by sub-project 65, below;
+the free number is now D820.**)
+
+## Sub-project 65: `app/dev/routes.py` -- a counter that counted nothing, a membership that was never committed, and two false kills the full suite caught
+
+**The round in one line: the module goes from **13.75** to **100.0** and takes a
+floor of 100, **closing `app/dev` at 44 floors**; FOUR defects were repaired,
+one of them found by a covering assertion rather than by reading; a 38-mutant
+pass killed **36 of 38 with the other two proved equivalent** -- after the full
+suite showed that the rows which had "killed" them never reached the code at
+all.**
+
+### 0. THE FOUR REPAIRS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D813 | `app/dev/routes.py:170-180` | **THE DELETION COUNTER COUNTED NOTHING.** `deleted_topics` was initialised to 0, reported in both flash messages, and **never incremented**. Probe: three dev topics, all deletable -- `PROBE h3 flash: 0 Dev Topics Deleted.` / `PROBE h3 topics left: 0`. Every topic gone, the developer told none were. **D736's shape**: an action observable only through a stale counter. | **fixed at `d4c8a5eb3`** | Probe output; the inverted row asserts the number AND that it is not the old message |
+| D814 | `app/dev/routes.py:73-80` | **POPULATING TOPICS ON AN EMPTY DATABASE WAS A 500.** `random.choice(communities.all())` ten times with no check: `PROBE h2 exception: IndexError Cannot choose from an empty sequence`. A fresh dev instance has no communities, which is exactly when a developer opens this page -- and the button above this one is what creates them. Repaired with a refusal naming what to press first. | **fixed at `d4c8a5eb3`** | Probe output; both halves, since a repair that always refused would pass the first |
+| D815 | `app/dev/routes.py:178`, `:181` | **TWO FLASHES COULD NOT BE TRANSLATED.** `flash(_(f'{deleted_topics} Dev Topics Deleted.'))` -- an f-string is interpolated BEFORE gettext sees it, so the catalog is asked for a string containing this run's numbers and never matches. Rewritten with placeholders, which the community-deletion flash in the same file already uses. | **fixed at `d4c8a5eb3`** | Both lines quoted |
+| D816 | `app/dev/routes.py:58-64` | **THE THIRTIETH GENERATED COMMUNITY HAD NO MODERATOR.** The generator adds a `CommunityMember` and relies on the NEXT iteration's `db.session.commit()` to write it, so the last one had nothing after it and was never committed: the developer owned and moderated twenty-nine of the thirty communities the button had just made. **Found by the covering test's assertion on the membership count** -- `assert 29 == 30` -- not by reading the loop. | **fixed at `ece941bd0`** | The failing assertion; the commit moved inside the loop |
+
+### 1. THE MEASUREMENT, AND TWO FALSE KILLS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D817 | `app/dev/routes.py`; `coverage_floors.ini`; `pytest.ini` | **THE MODULE CLOSES AT 100.0 AND TAKES A FLOOR OF 100 -- `app/dev` IS COMPLETE at 44 floors.** No missing lines, no missing arcs, no residual to prove. **BASIS: the full suite on the delivered tree, `6105 passed, 3 skipped, 7857 warnings in 451.28s`**, and `All 44 module floors met.` **THE SUITE OUTGREW ITS OWN BUDGET DURING THIS ROUND**: `pytest.ini`'s `session_timeout` was 600s, chosen when "the slowest legitimate full run measured is 260s", and a run stopped at **600.48s with 4786 of ~6100 tests and no failure to point at** -- precisely the shape that setting exists to stop being read as a pass. The campaign has added ~1,100 tests since the number was set, and the last four warm coverage runs measured 435s, 455s, 546s, 577s. Raised to 1200s with the old reasoning kept verbatim beside the new measurements, because the number is only as good as the evidence under it. | **package closed and floored; the budget re-measured** | The `&&` chain; both the aborted run and the green one quoted in `pytest.ini` |
+| D818 | `app/dev/routes.py:33`, `:73`; `tests/test_dev_tools.py` | **TWO MUTANTS THE ROUND FIRST "KILLED" BY MISTAKE, AND THE FULL SUITE CAUGHT IT.** Each button reads `form.<button>.data and form.validate()`, and the rows written to kill the mutants dropping `and form.validate()` posted a FORGED CSRF token. They passed in isolation -- but not because the route refused: **`login_required` validates the same token itself and raises before the view runs** (`app/utils.py:1979`), so the request never reached the button. In the full suite the raise surfaced as an error rather than a refusal and the rows failed. The two mutants are **equivalent**: on forms carrying nothing but a submit field and a token, `validate()` can only fail on the token, and the decorator has already rejected it. Replaced with a row that proves exactly that. **Fact 321.** | **two equivalences proved; the false kills removed** | The suite's failure; the mutants re-run and reported as survivors on purpose |
+| D819 | The module | **38 MUTANTS APPLIED, 31 KILLED AND SEVEN SURVIVING ON THE MEASURING PASS; 36 OF 38 AFTER THE FIX ROUND, THE OTHER TWO EQUIVALENT (D818).** Three survivors were missing rows, three were weak assertions -- the topic-assignment row asserted that AT LEAST ONE community had a topic, which a mutant assigning all ten to the same topic satisfies, and the two-counter message had both numbers equal to 1 so swapping them changed nothing. Making the assignment deterministic required patching `random.choice`, which patches the random MODULE and therefore catches every other caller in the request: the first version keyed its cursor on `item.id` and died on a list of strings -- **in the full suite only**. | **36/38 killed, 2 equivalent** | Every mutant applied singly and restored with the restoration proved by sha256 |
+
+### 2. REGISTERED, NOT FIXED
+
+| ID | Where | What | Status |
+|---|---|---|---|
+| (D819) | `:209` | `_('Invalid json ' + str(e))` concatenates before translating, so that message cannot be translated either -- and it puts a parser's exception text in front of a user. | **registered** |
+| (D819) | `:77-81`, `:116-121` | `random.choice` is called ten times over the same list, WITH replacement, so the ten "random communities" can repeat -- and then two topics land on one community, leaving a topic the delete tool will later report as still having communities. | **registered as dev scaffolding whose randomness is the point** |
+| (D819) | `:206` | `replay_inbox_request(j)` is called with only `JSONDecodeError` caught, so any other failure inside the replay is a 500 on the tools page rather than a flash. | **registered -- the error contract for replay belongs with the inbox** |
+
+**Next free number: D820.**
 
 ## Ratchet gotchas
 

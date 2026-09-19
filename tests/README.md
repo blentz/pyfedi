@@ -8866,6 +8866,18 @@ end in the same return value, and only the log says which happened.
 assert the message -- whenever the branch under test chooses between messages
 or decides whether to log at all. See D809.
 
+**321. A ROW THAT RAISES BEFORE REACHING THE CODE IS NOT A KILL.** Sub-project
+65 wrote two rows to kill the mutants dropping `and form.validate()` from a
+button guard, by posting a forged CSRF token. Both passed -- and neither
+reached the route: `login_required` (`app/utils.py:1979`) validates the token
+itself and RAISES, so the view never ran and the mutants were equivalent all
+along. The scoped run hid it because the raise still failed the mutated code
+for an unrelated reason; **the full-suite run is what exposed it.** When a
+mutant dies, check that the test reached the mutated line -- a `pytest.raises`
+or a 500 in the row that "kills" it is the signal to look. See D818, and
+fact 320's neighbourhood: both are about assertions that measure something
+other than the code under test.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
