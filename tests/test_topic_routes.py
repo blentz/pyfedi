@@ -631,7 +631,10 @@ def test_a_readers_own_page_length_wins_when_it_is_shorter(app, db_session):
     instance, alice, bob = _seed()
     topic = _topic()
     community = _community_in(topic)
-    _posts(community, alice, 15)
+    # 25 posts, so a LONGER preference than the site's is visible: under the
+    # repair the site's 20 wins and there is a next page, and a mutant that
+    # took the preference unconditionally would show 50 per page and none
+    _posts(community, alice, 25)
     app.config['PAGE_LENGTH'] = 20
     alice.page_length = 10
     db.session.commit()
@@ -639,13 +642,15 @@ def test_a_readers_own_page_length_wins_when_it_is_shorter(app, db_session):
     login(client, alice)
 
     with patch('app.topic.routes.render_template', return_value='rendered') as render:
-        client.get(f'/topic/{topic.machine_name}')
-        assert render.call_args.kwargs['next_url'] is not None   # 15 posts, 10 per page
+        client.get(f'/topic/{topic.machine_name}?page=2')
+        assert render.call_args.kwargs['next_url'] is None       # 25 posts, 10 per page
 
+        # a LONGER preference is ignored, and page 0 is where that shows: the
+        # site's 20 leaves a second page, while 50 would swallow all 25 posts
         alice.page_length = 50
         db.session.commit()
-        client.get(f'/topic/{topic.machine_name}')
-        assert render.call_args.kwargs['next_url'] is None       # 15 posts, 20 per page
+        client.get(f'/topic/{topic.machine_name}?page=0')
+        assert render.call_args.kwargs['next_url'] is not None
 
 
 def test_the_scaled_sort_is_read_as_the_default(app, db_session):
@@ -1074,3 +1079,131 @@ def test_the_closing_abort_is_unreachable(app, db_session):
     assert ''.split('/') == ['']
     assert len(''.split('/')) == 1
     assert client.get('/topic/').status_code == 404
+
+
+# --------------------------------------------------------------------------
+# Rows added to close mutation survivors
+# --------------------------------------------------------------------------
+
+
+def test_a_path_in_capitals_with_padding_still_finds_its_topics(app, db_session):
+    """`url_part.strip().lower()` -- urls arrive from links people type and
+    from peers that capitalise, and every machine_name is stored lower case.
+    """
+    instance, alice, bob = _seed()
+    parent = _topic('technology')
+    _topic('fediverse', parent=parent)
+    client = app.test_client()
+
+    with patch('app.topic.routes.render_template', return_value='rendered') as render:
+        response = client.get('/topic/Technology/%20FEDIVERSE%20')
+
+    assert response.status_code == 200
+    assert [crumb.text for crumb in render.call_args.kwargs['breadcrumbs']] == \
+        ['Technology', 'Fediverse']
+
+
+def test_a_three_level_breadcrumb_accumulates_the_path(app, db_session):
+    """`existing_url = breadcrumb.url` is what makes the trail cumulative, and
+    it only shows from the THIRD level: with two, the first crumb is the root
+    and the second is the page itself, so nothing has accumulated yet.
+    """
+    instance, alice, bob = _seed()
+    parent = _topic('technology')
+    child = _topic('fediverse', parent=parent)
+    _topic('activitypub', parent=child)
+    client = app.test_client()
+
+    with patch('app.topic.routes.render_template', return_value='rendered') as render:
+        client.get('/topic/technology/fediverse/activitypub')
+
+    crumbs = render.call_args.kwargs['breadcrumbs']
+    assert [crumb.url for crumb in crumbs] == \
+        ['/topic/technology', '/topic/technology/fediverse', '']
+
+
+def test_the_sidebar_lists_the_busiest_community_first(app, db_session):
+    """order_by(desc(total_subscriptions_count)) -- the fixture creates them in
+    ascending order, so the arrival order cannot satisfy the assertion.
+    """
+    instance, alice, bob = _seed()
+    topic = _topic()
+    _community_in(topic, 'quiet', total_subscriptions_count=1)
+    _community_in(topic, 'busy', total_subscriptions_count=50)
+    client = app.test_client()
+
+    with patch('app.topic.routes.render_template', return_value='rendered') as render:
+        client.get(f'/topic/{topic.machine_name}')
+
+    assert [c.name for c in render.call_args.kwargs['topic_communities']] == ['busy', 'quiet']
+
+
+def test_the_comments_tab_shows_only_this_topics_comments(app, db_session):
+    """The comment query is filtered to the topic's communities, and the only
+    way to see that is a comment in a community belonging to ANOTHER topic.
+    """
+    instance, alice, bob = _seed()
+    topic = _topic()
+    other_topic = _topic('cooking')
+    community = _community_in(topic)
+    elsewhere = _community_in(other_topic, 'kitchen')
+    post = _posts(community, alice, 1)[0]
+    other_post = _posts(elsewhere, alice, 1, prefix='other')[0]
+    _reply(community, bob, post, 'in this topic')
+    _reply(elsewhere, bob, other_post, 'in another topic')
+    client = app.test_client()
+
+    with patch('app.topic.routes.render_template', return_value='rendered') as render:
+        client.get(f'/topic/{topic.machine_name}?content_type=comments')
+
+    assert [c.body for c in render.call_args.kwargs['comments'].items] == ['in this topic']
+
+
+def test_a_url_with_no_recognisable_type_is_not_enclosed(app, db_session):
+    """`if type and not type.startswith('text/')` -- the first operand is what
+    keeps a url mimetype_from_url cannot classify from reaching .startswith on
+    None, so this row is a crash test as much as a filter test.
+    """
+    instance, alice, bob = _seed()
+    topic = _topic()
+    community = _community_in(topic)
+    post = _posts(community, alice, 1, prefix='untyped')[0]
+    post.url = 'https://example.test/thing.unknownextension'
+    db.session.commit()
+    client = app.test_client()
+
+    response = client.get(f'/topic/{topic.machine_name}.rss')
+
+    assert response.status_code == 200
+    assert 'enclosure' not in response.get_data(as_text=True)
+
+
+def test_the_private_community_placeholder_and_the_banned_filter_are_redundant(app, db_session):
+    """TWO OF THE ROUND'S THREE EQUIVALENT MUTANTS, PROVED.
+
+    show_topic's own SQL asks for `banned is false` and `(private is false OR id
+    IN :private_communities)`, and then hands the surviving ids to
+    get_deduped_post_ids -- which asks BOTH again (app/utils.py: 'c.banned is
+    false' unconditionally, and 'c.private is false' for an anonymous reader).
+    So dropping either from the route's query changes nothing that reaches the
+    page, and the placeholder `[0, 0]` for a reader with no private memberships
+    is likewise unobservable: `IN (0)` and `IN (0, 0)` select the same nothing.
+
+    This test asserts the OUTCOME the duplication guarantees -- a banned
+    community and a private one both contribute nothing to an anonymous
+    reader -- so it still fails if the day comes that the util's filters move.
+    """
+    instance, alice, bob = _seed()
+    topic = _topic()
+    banned = _community_in(topic, 'bannedcomm', banned=True)
+    private = _community_in(topic, 'privatecomm', private=True)
+    visible = _community_in(topic, 'visible')
+    _posts(banned, alice, 1, prefix='banned')
+    _posts(private, alice, 1, prefix='private')
+    _posts(visible, alice, 1, prefix='visible')
+    client = app.test_client()
+
+    with patch('app.topic.routes.render_template', return_value='rendered') as render:
+        client.get(f'/topic/{topic.machine_name}')
+
+    assert [p.title for p in render.call_args.kwargs['posts']] == ['visible 0']
