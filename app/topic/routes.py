@@ -100,7 +100,7 @@ def show_topic(topic_path):
         comments = None
         if content_type == 'posts':
             post_ids = get_deduped_post_ids(result_id, community_ids, sort, tag)
-            has_next_page = len(post_ids) > page + 1 * page_length
+            has_next_page = len(post_ids) > (page + 1) * page_length
             post_ids = paginate_post_ids(post_ids, page, page_length=page_length)
             posts = post_ids_to_models(post_ids, sort)
 
@@ -277,8 +277,9 @@ def topic_create_post(topic_name):
     child_topics = [topic.id for topic in Topic.query.filter(Topic.parent_id == topic.id).all()]
     sub_communities = Community.query.filter_by(banned=False).filter(Community.topic_id.in_(child_topics)).order_by(
         Community.title).all()
-    if request.form.get('community_id', '') != '':
-        community = Community.query.get_or_404(int(request.form.get('community_id')))
+    community_id = request.form.get('community_id', type=int)
+    if community_id:
+        community = Community.query.get_or_404(community_id)
         return redirect(url_for('community.join_then_add', actor=community.link()))
     return render_template('topic/topic_create_post.html', communities=communities, sub_communities=sub_communities,
                            topic=topic,

@@ -519,7 +519,7 @@ def show_feed(feed):
                 feed_community_ids.append(item.community_id)
 
         post_ids = get_deduped_post_ids(result_id, feed_community_ids, sort, tag)
-        has_next_page = len(post_ids) > page + 1 * page_length
+        has_next_page = len(post_ids) > (page + 1) * page_length
         post_ids = paginate_post_ids(post_ids, page, page_length=page_length)
         posts = post_ids_to_models(post_ids, sort)
 
