@@ -8904,6 +8904,17 @@ RSS 2.0's `<author>` is an email address: `fe.author(name=...)` with no email
 produces **no output at all**, so nothing a route does with the author is
 observable to a subscriber and no assertion can pin it. See D823.
 
+**324. `permission_required` REDIRECTS; IT DOES NOT ANSWER 401.** A route behind
+`@permission_required('manage users')` answers a reader without the permission
+with **302 to `auth.permission_denied`** (`app/utils.py:1961`), not 401 and not
+403. A row asserting a status code for the refusal will fail against correct
+code; assert the redirect target, and assert the thing the route would have
+changed is unchanged, which is what actually proves the refusal. The
+neighbouring decorators disagree with each other and with this one:
+`login_required` redirects to the login page, and a `trustworthy()` check
+inside a view body (`tags_blocked_list`) calls `abort(404)` so the page does
+not admit it exists. Read the decorator before writing the assertion.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
