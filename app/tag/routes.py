@@ -100,6 +100,9 @@ def show_tag(tag):
 
         # pagination
         posts = posts.paginate(page=page, per_page=50, error_out=False)
+        # tag.name, not tag: `tag` is the Tag row from the lookup above, and the
+        # URL builder has nothing but str() for a model -- which wrote
+        # /tag/%3CTag%201%3E into both links and made page 2 unreachable.
         next_url = url_for('tag.show_tag', tag=tag.name, page=posts.next_num,
                            category=category, category_id=category_id) if posts.has_next else None
         prev_url = url_for('tag.show_tag', tag=tag.name, page=posts.prev_num,
@@ -125,7 +128,8 @@ def show_tag_rss(tag):
     if tag:
         posts = Post.query.join(Community, Community.id == Post.community_id). \
             join(post_tag, post_tag.c.post_id == Post.id).filter(post_tag.c.tag_id == tag.id). \
-            filter(Community.banned == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING)
+            filter(Community.banned == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
+                   Post.private == False)
 
         if current_user.is_anonymous or current_user.ignore_bots == 1:
             posts = posts.filter(Post.from_bot == False)
