@@ -8823,6 +8823,26 @@ guard suppresses a link that should exist (`app/topic/routes.py`, D782).
 out which base the route uses**; a fixture built for the wrong one proves
 nothing either way. See D788.
 
+**317. THE TEST DATABASE IS BUILT BY MIGRATIONS, SO `create_all`-ONLY SQL IS
+MISSING FROM IT.** `make_searchable` (`app/__init__.py:82`) registers
+sqlalchemy_searchable's helper functions as a `before_create` DDL listener, so
+they exist in a database built by `create_all` and **not** in one built by
+`flask db upgrade` -- which is how `run_tests.sh` builds this one. Every
+`.search()` call therefore died with `psycopg2.errors.UndefinedFunction:
+function parse_websearch(unknown) does not exist`. `tests/conftest.py` now
+installs them once per session. **The general shape is worth remembering: any
+SQL the app creates through a create_all hook is absent here**, and its absence
+shows up as a database error rather than as a missing fixture. See D791.
+
+**318. A RANKING ASSERTION IS AN ORDERING ASSERTION, AND TIES BREAK BY ID.**
+A row asserting that the better full-text match comes back first passed alone
+and failed in the full suite: two documents containing the same lexeme can rank
+EQUAL, and Postgres then returns them in whatever order the plan produces --
+here, id order. **Assert the route's own decision** (the `sort` argument it
+passes) rather than the order the database chose, unless the fixture makes the
+ranks provably different. The full-suite run is what caught this; the scoped
+run was green. See D797.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
