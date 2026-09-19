@@ -350,7 +350,10 @@ def instance_unblock(instance_id):
 
     if request.headers.get('HX-Request'):
         resp = make_response()
-        resp.headers["HX-Redirect"] = request.headers.get('HX-Current-Url')
+        # HX-Current-Url is optional; without this the header would be the
+        # STRING 'None' and htmx would navigate to a page of that name
+        resp.headers["HX-Redirect"] = request.headers.get(
+            'HX-Current-Url', url_for("instance.instance_overview", instance_domain=instance.domain))
 
         return resp
 
