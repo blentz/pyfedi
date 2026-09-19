@@ -32,6 +32,8 @@ def show_domain(domain_id):
         if '.' in domain_id:
             domain = Domain.query.filter_by(name=domain_id, banned=False).first()
         else:
+            if not domain_id.isdigit():  # neither a name nor an id, so nothing to find
+                abort(404)
             domain = Domain.query.get_or_404(domain_id)
             if domain.banned:
                 domain = None
@@ -112,6 +114,8 @@ def show_domain_rss(domain_id):
         if '.' in domain_id:
             domain = Domain.query.filter_by(name=domain_id, banned=False).first()
         else:
+            if not domain_id.isdigit():  # neither a name nor an id, so nothing to find
+                abort(404)
             domain = Domain.query.get_or_404(domain_id)
             if domain.banned:
                 domain = None
@@ -138,6 +142,10 @@ def show_domain_rss(domain_id):
             already_added = set()
 
             for post in posts:
+                if post.url and post.url in already_added:
+                    # decided BEFORE the entry is added, or the skip leaves a
+                    # half-built <item> behind in the feed
+                    continue
                 fe = fg.add_entry()
                 fe.title(post.title)
                 if post.slug:
@@ -145,8 +153,6 @@ def show_domain_rss(domain_id):
                 else:
                     fe.link(href=f"{current_app.config['SERVER_URL']}/post/{post.id}")
                 if post.url:
-                    if post.url in already_added:
-                        continue
                     type = mimetype_from_url(post.url)
                     if type and not type.startswith('text/'):
                         fe.enclosure(post.url, type=type)
@@ -250,7 +256,9 @@ def domain_unblock(domain_id):
         resp = make_response()
         curr_url = request.headers.get("HX-Current-Url")
 
-        if "/d/" in curr_url:
+        # HX-Current-Url is optional; a caller who did not say where they are
+        # cannot be sent back there (D756)
+        if curr_url is None or "/d/" in curr_url:
             resp.headers["HX-Redirect"] = url_for("domain.show_domain", domain_id=domain.id)
         else:
             resp.headers["HX-Redirect"] = curr_url
