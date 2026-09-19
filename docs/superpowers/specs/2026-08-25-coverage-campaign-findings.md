@@ -14500,7 +14500,41 @@ application** untestable.**
 | D799 | `:58` | `SET work_mem = '100MB'` is executed on every search request against whichever connection the request holds. A performance decision, recorded so it is not mistaken for test scaffolding. | **registered** |
 | D800 | `:127`, `:182` | `has_prev and page != 1`, 1-based here and therefore redundant -- fact 316's shape, registered by reference rather than re-proved. | **registered** |
 
-**Next free number: D801.**
+**Next free number: D801.** (**D801-D806 were taken by sub-project 63, below;
+the free number is now D807.**)
+
+## Sub-project 63: `app/instance/routes.py` -- an unblock that sent readers to a page called /None, and four mutants hiding behind one weak assertion
+
+**The round in one line: the module goes from **16.573** to **99.719**, takes a
+floor of 99 and **closes `app/instance` at 40 floors**, its residual one arc
+proved unreachable; the suite is green at **6019 passed, 3 skipped, 7768
+warnings in 577.06s**; ONE defect was repaired -- D756's family in a third
+module, and the first of the three that failed SILENTLY; and a 66-mutant pass
+killed **66 of 66**, the campaign's eighth clean pass, after one weak assertion
+was found to be hiding four of them.**
+
+### 0. THE REPAIR
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D801 | `app/instance/routes.py:352-356` | **THE UNBLOCK TOLD HTMX TO NAVIGATE TO A PAGE CALLED `/None`.** `resp.headers["HX-Redirect"] = request.headers.get('HX-Current-Url')` -- the header is optional, and werkzeug stringifies the `None` it gives: `PROBE f3 status: 200 HX-Redirect: 'None'`. The unblock had already been written by then, so the reader landed on a 404 having succeeded. **D756's family in a third module** (`app/chat/routes.py` D756, `app/domain/routes.py` D786), and **the only one of the three that fails silently** -- which is why nobody reported it, while the other two announced themselves as 500s. Repaired with the fallback `instance_block` twelve lines above already uses. | **fixed at `ebe1f2ab4`** | Probe output; both header states asserted |
+
+### 1. THE MEASUREMENT AND THE FLOOR
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D802 | `app/instance/routes.py:62`; `coverage_floors.ini` | **THE MODULE CLOSES AT 99.719 AND TAKES A FLOOR OF 99 -- `app/instance` IS COMPLETE at 40 floors.** Every line is covered. The residual is the arc where the flash inside `if allowed_or_blocked:` names NEITHER 'blocked' nor 'allowed', which cannot happen: `allowed_or_blocked` is assigned from `'allowed' in filters or 'blocked' in filters`, and the only removals between that assignment and the flash are the six state filters in `filters_to_remove`, which contains neither name. **BASIS: the full suite on the delivered tree, `6019 passed, 3 skipped, 7768 warnings in 577.06s`**, and `All 40 module floors met.` | **package closed and floored** | `test_the_warning_about_disabled_filters_always_names_one_of_the_two`, asserted on the list |
+| D803 | The module | **66 MUTANTS APPLIED AND 66 KILLED after one fix round -- the campaign's eighth clean pass. FOUR OF THE SIX SURVIVORS WERE ONE WEAK ASSERTION.** The five state-filter rows asserted `wanted in domains` rather than equality, so a filter that stopped EXCLUDING things still passed -- and four mutants dropping half a condition (`online` and `dormant` each lose `gone_forever == False`, `gone_forever` loses its filter entirely) survived behind it. **Fact 319**: a membership assertion tests that a filter admits, never that it excludes. Rewriting them as equality also forced the fixture to admit the LOCAL instance, which is online too. | **66/66 killed** | Every mutant applied singly and restored with the restoration proved by sha256 |
+| D804 | `app/instance/routes.py:86` | **A GUARD THE ROUND EXPECTED TO BE REDUNDANT AND IS NOT.** `if filters and not allowed_or_blocked:` looked equivalent: in allowed/blocked mode the block above strips every state filter and redirects, so none of the six `in filters` tests below can match afterwards. That is right about the FILTERS and wrong about the QUERY -- in that mode the query runs over `AllowedInstances` or `BannedInstances`, **tables with no `trusted`, `silenced`, `dormant` or `gone_forever` column at all**, so dropping the operand applies `Instance.trusted == True` to a query over another table. The mutant dies against an end-to-end row that follows the redirect the way a browser does. **Recorded because the campaign has been right about equivalence five times and wrong here**: the reasoning stopped at the filter list and did not follow the query. | **covering row, not an equivalence** | The mutant's death; the docstring rewritten to say what the guard protects |
+
+### 2. REGISTERED, NOT FIXED
+
+| ID | Where | What | Status |
+|---|---|---|---|
+| D805 | `:220-224` | **A CSV THAT IS NOT UTF-8 IS A 500.** `form.mastodon_csv.data.read().decode('utf-8')` with no guard: `PROBE f4 exception: UnicodeDecodeError 'utf-8' codec can't decode byte 0xff in position 0`. A Mastodon export is always UTF-8, so a file that is not one is the wrong file -- but the answer to the wrong file is a message, and what it should say is a product decision. Covered as behaviour, asserting the exception. | **registered by decision** |
+| D806 | `:146-156`; `:249-255`; `:301-313`; `:99`, `:163`, `:199` | **Four shapes.** (1) The admin and non-admin branches of `instance_people` are identical except for `searchable=True`, written out twice. (2) `instance_posts` filters no `Post.private`, while `app/search/routes.py` and `app/domain/routes.py` both exclude it -- and `Post.private` is the microblog marker rather than a privacy flag, so including microblogs in an instance feed may be deliberate; registered with the three call sites named so someone decides rather than drifts. (3) D731's namedtuple-class-per-entry breadcrumb shape, in a third module. (4) `has_prev and page != 1`, 1-based and therefore redundant, in three more places -- fact 316 by reference. | **registered** |
+
+**Next free number: D807.**
 
 ## Ratchet gotchas
 
