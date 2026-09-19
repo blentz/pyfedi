@@ -8772,6 +8772,24 @@ malformed input, not only what it returns for well-formed input**, and assert
 the exception TYPE: the unrepaired code raises too, so a `pytest.raises(
 Exception)` pin proves nothing. See D762.
 
+**312. A `Community` OR `Feed` WITH `ap_id` None IS LOCAL, WHATEVER ITS
+INSTANCE SAYS.** `Community.is_local()` and `Feed.is_local()`
+(`app/models.py:1848`, `:3206`) are `self.ap_id is None or
+self.ap_id.startswith(SERVER_URL)` -- the instance_id is never consulted. So a
+fixture that sets `instance_id` to a peer and `ap_profile_id` to a remote url,
+but leaves `ap_id` None, is a LOCAL actor: every `if not actor.is_local()`
+path skips it and the test measures nothing. `User.is_local()`
+(`app/models.py:1251`) has the same shape. **Give a remote Community or Feed
+an `ap_id`**, not only a profile url. See D772.
+
+**313. `CACHE_TYPE = 'NullCache'` MAKES EVERY CACHE-FLAG GUARD INVISIBLE.**
+`cache.set` is a no-op and `cache.get` always answers None
+(`tests/conftest.py:68`), so a guard of the shape "if this flag is not set,
+set it and do the work" does the work every time and its de-duplication cannot
+be observed. **Patch the module's `cache` to test it**, and assert the WRITE as
+well as the read -- a guard that reads a flag nothing ever sets passes the
+read-only half of the test. See D772 and fact 276's neighbourhood.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not

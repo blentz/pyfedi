@@ -14351,7 +14351,42 @@ EQUIVALENT** rather than left as survivors.**
 | D767 | `:141-147`, `:157-166` | **A CONNECTION FAILURE NEVER RETRIES, WHILE A 502 IS RETRIED FOR FOUR HOURS.** The inner handler sets `http_status_code = 404` -- a status no peer sent -- and the retry gate admits only `429` and `>= 500`. So the peer that is hardest to reach is the one given up on first. D766 shows the assignment is inert either way; the asymmetry is in the gate. | **registered -- the retry policy is a federation decision** | Both paths quoted; `test_a_transport_failure_is_logged_and_not_retried` records the behaviour |
 | D768 | `:100`, `:102`; `:162`; `:319` | **THREE SHAPES CARRIED FORWARD.** (1) `post_request` crashes on a body that is None or carries no `id` -- `PROBE s5 exception: TypeError argument of type 'NoneType' is not iterable`, `PROBE s6 exception: KeyError 'id'` -- although its own type hint says `body: dict | None`; the second escapes the outer handler, so the task dies with no log row, which `test_a_task_that_cannot_log_rolls_back_and_reraises` records. (2) `SendQueue.send_after` is written from naive `datetime.utcnow()` while the rest of the module is timezone-aware, which is exactly what D762's `TypeError` was made of. (3) The comment at `:319` says the author avoided `parse_signature` for the pseudo-headers because "changing HttpSignatureDetails changes everything & I don't have the spoons for that ATM" -- so the module has two parsers for one header by acknowledged accident, and D763 repaired the weaker one rather than removing it. | **registered** | The probes; the lines quoted |
 
-**Next free number: D769.**
+**Next free number: D769.** (**D769-D775 were taken by sub-project 59, below;
+the free number is now D776.**)
+
+## Sub-project 59: `app/activitypub/actor.py` -- a feed request answered with a community, and D739 closed in both its copies
+
+**The round in one line: the module reaches **98.788** and takes a floor of 98 --
+36 floors -- with its whole residual two lines and two arcs behind a query a
+unique index makes impossible; the suite is green at **5764 passed, 3 skipped,
+6972 warnings in 388.73s**; FOUR defects were repaired and **D739 was closed in
+BOTH copies**; and a 65-mutant pass killed **60 of 65, with the other five
+PROVED EQUIVALENT** -- four of them proving that a set of fast paths has no
+behaviour of its own.**
+
+### 0. THE FOUR REPAIRS, AND D739
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D769 | `app/activitypub/actor.py:290-300` | **A CALLER ASKING FOR A FEED WAS HANDED A COMMUNITY.** `find_actor_by_url`'s local community branch read `if actor and community_only: return actor / elif actor and not community_only: return actor` -- both arms returning the same object, so `community_only` decided nothing and `feed_only` was never consulted; the local feed branch had the mirror problem with `community_only`. Probes: `PROBE a1 feed_only on a community url gave: Community <Community 1>` and `PROBE a2 community_only on a feed url gave: Feed <Feed localfeed_1>`. Repaired so each local branch returns None for the wrong kind, which is what the remote branch four lines below already did. | **fixed at `10ad652ff`** | Both probes; four inverted rows, two of them asserting the right kind is STILL found |
+| D770 | `app/activitypub/actor.py:234`; `app/feed/util.py:80-82` | **A WEBFINGER `self` LINK WITH NO `href` WAS A KeyError -- IN BOTH COPIES, AND BOTH ARE NOW REPAIRED.** `rel` and `type` are read defensively on the same line; `href` was not. Probe: `PROBE a3 exception: KeyError 'href'`. **This closes D739**, which sub-project 55 registered in `app/feed/util.py` and deferred because the error contract for malformed remote replies is one decision across several modules. **The decision is made here and applied to both copies**: a guard present in one copy and missing from the other is D712's shape, which this campaign has now met five times. The walk skips the broken link and continues, because a peer may advertise several -- so the fixture puts a usable link AFTER the broken one, or "skipped" and "gave up" would be indistinguishable. | **fixed at `10ad652ff`; D739 CLOSED** | The probe; rows in both modules |
+| D771 | `app/activitypub/actor.py:227-245` | **THE WEBFINGER RESPONSE WAS LEAKED ON TWO PATHS.** It is closed inside the success branch only, so a 404 or a content type the function does not accept returned without closing it: `PROBE a4 result: None response closed: False`, twice. Under httpx's pooling that holds the connection until garbage collection. | **fixed at `10ad652ff`** | Probe output; both paths asserted closed |
+| D772 | `app/activitypub/actor.py` | **THE ROUND'S TWO HARNESS FACTS, BOTH PAID FOR IN FAILING TESTS.** (1) A `Community` or `Feed` with `ap_id` None is **LOCAL** whatever its `instance_id` says (`app/models.py:1848`, `:3206`), so a fixture carrying only `ap_profile_id` is never refreshed and `schedule_actor_refresh`'s ladder looks broken. (2) The suite runs under `CACHE_TYPE = 'NullCache'`, so `cache.set` is a no-op and `cache.get` always answers None -- the refresh de-duplication cannot be seen at all unless the module's cache is patched, and the test asserts the WRITE as well as the read, since a guard reading a flag nothing sets would pass the read-only half. | **registered as facts 312-313** | Both established by a failing test and then fixed |
+
+### 1. THE MEASUREMENT AND THE FLOOR
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D773 | `app/activitypub/actor.py:96-106`, `:117-125`; `coverage_floors.ini` | **THE MODULE CLOSES AT 98.788 AND TAKES A FLOOR OF 98 -- 36 FLOORS. ITS WHOLE RESIDUAL IS TWO LINES AND TWO ARCS, ALL FOUR PROVED DEAD.** Both are `actor = unbanned_actor` after a query for a SECOND community row sharing the banned one's `ap_profile_id`. `ix_community_ap_profile_id` is **unique** -- the scoping probe got `IntegrityError ... duplicate key value violates unique constraint "ix_community_ap_profile_id"` trying to build one -- so the re-query always answers None, the `return None` above it always fires, and the assignment cannot run. The block is written out **twice**, in the fast path and again in the fallback. Registered rather than deleted, following **D758**. | **module floored; four residuals proved dead** | `test_the_unbanned_copy_lookup_can_never_find_anything`, which builds the duplicate and watches the IntegrityError |
+| D774 | The module | **65 MUTANTS APPLIED, 55 KILLED AND TEN SURVIVING ON THE MEASURING PASS; 60 OF 65 AFTER THE FIX ROUND, AND THE OTHER FIVE PROVED EQUIVALENT.** The five real survivors were missing rows, one of them worth keeping: dropping `'://' not in actor_url` from the handle guard lets a URL whose netloc urlparse REFUSED take the handle path, so `https://[oops/u/alice@evil.example` resolves its "server" to `evil.example` -- an actor id pointing at a broken host validated against an instance that never served it. **The five equivalents are the finding**: `if not server: return False` is defence in depth (a probe gives `instance_banned('') -> True`, `instance_banned(None) -> True`, `instance_allowed('') -> False`, so the gate below refuses a hostless actor either way), and **the four url-shape fast paths have no behaviour of their own at all** -- the fallback repeats all three queries unconditionally, which a row now proves by storing a Feed at a `/u/` url and finding it anyway. | **60/65 killed, 5 equivalent, both proofs kept as tests** | Every mutant applied singly and restored with the restoration proved by sha256 |
+
+### 2. REGISTERED, NOT FIXED
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D775 | `:213`, `:236`, `:177`, `:190`; `:39-41`; `:332` | **THREE SHAPES CARRIED FORWARD.** (1) **Four `time.sleep(randint(3, 10))` calls on the request thread**, reachable from the inbox through `create_actor_from_remote` -- D738's shape in a second module, and every test here patches `app.activitypub.actor.time.sleep` (fact 302). (2) `validate_remote_actor`'s docstring sits AFTER its first `return`, so it is a bare expression rather than a docstring and `help()` shows nothing. (3) `find_actor_by_url` ends with a `return None` after an if/else whose both arms return -- unreachable by inspection, D724's shape. | **registered** | The lines quoted |
+
+**Next free number: D776.**
 
 ## Ratchet gotchas
 
