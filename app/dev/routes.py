@@ -60,6 +60,9 @@ def tools():
             membership = CommunityMember(user_id=current_user.id, community_id=community.id, is_moderator=True,
                                          is_owner=True)
             db.session.add(membership)
+            # committed here rather than left to the next iteration's commit:
+            # the thirtieth membership had nothing after it and was lost
+            db.session.commit()
             
             # do the cache clearing bits
             cache.delete_memoized(community_membership, current_user, community)
