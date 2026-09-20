@@ -15106,7 +15106,65 @@ rows could not tell which permission the guard checks.**
 
 **BASIS: the full suite, `6560 passed, 3 skipped, 258 warnings, 6 subtests passed in 489.18s`** -- delta reconciling, 6524 plus 36 -- and `All 63 module floors met.` 30 of 32 mutants killed, 2 equivalent.
 
-**Next free number: D898.**
+**Next free number: D898.** (**D898-D911 were taken by sub-project 79
+slice A, below; the free number is now D912.**)
+
+## Sub-project 79 (slice A): the admin landing page nobody guarded, and a Save button that closed the instance
+
+**The round in one line: `app/admin/routes.py` begins with its three entry
+points at zero gaps, and the slice carried **THREE production defects** --
+**every registered account could read the host's infrastructure telemetry**,
+**a misc-settings Save with any text in the closing-announcement box closed
+the instance and paused federation for ten years**, and an unvalidated integer
+field turned an ordinary submission into a 500. No floor is taken yet; the
+module has five slices to go.**
+
+### 0. HOW THE TARGET WAS CHOSEN
+
+D891 ranked `app/admin/routes.py` first by authorization density (160
+constructs over 1400 missed statements). It is 1760 statements, so it is split
+by its own seams: slice A is `admin_home` (46 gaps), `admin_misc` (16) and
+`admin_instance_chooser` (19); `admin_site` (151) is B, federation (~430) C and
+D, community and topic (~180) E, user and content (~130) F.
+
+### 1. THE PRODUCTION DEFECTS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D898** | `app/admin/routes.py:57-59` | **THE ADMIN LANDING PAGE HAD NO PERMISSION CHECK, AND IT RENDERS THE HOST'S INFRASTRUCTURE.** Every other route on the blueprint carries `@permission_required(...)`; `admin_home` carried `@login_required` alone. Probed as a verified account with no roles and no permissions: `GET /admin/` answers **200**, leaking `os.getloadavg()`, `os.cpu_count()`, **`shutil.disk_usage()` as a percentage**, the loaded plugin list with every registered hook, the LibreTranslate language list, and every overdue `CronJobLog` row by name and last-run time. On an instance with open registration that is anyone who signs up. Anonymous visitors were correctly redirected, which is exactly why it read as guarded. **The intended audience was never in doubt:** `app/templates/base.html:268` hides the entire Admin menu, including this page's link, behind `{% if current_user.is_admin_or_staff() %}` -- the UI stated the rule and the route did not enforce it. Fixed with that same check, NOT `permission_required('change instance settings')`, which would lock out staff holding only `manage users` or `administer all communities`. | **fixed** | `PROBE n1 GET /admin/ status: 200`, `disk_usage leaked: Storage used: 51.18%`, `num_cores leaked: 32`, `load averages leaked: True`, `plugins leaked: True`; `PROBE n2 anonymous status: 302 /auth/login` |
+| **D899** | `app/admin/forms.py:130-138`; `app/admin/routes.py:292` | **TWO FORMS ON ONE PAGE BOTH NAMED THEIR BUTTON `submit`, SO A MISC-SETTINGS SAVE TOOK THE CLOSE-THE-INSTANCE BRANCH.** `admin_misc()` instantiates `SiteMiscForm` and `CloseInstanceForm` and binds **both to the same request body**, then branches on `if close_form.submit.data and close_form.validate():`. `SubmitField.data` is true whenever the field name is present, and both forms declared `submit` -- so an ordinary Save set it. The only thing standing between a Save and a closed instance was `CloseInstanceForm.announcement`'s `DataRequired()`: **a Save that carried any announcement text ran the close branch**, setting `pause_federation` for **ten years** (`ex=86400 * 365 * 10`) and `registration_mode = 'Closed'`, and skipping the entire Danger Zone confirmation -- an accordion, three warning paragraphs and "once you do this, there's no going back". Fixed by renaming the button `close_submit`, which is the convention `PreLoadCommunitiesForm.pre_load_submit` already uses on the same page for the same reason. | **fixed** | `PROBE q1 mode before: Open` / `after SAVE with announcement text: Closed` / `pause_federation: 666`; and the control, `PROBE q2 after SAVE with empty announcement: Open`, `pause_federation: None` |
+| **D900** | `app/admin/forms.py:74-79`; `app/admin/routes.py:346` | **AN UNVALIDATED `IntegerField` MADE A SUBMISSION THAT OMITS IT A 500.** `read_posts_cutoff = IntegerField(...)` carried no validators, and the route does `set_setting('read_posts_cutoff', int(form.read_posts_cutoff.data))`. An absent key leaves `.data` at `None` -- WTForms only errors on a key that is *present and unparseable* -- the form validates, and the route raises `TypeError: int() argument must be a string, a bytes-like object or a real number, not 'NoneType'`. A browser always posts the rendered input, so this is reachable by any non-browser client. Fixed with `InputRequired()` and `NumberRange(min=0)`. **Not `DataRequired()`**, which treats a legitimate cutoff of 0 as absent -- pinned in both directions. | **fixed** | The `TypeError`, raised by a payload built from the form's own field list |
+
+### 2. THE DURABLE ARTEFACTS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D901** | `tests/test_admin_routes_entry.py` | **A BLUEPRINT-WIDE AUTHORIZATION SCAN, not a row about `admin_home`.** One test enumerates **every rule on the admin blueprint** from `app.url_map`, logs in as a verified account with no roles, substitutes a plausible id into parameterised rules, requests each with GET or POST, and asserts **none answers 200** -- listing the offenders rather than a count, so a failure names the hole. D898 is the route it would have caught; the point is the ones added in slices B through F. It needs a real CSRF token, because `login_required(csrf=True)` validates CSRF itself and a tokenless scan would have been testing CSRF rather than authorization. | **added** | It fails on exactly `GET /admin/` with the fix reverted |
+| **D902** | `tests/test_admin_routes_entry.py` | **A STRUCTURAL ROW FOR D899's WHOLE CLASS:** `SiteMiscForm` and `CloseInstanceForm` must share no field name at all. D899's own pin dies to a mutant that renames the button back *and* adds a dummy `close_submit` to absorb it; this one does not, and it also refuses a collision introduced later by adding an innocuous field to either form. `csrf_token` is excluded because Flask-WTF puts it on every form and validates it per request, not per form. | **added** | Mutant m14, which the behavioural pin could not kill |
+
+### 3. WHAT THE MUTATION PASS FOUND
+
+27 mutants over the three functions and the two form fixes; the measuring pass
+killed 20, and **six of the seven survivors were real gaps in this round's own
+rows**:
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D903** | `tests/test_admin_routes_entry.py` | **D892'S MISTAKE IN A NEW COSTUME: the close-instance row started from an already-closed instance.** `Site.registration_mode` is `'Closed'` in the factory, so `assert ... == 'Closed'` after the POST proved nothing, and the mutant that deletes `site.registration_mode = 'Closed'` survived. The same trap made the *first* D899 probe inconclusive -- it printed `PROBE p1 registration_mode before: Closed` and had to be re-run from an open instance. **An assertion about a field's final value is vacuous unless the row set it to something else first.** | **closed; m17 dies** | The mutant, and the inconclusive first probe |
+| D904 | `tests/test_admin_routes_entry.py` | **A SWALLOWED EXCEPTION MADE AN OUTBOUND-CALL GUARD UNTESTABLE BY ITS RESULT.** Deleting `if current_app.config['TRANSLATE_ENDPOINT']:` survived: with no endpoint the mutant builds `LibreTranslateAPI(None)`, which raises inside the route's bare `except Exception: pass`, landing on the same `None` the guard produces. Closed by asserting the client is never **constructed** (`api.called is bool(endpoint)`) rather than asserting the result. **Where a bare except covers the difference, assert the call, not the value.** | **closed; m09 dies** | The mutant |
+| D905 | `tests/test_admin_routes_entry.py` | **`>` VERSUS `>=` ON THE OVERDUE-TASK CHECK WAS INDISTINGUISHABLE UNTIL THE CLOCK WAS PINNED.** The view calls `utcnow()` itself, so the microseconds between a row's arithmetic and the view's made every difference strictly greater. Closed with `patch('app.admin.routes.utcnow')` and a task last run exactly one frequency ago -- due, not late. | **closed; m11 dies** | The mutant |
+| D906 | `tests/test_admin_routes_entry.py` | **`form.elevator_pitch.data or ''` could only be tested by OMITTING the field.** The row posted `elevator_pitch: ''`, and a present-but-blank `StringField` already has data `''` -- so the default was a no-op and the mutant survived. Only an absent key leaves `.data` at `None`, which is what the default defends against. | **closed; m24 dies** | The mutant |
+| D907 | `tests/test_admin_routes_entry.py` | **`elif request.method == 'GET':` had no row for the case it exists to exclude.** Changing it to `elif True:` survived, because nothing submitted an instance-chooser form that the form *refused*. Under the mutant, a rejected POST comes back showing the **stored** settings instead of what the admin typed -- silently discarding the edit. Closed with an elevator pitch over `Length(max=90)`. | **closed; m27 dies** | The mutant |
+| D908 | `app/admin/routes.py:346` | `int(form.read_posts_cutoff.data)` is **equivalent**, proved rather than contorted into a kill: `IntegerField.process_formdata` has already produced an `int`, so the cast cannot change the stored value. The surviving mutant is honest. | **registered as an equivalent mutant** | m23, the one survivor of 27 |
+
+### 4. REGISTERED, NOT FIXED
+
+| ID | Where | What | Why not this round |
+|---|---|---|---|
+| D909 | `app/admin/routes.py:95-101` | **The admin home contacts the configured LibreTranslate endpoint on every page load**, inside a bare `except Exception: pass`. A slow or hostile endpoint delays the page for as long as the HTTP client's default timeout allows, and a failure is invisible to the operator. | A caching-and-timeout decision about an outbound dependency. |
+| D910 | `app/admin/routes.py:115` | **`flash(_(message), 'warning')` interpolates the overdue-task list into the string BEFORE gettext sees it**, so the catalogue is asked for a string containing this instance's task names and can never match -- D815's shape, in a different file. | Pre-existing; the same repair as D815, in a slice this round does not otherwise touch. Named so it is counted. |
+| D911 | `app/utils.py:5428-5433` | **An instance with no `Site` row cannot serve ANY request.** `get_site_as_dict()` does `db.session.get(Site, 1)` and dereferences `site.__table__` with no nil check, and the hook that populates `g.site` runs before every view -- so `AttributeError: 'NoneType' object has no attribute '__table__'` is raised before any route is reached. This is why `admin_misc`'s `if site is None: site = Site()` fresh-instance path can only be covered by **calling the view directly with `g.site` supplied**, which the row does and says so. The two lines defend against a state no HTTP request can be served in. | A question about how a brand-new instance bootstraps, which belongs with the installer rather than with this slice. |
+
 
 ## Ratchet gotchas
 
@@ -15162,3 +15220,19 @@ check and then dies on `string indices must be integers`.
 The corollary for reviewers: a mutation that kills is evidence about the input
 you chose, not about the guard. Ask what else the guard claims to reject, and
 whether anything tests that.
+
+**BASIS: the full suite, `6598 passed, 3 skipped, 258 warnings, 6 subtests
+passed in 498.29s`**, chained with `&&` to `All 63 module floors met.`
+Reconciling: `--collect-only` over `tests/` with this round's file removed gives
+**6568 at HEAD and 6568 now -- byte-identical node-ID listings**, i.e. 6565
+passing plus the 3 standing skips; `tests/test_admin_routes_entry.py` collects
+**33**; 6565 + 33 = 6598. The warning count is **unchanged at 258**, all
+third-party. `git diff --numstat` names exactly `app/admin/forms.py` and
+`app/admin/routes.py`.
+
+**No floor is taken.** `app/admin/routes.py` measures 19.3% overall and will
+rise every round through slice F; an interim floor would be a number with no
+meaning, exactly as `app/tag/routes.py` was left unfloored between
+sub-projects 66 and 68. The three functions in this slice are at `[]`.
+
+**Next free number: D912.**
