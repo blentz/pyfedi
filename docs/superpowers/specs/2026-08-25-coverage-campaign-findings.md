@@ -14753,7 +14753,50 @@ halves of a guard indistinguishable by every assertion the round had written.**
 | (D844) | `:1` | **The handlers use `flask.render_template`, not `app/utils.py`'s theme-aware one**, so error pages get no theme, no protocol replacement and no ETag handling. | **registered -- no theme in the repo ships an `errors/` template, so the theme-aware version falls through to the same file today. Checked rather than missed** |
 | (D844) | `app/templates/errors/429.html` | **The 429 page is plain text** -- `b'\n429 - Too Many Requests\n'` -- while 401 and 500 render full pages. | **registered -- a template, not this module** |
 
-**Next free number: D845.**
+**Next free number: D845.** (**D845-D851 were taken by sub-project 70,
+below; the free number is now D852.**)
+
+## Sub-project 70: the warnings, safe subset -- two latent defects, a deprecation, and a ratchet that caught its own author
+
+**The round in one line: the suite's warning count falls **8,373 -> 7,890** for
+the first time in the campaign; the two `SAWarning`s -- a latent defect
+SQLAlchemy says may become an error -- and all sixteen `datetime.utcnow()` calls
+are gone; a warnings CEILING file is added to stop the count growing back; and
+the coverage ratchet caught the round's own first repair turning a live branch
+into dead code.**
+
+### 0. THE REPAIRS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D845 | `app/shared/tasks/deletes.py:208-218`, `app/shared/tasks/pages.py:344-352` | **A NULLABLE FK HANDED STRAIGHT TO `.get()`, WHICH SQLALCHEMY SAYS MAY STOP ANSWERING `None`.** Both fan-out loops ran `session.query(User).get(follower.remote_user_id)` where `UserFollower.remote_user_id` is nullable (`app/models.py:3580`): `SAWarning: fully NULL primary key identity cannot load any object. This condition may raise an error in a future release.` The null row is REACHABLE and already deliberately seeded by `tests/test_shared_tasks_deletes.py:1043`, so the fan-out was correct **only because `.get(None)` happens to return `None`** -- correctness resting on a deprecation. Repaired by keeping the `None` out of `.get()` while leaving `if user_details:` as the loop's single decision. | **fixed** | The warning, gone from both files; the existing skip rows still pin the behaviour |
+| D846 | 16 sites across `app/` and `tests/` | **`datetime.utcnow()`, deprecated in 3.12 and scheduled for removal.** Replaced with `app/models.py:41`'s own `utcnow()`, which returns **naive** UTC and is therefore byte-for-byte what the deprecated call returned. **`datetime.now(UTC)` is NOT the drop-in** and was not used: it returns an AWARE datetime, and every stored column in this schema is naive, so the obvious modernisation would have raised `TypeError: can't compare offset-naive and offset-aware datetimes` at a distance from the change. Three files -- `notes.py`, `groups.py`, `pages.py` -- already imported `utcnow` and used it beside the deprecated call. | **fixed** | 9 deprecations to 0 on the affected files |
+| D847 | `tests/test_shared_community_invites.py:675-691` | **AN INTERMITTENT FAILURE, AND A TRIPWIRE THAT WORKED.** The row killing the `ap_domain` conjunct relied on an unordered `.first()` returning the decoy rather than the target. Its author knew that was an assumption, asserted it rather than trusting it, and wrote a docstring predicting the failure: it held for every isolated run of the file and then failed inside a full suite -- `assert 4 == 3` -- once the table had seen enough churn for the planner to answer the other row. **The assumption was wrong; the tripwire was right.** Repaired by DERIVING the roles instead of asserting them: the name-only query runs first, whatever it returns is designated the decoy, and the flairs are attached afterwards, so the mutant returns the wrong community in either ordering. | **fixed** | Two full-suite runs, one red and one green, on an unchanged tree; the mutant re-applied and confirmed still killed, then restored |
+
+### 1. THE RATCHET THAT CAUGHT ITS OWN AUTHOR
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D848 | `app/shared/tasks/deletes.py`; `tests/test_shared_tasks_deletes.py` | **THE FIRST VERSION OF D845's REPAIR TURNED A LIVE BRANCH INTO DEAD CODE, AND ONLY THE COVERAGE FLOOR SAID SO.** The obvious guard -- `if not follower.remote_user_id: continue` -- reads correctly and passes every test. It also dropped the module from **100.0 to 99.602**, failing the ratchet with `app/shared/tasks/deletes.py: 99.60% is below its floor of 100.00%`. The missing arc was `if user_details:` **false -> next iteration**, which the null row used to produce: with the early `continue`, that arm is reachable only through a DANGLING FK, which the database forbids and `app/models.py:1539` explicitly cleans up. The repair had quietly converted a tested branch into an unreachable one. Reshaped to `user_details = (... if follower.remote_user_id else None)`, which keeps one decision and both of its arms. **A floor that only rises is what made a silently-worse repair fail loudly.** | **caught and reshaped; module back to 100.0** | The failing ratchet line; the arc before and after; `pages.py` 99.2 -> 99.461 from the same reshape |
+| D849 | `tests/test_shared_tasks_deletes.py` | **NO ROW HAD EVER LET THE FAN-OUT LOOP GO ROUND TWICE AFTER A SUCCESSFUL APPEND.** Every existing row seeded at most one resolvable follower, so the append always ran on the final iteration. Added while chasing D848, and kept: a loop that stopped after the first follower would satisfy every other assertion in the file. | **added** | The arc, and two fans both named in the `cc` |
+
+### 2. THE CEILING FILE, AND THE CAP ON "ZERO"
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D850 | `tests/test_no_deprecated_apis.py` | **WARNINGS NOW HAVE A RATCHET, WHICH IS WHY THEY GREW UNNOTICED FOR SIXTY-NINE ROUNDS.** Coverage has had a floor file since sub-project 1; warnings had nothing, and the count went **7,768 -> 7,857 -> 8,326 -> 8,373** across four rounds without anything failing. The new file is the mirror image: ceilings that only ever FALL. It counts by reading the SOURCE, not by catching warnings at runtime -- a deprecated call on a line no test reaches still ships, which is exactly `app/nntp`'s shape and would score zero at runtime. `datetime.utcnow()` is pinned at zero outside two named exemptions, and the exemption list is itself asserted so it cannot outlive its reason. The legacy `Query.get()` count is pinned at **752** with a row asserting the ceiling EQUALS the count, so lowering it forces lowering the ceiling in the same commit rather than leaving slack to grow back into. | **added** | The file; its own first run, which failed by counting its own regex literals |
+| D851 | `flask_sqlalchemy/query.py:30`; `app/` x171 | **"ZERO WARNINGS" HAS A CAP THAT IS NOT OURS.** `get_or_404` is Flask-SQLAlchemy's own method and calls the legacy `self.get(ident)` internally -- version **3.1.1** against SQLAlchemy **2.0.52** -- so all **171** `get_or_404` sites in `app/` emit a `LegacyAPIWarning` from inside a dependency. No rewrite of our own calls reaches zero while they remain. **Decided for sub-project 71: replace all 171 with `db.session.get(Model, id) or abort(404)`** rather than filtering the warning, so the zero is real rather than suppressed. | **registered; 71's scope** | The method's source, read out of the installed package |
+
+### 3. REGISTERED, NOT FIXED
+
+| ID | Where | What | Status |
+|---|---|---|---|
+| (D851) | `app/nntp/nntpserver.py:295`, `app/nntp/server.py:722` | Two more `datetime.datetime.utcnow()` calls. | **registered -- neither module is imported by the suite (both 0.0%), so neither contributes a warning to the run this round reduced, and the change would be unverifiable. `nntpserver.py` is a generic NNTP implementation with no app imports and should not be coupled to `app.models` for this. They belong to the `app/nntp` sub-project** |
+| (D851) | third party | 4 `DeprecationWarning` (`ldap3`/`pyasn1` `tagMap`/`typeMap`, `httpx`, `botocore`). | **registered -- not ours; a dependency bump is not a coverage round's business** |
+
+**BASIS: the full suite, `6294 passed, 3 skipped, 7890 warnings, 6 subtests passed in 445.70s`**, and `All 49 module floors met.`
+
+**Next free number: D852.**
 
 ## Ratchet gotchas
 
