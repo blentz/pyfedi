@@ -9119,6 +9119,27 @@ independently vacuous versions of the same assertion, both green.** Check the
 existing tests for the invoking syntax before writing new ones --
 tests/test_enhanced_images.py had it right all along. See D877.
 
+**342. A `LocalProxy` CAPTURED BY A MOCK IS `None` ONCE ITS CONTEXT HAS EXITED.**
+`app/api/alpha/utils/upload.py`'s auth fallback passes `current_user` ITSELF
+into `process_upload`, so a mock records the PROXY, not the `User` behind it.
+Asserted after the `with app.test_request_context(...)` block has closed, the
+proxy resolves to `None` and the row fails with
+`AttributeError: 'NoneType' object has no attribute 'id'` -- against correct
+code, which reads exactly like a bug in the thing under test. **Assert inside
+the context**, or capture `.id` while the proxy is still bound. The same applies
+to anything a mock records that is really `g`, `session`, `request` or
+`current_app`. See D883.
+
+**343. TWO ADJACENT FILTERS NEED TWO ASSERTIONS.** `get_topic_list` fetches
+`blocked_community_ids` and `blocked_instance_ids` from two different helpers
+and passes them to `topic_view` as two different arguments. A suite covering the
+first said nothing about the second: the mutant replacing
+`blocked_or_banned_instances(user_id)` with `[]` survived rows that correctly
+proved a blocked COMMUNITY was hidden. Sub-project 72 hit the same shape with
+`func.lower()` on two sides of a comparison. **When two narrowing filters sit
+side by side, assume covering one leaves the other untested until a mutant says
+otherwise.** See D882.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
