@@ -24,12 +24,12 @@
                 </tr>
                 {% for permission in permissions -%}
                 <tr>
-                    <th>{{ permission[0] }}</th>
+                    <th>{{ permission }}</th>
                     <td class="text-center">
-                        <input type="checkbox" name="role_3_{{ permission[0] }}" {{ 'checked' if role_access(permission[0], 3) else '' }}>
+                        <input type="checkbox" name="role_3_{{ permission }}" {{ 'checked' if role_access(permission, 3) else '' }}>
                     </td>
                     <td class="text-center">
-                        <input type="checkbox" name="role_4_{{ permission[0] }}" {{ 'checked' if role_access(permission[0], 4) else '' }}>
+                        <input type="checkbox" name="role_4_{{ permission }}" {{ 'checked' if role_access(permission, 4) else '' }}>
                     </td>
                     <td class="text-center">
                         <input type="checkbox" name="user_1" checked disabled>

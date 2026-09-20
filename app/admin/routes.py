@@ -34,7 +34,7 @@ from app.auth.util import send_email_verification, random_token
 from app.community.util import save_icon_file, save_banner_file, search_for_community, is_bad_name
 from app.instance.util import bulk_follow
 from app.community.routes import do_subscribe
-from app.constants import REPORT_STATE_NEW, REPORT_STATE_ESCALATED, POST_STATUS_REVIEWING, ROLE_ADMIN
+from app.constants import EDITABLE_ROLE_IDS, ROLE_PERMISSIONS, REPORT_STATE_NEW, REPORT_STATE_ESCALATED, POST_STATUS_REVIEWING, ROLE_ADMIN
 from app.email import send_registration_approved_email
 from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJobLog, utcnow, Site, Community, \
     CommunityMember, \
@@ -2241,25 +2241,40 @@ def newsletter():
 def admin_permissions():
     form = FlaskForm()
     if request.method == 'POST':
-        permissions = db.session.execute(text('SELECT DISTINCT permission FROM "role_permission"')).fetchall()
-        db.session.execute(text('DELETE FROM "role_permission"'))
-        roles = [3, 4]  # 3 = Staff, 4 = Admin
-        staff_user_ids = list(db.session.execute(text('SELECT user_id FROM "user_role" WHERE role_id = 3')).scalars())
-        for permission in permissions:
-            for role in roles:
-                if request.form.get(f'role_{role}_{permission[0]}'):
-                    db.session.add(RolePermission(role_id=role, permission=permission[0]))
-            for staff_user_id in staff_user_ids:
-                cache.delete_memoized(user_access, permission, staff_user_id)
+        # DELETE scoped to the roles this page edits. It used to clear the whole
+        # table, while only roles 3 and 4 were written back -- so a save that
+        # changed nothing about Staff or Admin silently stripped every
+        # permission from every other role. Measured with a 'Moderator' role
+        # holding 'manage users': [('manage users',)] before, [] after.
+        db.session.execute(
+            text('DELETE FROM "role_permission" WHERE role_id IN :role_ids'),
+            {'role_ids': tuple(EDITABLE_ROLE_IDS)})
+
+        # Every user holding either editable role, not just Staff: an admin
+        # whose permissions changed kept the old answer for the length of
+        # user_access's memoize timeout exactly as a staffer did.
+        affected_user_ids = list(db.session.execute(
+            text('SELECT DISTINCT user_id FROM "user_role" WHERE role_id IN :role_ids'),
+            {'role_ids': tuple(EDITABLE_ROLE_IDS)}).scalars())
+
+        for permission in ROLE_PERMISSIONS:
+            for role in EDITABLE_ROLE_IDS:
+                if request.form.get(f'role_{role}_{permission}'):
+                    db.session.add(RolePermission(role_id=role, permission=permission))
+            for affected_user_id in affected_user_ids:
+                # `permission`, a str. This used to be the Row from the
+                # SELECT -- repr ('change instance settings',) -- so the
+                # memoize key never matched the one user_access is called
+                # with and the invalidation did nothing at all.
+                cache.delete_memoized(user_access, permission, affected_user_id)
         db.session.commit()
 
         flash(_('Settings saved'))
 
     roles = Role.query.filter(Role.id > 2).order_by(Role.weight).all()
-    permissions = db.session.execute(text('SELECT DISTINCT permission FROM "role_permission"')).fetchall()
 
     return render_template('admin/permissions.html', title=_('Role permissions'), roles=roles,
-                           form=form, permissions=permissions,
+                           form=form, permissions=ROLE_PERMISSIONS,
                            roles_with=roles_with('change user roles'))
 
 
