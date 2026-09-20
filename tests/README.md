@@ -9192,6 +9192,80 @@ endpoint could have been checking a permission every user holds, with the suite
 green. Grant the caller exactly one permission -- the one the guard names --
 and the string becomes load-bearing. See D893.
 
+**349. TWO FORMS RENDERED ON ONE PAGE MUST SHARE NO FIELD NAME.** A view that
+instantiates two `FlaskForm`s binds **both to the same request body**, and
+`SubmitField.data` is true whenever the field name is present -- so if both
+declare `submit`, submitting either one sets it on both. In `admin_misc` that
+made an ordinary settings Save take the close-the-instance branch, pausing
+federation for ten years. The convention already in the codebase is a distinct
+name per button (`PreLoadCommunitiesForm.pre_load_submit`,
+`CloseInstanceForm.close_submit`). Assert the disjointness structurally --
+`set(A()._fields) & set(B()._fields) == set()` -- because a behavioural pin can
+be satisfied by a mutant that adds a dummy field to absorb the rename. See
+D899, D902.
+
+**350. AN ASSERTION ABOUT A FIELD'S FINAL VALUE IS VACUOUS UNLESS THE ROW SET
+IT TO SOMETHING ELSE FIRST.** `Site.registration_mode` is already `'Closed'` in
+the factory, so `assert site.registration_mode == 'Closed'` after the
+close-instance POST passed whether or not the code ran -- and the mutant
+deleting that assignment survived. The same trap made the first probe of D899
+inconclusive. This is fact 347's shape applied to state instead of to
+permissions: **establish the negative before asserting the positive.** See
+D903.
+
+**351. WHERE A BARE `except` COVERS THE DIFFERENCE, ASSERT THE CALL, NOT THE
+VALUE.** `admin_home` guards its outbound LibreTranslate call with `if
+current_app.config['TRANSLATE_ENDPOINT']:` inside a `try: ... except
+Exception: pass`. Deleting the guard is invisible by result -- the unguarded
+client raises, the except swallows it, and `translation_languages` is `None`
+either way. Assert `api.called is bool(endpoint)`: that the client was never
+**constructed**. See D904.
+
+**352. PIN THE CLOCK TO TELL `>` FROM `>=`.** `admin_home` computes
+`utcnow() - cron_task.last_run` itself, so a row that builds `last_run` from
+its own `utcnow()` is always a few microseconds short of equality and the two
+operators are indistinguishable. `patch('app.admin.routes.utcnow',
+return_value=<fixed>)` with `last_run = fixed - frequency` makes the boundary
+exact: due, not late. See D905.
+
+**353. A DEFAULT LIKE `field.data or ''` CAN ONLY BE TESTED BY OMITTING THE
+FIELD.** A present-but-blank `StringField` already has data `''`, so posting
+`{'elevator_pitch': ''}` exercises nothing -- the mutant deleting the `or ''`
+survives. Only an absent key leaves `.data` at `None`. The same distinction is
+what makes an unvalidated `IntegerField` a 500 rather than a form error
+(D900): WTForms errors on a key that is *present and unparseable*, and does
+nothing at all for a key that is missing. See D906, D900.
+
+**354. DO NOT OPEN A NESTED `test_request_context` INSIDE A TEST.** The `app`
+fixture pushes one app context for the whole session; a nested
+`app.test_request_context()` pushes and then **pops** an app context, and the
+pop runs `teardown_appcontext`, which calls `db.session.remove()`. That closes
+the session the fixture is running on. Every later request in that test then
+resolves `current_user` to anonymous, so an authorized route answers
+`302 /auth/permission_denied` and any assertion about the view is vacuous --
+measured as `PROBE user_access call 'change instance settings' None False`
+with the client session still holding `_user_id: '3'`. Build form payloads
+with `SomeForm(formdata=None, ...)`, which is what FlaskForm's default
+`formdata=_Auto` needs a request for, and set choices directly instead of
+calling helpers that read `current_user`.
+
+**355. `login_required(csrf=True)` VALIDATES CSRF ITSELF.** It does not consult
+`WTF_CSRF_ENABLED`, which `tests/conftest.py` sets `False`, so every POST to a
+route using it needs a real token even though WTForms' own validation is off.
+Without one the POST is refused **before** any authorization check runs, which
+makes an authorization row pass while actually testing CSRF. Generate the token
+in a throwaway context and write the raw value into the client session; see
+`csrf()` in `tests/test_admin_routes_entry.py`.
+
+**356. A `SelectField` WITH EMPTY CHOICES FAILS SILENTLY IN A GENERATED
+PAYLOAD.** A helper that walks a form and skips fields with no choices leaves
+the payload missing a required key; `validate_on_submit()` then returns False,
+the branch under test never runs, and the row passes asserting nothing.
+`SiteMiscForm.language_id` is fed from the `language` table, which the test
+database does not seed. Assert `field.choices` in the helper rather than
+skipping, and assert `render.call_args.kwargs['form'].errors == {}` in rows
+that depend on a POST having validated.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
