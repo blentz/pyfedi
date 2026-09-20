@@ -44,7 +44,18 @@ class ProfileForm(FlaskForm):
         if current_user.another_account_using_email(field.data):
             raise ValidationError(_l('That email address is already in use by another account'))
 
-    def validate_matrix_user_id(self, matrix_user_id):
+    def validate_matrixuserid(self, matrix_user_id):
+        # NAMED FOR THE FIELD, which is `matrixuserid`. WTForms binds an inline
+        # validator by name and says nothing when there is no such field, so
+        # while this was called validate_matrix_user_id it never ran once and
+        # any value was accepted.
+        #
+        # The empty check is the other half of that repair: the field is
+        # Optional(), and `''.strip().startswith('@')` is False, so binding the
+        # method without it would have made a Matrix ID mandatory for every
+        # profile save.
+        if not matrix_user_id.data or not matrix_user_id.data.strip():
+            return
         if not matrix_user_id.data.strip().startswith('@'):
             raise ValidationError(_l('Matrix user ids start with @'))
 

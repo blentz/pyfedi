@@ -33,7 +33,14 @@ def get_locale():
             return session['ui_language']
         else:
             try:
-                return request.accept_languages.best_match(current_app.config['LANGUAGES'])
+                # `or 'en'`: best_match returns None -- it does not raise --
+                # when the request sends no Accept-Language header at all, or
+                # one that matches nothing in LANGUAGES. The bare except below
+                # only catches exceptions, so that None was returned to callers
+                # as if it were a locale. dateparser.parse(languages=[None])
+                # raises, which app/post/forms.py's bare `except Exception`
+                # then reported to the user as "Invalid." for every reminder.
+                return request.accept_languages.best_match(current_app.config['LANGUAGES']) or 'en'
             except:
                 return 'en'
     except:
