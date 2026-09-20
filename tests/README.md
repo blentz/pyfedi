@@ -9099,6 +9099,26 @@ written rows for code that was already covered, and might have "repaired"
 something to make them pass. Take the target list from the full-suite JSON;
 use a scoped run only to iterate. See D872.
 
+**340. A TEST THAT REIMPLEMENTS THE CODE UNDER TEST PASSES AND PROVES NOTHING --
+AND ONLY THE COVERAGE NUMBER SAYS SO.** Sub-project 75 wrote a row for
+`markdown_extras.add_attrs` that defined its own copy of the callback inside the
+test, ran `re.sub` with it, and asserted on the result. It passed. The module
+stayed at 96.396% and the production function was never called. **A green row
+plus an unchanged percentage is the signature** -- if a round's coverage does not
+move after adding rows that claim to cover something, the rows are testing
+something else. Drive the real entry point, even when the internal helper is
+easier to call.
+
+**341. AN EXTRA OR PLUGIN MAY NEED A MARKER BEFORE IT ENGAGES AT ALL.**
+markdown2's `enhanced-images` extra processes an image only when its alt text
+carries ` :: ` -- `![A cat :: width=200px](cat.jpg)`. Without it markdown2
+renders an ordinary `<img>`, none of the extra's branches run, and a row written
+without the marker passes while exercising nothing. Sub-project 75 hit this
+immediately after fixing fact 340's problem in the same rows: **two
+independently vacuous versions of the same assertion, both green.** Check the
+existing tests for the invoking syntax before writing new ones --
+tests/test_enhanced_images.py had it right all along. See D877.
+
 ## Known noise
 
 Two things show up in normal runs that are not bugs in this setup and do not
