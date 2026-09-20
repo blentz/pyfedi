@@ -14950,7 +14950,47 @@ test in the session.**
 
 **BASIS: the full suite, `6405 passed, 3 skipped, 247 warnings, 6 subtests passed in 533.23s`** -- the delta reconciles, 6371 plus this round's 34 rows -- and `All 53 module floors met.`
 
-**Next free number: D874.**
+**Next free number: D874.** (**D874-D878 were taken by sub-project 75,
+below; the free number is now D879.**)
+
+## Sub-project 75: three small utilities -- and three of the round's own mistakes, caught by the guards
+
+**The round in one line: `app/translation.py` (20.930), `app/main/util.py`
+(71.429) and `app/markdown_extras.py` (96.396) all close at **100.0** and take
+floors -- **56 floors** -- a 30-mutant pass killed **30 of 30**, and ONE
+production change landed that the round had not planned: a guard proved
+unreachable. The findings worth keeping are the THREE errors the round made in
+its own tests, none of which a failing test would have surfaced.**
+
+### 0. THE UNPLANNED REPAIR
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D874 | `app/markdown_extras.py:78-81` | **`if len(urls) == 2` COULD NEVER BE FALSE.** The branch runs only inside `if ',' in url_and_title`, and `str.split(',', 1)` on a string that contains a comma returns **exactly two parts, always** -- measured across `'cat.jpg,'`, `','`, `'a,b'`, `'a,b,c'` and `',,'`, every one of which splits to length 2. Coverage had reported the false arm as the unreachable arc `[79, 84]` for that reason. Removed rather than pragma'd, following D822, and the proof is asserted in a row rather than argued in a comment. A trailing comma now yields an EMPTY second url, which is falsy, so no anchor is written -- the same outcome the guard produced, reached without a branch that cannot be taken. **The round was scoped as coverage-only and this is why that scoping is a prediction rather than a promise.** | **fixed** | The five-input split measurement |
+
+### 1. THREE MISTAKES THE ROUND MADE, AND WHAT CAUGHT THEM
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D875 | `tests/test_small_utilities.py` | **THE DEPRECATED-API RATCHET CAUGHT THIS ROUND REINTRODUCING `Site.query.get(1)` -- TWICE, IN ONE FILE.** Four rounds after sub-project 71 migrated 841 call sites off the legacy API, two new ones went into a test helper. The first was fixed by a `sed` that matched one line; the ratchet then failed again on `:470`. **No individual test failure would have reported either**: both calls work perfectly, they simply emit a `LegacyAPIWarning` and undo a completed migration. The ratchet from sub-project 70 is the only thing in the suite that looks for them. | **both fixed; ratchet green** | Two consecutive ratchet failures naming the exact lines |
+| D876 | `tests/test_small_utilities.py` | **ONE ROW REIMPLEMENTED THE CODE UNDER TEST AND ASSERTED AGAINST ITS OWN COPY.** The first version of the `add_attrs` row defined a local `add_attrs` inside the test, ran `re.sub` with it, and asserted on the result -- passing while touching none of `app/markdown_extras.py`. The module stayed at 96.396% and the row proved only that the test's own copy behaved as written. **The coverage number is what exposed it**, not the row failing. Rewritten to drive the real `apply_enhanced_image_attributes`. | **rewritten against the real function** | The module's percentage, unchanged by a passing test |
+| D877 | `tests/test_small_utilities.py` | **AND THEN THE REWRITTEN ROWS WERE VACUOUS FOR A SECOND REASON.** The `enhanced-images` extra engages only for an image whose alt text carries the ` :: ` marker; without it markdown2 renders an ordinary `<img>` and none of the branches under test run. Three rows passed while exercising nothing until the marker was added -- and adding it is what finally exposed D874's unreachable arc. **Two independently vacuous versions of the same assertion, both green.** | **fixed; the arc then became visible** | The arc list before and after the marker was added |
+
+### 2. THE MEASUREMENT
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D878 | three modules; `coverage_floors.ini` | **ALL THREE CLOSE AT `[]`/`[]` AND TAKE FLOORS -- 56.** `app/translation.py` is reachable entirely through `http_mock`: 35 statements, all HTTP, with the API-key branch on each of the three methods covered both ways -- without the negative rows a mutant making the key unconditional would send `api_key=None` to a public endpoint unnoticed. `app/main/util.py`'s two sidebar functions are the same code twice (R3), so eight rows are parametrized across both. **30 of 30 mutants killed.** **BASIS: the full suite, `6466 passed, 3 skipped, 247 warnings, 6 subtests passed in 588.71s`** -- delta reconciling, 6405 plus 61 -- and `All 56 module floors met.` | **three floors** | The `&&` chain |
+
+### 3. REGISTERED, NOT FIXED
+
+| ID | Where | What | Status |
+|---|---|---|---|
+| (D878) | `app/translation.py:38` | **`assert len(self.url) > 0` in production code.** `python -O` strips it, and the failure then moves to `self.url[-1]` raising `IndexError` on the same input. | **registered -- what a misconfigured endpoint does at startup is an operator-facing decision. Pinned as the behaviour it is** |
+| (D878) | `app/translation.py:1` | **The file is a vendored copy** of LibreTranslate's own client rather than a dependency. | **registered so the next reader knows edits here do not flow upstream** |
+| (D878) | `app/main/util.py:17-48` | **`sidebar_active_communities` and `sidebar_new_communities` are the same function twice**, differing only in a date cutoff and the final `order_by`. | **registered -- both copies are covered, so the duplication is pinned rather than merely present** |
+
+**Next free number: D879.**
 
 ## Ratchet gotchas
 

@@ -74,11 +74,15 @@ class EnhancedImages(Extra):
                     url_and_title = f"{urls[0]} {title}"
                     full_url = urls[1]
             else:
-                # No title, just split by comma
+                # No title, just split by comma. The `if len(urls) == 2` that
+                # used to guard these two lines could never be false: this
+                # branch is inside `if ',' in url_and_title`, and
+                # split(',', 1) on a string containing a comma always returns
+                # exactly two parts. Coverage reported the false arm as an
+                # unreachable arc for that reason.
                 urls = [u.strip() for u in url_and_title.split(',', 1)]
-                if len(urls) == 2:
-                    url_and_title = urls[0]
-                    full_url = urls[1]
+                url_and_title = urls[0]
+                full_url = urls[1]
 
         # Parse custom attributes
         custom_attrs = {}
