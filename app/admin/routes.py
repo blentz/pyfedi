@@ -644,7 +644,6 @@ def admin_federation_remote_scan():
     if remote_scan_form.remote_scan_submit.data and remote_scan_form.validate():
         # filters to be used later
         already_known = list(db.session.execute(text('SELECT ap_public_url FROM "community"')).scalars())
-        banned_urls = list(db.session.execute(text('SELECT domain FROM "banned_instances"')).scalars())
         is_lemmy = False
         is_mbin = False
         is_piefed = False
@@ -656,7 +655,9 @@ def admin_federation_remote_scan():
         regex_pattern = '^(https:\\/\\/)(?=.{1,255}$)((.{1,63}\\.){1,127}(?![0-9]*$)[a-z0-9-]+\\.?)$'
         result = re.match(regex_pattern, remote_url)
         if result is None:
-            flash(_(f'{remote_url} does not appear to be a valid url. Make sure input is in the form "https://server-name.tld" without trailing slashes or paths.'))
+            flash(_('%(url)s does not appear to be a valid url. Make sure input is '
+                    'in the form "https://server-name.tld" without trailing slashes '
+                    'or paths.', url=remote_url))
             return redirect(url_for('admin.admin_federation_remote_scan'))
 
         # check if it's a banned instance
@@ -664,8 +665,15 @@ def admin_federation_remote_scan():
         parsed_url = urlparse(remote_url)
         # Extract the server domain name
         server_domain = parsed_url.netloc
-        if server_domain in banned_urls:
-            flash(_(f'{remote_url} is a banned instance.'))
+        # instance_banned(), not a membership test against the raw
+        # banned_instances rows: that second implementation missed every
+        # WILDCARD ban -- a Mastodon-style 'ev*l.com' is a pattern, not a
+        # domain -- and did no normalisation, so it also missed a differing
+        # case or a trailing dot. Scanning a defederated instance and
+        # subscribing to its communities is the thing this check exists to
+        # stop.
+        if instance_banned(server_domain):
+            flash(_('%(url)s is a banned instance.', url=remote_url))
             return redirect(url_for('admin.admin_federation_remote_scan'))
 
         # get dry run
@@ -685,9 +693,20 @@ def admin_federation_remote_scan():
         # check the ['links'] for instanceinfo url
         schema2p0 = "http://nodeinfo.diaspora.software/ns/schema/2.0"
         schema2p1 = "http://nodeinfo.diaspora.software/ns/schema/2.1"
+        remote_instanceinfo_url = None
         for e in nodeinfo_dict['links']:
             if e['rel'] == schema2p0 or e['rel'] == schema2p1:
                 remote_instanceinfo_url = e["href"]
+
+        # The REMOTE server chooses what its nodeinfo document contains, and a
+        # document with no 2.0 or 2.1 link left this name unbound -- so the next
+        # line raised UnboundLocalError and the admin got a 500 for asking about
+        # a server that answered something unexpected. An empty `links` list is
+        # enough to do it.
+        if remote_instanceinfo_url is None:
+            flash(_('%(url)s did not advertise a nodeinfo 2.0 or 2.1 document.',
+                    url=remote_url))
+            return redirect(url_for('admin.admin_federation_remote_scan'))
 
         # get the instanceinfo
         resp = get_request(remote_instanceinfo_url)
@@ -706,8 +725,17 @@ def admin_federation_remote_scan():
         elif instance_software_name == "piefed":
             is_piefed = True
         else:
-            flash(_(f"{remote_url} does not appear to be a lemmy, mbin, or piefed instance."))
+            flash(_('%(url)s does not appear to be a lemmy, mbin, or piefed instance.',
+                    url=remote_url))
             return redirect(url_for('admin.admin_federation'))
+
+        # A page cap for the three paginated scans below. Each loops until a
+        # page comes back short, and the REMOTE server decides how long every
+        # page is -- so a server that always returns a full page kept the
+        # request going forever, holding a worker and growing the holding list
+        # without bound. 200 pages is 10,000 communities, past any real
+        # instance and still a finite answer for a hostile one.
+        max_pages = 200
 
         if is_lemmy:
             # lemmy has a hard-coded upper limit of 50 commnities
@@ -727,7 +755,7 @@ def admin_federation_remote_scan():
                 # check the amount of items in the page_dict['communities'] list
                 # if it's lesss than 50 then we know its the last page of communities
                 # so we break the loop
-                if len(page_dict['communities']) < 50:
+                if len(page_dict['communities']) < 50 or page >= max_pages:
                     get_more_communities = False
                 else:
                     page += 1
@@ -777,7 +805,12 @@ def admin_federation_remote_scan():
                             Candidate Communities based on filters: {len(candidate_communities)}, \
                             Communities to join request: {communities_requested}, \
                             Communities to join based on current filters: {len(community_urls_to_join)}."
-                flash(_(message))
+                # Not _(message): the f-string above is interpolated BEFORE
+                # gettext sees it, so the catalogue is asked for a string
+                # containing this scan's own numbers and can never match --
+                # D815's shape. This is a diagnostic summary, so it is flashed
+                # untranslated rather than pretending otherwise.
+                flash(message)
                 return redirect(url_for('admin.admin_federation_remote_scan'))
 
         if is_piefed:
@@ -796,7 +829,7 @@ def admin_federation_remote_scan():
                 # check the amount of items in the page_dict['communities'] list
                 # if it's less than 50 then we know its the last page of communities
                 # so we break the loop
-                if len(page_dict['communities']) < 50:
+                if len(page_dict['communities']) < 50 or page >= max_pages:
                     get_more_communities = False
                 else:
                     page += 1
@@ -848,7 +881,12 @@ def admin_federation_remote_scan():
                             Candidate Communities based on filters: {len(candidate_communities)}, \
                             Communities to join request: {communities_requested}, \
                             Communities to join based on current filters: {len(community_urls_to_join)}."
-                flash(_(message))
+                # Not _(message): the f-string above is interpolated BEFORE
+                # gettext sees it, so the catalogue is asked for a string
+                # containing this scan's own numbers and can never match --
+                # D815's shape. This is a diagnostic summary, so it is flashed
+                # untranslated rather than pretending otherwise.
+                flash(message)
                 return redirect(url_for('admin.admin_federation_remote_scan'))
 
         if is_mbin:
@@ -869,7 +907,7 @@ def admin_federation_remote_scan():
                 # check the amount of items in the page_dict['items'] list
                 # if it's lesss than 50 then we know its the last page of magazines
                 # so we break the loop
-                if len(page_dict['items']) < 50:
+                if len(page_dict['items']) < 50 or page >= max_pages:
                     get_more_magazines = False
                 else:
                     page += 1
@@ -920,7 +958,12 @@ def admin_federation_remote_scan():
                             Candidate Magazines based on filters: {len(candidate_communities)}, \
                             Magazines to join request: {communities_requested}, \
                             Magazines to join based on current filters: {len(community_urls_to_join)}."
-                flash(_(message))
+                # Not _(message): the f-string above is interpolated BEFORE
+                # gettext sees it, so the catalogue is asked for a string
+                # containing this scan's own numbers and can never match --
+                # D815's shape. This is a diagnostic summary, so it is flashed
+                # untranslated rather than pretending otherwise.
+                flash(message)
                 return redirect(url_for('admin.admin_federation_remote_scan'))
 
         user = db.session.get(User, 1)
@@ -989,6 +1032,16 @@ def admin_federation_mastodon_scan():
             return redirect(url_for('admin.admin_federation_mastodon_scan'))
 
         domain = urlparse(remote_url).netloc
+
+        # The two community scans on this page refuse a banned instance, and so
+        # must this one: bulk_follow resolves each handle through
+        # search_for_user, which fetches the actor and creates local rows for
+        # it, so following accounts on a defederated instance is federating
+        # with it. The check was simply absent here.
+        if instance_banned(domain):
+            flash(_('%(url)s is a banned instance.', url=remote_url))
+            return redirect(url_for('admin.admin_federation_mastodon_scan'))
+
         accounts = fetch_mastodon_directory(remote_url)
         handles, stats = directory_candidates(
             accounts, domain,
