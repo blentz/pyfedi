@@ -15328,3 +15328,55 @@ predicate rather than its middle.**
 |---|---|---|---|
 | D929 | `app/admin/routes.py:448`, `:454` | `cache.delete_memoized(instance_allowed, allow.strip())` invalidates the key equal to **what the admin typed**, while the row is stored `.lower()`ed and real lookups are memoized under whatever string the PEER sent. The invalidation therefore rarely hits the entry it means to. The 150-second `@cache.memoize` bounds the staleness, which is the only reason this is not a P. | A caching-key decision spanning every caller of these two functions, not just the admin form. |
 | D930 | `app/admin/routes.py:1040-1046` | **The uploaded ban list is saved into `app/static/media/`, which is SERVED, and is never deleted.** The name is 15 characters of `gibberish` so it is not enumerable, but the file holds the instance's full ban list including banned users' ap_ids, and every import leaves another one. The same line also produces a doubled extension (`<gibberish>.json.json`), because `new_filename` already carries `.json`. | A retention decision about admin uploads, and the same shape as D918's "written into a served directory" -- better settled once for both. |
+
+**BASIS (slice C): the full suite, `6702 passed, 3 skipped, 258 warnings, 6
+subtests passed in 502.76s`**, chained with `&&` to `All 63 module floors met.`
+6625 + 77 across `tests/test_admin_federation.py` and
+`tests/test_instance_ban_matching.py` = 6702, exactly. `app/utils.py`'s floor
+of 73 held across both changes to it.
+
+**Next free number: D931.** (**D931-D936 were taken by sub-project 79
+slice D, below; the free number is now D937.**)
+
+## Sub-project 79 (slice D): two scans that trust whatever the remote server says
+
+**The round in one line: `admin_federation_remote_scan` and
+`admin_federation_mastodon_scan` close at zero gaps, the mutation pass killed
+**41 of 41**, and the slice carried **FOUR production defects** -- D924's
+membership test in a second place, a 500 any server can hand the admin, **three
+loops a remote server could run forever**, and a bulk-follow with no
+banned-instance check at all.**
+
+### 1. THE PRODUCTION DEFECTS
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| **D931** | `app/admin/routes.py:657-665` | **D924'S SECOND COPY.** `admin_federation_remote_scan` refused a banned instance with `server_domain in banned_urls`, the same membership test against the raw `banned_instances` rows that slice C replaced in `admin_federation_preload`. A Mastodon-style wildcard ban is a **pattern**, so `'evil.example' in ['ev*l.example']` is False, and no normalisation was done either -- so an admin could scan a defederated instance and subscribe to every community on it. Slice C fixed one of the two sites and this is the other; **finding the same defect twice in one module is the argument for replacing the second implementation rather than repairing it.** | **fixed** | The pin asserts a wildcard ban AND a plain one; only the wildcard fails against the old code, which is why the plain control is there |
+| **D932** | `app/admin/routes.py:688-698` | **A NODEINFO DOCUMENT WITH NO 2.0 OR 2.1 LINK WAS A 500.** `remote_instanceinfo_url` was assigned only inside the `for e in nodeinfo_dict['links']` loop, so a document whose `links` matched neither schema -- an empty list is enough -- left the name unbound and the next line raised `UnboundLocalError`. **The remote server chooses that document**, so this is a 500 any server on the internet can hand the admin by answering something unexpected, and the admin cannot tell it from a bug in their own instance. | **fixed** | The pin feeds `{'links': []}` and asserts a message instead of a traceback |
+| **D933** | `app/admin/routes.py:726-733`, `:779-786`, `:875-882` | **THREE LOOPS A REMOTE SERVER COULD RUN FOREVER.** Each of the lemmy, piefed and mbin scans pages until a page comes back with fewer than 50 entries -- and **the remote server decides how long every page is.** A server that always answers with a full page kept the request running indefinitely, holding a worker and growing the in-memory holding list without bound. No timeout, no page cap, no ceiling of any kind; reachable by any instance an admin decides to scan, hostile or merely broken. Capped at 200 pages, which is 10,000 communities -- past any real instance and a finite answer for the rest. | **fixed** | The pin feeds 400 full pages to each of the three branches and asserts exactly 200 requests |
+| **D934** | `app/admin/routes.py:997-1005` | **THE MASTODON SCAN HAD NO BANNED-INSTANCE CHECK AT ALL.** The two community scans on the same page refuse a banned instance; this one went straight from the software check to `fetch_mastodon_directory`. `bulk_follow` resolves each handle through `search_for_user`, which fetches the actor and creates local rows for it, so **following accounts on a defederated instance is federating with it.** Not a regression -- the check was never written. | **fixed** | The pin asserts the directory is never fetched, not merely that no follow is queued |
+
+### 2. WHAT THE MUTATION PASS FOUND
+
+41 mutants, **41 killed on the measuring pass** -- the campaign's first clean
+sweep at this size. Two things made it so, and both are worth recording:
+
+- **Every threshold was parameterised over all three protocol branches.** The
+  six `<`-versus-`<=` mutants (lemmy posts and actives, piefed posts and
+  actives, mbin entries and subscribers) each died to the branch-specific row
+  rather than to a single lemmy row that happened to cover the shape.
+- **Every mocked call asserts its arguments.** Fact 371 was written one slice
+  earlier, after `admin_preload=True` survived being dropped; here the
+  equivalent mutants (m31, m37-m42) all died, including three that changed
+  which value was passed to `directory_candidates` rather than whether it was
+  called.
+
+| ID | Where | What | Status | Evidence |
+|---|---|---|---|---|
+| D935 | `app/admin/routes.py:718-848` | **THE LEMMY AND PIEFED BRANCHES ARE BYTE-IDENTICAL FROM THE CLAMP ONWARD**, ~30 lines each, and the mbin branch differs only in its field names. This was found by the mutation pass rather than by reading: two planned mutants had **no unique anchor** (D833's check, doing work it was not designed for). A defect repaired in one branch would silently remain in the other two -- which is exactly what D931 is, one module over. | **registered** | `ANCHOR FAILURES: [('m20', 2), ('m26', 2)]` |
+
+### 3. ALSO FIXED, AS THE THIRD SIGHTING
+
+| ID | Where | What | Status |
+|---|---|---|---|
+| D936 | `app/admin/routes.py:653`, `:701`, and three dry-run summaries | **D815's SHAPE, FOR THE THIRD TIME**, registered as R2/D910 in slice A and left alone there because that slice did not otherwise touch the lines. This slice does. Four `flash(_(f'...'))` sites interpolated the URL into the string **before** gettext saw it, so the catalogue was asked for a string containing this instance's own data and could never match; the three dry-run summaries did the same with an f-string built several lines earlier. The four URL messages now use named parameters. The three summaries are flashed **untranslated**, with a comment saying why: they are diagnostics assembled from seven runtime counts, and pretending they are translatable is what produced the defect. | **fixed** |
